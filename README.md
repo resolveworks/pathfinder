@@ -4,7 +4,7 @@ Native Android chat app around the [pi](https://pi.dev) agent stack.
 
 ## Build
 
-Android Studio is not required. Install a JDK (17 or newer) and Android SDK API 37 with Build Tools 37, then set `ANDROID_HOME` to the SDK directory.
+Install a JDK (17 or newer) and Android SDK API 37 with Build Tools 37, then set `ANDROID_HOME` to the SDK directory.
 
 ```bash
 ./gradlew assembleDebug
