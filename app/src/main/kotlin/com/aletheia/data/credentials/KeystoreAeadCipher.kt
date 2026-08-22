@@ -7,8 +7,6 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * AES-256-GCM cipher whose key lives in the Android Keystore and never
@@ -18,8 +16,7 @@ import javax.inject.Singleton
  * (EncryptedSharedPreferences) with direct platform Keystore usage, per
  * current developer.android.com guidance.
  */
-@Singleton
-class AndroidKeyStoreAeadCipher @Inject constructor() : AeadCipher {
+class KeystoreAeadCipher {
 
     private fun masterKey(): SecretKey {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
@@ -43,7 +40,7 @@ class AndroidKeyStoreAeadCipher @Inject constructor() : AeadCipher {
         return generator.generateKey()
     }
 
-    override fun encrypt(plaintext: ByteArray): ByteArray {
+    fun encrypt(plaintext: ByteArray): ByteArray {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, masterKey())
         val iv = cipher.iv
@@ -51,7 +48,7 @@ class AndroidKeyStoreAeadCipher @Inject constructor() : AeadCipher {
         return byteArrayOf(iv.size.toByte()) + iv + ciphertext
     }
 
-    override fun decrypt(blob: ByteArray): ByteArray {
+    fun decrypt(blob: ByteArray): ByteArray {
         require(blob.size > IV_LENGTH_BYTES) { "Ciphertext too short" }
         val ivLength = blob[0].toInt() and 0xFF
         require(ivLength in GCM_IV_MIN..GCM_IV_MAX && blob.size > 1 + ivLength) {

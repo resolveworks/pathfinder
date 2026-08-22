@@ -18,17 +18,17 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
-class DataStoreSettingsRepositoryTest {
+class SettingsRepositoryTest {
 
     @get:Rule
     val tmpFolder = TemporaryFolder()
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private lateinit var repository: DataStoreSettingsRepository
+    private lateinit var repository: SettingsRepository
 
     @Before
     fun setUp() {
-        repository = DataStoreSettingsRepository(
+        repository = SettingsRepository(
             PreferenceDataStoreFactory.create(
                 scope = scope,
                 produceFile = { File(tmpFolder.root, "settings.preferences_pb") },
@@ -105,7 +105,7 @@ class DataStoreSettingsRepositoryTest {
 
         val secondScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         try {
-            val second = DataStoreSettingsRepository(
+            val second = SettingsRepository(
                 PreferenceDataStoreFactory.create(
                     scope = secondScope,
                     produceFile = { file },
