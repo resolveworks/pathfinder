@@ -11,7 +11,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 
 class ChatViewModel(
     private val runtime: AgentRuntime,
@@ -38,13 +37,7 @@ class ChatViewModel(
         viewModelScope.launch {
             try {
                 runtime.start()
-                runtime.command(
-                    JSONObject()
-                        .put("type", "initialize")
-                        .put("providerId", "faux")
-                        .put("modelId", "faux-1")
-                        .toString(),
-                )
+                runtime.initialize(providerId = "faux", modelId = "faux-1")
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -67,12 +60,7 @@ class ChatViewModel(
 
         viewModelScope.launch {
             try {
-                runtime.command(
-                    JSONObject()
-                        .put("type", "prompt")
-                        .put("text", prompt)
-                        .toString(),
-                )
+                runtime.prompt(prompt)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -85,7 +73,7 @@ class ChatViewModel(
         if (!mutableState.value.isStreaming) return
         viewModelScope.launch {
             try {
-                runtime.command(JSONObject().put("type", "abort").toString())
+                runtime.abort()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {

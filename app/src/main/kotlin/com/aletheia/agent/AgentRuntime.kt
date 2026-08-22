@@ -32,12 +32,26 @@ class AgentRuntime(
         quickJs.evaluate<Unit>(script, filename = ASSET_NAME)
     }
 
-    /** Resolves after pi has completed handling the command. */
-    suspend fun command(commandJson: String): String =
-        quickJs.evaluate<String>(
-            "await globalThis.aletheiaCommand(${JSONObject.quote(commandJson)})",
-            filename = "command.js",
+    suspend fun initialize(providerId: String, modelId: String) {
+        call("initialize", providerId, modelId)
+    }
+
+    /** Resolves after pi has completed responding to the prompt. */
+    suspend fun prompt(text: String) {
+        call("prompt", text)
+    }
+
+    suspend fun abort() {
+        call("abort")
+    }
+
+    private suspend fun call(method: String, vararg arguments: String) {
+        val args = arguments.joinToString(",") { JSONObject.quote(it) }
+        quickJs.evaluate<Unit>(
+            "await globalThis.aletheia.$method($args)",
+            filename = "aletheia.js",
         )
+    }
 
     override fun close() {
         quickJs.close()
