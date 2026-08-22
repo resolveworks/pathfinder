@@ -52,6 +52,9 @@ dependencies {
     // Coroutines (used directly by production code; version shared with coroutines-test)
     implementation(libs.kotlinx.coroutines.android)
 
+    // Embedded pi JavaScript runtime
+    implementation(libs.quickjs.android)
+
     // Settings persistence
     implementation(libs.androidx.datastore.preferences)
 
