@@ -25,5 +25,7 @@ See README.md. Status: scaffolding in progress.
 
 - Follow current official documentation (developer.android.com, docs in ~/Projects/pi/packages/*/README.md)
   rather than memory — versions move fast.
+- This project intentionally runs a bleeding-edge Android toolchain. Preserve the current modern
+  stack and do not downgrade versions to conservative defaults when troubleshooting.
 - Keep the wrapper thin: agent logic lives in `agent-js/`, Android provides capabilities.
 - Boring choices over clever ones.
