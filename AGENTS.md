@@ -1,31 +1,45 @@
 # aletheia
 
-A native Android chat app wrapping the [pi](https://pi.dev) agent stack.
+A native Android chat app embedding `@earendil-works/pi-agent-core` and
+`@earendil-works/pi-ai` in QuickJS.
 
-## What this is
+## Scope
 
-A minimal, "modern and boring" Android app (Kotlin, Jetpack Compose, MVVM/UDF)
-that embeds the pi agent runtime (`@earendil-works/pi-agent-core` + `@earendil-works/pi-ai`)
-as a bundled JS file executed by an embedded JS engine. The Kotlin wrapper stays thin:
-UI, settings, storage, and a small capability bridge (`httpFetch`).
+MVP: configure a provider, model, and API key; stream chat responses; switch between
+persistent sessions. Agent tools, including `web_search` and `web_fetch`, are out of
+scope.
 
-MVP scope: configure model/provider/API key, switch between sessions, chat with
-streaming responses. Tools (web_search, web_fetch) are explicitly out of scope for now.
+## Architecture
 
-## Layout
+- `app/` — Kotlin, Jetpack Compose, MVVM/UDF, DataStore, Android Keystore, and the
+  QuickJS host.
+- `agent-js/` — TypeScript pi runtime bundled by esbuild to the ignored
+  `app/src/main/assets/agent.js` asset.
+- Kotlin and JavaScript communicate through an explicit JSON command/event boundary.
+- pi owns agent, provider, and conversation behavior, including session persistence
+  through `JsonlSessionRepo`.
+- Android owns UI, settings, credentials, and narrow platform capabilities such as
+  HTTP and filesystem access.
 
-- `app/` — Android app module (Kotlin, Compose, Hilt, DataStore)
-- `agent-js/` — TypeScript agent runtime, bundled with esbuild into an app asset; Pi's `JsonlSessionRepo` owns conversation persistence
+Keep dependencies manually wired unless their complexity justifies DI.
 
-## Build
+## Commands
 
-See README.md. Status: scaffolding in progress.
+```bash
+pnpm --dir agent-js check
+pnpm --dir agent-js build
+./gradlew test assembleDebug
+```
+
+Rebuild the JS asset after changing `agent-js/`.
 
 ## Conventions
 
-- Follow current official documentation (developer.android.com, docs in ~/Projects/pi/packages/*/README.md)
-  rather than memory — versions move fast.
-- This project intentionally runs a bleeding-edge Android toolchain. Preserve the current modern
-  stack and do not downgrade versions to conservative defaults when troubleshooting.
-- Keep the wrapper thin: agent logic lives in `agent-js/`, Android provides capabilities.
-- Boring choices over clever ones.
+- Follow current Android documentation and `~/Projects/pi/packages/*/README.md`, not
+  remembered APIs.
+- Preserve the bleeding-edge Android toolchain; do not downgrade versions to fix
+  compatibility issues.
+- Keep the Kotlin wrapper thin and the JSON bridge explicit.
+- Prefer simple, conventional implementations over new abstraction layers.
+- Never log API keys or persist them outside the Android Keystore-backed credential
+  boundary.

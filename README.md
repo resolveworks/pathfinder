@@ -1,25 +1,21 @@
 # aletheia
 
-Native Android chat app around the [pi](https://pi.dev) agent stack.
+A native Android chat app for the [pi](https://pi.dev) agent stack. Kotlin provides
+the UI and Android platform integration; the agent runs in embedded QuickJS from a
+bundled TypeScript runtime.
 
 ## Build
 
-Install a JDK (17 or newer) and Android SDK API 37 with Build Tools 37, then set `ANDROID_HOME` to the SDK directory.
-
-Build the generated QuickJS asset first, then the Android app:
+Requires JDK 17+, pnpm, and Android SDK API 37 with Build Tools 37. Set
+`ANDROID_HOME`, then run:
 
 ```bash
 pnpm --dir agent-js install
 pnpm --dir agent-js check
 pnpm --dir agent-js build
-./gradlew assembleDebug
-./gradlew test
+./gradlew test assembleDebug
 ```
 
-The generated `app/src/main/assets/agent.js` is ignored by Git. Rebuild it after changing `agent-js/`. The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
-
-## Testing
-
-Testing is intentionally minimal. The current suite consists of fast, plain JVM tests for application logic and runs with `./gradlew test`.
-
-Status: scaffolding. See `AGENTS.md` for architecture and scope.
+`agent-js` bundles to `app/src/main/assets/agent.js`. The generated asset is ignored
+by Git and must be rebuilt after TypeScript changes. The debug APK is written to
+`app/build/outputs/apk/debug/app-debug.apk`.
