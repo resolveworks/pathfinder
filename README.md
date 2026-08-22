@@ -6,21 +6,17 @@ Native Android chat app around the [pi](https://pi.dev) agent stack.
 
 Install a JDK (17 or newer) and Android SDK API 37 with Build Tools 37, then set `ANDROID_HOME` to the SDK directory.
 
+Build the generated QuickJS asset first, then the Android app:
+
 ```bash
+pnpm --dir agent-js install
+pnpm --dir agent-js check
+pnpm --dir agent-js build
 ./gradlew assembleDebug
 ./gradlew test
 ```
 
-The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
-
-The pi runtime is a bundled QuickJS asset. The generated asset is committed so ordinary Android builds do not require Node.js. After changing `agent-js/`, rebuild it with pnpm:
-
-```bash
-cd agent-js
-pnpm install
-pnpm run check
-pnpm run build
-```
+The generated `app/src/main/assets/agent.js` is ignored by Git. Rebuild it after changing `agent-js/`. The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Testing
 

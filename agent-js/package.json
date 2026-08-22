@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=../app/src/main/assets/agent.js",
+    "build": "esbuild src/index.ts --bundle --minify --format=iife --platform=browser --target=es2020 --outfile=../app/src/main/assets/agent.js",
     "check": "tsc --noEmit"
   },
   "dependencies": {
