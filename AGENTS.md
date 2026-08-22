@@ -14,8 +14,8 @@ streaming responses. Tools (web_search, web_fetch) are explicitly out of scope f
 
 ## Layout
 
-- `app/` — Android app module (Kotlin, Compose, Hilt, Room, DataStore)
-- `agent-js/` — TypeScript agent runtime, bundled with esbuild into an app asset
+- `app/` — Android app module (Kotlin, Compose, Hilt, DataStore)
+- `agent-js/` — TypeScript agent runtime, bundled with esbuild into an app asset; Pi's `JsonlSessionRepo` owns conversation persistence
 
 ## Build
 

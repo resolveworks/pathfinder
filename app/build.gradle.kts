@@ -38,6 +38,7 @@ android {
     buildFeatures {
         compose = true
     }
+
 }
 
 dependencies {
@@ -57,10 +58,7 @@ dependencies {
     // Navigation (screens arrive in a later chunk)
     implementation(libs.androidx.navigation.compose)
 
-    // Persistence (Room + DataStore; data layer arrives in a later chunk)
-    implementation(libs.androidx.room.runtime)
-    implementation(libs.androidx.room.ktx)
-    ksp(libs.androidx.room.compiler)
+    // Settings persistence
     implementation(libs.androidx.datastore.preferences)
 
     // Dependency injection
@@ -73,4 +71,5 @@ dependencies {
 
     // Unit tests
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

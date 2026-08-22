@@ -13,4 +13,8 @@ Install a JDK (17 or newer) and Android SDK API 37 with Build Tools 37, then set
 
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
+## Testing
+
+Testing is intentionally minimal. The current suite consists of fast, plain JVM tests for application logic and runs with `./gradlew test`.
+
 Status: scaffolding. See `AGENTS.md` for architecture and scope.
