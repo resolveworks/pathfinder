@@ -1,3 +1,24 @@
+import { log, type LogLevel } from "./protocol";
+
+// QuickJS does not provide console. Forward metadata only: dependency messages may contain
+// prompts or credentials, so their values must not cross the logging boundary.
+if (typeof globalThis.console !== "object") {
+  const write = (level: LogLevel, method: string, args: unknown[]): void => {
+    log(level, "console_call", {
+      method,
+      argumentCount: args.length,
+      argumentTypes: args.map((value) => typeof value).join(","),
+    });
+  };
+  globalThis.console = {
+    debug: (...args: unknown[]) => write("debug", "debug", args),
+    log: (...args: unknown[]) => write("debug", "log", args),
+    info: (...args: unknown[]) => write("info", "info", args),
+    warn: (...args: unknown[]) => write("warn", "warn", args),
+    error: (...args: unknown[]) => write("error", "error", args),
+  } as unknown as Console;
+}
+
 // QuickJS provides ECMAScript but not the browser text encoding API used by pi-ai.
 if (typeof globalThis.TextEncoder !== "function") {
   globalThis.TextEncoder = class TextEncoder {

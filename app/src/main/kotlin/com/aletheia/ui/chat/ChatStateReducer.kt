@@ -1,5 +1,7 @@
 package com.aletheia.ui.chat
 
+import com.aletheia.agent.AgentEvent
+
 /** Pure chat state transitions, kept separate from Android and QuickJS. */
 object ChatStateReducer {
 
@@ -24,7 +26,7 @@ object ChatStateReducer {
     }
 
     fun reduce(state: ChatUiState, event: AgentEvent): ChatUiState = when (event) {
-        AgentEvent.Initialized -> state.copy(isInitializing = false, error = null)
+        is AgentEvent.Initialized -> state.copy(isInitializing = false, error = null)
         is AgentEvent.TextDelta -> state.copy(
             messages = state.messages.updateStreamingAssistant { message ->
                 message.copy(text = message.text + event.delta)

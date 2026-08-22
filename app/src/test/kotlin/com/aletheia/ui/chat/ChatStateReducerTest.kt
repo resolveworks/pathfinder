@@ -1,5 +1,6 @@
 package com.aletheia.ui.chat
 
+import com.aletheia.agent.AgentEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -81,7 +82,10 @@ class ChatStateReducerTest {
     fun initialized_enablesSendingAndClearsStartupError() {
         val state = ChatUiState(draft = "Hello", error = "old error")
 
-        val result = ChatStateReducer.reduce(state, AgentEvent.Initialized)
+        val result = ChatStateReducer.reduce(
+            state,
+            AgentEvent.Initialized(providerId = "faux", modelId = "faux-1"),
+        )
 
         assertFalse(result.isInitializing)
         assertNull(result.error)

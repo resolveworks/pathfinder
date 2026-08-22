@@ -22,11 +22,3 @@ data class ChatUiState(
     val canSend: Boolean
         get() = draft.isNotBlank() && !isInitializing && !isStreaming
 }
-
-sealed interface AgentEvent {
-    data object Initialized : AgentEvent
-    data class TextDelta(val delta: String) : AgentEvent
-    data object MessageEnd : AgentEvent
-    data object AgentEnd : AgentEvent
-    data class Error(val message: String) : AgentEvent
-}
