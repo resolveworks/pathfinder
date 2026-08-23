@@ -2,11 +2,10 @@
 
 ## pi
 
-This project's provider/chat streaming layer (under `app/src/main/kotlin/com/aletheia/ai/`)
-is a Kotlin port of portions of [pi](https://pi.dev) (the local pi project at
-`~/Projects/pi`), including its core assistant message/stream types, the
-OpenAI Chat Completions streaming adapter, provider retry behavior, and the
-Z.AI provider definition. Those portions are:
+The provider/chat streaming layer (under `app/src/main/kotlin/com/aletheia/ai/`)
+and the agent loop (under `app/src/main/kotlin/com/aletheia/agent/`) are
+Kotlin ports of portions of [pi](https://pi.dev) (the local pi project at
+`~/Projects/pi`). Those portions are:
 
 Copyright (c) 2025 Mario Zechner
 
