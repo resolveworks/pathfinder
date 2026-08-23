@@ -6,15 +6,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -29,7 +25,6 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DrawerDefaults
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -154,7 +149,6 @@ fun ChatScreen(
         drawerContent = {
             ChatDrawerContent(
                 uiState = uiState,
-                onCloseDrawer = { scope.launch { drawerState.close() } },
                 onNewSession = {
                     scope.launch { drawerState.close() }
                     onNewSession()
@@ -231,78 +225,57 @@ fun ChatScreen(
 // ---- navigation drawer ----
 
 /**
- * Default sessions sidebar: new chat plus the session list above, settings
- * pinned at the bottom.
+ * Default sessions sidebar: a plain titled header, "new chat" and the lazily
+ * rendered session list above, settings pinned at the bottom — all stock M3
+ * drawer pieces per the developer.android.com drawer guidance.
  */
 @Composable
 private fun ChatDrawerContent(
     uiState: ChatUiState,
-    onCloseDrawer: () -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (String) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    ModalDrawerSheet(
-        windowInsets = DrawerDefaults.windowInsets.union(WindowInsets.ime),
-    ) {
-        Column(modifier = Modifier.fillMaxHeight()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f),
+    ModalDrawerSheet {
+        Text(
+            text = stringResource(R.string.app_name),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(16.dp),
+        )
+        HorizontalDivider()
+        NavigationDrawerItem(
+            label = { Text(stringResource(R.string.action_new_chat)) },
+            icon = { Icon(Icons.Default.Add, contentDescription = null) },
+            selected = false,
+            onClick = onNewSession,
+            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+        )
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(uiState.sessionSummaries, key = SessionSummary::id) { summary ->
+                NavigationDrawerItem(
+                    label = {
+                        Text(
+                            text = summary.title,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    selected = summary.id == uiState.activeSessionId,
+                    onClick = {
+                        if (summary.id != uiState.activeSessionId) onSwitchSession(summary.id)
+                    },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
                 )
-                IconButton(onClick = onCloseDrawer) {
-                    Icon(
-                        Icons.Default.Menu,
-                        contentDescription = stringResource(R.string.action_close_menu),
-                    )
-                }
             }
-            HorizontalDivider()
-            NavigationDrawerItem(
-                label = { Text(stringResource(R.string.action_new_chat)) },
-                icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                selected = false,
-                onClick = onNewSession,
-                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-            )
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                uiState.sessionSummaries.forEach { summary ->
-                    NavigationDrawerItem(
-                        label = {
-                            Text(
-                                text = summary.title,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        },
-                        selected = summary.id == uiState.activeSessionId,
-                        onClick = {
-                            if (summary.id != uiState.activeSessionId) onSwitchSession(summary.id)
-                        },
-                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-                    )
-                }
-            }
-            HorizontalDivider()
-            NavigationDrawerItem(
-                label = { Text(stringResource(R.string.settings_title)) },
-                icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
-                selected = false,
-                onClick = onOpenSettings,
-                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-            )
         }
+        HorizontalDivider()
+        NavigationDrawerItem(
+            label = { Text(stringResource(R.string.settings_title)) },
+            icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
+            selected = false,
+            onClick = onOpenSettings,
+            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+        )
     }
 }
 

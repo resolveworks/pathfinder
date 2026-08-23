@@ -14,7 +14,6 @@
     <string name="action_send">Send</string>
     <string name="action_stop">Stop</string>
     <string name="action_menu">Menu</string>
-    <string name="action_close_menu">Close menu</string>
 
     <string name="configuration_provider">Provider: %1$s</string>
     <string name="configuration_model">Model</string>
