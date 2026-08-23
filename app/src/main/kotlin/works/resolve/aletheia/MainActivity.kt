@@ -3,6 +3,7 @@ package works.resolve.aletheia
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import works.resolve.aletheia.logging.AppLogger
 import works.resolve.aletheia.logging.LogLevel
@@ -21,6 +22,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         logger.log(LogLevel.Info, COMPONENT, "created")
         setContent {
             AletheiaTheme {
