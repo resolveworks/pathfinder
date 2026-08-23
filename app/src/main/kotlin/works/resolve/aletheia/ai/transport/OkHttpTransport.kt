@@ -77,7 +77,7 @@ class OkHttpTransport(
                     if (response != null) {
                         // Read at most ~4x the char cap (worst-case UTF-8) so a
                         // huge error body is never fully buffered just to be
-                        // truncated (pi truncates at capture).
+                        // truncated.
                         val readLimit = MAX_PROVIDER_ERROR_BODY_CHARS.toLong() * 4
                         val errorBody = try {
                             val source = response.body.source()

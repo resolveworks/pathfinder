@@ -86,7 +86,7 @@ data class StreamOptions(
     }
 }
 
-/** Provider-neutral options, like pi's SimpleStreamOptions. */
+/** Provider-neutral request options used by the models-level stream entry point. */
 data class SimpleStreamOptions(
     val apiKey: String? = null,
     val sessionId: String? = null,

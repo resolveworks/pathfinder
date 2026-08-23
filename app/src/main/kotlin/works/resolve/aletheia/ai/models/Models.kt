@@ -47,7 +47,7 @@ class Models(
     /**
      * Starts a chat stream. Unknown provider/model ids throw immediately;
      * request failures (including a missing API key) surface as
-     * [AssistantMessageEvent.Error] events, like pi.
+     * [AssistantMessageEvent.Error] events.
      */
     fun stream(
         providerId: String,

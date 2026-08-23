@@ -100,7 +100,7 @@ class ZaiCatalogTest {
     }
 
     @Test
-    fun `supported levels follow pi defaults and explicit-null semantics`() {
+    fun `supported levels default to off-high and explicit null removes`() {
         // Reasoning model without a map: OFF..HIGH default-supported, XHIGH/MAX not.
         assertEquals(
             listOf(
@@ -124,7 +124,7 @@ class ZaiCatalogTest {
     }
 
     @Test
-    fun `clamping rounds up then down like pi`() {
+    fun `clamping rounds up before down`() {
         // glm-5.3 supports low/high/max; medium rounds up to high.
         assertEquals(
             ModelThinkingLevel.HIGH,

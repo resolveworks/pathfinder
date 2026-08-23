@@ -90,7 +90,7 @@ object OpenAiCompletionsPayload {
         // Direct OFF never enables reasoning; it is equivalent to no effort.
         val effort = options.reasoningEffort?.takeIf { it != ModelThinkingLevel.OFF }
 
-        /** pi semantics: unspecified passes the level through, explicit null omits the field. */
+        /** Unspecified passes the level through; explicit null omits the field. */
         fun mappedEffort(level: ModelThinkingLevel): String? {
             val map = model.thinkingLevelMap ?: return level.name.lowercase()
             return if (map.isSpecified(level)) map.forLevel(level) else level.name.lowercase()
@@ -138,7 +138,6 @@ object OpenAiCompletionsPayload {
         val params = mutableListOf<JsonObject>()
 
         if (!context.systemPrompt.isNullOrEmpty()) {
-            // pi uses truthiness: an empty system prompt is skipped.
             val role = if (model.reasoning && compat.supportsDeveloperRole) "developer" else "system"
             params.add(
                 buildJsonObject {
@@ -215,7 +214,6 @@ object OpenAiCompletionsPayload {
     }
 
     private fun convertUserMessage(msg: works.resolve.aletheia.ai.core.UserMessage): JsonObject? {
-        // pi skips user messages whose content array is empty.
         if (msg.content.isEmpty()) return null
         return buildJsonObject {
             put("role", "user")
@@ -253,7 +251,7 @@ object OpenAiCompletionsPayload {
     ): JsonObject? {
         val assistant = mutableMapOf<String, JsonElement>()
 
-        // pi keeps only assistant text blocks with non-whitespace content.
+        // Keep only assistant text blocks with non-whitespace content.
         val text = sanitizeSurrogates(
             msg.content.filter { it.type == ContentType.TEXT }
                 .map { (it as works.resolve.aletheia.ai.core.TextContent).text }
@@ -328,8 +326,8 @@ object OpenAiCompletionsPayload {
                     put("name", tool.name)
                     put("description", tool.description)
                     put("parameters", tool.parameters)
-                    // pi sends an explicit strict:false for plain tools on strict-capable
-                    // providers; ZAI is strict-capable in pi's detectCompat.
+                    // Explicit strict:false for plain tools on strict-capable
+                    // providers (ZAI is strict-capable).
                     put("strict", false)
                 },
             )

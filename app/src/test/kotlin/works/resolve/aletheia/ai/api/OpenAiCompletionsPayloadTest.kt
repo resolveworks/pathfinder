@@ -191,7 +191,7 @@ class OpenAiCompletionsPayloadTest {
     }
 
     @Test
-    fun `function tools carry explicit strict false like pi`() {
+    fun `function tools carry explicit strict false`() {
         val tool = Tool(name = "read_file", description = "Reads a file", parameters = schema)
         val b = body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool)))
         val function = b["tools"]!!.jsonArray.single().jsonObject["function"]!!.jsonObject
@@ -249,7 +249,7 @@ class OpenAiCompletionsPayloadTest {
     }
 
     @Test
-    fun `empty system prompt is skipped like pi truthiness`() {
+    fun `empty system prompt is skipped`() {
         val b = body(Context(systemPrompt = "", messages = listOf(UserMessage.ofText("hi"))))
         val messages = b["messages"]!!.jsonArray
         assertEquals(1, messages.size)

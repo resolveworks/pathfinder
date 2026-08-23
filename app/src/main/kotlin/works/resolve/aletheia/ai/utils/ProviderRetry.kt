@@ -43,7 +43,7 @@ class ProviderRetry(
 
                 val retryIndex = maxRetries - retriesRemaining
                 retriesRemaining--
-                // pi clamps negative (stale HTTP-date) delays to zero at sleep time.
+                // Negative (stale HTTP-date) delays are clamped to zero at sleep time.
                 sleep(maxOf(0L, retryDelayMs(error, retryIndex, maxRetryDelayMs)))
             }
         }
@@ -90,8 +90,8 @@ class ProviderRetry(
         return delayMs
     }
 
-    /** Longest numeric prefix pi's `Number.parseFloat` would accept; null when none.
-     * NaN is rejected like pi's `Number.isNaN` guard so it falls through. */
+    /** Longest numeric prefix (so "1200ms" parses as 1200), or null when none.
+     * NaN parses in Kotlin but is not a valid delay, so it falls through. */
     private fun parseFloatPrefix(value: String): Double? {
         val trimmed = value.trim()
         // Longest-first so "1.5" wins over "1"; header values are tiny.
