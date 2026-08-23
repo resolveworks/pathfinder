@@ -67,6 +67,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -278,7 +279,13 @@ private fun ChatDrawerContent(
             ) {
                 uiState.sessionSummaries.forEach { summary ->
                     NavigationDrawerItem(
-                        label = { Text(summary.title) },
+                        label = {
+                            Text(
+                                text = summary.title,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
                         selected = summary.id == uiState.activeSessionId,
                         onClick = {
                             if (summary.id != uiState.activeSessionId) onSwitchSession(summary.id)
