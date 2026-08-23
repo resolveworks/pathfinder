@@ -14,7 +14,7 @@ import kotlinx.coroutines.withContext
 class CredentialStore(
     private val context: Context,
     private val cipher: KeystoreAeadCipher,
-) {
+) : ApiKeyStore {
 
     private val dir: File
         get() = File(context.filesDir, DIRECTORY)
@@ -26,13 +26,13 @@ class CredentialStore(
         return File(dir, "$providerId.bin")
     }
 
-    suspend fun getApiKey(providerId: String): String? = withContext(Dispatchers.IO) {
+    override suspend fun getApiKey(providerId: String): String? = withContext(Dispatchers.IO) {
         val file = fileFor(providerId)
         if (!file.exists()) return@withContext null
         String(cipher.decrypt(file.readBytes()), Charsets.UTF_8)
     }
 
-    suspend fun setApiKey(providerId: String, apiKey: String) = withContext(Dispatchers.IO) {
+    override suspend fun setApiKey(providerId: String, apiKey: String) = withContext(Dispatchers.IO) {
         val file = fileFor(providerId)
         file.parentFile?.mkdirs()
         val tmp = File(file.parentFile, "${file.name}.tmp")
@@ -43,7 +43,7 @@ class CredentialStore(
         }
     }
 
-    suspend fun deleteApiKey(providerId: String): Unit = withContext(Dispatchers.IO) {
+    override suspend fun deleteApiKey(providerId: String): Unit = withContext(Dispatchers.IO) {
         fileFor(providerId).delete()
     }
 

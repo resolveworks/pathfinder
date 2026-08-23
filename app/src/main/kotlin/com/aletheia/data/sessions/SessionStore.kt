@@ -33,7 +33,7 @@ class SessionStore(
     private val idFactory: () -> String = { UUID.randomUUID().toString() },
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     maxFileBytes: Long = MAX_FILE_BYTES,
-) {
+) : SessionRepository {
 
     /** Upper bound on a single session file to avoid reading unbounded/corrupt files. */
     val maxFileBytes: Long
@@ -46,7 +46,7 @@ class SessionStore(
     private val mutex = Mutex()
 
     /** Creates and persists a new (initially empty) session. */
-    suspend fun create(title: String = "New chat"): Session = mutex.withLock {
+    override suspend fun create(title: String): Session = mutex.withLock {
         val now = clock()
         val session = Session(
             id = idFactory(),
@@ -60,7 +60,7 @@ class SessionStore(
     }
 
     /** Lists session summaries, newest-updated first; unreadable entries are skipped. */
-    suspend fun summaries(): List<SessionSummary> = mutex.withLock {
+    override suspend fun summaries(): List<SessionSummary> = mutex.withLock {
         withContext(ioDispatcher) {
             sessionFiles()
                 .mapNotNull { file ->
@@ -79,7 +79,7 @@ class SessionStore(
     }
 
     /** Loads a session by id, or null when it does not exist. */
-    suspend fun load(id: String): Session? = mutex.withLock {
+    override suspend fun load(id: String): Session? = mutex.withLock {
         withContext(ioDispatcher) {
             val file = fileFor(id)
             if (!file.isFile) null else read(file).let(::defensiveCopy)
@@ -90,7 +90,7 @@ class SessionStore(
      * Persists [session] atomically, bumping [Session.updatedAt]. Returns the
      * stored session (with the new timestamp and defensive copies).
      */
-    suspend fun save(session: Session): Session = mutex.withLock {
+    override suspend fun save(session: Session): Session = mutex.withLock {
         val stored = defensiveCopy(session).copy(updatedAt = clock())
         withContext(ioDispatcher) { write(stored) }
         stored

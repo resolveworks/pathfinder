@@ -42,6 +42,7 @@ dependencies {
     // AndroidX base
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel)
 
     // Compose (versions managed by the BOM)
     implementation(platform(libs.androidx.compose.bom))
