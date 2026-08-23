@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">aletheia</string>
 
-    <string name="chat_title">aletheia</string>
+    <string name="chat_title">Chat</string>
     <string name="chat_empty">Start the conversation below</string>
     <string name="composer_hint">Message</string>
 
@@ -14,6 +14,7 @@
     <string name="action_send">Send</string>
     <string name="action_stop">Stop</string>
     <string name="action_menu">Menu</string>
+    <string name="action_close_menu">Close menu</string>
 
     <string name="configuration_provider">Provider: %1$s</string>
     <string name="configuration_model">Model</string>

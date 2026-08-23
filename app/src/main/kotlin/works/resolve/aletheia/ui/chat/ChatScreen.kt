@@ -6,11 +6,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,6 +29,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerDefaults
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -148,6 +153,7 @@ fun ChatScreen(
         drawerContent = {
             ChatDrawerContent(
                 uiState = uiState,
+                onCloseDrawer = { scope.launch { drawerState.close() } },
                 onNewSession = {
                     scope.launch { drawerState.close() }
                     onNewSession()
@@ -164,6 +170,10 @@ fun ChatScreen(
         },
         modifier = modifier,
     ) {
+        val showConversation = uiState.status != ChatStatus.Loading &&
+            uiState.destination == ChatDestination.Chat &&
+            uiState.status != ChatStatus.Failed
+
         Scaffold(
             topBar = {
                 if (uiState.status == ChatStatus.Ready) {
@@ -171,12 +181,24 @@ fun ChatScreen(
                         title = if (uiState.destination == ChatDestination.Settings) {
                             stringResource(R.string.settings_title)
                         } else {
-                            uiState.sessionSummaries
-                                .firstOrNull { it.id == uiState.activeSessionId }?.title
-                                .orEmpty()
-                                .ifEmpty { stringResource(R.string.chat_title) }
+                            stringResource(R.string.chat_title)
                         },
                         onOpenDrawer = { scope.launch { drawerState.open() } },
+                    )
+                }
+            },
+            bottomBar = {
+                if (showConversation) {
+                    Composer(
+                        draft = uiState.draft,
+                        onDraftChange = onDraftChange,
+                        onSend = onSend,
+                        onStop = onStop,
+                        canSend = uiState.canSend,
+                        isStreaming = uiState.isStreaming,
+                        modifier = Modifier
+                            .navigationBarsPadding()
+                            .imePadding(),
                     )
                 }
             },
@@ -198,12 +220,7 @@ fun ChatScreen(
                         error = uiState.error ?: stringResource(R.string.error_generic),
                         onOpenSettings = onOpenSettings,
                     )
-                    else -> ConversationContent(
-                        uiState = uiState,
-                        onDraftChange = onDraftChange,
-                        onSend = onSend,
-                        onStop = onStop,
-                    )
+                    else -> ConversationContent(uiState = uiState)
                 }
             }
         }
@@ -219,17 +236,33 @@ fun ChatScreen(
 @Composable
 private fun ChatDrawerContent(
     uiState: ChatUiState,
+    onCloseDrawer: () -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (String) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    ModalDrawerSheet {
+    ModalDrawerSheet(
+        windowInsets = DrawerDefaults.windowInsets.union(WindowInsets.ime),
+    ) {
         Column(modifier = Modifier.fillMaxHeight()) {
-            Text(
-                text = stringResource(R.string.app_name),
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(16.dp),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onCloseDrawer) {
+                    Icon(
+                        Icons.Default.Menu,
+                        contentDescription = stringResource(R.string.action_close_menu),
+                    )
+                }
+            }
             HorizontalDivider()
             NavigationDrawerItem(
                 label = { Text(stringResource(R.string.action_new_chat)) },
@@ -340,6 +373,7 @@ private fun ConfigurationContent(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -429,12 +463,7 @@ private fun ConfigurationContent(
 // ---- conversation ----
 
 @Composable
-private fun ConversationContent(
-    uiState: ChatUiState,
-    onDraftChange: (String) -> Unit,
-    onSend: () -> Unit,
-    onStop: () -> Unit,
-) {
+private fun ConversationContent(uiState: ChatUiState) {
     val listState = rememberLazyListState()
     val messageCount = uiState.messages.size
     val streamingId = uiState.streamingMessage?.id
@@ -445,41 +474,31 @@ private fun ConversationContent(
         if (total > 0) listState.scrollToItem(total - 1)
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.weight(1f)) {
-            if (messageCount == 0 && streamingId == null) {
-                Text(
-                    text = stringResource(R.string.chat_empty),
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.align(Alignment.Center),
-                )
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (messageCount == 0 && streamingId == null) {
+            Text(
+                text = stringResource(R.string.chat_empty),
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+        LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+            items(uiState.messages, key = ChatMessage::id) { message ->
+                MessageItem(message)
+                HorizontalDivider()
             }
-            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                items(uiState.messages, key = ChatMessage::id) { message ->
-                    MessageItem(message)
-                    HorizontalDivider()
-                }
-                uiState.streamingMessage?.let { streaming ->
-                    item(key = streaming.id) {
-                        MessageItem(
-                            streaming.copy(
-                                text = streaming.text.ifEmpty {
-                                    if (streaming.error == null) STREAMING_PLACEHOLDER else ""
-                                },
-                            ),
-                        )
-                    }
+            uiState.streamingMessage?.let { streaming ->
+                item(key = streaming.id) {
+                    MessageItem(
+                        streaming.copy(
+                            text = streaming.text.ifEmpty {
+                                if (streaming.error == null) STREAMING_PLACEHOLDER else ""
+                            },
+                        ),
+                    )
                 }
             }
         }
-        Composer(
-            draft = uiState.draft,
-            onDraftChange = onDraftChange,
-            onSend = onSend,
-            onStop = onStop,
-            canSend = uiState.canSend,
-            isStreaming = uiState.isStreaming,
-        )
     }
 }
 
@@ -515,11 +534,11 @@ private fun Composer(
     onStop: () -> Unit,
     canSend: Boolean,
     isStreaming: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .imePadding()
             .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
