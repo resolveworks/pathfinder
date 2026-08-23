@@ -3,11 +3,13 @@ package works.resolve.aletheia.ai.transport
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -146,12 +148,14 @@ class OkHttpTransportTest {
         )
         server.start()
         runBlocking {
-            val job = launch {
+            // Run on IO so blocking takeRequest below doesn't starve the
+            // runBlocking event loop this coroutine would otherwise share.
+            val job = launch(Dispatchers.IO) {
                 transport().post(request(server))
             }
             // Deterministic barrier: block until the request reaches the server,
             // then cancel while the server is withholding the response.
-            server.takeRequest(2, TimeUnit.SECONDS)
+            assertNotNull(server.takeRequest(2, TimeUnit.SECONDS))
             job.cancel()
             withTimeout(2_000) { job.join() }
         }
