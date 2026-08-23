@@ -2,10 +2,13 @@ package com.aletheia.ai.models
 
 import com.aletheia.ai.api.ChatApi
 import com.aletheia.ai.api.streamSimple
+import com.aletheia.ai.core.AssistantMessage
 import com.aletheia.ai.core.AssistantMessageEvent
 import com.aletheia.ai.core.Context
 import com.aletheia.ai.core.Model
 import com.aletheia.ai.core.SimpleStreamOptions
+import com.aletheia.ai.core.StopReason
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
@@ -59,7 +62,28 @@ class Models(
         return flow {
             // Resolve the credential lazily inside the flow so stored-credential
             // lookups can suspend without making stream() a suspend call.
-            val apiKey = options.apiKey ?: provider.apiKeyResolver?.invoke()
+            val apiKey = try {
+                options.apiKey ?: provider.apiKeyResolver?.invoke()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                emit(
+                    AssistantMessageEvent.Error(
+                        StopReason.ERROR,
+                        AssistantMessage(
+                            content = emptyList(),
+                            api = model.api,
+                            provider = provider.id,
+                            model = model.id,
+                            stopReason = StopReason.ERROR,
+                            errorMessage =
+                                "Failed to resolve stored API key for provider '${provider.id}'",
+                            timestamp = System.currentTimeMillis(),
+                        ),
+                    ),
+                )
+                return@flow
+            }
             provider.api.streamSimple(
                 model,
                 context,
