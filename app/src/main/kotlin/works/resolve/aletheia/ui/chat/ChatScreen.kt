@@ -1,6 +1,5 @@
 package works.resolve.aletheia.ui.chat
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -69,6 +68,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.ui.NavDisplay
 import works.resolve.aletheia.R
 import works.resolve.aletheia.data.sessions.SessionSummary
 import works.resolve.aletheia.ui.theme.AletheiaTheme
@@ -77,21 +80,24 @@ import kotlinx.coroutines.launch
 private const val PROVIDER_NAME = "Z.AI"
 private const val STREAMING_PLACEHOLDER = "…"
 
-/** Collects [ChatViewModel.uiState] and forwards intents from the pure [ChatScreen]. */
+/** Collects [ChatViewModel.uiState], owns the Nav3 back stack, and forwards intents from the pure [ChatScreen]. */
 @Composable
 fun ChatRoute(
     viewModel: ChatViewModel,
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    // The initial stack comes from the first collected state (Loading with
+    // startKey = Chat); initialize() soon swaps it via the reset effect in
+    // ChatScreen. Loading still renders LoadingContent, never a flash of Chat.
+    val backStack = rememberNavBackStack(uiState.startKey)
     ChatScreen(
         uiState = uiState,
+        backStack = backStack,
         onDraftChange = viewModel::onDraftChange,
         onSend = viewModel::send,
         onStop = viewModel::stop,
         onSaveConfiguration = viewModel::saveConfiguration,
-        onOpenSettings = viewModel::openSettings,
-        onCloseSettings = viewModel::closeSettings,
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
         onDismissError = viewModel::dismissError,
@@ -100,12 +106,15 @@ fun ChatRoute(
 }
 
 /**
- * Pure, state-hoisted chat surface rendering [ChatUiState]. Which surface is
- * visible is driven solely by [ChatUiState.destination] and [ChatUiState.status];
- * the composable never decides navigation itself, so a surface can never go
- * stale over a switched chat. Every user action is forwarded through an intent
- * callback; the composable owns only ephemeral, non-sensitive UI state
- * (configuration form inputs, dropdown/menu visibility, drawer state).
+ * Pure, state-hoisted chat surface rendering [ChatUiState] behind a Nav3
+ * back stack ([backStack], navigation chrome hoisted like drawerState). The
+ * ViewModel signals navigation through the state ([ChatUiState.startKey] and
+ * [ChatUiState.navigationEpoch]); whenever either changes, the stack is reset
+ * to exactly [ChatUiState.startKey], which makes an unconfigured app a
+ * dead-end settings surface and returns the user to the chat after a
+ * successful save or session adoption. Every user action is forwarded through
+ * an intent callback; the composable owns only ephemeral, non-sensitive UI
+ * state (configuration form inputs, dropdown/menu visibility, drawer state).
  *
  * The API-key input lives exclusively in Compose memory: it is never saved
  * across process death, logged, or written to any state that outlives the
@@ -115,12 +124,11 @@ fun ChatRoute(
 @Composable
 fun ChatScreen(
     uiState: ChatUiState,
+    backStack: MutableList<NavKey>,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onSaveConfiguration: (modelId: String, baseUrl: String?, apiKeyInput: String) -> Unit,
-    onOpenSettings: () -> Unit,
-    onCloseSettings: () -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
     onDismissError: () -> Unit,
@@ -137,13 +145,20 @@ fun ChatScreen(
         }
     }
 
-    // Settings is a dead end until the app is configured; everywhere else the
-    // system back gesture simply leaves it.
-    BackHandler(
-        enabled = uiState.destination == ChatDestination.Settings &&
-            uiState.status != ChatStatus.NeedsConfiguration,
-        onBack = onCloseSettings,
-    )
+    // Reset signal from the ViewModel: rebuild the stack to exactly the
+    // current root. A single-entry stack means NavDisplay's onBack does
+    // nothing on it, so NeedsConfiguration is a dead end, and a bumped epoch
+    // (session adopted / configuration saved) always lands back on the root.
+    LaunchedEffect(uiState.startKey, uiState.navigationEpoch) {
+        backStack.clear()
+        backStack.add(uiState.startKey)
+    }
+
+    val pushSettings: () -> Unit = { backStack.add(SettingsNavKey) }
+    val popSettings: () -> Unit = {
+        if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
+    }
+    val topKey = backStack.lastOrNull() ?: ChatNavKey
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -162,21 +177,21 @@ fun ChatScreen(
                 },
                 onOpenSettings = {
                     scope.launch { drawerState.close() }
-                    onOpenSettings()
+                    pushSettings()
                 },
             )
         },
         modifier = modifier,
     ) {
         val showConversation = uiState.status != ChatStatus.Loading &&
-            uiState.destination == ChatDestination.Chat &&
-            uiState.status != ChatStatus.Failed
+            uiState.status != ChatStatus.Failed &&
+            topKey == ChatNavKey
 
         Scaffold(
             topBar = {
                 if (uiState.status == ChatStatus.Ready) {
                     ChatTopBar(
-                        title = if (uiState.destination == ChatDestination.Settings) {
+                        title = if (topKey == SettingsNavKey) {
                             stringResource(R.string.settings_title)
                         } else {
                             stringResource(R.string.chat_title)
@@ -209,16 +224,30 @@ fun ChatScreen(
             ) {
                 when {
                     uiState.status == ChatStatus.Loading -> LoadingContent()
-                    uiState.destination == ChatDestination.Settings -> ConfigurationContent(
-                        uiState = uiState,
-                        onSave = onSaveConfiguration,
-                        onClose = if (uiState.status == ChatStatus.NeedsConfiguration) null else onCloseSettings,
-                    )
-                    uiState.status == ChatStatus.Failed -> FailedContent(
+                    // Settings pushed on top of a failed init replaces the
+                    // error surface; popping returns to it.
+                    uiState.status == ChatStatus.Failed && topKey != SettingsNavKey -> FailedContent(
                         error = uiState.error ?: stringResource(R.string.error_generic),
-                        onOpenSettings = onOpenSettings,
+                        onOpenSettings = pushSettings,
                     )
-                    else -> ConversationContent(uiState = uiState)
+                    else -> NavDisplay(
+                        backStack = backStack,
+                        onBack = { backStack.removeLastOrNull() },
+                        entryProvider = entryProvider {
+                            entry<ChatNavKey> { ConversationContent(uiState = uiState) }
+                            entry<SettingsNavKey> {
+                                ConfigurationContent(
+                                    uiState = uiState,
+                                    onSave = onSaveConfiguration,
+                                    onClose = if (uiState.status == ChatStatus.NeedsConfiguration) {
+                                        null
+                                    } else {
+                                        popSettings
+                                    },
+                                )
+                            }
+                        },
+                    )
                 }
             }
         }
@@ -561,16 +590,15 @@ private val PREVIEW_MODEL_OPTIONS = listOf(
 )
 
 @Composable
-private fun PreviewChatScreen(uiState: ChatUiState) {
+private fun PreviewChatScreen(uiState: ChatUiState, startKey: NavKey = ChatNavKey) {
     AletheiaTheme {
         ChatScreen(
             uiState = uiState,
+            backStack = rememberNavBackStack(startKey),
             onDraftChange = {},
             onSend = {},
             onStop = {},
             onSaveConfiguration = { _, _, _ -> },
-            onOpenSettings = {},
-            onCloseSettings = {},
             onNewSession = {},
             onSwitchSession = {},
             onDismissError = {},
@@ -584,7 +612,7 @@ private fun ChatScreenNeedsConfigurationPreview() {
     PreviewChatScreen(
         ChatUiState(
             status = ChatStatus.NeedsConfiguration,
-            destination = ChatDestination.Settings,
+            startKey = SettingsNavKey,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             hasApiKey = false,
         ),
@@ -597,7 +625,7 @@ private fun ChatScreenSettingsPreview() {
     PreviewChatScreen(
         ChatUiState(
             status = ChatStatus.Ready,
-            destination = ChatDestination.Settings,
+            startKey = SettingsNavKey,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModelId = "model-a",
             hasApiKey = true,

@@ -1,5 +1,7 @@
 package works.resolve.aletheia.ui.chat
 
+import androidx.navigation3.runtime.NavKey
+import kotlinx.serialization.Serializable
 import works.resolve.aletheia.data.sessions.SessionSummary
 
 enum class ChatRole {
@@ -16,14 +18,13 @@ data class ChatMessage(
     val error: String? = null,
 )
 
-/** Surface the app is currently showing. */
-enum class ChatDestination {
-    /** The conversation surface. */
-    Chat,
+/** Navigation 3 destination key: the conversation surface. */
+@Serializable
+data object ChatNavKey : NavKey
 
-    /** The configuration form. */
-    Settings,
-}
+/** Navigation 3 destination key: the configuration form. */
+@Serializable
+data object SettingsNavKey : NavKey
 
 /** Outcome of initial load of settings, credentials, and sessions. */
 enum class ChatStatus {
@@ -48,15 +49,21 @@ data class ChatModelOption(
  * no API keys (only [hasApiKey]), no provider-request options, and no AI-core
  * message objects.
  *
- * Navigation is part of this state: [destination] selects the visible surface
- * and is transitioned by the ViewModel atomically with everything else, so
- * any intent that changes what the user should see (switching sessions, new
- * chats, saving configuration) always leaves the two in sync. The invariant
- * `NeedsConfiguration implies Settings` holds by construction.
+ * Navigation is signaled from this state rather than commanded: an
+ * unconfigured app sets [startKey] to [SettingsNavKey], which the UI layer
+ * honors by rebuilding its Nav3 back stack to exactly that root (a dead end:
+ * back cannot leave it). Every success that should return the user to the
+ * chat (adopting a session, saving configuration) bumps the monotonic
+ * [navigationEpoch], which the UI layer reads as a reset-to-[startKey] signal,
+ * atomically with the rest of the state. The invariant `NeedsConfiguration
+ * implies startKey == SettingsNavKey` holds by construction.
  */
 data class ChatUiState(
     val status: ChatStatus = ChatStatus.Loading,
-    val destination: ChatDestination = ChatDestination.Chat,
+    /** Root of the Nav3 back stack; the stack must contain exactly this after a reset. */
+    val startKey: NavKey = ChatNavKey,
+    /** Monotonic reset signal: any change tells the UI to rebuild the stack to [startKey]. */
+    val navigationEpoch: Long = 0,
     val modelOptions: List<ChatModelOption> = emptyList(),
     val selectedModelId: String? = null,
     val baseUrl: String? = null,

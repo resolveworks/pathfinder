@@ -221,7 +221,7 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
 
         val state = vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        assertEquals(ChatDestination.Settings, state.destination)
+        assertEquals(SettingsNavKey, state.startKey)
         assertFalse(state.hasApiKey)
         assertNull(state.activeSessionId)
         assertTrue(state.messages.isEmpty())
@@ -240,44 +240,49 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun destination_followsIntents_andNeverStaysStaleOverASwitchedChat() = runTest(mainDispatcherRule.scheduler) {
+    fun resetSignal_followsSuccessfulIntents_andNeverGetsStale() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        // While unconfigured the settings surface is forced; closing is rejected.
-        vm.closeSettings()
-        assertEquals(ChatDestination.Settings, vm.uiState.value.destination)
+        // While unconfigured the reset signal pins the settings root: the UI
+        // back stack is rebuilt to exactly [SettingsNavKey] and back is a no-op.
+        assertEquals(SettingsNavKey, vm.uiState.value.startKey)
 
-        // Completing configuration lands on the chat.
+        // Completing configuration bumps the epoch and returns to the chat root.
         vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
-        vm.uiState.first { it.status == ChatStatus.Ready && it.destination == ChatDestination.Chat }
-        val firstId = vm.uiState.value.activeSessionId!!
+        val configured = vm.uiState.first { it.status == ChatStatus.Ready }
+        assertEquals(ChatNavKey, configured.startKey)
+        assertTrue(configured.navigationEpoch >= 1L)
+        val firstId = configured.activeSessionId!!
 
         vm.newSession()
         val secondId = vm.uiState.first { it.activeSessionId != firstId }.activeSessionId!!
+        // Each successful session adoption bumps the epoch again (reset to chat).
+        assertTrue(vm.uiState.value.navigationEpoch >= 2L)
 
-        // Settings opened by the user, then a chat picked from the drawer:
-        // the switch must atomically return to the chat surface.
-        vm.openSettings()
-        assertEquals(ChatDestination.Settings, vm.uiState.value.destination)
         vm.switchSession(firstId)
-        vm.uiState.first { it.activeSessionId == firstId && it.destination == ChatDestination.Chat }
+        val switched = vm.uiState.first { it.activeSessionId == firstId }
+        assertEquals(ChatNavKey, switched.startKey)
+        assertTrue(switched.navigationEpoch >= 3L)
 
-        // New chat from settings also lands on the chat surface.
-        vm.openSettings()
         vm.newSession()
-        vm.uiState.first {
-            it.activeSessionId !in setOf(firstId, secondId) && it.destination == ChatDestination.Chat
-        }
+        val created = vm.uiState.first { it.activeSessionId !in setOf(firstId, secondId) }
+        assertEquals(ChatNavKey, created.startKey)
+        assertTrue(created.navigationEpoch >= 4L)
 
-        // Reconfiguration also returns to the chat; explicit close works when configured.
-        vm.openSettings()
+        // Reconfiguration also bumps the epoch (returns the user to the chat).
         vm.saveConfiguration(modelId = "glm-5.3", baseUrl = null, apiKeyInput = "")
-        vm.uiState.first { it.selectedModelId == "glm-5.3" && it.destination == ChatDestination.Chat }
-        vm.openSettings()
-        vm.closeSettings()
-        vm.uiState.first { it.destination == ChatDestination.Chat }
+        val reconfigured = vm.uiState.first { it.selectedModelId == "glm-5.3" }
+        assertEquals(ChatStatus.Ready, reconfigured.status)
+        assertEquals(ChatNavKey, reconfigured.startKey)
+        assertTrue(reconfigured.navigationEpoch >= 5L)
+
+        // Status changes stay atomic with the signal: every Ready observation
+        // pairs with the chat root, every NeedsConfiguration one with settings.
+        vm.uiState.value.let {
+            assertTrue(it.status != ChatStatus.NeedsConfiguration || it.startKey == SettingsNavKey)
+        }
 
         vm.closeForTest()
     }
@@ -291,7 +296,8 @@ class ChatViewModelTest {
         vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "SECRET-KEY-123")
 
         val state = vm.uiState.first { it.status == ChatStatus.Ready }
-        assertEquals(ChatDestination.Chat, state.destination)
+        assertEquals(ChatNavKey, state.startKey)
+        assertTrue(state.navigationEpoch >= 1L)
         assertNotNull(state.activeSessionId)
         assertTrue(state.hasApiKey)
         assertEquals("glm-4.7", state.selectedModelId)

@@ -49,11 +49,13 @@ import kotlinx.coroutines.withContext
  * and the save loop drains whatever it accepted, so ViewModel teardown can
  * never abandon an accepted snapshot either.
  *
- * Navigation is state, not effects: [ChatUiState.destination] selects the
- * visible surface, and every intent that changes what the user should see
- * (switching or starting sessions, saving configuration, opening/closing
- * settings) transitions it atomically with the rest of the state. An
- * unconfigured app is locked onto the settings surface.
+ * Navigation is state, not effects: an unconfigured app pins
+ * [ChatUiState.startKey] to [SettingsNavKey], and every intent that should
+ * return the user to the chat (adopting a session, saving configuration)
+ * bumps [ChatUiState.navigationEpoch] atomically with the rest of the state.
+ * The UI layer owns the Nav3 back stack and resets it to [ChatUiState.startKey]
+ * whenever either field changes, so an unconfigured app is locked onto the
+ * settings surface.
  */
 class ChatViewModel(
     private val settingsRepository: SettingsStore,
@@ -95,19 +97,6 @@ class ChatViewModel(
     /** Clears the surfaced error without touching anything else. */
     fun dismissError() {
         updateState { it.copy(error = null) }
-    }
-
-    /** Shows the settings surface. */
-    fun openSettings() {
-        updateState { it.copy(destination = ChatDestination.Settings) }
-    }
-
-    /** Returns to the chat; an unconfigured app stays on settings. */
-    fun closeSettings() {
-        updateState { state ->
-            if (state.status == ChatStatus.NeedsConfiguration) state
-            else state.copy(destination = ChatDestination.Chat)
-        }
     }
 
     /**
@@ -186,7 +175,7 @@ class ChatViewModel(
                 updateState {
                     it.copy(
                         status = ChatStatus.NeedsConfiguration,
-                        destination = ChatDestination.Settings,
+                        startKey = SettingsNavKey,
                         hasApiKey = hasKey,
                         selectedModelId = settings.modelId.takeIf { m -> m in CATALOG_IDS },
                         baseUrl = settings.baseUrl,
@@ -273,7 +262,8 @@ class ChatViewModel(
         updateState {
             it.copy(
                 activeSessionId = session.id,
-                destination = ChatDestination.Chat,
+                startKey = ChatNavKey,
+                navigationEpoch = it.navigationEpoch + 1,
                 messages = projectCommitted(session.messages),
                 streamingMessage = null,
                 sessionSummaries = summaries,
@@ -477,7 +467,8 @@ class ChatViewModel(
         updateState {
             it.copy(
                 status = ChatStatus.Ready,
-                destination = ChatDestination.Chat,
+                startKey = ChatNavKey,
+                navigationEpoch = it.navigationEpoch + 1,
                 hasApiKey = true,
                 selectedModelId = candidate.modelId,
                 baseUrl = candidate.baseUrl,
