@@ -111,6 +111,35 @@ class TokenEstimateTest {
     }
 
     @Test
+    fun `usage applies again after a newer assistant response`() {
+        // Mirrors pi's context-estimate test: a stale usage is ignored, but a
+        // later assistant response with its own usage describes the new prefix.
+        fun assistant(timestamp: Long, totalTokens: Int) = AssistantMessage(
+            content = listOf(TextContent("kept")),
+            api = "openai-completions",
+            provider = "zai",
+            model = "glm",
+            usage = Usage(totalTokens = totalTokens),
+            stopReason = StopReason.STOP,
+            timestamp = timestamp,
+        )
+        val context = Context(
+            messages = listOf(
+                UserMessage.ofText("summary", 200L),
+                assistant(100L, 9_500), // stale: predates the inserted summary
+                UserMessage.ofText("new prompt", 300L),
+                assistant(400L, 2_000),
+                UserMessage.ofText("tail", 500L),
+            ),
+        )
+        val estimate = estimateContextTokens(context)
+        assertEquals(2_000, estimate.usageTokens)
+        assertEquals(1, estimate.trailingTokens) // ceil(4/4)
+        assertEquals(2_001, estimate.tokens)
+        assertEquals(3, estimate.lastUsageIndex)
+    }
+
+    @Test
     fun `without usage system prompt and tools are estimated`() {
         val context = Context(
             systemPrompt = "12345678", // 2 tokens
