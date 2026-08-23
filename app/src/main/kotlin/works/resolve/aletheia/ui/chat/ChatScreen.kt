@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
@@ -32,6 +34,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -225,9 +228,9 @@ fun ChatScreen(
 // ---- navigation drawer ----
 
 /**
- * Default sessions sidebar: a plain titled header, "new chat" and the lazily
- * rendered session list above, settings pinned at the bottom — all stock M3
- * drawer pieces per the developer.android.com drawer guidance.
+ * Default sessions sidebar: a plain titled header, a new-chat button and
+ * the lazily rendered session list above, settings pinned at the bottom —
+ * stock M3 pieces per the developer.android.com drawer guidance.
  */
 @Composable
 private fun ChatDrawerContent(
@@ -243,13 +246,21 @@ private fun ChatDrawerContent(
             modifier = Modifier.padding(16.dp),
         )
         HorizontalDivider()
-        NavigationDrawerItem(
-            label = { Text(stringResource(R.string.action_new_chat)) },
-            icon = { Icon(Icons.Default.Add, contentDescription = null) },
-            selected = false,
+        FilledTonalButton(
             onClick = onNewSession,
-            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-        )
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(NavigationDrawerItemDefaults.ItemPadding)
+                .padding(vertical = 8.dp),
+        ) {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = null,
+                modifier = Modifier.size(ButtonDefaults.IconSize),
+            )
+            Spacer(Modifier.size(ButtonDefaults.IconSpacing))
+            Text(stringResource(R.string.action_new_chat))
+        }
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(uiState.sessionSummaries, key = SessionSummary::id) { summary ->
                 NavigationDrawerItem(
