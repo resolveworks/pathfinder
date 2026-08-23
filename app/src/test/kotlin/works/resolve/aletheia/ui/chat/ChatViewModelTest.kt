@@ -114,12 +114,18 @@ class ChatViewModelTest {
             private set
         var totalSaves = 0
             private set
+        /** When set, completed as each save is entered (before the gate). */
+        var saveEntered: CompletableDeferred<Unit>? = null
+        /** When set, every save suspends on it before delegating. */
+        var saveGate: CompletableDeferred<Unit>? = null
         override suspend fun save(session: works.resolve.aletheia.data.sessions.Session): works.resolve.aletheia.data.sessions.Session {
             totalSaves += 1
             if (failSave) {
                 failedSaves += 1
                 throw works.resolve.aletheia.data.sessions.SessionDataException("save failed")
             }
+            saveEntered?.complete(Unit)
+            saveGate?.await()
             return delegate.save(session)
         }
     }
@@ -802,6 +808,43 @@ class ChatViewModelTest {
         assertEquals(state.activeSessionId, state.sessionSummaries.single().id)
 
         vm.closeForTest()
+    }
+
+    @Test
+    fun scopeTeardownMidSave_stillPersistsAcceptedSnapshots() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        // The first save (user message) suspends inside the gate; the final
+        // snapshot (user + assistant) is accepted while that save is in flight.
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        h.sessions.saveEntered = entered
+        h.sessions.saveGate = release
+        h.scriptedStreams.add(h.gatedStream("world", CompletableDeferred<Unit>().apply { complete(Unit) }))
+        vm.onDraftChange("Hello")
+        vm.send()
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+        entered.await()
+
+        // Teardown mid-save: neither the in-flight nor the accepted pending
+        // snapshot may be silently dropped.
+        val job = vm.viewModelScope.coroutineContext[Job]!!
+        job.cancel()
+        release.complete(Unit)
+        job.join()
+
+        val session = h.sessionStore.load(sessionId)!!
+        assertEquals(2, session.messages.size)
+        assertEquals("Hello", session.title)
+        // Both saves happened: the gated user-message snapshot drained *and* the
+        // coalesced final snapshot was then dequeued and written — proving the
+        // loop drains accepted pendings rather than skipping to the last one.
+        assertEquals(2, h.sessions.totalSaves)
     }
 
     @Test

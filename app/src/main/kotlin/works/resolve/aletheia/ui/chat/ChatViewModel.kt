@@ -20,11 +20,13 @@ import works.resolve.aletheia.data.sessions.SessionRepository
 import works.resolve.aletheia.data.sessions.SessionSummary
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Chat screen controller. Owns configuration, sessions, and the active
@@ -43,7 +45,9 @@ import kotlinx.coroutines.launch
  * the session they belong to. A failed save surfaces an error and blocks
  * session/config switches; the blocked intent explicitly retries the latest
  * snapshot and only proceeds once it is saved, so an unsaved transcript is
- * never silently abandoned.
+ * never silently abandoned. Snapshot writes themselves are non-cancellable
+ * and the save loop drains whatever it accepted, so ViewModel teardown can
+ * never abandon an accepted snapshot either.
  */
 class ChatViewModel(
     private val settingsRepository: SettingsStore,
@@ -315,6 +319,10 @@ class ChatViewModel(
         pendingPersist = session to messages
         if (persistJob?.isActive == true) return
         persistJob = viewModelScope.launch {
+            // [persistSnapshot] is non-cancellable, so once a snapshot is
+            // dequeued its write always completes; on scope teardown the loop
+            // keeps draining until no accepted snapshot remains (new enqueues
+            // stop with the cancelled state collector) and then exits.
             while (true) {
                 val next = pendingPersist ?: break
                 pendingPersist = null
@@ -329,25 +337,31 @@ class ChatViewModel(
      * state is only updated when that session is still active.
      */
     private suspend fun persistSnapshot(session: Session, messages: List<Message>) {
-        try {
-            val title = if (session.title == DEFAULT_SESSION_TITLE) {
-                deriveTitle(messages) ?: DEFAULT_SESSION_TITLE
-            } else {
-                session.title
+        // Non-cancellable: an accepted snapshot must reach the file even when
+        // the ViewModel scope is torn down mid-write; without this, cancelling
+        // the save coroutine between dequeue and write would silently drop the
+        // transcript. UI bookkeeping still only targets a still-active session.
+        withContext(NonCancellable) {
+            try {
+                val title = if (session.title == DEFAULT_SESSION_TITLE) {
+                    deriveTitle(messages) ?: DEFAULT_SESSION_TITLE
+                } else {
+                    session.title
+                }
+                val saved = sessionStore.save(session.copy(title = title, messages = messages))
+                if (activeSession?.id == session.id) {
+                    activeSession = saved
+                    persistedMessageCount = saved.messages.size
+                }
+                val summaries = sessionStore.summaries()
+                if (activeSession?.id == session.id || _uiState.value.activeSessionId == session.id) {
+                    updateState { it.copy(sessionSummaries = summaries) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(ERROR_SESSION_SAVE)
             }
-            val saved = sessionStore.save(session.copy(title = title, messages = messages))
-            if (activeSession?.id == session.id) {
-                activeSession = saved
-                persistedMessageCount = saved.messages.size
-            }
-            val summaries = sessionStore.summaries()
-            if (activeSession?.id == session.id || _uiState.value.activeSessionId == session.id) {
-                updateState { it.copy(sessionSummaries = summaries) }
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            setError(ERROR_SESSION_SAVE)
         }
     }
 
