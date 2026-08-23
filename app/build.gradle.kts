@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     // AGP 9 provides built-in Kotlin support; no kotlin-android plugin needed.
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -43,6 +44,10 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel)
+
+    // Navigation 3 (Compose-first navigation)
+    implementation(libs.androidx.navigation3.runtime)
+    implementation(libs.androidx.navigation3.ui)
 
     // Compose (versions managed by the BOM)
     implementation(platform(libs.androidx.compose.bom))
