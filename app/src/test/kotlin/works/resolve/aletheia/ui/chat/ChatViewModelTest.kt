@@ -221,6 +221,7 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
 
         val state = vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        assertEquals(ChatDestination.Settings, state.destination)
         assertFalse(state.hasApiKey)
         assertNull(state.activeSessionId)
         assertTrue(state.messages.isEmpty())
@@ -239,6 +240,49 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun destination_followsIntents_andNeverStaysStaleOverASwitchedChat() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+        // While unconfigured the settings surface is forced; closing is rejected.
+        vm.closeSettings()
+        assertEquals(ChatDestination.Settings, vm.uiState.value.destination)
+
+        // Completing configuration lands on the chat.
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready && it.destination == ChatDestination.Chat }
+        val firstId = vm.uiState.value.activeSessionId!!
+
+        vm.newSession()
+        val secondId = vm.uiState.first { it.activeSessionId != firstId }.activeSessionId!!
+
+        // Settings opened by the user, then a chat picked from the drawer:
+        // the switch must atomically return to the chat surface.
+        vm.openSettings()
+        assertEquals(ChatDestination.Settings, vm.uiState.value.destination)
+        vm.switchSession(firstId)
+        vm.uiState.first { it.activeSessionId == firstId && it.destination == ChatDestination.Chat }
+
+        // New chat from settings also lands on the chat surface.
+        vm.openSettings()
+        vm.newSession()
+        vm.uiState.first {
+            it.activeSessionId !in setOf(firstId, secondId) && it.destination == ChatDestination.Chat
+        }
+
+        // Reconfiguration also returns to the chat; explicit close works when configured.
+        vm.openSettings()
+        vm.saveConfiguration(modelId = "glm-5.3", baseUrl = null, apiKeyInput = "")
+        vm.uiState.first { it.selectedModelId == "glm-5.3" && it.destination == ChatDestination.Chat }
+        vm.openSettings()
+        vm.closeSettings()
+        vm.uiState.first { it.destination == ChatDestination.Chat }
+
+        vm.closeForTest()
+    }
+
+    @Test
     fun configure_createsSession_andGoesReady() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()
@@ -247,6 +291,7 @@ class ChatViewModelTest {
         vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "SECRET-KEY-123")
 
         val state = vm.uiState.first { it.status == ChatStatus.Ready }
+        assertEquals(ChatDestination.Chat, state.destination)
         assertNotNull(state.activeSessionId)
         assertTrue(state.hasApiKey)
         assertEquals("glm-4.7", state.selectedModelId)

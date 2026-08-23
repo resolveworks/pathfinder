@@ -48,6 +48,12 @@ import kotlinx.coroutines.withContext
  * never silently abandoned. Snapshot writes themselves are non-cancellable
  * and the save loop drains whatever it accepted, so ViewModel teardown can
  * never abandon an accepted snapshot either.
+ *
+ * Navigation is state, not effects: [ChatUiState.destination] selects the
+ * visible surface, and every intent that changes what the user should see
+ * (switching or starting sessions, saving configuration, opening/closing
+ * settings) transitions it atomically with the rest of the state. An
+ * unconfigured app is locked onto the settings surface.
  */
 class ChatViewModel(
     private val settingsRepository: SettingsStore,
@@ -89,6 +95,19 @@ class ChatViewModel(
     /** Clears the surfaced error without touching anything else. */
     fun dismissError() {
         updateState { it.copy(error = null) }
+    }
+
+    /** Shows the settings surface. */
+    fun openSettings() {
+        updateState { it.copy(destination = ChatDestination.Settings) }
+    }
+
+    /** Returns to the chat; an unconfigured app stays on settings. */
+    fun closeSettings() {
+        updateState { state ->
+            if (state.status == ChatStatus.NeedsConfiguration) state
+            else state.copy(destination = ChatDestination.Chat)
+        }
     }
 
     /**
@@ -140,7 +159,7 @@ class ChatViewModel(
                         return@launch
                     }
                     val newAgent = tryCreateAgent(currentSettings, session.id, session.messages) ?: return@launch
-                    activateSession(session, newAgent)
+                    if (!activateSession(session, newAgent)) return@launch
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -167,6 +186,7 @@ class ChatViewModel(
                 updateState {
                     it.copy(
                         status = ChatStatus.NeedsConfiguration,
+                        destination = ChatDestination.Settings,
                         hasApiKey = hasKey,
                         selectedModelId = settings.modelId.takeIf { m -> m in CATALOG_IDS },
                         baseUrl = settings.baseUrl,
@@ -230,9 +250,9 @@ class ChatViewModel(
 
     /**
      * Makes [session] active with a prebuilt [agent]: persists the active id,
-     * binds the agent, and refreshes the UI. Only called after the factory
-     * accepted the settings. Returns false when persisting the active id
-     * fails; in that case nothing is committed.
+     * binds the agent, and returns to the chat surface with a refreshed UI.
+     * Only called after the factory accepted the settings. Returns false when
+     * persisting the active id fails; in that case nothing is committed.
      */
     private suspend fun activateSession(session: Session, agent: Agent): Boolean {
         try {
@@ -253,6 +273,7 @@ class ChatViewModel(
         updateState {
             it.copy(
                 activeSessionId = session.id,
+                destination = ChatDestination.Chat,
                 messages = projectCommitted(session.messages),
                 streamingMessage = null,
                 sessionSummaries = summaries,
@@ -266,8 +287,14 @@ class ChatViewModel(
      * before anything is committed. Returns null on failure (safe error set).
      */
     private suspend fun prepareAdoption(settings: ModelSettings): Pair<Session, Agent>? {
-        val summaries = sessionStore.summaries()
-        val session = resolveSession(settings, summaries)
+        val session = try {
+            resolveSession(settings, sessionStore.summaries())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            setError(ERROR_SESSION_CREATE)
+            return null
+        }
         val newAgent = tryCreateAgent(settings, session.id, session.messages) ?: return null
         return session to newAgent
     }
@@ -441,14 +468,7 @@ class ChatViewModel(
             // Initial configuration: validate the session and agent first,
             // then persist the settings, then activate. A failure at any step
             // leaves the ViewModel unconfigured (never falsely Ready).
-            val prepared = try {
-                prepareAdoption(candidate)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                setError(ERROR_SESSION_CREATE)
-                return
-            } ?: return
+            val prepared = prepareAdoption(candidate) ?: return
             if (!persistSettings(candidate)) return
             if (!activateSession(prepared.first, prepared.second)) return
             currentSettings = candidate
@@ -457,6 +477,7 @@ class ChatViewModel(
         updateState {
             it.copy(
                 status = ChatStatus.Ready,
+                destination = ChatDestination.Chat,
                 hasApiKey = true,
                 selectedModelId = candidate.modelId,
                 baseUrl = candidate.baseUrl,

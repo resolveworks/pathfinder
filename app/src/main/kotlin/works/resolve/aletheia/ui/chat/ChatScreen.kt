@@ -1,5 +1,6 @@
 package works.resolve.aletheia.ui.chat
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -85,6 +86,8 @@ fun ChatRoute(
         onSend = viewModel::send,
         onStop = viewModel::stop,
         onSaveConfiguration = viewModel::saveConfiguration,
+        onOpenSettings = viewModel::openSettings,
+        onCloseSettings = viewModel::closeSettings,
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
         onDismissError = viewModel::dismissError,
@@ -93,9 +96,12 @@ fun ChatRoute(
 }
 
 /**
- * Pure, state-hoisted chat surface rendering [ChatUiState]. Every user action
- * is forwarded through an intent callback; the composable owns only ephemeral,
- * non-sensitive UI state (configuration form inputs, dropdown/menu visibility).
+ * Pure, state-hoisted chat surface rendering [ChatUiState]. Which surface is
+ * visible is driven solely by [ChatUiState.destination] and [ChatUiState.status];
+ * the composable never decides navigation itself, so a surface can never go
+ * stale over a switched chat. Every user action is forwarded through an intent
+ * callback; the composable owns only ephemeral, non-sensitive UI state
+ * (configuration form inputs, dropdown/menu visibility, drawer state).
  *
  * The API-key input lives exclusively in Compose memory: it is never saved
  * across process death, logged, or written to any state that outlives the
@@ -109,6 +115,8 @@ fun ChatScreen(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onSaveConfiguration: (modelId: String, baseUrl: String?, apiKeyInput: String) -> Unit,
+    onOpenSettings: () -> Unit,
+    onCloseSettings: () -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
     onDismissError: () -> Unit,
@@ -117,23 +125,26 @@ fun ChatScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    val showConfigByUser = remember { mutableStateOf(false) }
-    // Returning to a non-Ready status (or saving configuration) implicitly
-    // closes a user-opened configuration sheet.
-    val showConfiguration = uiState.status == ChatStatus.NeedsConfiguration || showConfigByUser.value
-    LaunchedEffect(uiState.status) {
-        if (uiState.status != ChatStatus.Ready) showConfigByUser.value = false
-    }
 
-    uiState.error?.let { error ->
-        LaunchedEffect(error) {
+    LaunchedEffect(uiState.error) {
+        uiState.error?.let { error ->
             snackbarHostState.showSnackbar(error)
             onDismissError()
         }
     }
 
+    // Settings is a dead end until the app is configured; everywhere else the
+    // system back gesture simply leaves it.
+    BackHandler(
+        enabled = uiState.destination == ChatDestination.Settings &&
+            uiState.status != ChatStatus.NeedsConfiguration,
+        onBack = onCloseSettings,
+    )
+
     ModalNavigationDrawer(
         drawerState = drawerState,
+        // Session navigation is meaningless before the app is configured.
+        gesturesEnabled = uiState.status == ChatStatus.Ready,
         drawerContent = {
             ChatDrawerContent(
                 uiState = uiState,
@@ -145,9 +156,9 @@ fun ChatScreen(
                     scope.launch { drawerState.close() }
                     onSwitchSession(sessionId)
                 },
-                onOpenConfiguration = {
+                onOpenSettings = {
                     scope.launch { drawerState.close() }
-                    showConfigByUser.value = true
+                    onOpenSettings()
                 },
             )
         },
@@ -155,10 +166,10 @@ fun ChatScreen(
     ) {
         Scaffold(
             topBar = {
-                when (uiState.status) {
-                    ChatStatus.Ready -> ChatTopBar(
-                        title = if (showConfiguration) {
-                            stringResource(R.string.configuration_title)
+                if (uiState.status == ChatStatus.Ready) {
+                    ChatTopBar(
+                        title = if (uiState.destination == ChatDestination.Settings) {
+                            stringResource(R.string.settings_title)
                         } else {
                             uiState.sessionSummaries
                                 .firstOrNull { it.id == uiState.activeSessionId }?.title
@@ -167,7 +178,6 @@ fun ChatScreen(
                         },
                         onOpenDrawer = { scope.launch { drawerState.open() } },
                     )
-                    else -> Unit
                 }
             },
             snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -179,18 +189,14 @@ fun ChatScreen(
             ) {
                 when {
                     uiState.status == ChatStatus.Loading -> LoadingContent()
-                    uiState.status == ChatStatus.Failed && !showConfiguration -> FailedContent(
-                        error = uiState.error,
-                        onOpenConfiguration = { showConfigByUser.value = true },
-                    )
-                    showConfiguration -> ConfigurationContent(
+                    uiState.destination == ChatDestination.Settings -> ConfigurationContent(
                         uiState = uiState,
                         onSave = onSaveConfiguration,
-                        onClose = if (uiState.status == ChatStatus.Ready) {
-                            { showConfigByUser.value = false }
-                        } else {
-                            null
-                        },
+                        onClose = if (uiState.status == ChatStatus.NeedsConfiguration) null else onCloseSettings,
+                    )
+                    uiState.status == ChatStatus.Failed -> FailedContent(
+                        error = uiState.error ?: stringResource(R.string.error_generic),
+                        onOpenSettings = onOpenSettings,
                     )
                     else -> ConversationContent(
                         uiState = uiState,
@@ -215,7 +221,7 @@ private fun ChatDrawerContent(
     uiState: ChatUiState,
     onNewSession: () -> Unit,
     onSwitchSession: (String) -> Unit,
-    onOpenConfiguration: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     ModalDrawerSheet {
         Column(modifier = Modifier.fillMaxHeight()) {
@@ -250,10 +256,10 @@ private fun ChatDrawerContent(
             }
             HorizontalDivider()
             NavigationDrawerItem(
-                label = { Text(stringResource(R.string.action_settings)) },
+                label = { Text(stringResource(R.string.settings_title)) },
                 icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
                 selected = false,
-                onClick = onOpenConfiguration,
+                onClick = onOpenSettings,
                 modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
             )
         }
@@ -291,7 +297,7 @@ private fun LoadingContent() {
 }
 
 @Composable
-private fun FailedContent(error: String?, onOpenConfiguration: () -> Unit) {
+private fun FailedContent(error: String, onOpenSettings: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -301,12 +307,12 @@ private fun FailedContent(error: String?, onOpenConfiguration: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = error ?: stringResource(R.string.error_generic),
+            text = error,
             style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center,
         )
         Spacer(modifier = Modifier.padding(top = 16.dp))
-        Button(onClick = onOpenConfiguration) {
+        Button(onClick = onOpenSettings) {
             Text(stringResource(R.string.action_configure))
         }
     }
@@ -339,7 +345,7 @@ private fun ConfigurationContent(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(
-            text = stringResource(R.string.configuration_title),
+            text = stringResource(R.string.settings_title),
             style = MaterialTheme.typography.headlineSmall,
         )
         Text(
@@ -430,18 +436,18 @@ private fun ConversationContent(
     onStop: () -> Unit,
 ) {
     val listState = rememberLazyListState()
-    val lastMessageCount = uiState.messages.size
+    val messageCount = uiState.messages.size
     val streamingId = uiState.streamingMessage?.id
     val streamingLength = uiState.streamingMessage?.text?.length
 
-    LaunchedEffect(lastMessageCount, streamingId, streamingLength) {
-        val total = lastMessageCount + if (streamingId != null) 1 else 0
+    LaunchedEffect(messageCount, streamingId, streamingLength) {
+        val total = messageCount + if (streamingId != null) 1 else 0
         if (total > 0) listState.scrollToItem(total - 1)
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
-            if (lastMessageCount == 0 && streamingId == null) {
+            if (messageCount == 0 && streamingId == null) {
                 Text(
                     text = stringResource(R.string.chat_empty),
                     style = MaterialTheme.typography.bodyLarge,
@@ -471,7 +477,6 @@ private fun ConversationContent(
             onDraftChange = onDraftChange,
             onSend = onSend,
             onStop = onStop,
-            enabled = uiState.status == ChatStatus.Ready,
             canSend = uiState.canSend,
             isStreaming = uiState.isStreaming,
         )
@@ -508,7 +513,6 @@ private fun Composer(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
-    enabled: Boolean,
     canSend: Boolean,
     isStreaming: Boolean,
 ) {
@@ -522,7 +526,7 @@ private fun Composer(
         OutlinedTextField(
             value = draft,
             onValueChange = onDraftChange,
-            enabled = enabled && !isStreaming,
+            enabled = !isStreaming,
             label = { Text(stringResource(R.string.composer_hint)) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
@@ -546,20 +550,17 @@ private val PREVIEW_MODEL_OPTIONS = listOf(
     ChatModelOption(id = "model-b", name = "Preview Model B"),
 )
 
-@Preview(showBackground = true)
 @Composable
-private fun ChatScreenNeedsConfigurationPreview() {
+private fun PreviewChatScreen(uiState: ChatUiState) {
     AletheiaTheme {
         ChatScreen(
-            uiState = ChatUiState(
-                status = ChatStatus.NeedsConfiguration,
-                modelOptions = PREVIEW_MODEL_OPTIONS,
-                hasApiKey = false,
-            ),
+            uiState = uiState,
             onDraftChange = {},
             onSend = {},
             onStop = {},
             onSaveConfiguration = { _, _, _ -> },
+            onOpenSettings = {},
+            onCloseSettings = {},
             onNewSession = {},
             onSwitchSession = {},
             onDismissError = {},
@@ -569,38 +570,56 @@ private fun ChatScreenNeedsConfigurationPreview() {
 
 @Preview(showBackground = true)
 @Composable
+private fun ChatScreenNeedsConfigurationPreview() {
+    PreviewChatScreen(
+        ChatUiState(
+            status = ChatStatus.NeedsConfiguration,
+            destination = ChatDestination.Settings,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            hasApiKey = false,
+        ),
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenSettingsPreview() {
+    PreviewChatScreen(
+        ChatUiState(
+            status = ChatStatus.Ready,
+            destination = ChatDestination.Settings,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModelId = "model-a",
+            hasApiKey = true,
+        ),
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
 private fun ChatScreenReadyStreamingPreview() {
-    AletheiaTheme {
-        ChatScreen(
-            uiState = ChatUiState(
-                status = ChatStatus.Ready,
-                modelOptions = PREVIEW_MODEL_OPTIONS,
-                selectedModelId = "model-a",
-                hasApiKey = true,
-                activeSessionId = "s1",
-                sessionSummaries = listOf(
-                    SessionSummary(
-                        id = "s1",
-                        title = "Preview chat",
-                        createdAt = 0L,
-                        updatedAt = 0L,
-                        messageCount = 2,
-                    ),
+    PreviewChatScreen(
+        ChatUiState(
+            status = ChatStatus.Ready,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModelId = "model-a",
+            hasApiKey = true,
+            activeSessionId = "s1",
+            sessionSummaries = listOf(
+                SessionSummary(
+                    id = "s1",
+                    title = "Preview chat",
+                    createdAt = 0L,
+                    updatedAt = 0L,
+                    messageCount = 2,
                 ),
-                messages = listOf(
-                    ChatMessage(id = "m1", role = ChatRole.User, text = "Hello there"),
-                    ChatMessage(id = "m2", role = ChatRole.Assistant, text = "Hi! How can I help?"),
-                ),
-                streamingMessage = ChatMessage(id = "streaming-1", role = ChatRole.Assistant, text = "Sure, "),
-                isStreaming = true,
             ),
-            onDraftChange = {},
-            onSend = {},
-            onStop = {},
-            onSaveConfiguration = { _, _, _ -> },
-            onNewSession = {},
-            onSwitchSession = {},
-            onDismissError = {},
-        )
-    }
+            messages = listOf(
+                ChatMessage(id = "m1", role = ChatRole.User, text = "Hello there"),
+                ChatMessage(id = "m2", role = ChatRole.Assistant, text = "Hi! How can I help?"),
+            ),
+            streamingMessage = ChatMessage(id = "streaming-1", role = ChatRole.Assistant, text = "Sure, "),
+            isStreaming = true,
+        ),
+    )
 }

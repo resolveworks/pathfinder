@@ -16,11 +16,20 @@ data class ChatMessage(
     val error: String? = null,
 )
 
-/** Lifecycle of the chat surface. */
+/** Surface the app is currently showing. */
+enum class ChatDestination {
+    /** The conversation surface. */
+    Chat,
+
+    /** The configuration form. */
+    Settings,
+}
+
+/** Outcome of initial load of settings, credentials, and sessions. */
 enum class ChatStatus {
-    /** Initial load of settings, credentials, and sessions in progress. */
+    /** Initial load in progress. */
     Loading,
-    /** No valid provider/model/key configuration; the setup UI should show. */
+    /** No valid provider/model/key configuration; the settings form is forced. */
     NeedsConfiguration,
     /** Configured and ready to chat. */
     Ready,
@@ -38,9 +47,16 @@ data class ChatModelOption(
  * Immutable projection of the chat screen state. Contains only UI-safe data:
  * no API keys (only [hasApiKey]), no provider-request options, and no AI-core
  * message objects.
+ *
+ * Navigation is part of this state: [destination] selects the visible surface
+ * and is transitioned by the ViewModel atomically with everything else, so
+ * any intent that changes what the user should see (switching sessions, new
+ * chats, saving configuration) always leaves the two in sync. The invariant
+ * `NeedsConfiguration implies Settings` holds by construction.
  */
 data class ChatUiState(
     val status: ChatStatus = ChatStatus.Loading,
+    val destination: ChatDestination = ChatDestination.Chat,
     val modelOptions: List<ChatModelOption> = emptyList(),
     val selectedModelId: String? = null,
     val baseUrl: String? = null,
