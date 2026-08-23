@@ -162,7 +162,6 @@ private suspend fun streamAssistantResponse(
                             when (event) {
                                 is AssistantMessageEvent.Done -> event.message
                                 is AssistantMessageEvent.Error -> event.error
-                                else -> error("unreachable")
                             },
                         )
                         this@launch.cancel()

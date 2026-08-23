@@ -44,6 +44,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 /** Replaces Dispatchers.Main so viewModelScope runs on a shared test scheduler. */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MainDispatcherRule : org.junit.rules.TestWatcher() {
     val scheduler = kotlinx.coroutines.test.TestCoroutineScheduler()
     val testDispatcher: TestDispatcher = UnconfinedTestDispatcher(scheduler)

@@ -97,8 +97,8 @@ class AgentLoopTest {
 
         // Provider context: existing messages + prompt, system prompt preserved, no tools
         assertEquals("sys", capturedContext!!.systemPrompt)
-        assertEquals(listOf<Message>(UserMessage.ofText("earlier"), prompt), capturedContext!!.messages)
-        assertTrue(capturedContext!!.tools.isEmpty())
+        assertEquals(listOf<Message>(UserMessage.ofText("earlier"), prompt), capturedContext.messages)
+        assertTrue(capturedContext.tools.isEmpty())
         assertEquals(SimpleStreamOptions(), capturedOptions)
 
         // Immutable snapshot: the caller's context list is untouched
@@ -345,7 +345,7 @@ class AgentLoopTest {
         assertTrue(collectedAfterCancel)
         // Lifecycle stops after the cancellation point: no MessageEnd, TurnEnd, AgentEnd, or synthetic Error.
         assertEquals(listOf("AgentStart", "TurnStart", "MessageStart", "MessageEnd", "MessageStart"), typeLabels(events))
-        assertTrue(events.none { it is AgentEvent.MessageEnd && it.message is AssistantMessage && (it.message as AssistantMessage).stopReason == StopReason.ERROR })
+        assertTrue(events.none { it is AgentEvent.MessageEnd && it.message is AssistantMessage && it.message.stopReason == StopReason.ERROR })
         assertTrue(events.none { it is AgentEvent.AgentEnd })
     }
 }

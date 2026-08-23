@@ -193,7 +193,7 @@ object OpenAiCompletionsPayload {
                                     "content",
                                     buildJsonArray {
                                         add(buildJsonObject { put("type", "text"); put("text", "Attached image(s) from tool result:") })
-                                        addAll(imageParts)
+                                        imageParts.forEach { add(it) }
                                     },
                                 )
                             },

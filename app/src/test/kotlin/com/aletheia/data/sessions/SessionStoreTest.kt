@@ -191,7 +191,6 @@ class SessionStoreTest {
             assertFailsWithSessionDataException { store.load("../secrets") }
             assertFailsWithSessionDataException { store.delete("../../keys") }
         }
-        Unit
     }
 
     private suspend fun assertFailsWithSessionDataException(block: suspend () -> Unit) {
