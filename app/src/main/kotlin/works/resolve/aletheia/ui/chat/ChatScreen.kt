@@ -271,9 +271,10 @@ fun ChatScreen(
 // ---- navigation drawer ----
 
 /**
- * Default sessions sidebar: a plain titled header, a new-chat button and
- * the lazily rendered session list above, settings pinned at the bottom —
- * stock M3 pieces per the developer.android.com drawer guidance.
+ * Default sessions sidebar: a header row pairing the app title with a
+ * settings icon on the trailing edge, a new-chat button and the lazily
+ * rendered session list — stock M3 pieces per the developer.android.com
+ * drawer guidance.
  */
 @Composable
 private fun ChatDrawerContent(
@@ -283,11 +284,24 @@ private fun ChatDrawerContent(
     onOpenSettings: () -> Unit,
 ) {
     ModalDrawerSheet {
-        Text(
-            text = stringResource(R.string.app_name),
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(16.dp),
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, top = 4.dp, bottom = 4.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.app_name),
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onOpenSettings) {
+                Icon(
+                    Icons.Outlined.Settings,
+                    contentDescription = stringResource(R.string.settings_title),
+                )
+            }
+        }
         HorizontalDivider()
         FilledTonalButton(
             onClick = onNewSession,
@@ -322,14 +336,6 @@ private fun ChatDrawerContent(
                 )
             }
         }
-        HorizontalDivider()
-        NavigationDrawerItem(
-            label = { Text(stringResource(R.string.settings_title)) },
-            icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
-            selected = false,
-            onClick = onOpenSettings,
-            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-        )
     }
 }
 
