@@ -56,7 +56,14 @@ dependencies {
     // Settings persistence
     implementation(libs.androidx.datastore.preferences)
 
+    // HTTP + JSON for the native provider layer (com.aletheia.ai)
+    implementation(libs.okhttp)
+    implementation(libs.okhttp.sse)
+    implementation(libs.kotlinx.serialization.json)
+
     // Unit tests
     testImplementation(libs.junit)
+    testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
 }
