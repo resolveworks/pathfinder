@@ -66,12 +66,12 @@ class ProviderRetry(
     fun retryDelayMs(error: Exception, retryIndex: Int, maxRetryDelayMs: Long): Long {
         if (error is ProviderHttpException) {
             error.header("retry-after-ms")?.let { header ->
-                header.toDoubleOrNull()?.let { value ->
+                parseFloatPrefix(header)?.let { value ->
                     return validateServerDelayMs(value.toLong(), maxRetryDelayMs, error)
                 }
             }
             error.header("retry-after")?.let { header ->
-                val delayMs = header.toDoubleOrNull()?.let { it * 1000 }
+                val delayMs = parseFloatPrefix(header)?.let { it * 1000 }
                     ?: (parseHttpDateMs(header) - nowMs())
                 return validateServerDelayMs(delayMs.toLong(), maxRetryDelayMs, error)
             }
@@ -88,6 +88,16 @@ class ProviderRetry(
             )
         }
         return delayMs
+    }
+
+    /** Longest numeric prefix pi's `Number.parseFloat` would accept; null when none. */
+    private fun parseFloatPrefix(value: String): Double? {
+        val trimmed = value.trim()
+        // Longest-first so "1.5" wins over "1"; header values are tiny.
+        for (end in trimmed.length downTo 1) {
+            trimmed.substring(0, end).toDoubleOrNull()?.let { return it }
+        }
+        return null
     }
 
     private fun parseHttpDateMs(value: String): Long = try {

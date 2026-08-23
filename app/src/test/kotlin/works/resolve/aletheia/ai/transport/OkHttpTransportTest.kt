@@ -7,6 +7,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import okhttp3.mockwebserver.MockResponse
@@ -129,6 +130,27 @@ class OkHttpTransportTest {
             // than block on the still-open socket.
             val remaining = withTimeout(2_000) { response.events.toList() }
             assertTrue(remaining.isEmpty(), "stream must be closed after collection stops")
+        }
+        server.shutdown()
+    }
+
+    @Test
+    fun `cancelling post before headers cancels the call`() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setSocketPolicy(SocketPolicy.NO_RESPONSE),
+        )
+        server.start()
+        runBlocking {
+            val job = launch {
+                transport().post(request(server))
+            }
+            kotlinx.coroutines.delay(200)
+            job.cancel()
+            withTimeout(2_000) { job.join() }
         }
         server.shutdown()
     }

@@ -147,6 +147,40 @@ class ProviderRetryTest {
     }
 
     @Test
+    fun `retry-after-ms takes precedence over retry-after`() = runTest {
+        val h = Harness()
+        val error = httpError(429, mapOf("Retry-After-Ms" to listOf("100"), "Retry-After" to listOf("30")))
+        assertEquals(100L, h.retry.retryDelayMs(error, 0, 60_000))
+    }
+
+    @Test
+    fun `parses numeric prefixes like parseFloat`() = runTest {
+        val h = Harness()
+        // pi uses Number.parseFloat, which accepts trailing junk (e.g. "1200ms").
+        assertEquals(1200L, h.retry.retryDelayMs(httpError(429, mapOf("retry-after-ms" to listOf("1200ms"))), 0, 60_000))
+        // Unparseable retry-after-ms falls through to retry-after.
+        val error = httpError(429, mapOf("Retry-After-Ms" to listOf("soon"), "Retry-After" to listOf("2")))
+        assertEquals(2000L, h.retry.retryDelayMs(error, 0, 60_000))
+    }
+
+    @Test
+    fun `cancellation during backoff is terminal`() = runTest {
+        val h = Harness()
+        var calls = 0
+        val retry = ProviderRetry(
+            sleep = { throw kotlinx.coroutines.CancellationException("aborted") },
+            nowMs = { 0L },
+        )
+        assertFailsWith<kotlinx.coroutines.CancellationException> {
+            retry.retryProviderRequest(maxRetries = 2, maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS) {
+                calls++
+                throw httpError(429)
+            }
+        }
+        assertEquals(1, calls)
+    }
+
+    @Test
     fun `parses retry-after seconds`() = runTest {
         val h = Harness()
         h.retry.retryDelayMs(httpError(503, mapOf("Retry-After" to listOf("3"))), 0, 60_000).let {
