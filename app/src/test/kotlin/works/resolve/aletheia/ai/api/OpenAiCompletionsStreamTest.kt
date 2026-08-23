@@ -10,16 +10,15 @@ import works.resolve.aletheia.ai.core.TextContent
 import works.resolve.aletheia.ai.core.ThinkingContent
 import works.resolve.aletheia.ai.core.ToolCall
 import works.resolve.aletheia.ai.core.UserMessage
-import works.resolve.aletheia.ai.models.Models
-import works.resolve.aletheia.ai.models.Provider
 import works.resolve.aletheia.ai.providers.ZaiModels
 import works.resolve.aletheia.ai.transport.ProviderHttpException
 import works.resolve.aletheia.ai.transport.SseEvent
 import works.resolve.aletheia.ai.transport.TransportRequest
 import works.resolve.aletheia.ai.transport.TransportResponse
+import works.resolve.aletheia.ai.testing.FakeTransport
+import works.resolve.aletheia.ai.testing.sse
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -35,66 +34,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
-
-/** Scripted transport; records requests and replays scripted outcomes as complete SSE events. */
-private class FakeTransport : works.resolve.aletheia.ai.transport.HttpStreamingTransport {
-    val requests = mutableListOf<TransportRequest>()
-    var outcomes: MutableList<suspend () -> TransportResponse> = mutableListOf()
-
-    /** Set when the caller stopped consuming a response's events. */
-    var cancelled = MutableStateFlow(false)
-
-    override suspend fun post(request: TransportRequest): TransportResponse {
-        requests.add(request)
-        check(outcomes.isNotEmpty()) { "unexpected request" }
-        return outcomes.removeAt(0)()
-    }
-
-    fun enqueueResponse(chunks: List<String>, status: Int = 200) {
-        outcomes.add {
-            val events = flow {
-                try {
-                    chunks.forEach { emit(SseEvent(it)) }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    // take() aborts the flow without necessarily flipping
-                    // Job.isActive, so observe cancellation via the exception.
-                    cancelled.value = true
-                    throw e
-                }
-            }
-            TransportResponse(
-                status = status,
-                headers = mapOf("content-type" to listOf("text/event-stream")),
-                events = events,
-            )
-        }
-    }
-
-    /** A stream that never ends server-side after the given chunks. */
-    fun enqueueHangingResponse(vararg chunks: String) {
-        outcomes.add {
-            val events = flow {
-                try {
-                    chunks.forEach { emit(SseEvent(it)) }
-                    awaitCancellation()
-                } finally {
-                    cancelled.value = true
-                }
-            }
-            TransportResponse(
-                status = 200,
-                headers = mapOf("content-type" to listOf("text/event-stream")),
-                events = events,
-            )
-        }
-    }
-
-    fun enqueueError(status: Int, body: String, headers: Map<String, List<String>> = emptyMap()) {
-        outcomes.add { throw ProviderHttpException(status, headers, body) }
-    }
-}
-
-private fun sse(vararg payloads: String): List<String> = payloads.toList()
 
 class OpenAiCompletionsStreamTest {
 
@@ -662,99 +601,5 @@ class OpenAiCompletionsStreamTest {
         val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
         assertEquals("enabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertTrue(!body.containsKey("reasoning_effort"))
-    }
-}
-
-class ModelsRegistryTest {
-
-    private fun models(transport: FakeTransport, storedKey: String? = null): Models =
-        Models(
-            listOf(
-                Provider(
-                    id = ZaiModels.PROVIDER_ID,
-                    name = "Z.AI",
-                    baseUrl = ZaiModels.BASE_URL,
-                    apiKeyResolver = { storedKey },
-                    models = ZaiModels.ALL,
-                    api = OpenAiCompletionsApi(
-                        transport,
-                        works.resolve.aletheia.ai.utils.ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),
-                    ),
-                ),
-            ),
-        )
-
-    @Test
-    fun `explicit api key wins over resolver`() = runTest {
-        val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
-        models(transport, storedKey = "stored").stream(
-            "zai",
-            "glm-4.7",
-            Context(messages = listOf(UserMessage.ofText("hi"))),
-            SimpleStreamOptions(apiKey = "explicit"),
-        ).toList()
-        assertEquals("explicit", transport.requests.single().bearerToken)
-    }
-
-    @Test
-    fun `resolver supplies key when option absent`() = runTest {
-        val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
-        models(transport, storedKey = "stored").stream(
-            "zai",
-            "glm-4.7",
-            Context(messages = listOf(UserMessage.ofText("hi"))),
-        ).toList()
-        assertEquals("stored", transport.requests.single().bearerToken)
-    }
-
-    @Test
-    fun `missing key surfaces as error event`() = runTest {
-        val transport = FakeTransport()
-        val events = models(transport, storedKey = null).stream(
-            "zai",
-            "glm-4.7",
-            Context(messages = listOf(UserMessage.ofText("hi"))),
-        ).toList()
-        val error = assertIs<AssistantMessageEvent.Error>(events.single())
-        assertTrue("No API key" in (error.error.errorMessage ?: ""))
-    }
-
-    @Test
-    fun `unknown provider or model throws`() {
-        val transport = FakeTransport()
-        val models = models(transport)
-        assertFailsWithMessage<IllegalArgumentException>("Unknown provider") {
-            models.stream("nope", "x", Context(messages = emptyList()))
-        }
-        assertFailsWithMessage<IllegalArgumentException>("Unknown model") {
-            models.stream("zai", "nope", Context(messages = emptyList()))
-        }
-    }
-
-    @Test
-    fun `registry exposes providers and models`() {
-        val models = models(FakeTransport())
-        val provider = models.getProvider("zai")!!
-        assertEquals("Z.AI", provider.name)
-        assertEquals(
-            listOf("glm-4.7", "glm-5-turbo", "glm-5.3", "glm-5.2", "glm-5.2-highspeed"),
-            provider.models.map { it.id },
-        )
-        assertEquals("glm-5.3", models.getModel("zai", "glm-5.3")!!.id)
-    }
-
-    private inline fun <reified T : Throwable> assertFailsWithMessage(
-        fragment: String,
-        block: () -> Unit,
-    ) {
-        try {
-            block()
-            throw AssertionError("Expected ${T::class.simpleName} but call succeeded")
-        } catch (error: Throwable) {
-            if (error::class != T::class) throw error
-            assertTrue(fragment in (error.message ?: ""), "expected '$fragment' in: ${error.message}")
-        }
     }
 }
