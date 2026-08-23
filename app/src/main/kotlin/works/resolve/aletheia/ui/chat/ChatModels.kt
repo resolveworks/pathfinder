@@ -26,6 +26,10 @@ data object ChatNavKey : NavKey
 @Serializable
 data object SettingsNavKey : NavKey
 
+/** Navigation 3 destination key: the model configuration form. */
+@Serializable
+data object ModelSettingsNavKey : NavKey
+
 /** Outcome of initial load of settings, credentials, and sessions. */
 enum class ChatStatus {
     /** Initial load in progress. */

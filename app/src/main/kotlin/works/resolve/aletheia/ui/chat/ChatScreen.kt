@@ -15,11 +15,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Settings
@@ -155,6 +157,7 @@ fun ChatScreen(
     }
 
     val pushSettings: () -> Unit = { backStack.add(SettingsNavKey) }
+    val pushModelSettings: () -> Unit = { backStack.add(ModelSettingsNavKey) }
     val popSettings: () -> Unit = {
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
@@ -191,10 +194,10 @@ fun ChatScreen(
             topBar = {
                 if (uiState.status == ChatStatus.Ready) {
                     ChatTopBar(
-                        title = if (topKey == SettingsNavKey) {
-                            stringResource(R.string.settings_title)
-                        } else {
-                            stringResource(R.string.chat_title)
+                        title = when (topKey) {
+                            SettingsNavKey -> stringResource(R.string.settings_title)
+                            ModelSettingsNavKey -> stringResource(R.string.settings_model)
+                            else -> stringResource(R.string.chat_title)
                         },
                         onOpenDrawer = { scope.launch { drawerState.open() } },
                     )
@@ -224,11 +227,12 @@ fun ChatScreen(
             ) {
                 when {
                     uiState.status == ChatStatus.Loading -> LoadingContent()
-                    // Settings pushed on top of a failed init replaces the
-                    // error surface; popping returns to it.
-                    uiState.status == ChatStatus.Failed && topKey != SettingsNavKey -> FailedContent(
+                    // Any settings-family surface pushed on top of a failed
+                    // init replaces the error surface; popping returns to it.
+                    uiState.status == ChatStatus.Failed &&
+                        topKey != SettingsNavKey && topKey != ModelSettingsNavKey -> FailedContent(
                         error = uiState.error ?: stringResource(R.string.error_generic),
-                        onOpenSettings = pushSettings,
+                        onOpenSettings = pushModelSettings,
                     )
                     else -> NavDisplay(
                         backStack = backStack,
@@ -236,6 +240,9 @@ fun ChatScreen(
                         entryProvider = entryProvider {
                             entry<ChatNavKey> { ConversationContent(uiState = uiState) }
                             entry<SettingsNavKey> {
+                                SettingsContent(onOpenModelSettings = pushModelSettings)
+                            }
+                            entry<ModelSettingsNavKey> {
                                 ConfigurationContent(
                                     uiState = uiState,
                                     onSave = onSaveConfiguration,
@@ -368,6 +375,27 @@ private fun FailedContent(error: String, onOpenSettings: () -> Unit) {
         Button(onClick = onOpenSettings) {
             Text(stringResource(R.string.action_configure))
         }
+    }
+}
+
+/**
+ * Settings root: a submenu listing. Currently a single row pushing the
+ * model configuration form.
+ */
+@Composable
+private fun SettingsContent(onOpenModelSettings: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+    ) {
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.settings_model)) },
+            trailingContent = {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+            },
+            modifier = Modifier.clickable(onClick = onOpenModelSettings),
+        )
     }
 }
 
@@ -590,7 +618,12 @@ private val PREVIEW_MODEL_OPTIONS = listOf(
 )
 
 @Composable
-private fun PreviewChatScreen(uiState: ChatUiState, startKey: NavKey = ChatNavKey) {
+private fun PreviewChatScreen(
+    uiState: ChatUiState,
+    startKey: NavKey = ChatNavKey,
+    extraKeys: List<NavKey> = emptyList(),
+) {
+    val backStack = rememberNavBackStack(startKey).apply { addAll(extraKeys) }
     AletheiaTheme {
         ChatScreen(
             uiState = uiState,
@@ -602,6 +635,7 @@ private fun PreviewChatScreen(uiState: ChatUiState, startKey: NavKey = ChatNavKe
             onNewSession = {},
             onSwitchSession = {},
             onDismissError = {},
+            modifier = Modifier,
         )
     }
 }
@@ -630,6 +664,34 @@ private fun ChatScreenSettingsPreview() {
             selectedModelId = "model-a",
             hasApiKey = true,
         ),
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenSettingsRootPreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModelId = "model-a",
+            hasApiKey = true,
+        ),
+        extraKeys = listOf(SettingsNavKey),
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenModelSettingsPreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModelId = "model-a",
+            hasApiKey = true,
+        ),
+        extraKeys = listOf(SettingsNavKey, ModelSettingsNavKey),
     )
 }
 
