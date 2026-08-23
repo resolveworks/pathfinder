@@ -11,6 +11,7 @@ import com.aletheia.ai.transport.TransportRequest
 import com.aletheia.ai.transport.TransportResponse
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -160,5 +161,45 @@ class ZaiCatalogTest {
         assertEquals(ZaiModels.BASE_URL, provider.baseUrl)
         assertEquals(ZaiModels.ALL, provider.models)
         assertTrue(provider.api is com.aletheia.ai.api.OpenAiCompletionsApi)
+    }
+
+    @Test
+    fun `factory default base url is the catalog default without rebasing models`() {
+        val provider = ZaiProvider.create(
+            object : HttpStreamingTransport {
+                override suspend fun post(request: TransportRequest): TransportResponse =
+                    TransportResponse(200, emptyMap(), flowOf())
+            },
+        )
+        assertEquals(ZaiModels.BASE_URL, provider.baseUrl)
+        // The shared immutable catalog is reused unchanged.
+        assertEquals(ZaiModels.ALL, provider.models)
+    }
+
+    @Test
+    fun `factory override rebases provider and every model`() {
+        val provider = ZaiProvider.create(
+            object : HttpStreamingTransport {
+                override suspend fun post(request: TransportRequest): TransportResponse =
+                    TransportResponse(200, emptyMap(), flowOf())
+            },
+            baseUrl = " http://localhost:1234/v4/ ",
+        )
+        assertEquals("http://localhost:1234/v4", provider.baseUrl)
+        assertEquals(ZaiModels.ALL.size, provider.models.size)
+        assertTrue(provider.models.all { it.baseUrl == "http://localhost:1234/v4" })
+        // The shared catalog is not mutated.
+        assertTrue(ZaiModels.ALL.all { it.baseUrl == ZaiModels.BASE_URL })
+    }
+
+    @Test
+    fun `factory rejects blank base url`() {
+        val transport = object : HttpStreamingTransport {
+            override suspend fun post(request: TransportRequest): TransportResponse =
+                TransportResponse(200, emptyMap(), flowOf())
+        }
+        assertFailsWith<IllegalArgumentException> { ZaiProvider.create(transport, baseUrl = "   ") }
+        assertFailsWith<IllegalArgumentException> { ZaiProvider.create(transport, baseUrl = "") }
+        assertFailsWith<IllegalArgumentException> { ZaiProvider.create(transport, baseUrl = "/") }
     }
 }

@@ -16,16 +16,33 @@ object ZaiProvider {
     const val NAME = "Z.AI"
     const val API_KEY_ENV_VAR = "ZAI_API_KEY"
 
+    /** Normalizes a base-URL override: trimmed, with all trailing slashes dropped. */
+    internal fun normalizeBaseUrl(url: String): String {
+        val effective = url.trim().trimEnd('/')
+        if (effective.isNullOrEmpty()) {
+            throw IllegalArgumentException("baseUrl must not be blank")
+        }
+        return effective
+    }
+
     fun create(
         transport: HttpStreamingTransport,
         retry: ProviderRetry = ProviderRetry(),
         apiKeyResolver: (suspend () -> String?)? = null,
-    ): Provider = Provider(
-        id = ZaiModels.PROVIDER_ID,
-        name = NAME,
-        baseUrl = ZaiModels.BASE_URL,
-        apiKeyResolver = apiKeyResolver,
-        models = ZaiModels.ALL,
-        api = OpenAiCompletionsApi(transport, retry) as ChatApi,
-    )
+        baseUrl: String = ZaiModels.BASE_URL,
+    ): Provider {
+        val effectiveBaseUrl = normalizeBaseUrl(baseUrl)
+        return Provider(
+            id = ZaiModels.PROVIDER_ID,
+            name = NAME,
+            baseUrl = effectiveBaseUrl,
+            apiKeyResolver = apiKeyResolver,
+            models = if (effectiveBaseUrl == ZaiModels.BASE_URL) {
+                ZaiModels.ALL
+            } else {
+                ZaiModels.ALL.map { it.copy(baseUrl = effectiveBaseUrl) }
+            },
+            api = OpenAiCompletionsApi(transport, retry) as ChatApi,
+        )
+    }
 }
