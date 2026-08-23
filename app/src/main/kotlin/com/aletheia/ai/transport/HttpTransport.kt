@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.Flow
  * Minimal HTTP SSE transport abstraction so request execution and event
  * parsing stay testable without a live network. Implementations POST a
  * request with optional bearer auth and expose the response's complete SSE
- * `data:` events as a cold, cancellable flow.
+ * `data:` events as a cancellable flow.
  *
  * A successful call returns after response headers are received; collecting
  * [TransportResponse.events] reads the body. Non-2xx responses throw
@@ -20,12 +20,18 @@ interface HttpStreamingTransport {
 
 data class TransportRequest(
     val url: String,
-    /** Auth token sent as a Bearer credential; never logged. */
+    /** Auth token sent as a Bearer credential; never logged or included in toString(). */
     val bearerToken: String?,
     val headers: Map<String, String> = emptyMap(),
     val body: ByteArray,
     val timeoutMs: Long? = null,
 ) {
+    override fun toString(): String =
+        "TransportRequest(url=$url, bearerToken=" +
+            (bearerToken?.let { "<redacted>" } ?: "null") +
+            ", headers=${headers.keys}, body=<${body.size} bytes>" +
+            ", timeoutMs=$timeoutMs)"
+
     override fun equals(other: Any?): Boolean =
         other is TransportRequest &&
             other.url == url &&
@@ -45,7 +51,14 @@ data class TransportResponse(
     val status: Int,
     /** Header names lower-cased. */
     val headers: Map<String, List<String>>,
-    /** Complete SSE data events; collecting this flow reads the stream and must be cancellable. */
+    /**
+     * Complete SSE data events. This flow is an already-started,
+     * single-consumer view of the live response body, not a cold/restartable
+     * flow: collecting it consumes the stream from the point the response was
+     * received. Collecting is cancellable; cancelling collection closes the
+     * underlying response body. Attempting to collect more than once is not
+     * supported.
+     */
     val events: Flow<SseEvent>,
 ) {
     fun header(name: String): String? = headers[name.lowercase()]?.firstOrNull { it.isNotBlank() }

@@ -1,9 +1,16 @@
 package com.aletheia.ai.core
 
 /**
- * Stream event protocol ported from pi's AssistantMessageEvent. A stream emits
- * `Start` first, then block events carrying immutable partial snapshots, and
- * terminates with `Done` (success) or `Error` (failure/abort) — never both.
+ * Stream event protocol ported from pi's AssistantMessageEvent. A successful
+ * stream emits `Start` first, then block events carrying immutable partial
+ * snapshots, and terminates with `Done`. Failures at any point — including
+ * auth or setup failures before anything is emitted — are encoded as a
+ * terminal `Error` event, which may therefore arrive without a preceding
+ * `Start`. `Done` and `Error` are mutually exclusive terminal events.
+ *
+ * Coroutine cancellation is not a failure: cancelling the collecting
+ * coroutine propagates normally (the flow simply stops emitting) and no
+ * `Error` event is produced.
  */
 sealed class AssistantMessageEvent {
     abstract val partial: AssistantMessage
@@ -58,7 +65,7 @@ sealed class AssistantMessageEvent {
  * Timing and retry behavior matches pi's provider-retry defaults.
  */
 data class StreamOptions(
-    /** Explicit API key; when absent the provider's credential resolver is used. */
+    /** Explicit API key; when absent the provider's credential resolver is used. Never included in toString(). */
     val apiKey: String? = null,
     /** Session identifier usable for affinity/sticky routing. */
     val sessionId: String? = null,
@@ -69,6 +76,11 @@ data class StreamOptions(
     /** Cap on server-requested retry delays; delays above this fail immediately. 0 disables. */
     val maxRetryDelayMs: Long = DEFAULT_MAX_RETRY_DELAY_MS,
 ) {
+    override fun toString(): String =
+        "StreamOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
+            ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
+            ", timeoutMs=$timeoutMs, maxRetries=$maxRetries, maxRetryDelayMs=$maxRetryDelayMs)"
+
     companion object {
         const val DEFAULT_MAX_RETRY_DELAY_MS = 60_000L
     }
@@ -85,6 +97,12 @@ data class SimpleStreamOptions(
     val maxRetries: Int = 0,
     val maxRetryDelayMs: Long = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
 ) {
+    override fun toString(): String =
+        "SimpleStreamOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
+            ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
+            ", reasoning=$reasoning, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
+            ", maxRetryDelayMs=$maxRetryDelayMs)"
+
     fun toStreamOptions(reasoningEffort: ModelThinkingLevel?): OpenAiCompletionsOptions =
         OpenAiCompletionsOptions(
             apiKey = apiKey,
@@ -109,4 +127,10 @@ data class OpenAiCompletionsOptions(
     val timeoutMs: Long? = null,
     val maxRetries: Int = 0,
     val maxRetryDelayMs: Long = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
-)
+) {
+    override fun toString(): String =
+        "OpenAiCompletionsOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
+            ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
+            ", reasoningEffort=$reasoningEffort, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
+            ", maxRetryDelayMs=$maxRetryDelayMs)"
+}

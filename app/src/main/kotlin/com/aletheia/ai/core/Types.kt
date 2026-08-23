@@ -4,7 +4,7 @@ import kotlinx.serialization.json.JsonElement
 
 /**
  * Core chat content, message, and model metadata types, ported from the pi
- * `@mariozechner/ai` package (packages/ai/src/types.ts), reduced to what the
+ * project's ai package (packages/ai/src/types.ts), reduced to what the
  * OpenAI Chat Completions API family needs.
  */
 
