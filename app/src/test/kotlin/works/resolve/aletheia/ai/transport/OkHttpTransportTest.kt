@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -148,7 +149,9 @@ class OkHttpTransportTest {
             val job = launch {
                 transport().post(request(server))
             }
-            kotlinx.coroutines.delay(200)
+            // Deterministic barrier: block until the request reaches the server,
+            // then cancel while the server is withholding the response.
+            server.takeRequest(2, TimeUnit.SECONDS)
             job.cancel()
             withTimeout(2_000) { job.join() }
         }

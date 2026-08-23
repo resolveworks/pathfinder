@@ -90,12 +90,13 @@ class ProviderRetry(
         return delayMs
     }
 
-    /** Longest numeric prefix pi's `Number.parseFloat` would accept; null when none. */
+    /** Longest numeric prefix pi's `Number.parseFloat` would accept; null when none.
+     * NaN is rejected like pi's `Number.isNaN` guard so it falls through. */
     private fun parseFloatPrefix(value: String): Double? {
         val trimmed = value.trim()
         // Longest-first so "1.5" wins over "1"; header values are tiny.
         for (end in trimmed.length downTo 1) {
-            trimmed.substring(0, end).toDoubleOrNull()?.let { return it }
+            trimmed.substring(0, end).toDoubleOrNull()?.takeIf { !it.isNaN() }?.let { return it }
         }
         return null
     }

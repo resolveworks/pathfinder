@@ -161,6 +161,9 @@ class ProviderRetryTest {
         // Unparseable retry-after-ms falls through to retry-after.
         val error = httpError(429, mapOf("Retry-After-Ms" to listOf("soon"), "Retry-After" to listOf("2")))
         assertEquals(2000L, h.retry.retryDelayMs(error, 0, 60_000))
+        // NaN retry-after-ms (pi guards with Number.isNaN) falls through too.
+        val nan = httpError(429, mapOf("Retry-After-Ms" to listOf("NaN"), "Retry-After" to listOf("2")))
+        assertEquals(2000L, h.retry.retryDelayMs(nan, 0, 60_000))
     }
 
     @Test
