@@ -282,8 +282,25 @@ class AgentTest {
             streamOptions = SimpleStreamOptions(apiKey = "sk-supersecret"),
         )
 
+        val failureTypes = mutableListOf<String>()
+        val collector = launch { agent.events.collect { failureTypes.add(it::class.simpleName!!) } }
+        yield() // subscribe before the run starts
+
         // Ordinary failures resolve normally rather than throwing.
         agent.prompt("hi")
+        collector.cancelAndJoin()
+
+        // Full lifecycle, mirroring pi: agent_start/turn_start, user prompt pair,
+        // then the synthesized failure message through message_start/end, turn_end, agent_end.
+        assertEquals(
+            listOf(
+                "AgentStart", "TurnStart",
+                "MessageStart", "MessageEnd",
+                "MessageStart", "MessageEnd",
+                "TurnEnd", "AgentEnd",
+            ),
+            failureTypes,
+        )
 
         val final = agent.state.value
         assertFalse(final.isStreaming)
@@ -293,5 +310,29 @@ class AgentTest {
         assertEquals("Unexpected error (RuntimeException)", error.errorMessage)
         assertFalse(error.errorMessage!!.contains("sk-supersecret"))
         assertEquals("Unexpected error (RuntimeException)", final.errorMessage)
+    }
+
+    @Test
+    fun `provider error errorMessage is cleared by the next successful run`() = runTest {
+        var call = 0
+        val error = assistant(text = "", stopReason = StopReason.ERROR, errorMessage = "500 upstream")
+        val agent = agent(streamFn = StreamFn { _, _, _ ->
+            call++
+            if (call == 1) flowOf(AssistantMessageEvent.Error(StopReason.ERROR, error)) else okStream()
+        })
+
+        agent.prompt("hi")
+        assertEquals("500 upstream", agent.state.value.errorMessage)
+
+        agent.prompt("again")
+        assertNull(agent.state.value.errorMessage)
+        assertEquals(4, agent.state.value.messages.size)
+    }
+
+    @Test
+    fun `abort while idle is a no-op`() = runTest {
+        val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
+        agent.abort() // must not throw
+        assertTrue(agent.state.value.messages.isEmpty())
     }
 }
