@@ -28,7 +28,11 @@ class ProviderStreamException(
     val stopReason: StopReason = StopReason.ERROR,
 ) : Exception(message)
 
-/** Convenience for the provider-neutral options, mirroring pi's streamSimple. */
+/**
+ * Convenience for the provider-neutral options, mirroring pi's streamSimple.
+ * maxTokens defaults to the model's limit and is clamped against the estimated
+ * context so the request always leaves safety room for the answer.
+ */
 fun ChatApi.streamSimple(
     model: Model,
     context: Context,
@@ -38,5 +42,10 @@ fun ChatApi.streamSimple(
         com.aletheia.ai.core.clampThinkingLevel(model, ModelThinkingLevel.valueOf(it.name))
     }
     val effort = if (clamped == ModelThinkingLevel.OFF) null else clamped
-    return stream(model, context, options.toStreamOptions(effort))
+    val maxTokens = com.aletheia.ai.utils.clampMaxTokensToContext(
+        model,
+        context,
+        options.maxTokens ?: model.maxTokens,
+    )
+    return stream(model, context, options.toStreamOptions(effort).copy(maxTokens = maxTokens))
 }

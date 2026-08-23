@@ -503,6 +503,54 @@ class OpenAiCompletionsStreamTest {
     }
 
     @Test
+    fun `streamSimple defaults max tokens to the model limit`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        api(transport).streamSimple(model, context, SimpleStreamOptions(apiKey = "k")).toList()
+        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertEquals(model.maxTokens.toLong(), body["max_tokens"]!!.jsonPrimitive.longOrNull)
+    }
+
+    @Test
+    fun `streamSimple retains explicit max tokens when room exists`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        api(transport).streamSimple(model, context, SimpleStreamOptions(apiKey = "k", maxTokens = 512)).toList()
+        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertEquals(512L, body["max_tokens"]!!.jsonPrimitive.longOrNull)
+    }
+
+    @Test
+    fun `streamSimple clamps oversized max tokens against context`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        api(transport).streamSimple(
+            model,
+            context,
+            SimpleStreamOptions(apiKey = "k", maxTokens = 1_000_000),
+        ).toList()
+        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertEquals(
+            com.aletheia.ai.utils.clampMaxTokensToContext(model, context, 1_000_000).toLong(),
+            body["max_tokens"]!!.jsonPrimitive.longOrNull,
+        )
+    }
+
+    @Test
+    fun `streamSimple clamps to minimum one in a tight window`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        val tiny = model.copy(contextWindow = 4097) // 1 estimated token + 4096 safety
+        api(transport).streamSimple(
+            tiny,
+            context,
+            SimpleStreamOptions(apiKey = "k", maxTokens = 5000),
+        ).toList()
+        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertEquals(1L, body["max_tokens"]!!.jsonPrimitive.longOrNull)
+    }
+
+    @Test
     fun `toggle-only model enables reasoning through streamSimple without effort`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
