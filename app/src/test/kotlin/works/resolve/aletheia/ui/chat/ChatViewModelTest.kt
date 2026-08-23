@@ -1,0 +1,864 @@
+package works.resolve.aletheia.ui.chat
+
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.lifecycle.viewModelScope
+import works.resolve.aletheia.agent.Agent
+import works.resolve.aletheia.agent.AgentFactory
+import works.resolve.aletheia.agent.StreamFn
+import works.resolve.aletheia.ai.core.AssistantMessage
+import works.resolve.aletheia.ai.core.AssistantMessageEvent
+import works.resolve.aletheia.ai.core.Message
+import works.resolve.aletheia.ai.core.Model
+import works.resolve.aletheia.ai.core.StopReason
+import works.resolve.aletheia.ai.core.TextContent
+import works.resolve.aletheia.data.credentials.ApiKeyStore
+import works.resolve.aletheia.data.settings.SettingsRepository
+import works.resolve.aletheia.data.settings.SettingsStore
+import works.resolve.aletheia.data.sessions.SessionRepository
+import works.resolve.aletheia.data.sessions.SessionStore
+import java.io.File
+import java.util.concurrent.ConcurrentLinkedQueue
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.test.TestDispatcher
+import org.junit.runner.Description
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+
+/** Replaces Dispatchers.Main so viewModelScope runs on a shared test scheduler. */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+class MainDispatcherRule : org.junit.rules.TestWatcher() {
+    val scheduler = kotlinx.coroutines.test.TestCoroutineScheduler()
+    val testDispatcher: TestDispatcher = UnconfinedTestDispatcher(scheduler)
+    override fun starting(description: Description?) = Dispatchers.setMain(testDispatcher)
+    override fun finished(description: Description?) = Dispatchers.resetMain()
+}
+
+class ChatViewModelTest {
+
+    @get:Rule
+    val tmpFolder = TemporaryFolder()
+
+    @get:Rule
+    val mainDispatcherRule = MainDispatcherRule()
+
+    private val testModel = Model(
+        id = "glm-4.7",
+        name = "GLM",
+        api = "openai-completions",
+        provider = "zai",
+        baseUrl = "https://example.invalid",
+    )
+
+    private class FakeApiKeyStore : ApiKeyStore {
+        val keys = mutableMapOf<String, String>()
+        var lastSet: String? = null
+        override suspend fun getApiKey(providerId: String): String? = keys[providerId]
+        override suspend fun setApiKey(providerId: String, apiKey: String) {
+            keys[providerId] = apiKey
+            lastSet = apiKey
+        }
+        override suspend fun deleteApiKey(providerId: String) {
+            keys.remove(providerId)
+        }
+    }
+
+    /** SettingsStore wrapper whose writes can be made to fail deterministically. */
+    class FailingSettingsStore(
+        private val delegate: SettingsStore,
+    ) : SettingsStore by delegate {
+        var failWrites = false
+        var failActiveSessionWrites = false
+        override suspend fun setProviderId(providerId: String) {
+            if (failWrites) throw java.io.IOException("settings write failed")
+            delegate.setProviderId(providerId)
+        }
+        override suspend fun setModelId(modelId: String) {
+            if (failWrites) throw java.io.IOException("settings write failed")
+            delegate.setModelId(modelId)
+        }
+        override suspend fun setBaseUrl(baseUrl: String?) {
+            if (failWrites) throw java.io.IOException("settings write failed")
+            delegate.setBaseUrl(baseUrl)
+        }
+        override suspend fun setActiveSessionId(sessionId: String?) {
+            if (failActiveSessionWrites) throw java.io.IOException("active session write failed")
+            delegate.setActiveSessionId(sessionId)
+        }
+    }
+
+    /** SessionRepository wrapper whose saves can be made to fail deterministically. */
+    class FailingSessionRepository(
+        private val delegate: SessionRepository,
+    ) : SessionRepository by delegate {
+        var failSave = false
+        var failedSaves = 0
+            private set
+        var totalSaves = 0
+            private set
+        override suspend fun save(session: works.resolve.aletheia.data.sessions.Session): works.resolve.aletheia.data.sessions.Session {
+            totalSaves += 1
+            if (failSave) {
+                failedSaves += 1
+                throw works.resolve.aletheia.data.sessions.SessionDataException("save failed")
+            }
+            return delegate.save(session)
+        }
+    }
+
+    /** Test harness wiring real repositories/stores and scripted real Agents. */
+    private inner class Harness {
+        val credentials = FakeApiKeyStore()
+        val dataStoreScope = CoroutineScope(SupervisorJob() + mainDispatcherRule.testDispatcher)
+        val settings = SettingsRepository(
+            PreferenceDataStoreFactory.create(
+                scope = dataStoreScope,
+                produceFile = { File(tmpFolder.root, "settings_${System.nanoTime()}.preferences_pb") },
+            ),
+        )
+        val settingsStore = FailingSettingsStore(settings)
+        var nextSessionId = 0
+        val sessionStore = SessionStore(
+            root = File(tmpFolder.root, "sessions_${System.nanoTime()}"),
+            idFactory = { "sess-${nextSessionId++}" },
+        )
+        val sessions = FailingSessionRepository(sessionStore)
+
+        /** Scripted stream flows per prompt; queued before send(). */
+        val scriptedStreams = ConcurrentLinkedQueue<Flow<AssistantMessageEvent>>()
+
+        /** Base URLs rejected by the fake factory (validation-error path). */
+        val rejectedBaseUrls = mutableSetOf<String>()
+
+        /** When set, the factory rejects every configuration. */
+        var rejectAll = false
+        val createdAgents = mutableListOf<Agent>()
+
+        val factory = AgentFactory { settings, _, transcript ->
+            check(!rejectAll) { "factory unavailable" }
+            settings.baseUrl?.let { require(it !in rejectedBaseUrls) { "baseUrl rejected" } }
+            Agent(
+                model = testModel,
+                streamFn = StreamFn { _, _, _ ->
+                    scriptedStreams.poll() ?: flow { kotlinx.coroutines.awaitCancellation() }
+                },
+            ).also { agent ->
+                agent.replaceTranscript(transcript)
+                createdAgents += agent
+            }
+        }
+
+        fun newViewModel(): ChatViewModel = ChatViewModel(
+            settingsRepository = settingsStore,
+            credentials = credentials,
+            sessionStore = sessions,
+            agentFactory = factory,
+        )
+
+        fun assistant(text: String, stopReason: StopReason = StopReason.STOP, error: String? = null) =
+            AssistantMessage(
+                content = if (text.isEmpty()) emptyList() else listOf(TextContent(text)),
+                api = testModel.api,
+                provider = testModel.provider,
+                model = testModel.id,
+                stopReason = stopReason,
+                errorMessage = error,
+                timestamp = System.nanoTime(),
+            )
+
+        /** Stream that emits a partial, then waits for [gate] before finishing. */
+        fun gatedStream(text: String, gate: CompletableDeferred<Unit>): Flow<AssistantMessageEvent> = flow {
+            emit(AssistantMessageEvent.Start(assistant("")))
+            gate.await()
+            val full = assistant(text)
+            emit(AssistantMessageEvent.TextDelta(0, text, full))
+            emit(AssistantMessageEvent.Done(StopReason.STOP, full))
+        }
+
+        /** Stream that fails before any content. */
+        fun errorStream(message: AssistantMessage) =
+            flowOf(AssistantMessageEvent.Error(StopReason.ERROR, message))
+
+        suspend fun countSessions(): Int = sessionStore.summaries().size
+    }
+
+    /** Cancels the ViewModel scope and waits until all in-flight work has settled. */
+    private suspend fun ChatViewModel.closeForTest() {
+        val job = viewModelScope.coroutineContext[Job]!!
+        job.cancel()
+        job.join()
+    }
+
+    // ---- tests ----
+
+    @Test
+    fun unconfiguredInit_showsNeedsConfiguration_andKeepsKeyPrivate() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+
+        val state = vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        assertFalse(state.hasApiKey)
+        assertNull(state.activeSessionId)
+        assertTrue(state.messages.isEmpty())
+        assertTrue(state.modelOptions.isNotEmpty())
+
+        // Configure a stored key but no model settings: still unconfigured,
+        // and the key never appears anywhere in the UI state.
+        h.credentials.keys["zai"] = "SECRET-KEY-123"
+        val vm2 = h.newViewModel()
+        val state2 = vm2.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        assertTrue(state2.hasApiKey)
+        assertFalse(state2.toString().contains("SECRET-KEY-123"))
+
+        vm.closeForTest()
+        vm2.closeForTest()
+    }
+
+    @Test
+    fun configure_createsSession_andGoesReady() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "SECRET-KEY-123")
+
+        val state = vm.uiState.first { it.status == ChatStatus.Ready }
+        assertNotNull(state.activeSessionId)
+        assertTrue(state.hasApiKey)
+        assertEquals("glm-4.7", state.selectedModelId)
+        assertFalse(state.toString().contains("SECRET-KEY-123"))
+        assertEquals(1, h.countSessions())
+
+        val persisted = h.settings.currentSettings()
+        assertEquals("zai", persisted.providerId)
+        assertEquals("glm-4.7", persisted.modelId)
+        assertEquals(state.activeSessionId, persisted.activeSessionId)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun send_streamsPersists_andDerivesTitle() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        val gate = CompletableDeferred<Unit>()
+        h.scriptedStreams.add(h.gatedStream("world", gate))
+
+        vm.onDraftChange("  Hello  ")
+        assertTrue(vm.uiState.value.canSend)
+        vm.send()
+
+        // Mid-stream: partial visible, committed transcript has only the user message.
+        vm.uiState.first { it.isStreaming && it.streamingMessage != null }
+        val mid = vm.uiState.value
+        assertEquals(1, mid.messages.size)
+        assertEquals(ChatRole.User, mid.messages[0].role)
+        assertEquals("Hello", mid.messages[0].text)
+        assertFalse(mid.canSend)
+        assertEquals("", mid.draft)
+
+        gate.complete(Unit)
+
+        // Done: user + assistant committed, no duplicates, not streaming.
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+        val done = vm.uiState.value
+        assertNull(done.streamingMessage)
+        assertEquals(ChatRole.Assistant, done.messages[1].role)
+        assertEquals("world", done.messages[1].text)
+        assertNull(done.error)
+
+        // Session persisted with both messages and a derived title.
+        vm.uiState.first {
+            it.sessionSummaries.firstOrNull()?.title == "Hello" &&
+                it.sessionSummaries.firstOrNull()?.messageCount == 2
+        }
+        val sessionId = done.activeSessionId!!
+        val session = h.sessionStore.load(sessionId)!!
+        assertEquals(2, session.messages.size)
+        assertEquals("Hello", session.title)
+        vm.onDraftChange("next")
+        assertTrue(vm.uiState.value.canSend)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun abort_persistsUserAndAbortedAssistant() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        val gate = CompletableDeferred<Unit>()
+        h.scriptedStreams.add(h.gatedStream("never", gate))
+        vm.onDraftChange("Hello")
+        vm.send()
+        vm.uiState.first { it.isStreaming }
+
+        vm.stop()
+
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+        val state = vm.uiState.value
+        assertEquals(ChatRole.Assistant, state.messages[1].role)
+        assertNotNull(state.messages[1].error)
+        val sessionId = state.activeSessionId!!
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+
+        val session = h.sessionStore.load(sessionId)!!
+        assertEquals(2, session.messages.size)
+        val assistant = session.messages[1] as works.resolve.aletheia.ai.core.AssistantMessage
+        assertEquals(StopReason.ABORTED, assistant.stopReason)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun streamError_surfacesError_andPersists() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        h.scriptedStreams.add(h.errorStream(h.assistant("", StopReason.ERROR, "boom")))
+        vm.onDraftChange("Hello")
+        vm.send()
+
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+        val state = vm.uiState.value
+        assertNotNull(state.error)
+        assertNotNull(state.messages[1].error)
+        val sessionId = state.activeSessionId!!
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+        assertEquals(2, h.sessionStore.load(sessionId)!!.messages.size)
+
+        vm.dismissError()
+        assertNull(vm.uiState.value.error)
+
+        // A new successful run clears the (re-surfaced) agent error for good.
+        vm.onDraftChange("Again")
+        vm.uiState.first { it.canSend }
+        h.scriptedStreams.add(h.gatedStream("fine", CompletableDeferred<Unit>().apply { complete(Unit) }))
+        vm.send()
+        vm.uiState.first { !it.isStreaming && it.messages.size == 4 }
+        assertNull(vm.uiState.value.error)
+        assertNull(vm.uiState.value.messages[3].error)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun restart_restoresActiveSession_andTranscript() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        val gate = CompletableDeferred<Unit>().apply { complete(Unit) }
+        h.scriptedStreams.add(h.gatedStream("world", gate))
+        vm.onDraftChange("Hello")
+        vm.send()
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+        val originalId = vm.uiState.value.activeSessionId
+        // Wait until persistence of both messages is observable.
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == originalId }.messageCount == 2 }
+        vm.closeForTest()
+
+        val vm2 = h.newViewModel()
+        val state = vm2.uiState.first { it.status == ChatStatus.Ready }
+        assertEquals(originalId, state.activeSessionId)
+        assertEquals(2, state.messages.size)
+        assertEquals("Hello", state.sessionSummaries.first { it.id == originalId!! }.title)
+        // No save loop: restart alone does not bump the file beyond content.
+        assertEquals(2, h.sessionStore.load(originalId!!)!!.messages.size)
+
+        vm2.closeForTest()
+    }
+
+    @Test
+    fun newAndSwitchSession_swapTranscripts() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val firstId = vm.uiState.value.activeSessionId!!
+
+        // Populate the first session.
+        val gate = CompletableDeferred<Unit>().apply { complete(Unit) }
+        h.scriptedStreams.add(h.gatedStream("world", gate))
+        vm.onDraftChange("Hello")
+        vm.send()
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == firstId }.messageCount == 2 }
+
+        vm.newSession()
+        val fresh = vm.uiState.first { it.activeSessionId != firstId }
+        assertTrue(fresh.messages.isEmpty())
+        assertNull(fresh.streamingMessage)
+        assertEquals(2, fresh.sessionSummaries.size)
+        assertTrue(fresh.sessionSummaries.none { it.id == fresh.activeSessionId && it.messageCount > 0 })
+
+        vm.switchSession(firstId)
+        val restored = vm.uiState.first { it.activeSessionId == firstId && it.messages.size == 2 }
+        assertEquals("Hello", restored.messages[0].text)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun invalidModel_andFactoryValidation_areRejectedSafely() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+        vm.saveConfiguration(modelId = "not-a-model", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.error != null }
+        assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
+        vm.dismissError()
+
+        // Missing key on initial configuration.
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "   ")
+        vm.uiState.first { it.error != null }
+        assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
+        assertEquals(0, h.countSessions())
+
+        // Complete configuration, then a factory-invalid base URL keeps the old agent.
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val agentsBefore = h.createdAgents.size
+
+        h.rejectedBaseUrls += "https://bad.example"
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = "https://bad.example", apiKeyInput = "")
+        vm.uiState.first { it.error != null }
+        assertEquals(agentsBefore, h.createdAgents.size)
+        // Same agent still bound: sending still works through the old agent.
+        assertTrue(vm.uiState.value.status == ChatStatus.Ready)
+        // The invalid base URL was never persisted.
+        assertNull(h.settings.currentSettings().baseUrl)
+        assertEquals("glm-4.7", h.settings.currentSettings().modelId)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun blankKeyRetention_keepsStoredKey() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = "https://api.example.com/v1/", apiKeyInput = "first-key")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        assertEquals("first-key", h.credentials.keys["zai"])
+        assertEquals(1, h.createdAgents.size)
+
+        // Blank key input retains the stored key; blank base URL clears it.
+        vm.saveConfiguration(modelId = "glm-5.3", baseUrl = "   ", apiKeyInput = "")
+        vm.uiState.first { it.selectedModelId == "glm-5.3" }
+
+        val state = vm.uiState.value
+        assertEquals(ChatStatus.Ready, state.status)
+        assertTrue(state.hasApiKey)
+        assertEquals("first-key", h.credentials.keys["zai"])
+        assertNull(state.baseUrl)
+        assertNull(h.settings.currentSettings().baseUrl)
+        // Agent rebuilt for the same session/transcript with new settings.
+        assertEquals(2, h.createdAgents.size)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun busyIntents_areRejectedWhileStreaming() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        val gate = CompletableDeferred<Unit>()
+        h.scriptedStreams.add(h.gatedStream("world", gate))
+        vm.onDraftChange("Hello")
+        vm.send()
+        vm.uiState.first { it.isStreaming }
+        val sessionId = vm.uiState.value.activeSessionId
+        val sessionsBefore = h.countSessions()
+
+        vm.newSession()
+        vm.uiState.first { it.error != null }
+        assertEquals(sessionId, vm.uiState.value.activeSessionId)
+        assertEquals(sessionsBefore, h.countSessions())
+        vm.dismissError()
+
+        vm.switchSession("other")
+        vm.uiState.first { it.error != null }
+        assertEquals(sessionId, vm.uiState.value.activeSessionId)
+        vm.dismissError()
+
+        vm.saveConfiguration(modelId = "glm-5.3", baseUrl = null, apiKeyInput = "k2")
+        vm.uiState.first { it.error != null }
+        assertEquals("glm-4.7", vm.uiState.value.selectedModelId)
+        vm.dismissError()
+
+        // Blank send is a no-op even when idle; blank draft cannot send.
+        vm.onDraftChange("   ")
+        assertFalse(vm.uiState.value.canSend)
+        vm.send()
+        assertEquals(1, vm.uiState.value.messages.size)
+
+        gate.complete(Unit)
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+        // Wait for the final persistence before tearing the scope down.
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun switchAfterCompletion_awaitsPersistence_andCannotCrossSessions() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val firstId = vm.uiState.value.activeSessionId!!
+
+        // Stream completes; the persistence job for the final assistant
+        // message may still be pending when a new session is requested.
+        val gate = CompletableDeferred<Unit>().apply { complete(Unit) }
+        h.scriptedStreams.add(h.gatedStream("world", gate))
+        vm.onDraftChange("Hello")
+        vm.send()
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+
+        vm.newSession()
+        val state = vm.uiState.first { it.activeSessionId != firstId }
+        val secondId = state.activeSessionId!!
+
+        // The finished transcript stayed with the old session...
+        val oldSession = h.sessionStore.load(firstId)!!
+        assertEquals(2, oldSession.messages.size)
+        assertEquals("Hello", oldSession.title)
+        // ...and cannot overwrite the freshly adopted one.
+        assertTrue(state.messages.isEmpty())
+        assertEquals(0, h.sessionStore.load(secondId)!!.messages.size)
+        assertEquals(2, state.sessionSummaries.first { s -> s.id == firstId }.messageCount)
+
+        // A later exchange in the new session only touches the new session file.
+        h.scriptedStreams.add(h.gatedStream("second", CompletableDeferred<Unit>().apply { complete(Unit) }))
+        vm.onDraftChange("Second")
+        vm.send()
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == secondId }.messageCount == 2 }
+        assertEquals(2, h.sessionStore.load(firstId)!!.messages.size)
+        assertEquals(2, h.sessionStore.load(secondId)!!.messages.size)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun initFactoryFailure_isFailed_neverReady_andInvalidBaseUrlNotPersisted() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        // Persist a fully valid-looking configuration, but the factory is down.
+        h.settings.setProviderId("zai")
+        h.settings.setModelId("glm-4.7")
+        h.credentials.keys["zai"] = "stored-key"
+        h.rejectAll = true
+
+        val vm = h.newViewModel()
+        val state = vm.uiState.first { it.status != ChatStatus.Loading }
+        assertEquals(ChatStatus.Failed, state.status)
+        assertNotNull(state.error)
+        assertNull(state.activeSessionId)
+        assertNull(h.settings.currentSettings().activeSessionId)
+        vm.closeForTest()
+
+        // Restart after a rejected base URL: the invalid value was never
+        // persisted, so the previous valid configuration still works.
+        val h2 = Harness()
+        val vm2 = h2.newViewModel()
+        vm2.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm2.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm2.uiState.first { it.status == ChatStatus.Ready }
+        h2.rejectedBaseUrls += "https://bad.example"
+        vm2.saveConfiguration(modelId = "glm-4.7", baseUrl = "https://bad.example", apiKeyInput = "")
+        vm2.uiState.first { it.error != null }
+        assertEquals("glm-4.7", vm2.uiState.value.selectedModelId)
+        vm2.closeForTest()
+
+        val vm3 = h2.newViewModel()
+        val state3 = vm3.uiState.first { it.status == ChatStatus.Ready }
+        assertNull(state3.error)
+        assertEquals("glm-4.7", state3.selectedModelId)
+        assertNull(h2.settings.currentSettings().baseUrl)
+        vm3.closeForTest()
+    }
+
+    @Test
+    fun keyStoredBeforeLaterFailure_isRetainedOnBlankKeyRetry() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+        // The key is stored, but the factory rejects the base URL afterwards.
+        h.rejectedBaseUrls += "https://bad.example"
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = "https://bad.example", apiKeyInput = "first-key")
+        vm.uiState.first { it.error != null }
+        val state = vm.uiState.value
+        assertEquals(ChatStatus.NeedsConfiguration, state.status)
+        assertEquals("first-key", h.credentials.keys["zai"])
+        assertTrue(state.hasApiKey)
+        assertFalse(state.toString().contains("first-key"))
+
+        // Blank-key retry retains the stored key and completes.
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        assertEquals("first-key", h.credentials.keys["zai"])
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun sameTimestampMessages_getDistinctKeys() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        // A persisted session whose user and assistant messages share a timestamp.
+        val session = h.sessionStore.create("Collide")
+        val saved = h.sessionStore.save(
+            session.copy(
+                messages = listOf(
+                    works.resolve.aletheia.ai.core.UserMessage.ofText("Hello", 123L),
+                    h.assistant("World").copy(timestamp = 123L),
+                ),
+            ),
+        )
+        h.settings.setProviderId("zai")
+        h.settings.setModelId("glm-4.7")
+        h.settings.setActiveSessionId(saved.id)
+        h.credentials.keys["zai"] = "stored-key"
+
+        val vm = h.newViewModel()
+        val state = vm.uiState.first { it.status == ChatStatus.Ready }
+        assertEquals(2, state.messages.size)
+        assertEquals(123L, h.sessionStore.load(saved.id)!!.messages[0].timestamp)
+        val keys = state.messages.map { it.id }
+        assertEquals(2, keys.toSet().size)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun settingsWriteFailure_initialConfig_staysUnconfigured_andKeepsKeyPrivate() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+        h.settingsStore.failWrites = true
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "SECRET-KEY-9")
+
+        vm.uiState.first { it.error != null }
+        val state = vm.uiState.value
+        // No false Ready: still unconfigured, no session adopted, nothing persisted.
+        assertEquals(ChatStatus.NeedsConfiguration, state.status)
+        assertNull(state.activeSessionId)
+        assertTrue(state.messages.isEmpty())
+        assertEquals("", h.settings.currentSettings().modelId)
+        assertNull(h.settings.currentSettings().activeSessionId)
+        // The key was stored before the failure; the safe boolean reflects it.
+        assertEquals("SECRET-KEY-9", h.credentials.keys["zai"])
+        assertTrue(state.hasApiKey)
+        assertFalse(state.toString().contains("SECRET-KEY-9"))
+
+        // Recovery: a retry with a working store succeeds.
+        h.settingsStore.failWrites = false
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun settingsWriteFailure_reconfigure_retainsPreviousAgentAndSettings() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        h.settingsStore.failWrites = true
+        vm.saveConfiguration(modelId = "glm-5.3", baseUrl = "https://new.example", apiKeyInput = "")
+        vm.uiState.first { it.error != null }
+
+        val state = vm.uiState.value
+        assertEquals(ChatStatus.Ready, state.status)
+        assertEquals("glm-4.7", state.selectedModelId)
+        assertNull(state.baseUrl)
+        // Persisted settings unchanged.
+        assertEquals("glm-4.7", h.settings.currentSettings().modelId)
+        assertNull(h.settings.currentSettings().baseUrl)
+
+        // The previous agent is still bound: chatting still works and persists.
+        h.settingsStore.failWrites = false
+        h.scriptedStreams.add(h.gatedStream("world", CompletableDeferred<Unit>().apply { complete(Unit) }))
+        vm.onDraftChange("Hello")
+        vm.send()
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+        val sessionId = vm.uiState.value.activeSessionId!!
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+        assertEquals(2, h.sessionStore.load(sessionId)!!.messages.size)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun initActiveSessionWriteFailure_isFailed_neverReady() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        // Fully valid persisted configuration, but the active-id write fails.
+        h.settings.setProviderId("zai")
+        h.settings.setModelId("glm-4.7")
+        h.credentials.keys["zai"] = "stored-key"
+        h.settingsStore.failActiveSessionWrites = true
+
+        val vm = h.newViewModel()
+        val state = vm.uiState.first { it.status != ChatStatus.Loading }
+        assertEquals(ChatStatus.Failed, state.status)
+        assertNotNull(state.error)
+        assertNull(state.activeSessionId)
+        assertNull(h.settings.currentSettings().activeSessionId)
+        assertTrue(state.messages.isEmpty())
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun switchBinding_alone_doesNotEnqueueOrCrossWriteSaves() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val firstId = vm.uiState.value.activeSessionId!!
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == firstId }.messageCount == 0 }
+
+        // Seed a second session with a longer transcript in the store.
+        val other = h.sessionStore.create("Other")
+        h.sessionStore.save(
+            other.copy(
+                messages = listOf(
+                    works.resolve.aletheia.ai.core.UserMessage.ofText("Old", 1L),
+                    h.assistant("Stock").copy(timestamp = 2L),
+                ),
+            ),
+        )
+        val savesBefore = h.sessions.totalSaves
+
+        // Switching binds an agent over the longer transcript; binding alone
+        // must not observe it against the previous (empty) session.
+        vm.switchSession(other.id)
+        val state = vm.uiState.first { it.activeSessionId == other.id }
+        assertEquals(2, state.messages.size)
+        assertEquals(savesBefore, h.sessions.totalSaves)
+        // No cross-write: the empty session is untouched on disk.
+        assertEquals(0, h.sessionStore.load(firstId)!!.messages.size)
+        assertEquals(2, h.sessionStore.load(other.id)!!.messages.size)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun firstConfiguredInitialization_exposesCreatedSessionSummary() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        // Persisted settings + key, but no sessions yet: initialization must
+        // create the first session and expose it in the summaries.
+        h.settings.setProviderId("zai")
+        h.settings.setModelId("glm-4.7")
+        h.credentials.keys["zai"] = "stored-key"
+
+        val vm = h.newViewModel()
+        val state = vm.uiState.first { it.status == ChatStatus.Ready }
+        assertEquals(1, state.sessionSummaries.size)
+        assertEquals(state.activeSessionId, state.sessionSummaries.single().id)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun persistenceFailure_blocksSessionSwitch_untilRetrySucceeds() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val firstId = vm.uiState.value.activeSessionId!!
+
+        // First exchange succeeds; then saves start failing.
+        h.scriptedStreams.add(h.gatedStream("one", CompletableDeferred<Unit>().apply { complete(Unit) }))
+        vm.onDraftChange("First")
+        vm.send()
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == firstId }.messageCount == 2 }
+
+        h.sessions.failSave = true
+        h.scriptedStreams.add(h.gatedStream("two", CompletableDeferred<Unit>().apply { complete(Unit) }))
+        vm.onDraftChange("Second")
+        vm.send()
+        vm.uiState.first { it.error != null && !it.isStreaming }
+        assertTrue(h.sessions.failedSaves > 0)
+
+        // The failed save must block abandoning the session: the switch is
+        // rejected with the session error and the active session is kept.
+        vm.dismissError()
+        vm.newSession()
+        vm.uiState.first { it.error != null }
+        assertEquals(firstId, vm.uiState.value.activeSessionId)
+        assertEquals(4, vm.uiState.value.messages.size)
+        // The blocked intent explicitly retried the unsaved snapshot once.
+        val savesAfterFailedExchange = h.sessions.failedSaves
+        vm.dismissError()
+        vm.newSession()
+        vm.uiState.first { it.error != null }
+        assertTrue(h.sessions.failedSaves > savesAfterFailedExchange)
+        assertEquals(firstId, vm.uiState.value.activeSessionId)
+        vm.dismissError()
+
+        // A later agent transition retries the snapshot: after another
+        // exchange with saves working again, the full transcript persists.
+        h.sessions.failSave = false
+        h.scriptedStreams.add(h.gatedStream("three", CompletableDeferred<Unit>().apply { complete(Unit) }))
+        vm.onDraftChange("Third")
+        vm.send()
+        vm.uiState.first { !it.isStreaming && it.messages.size == 6 }
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == firstId }.messageCount == 6 }
+        assertEquals(6, h.sessionStore.load(firstId)!!.messages.size)
+
+        // Now switching is allowed again.
+        vm.newSession()
+        val state = vm.uiState.first { it.activeSessionId != firstId }
+        assertTrue(state.messages.isEmpty())
+        assertEquals(6, h.sessionStore.load(firstId)!!.messages.size)
+
+        vm.closeForTest()
+    }
+}

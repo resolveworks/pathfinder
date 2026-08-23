@@ -14,7 +14,7 @@ Kotlin runtime (ZAI provider, OpenAI-completions API, OkHttp transport).
 
 - `app/` — Kotlin, Jetpack Compose, MVVM/UDF, DataStore, and Android Keystore.
 - Android owns UI, settings, credentials, and platform capabilities. The native
-  agent runtime (`com.aletheia.ai`, `com.aletheia.agent`) owns agent, provider, and
+  agent runtime (`works.resolve.aletheia.ai`, `works.resolve.aletheia.agent`) owns agent, provider, and
   conversation behavior, including session persistence. `AletheiaApplication` wires
   the graph manually; no DI framework.
 

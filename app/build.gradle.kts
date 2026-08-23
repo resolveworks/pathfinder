@@ -5,12 +5,12 @@ plugins {
 }
 
 android {
-    namespace = "com.aletheia"
+    namespace = "works.resolve.aletheia"
     compileSdk = 37
     buildToolsVersion = "37.0.0"
 
     defaultConfig {
-        applicationId = "com.aletheia"
+        applicationId = "works.resolve.aletheia"
         minSdk = 26
         targetSdk = 37
         versionCode = 1
@@ -57,7 +57,7 @@ dependencies {
     // Settings persistence
     implementation(libs.androidx.datastore.preferences)
 
-    // HTTP + JSON for the native provider layer (com.aletheia.ai)
+    // HTTP + JSON for the native provider layer (works.resolve.aletheia.ai)
     implementation(libs.okhttp)
     implementation(libs.okhttp.sse)
     implementation(libs.kotlinx.serialization.json)

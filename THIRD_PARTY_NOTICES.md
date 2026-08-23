@@ -2,8 +2,8 @@
 
 ## pi
 
-The provider/chat streaming layer (under `app/src/main/kotlin/com/aletheia/ai/`)
-and the agent loop (under `app/src/main/kotlin/com/aletheia/agent/`) are
+The provider/chat streaming layer (under `app/src/main/kotlin/works/resolve/aletheia/ai/`)
+and the agent loop (under `app/src/main/kotlin/works/resolve/aletheia/agent/`) are
 Kotlin ports of portions of [pi](https://pi.dev) (the local pi project at
 `~/Projects/pi`). Those portions are:
 
