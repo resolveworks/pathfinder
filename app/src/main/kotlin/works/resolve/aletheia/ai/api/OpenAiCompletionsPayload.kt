@@ -137,7 +137,8 @@ object OpenAiCompletionsPayload {
     ): List<JsonObject> {
         val params = mutableListOf<JsonObject>()
 
-        if (context.systemPrompt != null) {
+        if (!context.systemPrompt.isNullOrEmpty()) {
+            // pi uses truthiness: an empty system prompt is skipped.
             val role = if (model.reasoning && compat.supportsDeveloperRole) "developer" else "system"
             params.add(
                 buildJsonObject {
@@ -284,8 +285,9 @@ object OpenAiCompletionsPayload {
         if (!compat.requiresThinkingAsText && nonEmptyThinking.isNotEmpty()) {
             val signature = nonEmptyThinking.first().thinkingSignature
             if (signature != null && signature in REASONING_FIELDS) {
-                assistant[signature] =
-                    JsonPrimitive(sanitizeSurrogates(nonEmptyThinking.joinToString("\n") { it.thinking }))
+                // Exact pi parity: the raw reasoning field is replayed unsanitized
+                // (only requiresThinkingAsText output is sanitized).
+                assistant[signature] = JsonPrimitive(nonEmptyThinking.joinToString("\n") { it.thinking })
             }
         }
 

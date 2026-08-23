@@ -249,17 +249,50 @@ class OpenAiCompletionsPayloadTest {
     }
 
     @Test
+    fun `empty system prompt is skipped like pi truthiness`() {
+        val b = body(Context(systemPrompt = "", messages = listOf(UserMessage.ofText("hi"))))
+        val messages = b["messages"]!!.jsonArray
+        assertEquals(1, messages.size)
+        assertEquals("user", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun `unpaired surrogates are stripped but valid pairs kept`() {
         val lone = buildString { append("a"); append(0xD83D.toChar()); append(0xDC00.toChar()); append(0xD800.toChar()) }
         val sanitized = OpenAiCompletionsPayload.sanitizeSurrogates(lone)
         assertEquals("a\uD83D\uDC00", sanitized)
 
         val b = body(Context(systemPrompt = lone, messages = listOf(UserMessage.ofText(lone))))
-        assertEquals("a\uD83D\uDC00", b["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonPrimitive.content)
-        assertEquals(
-            "a\uD83D\uDC00",
-            b["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonPrimitive.content,
+        val messages = b["messages"]!!.jsonArray
+        assertEquals("system", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals("a\uD83D\uDC00", messages[0].jsonObject["content"]!!.jsonPrimitive.content)
+        assertEquals("user", messages[1].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals("a\uD83D\uDC00", messages[1].jsonObject["content"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `raw reasoning field replayed verbatim without surrogate sanitization`() {
+        // pi's openai-completions.ts joins thinking blocks into the reasoning
+        // field without sanitizeSurrogates; exact-parity port.
+        val lone = buildString { append("think "); append(0xD800.toChar()) }
+        val b = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent(lone, thinkingSignature = "reasoning_content"),
+                            TextContent("answer"),
+                        ),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2",
+                    ),
+                ),
+            ),
         )
+        val assistant = b["messages"]!!.jsonArray[0].jsonObject
+        assertTrue(assistant.containsKey("reasoning_content"))
+        assertEquals(lone, assistant["reasoning_content"]!!.jsonPrimitive.content)
     }
 
     @Test
