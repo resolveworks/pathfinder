@@ -49,6 +49,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -102,6 +103,7 @@ fun ChatRoute(
         onSaveConfiguration = viewModel::saveConfiguration,
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
+        onToggleShowThinking = viewModel::setShowThinking,
         onDismissError = viewModel::dismissError,
         modifier = modifier,
     )
@@ -133,6 +135,7 @@ fun ChatScreen(
     onSaveConfiguration: (modelId: String, baseUrl: String?, apiKeyInput: String) -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
+    onToggleShowThinking: (Boolean) -> Unit,
     onDismissError: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -240,7 +243,11 @@ fun ChatScreen(
                         entryProvider = entryProvider {
                             entry<ChatNavKey> { ConversationContent(uiState = uiState) }
                             entry<SettingsNavKey> {
-                                SettingsContent(onOpenModelSettings = pushModelSettings)
+                                SettingsContent(
+                                    showThinking = uiState.showThinking,
+                                    onOpenModelSettings = pushModelSettings,
+                                    onToggleShowThinking = onToggleShowThinking,
+                                )
                             }
                             entry<ModelSettingsNavKey> {
                                 ConfigurationContent(
@@ -379,11 +386,15 @@ private fun FailedContent(error: String, onOpenSettings: () -> Unit) {
 }
 
 /**
- * Settings root: a submenu listing. Currently a single row pushing the
- * model configuration form.
+ * Settings root: a submenu listing. Rows push the model configuration form
+ * or toggle display preferences directly.
  */
 @Composable
-private fun SettingsContent(onOpenModelSettings: () -> Unit) {
+private fun SettingsContent(
+    showThinking: Boolean,
+    onOpenModelSettings: () -> Unit,
+    onToggleShowThinking: (Boolean) -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -395,6 +406,17 @@ private fun SettingsContent(onOpenModelSettings: () -> Unit) {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },
             modifier = Modifier.clickable(onClick = onOpenModelSettings),
+        )
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.settings_show_thinking)) },
+            supportingContent = { Text(stringResource(R.string.settings_show_thinking_hint)) },
+            trailingContent = {
+                Switch(
+                    checked = showThinking,
+                    onCheckedChange = onToggleShowThinking,
+                )
+            },
+            modifier = Modifier.clickable { onToggleShowThinking(!showThinking) },
         )
     }
 }
@@ -634,6 +656,7 @@ private fun PreviewChatScreen(
             onSaveConfiguration = { _, _, _ -> },
             onNewSession = {},
             onSwitchSession = {},
+            onToggleShowThinking = {},
             onDismissError = {},
             modifier = Modifier,
         )

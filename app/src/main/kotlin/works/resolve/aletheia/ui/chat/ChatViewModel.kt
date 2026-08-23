@@ -108,6 +108,21 @@ class ChatViewModel(
         viewModelScope.launch { saveConfigurationInternal(modelId, baseUrl, apiKeyInput) }
     }
 
+    /** Persists the show-thinking display preference; safe mid-stream (display-only). */
+    fun setShowThinking(enabled: Boolean) {
+        viewModelScope.launch {
+            try {
+                settingsRepository.setShowThinking(enabled)
+                currentSettings = currentSettings.copy(showThinking = enabled)
+                updateState { it.copy(showThinking = enabled) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(ERROR_SETTINGS_SAVE)
+            }
+        }
+    }
+
     fun send() {
         viewModelScope.launch { sendInternal() }
     }
@@ -179,6 +194,7 @@ class ChatViewModel(
                         hasApiKey = hasKey,
                         selectedModelId = settings.modelId.takeIf { m -> m in CATALOG_IDS },
                         baseUrl = settings.baseUrl,
+                        showThinking = settings.showThinking,
                         sessionSummaries = summaries,
                     )
                 }
@@ -215,6 +231,7 @@ class ChatViewModel(
                     hasApiKey = true,
                     selectedModelId = settings.modelId,
                     baseUrl = settings.baseUrl,
+                    showThinking = settings.showThinking,
                 )
             }
         } catch (e: CancellationException) {
@@ -439,6 +456,9 @@ class ChatViewModel(
             modelId = trimmedModelId,
             baseUrl = normalizedBaseUrl,
             activeSessionId = activeSession?.id,
+            // The display preference is owned by setShowThinking; preserve it
+            // so agent rebuilds never drift from what the user picked.
+            showThinking = currentSettings.showThinking,
         )
 
         val wasReady = _uiState.value.status == ChatStatus.Ready && activeSession != null

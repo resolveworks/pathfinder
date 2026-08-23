@@ -12,7 +12,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -48,6 +50,7 @@ class SettingsRepositoryTest {
         assertEquals("", settings.modelId)
         assertNull(settings.baseUrl)
         assertNull(settings.activeSessionId)
+        assertFalse(settings.showThinking)
     }
 
     @Test
@@ -95,6 +98,20 @@ class SettingsRepositoryTest {
         val settings = repository.settings.first()
         assertNull(settings.baseUrl)
         assertNull(settings.activeSessionId)
+    }
+
+    @Test
+    fun showThinking_defaultsFalse_andRoundTrips() = runTest {
+        assertFalse(repository.settings.first().showThinking)
+        assertFalse(repository.currentSettings().showThinking)
+
+        repository.setShowThinking(true)
+
+        assertTrue(repository.settings.first().showThinking)
+        assertTrue(repository.currentSettings().showThinking)
+
+        repository.setShowThinking(false)
+        assertFalse(repository.settings.first().showThinking)
     }
 
     @Test

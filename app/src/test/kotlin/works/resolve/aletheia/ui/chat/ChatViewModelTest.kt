@@ -103,6 +103,10 @@ class ChatViewModelTest {
             if (failActiveSessionWrites) throw java.io.IOException("active session write failed")
             delegate.setActiveSessionId(sessionId)
         }
+        override suspend fun setShowThinking(showThinking: Boolean) {
+            if (failWrites) throw java.io.IOException("settings write failed")
+            delegate.setShowThinking(showThinking)
+        }
     }
 
     /** SessionRepository wrapper whose saves can be made to fail deterministically. */
@@ -236,6 +240,49 @@ class ChatViewModelTest {
         assertFalse(state2.toString().contains("SECRET-KEY-123"))
 
         vm.closeForTest()
+        vm2.closeForTest()
+    }
+
+    @Test
+    fun showThinking_persists_andInitProjectsPersistedValue() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        assertFalse(vm.uiState.value.showThinking)
+
+        vm.setShowThinking(true)
+        vm.uiState.first { it.showThinking }
+        assertTrue(h.settings.currentSettings().showThinking)
+        assertNull(vm.uiState.value.error)
+
+        // A failing store surfaces the error and leaves the state unchanged.
+        h.settingsStore.failWrites = true
+        vm.setShowThinking(false)
+        vm.uiState.first { it.error != null }
+        assertTrue(vm.uiState.value.showThinking)
+        assertTrue(h.settings.currentSettings().showThinking)
+        vm.dismissError()
+
+        // setShowThinking is display-only: the configuration flow is unaffected.
+        h.settingsStore.failWrites = false
+        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        vm.setShowThinking(false)
+        vm.uiState.first { !it.showThinking }
+        assertFalse(h.settings.currentSettings().showThinking)
+
+        // Reconfiguration preserves the user's preference in the candidate.
+        vm.saveConfiguration(modelId = "glm-5.3", baseUrl = null, apiKeyInput = "")
+        vm.uiState.first { it.selectedModelId == "glm-5.3" }
+        assertFalse(vm.uiState.value.showThinking)
+
+        vm.closeForTest()
+
+        // A fresh init projects the persisted value into the Ready state.
+        h.settings.setShowThinking(true)
+        val vm2 = h.newViewModel()
+        vm2.uiState.first { it.status == ChatStatus.Ready }
+        assertTrue(vm2.uiState.value.showThinking)
         vm2.closeForTest()
     }
 

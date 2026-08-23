@@ -9,6 +9,8 @@
     <string name="action_new_chat">New chat</string>
     <string name="settings_title">Settings</string>
     <string name="settings_model">Model settings</string>
+    <string name="settings_show_thinking">Show thinking</string>
+    <string name="settings_show_thinking_hint">Show the model\'s reasoning as it thinks</string>
     <string name="action_configure">Configure</string>
     <string name="action_save">Save</string>
     <string name="action_cancel">Cancel</string>

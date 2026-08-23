@@ -2,6 +2,7 @@ package works.resolve.aletheia.data.settings
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
@@ -18,6 +19,7 @@ class SettingsRepository(
         val MODEL_ID = stringPreferencesKey("model_id")
         val BASE_URL = stringPreferencesKey("base_url")
         val ACTIVE_SESSION_ID = stringPreferencesKey("active_session_id")
+        val SHOW_THINKING = booleanPreferencesKey("show_thinking")
     }
 
     val settings: Flow<ModelSettings> = dataStore.data.map { prefs ->
@@ -26,6 +28,7 @@ class SettingsRepository(
             modelId = prefs[Keys.MODEL_ID] ?: "",
             baseUrl = prefs[Keys.BASE_URL]?.takeIf { it.isNotBlank() },
             activeSessionId = prefs[Keys.ACTIVE_SESSION_ID]?.takeIf { it.isNotBlank() },
+            showThinking = prefs[Keys.SHOW_THINKING] ?: false,
         )
     }
 
@@ -49,6 +52,10 @@ class SettingsRepository(
             if (sessionId == null) prefs.remove(Keys.ACTIVE_SESSION_ID)
             else prefs[Keys.ACTIVE_SESSION_ID] = sessionId
         }
+    }
+
+    override suspend fun setShowThinking(showThinking: Boolean) {
+        dataStore.edit { it[Keys.SHOW_THINKING] = showThinking }
     }
 
     /** One-shot read; convenient for non-reactive callers. */

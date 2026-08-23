@@ -80,5 +80,7 @@ data class ChatUiState(
     val draft: String = "",
     val isStreaming: Boolean = false,
     val canSend: Boolean = false,
+    /** Display-only flag: whether to show the model's reasoning (never affects the agent). */
+    val showThinking: Boolean = false,
     val error: String? = null,
 )

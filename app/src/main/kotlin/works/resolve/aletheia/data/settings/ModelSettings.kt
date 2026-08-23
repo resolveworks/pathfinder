@@ -10,4 +10,9 @@ data class ModelSettings(
     /** Optional base URL override for OpenAI-compatible endpoints. */
     val baseUrl: String? = null,
     val activeSessionId: String? = null,
+    /**
+     * Display-only preference: show the model's reasoning while it thinks.
+     * The agent layer ignores this for now; nothing renders thinking yet.
+     */
+    val showThinking: Boolean = false,
 )
