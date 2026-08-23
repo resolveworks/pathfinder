@@ -13,6 +13,7 @@
     <string name="action_cancel">Cancel</string>
     <string name="action_send">Send</string>
     <string name="action_stop">Stop</string>
+    <string name="action_menu">Menu</string>
 
     <string name="configuration_title">Configuration</string>
     <string name="configuration_provider">Provider: %1$s</string>

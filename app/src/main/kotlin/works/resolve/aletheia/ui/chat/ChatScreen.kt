@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -17,17 +18,28 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -35,11 +47,13 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +67,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import works.resolve.aletheia.R
 import works.resolve.aletheia.data.sessions.SessionSummary
 import works.resolve.aletheia.ui.theme.AletheiaTheme
+import kotlinx.coroutines.launch
 
 private const val PROVIDER_NAME = "Z.AI"
 private const val STREAMING_PLACEHOLDER = "…"
@@ -100,6 +115,8 @@ fun ChatScreen(
     modifier: Modifier = Modifier,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
     val showConfigByUser = remember { mutableStateOf(false) }
     // Returning to a non-Ready status (or saving configuration) implicitly
     // closes a user-opened configuration sheet.
@@ -115,48 +132,130 @@ fun ChatScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            when (uiState.status) {
-                ChatStatus.Ready -> ChatTopBar(
-                    uiState = uiState,
-                    onNewSession = onNewSession,
-                    onSwitchSession = onSwitchSession,
-                    onOpenConfiguration = { showConfigByUser.value = true },
-                )
-                else -> Unit
-            }
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ChatDrawerContent(
+                uiState = uiState,
+                onNewSession = {
+                    scope.launch { drawerState.close() }
+                    onNewSession()
+                },
+                onSwitchSession = { sessionId ->
+                    scope.launch { drawerState.close() }
+                    onSwitchSession(sessionId)
+                },
+                onOpenConfiguration = {
+                    scope.launch { drawerState.close() }
+                    showConfigByUser.value = true
+                },
+            )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
         modifier = modifier,
-    ) { contentPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(contentPadding),
-        ) {
-            when {
-                uiState.status == ChatStatus.Loading -> LoadingContent()
-                uiState.status == ChatStatus.Failed && !showConfiguration -> FailedContent(
-                    error = uiState.error,
-                    onOpenConfiguration = { showConfigByUser.value = true },
-                )
-                showConfiguration -> ConfigurationContent(
-                    uiState = uiState,
-                    onSave = onSaveConfiguration,
-                    onClose = if (uiState.status == ChatStatus.Ready) {
-                        { showConfigByUser.value = false }
-                    } else {
-                        null
-                    },
-                )
-                else -> ConversationContent(
-                    uiState = uiState,
-                    onDraftChange = onDraftChange,
-                    onSend = onSend,
-                    onStop = onStop,
-                )
+    ) {
+        Scaffold(
+            topBar = {
+                when (uiState.status) {
+                    ChatStatus.Ready -> ChatTopBar(
+                        title = if (showConfiguration) {
+                            stringResource(R.string.configuration_title)
+                        } else {
+                            uiState.sessionSummaries
+                                .firstOrNull { it.id == uiState.activeSessionId }?.title
+                                .orEmpty()
+                                .ifEmpty { stringResource(R.string.chat_title) }
+                        },
+                        onOpenDrawer = { scope.launch { drawerState.open() } },
+                    )
+                    else -> Unit
+                }
+            },
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+        ) { contentPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(contentPadding),
+            ) {
+                when {
+                    uiState.status == ChatStatus.Loading -> LoadingContent()
+                    uiState.status == ChatStatus.Failed && !showConfiguration -> FailedContent(
+                        error = uiState.error,
+                        onOpenConfiguration = { showConfigByUser.value = true },
+                    )
+                    showConfiguration -> ConfigurationContent(
+                        uiState = uiState,
+                        onSave = onSaveConfiguration,
+                        onClose = if (uiState.status == ChatStatus.Ready) {
+                            { showConfigByUser.value = false }
+                        } else {
+                            null
+                        },
+                    )
+                    else -> ConversationContent(
+                        uiState = uiState,
+                        onDraftChange = onDraftChange,
+                        onSend = onSend,
+                        onStop = onStop,
+                    )
+                }
             }
+        }
+    }
+}
+
+// ---- navigation drawer ----
+
+/**
+ * Default sessions sidebar: new chat plus the session list above, settings
+ * pinned at the bottom.
+ */
+@Composable
+private fun ChatDrawerContent(
+    uiState: ChatUiState,
+    onNewSession: () -> Unit,
+    onSwitchSession: (String) -> Unit,
+    onOpenConfiguration: () -> Unit,
+) {
+    ModalDrawerSheet {
+        Column(modifier = Modifier.fillMaxHeight()) {
+            Text(
+                text = stringResource(R.string.app_name),
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(16.dp),
+            )
+            HorizontalDivider()
+            NavigationDrawerItem(
+                label = { Text(stringResource(R.string.action_new_chat)) },
+                icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                selected = false,
+                onClick = onNewSession,
+                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                uiState.sessionSummaries.forEach { summary ->
+                    NavigationDrawerItem(
+                        label = { Text(summary.title) },
+                        selected = summary.id == uiState.activeSessionId,
+                        onClick = {
+                            if (summary.id != uiState.activeSessionId) onSwitchSession(summary.id)
+                        },
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+                    )
+                }
+            }
+            HorizontalDivider()
+            NavigationDrawerItem(
+                label = { Text(stringResource(R.string.action_settings)) },
+                icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
+                selected = false,
+                onClick = onOpenConfiguration,
+                modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+            )
         }
     }
 }
@@ -166,38 +265,18 @@ fun ChatScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatTopBar(
-    uiState: ChatUiState,
-    onNewSession: () -> Unit,
-    onSwitchSession: (String) -> Unit,
-    onOpenConfiguration: () -> Unit,
+    title: String,
+    onOpenDrawer: () -> Unit,
 ) {
-    val activeTitle = uiState.sessionSummaries
-        .firstOrNull { it.id == uiState.activeSessionId }?.title
-        .orEmpty()
-    var sessionsOpen by remember { mutableStateOf(false) }
-
     TopAppBar(
-        title = {
-            Box {
-                TextButton(onClick = { sessionsOpen = true }) {
-                    Text(activeTitle.ifEmpty { stringResource(R.string.chat_title) })
-                }
-                DropdownMenu(expanded = sessionsOpen, onDismissRequest = { sessionsOpen = false }) {
-                    uiState.sessionSummaries.forEach { summary ->
-                        DropdownMenuItem(
-                            text = { Text(summary.title) },
-                            onClick = {
-                                sessionsOpen = false
-                                if (summary.id != uiState.activeSessionId) onSwitchSession(summary.id)
-                            },
-                        )
-                    }
-                }
+        title = { Text(title) },
+        navigationIcon = {
+            IconButton(onClick = onOpenDrawer) {
+                Icon(
+                    Icons.Default.Menu,
+                    contentDescription = stringResource(R.string.action_menu),
+                )
             }
-        },
-        actions = {
-            TextButton(onClick = onNewSession) { Text(stringResource(R.string.action_new_chat)) }
-            TextButton(onClick = onOpenConfiguration) { Text(stringResource(R.string.action_settings)) }
         },
     )
 }
