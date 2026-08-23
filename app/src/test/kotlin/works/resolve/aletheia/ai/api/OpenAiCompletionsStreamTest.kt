@@ -21,6 +21,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
@@ -374,6 +375,50 @@ class OpenAiCompletionsStreamTest {
         val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertTrue("finish_reason" in (error.error.errorMessage ?: ""))
+    }
+
+    @Test
+    fun `raw finish reason is preserved on stop and provider error stops`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                "{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}",
+                "[DONE]",
+            ),
+        )
+        var events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
+        var done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(StopReason.STOP, done.reason)
+        assertEquals("stop", done.message.rawStopReason)
+        assertNull(done.message.errorMessage)
+
+        transport.enqueueResponse(
+            sse(
+                "{\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}",
+                "[DONE]",
+            ),
+        )
+        events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.last())
+        assertEquals("content_filter", error.error.rawStopReason)
+        assertEquals("Provider finish_reason: content_filter", error.error.errorMessage)
+    }
+
+    @Test
+    fun `routed chunk model surfaces on responseModel only when different`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                "{\"id\":\"r1\",\"model\":\"glm-5.2-air\",\"choices\":[{\"delta\":{\"content\":\"x\"}}]}",
+                "{\"model\":\"glm-5.2\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}",
+                "[DONE]",
+            ),
+        )
+        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals("glm-5.2-air", done.message.responseModel)
+        assertEquals("glm-5.2", done.message.model)
+        assertEquals("r1", done.message.responseId)
     }
 
     @Test

@@ -191,6 +191,78 @@ class OpenAiCompletionsPayloadTest {
     }
 
     @Test
+    fun `function tools carry explicit strict false like pi`() {
+        val tool = Tool(name = "read_file", description = "Reads a file", parameters = schema)
+        val b = body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool)))
+        val function = b["tools"]!!.jsonArray.single().jsonObject["function"]!!.jsonObject
+        assertEquals(false, function["strict"]!!.jsonPrimitive.content.toBoolean())
+    }
+
+    @Test
+    fun `whitespace-only assistant text blocks are dropped`() {
+        val b = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent("hmm", thinkingSignature = "reasoning_content"),
+                            TextContent("  "),
+                            TextContent("answer"),
+                        ),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2",
+                    ),
+                ),
+            ),
+        )
+        assertEquals("answer", b["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `assistant message with only blank text and no tool calls is skipped`() {
+        val b = body(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("hi"),
+                    AssistantMessage(
+                        content = listOf(TextContent(" \t ")),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2",
+                    ),
+                    UserMessage.ofText("again"),
+                ),
+            ),
+        )
+        val messages = b["messages"]!!.jsonArray
+        assertEquals(2, messages.size)
+        assertEquals("user", messages.map { it.jsonObject["role"]!!.jsonPrimitive.content }.distinct().single())
+    }
+
+    @Test
+    fun `empty user content array is skipped`() {
+        val b = body(Context(messages = listOf(UserMessage(content = emptyList()), UserMessage.ofText("hi"))))
+        val messages = b["messages"]!!.jsonArray
+        assertEquals(1, messages.size)
+        assertEquals("hi", messages[0].jsonObject["content"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `unpaired surrogates are stripped but valid pairs kept`() {
+        val lone = buildString { append("a"); append(0xD83D.toChar()); append(0xDC00.toChar()); append(0xD800.toChar()) }
+        val sanitized = OpenAiCompletionsPayload.sanitizeSurrogates(lone)
+        assertEquals("a\uD83D\uDC00", sanitized)
+
+        val b = body(Context(systemPrompt = lone, messages = listOf(UserMessage.ofText(lone))))
+        assertEquals("a\uD83D\uDC00", b["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonPrimitive.content)
+        assertEquals(
+            "a\uD83D\uDC00",
+            b["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
     fun `system prompt sent with system role not developer`() {
         val b = body(Context(systemPrompt = "You are helpful.", messages = listOf(UserMessage.ofText("hi"))))
         val first = b["messages"]!!.jsonArray[0].jsonObject

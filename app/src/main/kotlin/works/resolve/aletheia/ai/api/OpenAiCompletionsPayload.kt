@@ -139,7 +139,12 @@ object OpenAiCompletionsPayload {
 
         if (context.systemPrompt != null) {
             val role = if (model.reasoning && compat.supportsDeveloperRole) "developer" else "system"
-            params.add(buildJsonObject { put("role", role); put("content", context.systemPrompt) })
+            params.add(
+                buildJsonObject {
+                    put("role", role)
+                    put("content", sanitizeSurrogates(context.systemPrompt))
+                },
+            )
         }
 
         val messages = context.messages
@@ -147,7 +152,9 @@ object OpenAiCompletionsPayload {
         while (i < messages.size) {
             val msg = messages[i]
             when (msg.role) {
-                MessageRole.USER -> params.add(convertUserMessage(msg as works.resolve.aletheia.ai.core.UserMessage))
+                MessageRole.USER ->
+                    convertUserMessage(msg as works.resolve.aletheia.ai.core.UserMessage)
+                        ?.let { params.add(it) }
 
                 MessageRole.ASSISTANT -> convertAssistantMessage(msg as works.resolve.aletheia.ai.core.AssistantMessage, compat)
                     ?.let { params.add(it) }
@@ -169,7 +176,7 @@ object OpenAiCompletionsPayload {
                         }
                         val toolMessage = mutableMapOf<String, JsonElement>(
                             "role" to JsonPrimitive("tool"),
-                            "content" to JsonPrimitive(toolResultText),
+                            "content" to JsonPrimitive(sanitizeSurrogates(toolResultText)),
                             "tool_call_id" to JsonPrimitive(toolMsg.toolCallId),
                         )
                         if (compat.requiresToolResultName && toolMsg.toolName.isNotEmpty()) {
@@ -206,11 +213,15 @@ object OpenAiCompletionsPayload {
         return params
     }
 
-    private fun convertUserMessage(msg: works.resolve.aletheia.ai.core.UserMessage): JsonObject =
-        buildJsonObject {
+    private fun convertUserMessage(msg: works.resolve.aletheia.ai.core.UserMessage): JsonObject? {
+        // pi skips user messages whose content array is empty.
+        if (msg.content.isEmpty()) return null
+        return buildJsonObject {
             put("role", "user")
-            val text = msg.content.filter { it.type == ContentType.TEXT }
-                .joinToString("") { (it as works.resolve.aletheia.ai.core.TextContent).text }
+            val text = sanitizeSurrogates(
+                msg.content.filter { it.type == ContentType.TEXT }
+                    .joinToString("") { (it as works.resolve.aletheia.ai.core.TextContent).text },
+            )
             val images = msg.content.filter { it.type == ContentType.IMAGE }
             if (images.isEmpty()) {
                 put("content", text)
@@ -226,6 +237,7 @@ object OpenAiCompletionsPayload {
                 )
             }
         }
+    }
 
     private fun imagePart(image: works.resolve.aletheia.ai.core.ImageContent): JsonObject =
         buildJsonObject {
@@ -240,15 +252,20 @@ object OpenAiCompletionsPayload {
     ): JsonObject? {
         val assistant = mutableMapOf<String, JsonElement>()
 
-        val text = msg.content.filter { it.type == ContentType.TEXT }
-            .joinToString("") { (it as works.resolve.aletheia.ai.core.TextContent).text }
+        // pi keeps only assistant text blocks with non-whitespace content.
+        val text = sanitizeSurrogates(
+            msg.content.filter { it.type == ContentType.TEXT }
+                .map { (it as works.resolve.aletheia.ai.core.TextContent).text }
+                .filter { it.isNotBlank() }
+                .joinToString(""),
+        )
 
         val thinkingBlocks = msg.content.filter { it.type == ContentType.THINKING }
             .map { it as works.resolve.aletheia.ai.core.ThinkingContent }
         val nonEmptyThinking = thinkingBlocks.filter { it.thinking.isNotBlank() }
 
         if (compat.requiresThinkingAsText && nonEmptyThinking.isNotEmpty()) {
-            val thinkingText = nonEmptyThinking.joinToString("\n\n") { it.thinking }
+            val thinkingText = sanitizeSurrogates(nonEmptyThinking.joinToString("\n\n") { it.thinking })
             val parts = buildJsonArray {
                 add(buildJsonObject { put("type", "text"); put("text", thinkingText) })
                 if (text.isNotEmpty()) add(buildJsonObject { put("type", "text"); put("text", text) })
@@ -267,7 +284,8 @@ object OpenAiCompletionsPayload {
         if (!compat.requiresThinkingAsText && nonEmptyThinking.isNotEmpty()) {
             val signature = nonEmptyThinking.first().thinkingSignature
             if (signature != null && signature in REASONING_FIELDS) {
-                assistant[signature] = JsonPrimitive(nonEmptyThinking.joinToString("\n") { it.thinking })
+                assistant[signature] =
+                    JsonPrimitive(sanitizeSurrogates(nonEmptyThinking.joinToString("\n") { it.thinking }))
             }
         }
 
@@ -308,6 +326,9 @@ object OpenAiCompletionsPayload {
                     put("name", tool.name)
                     put("description", tool.description)
                     put("parameters", tool.parameters)
+                    // pi sends an explicit strict:false for plain tools on strict-capable
+                    // providers; ZAI is strict-capable in pi's detectCompat.
+                    put("strict", false)
                 },
             )
         }
@@ -315,5 +336,32 @@ object OpenAiCompletionsPayload {
     private fun hasToolHistory(messages: List<Message>): Boolean = messages.any { msg ->
         msg.role == MessageRole.TOOL_RESULT ||
             (msg as? works.resolve.aletheia.ai.core.AssistantMessage)?.content?.any { it.type == ContentType.TOOL_CALL } == true
+    }
+
+    /**
+     * Removes unpaired UTF-16 surrogates, which many providers reject during JSON
+     * parsing. Valid surrogate pairs (emoji, astral text) are preserved. Mirrors pi's
+     * sanitizeSurrogates.
+     */
+    internal fun sanitizeSurrogates(text: String): String {
+        val sb = StringBuilder(text.length)
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            when {
+                c.isHighSurrogate() -> {
+                    val next = if (i + 1 < text.length) text[i + 1] else ' '
+                    if (next.isLowSurrogate()) {
+                        sb.append(c).append(next)
+                        i++
+                    }
+                    // else: drop unpaired high surrogate
+                }
+                c.isLowSurrogate() -> Unit // drop unpaired low surrogate
+                else -> sb.append(c)
+            }
+            i++
+        }
+        return sb.toString()
     }
 }
