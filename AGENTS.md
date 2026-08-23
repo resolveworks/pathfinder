@@ -7,15 +7,16 @@ pure Kotlin implementation.
 
 MVP: configure a provider, model, and API key; stream chat responses; switch between
 persistent sessions. Agent tools, including `web_search` and `web_fetch`, are out of
-scope. The agent runtime awaits a native Kotlin port, and the chat UI shows a
-disabled interim state until then.
+scope. Configuration, chat streaming, and session switching all run on the native
+Kotlin runtime (ZAI provider, OpenAI-completions API, OkHttp transport).
 
 ## Architecture
 
 - `app/` — Kotlin, Jetpack Compose, MVVM/UDF, DataStore, and Android Keystore.
-- Android owns UI, settings, credentials, and platform capabilities. The future native
-  agent runtime will own agent, provider, and conversation behavior, including session
-  persistence.
+- Android owns UI, settings, credentials, and platform capabilities. The native
+  agent runtime (`com.aletheia.ai`, `com.aletheia.agent`) owns agent, provider, and
+  conversation behavior, including session persistence. `AletheiaApplication` wires
+  the graph manually; no DI framework.
 
 Keep dependencies manually wired unless their complexity justifies DI.
 

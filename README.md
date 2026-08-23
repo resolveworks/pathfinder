@@ -1,8 +1,9 @@
 # aletheia
 
 A native Android chat app for the [pi](https://pi.dev) agent stack, written in Kotlin
-with Jetpack Compose. The agent runtime awaits a native Kotlin port; until it lands
-the chat UI shows an honest unavailable state with the composer disabled.
+with Jetpack Compose. The native Z.AI agent runtime is wired in: configure a provider,
+model, and API key; stream chat responses; and switch between persistent sessions.
+Agent tools, including `web_search` and `web_fetch`, are out of scope for the MVP.
 
 ## Build
 

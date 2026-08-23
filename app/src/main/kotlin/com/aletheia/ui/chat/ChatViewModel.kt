@@ -10,6 +10,7 @@ import com.aletheia.ai.core.Message
 import com.aletheia.ai.core.TextContent
 import com.aletheia.ai.core.UserMessage
 import com.aletheia.ai.providers.ZaiModels
+import com.aletheia.agent.AgentFactory
 import com.aletheia.data.credentials.ApiKeyStore
 import com.aletheia.data.settings.ModelSettings
 import com.aletheia.data.settings.SettingsStore
@@ -26,24 +27,15 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * Builds the [Agent] for a session from the persisted configuration. The real
- * implementation (next composition chunk) constructs Models/ZaiProvider with
- * OkHttp, resolves the API key from [ApiKeyStore], and normalizes/validates
- * the base URL; tests script a fake [Agent] with a fake stream function.
- *
- * [settings.baseUrl] is already trimmed by the ViewModel; implementations
- * validate it (e.g. reject blank) by throwing [IllegalArgumentException].
- */
-fun interface AgentFactory {
-    fun create(settings: ModelSettings, sessionId: String, initialTranscript: List<Message>): Agent
-}
-
-/**
  * Chat screen controller. Owns configuration, sessions, and the active
  * [Agent]; projects everything into an immutable [ChatUiState] (UDF).
  *
  * The provider is fixed to Z.AI for the MVP. The API key never enters
  * [ChatUiState] (only a boolean presence flag) and is never logged.
+ *
+ * The agent itself is created through the injected [AgentFactory]
+ * (see [com.aletheia.agent]); the production implementation wires the native
+ * Z.AI runtime.
  *
  * Transcript persistence runs through a single latest-snapshot pipeline: at
  * most one save per session is in flight, superseded snapshots are coalesced,

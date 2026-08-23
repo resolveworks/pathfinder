@@ -3,6 +3,7 @@ package com.aletheia.ui.chat
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.viewModelScope
 import com.aletheia.agent.Agent
+import com.aletheia.agent.AgentFactory
 import com.aletheia.agent.StreamFn
 import com.aletheia.ai.core.AssistantMessage
 import com.aletheia.ai.core.AssistantMessageEvent
