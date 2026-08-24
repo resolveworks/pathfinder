@@ -6,7 +6,7 @@
     <string name="chat_empty">Start the conversation below</string>
     <string name="composer_hint">Message</string>
     <string name="tree_title">Session tree</string>
-    <string name="tree_empty">The session tree is coming soon</string>
+    <string name="tree_page_placeholder">The session tree is coming soon</string>
     <string name="tree_open">Show session tree</string>
 
     <string name="action_new_chat">New chat</string>

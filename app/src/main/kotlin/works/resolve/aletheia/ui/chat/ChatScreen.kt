@@ -28,6 +28,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -73,17 +74,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathFillType
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.addPathNodes
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -108,32 +99,6 @@ private const val STREAMING_PLACEHOLDER = "…"
 private const val ChatPageIndex = 0
 private const val TreePageIndex = 1
 private const val ChatPagerPageCount = 2
-
-/** Rightward over-drag on the chat page needed to open the sessions drawer. */
-private val DrawerOpenDragThreshold = 48.dp
-
-/**
- * Outlined account-tree icon (the session-tree action). Defined inline from
- * the Material Symbols path data because material-icons-extended is not a
- * dependency and none may be added.
- */
-private val IconAccountTree: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "AccountTree",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f,
-    ).apply {
-        addPath(
-            pathData = addPathNodes(
-                "M22,11V3h-7v3H9V3H2v8h7V8h2v10h4v3h7v-8h-7v3h-2V8h2v3H22z M7,9H4V5h3V9z M17,15h3v4h-3V15z M17,5h3v4h-3V5z",
-            ),
-            fill = SolidColor(Color.Black),
-            pathFillType = PathFillType.EvenOdd,
-        )
-    }.build()
-}
 
 /** Collects [ChatViewModel.uiState], owns the Nav3 back stack, and forwards intents from the pure [ChatScreen]. */
 @Composable
@@ -332,7 +297,7 @@ fun ChatScreen(
                             {
                                 IconButton(onClick = openTreePage) {
                                     Icon(
-                                        IconAccountTree,
+                                        Icons.AutoMirrored.Outlined.List,
                                         contentDescription = stringResource(R.string.tree_open),
                                     )
                                 }
@@ -382,7 +347,6 @@ fun ChatScreen(
                                     ConversationPager(
                                         uiState = uiState,
                                         pagerState = pagerState,
-                                        onOpenDrawer = openDrawer,
                                     )
                                 } else {
                                     ConversationContent(uiState = uiState)
@@ -880,64 +844,19 @@ private fun ProviderAuthContent(
 
 /**
  * Two-page swipeable chat surface: page 0 is the conversation, page 1 the
- * session tree (a placeholder until the real panel lands). A rightward
- * drag on page 0 overflows the pager's scroll range; the parent
- * [NestedScrollConnection] below accumulates that leftover horizontal
- * delta and opens the sessions drawer once it exceeds
- * [DrawerOpenDragThreshold].
+ * session tree (a placeholder until the real panel lands). The drawer keeps
+ * its stock behavior (built-in edge-swipe-to-open + menu button); only the
+ * pager's own gestures handle page swiping.
  */
 @Composable
 private fun ConversationPager(
     uiState: ChatUiState,
     pagerState: PagerState,
-    onOpenDrawer: () -> Unit,
 ) {
-    val density = LocalDensity.current
-    val thresholdPx = with(density) { DrawerOpenDragThreshold.toPx() }
-    var drawerDrag by remember { mutableStateOf(0f) }
-    val drawerScrollConnection = remember(thresholdPx, onOpenDrawer) {
-        object : NestedScrollConnection {
-            // Horizontal scroll sign convention: a finger drag to the right
-            // yields a POSITIVE delta (scrolling toward the start), which the
-            // pager cannot consume at page 0 — so a positive available.x here
-            // means exactly "rightward drag past the pager's bounds".
-            override fun onPostScroll(
-                consumed: Offset,
-                available: Offset,
-                source: NestedScrollSource,
-            ): Offset {
-                if (source == NestedScrollSource.UserInput) {
-                    if (available.x > 0f) {
-                        drawerDrag += available.x
-                        if (drawerDrag >= thresholdPx) {
-                            drawerDrag = 0f
-                            onOpenDrawer()
-                        }
-                    } else if (available.x < 0f) {
-                        // Direction change: discard the partial accumulation.
-                        drawerDrag = 0f
-                    }
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                drawerDrag = 0f
-                return Velocity.Zero
-            }
-        }
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .nestedScroll(drawerScrollConnection),
-    ) {
-        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
-            when (page) {
-                TreePageIndex -> TreePageContent()
-                else -> ConversationContent(uiState = uiState)
-            }
+    HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+        when (page) {
+            TreePageIndex -> TreePageContent()
+            else -> ConversationContent(uiState = uiState)
         }
     }
 }
@@ -960,7 +879,7 @@ private fun TreePageContent() {
         )
         Spacer(Modifier.size(16.dp))
         Text(
-            text = stringResource(R.string.tree_empty),
+            text = stringResource(R.string.tree_page_placeholder),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
