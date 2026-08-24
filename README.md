@@ -2,7 +2,7 @@
 
 A native Android chat app for the [pi](https://pi.dev) agent stack, written in Kotlin
 with Jetpack Compose. The native agent runtime is wired in: configure any of the
-bundled OpenAI Chat-Completions providers (26 providers, 663 models generated from
+bundled OpenAI Chat-Completions providers (26 providers generated from
 pi's catalog), manage per-provider credentials, stream chat responses, and switch
 between persistent sessions. Agent tools, including `web_search` and `web_fetch`,
 are out of scope for the MVP.
@@ -33,6 +33,23 @@ openai-completions providers, and merges each provider's hand-curated identity
 `providers/*.ts`). Fields pi solves with environment variables (API keys,
 Cloudflare account/gateway ids) become credential inputs in the app and are
 stored per provider in the Android Keystore-backed credential store.
+
+Because the asset ships inside the APK, the generator fails loudly on drift
+in the pi checkout instead of letting it surface at app startup:
+
+- The set of providers pi generates openai-completions models for must match
+  the curated `PROVIDER_IDENTITY` table exactly (`EXCLUDED_PROVIDERS` documents
+  deliberate exceptions).
+- compat fields the Kotlin runtime does not model must be listed in
+  `UNSUPPORTED_COMPAT_FIELDS` (reviewed as irrelevant to the MVP), and
+  enum-shaped values (`thinkingFormat`, `maxTokensField`, input modalities)
+  must match the Kotlin enums.
+
+The asset records the pi git revision it was generated from (`piRevision`), so
+regenerating from one checkout is byte-stable apart from upstream model data.
+
+`node tools/generate-model-catalog.mjs --test` runs a self-test of these drift
+guards without needing a pi checkout.
 
 ## Runtime diagnostics
 
