@@ -22,6 +22,8 @@ data class Model(
     val contextWindow: Int = 4096,
     val maxTokens: Int = 4096,
     val compat: OpenAiCompletionsCompat = OpenAiCompletionsCompat(),
+    /** Anthropic Messages API compatibility flags (pi's AnthropicMessagesCompat). */
+    val anthropicCompat: AnthropicMessagesCompat = AnthropicMessagesCompat(),
     /** Per-model HTTP headers (e.g. github-copilot, nvidia). */
     val headers: Map<String, String> = emptyMap(),
 )
@@ -135,3 +137,25 @@ fun clampThinkingLevel(model: Model, level: ModelThinkingLevel): ModelThinkingLe
     }
     return available.firstOrNull() ?: ModelThinkingLevel.OFF
 }
+
+/**
+ * Anthropic Messages API compatibility flags, ported from pi's
+ * AnthropicMessagesCompat (packages/ai/src/types.ts). Only the flags the
+ * anthropic-messages adapter consumes are modeled; defaults match pi's
+ * getAnthropicCompat. `forceAdaptiveThinking` stays nullable because pi
+ * distinguishes "unset" from `false` there.
+ */
+data class AnthropicMessagesCompat(
+    val supportsEagerToolInputStreaming: Boolean = true,
+    val supportsLongCacheRetention: Boolean = true,
+    val sendSessionAffinityHeaders: Boolean = false,
+    val supportsCacheControlOnTools: Boolean = true,
+    val supportsTemperature: Boolean = true,
+    val allowEmptySignature: Boolean = false,
+    val supportsStrictTools: Boolean = false,
+    /** pi's compat.forceAdaptiveThinking: null = unset, true/false explicit. */
+    val forceAdaptiveThinking: Boolean? = null,
+)
+
+/** Resolved Anthropic compat flags with pi's defaults, pi's getAnthropicCompat. */
+fun anthropicCompatOf(model: Model): AnthropicMessagesCompat = model.anthropicCompat

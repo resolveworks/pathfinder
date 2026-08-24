@@ -45,7 +45,7 @@ data class TransportRequest(
 }
 
 /** One complete SSE data event; framing/UTF-8/multiline handling lives below this boundary. */
-data class SseEvent(val data: String)
+data class SseEvent(val data: String, /** SSE `event:` field name, when the server sent one. */ val name: String? = null)
 
 data class TransportResponse(
     val status: Int,

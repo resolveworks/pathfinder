@@ -58,6 +58,8 @@ data class ThinkingContent(
     val thinking: String,
     /** Provider-specific opaque reasoning replay data (e.g. which wire field it came from). */
     val thinkingSignature: String? = null,
+    /** True for Anthropic redacted_thinking blocks: opaque replay-only payload. */
+    val redacted: Boolean = false,
 ) : Content() {
     override val type: ContentType get() = ContentType.THINKING
 }

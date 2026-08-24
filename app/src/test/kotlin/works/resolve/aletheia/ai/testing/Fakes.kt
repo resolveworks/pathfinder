@@ -43,6 +43,30 @@ internal class FakeTransport : HttpStreamingTransport {
         }
     }
 
+    /** Anthropic-style responses that also carry an `event:` name. */
+    fun enqueueNamedResponse(vararg events: Pair<String?, String>, status: Int = 200) {
+        enqueueNamedResponse(events.toList(), status)
+    }
+
+    /** Anthropic-style responses that also carry an `event:` name. */
+    fun enqueueNamedResponse(events: List<Pair<String?, String>>, status: Int = 200) {
+        outcomes.add {
+            val flow = flow {
+                try {
+                    events.forEach { (name, data) -> emit(SseEvent(data, name)) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    cancelled.value = true
+                    throw e
+                }
+            }
+            TransportResponse(
+                status = status,
+                headers = mapOf("content-type" to listOf("text/event-stream")),
+                events = flow,
+            )
+        }
+    }
+
     /** A stream that never ends server-side after the given chunks. */
     fun enqueueHangingResponse(vararg chunks: String) {
         outcomes.add {

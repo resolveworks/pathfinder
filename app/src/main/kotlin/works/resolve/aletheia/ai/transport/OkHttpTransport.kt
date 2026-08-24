@@ -66,7 +66,7 @@ class OkHttpTransport(
                 }
 
                 override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                    events.trySend(SseEvent(data))
+                    events.trySend(SseEvent(data, type))
                 }
 
                 override fun onClosed(eventSource: EventSource) {
