@@ -155,5 +155,9 @@ data class ChatUiState(
     val canSend: Boolean = false,
     /** Display-only flag: whether to show the model's reasoning (never affects the agent). */
     val showThinking: Boolean = false,
+    /** Flattened tree rows of the active session's conversation (see TreeProjection.kt). */
+    val treeRows: List<TreeRow> = emptyList(),
+    /** In-memory tree-panel filter (never persisted). */
+    val treeFilter: TreeFilter = TreeFilter.DEFAULT,
     val error: String? = null,
 )

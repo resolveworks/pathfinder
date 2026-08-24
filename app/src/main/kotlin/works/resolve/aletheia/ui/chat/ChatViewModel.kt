@@ -18,6 +18,8 @@ import works.resolve.aletheia.data.credentials.ApiKeyStore
 import works.resolve.aletheia.data.settings.ModelSettings
 import works.resolve.aletheia.data.settings.SettingsStore
 import works.resolve.aletheia.data.settings.SettingsRepository
+import works.resolve.aletheia.data.sessions.Conversation
+import works.resolve.aletheia.data.sessions.MessageEntry
 import works.resolve.aletheia.data.sessions.Session
 import works.resolve.aletheia.data.sessions.SessionRepository
 import works.resolve.aletheia.data.sessions.SessionSummary
@@ -51,12 +53,22 @@ import kotlinx.coroutines.withContext
  * Transcript persistence runs through a single latest-snapshot pipeline: at
  * most one save per session is in flight, superseded snapshots are coalesced,
  * and session switches wait for pending saves so transcripts always stay with
- * the session they belong to. A failed save surfaces an error and blocks
+ * the session they belong to. The persisted unit is the conversation tree
+ * itself (entries + leafId), so branch structure survives saves; snapshots
+ * are taken from the immutable [Conversation] the ViewModel owns alongside
+ * the active session. A failed save surfaces an error and blocks
  * session/config switches; the blocked intent explicitly retries the latest
  * snapshot and only proceeds once it is saved, so an unsaved transcript is
  * never silently abandoned. Snapshot writes themselves are non-cancellable
  * and the save loop drains whatever it accepted, so ViewModel teardown can
  * never abandon an accepted snapshot either.
+ *
+ * Tree navigation (pi's navigateTree, reduced to no summarization) is a
+ * state change on the same conversation: navigating to an assistant entry
+ * moves the leaf there (the active path becomes root..that entry);
+ * navigating to a user entry implements re-edit semantics — the leaf moves
+ * to the entry's parent (or resets to root) and the message text lands in
+ * the draft, so the next send appends a sibling of the original message.
  *
  * Navigation is state, not effects: an unconfigured app pins
  * [ChatUiState.startKey] to [ProvidersNavKey] (first-run step 1: pick a
@@ -92,11 +104,18 @@ class ChatViewModel(
     private var agentStateJob: Job? = null
     private var activeSession: Session? = null
 
-    /** Count of transcript messages already persisted for [activeSession]. */
+    /**
+     * The conversation tree of [activeSession]: the transcript source of
+     * truth for persistence and tree navigation. Kept in lockstep with the
+     * bound agent's committed transcript (which mirrors the active path).
+     */
+    private var activeConversation: Conversation = Conversation(emptyList(), null)
+
+    /** Count of active-path messages already persisted for [activeSession]. */
     private var persistedMessageCount: Int = 0
 
-    /** Latest unsaved transcript snapshot for its owning session. */
-    private var pendingPersist: Pair<Session, List<Message>>? = null
+    /** Latest unsaved conversation snapshot for its owning session. */
+    private var pendingPersist: Pair<Session, Conversation>? = null
     private var persistJob: Job? = null
 
     /** Agent-sourced error last projected into the UI, to detect agent-side clearing. */
@@ -218,6 +237,56 @@ class ChatViewModel(
 
     fun stop() {
         agent?.abort()
+    }
+
+    /**
+     * Navigates the conversation tree to [id] (pi's navigateTree, reduced:
+     * no summarization). Busy-rejected while streaming; selecting the
+     * current leaf is a no-op error; unknown ids are a safe error. A user
+     * message target re-edits: the leaf moves to its parent (or resets to
+     * root) and its text is restored into the draft, so the next send forks
+     * as a sibling. Any other target moves the leaf to that entry.
+     */
+    fun navigateToTreeEntry(id: String) {
+        viewModelScope.launch {
+            if (rejectWhileBusy()) return@launch
+            if (id == activeConversation.leafId) {
+                setError(ERROR_ALREADY_AT_POINT)
+                return@launch
+            }
+            val entry = activeConversation.entry(id)
+            if (entry == null) {
+                setError(ERROR_ENTRY_MISSING)
+                return@launch
+            }
+            val userMessage = (entry as? MessageEntry)?.message as? UserMessage
+            activeConversation = if (userMessage != null) {
+                // Re-edit: the next append lands as a sibling of the target.
+                val parent = entry.parentId?.let { pid -> activeConversation.entry(pid) }
+                if (parent != null) activeConversation.branch(parent.id) else activeConversation.resetLeaf()
+            } else {
+                activeConversation.branch(id)
+            }
+            agent?.replaceTranscript(activeConversation.activeMessages())
+            updateState {
+                it.copy(
+                    draft = userMessage
+                        ?.content
+                        ?.filterIsInstance<TextContent>()
+                        ?.joinToString("") { part -> part.text }
+                        ?: it.draft,
+                    treeRows = buildTreeRows(activeConversation, it.treeFilter),
+                )
+            }
+            enqueuePersist()
+        }
+    }
+
+    /** Switches the tree-panel filter (in-memory only) and re-projects the rows. */
+    fun setTreeFilter(filter: TreeFilter) {
+        updateState {
+            it.copy(treeFilter = filter, treeRows = buildTreeRows(activeConversation, filter))
+        }
     }
 
     fun newSession() {
@@ -357,6 +426,7 @@ class ChatViewModel(
         // immediately, and the new agent's transcript must never be observed
         // against the previous session (which could cross-write saves).
         activeSession = session
+        activeConversation = Conversation(session.entries, session.leafId)
         persistedMessageCount = session.messages.size
         bindAgent(agent)
         val summaries = sessionStore.summaries()
@@ -367,6 +437,7 @@ class ChatViewModel(
                 navigationEpoch = it.navigationEpoch + 1,
                 messages = projectCommitted(session.messages),
                 streamingMessage = null,
+                treeRows = buildTreeRows(activeConversation, it.treeFilter),
                 sessionSummaries = summaries,
             )
         }
@@ -409,32 +480,51 @@ class ChatViewModel(
     }
 
     private fun onAgentState(state: AgentState) {
+        syncConversation(state.messages)
         val agentError = state.errorMessage
         updateState {
             it.copy(
                 messages = projectCommitted(state.messages),
                 streamingMessage = state.streamingMessage?.let(::projectStreaming),
                 isStreaming = state.isStreaming,
+                treeRows = buildTreeRows(activeConversation, it.treeFilter),
                 error = agentError ?: it.error?.takeIf { e -> e != lastAgentError },
             )
         }
         lastAgentError = agentError
 
         if (state.messages.size > persistedMessageCount) {
-            enqueuePersist(state.messages)
+            enqueuePersist()
+        }
+    }
+
+    /**
+     * Folds the agent's committed transcript into the conversation tree.
+     * The agent's transcript always equals the conversation's active path
+     * (they are seeded together and only the agent appends), so growth is a
+     * strictly appended suffix that becomes children of the current leaf.
+     */
+    private fun syncConversation(messages: List<Message>) {
+        val activeCount = activeConversation.activeMessages().size
+        if (messages.size > activeCount) {
+            var updated = activeConversation
+            for (message in messages.drop(activeCount)) {
+                updated = updated.append(message)
+            }
+            activeConversation = updated
         }
     }
 
     // ---- persistence pipeline ----
 
     /**
-     * Schedules [messages] for persistence against the currently active
-     * session snapshot. At most one save runs at a time; while a save is in
-     * flight, newer snapshots coalesce (only the latest is written).
+     * Schedules the current conversation snapshot for persistence against
+     * the active session. At most one save runs at a time; while a save is
+     * in flight, newer snapshots coalesce (only the latest is written).
      */
-    private fun enqueuePersist(messages: List<Message>) {
+    private fun enqueuePersist() {
         val session = activeSession ?: return
-        pendingPersist = session to messages
+        pendingPersist = session to activeConversation
         if (persistJob?.isActive == true) return
         persistJob = viewModelScope.launch {
             // [persistSnapshot] is non-cancellable, so once a snapshot is
@@ -454,19 +544,25 @@ class ChatViewModel(
      * with its session even if the user switched away meanwhile); UI/active
      * state is only updated when that session is still active.
      */
-    private suspend fun persistSnapshot(session: Session, messages: List<Message>) {
+    private suspend fun persistSnapshot(session: Session, conversation: Conversation) {
         // Non-cancellable: an accepted snapshot must reach the file even when
         // the ViewModel scope is torn down mid-write; without this, cancelling
         // the save coroutine between dequeue and write would silently drop the
         // transcript. UI bookkeeping still only targets a still-active session.
         withContext(NonCancellable) {
             try {
+                val activeMessages = conversation.activeMessages()
                 val title = if (session.title == DEFAULT_SESSION_TITLE) {
-                    deriveTitle(messages) ?: DEFAULT_SESSION_TITLE
+                    deriveTitle(activeMessages) ?: DEFAULT_SESSION_TITLE
                 } else {
                     session.title
                 }
-                val saved = sessionStore.save(session.withMessages(messages).copy(title = title))
+                // Persist the tree itself (entries + leafId): branch
+                // structure must survive saves; withMessages stays a
+                // flat-transcript bridge only.
+                val saved = sessionStore.save(
+                    session.copy(entries = conversation.entries, leafId = conversation.leafId, title = title),
+                )
                 if (activeSession?.id == session.id) {
                     activeSession = saved
                     persistedMessageCount = saved.messages.size
@@ -502,7 +598,8 @@ class ChatViewModel(
     private fun retryUnsavedSnapshot() {
         val snapshot = agent?.state?.value ?: return
         if (activeSession != null && snapshot.messages.size > persistedMessageCount) {
-            enqueuePersist(snapshot.messages)
+            syncConversation(snapshot.messages)
+            enqueuePersist()
         }
     }
 
@@ -791,6 +888,8 @@ class ChatViewModel(
         const val ERROR_SESSION_SAVE = "Could not save the chat"
         const val ERROR_BUSY = "Wait for the response to finish first"
         const val ERROR_ALREADY_STREAMING = "A response is already streaming"
+        const val ERROR_ALREADY_AT_POINT = "Already at this point"
+        const val ERROR_ENTRY_MISSING = "Message not found"
 
         /** Actionable, secret-free message naming the still-missing auth prompts. */
         fun missingCredentialError(missing: List<AuthPrompt>): String =
