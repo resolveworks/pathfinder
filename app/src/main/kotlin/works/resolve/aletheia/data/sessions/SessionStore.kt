@@ -53,7 +53,8 @@ class SessionStore(
             title = title,
             createdAt = now,
             updatedAt = now,
-            messages = emptyList(),
+            entries = emptyList(),
+            leafId = null,
         )
         withContext(ioDispatcher) { write(session) }
         session
@@ -107,7 +108,7 @@ class SessionStore(
     // ---- internals ----
 
     private fun defensiveCopy(session: Session): Session =
-        session.copy(messages = session.messages.toList())
+        session.copy(entries = session.entries.toList())
 
     private fun fileFor(id: String): File = File(root, requireId(id) + ".json")
 

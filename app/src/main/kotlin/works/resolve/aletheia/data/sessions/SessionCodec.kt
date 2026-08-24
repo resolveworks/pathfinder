@@ -37,7 +37,7 @@ import kotlinx.serialization.json.buildJsonObject
  */
 internal object SessionCodec {
 
-    private const val FORMAT_VERSION = 1
+    private const val FORMAT_VERSION = 2
 
     private val json = Json {
         prettyPrint = true
@@ -50,7 +50,8 @@ internal object SessionCodec {
         put("title", session.title)
         put("createdAt", session.createdAt)
         put("updatedAt", session.updatedAt)
-        put("messages", JsonArray(session.messages.map(::encodeMessage)))
+        put("entries", JsonArray(session.entries.map(::encodeEntry)))
+        put("leafId", session.leafId)
     }.toString()
 
     fun decode(text: String): Session {
@@ -62,17 +63,72 @@ internal object SessionCodec {
         val obj = element as? JsonObject
             ?: throw SessionDataException("Malformed session data: expected object")
         val version = obj.int("format") ?: throw SessionDataException("Unsupported session format")
-        if (version != FORMAT_VERSION) throw SessionDataException("Unsupported session format: $version")
+        if (version !in 1..FORMAT_VERSION) throw SessionDataException("Unsupported session format: $version")
 
-        val messages = (obj["messages"] as? JsonArray)
-            ?: throw SessionDataException("Malformed session data: missing messages")
+        return when (version) {
+            1 -> migrateV1(obj)
+            else -> decodeV2(obj)
+        }
+    }
+
+    private fun decodeV2(obj: JsonObject): Session {
+        val entries = (obj["entries"] as? JsonArray)
+            ?: throw SessionDataException("Malformed session data: missing entries")
         return Session(
             id = requireId(obj.string("id") ?: throw SessionDataException("Malformed session data: missing id")),
             title = obj.string("title") ?: throw SessionDataException("Malformed session data: missing title"),
             createdAt = obj.long("createdAt") ?: throw SessionDataException("Malformed session data: missing createdAt"),
             updatedAt = obj.long("updatedAt") ?: throw SessionDataException("Malformed session data: missing updatedAt"),
-            messages = messages.map(::decodeMessage),
+            entries = entries.map(::decodeEntry),
+            leafId = obj.string("leafId"),
         )
+    }
+
+    /** v1 files stored a flat message list; chain them into entries with
+     * Conversation.fromMessages semantics (leaf = last entry or null). */
+    private fun migrateV1(obj: JsonObject): Session {
+        val messages = (obj["messages"] as? JsonArray)
+            ?: throw SessionDataException("Malformed session data: missing messages")
+        val conversation = Conversation.fromMessages(messages.map(::decodeMessage))
+        return Session(
+            id = requireId(obj.string("id") ?: throw SessionDataException("Malformed session data: missing id")),
+            title = obj.string("title") ?: throw SessionDataException("Malformed session data: missing title"),
+            createdAt = obj.long("createdAt") ?: throw SessionDataException("Malformed session data: missing createdAt"),
+            updatedAt = obj.long("updatedAt") ?: throw SessionDataException("Malformed session data: missing updatedAt"),
+            entries = conversation.entries,
+            leafId = conversation.leafId,
+        )
+    }
+
+    // ---- Entries ----
+
+    private fun encodeEntry(entry: SessionEntry): JsonObject = when (entry) {
+        is MessageEntry -> buildJsonObject {
+            put("type", "message")
+            put("id", entry.id)
+            entry.parentId?.let { put("parentId", it) }
+            put("timestamp", entry.timestamp)
+            put("message", encodeMessage(entry.message))
+        }
+    }
+
+    private fun decodeEntry(element: JsonElement): SessionEntry {
+        val obj = element as? JsonObject
+            ?: throw SessionDataException("Malformed session data: entry must be an object")
+        val id = obj.string("id") ?: throw SessionDataException("Malformed session data: entry missing id")
+        return when (val type = obj.string("type")) {
+            "message" -> MessageEntry(
+                id = id,
+                parentId = obj.string("parentId"),
+                timestamp = obj.long("timestamp")
+                    ?: throw SessionDataException("Malformed session data: entry missing timestamp"),
+                message = decodeMessage(
+                    obj["message"] ?: throw SessionDataException("Malformed session data: entry missing message"),
+                ),
+            )
+
+            else -> throw SessionDataException("Unknown entry type: $type")
+        }
     }
 
     /** Strictly-required long (present, correct type). */

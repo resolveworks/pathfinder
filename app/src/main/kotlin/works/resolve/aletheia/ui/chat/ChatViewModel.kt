@@ -466,7 +466,7 @@ class ChatViewModel(
                 } else {
                     session.title
                 }
-                val saved = sessionStore.save(session.copy(title = title, messages = messages))
+                val saved = sessionStore.save(session.withMessages(messages).copy(title = title))
                 if (activeSession?.id == session.id) {
                     activeSession = saved
                     persistedMessageCount = saved.messages.size
