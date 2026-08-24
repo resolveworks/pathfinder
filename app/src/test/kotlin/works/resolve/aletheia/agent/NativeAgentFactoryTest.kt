@@ -209,7 +209,7 @@ class NativeAgentFactoryTest {
         runBlocking {
             // A catalog whose model carries its own base URL (the pi invariant
             // we honor: request-model selection defaults from model.baseUrl).
-            val modelBaseUrlModel = works.resolve.aletheia.ai.core.Model(
+            val modelBaseUrlModel = Model(
                 id = "m",
                 name = "M",
                 api = "openai-completions",
