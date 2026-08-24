@@ -52,9 +52,11 @@ const CLOUDFLARE_GATEWAY = {
  * the deliberately excluded ones in EXCLUDED_PROVIDERS (buildCatalog fails
  * otherwise). `label` is the envApiKeyAuth display name,
  * `envKey` its environment variable, `promptMessage` overrides the default
- * "Enter <label>" prompt text, `extraPrompts` adds non-key env prompts, and
- * `authless: true` marks OAuth-only providers whose API-key auth is out of
- * scope (models kept, auth omitted).
+ * "Enter <label>" prompt text, `extraPrompts` adds non-key env prompts.
+ * OAuth-only providers (openai-codex) have no identity entry; their
+ * capability lives in OAUTH_METADATA. OAuth *flow implementations* are out
+ * of scope for this foundation commit; the declarative metadata emitted
+ * here is what the upcoming OAuth foundation consumes.
  */
 
 /**
@@ -160,6 +162,13 @@ function buildCatalog(piModels, { piRevision = null } = {}) {
 	for (const providerId of Object.keys(PROVIDER_IDENTITY)) {
 		if (EXCLUDED_PROVIDERS.has(providerId)) {
 			throw new Error(`PROVIDER_IDENTITY entry '${providerId}' is also in EXCLUDED_PROVIDERS`);
+		}
+	}
+	// A stale exclusion (upstream rename/removal) must be visible, not silent.
+	for (const providerId of EXCLUDED_PROVIDERS) {
+		const models = Object.values(piModels[providerId] ?? {});
+		if (models.length === 0) {
+			throw new Error(`EXCLUDED_PROVIDERS entry '${providerId}' no longer exists in pi's generated catalog`);
 		}
 	}
 	for (const [providerId, oauth] of Object.entries(OAUTH_METADATA)) {
