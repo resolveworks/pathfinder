@@ -194,6 +194,59 @@ class CatalogProviderAuthTest {
         assertEquals(rotated, store.read("codex"), "the refreshed credential must be persisted")
     }
 
+    // ---- naming and composition shape ----
+
+    @Test
+    fun `api key auth name uses the catalog label verbatim`() {
+        // pi's auth names like "Anthropic API key" already carry the suffix;
+        // appending would yield "Anthropic API key API key".
+        assertEquals("Z.AI API key", CatalogApiKeyAuth(TestCatalogs.ZAI).name)
+        assertEquals("Cloudflare API key", CatalogApiKeyAuth(TestCatalogs.CLOUDFLARE).name)
+    }
+
+    @Test
+    fun `api key auth name falls back to provider name plus API key without a label`() {
+        // Label-less catalog entry: pi's envApiKeyAuth names are "<provider> API key".
+        val unlabeled = CatalogProvider(
+            id = "unlabeled",
+            name = "Unlabeled",
+            baseUrl = "https://unlabeled.test/v1",
+            auth = works.resolve.aletheia.ai.providers.ProviderAuth(
+                prompts = listOf(works.resolve.aletheia.ai.providers.AuthPrompt("UNLABELED_API_KEY", "Key")),
+            ),
+            models = emptyList(),
+        )
+        assertEquals("Unlabeled API key", CatalogApiKeyAuth(unlabeled).name)
+    }
+
+    @Test
+    fun `oauth-only promptless provider has no api key handler`() = runTest {
+        // Pi's openai-codex carries no apiKey auth: a prompt-less catalog
+        // provider must expose ProviderAuth.apiKey == null, and a stray stored
+        // API-key credential resolves as unconfigured (no matching handler).
+        val auth = CatalogProviderAuth(codex)
+        assertNull(auth.apiKey)
+
+        val store = InMemoryCredentialStore()
+        store.modify("codex") { ApiKeyCredential(key = "stray-key") }
+        assertNull(resolveProviderAuth(CatalogAuthProviderRef(codex), store, NoopAuthContext))
+        // Even an explicit key override has no apiKey handler to shape it.
+        assertNull(
+            resolveProviderAuth(
+                CatalogAuthProviderRef(codex),
+                store,
+                NoopAuthContext,
+                AuthResolutionOverrides(apiKey = "explicit"),
+            ),
+        )
+    }
+
+    @Test
+    fun `prompted provider keeps its api key handler`() {
+        assertNull(CatalogProviderAuth(codex).apiKey)
+        assertTrue(CatalogProviderAuth(TestCatalogs.ZAI).apiKey != null)
+    }
+
     // ---- mismatched/unregistered OAuth ----
 
     @Test

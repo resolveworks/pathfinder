@@ -16,32 +16,28 @@ import works.resolve.aletheia.ai.providers.CatalogProvider
  * only when every prompt resolves nonblank (pi's Cloudflare resolution
  * returns unconfigured unless every value exists); following the catalog's
  * blank-is-missing rule, blank values fall through to ambient instead of
- * short-circuiting like pi's `!== undefined` check. Prompt-less providers
- * (OAuth-capable providers without key prompts) stay unconfigurable under
- * API-key auth until a nonblank key is stored — ambient env has no slot to
- * fill there.
+ * short-circuiting like pi's `!== undefined` check. OAuth-only prompt-less
+ * providers carry no API-key handler at all: pi leaves `ProviderAuth.apiKey`
+ * unset for them (pi's `openai-codex.ts` has no `apiKey` auth), so their auth
+ * composition depends entirely on a registered OAuth flow.
  */
 class CatalogApiKeyAuth(private val entry: CatalogProvider) : ApiKeyAuth {
-    override val name: String = "${entry.auth.label ?: entry.name} API key"
+    /** The catalog label verbatim (pi's `envApiKeyAuth` name); fallback for
+     * label-less entries, matching the old `"Anthropic API key"`-style labels. */
+    override val name: String = entry.auth.label ?: "${entry.name} API key"
 
     override suspend fun resolve(ctx: AuthContext, credential: ApiKeyCredential?): AuthResult? {
         val prompts = entry.auth.prompts
         val env = credential?.env?.toMutableMap() ?: mutableMapOf()
-        val key: String = if (prompts.isEmpty()) {
-            // Catalog invariant (missingAuthPrompts): a prompt-less provider
-            // requires a nonblank stored key; there is no ambient env name.
-            credential?.key?.takeIf { it.isNotBlank() } ?: return null
-        } else {
-            var apiKey: String? = null
-            prompts.forEachIndexed { index, prompt ->
-                val stored = if (index == 0) credential?.key else credential?.env?.get(prompt.envKey)
-                val value =
-                    stored?.takeIf { it.isNotBlank() } ?: ctx.env(prompt.envKey)?.takeIf { it.isNotBlank() }
-                if (value == null) return null
-                if (index == 0) apiKey = value else env[prompt.envKey] = value
-            }
-            apiKey ?: return null
+        var apiKey: String? = null
+        prompts.forEachIndexed { index, prompt ->
+            val stored = if (index == 0) credential?.key else credential?.env?.get(prompt.envKey)
+            val value =
+                stored?.takeIf { it.isNotBlank() } ?: ctx.env(prompt.envKey)?.takeIf { it.isNotBlank() }
+            if (value == null) return null
+            if (index == 0) apiKey = value else env[prompt.envKey] = value
         }
+        val key = apiKey ?: return null
         val source = if (credential != null) "stored credential" else prompts.first().envKey
 
         return AuthResult(
@@ -86,13 +82,14 @@ class CatalogAuthProviderRef(
     override val auth: ProviderAuth = CatalogProviderAuth(entry, registry)
 }
 
-/** Catalog entry → [ProviderAuth] composition (pi's `ProviderAuth`). */
+/** Catalog entry → [ProviderAuth] composition (pi's `ProviderAuth`): an
+ * API-key handler exists iff the catalog carries key prompts — OAuth-only
+ * prompt-less providers (pi's `openai-codex`) have none. */
 class CatalogProviderAuth(
     entry: CatalogProvider,
     registry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
 ) : ProviderAuth {
-    /** Every catalog provider is key-driven (pi: even keyless providers provide an apiKey handler). */
-    override val apiKey: ApiKeyAuth = CatalogApiKeyAuth(entry)
+    override val apiKey: ApiKeyAuth? = entry.auth.prompts.takeIf { it.isNotEmpty() }?.let { CatalogApiKeyAuth(entry) }
     override val oauth: OAuthAuth? = registry.oauthAuth(entry)
 }
 

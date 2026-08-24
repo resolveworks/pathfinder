@@ -297,6 +297,11 @@ class NativeAgentFactoryTest {
                         id = "multi",
                         name = "Multi",
                         baseUrl = "https://provider.test/v1",
+                        auth = works.resolve.aletheia.ai.providers.ProviderAuth(
+                            prompts = listOf(
+                                works.resolve.aletheia.ai.providers.AuthPrompt("MULTI_API_KEY", "API key"),
+                            ),
+                        ),
                         models = listOf(modelBaseUrlModel),
                     ),
                 ),
