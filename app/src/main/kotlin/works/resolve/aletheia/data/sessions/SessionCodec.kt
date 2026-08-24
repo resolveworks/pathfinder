@@ -181,6 +181,9 @@ internal object SessionCodec {
             put("toolName", message.toolName)
             put("content", encodeContentList(message.content))
             put("isError", message.isError)
+            if (message.addedToolNames.isNotEmpty()) {
+                put("addedToolNames", JsonArray(message.addedToolNames.map(::JsonPrimitive)))
+            }
         }
     }
 
@@ -212,6 +215,7 @@ internal object SessionCodec {
                 toolCallId = obj.string("toolCallId") ?: throw SessionDataException("Malformed session data: tool result missing toolCallId"),
                 toolName = obj.string("toolName") ?: throw SessionDataException("Malformed session data: tool result missing toolName"),
                 content = decodeContentList(obj["content"]),
+                addedToolNames = decodeStringList(obj["addedToolNames"]),
                 isError = obj.boolean("isError")
                     ?: throw SessionDataException("Malformed session data: tool result missing isError"),
                 timestamp = obj.requireLong("timestamp", "message timestamp"),
@@ -259,6 +263,12 @@ internal object SessionCodec {
     private fun decodeContentList(element: JsonElement?): List<Content> {
         val array = element as? JsonArray ?: throw SessionDataException("Malformed session data: missing content")
         return array.map(::decodeContent)
+    }
+
+    /** Optional string array; the current default when absent is empty. */
+    private fun decodeStringList(element: JsonElement?): List<String> {
+        val array = element as? JsonArray ?: return emptyList()
+        return array.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
     }
 
     private fun encodeContent(content: Content): JsonObject = when (content) {

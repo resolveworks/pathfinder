@@ -131,8 +131,8 @@ fun estimateContextTokens(context: Context): ContextUsageEstimate {
 
     // When usage applies, the system prompt and tools are part of the
     // reported prefix. pi also re-adds tools introduced after that point via
-    // ToolResultMessage.addedToolNames, which our ToolResultMessage lacks;
-    // trailing tool results' content is still estimated.
+    // ToolResultMessage.addedToolNames; that re-add is not reflected here,
+    // though trailing tool results' content is still estimated.
     if (estimate.lastUsageIndex != null) return estimate
 
     val prefixTokens = (context.systemPrompt?.let { estimateTextTokens(it) } ?: 0) + estimateToolsTokens(context)

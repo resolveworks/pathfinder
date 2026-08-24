@@ -70,6 +70,43 @@ class SessionCodecTest {
     }
 
     @Test
+    fun toolResultAddedToolNamesRoundTripAndDefaultToEmpty() {
+        val result = ToolResultMessage(
+            toolCallId = "call|fc_1",
+            toolName = "edit",
+            content = listOf(TextContent("ok")),
+            addedToolNames = listOf("search", "edit"),
+        )
+        val session = branchedSession().copy(
+            entries = listOf(MessageEntry("m1", null, 2L, result)),
+            leafId = "m1",
+        )
+        val encoded = SessionCodec.encode(session)
+        val decoded = SessionCodec.decode(encoded)
+        assertEquals(result, (decoded.entries.single() as MessageEntry).message)
+
+        // The field is optional; without it the default is emptyList.
+        val omitted = SessionCodec.decode(encoded.replace(",\"addedToolNames\":[\"search\",\"edit\"]", ""))
+        val omittedResult = (omitted.entries.single() as MessageEntry).message as ToolResultMessage
+        assertEquals(emptyList<String>(), omittedResult.addedToolNames)
+    }
+
+    @Test
+    fun toolResultOmitsAddedToolNamesWhenEmpty() {
+        val result = ToolResultMessage(
+            toolCallId = "call|fc_1",
+            toolName = "edit",
+            content = listOf(TextContent("ok")),
+        )
+        val session = branchedSession().copy(
+            entries = listOf(MessageEntry("m1", null, 2L, result)),
+            leafId = "m1",
+        )
+        val encoded = SessionCodec.encode(session)
+        assertEquals(false, encoded.contains("addedToolNames"))
+    }
+
+    @Test
     fun v2RoundTripPreservesEntriesAndLeafId() {
         val session = branchedSession()
         val decoded = SessionCodec.decode(SessionCodec.encode(session))
