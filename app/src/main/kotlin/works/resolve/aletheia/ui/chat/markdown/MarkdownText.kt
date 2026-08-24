@@ -42,6 +42,13 @@ import org.commonmark.node.Paragraph
 import org.commonmark.node.ThematicBreak
 
 /**
+ * Prose styling for rendered text blocks: text color and italics. A block-level
+ * analog of pi's thinking/quote overrides (`{ color, italic }`); [Color.Unspecified]
+ * with [italic] false renders with theme defaults.
+ */
+private data class ProseStyle(val color: Color = Color.Unspecified, val italic: Boolean = false, val dimmed: Boolean = false)
+
+/**
  * Renders a markdown string as structured Compose content, porting pi's block-level
  * markdown rendering (`Markdown.render()` / `renderToken()`) to Material 3.
  *
@@ -49,9 +56,17 @@ import org.commonmark.node.ThematicBreak
  * [buildInlineMarkdown][Node.buildInlineMarkdown] builder with values resolved from
  * [MaterialTheme] here; this layer owns block structure: headings, lists, quotes,
  * tables, code blocks, and rules.
+ *
+ * @param color prose text color override; [Color.Unspecified] keeps theme defaults.
+ * @param italic renders prose in italics (e.g. thinking traces); quotes force this on.
  */
 @Composable
-fun MarkdownText(markdown: String, modifier: Modifier = Modifier) {
+fun MarkdownText(
+    markdown: String,
+    modifier: Modifier = Modifier,
+    color: Color = Color.Unspecified,
+    italic: Boolean = false,
+) {
     val document: Node = remember(markdown) { MarkdownParser.parser.parse(markdown) }
     val inlineStyles = InlineMarkdownStyles(
         linkColor = MaterialTheme.colorScheme.primary,
@@ -59,26 +74,26 @@ fun MarkdownText(markdown: String, modifier: Modifier = Modifier) {
         codeTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        RenderBlocks(document, inlineStyles, inQuote = false)
+        RenderBlocks(document, inlineStyles, ProseStyle(color, italic))
     }
 }
 
 /** Walks [parent]'s children and renders each block, mirroring pi's token loop. */
 @Composable
-private fun RenderBlocks(parent: Node, styles: InlineMarkdownStyles, inQuote: Boolean) {
+private fun RenderBlocks(parent: Node, styles: InlineMarkdownStyles, prose: ProseStyle) {
     for (child in parent.children()) {
-        RenderBlock(child, styles, inQuote)
+        RenderBlock(child, styles, prose)
     }
 }
 
 @Composable
-private fun RenderBlock(node: Node, styles: InlineMarkdownStyles, inQuote: Boolean) {
+private fun RenderBlock(node: Node, styles: InlineMarkdownStyles, prose: ProseStyle) {
     when (node) {
         is Paragraph -> Text(
             text = node.buildInlineMarkdown(styles),
             style = MaterialTheme.typography.bodyLarge,
-            fontStyle = if (inQuote) FontStyle.Italic else null,
-            color = if (inQuote) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified,
+            fontStyle = if (prose.italic) FontStyle.Italic else null,
+            color = prose.resolveColor(),
         )
 
         is Heading -> Text(
@@ -88,7 +103,7 @@ private fun RenderBlock(node: Node, styles: InlineMarkdownStyles, inQuote: Boole
                 2 -> MaterialTheme.typography.titleMedium
                 else -> MaterialTheme.typography.titleSmall
             },
-            color = if (inQuote) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified,
+            color = prose.resolveColor(),
         )
 
         // Info string (node.info) is available; syntax highlighting is out of scope.
@@ -111,29 +126,49 @@ private fun RenderBlock(node: Node, styles: InlineMarkdownStyles, inQuote: Boole
                     .padding(start = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                RenderBlocks(node, styles, inQuote = true)
+                // Quotes render their content italic + dimmed; merge with any outer prose override.
+                val quoted = ProseStyle(
+                    color = prose.color.takeIf { it != Color.Unspecified }
+                        ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                    italic = true,
+                    dimmed = true,
+                )
+                RenderBlocks(node, styles, quoted)
             }
         }
 
         is ThematicBreak -> HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        is BulletList -> ListBlock(node, ordered = false, styles = styles, inQuote = inQuote)
+        is BulletList -> ListBlock(node, ordered = false, styles = styles, prose = prose)
 
-        is OrderedList -> ListBlock(node, ordered = true, styles = styles, inQuote = inQuote)
+        is OrderedList -> ListBlock(node, ordered = true, styles = styles, prose = prose)
 
-        is TableBlock -> Table(node, styles, inQuote)
+        is TableBlock -> Table(node, styles, prose)
 
         is HtmlBlock -> Text(
             text = node.literal,
             style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (prose.color != Color.Unspecified) prose.color else MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         is TaskListItemMarker -> Unit // rendered as a checkbox by the owning ListItem
 
-        else -> RenderBlocks(node, styles, inQuote) // unknown block: walk children
+        else -> RenderBlocks(node, styles, prose) // unknown block: walk children
     }
 }
+
+/**
+ * Resolves the effective prose color: an explicit override wins, otherwise quoted
+ * (dimmed) content falls back to [MaterialTheme.colorScheme.onSurfaceVariant] and
+ * normal content keeps [Color.Unspecified] (theme default text color).
+ */
+@Composable
+private fun ProseStyle.resolveColor(): Color =
+    when {
+        color != Color.Unspecified -> color
+        dimmed -> MaterialTheme.colorScheme.onSurfaceVariant
+        else -> Color.Unspecified
+    }
 
 @Composable
 private fun CodeBlock(literal: String) {
@@ -160,7 +195,7 @@ private fun CodeBlock(literal: String) {
  * [TaskListItemMarker] node itself.
  */
 @Composable
-private fun ListBlock(listNode: Node, ordered: Boolean, styles: InlineMarkdownStyles, inQuote: Boolean) {
+private fun ListBlock(listNode: Node, ordered: Boolean, styles: InlineMarkdownStyles, prose: ProseStyle) {
     val startNumber = (listNode as? OrderedList)?.markerStartNumber ?: 1
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         var itemIndex = 0
@@ -183,12 +218,12 @@ private fun ListBlock(listNode: Node, ordered: Boolean, styles: InlineMarkdownSt
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier.padding(start = 12.dp),
                     ) {
-                        RenderBlocks(child, styles, inQuote = inQuote)
+                        RenderBlocks(child, styles, prose)
                     }
                 }
                 itemIndex++
             } else {
-                RenderBlock(child, styles, inQuote)
+                RenderBlock(child, styles, prose)
             }
         }
     }
@@ -196,7 +231,7 @@ private fun ListBlock(listNode: Node, ordered: Boolean, styles: InlineMarkdownSt
 
 /** Tables: Column of Rows; header row bold with a divider beneath it. */
 @Composable
-private fun Table(table: TableBlock, styles: InlineMarkdownStyles, inQuote: Boolean) {
+private fun Table(table: TableBlock, styles: InlineMarkdownStyles, prose: ProseStyle) {
     Column {
         for (section in table.children()) {
             val isHead = section is TableHead
@@ -212,8 +247,8 @@ private fun Table(table: TableBlock, styles: InlineMarkdownStyles, inQuote: Bool
                                     modifier = Modifier
                                         .weight(1f)
                                         .padding(horizontal = 8.dp, vertical = 4.dp),
-                                    fontStyle = if (inQuote) FontStyle.Italic else null,
-                                    color = if (inQuote) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified,
+                                    fontStyle = if (prose.italic) FontStyle.Italic else null,
+                                    color = prose.resolveColor(),
                                 )
                             }
                         }
@@ -274,6 +309,19 @@ private fun MarkdownTextPreview() {
 
             <div>literal html</div>
             """.trimIndent(),
+        )
+        MarkdownText(
+            markdown = """
+            # Thinking heading
+
+            A dimmed, italic thinking paragraph with **bold** and a [link](https://pi.dev).
+
+            - italic thinking list item
+
+            > A quote inside thinking stays italic + dimmed.
+            """.trimIndent(),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            italic = true,
         )
     }
 }
