@@ -26,9 +26,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * Shared logic for the Google Generative AI and Google Vertex adapters,
- * ported from pi's packages/ai/src/api/google-shared.ts (and the
- * transformMessages pass it runs from transform-messages.ts).
+ * Shared logic for the Google Generative AI adapter, ported from pi's
+ * packages/ai/src/api/google-shared.ts (and the transformMessages pass it
+ * runs from transform-messages.ts).
  *
  * Upstream delegates the wire protocol to the `@google/genai` SDK; Aletheia
  * has no such SDK, so the conversion produces the same GenerateContentRequest

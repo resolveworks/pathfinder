@@ -30,7 +30,7 @@ import kotlinx.serialization.json.jsonPrimitive
  * Canned streaming tests for the Google Generative AI adapter, ported from
  * pi's google-generative-ai.ts stream loop (exercised upstream via
  * test/google-thinking-signature.test.ts, google-raw-stop-reason.test.ts,
- * and the SDK-mocked vertex tests). No network or live credentials.
+ * and the SDK-mocked adapter tests). No network or live credentials.
  */
 class GoogleGenerativeAiStreamTest {
 

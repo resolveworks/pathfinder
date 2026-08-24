@@ -27,13 +27,11 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 /**
- * Shared streaming engine for the Google Generative AI and Google Vertex
- * adapters. This is the common part of pi's google-generative-ai.ts and
- * google-vertex.ts `stream` functions, which are byte-for-byte identical
- * except for client construction and endpoint resolution; Aletheia keeps one
- * port and parameterizes the request plan.
+ * Streaming engine for the Google Generative AI adapter. This is the loop
+ * body of pi's google-generative-ai.ts `stream` function; Aletheia keeps it
+ * as one object parameterized by the request plan.
  *
- * The wire protocol is the Generative Language / Vertex AI
+ * The wire protocol is the Generative Language
  * `streamGenerateContent?alt=sse` REST streaming shape the `@google/genai`
  * SDK drives upstream: each SSE data payload is a GenerateContentResponse
  * JSON object with `candidates[0].content.parts[]`, `finishReason`,

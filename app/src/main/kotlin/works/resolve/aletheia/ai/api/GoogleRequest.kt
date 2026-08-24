@@ -11,10 +11,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * Request construction shared by the Google Generative AI and Vertex adapters:
- * pi's identical `buildParams` functions plus the model-class helpers that
- * differ only in whether Gemma is in scope (google-generative-ai.ts has Gemma
- * branches; google-vertex.ts does not).
+ * Request construction for the Google Generative AI adapter: pi's
+ * google-generative-ai.ts `buildParams` plus its model-class thinking
+ * helpers (Gemini 3 / Gemma 4 / 2.5 budgets).
  *
  * Wire shape: where pi hands `config` to the `@google/genai` SDK, Aletheia
  * writes the documented GenerateContentRequest REST shape directly —
@@ -32,7 +31,7 @@ object GoogleRequest {
         val level: GoogleShared.GoogleApiThinkingLevel? = null,
     )
 
-    /** Fields shared by GoogleOptions / GoogleVertexOptions. */
+    /** pi's GoogleOptions (StreamOptions plus toolChoice and thinking). */
     data class CommonOptions(
         val apiKey: String? = null,
         val sessionId: String? = null,
@@ -174,7 +173,7 @@ object GoogleRequest {
     private fun ThinkingLevel.toModelThinkingLevel(): ModelThinkingLevel =
         ModelThinkingLevel.valueOf(name)
 
-    /** pi's getThinkingLevel (Google) / getGemini3ThinkingLevel (Vertex). */
+    /** pi's getThinkingLevel. */
     private fun getThinkingLevel(
         effort: GoogleShared.ResolvedGoogleThinkingLevel,
         model: Model,
@@ -223,9 +222,7 @@ object GoogleRequest {
                 GoogleShared.ResolvedGoogleThinkingLevel.HIGH to 32768,
             )
 
-            // Gemini API budget table has an extra 2.5-flash-lite entry; the
-            // Vertex table falls through to 2.5-flash for both.
-            model.id.contains("2.5-flash-lite") && model.api == "google-generative-ai" -> mapOf(
+            model.id.contains("2.5-flash-lite") -> mapOf(
                 GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL to 512,
                 GoogleShared.ResolvedGoogleThinkingLevel.LOW to 2048,
                 GoogleShared.ResolvedGoogleThinkingLevel.MEDIUM to 8192,
