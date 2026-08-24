@@ -209,6 +209,9 @@ object OpenAiResponsesShared {
                     val content = msg.content.flatMap { block ->
                         when (block) {
                             is ThinkingContent -> when {
+                                // Redacted thinking is opaque provider data and is only
+                                // valid when replayed to the same model.
+                                block.redacted -> if (isSameModel) listOf(block) else emptyList()
                                 // Same model: keep thinking with signatures (needed for
                                 // replay) even with empty text (encrypted reasoning).
                                 isSameModel && block.thinkingSignature != null -> listOf(block)
@@ -219,12 +222,16 @@ object OpenAiResponsesShared {
                             is TextContent ->
                                 if (isSameModel) listOf(block) else listOf(TextContent(block.text))
                             is ToolCall -> {
-                                var normalized = block
+                                var normalized = if (!isSameModel && block.thoughtSignature != null) {
+                                    block.copy(thoughtSignature = null)
+                                } else {
+                                    block
+                                }
                                 if (!isSameModel && normalizeToolCallId != null) {
                                     val normalizedId = normalizeToolCallId(block.id, msg)
                                     if (normalizedId != block.id) {
                                         toolCallIdMap[block.id] = normalizedId
-                                        normalized = block.copy(id = normalizedId)
+                                        normalized = normalized.copy(id = normalizedId)
                                     }
                                 }
                                 listOf(normalized)

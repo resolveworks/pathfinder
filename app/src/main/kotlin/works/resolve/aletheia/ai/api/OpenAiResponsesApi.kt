@@ -179,7 +179,7 @@ class OpenAiResponsesApi(
             val cacheSessionId = if (cacheRetention == CacheRetention.NONE) null else options.sessionId
 
             val headers = OpenAiResponsesShared.mergeClientHeaders(
-                model.headers + mapOf("User-Agent" to PI_USER_AGENT),
+                mapOf("User-Agent" to PI_USER_AGENT) + model.headers,
                 cacheSessionId,
                 compat,
                 options.headers,

@@ -14,9 +14,11 @@ import works.resolve.aletheia.ai.core.AssistantMessageEvent
 import works.resolve.aletheia.ai.core.Context
 import works.resolve.aletheia.ai.core.Model
 import works.resolve.aletheia.ai.core.ModelCost
+import works.resolve.aletheia.ai.core.ModelThinkingLevel
 import works.resolve.aletheia.ai.core.OpenAiResponsesCompat
 import works.resolve.aletheia.ai.core.StopReason
 import works.resolve.aletheia.ai.core.TextContent
+import works.resolve.aletheia.ai.core.ThinkingLevelMap
 import works.resolve.aletheia.ai.core.UserMessage
 import works.resolve.aletheia.ai.testing.FakeTransport
 import works.resolve.aletheia.ai.testing.sse
@@ -167,6 +169,18 @@ class OpenAiCodexResponsesApiTest {
         val body = bodyOf(transport)
         assertEquals("high", body["reasoning"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
         assertEquals("auto", body["reasoning"]!!.jsonObject["summary"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `explicit unsupported off level omits raw reasoning options`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*doneEvents().toTypedArray()))
+        api(transport).stream(
+            model.copy(thinkingLevelMap = ThinkingLevelMap.of(ModelThinkingLevel.OFF to null)),
+            context,
+            OpenAICodexResponsesOptions(apiKey = apiKey, reasoningEffort = ModelThinkingLevel.OFF),
+        ).toList()
+        assertNull(bodyOf(transport)["reasoning"])
     }
 
     @Test

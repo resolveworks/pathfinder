@@ -92,6 +92,27 @@ class SessionCodecTest {
     }
 
     @Test
+    fun toolResultRejectsMalformedAddedToolNames() {
+        val result = ToolResultMessage(
+            toolCallId = "call|fc_1",
+            toolName = "edit",
+            content = listOf(TextContent("ok")),
+            addedToolNames = listOf("search"),
+        )
+        val session = branchedSession().copy(
+            entries = listOf(MessageEntry("m1", null, 2L, result)),
+            leafId = "m1",
+        )
+        val encoded = SessionCodec.encode(session)
+        assertFailsWith<SessionDataException> {
+            SessionCodec.decode(encoded.replace("[\"search\"]", "\"search\""))
+        }
+        assertFailsWith<SessionDataException> {
+            SessionCodec.decode(encoded.replace("[\"search\"]", "[1]"))
+        }
+    }
+
+    @Test
     fun toolResultOmitsAddedToolNamesWhenEmpty() {
         val result = ToolResultMessage(
             toolCallId = "call|fc_1",

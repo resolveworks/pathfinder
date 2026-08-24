@@ -265,10 +265,15 @@ internal object SessionCodec {
         return array.map(::decodeContent)
     }
 
-    /** Optional string array; the current default when absent is empty. */
+    /** Optional string array; absence uses the current model default. */
     private fun decodeStringList(element: JsonElement?): List<String> {
-        val array = element as? JsonArray ?: return emptyList()
-        return array.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+        if (element == null) return emptyList()
+        val array = element as? JsonArray
+            ?: throw SessionDataException("Malformed session data: addedToolNames must be an array")
+        return array.map { value ->
+            (value as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw SessionDataException("Malformed session data: addedToolNames must contain strings")
+        }
     }
 
     private fun encodeContent(content: Content): JsonObject = when (content) {

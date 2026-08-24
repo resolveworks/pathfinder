@@ -492,6 +492,29 @@ class OpenAiResponsesSharedTest {
     }
 
     @Test
+    fun `cross-model replay drops redacted thinking and tool thought signatures`() {
+        val assistant = AssistantMessage(
+            content = listOf(
+                ThinkingContent("opaque", redacted = true),
+                ToolCall("foreign", "edit", "{}", thoughtSignature = "google-signature"),
+            ),
+            api = "google-generative-ai",
+            provider = "google",
+            model = "gemini",
+            stopReason = StopReason.TOOL_USE,
+        )
+        val transformed = OpenAiResponsesShared.transformMessages(
+            listOf(assistant),
+            model(),
+        ) { _, _ -> "normalized" }
+        val content = (transformed.first() as AssistantMessage).content
+        assertEquals(1, content.size)
+        val call = content.single() as ToolCall
+        assertEquals("normalized", call.id)
+        assertNull(call.thoughtSignature)
+    }
+
+    @Test
     fun `errored assistant turns are skipped entirely`() {
         val errored = AssistantMessage(
             content = listOf(TextContent("partial")),

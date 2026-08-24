@@ -345,18 +345,21 @@ internal fun buildCodexRequestBody(
         }
         if (options?.reasoningEffort != null) {
             val effort = if (options.reasoningEffort == ModelThinkingLevel.OFF) {
-                model.thinkingLevelMap?.takeIf { it.isSpecified(ModelThinkingLevel.OFF) }
-                    ?.forLevel(ModelThinkingLevel.OFF) ?: "none"
+                val map = model.thinkingLevelMap
+                if (map == null || !map.isSpecified(ModelThinkingLevel.OFF)) "none"
+                else map.forLevel(ModelThinkingLevel.OFF)
             } else {
                 OpenAiResponsesShared.resolveReasoningEffort(model, options.reasoningEffort, "medium")
             }
-            put(
-                "reasoning",
-                buildJsonObject {
-                    put("effort", effort)
-                    put("summary", options.reasoningSummary ?: "auto")
-                },
-            )
+            if (effort != null) {
+                put(
+                    "reasoning",
+                    buildJsonObject {
+                        put("effort", effort)
+                        put("summary", options.reasoningSummary ?: "auto")
+                    },
+                )
+            }
         }
     }
 }

@@ -87,6 +87,18 @@ class OpenAiResponsesApiTest {
     }
 
     @Test
+    fun `model headers override the default user agent`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        api(transport).stream(
+            model.copy(headers = mapOf("User-Agent" to "provider-agent")),
+            context,
+            OpenAiResponsesOptions(apiKey = "k"),
+        ).toList()
+        assertEquals("provider-agent", transport.requests.single().headers["User-Agent"])
+    }
+
+    @Test
     fun `session id becomes a clamped prompt cache key and affinity headers`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
