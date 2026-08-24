@@ -3,6 +3,7 @@ package works.resolve.aletheia.ui.chat.markdown
 import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
 import org.commonmark.ext.gfm.tables.TablesExtension
 import org.commonmark.ext.task.list.items.TaskListItemsExtension
+import org.commonmark.node.Node
 import org.commonmark.parser.Parser
 
 /**
@@ -28,3 +29,6 @@ object MarkdownParser {
         )
         .build()
 }
+
+/** The children of this node, in document order. */
+internal fun Node.children(): Sequence<Node> = generateSequence(firstChild) { it.next }
