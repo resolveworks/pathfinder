@@ -10,8 +10,9 @@
 //
 // Dynamic providers (radius), llama.cpp, Amazon Bedrock, Google Vertex AI,
 // and image-generation providers are deliberately excluded. OAuth flows are
-// out of scope, so OAuth-only providers keep their model list but carry no
-// API-key auth (auth: null).
+// out of scope, but OAuth capability metadata is emitted declaratively for
+// OAuth-capable providers (see OAUTH_METADATA) so a later account-vs-API-key
+// selector has what it needs.
 //
 // Usage:
 //   node tools/generate-model-catalog.mjs          # PI_REPO_DIR or ~/Projects/pi
@@ -56,8 +57,28 @@ const CLOUDFLARE_GATEWAY = {
  * scope (models kept, auth omitted).
  */
 
+/**
+ * OAuth capability metadata for the retained providers that offer OAuth
+ * login (pi's lazyOAuth({...}) blocks in providers/*.ts): display name,
+ * login-button label (defaults to the name), and whether the login is a
+ * paid subscription. Purely declarative - no flow implementation ships.
+ * `oauthOnly: true` marks providers whose ONLY auth is OAuth
+ * (openai-codex): they carry no API-key prompts and no placeholder env key.
+ */
+const OAUTH_METADATA = {
+	anthropic: { name: "Anthropic (Claude Pro/Max)", isSubscription: true },
+	"github-copilot": { name: "GitHub Copilot", isSubscription: true },
+	"kimi-coding": { name: "Kimi Code (subscription)", loginLabel: "Sign in with Kimi Code", isSubscription: true },
+	"openai-codex": { name: "OpenAI (ChatGPT Plus/Pro)", isSubscription: true, oauthOnly: true },
+	openrouter: { name: "OpenRouter OAuth", loginLabel: "Sign in with OpenRouter" },
+	xai: { name: "xAI (Grok/X subscription)", loginLabel: "Sign in with SuperGrok or X Premium", isSubscription: true },
+};
+
 /** Static pi providers deliberately excluded from the aletheia catalog. */
 const EXCLUDED_PROVIDERS = new Set(["amazon-bedrock", "google-vertex"]);
+
+/** Display names for OAuth-only providers (no PROVIDER_IDENTITY entry). */
+const OAUTH_ONLY_NAME = { "openai-codex": "OpenAI Codex" };
 
 const PROVIDER_IDENTITY = {
 	anthropic: { name: "Anthropic", label: "Anthropic API key", envKey: "ANTHROPIC_API_KEY" },
@@ -96,7 +117,6 @@ const PROVIDER_IDENTITY = {
 	"moonshotai-cn": { name: "Moonshot AI CN", label: "Moonshot AI API key", envKey: "MOONSHOT_API_KEY" },
 	nvidia: { name: "NVIDIA", label: "NVIDIA API key", envKey: "NVIDIA_API_KEY" },
 	openai: { name: "OpenAI", label: "OpenAI API key", envKey: "OPENAI_API_KEY" },
-	"openai-codex": { name: "OpenAI Codex", label: "OpenAI Codex token", envKey: "OPENAI_CODEX_TOKEN", authless: true },
 	opencode: { name: "OpenCode Zen", label: "OpenCode API key", envKey: "OPENCODE_API_KEY" },
 	"opencode-go": { name: "OpenCode Go", label: "OpenCode API key", envKey: "OPENCODE_API_KEY" },
 	openrouter: { name: "OpenRouter", label: "OpenRouter API key", envKey: "OPENROUTER_API_KEY" },
@@ -133,42 +153,75 @@ function buildCatalog(piModels, { piRevision = null } = {}) {
 	const providers = [];
 	for (const [providerId, models] of Object.entries(piModels)) {
 		if (EXCLUDED_PROVIDERS.has(providerId)) continue;
-		if (!(providerId in PROVIDER_IDENTITY)) {
+		if (!(providerId in PROVIDER_IDENTITY) && !(providerId in OAUTH_METADATA)) {
 			throw new Error(`pi static provider '${providerId}' has no PROVIDER_IDENTITY entry`);
 		}
 	}
-	for (const [providerId] of Object.entries(PROVIDER_IDENTITY)) {
+	for (const providerId of Object.keys(PROVIDER_IDENTITY)) {
 		if (EXCLUDED_PROVIDERS.has(providerId)) {
 			throw new Error(`PROVIDER_IDENTITY entry '${providerId}' is also in EXCLUDED_PROVIDERS`);
 		}
+	}
+	for (const [providerId, oauth] of Object.entries(OAUTH_METADATA)) {
+		if (EXCLUDED_PROVIDERS.has(providerId)) {
+			throw new Error(`OAUTH_METADATA entry '${providerId}' is excluded`);
+		}
+		const oauthOnly = oauth.oauthOnly === true;
+		if (oauthOnly === (providerId in PROVIDER_IDENTITY)) {
+			throw new Error(
+				`OAUTH_METADATA entry '${providerId}' must be oauthOnly XOR in PROVIDER_IDENTITY`,
+			);
+		}
+	}
+	for (const [providerId, identity] of Object.entries(PROVIDER_IDENTITY)) {
 		const models = Object.values(piModels[providerId] ?? {});
 		if (models.length === 0) {
 			throw new Error(`PROVIDER_IDENTITY entry '${providerId}' has no models in pi's generated catalog`);
 		}
-		const identity = PROVIDER_IDENTITY[providerId];
+		const oauth = OAUTH_METADATA[providerId];
 		const entry = {
 			id: providerId,
 			name: identity.name,
 			// Providers whose models span multiple base URLs keep the first
 			// model's URL here; each model always carries its own baseUrl.
 			baseUrl: models[0].baseUrl,
-			auth: identity.authless
-				? null
-				: {
-						label: identity.label,
-						prompts: [
-							{
-								envKey: identity.envKey,
-								message: identity.promptMessage ?? `Enter ${identity.label}`,
-								secret: true,
-							},
-							...(identity.extraPrompts ?? []),
-						],
+			auth: {
+				label: identity.label,
+				...(oauth ? { oauth: { name: oauth.name, loginLabel: oauth.loginLabel, isSubscription: oauth.isSubscription ?? false } } : {}),
+				prompts: [
+					{
+						envKey: identity.envKey,
+						message: identity.promptMessage ?? `Enter ${identity.label}`,
+						secret: true,
 					},
+					...(identity.extraPrompts ?? []),
+				],
+			},
 			models,
 		};
 		if (identity.bearerHeaderName) entry.bearerHeaderName = identity.bearerHeaderName;
 		providers.push(entry);
+	}
+
+	// OAuth-only providers (openai-codex): no API-key prompts, no placeholder
+	// env key — the auth entry carries OAuth capability metadata only.
+	for (const [providerId, oauth] of Object.entries(OAUTH_METADATA)) {
+		if (oauth.oauthOnly !== true) continue;
+		const models = Object.values(piModels[providerId] ?? {});
+		if (models.length === 0) {
+			throw new Error(`OAUTH_METADATA oauthOnly entry '${providerId}' has no models in pi's generated catalog`);
+		}
+		providers.push({
+			id: providerId,
+			name: OAUTH_ONLY_NAME[providerId],
+			baseUrl: models[0].baseUrl,
+			auth: {
+				label: OAUTH_ONLY_NAME[providerId],
+				oauth: { name: oauth.name, loginLabel: oauth.loginLabel, isSubscription: oauth.isSubscription ?? false },
+				prompts: [],
+			},
+			models,
+		});
 	}
 
 	providers.sort((a, b) => a.id.localeCompare(b.id));

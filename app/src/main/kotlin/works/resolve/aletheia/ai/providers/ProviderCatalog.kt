@@ -32,9 +32,19 @@ data class AuthPrompt(
     val secret: Boolean = true,
 )
 
-/** Provider auth metadata: a label plus the prompts that fill its env slots. */
+/** OAuth capability metadata (pi's lazyOAuth blocks): declarative only —
+ * no flow implementation ships. [loginLabel] defaults to the name in pi. */
+data class ProviderOAuth(
+    val name: String,
+    val loginLabel: String? = null,
+    val isSubscription: Boolean = false,
+)
+
+/** Provider auth metadata: a label, OAuth capability for providers that
+ * offer account login, and the prompts that fill its env slots. */
 data class ProviderAuth(
     val label: String? = null,
+    val oauth: ProviderOAuth? = null,
     val prompts: List<AuthPrompt> = emptyList(),
 )
 
@@ -73,8 +83,9 @@ class CatalogProvider(
             if (value.isNullOrBlank()) prompt else null
         }.toMutableList()
         // A provider with no auth prompts (OAuth-only providers like
-        // openai-codex, whose OAuth is out of scope) still requires a
-        // nonblank key before it can be considered configured.
+        // openai-codex, whose OAuth flow is not implemented) still requires
+        // a nonblank key before it can be considered configured — it stays
+        // unconfigurable until the auth foundation lands.
         if (auth.prompts.isEmpty() && key.isNullOrBlank()) {
             missing += AuthPrompt("API_KEY", "API key")
         }
@@ -202,9 +213,23 @@ private data class ProviderDto(
 @Serializable
 private data class AuthDto(
     val label: String? = null,
+    val oauth: OAuthDto? = null,
     val prompts: List<PromptDto> = emptyList(),
 ) {
-    fun toDomain() = ProviderAuth(label = label, prompts = prompts.map { it.toDomain() })
+    fun toDomain() = ProviderAuth(
+        label = label,
+        oauth = oauth?.toDomain(),
+        prompts = prompts.map { it.toDomain() },
+    )
+}
+
+@Serializable
+private data class OAuthDto(
+    val name: String,
+    val loginLabel: String? = null,
+    val isSubscription: Boolean = false,
+) {
+    fun toDomain() = ProviderOAuth(name, loginLabel, isSubscription)
 }
 
 @Serializable

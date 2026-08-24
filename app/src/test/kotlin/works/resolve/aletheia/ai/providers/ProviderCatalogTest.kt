@@ -451,10 +451,15 @@ class ProviderCatalogTest {
     @Test
     fun `real asset auth metadata covers new providers`() {
         val catalog = realAsset()
-        // OAuth-only provider: models kept, no declarative auth (out of scope).
+        // OAuth-only provider: models kept, auth carries OAuth capability
+        // metadata only — no API-key prompts, no placeholder env key.
         val codex = catalog.getProvider("openai-codex")!!
         assertTrue(codex.models.isNotEmpty())
         assertEquals(emptyList<AuthPrompt>(), codex.auth.prompts)
+        assertEquals(
+            ProviderOAuth(name = "OpenAI (ChatGPT Plus/Pro)", isSubscription = true),
+            codex.auth.oauth,
+        )
         // Simple env-key providers.
         assertEquals("ANTHROPIC_API_KEY", catalog.getProvider("anthropic")!!.auth.prompts.single().envKey)
         assertEquals("GEMINI_API_KEY", catalog.getProvider("google")!!.auth.prompts.single().envKey)
@@ -465,6 +470,35 @@ class ProviderCatalogTest {
             gateway.map { it.envKey },
         )
         assertFalse(gateway[1].secret)
+    }
+
+    @Test
+    fun `real asset keeps OAuth capability metadata for the six OAuth providers`() {
+        val catalog = realAsset()
+        val expected = mapOf(
+            "anthropic" to ProviderOAuth("Anthropic (Claude Pro/Max)", isSubscription = true),
+            "github-copilot" to ProviderOAuth("GitHub Copilot", isSubscription = true),
+            "kimi-coding" to ProviderOAuth(
+                "Kimi Code (subscription)",
+                loginLabel = "Sign in with Kimi Code",
+                isSubscription = true,
+            ),
+            "openai-codex" to ProviderOAuth("OpenAI (ChatGPT Plus/Pro)", isSubscription = true),
+            "openrouter" to ProviderOAuth("OpenRouter OAuth", loginLabel = "Sign in with OpenRouter"),
+            "xai" to ProviderOAuth(
+                "xAI (Grok/X subscription)",
+                loginLabel = "Sign in with SuperGrok or X Premium",
+                isSubscription = true,
+            ),
+        )
+        for (provider in catalog.providers) {
+            assertEquals(expected[provider.id], provider.auth.oauth)
+        }
+        // OAuth-capable providers other than openai-codex keep their API-key
+        // prompt shape alongside the OAuth metadata.
+        for (id in expected.keys - "openai-codex") {
+            assertTrue(catalog.getProvider(id)!!.auth.prompts.isNotEmpty())
+        }
     }
 
     @Test
