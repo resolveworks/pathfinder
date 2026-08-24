@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -15,7 +16,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -67,7 +72,18 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.addPathNodes
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -87,6 +103,37 @@ import works.resolve.aletheia.ui.theme.AletheiaTheme
 import kotlinx.coroutines.launch
 
 private const val STREAMING_PLACEHOLDER = "…"
+
+/** HorizontalPager over the chat surface: page 0 = conversation, page 1 = session tree. */
+private const val ChatPageIndex = 0
+private const val TreePageIndex = 1
+private const val ChatPagerPageCount = 2
+
+/** Rightward over-drag on the chat page needed to open the sessions drawer. */
+private val DrawerOpenDragThreshold = 48.dp
+
+/**
+ * Outlined account-tree icon (the session-tree action). Defined inline from
+ * the Material Symbols path data because material-icons-extended is not a
+ * dependency and none may be added.
+ */
+private val IconAccountTree: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "AccountTree",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        addPath(
+            pathData = addPathNodes(
+                "M22,11V3h-7v3H9V3H2v8h7V8h2v10h4v3h7v-8h-7v3h-2V8h2v3H22z M7,9H4V5h3V9z M17,15h3v4h-3V15z M17,5h3v4h-3V5z",
+            ),
+            fill = SolidColor(Color.Black),
+            pathFillType = PathFillType.EvenOdd,
+        )
+    }.build()
+}
 
 /** Collects [ChatViewModel.uiState], owns the Nav3 back stack, and forwards intents from the pure [ChatScreen]. */
 @Composable
@@ -158,6 +205,22 @@ fun ChatScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val pagerState = rememberPagerState { ChatPagerPageCount }
+    // Reading currentPage keeps the top bar and composer in sync with swipes.
+    val onTreePage = pagerState.currentPage == TreePageIndex
+
+    // Back handling: while the pager shows the tree page, the system back
+    // gesture returns to the chat page instead of leaving the Chat root
+    // (BackHandler wins over Nav3's onBack while enabled).
+    BackHandler(enabled = onTreePage) {
+        scope.launch { pagerState.animateScrollToPage(ChatPageIndex) }
+    }
+
+    // Session switch: land on the chat page. Also covers the initial state
+    // after init (activeSessionId goes null -> real id).
+    LaunchedEffect(uiState.activeSessionId) {
+        pagerState.scrollToPage(ChatPageIndex)
+    }
 
     LaunchedEffect(uiState.error) {
         uiState.error?.let { error ->
@@ -197,6 +260,10 @@ fun ChatScreen(
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
     val topKey = backStack.lastOrNull() ?: ChatNavKey
+    // Pager navigation helpers, explicitly () -> Unit (launch returns a Job).
+    val openTreePage: () -> Unit = { scope.launch { pagerState.animateScrollToPage(TreePageIndex) } }
+    val backToChatPage: () -> Unit = { scope.launch { pagerState.animateScrollToPage(ChatPageIndex) } }
+    val openDrawer: () -> Unit = { scope.launch { drawerState.open() } }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -224,11 +291,13 @@ fun ChatScreen(
         val showConversation = uiState.status != ChatStatus.Loading &&
             uiState.status != ChatStatus.Failed &&
             topKey == ChatNavKey
+        val showPager = showConversation && uiState.status == ChatStatus.Ready
 
         Scaffold(
             topBar = {
                 if (uiState.status != ChatStatus.Loading) {
                     val canPop = backStack.size > 1
+                    val chatRoot = topKey == ChatNavKey && uiState.status == ChatStatus.Ready
                     ChatTopBar(
                         title = when (topKey) {
                             SettingsNavKey -> stringResource(R.string.settings_title)
@@ -237,24 +306,45 @@ fun ChatScreen(
                             is ProviderAuthNavKey -> uiState.providerOptions
                                 .firstOrNull { it.id == topKey.providerId }?.name
                                 ?: stringResource(R.string.providers_title)
-                            else -> stringResource(R.string.chat_title)
+                            else -> stringResource(
+                                if (onTreePage) R.string.tree_title else R.string.chat_title,
+                            )
                         },
                         // The drawer belongs to the Chat root; nested
                         // destinations navigate up instead. A forced root
-                        // (unconfigured app) is a dead end: no Up arrow.
+                        // (unconfigured app) is a dead end: no Up arrow. On
+                        // the tree page the menu icon is replaced by a back
+                        // arrow returning to the chat page.
                         onOpenDrawer = if (topKey == ChatNavKey &&
-                            uiState.status == ChatStatus.Ready
+                            uiState.status == ChatStatus.Ready &&
+                            !onTreePage
                         ) {
-                            { scope.launch { drawerState.open() } }
+                            openDrawer
                         } else {
                             null
                         },
-                        onBack = if (canPop) popBackStack else null,
+                        onBack = when {
+                            chatRoot && onTreePage -> backToChatPage
+                            canPop -> popBackStack
+                            else -> null
+                        },
+                        actions = if (chatRoot && !onTreePage) {
+                            {
+                                IconButton(onClick = openTreePage) {
+                                    Icon(
+                                        IconAccountTree,
+                                        contentDescription = stringResource(R.string.tree_open),
+                                    )
+                                }
+                            }
+                        } else {
+                            {}
+                        },
                     )
                 }
             },
             bottomBar = {
-                if (showConversation) {
+                if (showConversation && !onTreePage) {
                     Composer(
                         draft = uiState.draft,
                         onDraftChange = onDraftChange,
@@ -287,7 +377,17 @@ fun ChatScreen(
                         backStack = backStack,
                         onBack = { backStack.removeLastOrNull() },
                         entryProvider = entryProvider {
-                            entry<ChatNavKey> { ConversationContent(uiState = uiState) }
+                            entry<ChatNavKey> {
+                                if (showPager) {
+                                    ConversationPager(
+                                        uiState = uiState,
+                                        pagerState = pagerState,
+                                        onOpenDrawer = openDrawer,
+                                    )
+                                } else {
+                                    ConversationContent(uiState = uiState)
+                                }
+                            }
                             entry<SettingsNavKey> {
                                 SettingsContent(
                                     showThinking = uiState.showThinking,
@@ -417,6 +517,7 @@ private fun ChatTopBar(
     title: String,
     onOpenDrawer: (() -> Unit)?,
     onBack: (() -> Unit)?,
+    actions: @Composable RowScope.() -> Unit = {},
 ) {
     TopAppBar(
         title = { Text(title) },
@@ -436,6 +537,7 @@ private fun ChatTopBar(
                 }
             }
         },
+        actions = actions,
     )
 }
 
@@ -775,6 +877,96 @@ private fun ProviderAuthContent(
 }
 
 // ---- conversation ----
+
+/**
+ * Two-page swipeable chat surface: page 0 is the conversation, page 1 the
+ * session tree (a placeholder until the real panel lands). A rightward
+ * drag on page 0 overflows the pager's scroll range; the parent
+ * [NestedScrollConnection] below accumulates that leftover horizontal
+ * delta and opens the sessions drawer once it exceeds
+ * [DrawerOpenDragThreshold].
+ */
+@Composable
+private fun ConversationPager(
+    uiState: ChatUiState,
+    pagerState: PagerState,
+    onOpenDrawer: () -> Unit,
+) {
+    val density = LocalDensity.current
+    val thresholdPx = with(density) { DrawerOpenDragThreshold.toPx() }
+    var drawerDrag by remember { mutableStateOf(0f) }
+    val drawerScrollConnection = remember(thresholdPx, onOpenDrawer) {
+        object : NestedScrollConnection {
+            // Horizontal scroll sign convention: a finger drag to the right
+            // yields a POSITIVE delta (scrolling toward the start), which the
+            // pager cannot consume at page 0 — so a positive available.x here
+            // means exactly "rightward drag past the pager's bounds".
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset {
+                if (source == NestedScrollSource.UserInput) {
+                    if (available.x > 0f) {
+                        drawerDrag += available.x
+                        if (drawerDrag >= thresholdPx) {
+                            drawerDrag = 0f
+                            onOpenDrawer()
+                        }
+                    } else if (available.x < 0f) {
+                        // Direction change: discard the partial accumulation.
+                        drawerDrag = 0f
+                    }
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                drawerDrag = 0f
+                return Velocity.Zero
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .nestedScroll(drawerScrollConnection),
+    ) {
+        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+            when (page) {
+                TreePageIndex -> TreePageContent()
+                else -> ConversationContent(uiState = uiState)
+            }
+        }
+    }
+}
+
+/**
+ * PLACEHOLDER: centered title + muted empty-state text standing in for the
+ * real session-tree panel. Swap the body for the panel composable when it
+ * lands; keep the title until then.
+ */
+@Composable
+private fun TreePageContent() {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = stringResource(R.string.tree_title),
+            style = MaterialTheme.typography.titleLarge,
+        )
+        Spacer(Modifier.size(16.dp))
+        Text(
+            text = stringResource(R.string.tree_empty),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
 
 /** Concatenated text of the text blocks; the displayable body for user (plain-text) messages. */
 private fun ChatMessage.displayText(): String =
@@ -1228,6 +1420,26 @@ private fun ConversationContentThinkingPreview() {
             initialThinkingOverrides = mapOf("m2:0" to true),
         )
     }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenPagerPreview() {
+    PreviewChatScreen(
+        ChatUiState(
+            status = ChatStatus.Ready,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            configured = true,
+            activeSessionId = "s1",
+            sessionSummaries = listOf(
+                SessionSummary(id = "s1", title = "Preview chat", createdAt = 0L, updatedAt = 0L, messageCount = 1),
+            ),
+            messages = listOf(
+                ChatMessage(id = "m1", role = ChatRole.User, blocks = listOf(ChatBlock.Text("Hello there"))),
+            ),
+        ),
+    )
 }
 
 @Preview(showBackground = true)
