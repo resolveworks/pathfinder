@@ -241,7 +241,7 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
 
         val state = vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        assertEquals(SettingsNavKey, state.startKey)
+        assertEquals(ProvidersNavKey, state.startKey)
         assertFalse(state.providerOptions.first { o -> o.id == "zai" }.configured)
         assertNull(state.activeSessionId)
         assertTrue(state.messages.isEmpty())
@@ -308,43 +308,58 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        // While unconfigured the reset signal pins the settings root: the UI
-        // back stack is rebuilt to exactly [SettingsNavKey] and back is a no-op.
-        assertEquals(SettingsNavKey, vm.uiState.value.startKey)
+        // While unconfigured the reset signal pins the forced first-run root:
+        // the UI back stack is rebuilt to exactly [ProvidersNavKey] and back
+        // is a no-op.
+        assertEquals(ProvidersNavKey, vm.uiState.value.startKey)
+
+        // A credential save that does not complete configuration advances to
+        // the second forced step: the model settings form, with an epoch bump
+        // so configured models are immediately selectable.
+        vm.saveProviderCredential("zai", "k", emptyMap())
+        val modelStep = vm.uiState.first { it.startKey == ModelSettingsNavKey }
+        assertEquals(ChatStatus.NeedsConfiguration, modelStep.status)
+        assertTrue(modelStep.modelOptions.isNotEmpty())
+        assertTrue(modelStep.navigationEpoch >= 1L)
 
         // Completing configuration bumps the epoch and returns to the chat root.
         vm.configure(apiKey = "k")
         val configured = vm.uiState.first { it.status == ChatStatus.Ready }
         assertEquals(ChatNavKey, configured.startKey)
-        assertTrue(configured.navigationEpoch >= 1L)
+        assertTrue(configured.navigationEpoch >= 2L)
         val firstId = configured.activeSessionId!!
 
         vm.newSession()
         val secondId = vm.uiState.first { it.activeSessionId != firstId }.activeSessionId!!
         // Each successful session adoption bumps the epoch again (reset to chat).
-        assertTrue(vm.uiState.value.navigationEpoch >= 2L)
+        assertTrue(vm.uiState.value.navigationEpoch >= 3L)
 
         vm.switchSession(firstId)
         val switched = vm.uiState.first { it.activeSessionId == firstId }
         assertEquals(ChatNavKey, switched.startKey)
-        assertTrue(switched.navigationEpoch >= 3L)
+        assertTrue(switched.navigationEpoch >= 4L)
 
         vm.newSession()
         val created = vm.uiState.first { it.activeSessionId !in setOf(firstId, secondId) }
         assertEquals(ChatNavKey, created.startKey)
-        assertTrue(created.navigationEpoch >= 4L)
+        assertTrue(created.navigationEpoch >= 5L)
 
         // Reconfiguration also bumps the epoch (returns the user to the chat).
         vm.configure(modelId = "glm-5.3")
         val reconfigured = vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
         assertEquals(ChatStatus.Ready, reconfigured.status)
         assertEquals(ChatNavKey, reconfigured.startKey)
-        assertTrue(reconfigured.navigationEpoch >= 5L)
+        assertTrue(reconfigured.navigationEpoch >= 6L)
 
         // Status changes stay atomic with the signal: every Ready observation
-        // pairs with the chat root, every NeedsConfiguration one with settings.
+        // pairs with the chat root, every NeedsConfiguration one with a forced
+        // first-run root (providers or model settings).
         vm.uiState.value.let {
-            assertTrue(it.status != ChatStatus.NeedsConfiguration || it.startKey == SettingsNavKey)
+            assertTrue(
+                it.status != ChatStatus.NeedsConfiguration ||
+                    it.startKey == ProvidersNavKey ||
+                    it.startKey == ModelSettingsNavKey,
+            )
         }
 
         vm.closeForTest()
@@ -1149,6 +1164,46 @@ class ChatViewModelTest {
         assertEquals("zai", state.selectedModel?.providerId)
         assertTrue(state.modelOptions.all { it.providerId == "zai" })
         assertEquals("zai", h.settings.currentSettings().providerId)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun saveProviderCredential_withoutModelSettings_advancesToModelStep() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        assertEquals(ProvidersNavKey, vm.uiState.value.startKey)
+
+        // Step 1: a complete credential save without valid model settings
+        // keeps NeedsConfiguration but resets navigation to the model form.
+        vm.saveProviderCredential("zai", "k", emptyMap())
+        val step2 = vm.uiState.first { it.startKey == ModelSettingsNavKey }
+        assertEquals(ChatStatus.NeedsConfiguration, step2.status)
+        assertTrue(step2.navigationEpoch >= 1L)
+        assertNull(step2.activeSessionId)
+        assertEquals(0, h.countSessions())
+        assertTrue(step2.modelOptions.all { it.providerId == "zai" })
+
+        // A second credential save (another provider) re-bumps the epoch and
+        // stays on the model step: both providers' models are selectable.
+        vm.saveProviderCredential(
+            "cloudflare-ai-gateway",
+            "cf",
+            mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
+        )
+        val stillStep2 = vm.uiState.first { it.modelOptions.any { o -> o.providerId == "cloudflare-ai-gateway" } }
+        assertEquals(ModelSettingsNavKey, stillStep2.startKey)
+        assertEquals(ChatStatus.NeedsConfiguration, stillStep2.status)
+        assertTrue(stillStep2.navigationEpoch >= 2L)
+
+        // Step 2: saving a model selection completes configuration and enters
+        // the chat as before.
+        vm.saveModelSelection("zai", "glm-4.7", null)
+        val ready = vm.uiState.first { it.status == ChatStatus.Ready }
+        assertEquals(ChatNavKey, ready.startKey)
+        assertTrue(ready.navigationEpoch >= 3L)
+        assertNotNull(ready.activeSessionId)
 
         vm.closeForTest()
     }

@@ -58,12 +58,16 @@ import kotlinx.coroutines.withContext
  * never abandon an accepted snapshot either.
  *
  * Navigation is state, not effects: an unconfigured app pins
- * [ChatUiState.startKey] to [SettingsNavKey], and every intent that should
- * return the user to the chat (adopting a session, saving configuration)
- * bumps [ChatUiState.navigationEpoch] atomically with the rest of the state.
- * The UI layer owns the Nav3 back stack and resets it to [ChatUiState.startKey]
- * whenever either field changes, so an unconfigured app is locked onto the
- * settings surface.
+ * [ChatUiState.startKey] to [ProvidersNavKey] (first-run step 1: pick a
+ * provider and sign in), and after a credential save that does not complete
+ * configuration it moves to [ModelSettingsNavKey] with an epoch bump (step
+ * 2: pick a model — configured models are immediately selectable). Every
+ * intent that should return the user to the chat (adopting a session, saving
+ * configuration) sets [ChatUiState.startKey] to [ChatNavKey] and bumps
+ * [ChatUiState.navigationEpoch] atomically with the rest of the state.
+ * The UI layer owns the Nav3 back stack and resets it to
+ * [ChatUiState.startKey] whenever either field changes, so the forced
+ * first-run steps are single-entry dead ends until configuration completes.
  */
 class ChatViewModel(
     private val settingsRepository: SettingsStore,
@@ -263,7 +267,7 @@ class ChatViewModel(
                 updateState {
                     it.copy(
                         status = ChatStatus.NeedsConfiguration,
-                        startKey = SettingsNavKey,
+                        startKey = ProvidersNavKey,
                         showThinking = settings.showThinking,
                         sessionSummaries = summaries,
                     )
@@ -607,16 +611,21 @@ class ChatViewModel(
         }
 
         // Mirrors pi's completeProviderAuthentication: logging in completes
-        // configuration when a valid model is already selected.
+        // configuration (direct transition to the chat) when valid model
+        // settings are already selected; otherwise the forced first-run flow
+        // advances to its second step — the model settings form — with an
+        // epoch bump so configured models are immediately selectable.
         val nowConfigured = isConfigured(currentSettings)
         refreshOptions(nowConfigured)
-        if (nowConfigured && _uiState.value.status == ChatStatus.NeedsConfiguration) {
-            val prepared = prepareAdoption(currentSettings) ?: return
-            if (!activateSession(prepared.first, prepared.second)) return
+        if (_uiState.value.status == ChatStatus.NeedsConfiguration) {
+            if (nowConfigured) {
+                val prepared = prepareAdoption(currentSettings) ?: return
+                if (!activateSession(prepared.first, prepared.second)) return
+            }
             updateState {
                 it.copy(
-                    status = ChatStatus.Ready,
-                    startKey = ChatNavKey,
+                    status = if (nowConfigured) ChatStatus.Ready else it.status,
+                    startKey = if (nowConfigured) ChatNavKey else ModelSettingsNavKey,
                     navigationEpoch = it.navigationEpoch + 1,
                 )
             }
