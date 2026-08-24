@@ -3,6 +3,7 @@ package works.resolve.aletheia.ai.auth
 import works.resolve.aletheia.ai.auth.oauth.KimiCodingOAuthAuth
 import works.resolve.aletheia.ai.auth.oauth.OpenRouterOAuthAuth
 import works.resolve.aletheia.ai.auth.oauth.UrlConnectionOAuthHttpClient
+import works.resolve.aletheia.ai.auth.oauth.XaiOAuthAuth
 
 /**
  * Production [CatalogAuthRegistry]: the app's single composition point
@@ -10,9 +11,9 @@ import works.resolve.aletheia.ai.auth.oauth.UrlConnectionOAuthHttpClient
  * flows directly inside its provider definitions; Aletheia composes them
  * here because the flows are injected ports with an HTTP boundary).
  *
- * Currently registered: `openrouter` → [OpenRouterOAuthAuth] and `kimi-coding` →
- * [KimiCodingOAuthAuth] over the JDK [UrlConnectionOAuthHttpClient]. New flows
- * are added by extending the map
+ * Currently registered: `openrouter` → [OpenRouterOAuthAuth], `kimi-coding` →
+ * [KimiCodingOAuthAuth], and `xai` → [XaiOAuthAuth], all over the JDK
+ * [UrlConnectionOAuthHttpClient]. New flows are added by extending the map
  * — never by leaking provider knowledge into the catalog bridge.
  */
 object ProductionCatalogAuthRegistry : CatalogAuthRegistry {
@@ -20,6 +21,7 @@ object ProductionCatalogAuthRegistry : CatalogAuthRegistry {
         mapOf(
             "openrouter" to OpenRouterOAuthAuth(UrlConnectionOAuthHttpClient()),
             "kimi-coding" to KimiCodingOAuthAuth(UrlConnectionOAuthHttpClient()),
+            "xai" to XaiOAuthAuth(UrlConnectionOAuthHttpClient()),
         ),
     )
 
