@@ -172,6 +172,18 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * UI-safe auth prompts for a provider's credential form, in catalog order:
+     * the first prompt is the API key (secret); later prompts fill env slots.
+     * Only envKey/message/secret cross the boundary — never stored values.
+     */
+    fun providerAuthPrompts(providerId: String): List<ProviderAuthPrompt> =
+        catalog.getProvider(providerId)
+            ?.auth
+            ?.prompts
+            ?.map { ProviderAuthPrompt(it.envKey, it.message, it.secret) }
+            .orEmpty()
+
     /** Persists the show-thinking display preference; safe mid-stream (display-only). */
     fun setShowThinking(enabled: Boolean) {
         viewModelScope.launch {
@@ -649,6 +661,7 @@ class ChatViewModel(
                         providerName = provider.name,
                         modelId = model.id,
                         name = model.name,
+                        defaultBaseUrl = provider.baseUrl,
                     )
                 }
             }
