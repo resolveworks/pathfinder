@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import works.resolve.aletheia.ai.api.ChatApiRegistry
+import works.resolve.aletheia.ai.core.AnthropicMessagesCompat
 import works.resolve.aletheia.ai.core.ChatTemplateKwargValue
 import works.resolve.aletheia.ai.core.InputModality
 import works.resolve.aletheia.ai.core.MaxTokensField
@@ -271,6 +272,7 @@ private data class ModelDto(
         contextWindow = contextWindow,
         maxTokens = maxTokens,
         compat = compat.toDomain("${owner.id}/$id"),
+        anthropicCompat = compat.toAnthropicDomain(),
         headers = headers,
     )
 }
@@ -298,10 +300,24 @@ private data class CompatDto(
     val thinkingFormat: String? = null,
     val zaiToolStream: Boolean? = null,
     val chatTemplateArgs: Map<String, kotlinx.serialization.json.JsonElement>? = null,
+    // Anthropic Messages compat (pi's AnthropicMessagesCompat): consumed by
+    // the anthropic-messages adapter via Model.anthropicCompat.
+    val supportsEagerToolInputStreaming: Boolean? = null,
+    val supportsLongCacheRetention: Boolean? = null,
+    val sendSessionAffinityHeaders: Boolean? = null,
+    val supportsCacheControlOnTools: Boolean? = null,
+    val supportsTemperature: Boolean? = null,
+    val allowEmptySignature: Boolean? = null,
+    val supportsStrictTools: Boolean? = null,
+    val forceAdaptiveThinking: Boolean? = null,
     // Not yet modeled by the runtime: supportsStrictMode,
-    // supportsLongCacheRetention, sendSessionAffinityHeaders,
     // requiresReasoningContentOnAssistantMessages, deferredToolsMode,
     // cacheControlFormat — ignored via ignoreUnknownKeys.
+    //
+    // Deliberate narrow omission: allowedFallbackModels (server-side
+    // `fallbacks` models) is present in the asset but not ported in this
+    // chunk; callers must continue to omit the `fallbacks` request field.
+    // supportsToolReferences is likewise not yet modeled.
 ) {
     fun toDomain(where: String) = OpenAiCompletionsCompat(
         supportsStore = supportsStore ?: true,
@@ -318,6 +334,18 @@ private data class CompatDto(
         chatTemplateArgs = chatTemplateArgs
             ?.mapValues { (_, value) -> parseChatTemplateKwarg(value, "${where}.chatTemplateArgs") }
             ?: emptyMap(),
+    )
+
+    /** pi's getAnthropicCompat defaults apply per field when absent. */
+    fun toAnthropicDomain() = AnthropicMessagesCompat(
+        supportsEagerToolInputStreaming = supportsEagerToolInputStreaming ?: true,
+        supportsLongCacheRetention = supportsLongCacheRetention ?: true,
+        sendSessionAffinityHeaders = sendSessionAffinityHeaders ?: false,
+        supportsCacheControlOnTools = supportsCacheControlOnTools ?: true,
+        supportsTemperature = supportsTemperature ?: true,
+        allowEmptySignature = allowEmptySignature ?: false,
+        supportsStrictTools = supportsStrictTools ?: false,
+        forceAdaptiveThinking = forceAdaptiveThinking,
     )
 }
 

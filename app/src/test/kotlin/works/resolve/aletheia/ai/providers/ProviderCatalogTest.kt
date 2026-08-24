@@ -384,6 +384,74 @@ class ProviderCatalogTest {
         assertEquals(expected, model)
     }
 
+    // ---- anthropic-messages compat mapping ----
+
+    @Test
+    fun `compat anthropic flags map with pi defaults when absent`() {
+        val model = ProviderCatalog.parse(
+            """{"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
+               {"id":"m","name":"M","api":"anthropic-messages"}]}]}""",
+        ).getModel("p", "m")!!
+        assertEquals(works.resolve.aletheia.ai.core.AnthropicMessagesCompat(), model.anthropicCompat)
+    }
+
+    @Test
+    fun `compat anthropic flags map explicit non-default values`() {
+        val model = ProviderCatalog.parse(
+            """
+            {"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
+              {"id":"m","name":"M","api":"anthropic-messages","compat":{
+                "supportsEagerToolInputStreaming": false,
+                "supportsLongCacheRetention": false,
+                "sendSessionAffinityHeaders": true,
+                "supportsCacheControlOnTools": false,
+                "supportsTemperature": false,
+                "allowEmptySignature": true,
+                "supportsStrictTools": true,
+                "forceAdaptiveThinking": true
+              }}]}]}
+            """,
+        ).getModel("p", "m")!!
+        assertEquals(
+            works.resolve.aletheia.ai.core.AnthropicMessagesCompat(
+                supportsEagerToolInputStreaming = false,
+                supportsLongCacheRetention = false,
+                sendSessionAffinityHeaders = true,
+                supportsCacheControlOnTools = false,
+                supportsTemperature = false,
+                allowEmptySignature = true,
+                supportsStrictTools = true,
+                forceAdaptiveThinking = true,
+            ),
+            model.anthropicCompat,
+        )
+    }
+
+    @Test
+    fun `real asset loads non-default anthropic compat flags`() {
+        val catalog = realAsset()
+        // anthropic/claude-opus-4-7: strict tools + adaptive thinking + no
+        // temperature; everything else stays at pi defaults.
+        assertEquals(
+            works.resolve.aletheia.ai.core.AnthropicMessagesCompat(
+                supportsTemperature = false,
+                supportsStrictTools = true,
+                forceAdaptiveThinking = true,
+            ),
+            catalog.getModel("anthropic", "claude-opus-4-7")!!.anthropicCompat,
+        )
+        // fireworks deepseek-v4-flash: session affinity on, everything else off.
+        assertEquals(
+            works.resolve.aletheia.ai.core.AnthropicMessagesCompat(
+                supportsEagerToolInputStreaming = false,
+                supportsLongCacheRetention = false,
+                sendSessionAffinityHeaders = true,
+                supportsCacheControlOnTools = false,
+            ),
+            catalog.getModel("fireworks", "accounts/fireworks/models/deepseek-v4-flash")!!.anthropicCompat,
+        )
+    }
+
     // ---- the real bundled asset ----
 
     private var realCatalog: ProviderCatalog? = null
