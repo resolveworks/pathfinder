@@ -70,16 +70,19 @@ class ChatViewModelTest {
     )
 
     private class FakeApiKeyStore : ApiKeyStore {
-        val keys = mutableMapOf<String, String>()
-        var lastSet: String? = null
-        override suspend fun getCredential(providerId: String): ApiKeyCredential? =
-            keys[providerId]?.let { ApiKeyCredential(it) }
+        val creds = mutableMapOf<String, ApiKeyCredential>()
+        var failWrites = false
+        override suspend fun getCredential(providerId: String): ApiKeyCredential? {
+            if (failWrites) throw java.io.IOException("credential store failed")
+            return creds[providerId]
+        }
         override suspend fun setCredential(providerId: String, credential: ApiKeyCredential) {
-            keys[providerId] = credential.key
-            lastSet = credential.key
+            if (failWrites) throw java.io.IOException("credential store failed")
+            creds[providerId] = credential
         }
         override suspend fun deleteCredential(providerId: String) {
-            keys.remove(providerId)
+            if (failWrites) throw java.io.IOException("credential store failed")
+            creds.remove(providerId)
         }
     }
 
@@ -220,6 +223,16 @@ class ChatViewModelTest {
         job.join()
     }
 
+    /** Configures zai in two intents: optional credential save, then model selection. */
+    private fun ChatViewModel.configure(
+        modelId: String = "glm-4.7",
+        baseUrl: String? = null,
+        apiKey: String = "",
+    ) {
+        if (apiKey.isNotEmpty()) saveProviderCredential("zai", apiKey, emptyMap())
+        saveModelSelection("zai", modelId, baseUrl)
+    }
+
     // ---- tests ----
 
     @Test
@@ -229,17 +242,17 @@ class ChatViewModelTest {
 
         val state = vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
         assertEquals(SettingsNavKey, state.startKey)
-        assertFalse(state.hasApiKey)
+        assertFalse(state.providerOptions.first { o -> o.id == "zai" }.configured)
         assertNull(state.activeSessionId)
         assertTrue(state.messages.isEmpty())
-        assertTrue(state.modelOptions.isNotEmpty())
+        assertTrue(state.modelOptions.isEmpty())
 
         // Configure a stored key but no model settings: still unconfigured,
         // and the key never appears anywhere in the UI state.
-        h.credentials.keys["zai"] = "SECRET-KEY-123"
+        h.credentials.creds["zai"] = ApiKeyCredential("SECRET-KEY-123")
         val vm2 = h.newViewModel()
         val state2 = vm2.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        assertTrue(state2.hasApiKey)
+        assertTrue(state2.providerOptions.first { o -> o.id == "zai" }.configured)
         assertFalse(state2.toString().contains("SECRET-KEY-123"))
 
         vm.closeForTest()
@@ -268,15 +281,15 @@ class ChatViewModelTest {
 
         // setShowThinking is display-only: the configuration flow is unaffected.
         h.settingsStore.failWrites = false
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
         vm.setShowThinking(false)
         vm.uiState.first { !it.showThinking }
         assertFalse(h.settings.currentSettings().showThinking)
 
         // Reconfiguration preserves the user's preference in the candidate.
-        vm.saveConfiguration(modelId = "glm-5.3", baseUrl = null, apiKeyInput = "")
-        vm.uiState.first { it.selectedModelId == "glm-5.3" }
+        vm.configure(modelId = "glm-5.3")
+        vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
         assertFalse(vm.uiState.value.showThinking)
 
         vm.closeForTest()
@@ -300,7 +313,7 @@ class ChatViewModelTest {
         assertEquals(SettingsNavKey, vm.uiState.value.startKey)
 
         // Completing configuration bumps the epoch and returns to the chat root.
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         val configured = vm.uiState.first { it.status == ChatStatus.Ready }
         assertEquals(ChatNavKey, configured.startKey)
         assertTrue(configured.navigationEpoch >= 1L)
@@ -322,8 +335,8 @@ class ChatViewModelTest {
         assertTrue(created.navigationEpoch >= 4L)
 
         // Reconfiguration also bumps the epoch (returns the user to the chat).
-        vm.saveConfiguration(modelId = "glm-5.3", baseUrl = null, apiKeyInput = "")
-        val reconfigured = vm.uiState.first { it.selectedModelId == "glm-5.3" }
+        vm.configure(modelId = "glm-5.3")
+        val reconfigured = vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
         assertEquals(ChatStatus.Ready, reconfigured.status)
         assertEquals(ChatNavKey, reconfigured.startKey)
         assertTrue(reconfigured.navigationEpoch >= 5L)
@@ -343,14 +356,14 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "SECRET-KEY-123")
+        vm.configure(apiKey = "SECRET-KEY-123")
 
         val state = vm.uiState.first { it.status == ChatStatus.Ready }
         assertEquals(ChatNavKey, state.startKey)
         assertTrue(state.navigationEpoch >= 1L)
         assertNotNull(state.activeSessionId)
-        assertTrue(state.hasApiKey)
-        assertEquals("glm-4.7", state.selectedModelId)
+        assertTrue(state.providerOptions.first { o -> o.id == "zai" }.configured)
+        assertEquals("glm-4.7", state.selectedModel?.modelId)
         assertFalse(state.toString().contains("SECRET-KEY-123"))
         assertEquals(1, h.countSessions())
 
@@ -367,7 +380,7 @@ class ChatViewModelTest {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
 
         val gate = CompletableDeferred<Unit>()
@@ -416,7 +429,7 @@ class ChatViewModelTest {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
 
         val gate = CompletableDeferred<Unit>()
@@ -447,7 +460,7 @@ class ChatViewModelTest {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
 
         h.scriptedStreams.add(h.errorStream(h.assistant("", StopReason.ERROR, "boom")))
@@ -482,7 +495,7 @@ class ChatViewModelTest {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
 
         val gate = CompletableDeferred<Unit>().apply { complete(Unit) }
@@ -511,7 +524,7 @@ class ChatViewModelTest {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
         val firstId = vm.uiState.value.activeSessionId!!
 
@@ -543,24 +556,25 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        vm.saveConfiguration(modelId = "not-a-model", baseUrl = null, apiKeyInput = "k")
+        vm.saveProviderCredential("zai", "k", emptyMap())
+        vm.saveModelSelection("zai", "not-a-model", null)
         vm.uiState.first { it.error != null }
         assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
         vm.dismissError()
 
         // Missing key on initial configuration.
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "   ")
+        vm.saveModelSelection("zai", "glm-4.7", null)
         vm.uiState.first { it.error != null }
         assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
         assertEquals(0, h.countSessions())
 
         // Complete configuration, then a factory-invalid base URL keeps the old agent.
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
         val agentsBefore = h.createdAgents.size
 
         h.rejectedBaseUrls += "https://bad.example"
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = "https://bad.example", apiKeyInput = "")
+        vm.configure(baseUrl = "https://bad.example")
         vm.uiState.first { it.error != null }
         assertEquals(agentsBefore, h.createdAgents.size)
         // Same agent still bound: sending still works through the old agent.
@@ -577,20 +591,20 @@ class ChatViewModelTest {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = "https://api.example.com/v1/", apiKeyInput = "first-key")
+        vm.configure(baseUrl = "https://api.example.com/v1/", apiKey = "first-key")
         vm.uiState.first { it.status == ChatStatus.Ready }
-        assertEquals("first-key", h.credentials.keys["zai"])
+        assertEquals("first-key", h.credentials.creds["zai"]!!.key)
         assertEquals(1, h.createdAgents.size)
 
         // Blank key input retains the stored key; blank base URL clears it.
-        vm.saveConfiguration(modelId = "glm-5.3", baseUrl = "   ", apiKeyInput = "")
-        vm.uiState.first { it.selectedModelId == "glm-5.3" }
+        vm.configure(modelId = "glm-5.3", baseUrl = "   ")
+        vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
 
         val state = vm.uiState.value
         assertEquals(ChatStatus.Ready, state.status)
-        assertTrue(state.hasApiKey)
-        assertEquals("first-key", h.credentials.keys["zai"])
-        assertNull(state.baseUrl)
+        assertTrue(state.providerOptions.first { o -> o.id == "zai" }.configured)
+        assertEquals("first-key", h.credentials.creds["zai"]!!.key)
+        assertNull(state.selectedModel?.baseUrlOverride)
         assertNull(h.settings.currentSettings().baseUrl)
         // Agent rebuilt for the same session/transcript with new settings.
         assertEquals(2, h.createdAgents.size)
@@ -603,7 +617,7 @@ class ChatViewModelTest {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
 
         val gate = CompletableDeferred<Unit>()
@@ -625,9 +639,9 @@ class ChatViewModelTest {
         assertEquals(sessionId, vm.uiState.value.activeSessionId)
         vm.dismissError()
 
-        vm.saveConfiguration(modelId = "glm-5.3", baseUrl = null, apiKeyInput = "k2")
+        vm.saveModelSelection("zai", "glm-5.3", null)
         vm.uiState.first { it.error != null }
-        assertEquals("glm-4.7", vm.uiState.value.selectedModelId)
+        assertEquals("glm-4.7", vm.uiState.value.selectedModel?.modelId)
         vm.dismissError()
 
         // Blank send is a no-op even when idle; blank draft cannot send.
@@ -649,7 +663,7 @@ class ChatViewModelTest {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
         val firstId = vm.uiState.value.activeSessionId!!
 
@@ -692,7 +706,7 @@ class ChatViewModelTest {
         // Persist a fully valid-looking configuration, but the factory is down.
         h.settings.setProviderId("zai")
         h.settings.setModelId("glm-4.7")
-        h.credentials.keys["zai"] = "stored-key"
+        h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
         h.rejectAll = true
 
         val vm = h.newViewModel()
@@ -708,18 +722,18 @@ class ChatViewModelTest {
         val h2 = Harness()
         val vm2 = h2.newViewModel()
         vm2.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm2.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm2.configure(apiKey = "k")
         vm2.uiState.first { it.status == ChatStatus.Ready }
         h2.rejectedBaseUrls += "https://bad.example"
-        vm2.saveConfiguration(modelId = "glm-4.7", baseUrl = "https://bad.example", apiKeyInput = "")
+        vm2.configure(baseUrl = "https://bad.example")
         vm2.uiState.first { it.error != null }
-        assertEquals("glm-4.7", vm2.uiState.value.selectedModelId)
+        assertEquals("glm-4.7", vm2.uiState.value.selectedModel?.modelId)
         vm2.closeForTest()
 
         val vm3 = h2.newViewModel()
         val state3 = vm3.uiState.first { it.status == ChatStatus.Ready }
         assertNull(state3.error)
-        assertEquals("glm-4.7", state3.selectedModelId)
+        assertEquals("glm-4.7", state3.selectedModel?.modelId)
         assertNull(h2.settings.currentSettings().baseUrl)
         vm3.closeForTest()
     }
@@ -732,18 +746,19 @@ class ChatViewModelTest {
 
         // The key is stored, but the factory rejects the base URL afterwards.
         h.rejectedBaseUrls += "https://bad.example"
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = "https://bad.example", apiKeyInput = "first-key")
+        vm.saveProviderCredential("zai", "first-key", emptyMap())
+        vm.configure(baseUrl = "https://bad.example")
         vm.uiState.first { it.error != null }
         val state = vm.uiState.value
         assertEquals(ChatStatus.NeedsConfiguration, state.status)
-        assertEquals("first-key", h.credentials.keys["zai"])
-        assertTrue(state.hasApiKey)
+        assertEquals("first-key", h.credentials.creds["zai"]!!.key)
+        assertTrue(state.providerOptions.first { o -> o.id == "zai" }.configured)
         assertFalse(state.toString().contains("first-key"))
 
         // Blank-key retry retains the stored key and completes.
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "")
+        vm.configure()
         vm.uiState.first { it.status == ChatStatus.Ready }
-        assertEquals("first-key", h.credentials.keys["zai"])
+        assertEquals("first-key", h.credentials.creds["zai"]!!.key)
 
         vm.closeForTest()
     }
@@ -764,7 +779,7 @@ class ChatViewModelTest {
         h.settings.setProviderId("zai")
         h.settings.setModelId("glm-4.7")
         h.settings.setActiveSessionId(saved.id)
-        h.credentials.keys["zai"] = "stored-key"
+        h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
 
         val vm = h.newViewModel()
         val state = vm.uiState.first { it.status == ChatStatus.Ready }
@@ -783,7 +798,7 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
         h.settingsStore.failWrites = true
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "SECRET-KEY-9")
+        vm.configure(apiKey = "SECRET-KEY-9")
 
         vm.uiState.first { it.error != null }
         val state = vm.uiState.value
@@ -794,13 +809,13 @@ class ChatViewModelTest {
         assertEquals("", h.settings.currentSettings().modelId)
         assertNull(h.settings.currentSettings().activeSessionId)
         // The key was stored before the failure; the safe boolean reflects it.
-        assertEquals("SECRET-KEY-9", h.credentials.keys["zai"])
-        assertTrue(state.hasApiKey)
+        assertEquals("SECRET-KEY-9", h.credentials.creds["zai"]!!.key)
+        assertTrue(state.providerOptions.first { o -> o.id == "zai" }.configured)
         assertFalse(state.toString().contains("SECRET-KEY-9"))
 
         // Recovery: a retry with a working store succeeds.
         h.settingsStore.failWrites = false
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "")
+        vm.configure()
         vm.uiState.first { it.status == ChatStatus.Ready }
 
         vm.closeForTest()
@@ -811,17 +826,17 @@ class ChatViewModelTest {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
 
         h.settingsStore.failWrites = true
-        vm.saveConfiguration(modelId = "glm-5.3", baseUrl = "https://new.example", apiKeyInput = "")
+        vm.configure(modelId = "glm-5.3", baseUrl = "https://new.example")
         vm.uiState.first { it.error != null }
 
         val state = vm.uiState.value
         assertEquals(ChatStatus.Ready, state.status)
-        assertEquals("glm-4.7", state.selectedModelId)
-        assertNull(state.baseUrl)
+        assertEquals("glm-4.7", state.selectedModel?.modelId)
+        assertNull(state.selectedModel?.baseUrlOverride)
         // Persisted settings unchanged.
         assertEquals("glm-4.7", h.settings.currentSettings().modelId)
         assertNull(h.settings.currentSettings().baseUrl)
@@ -845,7 +860,7 @@ class ChatViewModelTest {
         // Fully valid persisted configuration, but the active-id write fails.
         h.settings.setProviderId("zai")
         h.settings.setModelId("glm-4.7")
-        h.credentials.keys["zai"] = "stored-key"
+        h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
         h.settingsStore.failActiveSessionWrites = true
 
         val vm = h.newViewModel()
@@ -864,7 +879,7 @@ class ChatViewModelTest {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
         val firstId = vm.uiState.value.activeSessionId!!
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == firstId }.messageCount == 0 }
@@ -901,7 +916,7 @@ class ChatViewModelTest {
         // create the first session and expose it in the summaries.
         h.settings.setProviderId("zai")
         h.settings.setModelId("glm-4.7")
-        h.credentials.keys["zai"] = "stored-key"
+        h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
 
         val vm = h.newViewModel()
         val state = vm.uiState.first { it.status == ChatStatus.Ready }
@@ -916,7 +931,7 @@ class ChatViewModelTest {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
         val sessionId = vm.uiState.value.activeSessionId!!
 
@@ -953,7 +968,7 @@ class ChatViewModelTest {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.saveConfiguration(modelId = "glm-4.7", baseUrl = null, apiKeyInput = "k")
+        vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
         val firstId = vm.uiState.value.activeSessionId!!
 
@@ -1002,6 +1017,167 @@ class ChatViewModelTest {
         val state = vm.uiState.first { it.activeSessionId != firstId }
         assertTrue(state.messages.isEmpty())
         assertEquals(6, h.sessionStore.load(firstId)!!.messages.size)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun providerAndModelOptions_followCredentialState() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        val state = vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+        // All catalog providers listed (name-sorted), all unconfigured, so the
+        // model picker is empty: pi's "only configured providers" rule.
+        assertEquals(listOf("Cloudflare AI Gateway", "Z.AI"), state.providerOptions.map { it.name })
+        assertTrue(state.providerOptions.none { it.configured })
+        assertTrue(state.modelOptions.isEmpty())
+
+        vm.saveProviderCredential("zai", "SECRET-KEY-777", emptyMap())
+        val after = vm.uiState.first { it.providerOptions.first { o -> o.id == "zai" }.configured }
+        assertTrue(after.providerOptions.first { it.id == "cloudflare-ai-gateway" }.let { !it.configured })
+        assertTrue(after.modelOptions.isNotEmpty())
+        assertTrue(after.modelOptions.all { it.providerId == "zai" })
+        assertEquals("GLM-4.7", after.modelOptions.first { it.modelId == "glm-4.7" }.name)
+        assertNull(after.selectedModel)
+        assertFalse(after.configured)
+        assertFalse(after.toString().contains("SECRET-KEY-777"))
+
+        vm.saveProviderCredential(
+            "cloudflare-ai-gateway",
+            "cf",
+            mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
+        )
+        val both = vm.uiState.first { it.providerOptions.first { o -> o.id == "cloudflare-ai-gateway" }.configured }
+        assertTrue(both.modelOptions.any { it.providerId == "cloudflare-ai-gateway" && it.modelId == "workers-ai/test-model" })
+        // Provider-name-then-model-name sort: Cloudflare options come first.
+        assertEquals("Cloudflare AI Gateway", both.modelOptions.first().providerName)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun saveProviderCredential_mergesKeyAndEnvValues() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+        // Key only: the env map stays empty.
+        vm.saveProviderCredential("cloudflare-ai-gateway", "cf-key", emptyMap())
+        vm.uiState.first { it.providerOptions.first { o -> o.id == "cloudflare-ai-gateway" }.configured }
+        val first = h.credentials.creds["cloudflare-ai-gateway"]!!
+        assertEquals("cf-key", first.key)
+        assertTrue(first.env.isEmpty())
+
+        // Blank key keeps the stored key; env slots are filled.
+        vm.saveProviderCredential(
+            "cloudflare-ai-gateway",
+            "   ",
+            mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
+        )
+        val filled = h.credentials.creds["cloudflare-ai-gateway"]!!
+        assertEquals("cf-key", filled.key)
+        assertEquals(mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"), filled.env)
+
+        // Blank env values keep the stored ones; a new key rotates.
+        vm.saveProviderCredential("cloudflare-ai-gateway", "cf-key-2", mapOf("CLOUDFLARE_ACCOUNT_ID" to " "))
+        val rotated = h.credentials.creds["cloudflare-ai-gateway"]!!
+        assertEquals("cf-key-2", rotated.key)
+        assertEquals(mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"), rotated.env)
+
+        // The very first save with a blank key is rejected (no existing key).
+        vm.saveProviderCredential("zai", "   ", emptyMap())
+        vm.uiState.first { it.error != null }
+        assertFalse(vm.uiState.value.providerOptions.first { o -> o.id == "zai" }.configured)
+        vm.dismissError()
+
+        // A credential-store failure surfaces a safe error.
+        h.credentials.failWrites = true
+        vm.saveProviderCredential("zai", "k", emptyMap())
+        vm.uiState.first { it.error != null }
+        vm.closeForTest()
+    }
+
+    @Test
+    fun saveProviderCredential_withValidSettings_adoptsSession_andGoesReady() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        // Valid model settings persisted, but the key is missing: pi's
+        // completeProviderAuthentication semantics — logging in completes it.
+        h.settings.setProviderId("zai")
+        h.settings.setModelId("glm-4.7")
+
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        assertNull(vm.uiState.value.activeSessionId)
+
+        vm.saveProviderCredential("zai", "k", emptyMap())
+        val state = vm.uiState.first { it.status == ChatStatus.Ready }
+        assertEquals(ChatNavKey, state.startKey)
+        assertTrue(state.configured)
+        assertTrue(state.navigationEpoch >= 1L)
+        assertNotNull(state.activeSessionId)
+        assertEquals("zai", state.selectedModel?.providerId)
+        assertTrue(state.modelOptions.all { it.providerId == "zai" })
+        assertEquals("zai", h.settings.currentSettings().providerId)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun removeProviderCredential_unconfigures_butNeverTearsDownSessions() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val agentsBefore = h.createdAgents.size
+
+        vm.removeProviderCredential("zai")
+        val state = vm.uiState.first { !it.configured }
+        // Status stays Ready and the agent is untouched: credentials are read
+        // per request, sessions are never torn down.
+        assertEquals(ChatStatus.Ready, state.status)
+        assertEquals(agentsBefore, h.createdAgents.size)
+        assertNotNull(state.activeSessionId)
+        assertFalse(state.providerOptions.first { o -> o.id == "zai" }.configured)
+        assertTrue(state.modelOptions.isEmpty())
+        // The committed selection stays visible for the model screen.
+        assertEquals("glm-4.7", state.selectedModel?.modelId)
+        assertNull(h.credentials.creds["zai"])
+
+        // Sending still works through the still-bound agent.
+        h.scriptedStreams.add(h.gatedStream("world", CompletableDeferred<Unit>().apply { complete(Unit) }))
+        vm.onDraftChange("Hello")
+        vm.send()
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+
+        // Re-login restores configured status.
+        vm.saveProviderCredential("zai", "k2", emptyMap())
+        vm.uiState.first { it.configured }
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun unknownProviderSettings_initNeedsConfiguration() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        h.settings.setProviderId("not-a-provider")
+        h.settings.setModelId("glm-4.7")
+        h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
+
+        val vm = h.newViewModel()
+        val state = vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        assertNull(state.selectedModel)
+        assertFalse(state.configured)
+        // The valid zai key still drives the model picker.
+        assertTrue(state.modelOptions.all { it.providerId == "zai" })
+        assertTrue(state.modelOptions.isNotEmpty())
+
+        // Model selection for an unknown provider is rejected safely.
+        vm.saveModelSelection("not-a-provider", "glm-4.7", null)
+        vm.uiState.first { it.error != null }
+        assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
+        assertEquals(0, h.countSessions())
 
         vm.closeForTest()
     }

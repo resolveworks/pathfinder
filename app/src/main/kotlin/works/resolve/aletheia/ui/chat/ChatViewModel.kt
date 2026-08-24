@@ -11,6 +11,7 @@ import works.resolve.aletheia.ai.core.TextContent
 import works.resolve.aletheia.ai.core.UserMessage
 import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.agent.AgentFactory
+import works.resolve.aletheia.data.credentials.ApiKeyCredential
 import works.resolve.aletheia.data.credentials.ApiKeyStore
 import works.resolve.aletheia.data.settings.ModelSettings
 import works.resolve.aletheia.data.settings.SettingsStore
@@ -32,8 +33,14 @@ import kotlinx.coroutines.withContext
  * Chat screen controller. Owns configuration, sessions, and the active
  * [Agent]; projects everything into an immutable [ChatUiState] (UDF).
  *
- * The provider is fixed to Z.AI for the MVP. The API key never enters
- * [ChatUiState] (only a boolean presence flag) and is never logged.
+ * The provider/model pair is user-selectable from the injected generated
+ * catalog; credentials are managed per provider (pi's /login semantics:
+ * one credential per provider, removed per provider), while model settings
+ * persist the selected provider+model+base-URL override.
+ *
+ * Provider auth status (`configured`/`unconfigured`) is derived live from
+ * the credential store — never persisted in settings — and the model picker
+ * only lists models of configured providers (pi's model-selector rule).
  *
  * The agent itself is created through the injected [AgentFactory]
  * (see [works.resolve.aletheia.agent]); the production implementation wires the native
@@ -60,21 +67,14 @@ import kotlinx.coroutines.withContext
 class ChatViewModel(
     private val settingsRepository: SettingsStore,
     private val credentials: ApiKeyStore,
-    catalog: ProviderCatalog,
+    private val catalog: ProviderCatalog,
     private val sessionStore: SessionRepository,
     private val agentFactory: AgentFactory,
 ) : ViewModel() {
 
-    // Catalog-driven shim (Wave 3 reworks the UI): the MVP provider is still
-    // fixed to Z.AI, but its model list and validation now come from the
-    // injected generated catalog.
-    private val zaiProvider = catalog.getProvider(PROVIDER_ID)
-        ?: error("Model catalog is missing the '$PROVIDER_ID' provider")
-    private val catalogOptions: List<ChatModelOption> =
-        zaiProvider.models.map { ChatModelOption(id = it.id, name = it.name) }
-    private val catalogIds: Set<String> = zaiProvider.models.map { it.id }.toSet()
-
-    private val _uiState = MutableStateFlow(ChatUiState(modelOptions = catalogOptions))
+    // Catalog-driven provider/model surface: option lists are computed from
+    // live credential state (see refreshOptions).
+    private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
     /** Current committed configuration; updated on init and successful save. */
@@ -110,12 +110,54 @@ class ChatViewModel(
     }
 
     /**
-     * Persists the configuration and (re)builds the agent. A blank
-     * [apiKeyInput] retains an existing stored key, but the initial
-     * configuration requires one.
+     * Persists the selected provider+model (+ optional base-URL override) and
+     * (re)builds the agent. Requires a stored credential for [providerId].
      */
-    fun saveConfiguration(modelId: String, baseUrl: String?, apiKeyInput: String) {
-        viewModelScope.launch { saveConfigurationInternal(modelId, baseUrl, apiKeyInput) }
+    fun saveModelSelection(providerId: String, modelId: String, baseUrl: String?) {
+        viewModelScope.launch { saveModelSelectionInternal(providerId, modelId, baseUrl) }
+    }
+
+    /**
+     * Saves (or merges into) the credential for [providerId]: a blank
+     * [apiKeyInput] keeps the stored key; a blank value for any other auth
+     * prompt keeps its stored env value. Mirrors pi's completeProviderAuthentication:
+     * logging in completes configuration when valid model settings already
+     * exist, otherwise the app stays NeedsConfiguration until a model is picked.
+     */
+    fun saveProviderCredential(providerId: String, apiKeyInput: String, envInputs: Map<String, String>) {
+        viewModelScope.launch { saveProviderCredentialInternal(providerId, apiKeyInput, envInputs) }
+    }
+
+    /**
+     * Forgets the credential for [providerId]. Never tears down sessions or
+     * the agent (credentials are read per request); only the derived status
+     * surfaces (provider/model options and `configured`) are refreshed.
+     */
+    fun removeProviderCredential(providerId: String) {
+        viewModelScope.launch {
+            try {
+                credentials.deleteCredential(providerId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(ERROR_CREDENTIAL_SAVE)
+                return@launch
+            }
+            refreshOptions()
+        }
+    }
+
+    /** Re-reads credentials and recomputes the derived provider/model surfaces. */
+    fun refreshProviderStatus() {
+        viewModelScope.launch {
+            try {
+                refreshOptions()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(ERROR_CREDENTIAL_SAVE)
+            }
+        }
     }
 
     /** Persists the show-thinking display preference; safe mid-stream (display-only). */
@@ -188,22 +230,15 @@ class ChatViewModel(
     private suspend fun initialize() {
         try {
             val settings = settingsRepository.currentSettings()
-            val hasKey = !credentials.getApiKey(PROVIDER_ID).isNullOrBlank()
             val summaries = sessionStore.summaries()
 
-            val configured = settings.providerId == PROVIDER_ID &&
-                settings.modelId in catalogIds &&
-                hasKey
-
-            if (!configured) {
+            if (!isConfigured(settings)) {
                 currentSettings = settings
+                refreshOptions()
                 updateState {
                     it.copy(
                         status = ChatStatus.NeedsConfiguration,
                         startKey = SettingsNavKey,
-                        hasApiKey = hasKey,
-                        selectedModelId = settings.modelId.takeIf { m -> m in catalogIds },
-                        baseUrl = settings.baseUrl,
                         showThinking = settings.showThinking,
                         sessionSummaries = summaries,
                     )
@@ -219,7 +254,6 @@ class ChatViewModel(
                 updateState {
                     it.copy(
                         status = ChatStatus.Failed,
-                        hasApiKey = true,
                         sessionSummaries = summaries,
                         error = ERROR_CONFIG_INVALID,
                     )
@@ -234,13 +268,11 @@ class ChatViewModel(
                 return
             }
             // activateSession already projected the session and fresh
-            // summaries; only the configuration fields remain.
+            // summaries; only the configuration surfaces remain.
+            refreshOptions()
             updateState {
                 it.copy(
                     status = ChatStatus.Ready,
-                    hasApiKey = true,
-                    selectedModelId = settings.modelId,
-                    baseUrl = settings.baseUrl,
                     showThinking = settings.showThinking,
                 )
             }
@@ -434,35 +466,30 @@ class ChatViewModel(
 
     // ---- intent internals ----
 
-    private suspend fun saveConfigurationInternal(modelId: String, baseUrl: String?, apiKeyInput: String) {
+    private suspend fun saveModelSelectionInternal(providerId: String, modelId: String, baseUrl: String?) {
         val trimmedModelId = modelId.trim()
-        if (trimmedModelId !in catalogIds) {
+        if (catalog.getModel(providerId, trimmedModelId) == null) {
             setError(ERROR_UNKNOWN_MODEL)
             return
         }
         if (rejectWhileBusy()) return
 
-        val keyInput = apiKeyInput.trim()
-        if (keyInput.isNotEmpty()) {
-            try {
-                credentials.setApiKey(PROVIDER_ID, keyInput)
-                // The stored key now exists even if a later step fails; keep
-                // the safe boolean in sync so a blank-key retry retains it.
-                updateState { it.copy(hasApiKey = true) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                setError(ERROR_CREDENTIAL_SAVE)
-                return
-            }
-        } else if (!_uiState.value.hasApiKey) {
+        val key = try {
+            credentials.getApiKey(providerId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            setError(ERROR_CREDENTIAL_SAVE)
+            return
+        }
+        if (key.isNullOrBlank()) {
             setError(ERROR_KEY_REQUIRED)
             return
         }
 
         val normalizedBaseUrl = baseUrl?.trim()?.takeIf { it.isNotEmpty() }
         val candidate = ModelSettings(
-            providerId = PROVIDER_ID,
+            providerId = providerId,
             modelId = trimmedModelId,
             baseUrl = normalizedBaseUrl,
             activeSessionId = activeSession?.id,
@@ -494,16 +521,147 @@ class ChatViewModel(
             currentSettings = candidate
         }
 
+        refreshOptions()
         updateState {
             it.copy(
                 status = ChatStatus.Ready,
                 startKey = ChatNavKey,
                 navigationEpoch = it.navigationEpoch + 1,
-                hasApiKey = true,
-                selectedModelId = candidate.modelId,
-                baseUrl = candidate.baseUrl,
             )
         }
+    }
+
+    private suspend fun saveProviderCredentialInternal(
+        providerId: String,
+        apiKeyInput: String,
+        envInputs: Map<String, String>,
+    ) {
+        val provider = catalog.getProvider(providerId) ?: run {
+            setError(ERROR_UNKNOWN_PROVIDER)
+            return
+        }
+        val existing = try {
+            credentials.getCredential(providerId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            setError(ERROR_CREDENTIAL_SAVE)
+            return
+        }
+        // Blank key input keeps the stored key; the very first save requires one.
+        val newKey = apiKeyInput.trim().takeIf { it.isNotEmpty() } ?: existing?.key
+        if (newKey.isNullOrBlank()) {
+            setError(ERROR_KEY_REQUIRED)
+            return
+        }
+        // The first auth prompt is the API key (stored in credential.key);
+        // every other prompt fills its env slot. Blank values keep the
+        // previously stored env value (same rule as the key field).
+        val env = buildMap<String, String> {
+            provider.auth.prompts.drop(1).forEach { prompt ->
+                val input = envInputs[prompt.envKey]?.trim()
+                val value = input?.takeIf { it.isNotEmpty() }
+                    ?: existing?.env[prompt.envKey]
+                if (value != null) put(prompt.envKey, value)
+            }
+        }
+        try {
+            credentials.setCredential(providerId, ApiKeyCredential(newKey, env))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            setError(ERROR_CREDENTIAL_SAVE)
+            return
+        }
+
+        // Mirrors pi's completeProviderAuthentication: logging in completes
+        // configuration when a valid model is already selected.
+        val nowConfigured = isConfigured(currentSettings)
+        refreshOptions(nowConfigured)
+        if (nowConfigured && _uiState.value.status == ChatStatus.NeedsConfiguration) {
+            val prepared = prepareAdoption(currentSettings) ?: return
+            if (!activateSession(prepared.first, prepared.second)) return
+            updateState {
+                it.copy(
+                    status = ChatStatus.Ready,
+                    startKey = ChatNavKey,
+                    navigationEpoch = it.navigationEpoch + 1,
+                )
+            }
+        }
+    }
+
+    /** True iff settings name a catalog provider+model AND a key exists for the provider. */
+    private suspend fun isConfigured(settings: ModelSettings): Boolean =
+        catalog.getModel(settings.providerId, settings.modelId) != null &&
+            !credentials.getApiKey(settings.providerId).isNullOrBlank()
+
+    /**
+     * Recomputes every credential-derived surface (providers screen rows,
+     * model picker options, selection projection, `configured`). Called on
+     * init, after every credential mutation, and from [refreshProviderStatus].
+     */
+    private suspend fun refreshOptions(configuredOverride: Boolean? = null) {
+        val providerOptions = try {
+            catalog.providers
+                .map { provider ->
+                    ProviderOption(
+                        id = provider.id,
+                        name = provider.name,
+                        configured = !credentials.getApiKey(provider.id).isNullOrBlank(),
+                    )
+                }
+                .sortedBy { it.name }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            setError(ERROR_CREDENTIAL_SAVE)
+            return
+        }
+        val configured = configuredOverride ?: try {
+            isConfigured(currentSettings)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            setError(ERROR_CREDENTIAL_SAVE)
+            return
+        }
+        val configuredIds = providerOptions.filter { it.configured }.map { it.id }.toSet()
+        // Pi's model-selector rule: only models from configured providers.
+        val modelOptions = catalog.providers
+            .filter { it.id in configuredIds }
+            .flatMap { provider ->
+                provider.models.map { model ->
+                    ModelOption(
+                        providerId = provider.id,
+                        providerName = provider.name,
+                        modelId = model.id,
+                        name = model.name,
+                    )
+                }
+            }
+            .sortedWith(compareBy({ it.providerName }, { it.name }))
+        updateState {
+            it.copy(
+                providerOptions = providerOptions,
+                modelOptions = modelOptions,
+                selectedModel = selectedModelProjection(currentSettings),
+                configured = configured,
+            )
+        }
+    }
+
+    private fun selectedModelProjection(settings: ModelSettings): SelectedModel? {
+        val provider = catalog.getProvider(settings.providerId) ?: return null
+        val model = provider.model(settings.modelId) ?: return null
+        return SelectedModel(
+            providerId = provider.id,
+            providerName = provider.name,
+            modelId = model.id,
+            modelName = model.name,
+            baseUrlOverride = settings.baseUrl,
+            defaultBaseUrl = provider.baseUrl,
+        )
     }
 
     /** Persists the validated configuration; false (with a safe error) on failure. */
@@ -563,13 +721,13 @@ class ChatViewModel(
     }
 
     private companion object {
-        const val PROVIDER_ID = "zai"
         const val DEFAULT_SESSION_TITLE = "New chat"
         const val TITLE_MAX_LENGTH = 48
 
         const val ERROR_INIT = "Could not load chat data"
-        const val ERROR_KEY_REQUIRED = "An API key is required for the initial configuration"
+        const val ERROR_KEY_REQUIRED = "An API key is required"
         const val ERROR_UNKNOWN_MODEL = "Unknown model"
+        const val ERROR_UNKNOWN_PROVIDER = "Unknown provider"
         const val ERROR_CREDENTIAL_SAVE = "Could not store the API key"
         const val ERROR_SETTINGS_SAVE = "Could not save the configuration"
         const val ERROR_CONFIG_INVALID = "Invalid configuration"

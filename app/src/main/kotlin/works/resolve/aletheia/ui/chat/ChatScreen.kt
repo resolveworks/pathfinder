@@ -65,7 +65,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -80,7 +79,6 @@ import works.resolve.aletheia.data.sessions.SessionSummary
 import works.resolve.aletheia.ui.theme.AletheiaTheme
 import kotlinx.coroutines.launch
 
-private const val PROVIDER_NAME = "Z.AI"
 private const val STREAMING_PLACEHOLDER = "…"
 
 /** Collects [ChatViewModel.uiState], owns the Nav3 back stack, and forwards intents from the pure [ChatScreen]. */
@@ -100,7 +98,8 @@ fun ChatRoute(
         onDraftChange = viewModel::onDraftChange,
         onSend = viewModel::send,
         onStop = viewModel::stop,
-        onSaveConfiguration = viewModel::saveConfiguration,
+        onSaveModelSelection = viewModel::saveModelSelection,
+        onRefreshProviderStatus = viewModel::refreshProviderStatus,
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
         onToggleShowThinking = viewModel::setShowThinking,
@@ -132,7 +131,8 @@ fun ChatScreen(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
-    onSaveConfiguration: (modelId: String, baseUrl: String?, apiKeyInput: String) -> Unit,
+    onSaveModelSelection: (providerId: String, modelId: String, baseUrl: String?) -> Unit,
+    onRefreshProviderStatus: () -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
     onToggleShowThinking: (Boolean) -> Unit,
@@ -252,7 +252,8 @@ fun ChatScreen(
                             entry<ModelSettingsNavKey> {
                                 ConfigurationContent(
                                     uiState = uiState,
-                                    onSave = onSaveConfiguration,
+                                    onSave = onSaveModelSelection,
+                                    onRefreshProviderStatus = onRefreshProviderStatus,
                                     onClose = if (uiState.status == ChatStatus.NeedsConfiguration) {
                                         null
                                     } else {
@@ -428,23 +429,32 @@ private fun SettingsContent(
 }
 
 /**
- * The API-key input lives exclusively in ephemeral `remember` Compose memory
- * (never `rememberSaveable`):
- * a blank field while [ChatUiState.hasApiKey] is true keeps the stored key.
+ * Mechanical shim over the new multi-provider state: a plain model picker
+ * (configured providers only) plus the base-URL override. The full providers
+ * and model screens are built by the next chunk; credentials are managed
+ * there, not on this surface.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConfigurationContent(
     uiState: ChatUiState,
-    onSave: (modelId: String, baseUrl: String?, apiKeyInput: String) -> Unit,
+    onSave: (providerId: String, modelId: String, baseUrl: String?) -> Unit,
+    onRefreshProviderStatus: () -> Unit,
     onClose: (() -> Unit)?,
 ) {
-    var modelId by remember(uiState.selectedModelId) {
-        mutableStateOf(uiState.selectedModelId ?: uiState.modelOptions.firstOrNull()?.id.orEmpty())
+    LaunchedEffect(Unit) { onRefreshProviderStatus() }
+
+    val initialSelection: Pair<String, String>? = uiState.selectedModel
+        ?.let { it.providerId to it.modelId }
+        ?: uiState.modelOptions.firstOrNull()
+            ?.let { it.providerId to it.modelId }
+    var selection by remember(uiState.selectedModel, uiState.modelOptions) {
+        mutableStateOf(initialSelection)
     }
     var modelMenuOpen by remember { mutableStateOf(false) }
-    var baseUrl by remember(uiState.baseUrl) { mutableStateOf(uiState.baseUrl.orEmpty()) }
-    var apiKey by remember { mutableStateOf("") }
+    var baseUrl by remember(uiState.selectedModel) {
+        mutableStateOf(uiState.selectedModel?.baseUrlOverride.orEmpty())
+    }
 
     Column(
         modifier = Modifier
@@ -458,17 +468,18 @@ private fun ConfigurationContent(
             text = stringResource(R.string.settings_title),
             style = MaterialTheme.typography.headlineSmall,
         )
-        Text(
-            text = stringResource(R.string.configuration_provider, PROVIDER_NAME),
-            style = MaterialTheme.typography.bodyMedium,
-        )
 
         ExposedDropdownMenuBox(
             expanded = modelMenuOpen,
             onExpandedChange = { modelMenuOpen = it },
         ) {
+            val selected = selection?.let { (p, m) ->
+                uiState.modelOptions.firstOrNull { it.providerId == p && it.modelId == m }
+            }
             OutlinedTextField(
-                value = uiState.modelOptions.firstOrNull { it.id == modelId }?.name ?: modelId,
+                value = selected?.let { "${it.name} · ${it.providerName}" }
+                    ?: selection?.second
+                    ?: "",
                 onValueChange = {},
                 readOnly = true,
                 label = { Text(stringResource(R.string.configuration_model)) },
@@ -483,9 +494,9 @@ private fun ConfigurationContent(
             ) {
                 uiState.modelOptions.forEach { option ->
                     DropdownMenuItem(
-                        text = { Text(option.name) },
+                        text = { Text("${option.name} · ${option.providerName}") },
                         onClick = {
-                            modelId = option.id
+                            selection = option.providerId to option.modelId
                             modelMenuOpen = false
                         },
                     )
@@ -493,39 +504,26 @@ private fun ConfigurationContent(
             }
         }
 
-        OutlinedTextField(
-            value = baseUrl,
-            onValueChange = { baseUrl = it },
-            label = { Text(stringResource(R.string.configuration_base_url)) },
-            placeholder = { Text(stringResource(R.string.configuration_base_url_hint)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        OutlinedTextField(
-            value = apiKey,
-            onValueChange = { apiKey = it },
-            label = { Text(stringResource(R.string.configuration_api_key)) },
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            supportingText = if (uiState.hasApiKey) {
-                { Text(stringResource(R.string.configuration_api_key_keep_hint)) }
-            } else {
-                null
-            },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        if (selection != null) {
+            OutlinedTextField(
+                value = baseUrl,
+                onValueChange = { baseUrl = it },
+                label = { Text(stringResource(R.string.configuration_base_url)) },
+                placeholder = {
+                    Text(
+                        uiState.selectedModel?.defaultBaseUrl
+                            ?: stringResource(R.string.configuration_base_url_hint),
+                    )
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = {
-                    onSave(modelId, baseUrl, apiKey)
-                    // The key is submitted to the ViewModel intent and never
-                    // kept locally afterwards.
-                    apiKey = ""
-                },
-                enabled = modelId.isNotEmpty(),
+                onClick = { selection?.let { (p, m) -> onSave(p, m, baseUrl) } },
+                enabled = selection != null,
             ) {
                 Text(stringResource(R.string.action_save))
             }
@@ -641,8 +639,17 @@ private fun Composer(
 // ---- previews ----
 
 private val PREVIEW_MODEL_OPTIONS = listOf(
-    ChatModelOption(id = "model-a", name = "Preview Model A"),
-    ChatModelOption(id = "model-b", name = "Preview Model B"),
+    ModelOption(providerId = "zai", providerName = "Z.AI", modelId = "model-a", name = "Preview Model A"),
+    ModelOption(providerId = "zai", providerName = "Z.AI", modelId = "model-b", name = "Preview Model B"),
+)
+
+private val PREVIEW_SELECTED_MODEL = SelectedModel(
+    providerId = "zai",
+    providerName = "Z.AI",
+    modelId = "model-a",
+    modelName = "Preview Model A",
+    baseUrlOverride = null,
+    defaultBaseUrl = "https://api.example.invalid/v4",
 )
 
 @Composable
@@ -659,7 +666,8 @@ private fun PreviewChatScreen(
             onDraftChange = {},
             onSend = {},
             onStop = {},
-            onSaveConfiguration = { _, _, _ -> },
+            onSaveModelSelection = { _, _, _ -> },
+            onRefreshProviderStatus = {},
             onNewSession = {},
             onSwitchSession = {},
             onToggleShowThinking = {},
@@ -676,8 +684,10 @@ private fun ChatScreenNeedsConfigurationPreview() {
         ChatUiState(
             status = ChatStatus.NeedsConfiguration,
             startKey = SettingsNavKey,
-            modelOptions = PREVIEW_MODEL_OPTIONS,
-            hasApiKey = false,
+            providerOptions = listOf(
+                ProviderOption("zai", "Z.AI", configured = false),
+                ProviderOption("cloudflare-ai-gateway", "Cloudflare AI Gateway", configured = false),
+            ),
         ),
     )
 }
@@ -690,8 +700,8 @@ private fun ChatScreenSettingsPreview() {
             status = ChatStatus.Ready,
             startKey = SettingsNavKey,
             modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModelId = "model-a",
-            hasApiKey = true,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            configured = true,
         ),
     )
 }
@@ -703,8 +713,8 @@ private fun ChatScreenSettingsRootPreview() {
         uiState = ChatUiState(
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModelId = "model-a",
-            hasApiKey = true,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            configured = true,
         ),
         extraKeys = listOf(SettingsNavKey),
     )
@@ -717,8 +727,8 @@ private fun ChatScreenModelSettingsPreview() {
         uiState = ChatUiState(
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModelId = "model-a",
-            hasApiKey = true,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            configured = true,
         ),
         extraKeys = listOf(SettingsNavKey, ModelSettingsNavKey),
     )
@@ -731,8 +741,8 @@ private fun ChatScreenReadyStreamingPreview() {
         ChatUiState(
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModelId = "model-a",
-            hasApiKey = true,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            configured = true,
             activeSessionId = "s1",
             sessionSummaries = listOf(
                 SessionSummary(
