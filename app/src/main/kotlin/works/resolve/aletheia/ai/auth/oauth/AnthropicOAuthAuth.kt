@@ -55,9 +55,16 @@ import works.resolve.aletheia.ai.auth.PkceGenerator
  * - `Date.now()` is read through the [now] seam for deterministic expiry
  *   tests.
  *
+ * - Secret-safety divergence (deliberate, per Aletheia's security rules): pi
+ *   echoes the raw response body in its `HTTP request failed ... body=` and
+ *   invalid-JSON messages; a body can carry tokens (a truncated token error,
+ *   an echoed code/verifier), so this port never interpolates an unparseable
+ *   raw body. Non-2xx bodies that parse as JSON objects contribute only their
+ *   `error`/`error_description` strings (ordinary safe server error
+ *   descriptors); anything else becomes `<redacted>`. Invalid-JSON messages
+ *   carry no body at all.
+ *
  * Nothing secret is logged: error messages carry only URLs without query
- * strings, HTTP statuses, and server response bodies (pi's exact `body=`
- * echo) — never the verifier, authorization code, or tokens.
  */
 class AnthropicOAuthAuth(
     private val http: OAuthHttpClient,
@@ -77,8 +84,9 @@ class AnthropicOAuthAuth(
         val challenge = pkce.generate()
         val verifier = challenge.verifier
 
-        // pi's URLSearchParams insertion order, serialized with
-        // URLSearchParams semantics (form encoding: space → `+`).
+        // pi's URLSearchParams insertion order; every current parameter value
+        // (constants, base64url PKCE, localhost redirect URI, scopes) avoids
+        // `~` — see formEncode's encoding note.
         val authParams = linkedMapOf(
             "code" to "true",
             "client_id" to CLIENT_ID,
@@ -151,9 +159,11 @@ class AnthropicOAuthAuth(
         }
 
         if (value.contains("#")) {
-            // pi: `value.split("#", 2)` — everything after the first `#` is the state.
-            val code = value.substringBefore("#")
-            val state = value.substringAfter("#")
+            // pi: `value.split("#", 2)` — at most two segments; JS discards the
+            // remainder, so the state is only up to the next `#`.
+            val segments = value.split("#")
+            val code = segments[0]
+            val state = segments.getOrElse(1) { "" }
             return ParsedAuthorizationInput(code, state)
         }
 
@@ -223,10 +233,12 @@ class AnthropicOAuthAuth(
         try {
             tokenData = Json.parseToJsonElement(responseBody) as? JsonObject
                 ?: throw IllegalArgumentException("JSON is not an object")
-        } catch (error: Exception) {
+        } catch (_: Exception) {
+            // No formatErrorDetails here: the parser's message embeds the raw
+            // input, which can carry secrets.
             throw IllegalStateException(
-                "Token exchange returned invalid JSON. url=$TOKEN_URL; body=$responseBody; " +
-                    "details=${formatErrorDetails(error)}",
+                "Token exchange returned invalid JSON. url=$TOKEN_URL; " +
+                    "details=IllegalStateException: response body is not valid JSON",
             )
         }
 
@@ -258,10 +270,12 @@ class AnthropicOAuthAuth(
         try {
             data = Json.parseToJsonElement(responseBody) as? JsonObject
                 ?: throw IllegalArgumentException("JSON is not an object")
-        } catch (error: Exception) {
+        } catch (_: Exception) {
+            // No formatErrorDetails here: the parser's message embeds the raw
+            // input, which can carry secrets.
             throw IllegalStateException(
-                "Anthropic token refresh returned invalid JSON. url=$TOKEN_URL; body=$responseBody; " +
-                    "details=${formatErrorDetails(error)}",
+                "Anthropic token refresh returned invalid JSON. url=$TOKEN_URL; " +
+                    "details=IllegalStateException: response body is not valid JSON",
             )
         }
 
@@ -333,11 +347,32 @@ class AnthropicOAuthAuth(
         )
         val responseBody = response.body.toString(Charsets.UTF_8)
         if (response.status !in 200..299) {
+            // Divergence from pi (documented in the class KDoc): pi echoes the
+            // raw body, which can carry tokens; only structured
+            // `error`/`error_description` strings survive, anything else is
+            // `<redacted>`.
             throw IllegalStateException(
-                "HTTP request failed. status=${response.status}; url=$TOKEN_URL; body=$responseBody",
+                "HTTP request failed. status=${response.status}; url=$TOKEN_URL; body=${safeBodySummary(responseBody)}",
             )
         }
         return responseBody
+    }
+
+    /**
+     * Sanitized `body=` summary for a non-2xx response: `error=` plus the
+     * JSON object's `error`/`error_description` strings when present, else
+     * `<redacted>` — an unparseable or non-error body is never interpolated.
+     */
+    private fun safeBodySummary(responseBody: String): String {
+        val body = try {
+            Json.parseToJsonElement(responseBody) as? JsonObject ?: return "<redacted>"
+        } catch (_: Exception) {
+            return "<redacted>"
+        }
+        val error = (body["error"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val description = (body["error_description"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val detail = listOfNotNull(error, description).joinToString(": ")
+        return if (detail.isNotEmpty()) "error=$detail" else "<redacted>"
     }
 
     private fun jsonRequest(fields: Map<String, String>): ByteArray =
@@ -380,11 +415,17 @@ class AnthropicOAuthAuth(
         private val json = Json { ignoreUnknownKeys = true }
 
         /**
-         * `application/x-www-form-urlencoded` serialization matching pi's
-         * `new URLSearchParams(fields).toString()` exactly via the JDK
-         * [java.net.URLEncoder] (see [XaiOAuthAuth] for the equivalence
-         * notes): space → `+`, everything outside the URLSearchParams
-         * unreserved set percent-encoded.
+         * `application/x-www-form-urlencoded` serialization for the authorize
+         * URL's query. NOT universally WHATWG `URLSearchParams`-equivalent:
+         * the JDK [java.net.URLEncoder] percent-encodes `~` (`%7E`) where
+         * URLSearchParams leaves it bare — the two differ only on that byte
+         * (`*`, alphanumerics, `.-_` are bare in both, space → `+` in both).
+         * Every current parameter value avoids `~`: the constants and
+         * localhost redirect URI contain none, the scopes use only `:` and
+         * space, and the PKCE state/challenge come from the URL-safe base64
+         * alphabet (A–Z, a–z, 0–9, `-`, `_`). So today's wire output is
+         * byte-identical to pi's `new URLSearchParams(fields).toString()`;
+         * any future parameter containing `~` must be encoded explicitly.
          */
         internal fun formEncode(fields: Map<String, String>): String =
             fields.entries.joinToString("&") { (name, value) ->

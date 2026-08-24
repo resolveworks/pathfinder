@@ -139,6 +139,18 @@ class AnthropicOAuthAuthTest {
     }
 
     @Test
+    fun `hash input keeps only the first two segments like js split limit 2`() = runBlocking {
+        val pair = pkce()
+        val (auth, http) = flow()
+        val credential = auth.login(RecordingInteraction("manual-code#${pair.verifier}#ignored"))
+
+        assertEquals("access", credential.access)
+        val sent = Json.parseToJsonElement(http.requests.single().body.decodeToString()).jsonObject
+        // The third segment is discarded: state stays the verifier, not "verifier#ignored".
+        assertEquals(pair.verifier, sent["state"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun `input without a code fails with Missing authorization code`() {
         for (input in listOf("https://claude.ai/oauth/authorize", "", "   ", "#")) {
             val (auth, http) = flow()
@@ -258,7 +270,7 @@ class AnthropicOAuthAuthTest {
         }
         assertTrue(
             error.message!!.startsWith(
-                "Token exchange returned invalid JSON. url=${AnthropicOAuthAuth.TOKEN_URL}; body=not json; details=",
+                "Token exchange returned invalid JSON. url=${AnthropicOAuthAuth.TOKEN_URL}; details=",
             ),
             error.message,
         )
@@ -272,7 +284,7 @@ class AnthropicOAuthAuthTest {
         }
         assertTrue(
             error.message!!.startsWith(
-                "Anthropic token refresh returned invalid JSON. url=${AnthropicOAuthAuth.TOKEN_URL}; body=",
+                "Anthropic token refresh returned invalid JSON. url=${AnthropicOAuthAuth.TOKEN_URL}; details=",
             ),
             error.message,
         )
@@ -304,9 +316,9 @@ class AnthropicOAuthAuthTest {
     // --- non-2xx (pi `postJson` error, wrapped by each caller) ---
 
     @Test
-    fun `non-2xx exchange carries pi's request failed message with the server body`() {
+    fun `non-2xx exchange carries pi's shape with a sanitized structured error`() {
         val auth = AnthropicOAuthAuth(
-            FakeHttpClient(respond = { jsonResponse(400, """{"error":"invalid_grant"}""") }),
+            FakeHttpClient(respond = { jsonResponse(400, """{"error":"invalid_grant","error_description":"code expired"}""") }),
             fixedPkce(),
         )
         val error = assertFailsWith<IllegalStateException> {
@@ -316,13 +328,13 @@ class AnthropicOAuthAuthTest {
             "Token exchange request failed. url=${AnthropicOAuthAuth.TOKEN_URL}; " +
                 "redirect_uri=${AnthropicOAuthAuth.REDIRECT_URI}; response_type=authorization_code; " +
                 "details=IllegalStateException: HTTP request failed. status=400; " +
-                "url=${AnthropicOAuthAuth.TOKEN_URL}; body={\"error\":\"invalid_grant\"}",
+                "url=${AnthropicOAuthAuth.TOKEN_URL}; body=error=invalid_grant: code expired",
             error.message,
         )
     }
 
     @Test
-    fun `non-2xx refresh carries pi's refresh failed message`() {
+    fun `non-2xx refresh carries pi's shape and redacts an unparseable body`() {
         val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(401, "unauthorized") }), fixedPkce())
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.refresh(OAuthCredential("a", "stale", 0)) }
@@ -330,11 +342,11 @@ class AnthropicOAuthAuthTest {
         assertTrue(
             error.message!!.startsWith(
                 "Anthropic token refresh request failed. url=${AnthropicOAuthAuth.TOKEN_URL}; " +
-                    "details=IllegalStateException: HTTP request failed. status=401; ",
+                    "details=IllegalStateException: HTTP request failed. status=401; "+
+                    "url=${AnthropicOAuthAuth.TOKEN_URL}; body=<redacted>",
             ),
             error.message,
         )
-        assertTrue("body=unauthorized" in error.message!!)
     }
 
     // --- bounded request / cancellation ---
@@ -380,6 +392,74 @@ class AnthropicOAuthAuthTest {
         }
         for (secret in listOf("secret-code")) {
             assertTrue(!error.message!!.contains(secret), "secret leaked: ${error.message}")
+        }
+    }
+
+    @Test
+    fun `unparseable non-2xx bodies carrying secrets are never interpolated`() {
+        val bodies = listOf(
+            // A truncated token error echoing credentials in plain text.
+            "access_token=sk-ant-oat-distinctive-access refresh_token=distinctive-refresh",
+            // Garbage that happens to embed a code/verifier.
+            "<html>bad code the-secret-code verifier the-secret-verifier</html>",
+            // Valid JSON but no error envelope: other fields are not echoed.
+            """{"access_token":"sk-ant-oat-distinctive-access","refresh_token":"distinctive-refresh"}""",
+            // Non-object JSON.
+            "[\"sk-ant-oat-distinctive-access\"]",
+        )
+        for (body in bodies) {
+            val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(500, body) }), fixedPkce())
+            val error = assertFailsWith<IllegalStateException> {
+                runBlocking { auth.login(RecordingInteraction("the-secret-code")) }
+            }
+            val verifier = pkce().verifier
+            assertNoSecrets(
+                error.message,
+                listOf("sk-ant-oat-distinctive-access", "distinctive-refresh", "the-secret-code", verifier, "the-secret-verifier"),
+                "body: $body",
+            )
+        }
+    }
+
+    @Test
+    fun `invalid json bodies carrying secrets are never echoed`() {
+        val bodies = listOf(
+            "not json sk-ant-oat-distinctive-access",
+            """{"access_token":"sk-ant-oat-distinctive-access"""",
+        )
+        for (body in bodies) {
+            val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, body) }), fixedPkce())
+            val error = assertFailsWith<IllegalStateException> {
+                runBlocking { auth.login(RecordingInteraction("the-secret-code")) }
+            }
+            assertNoSecrets(
+                error.message,
+                listOf("sk-ant-oat-distinctive-access", "the-secret-code"),
+                "body: $body",
+            )
+        }
+    }
+
+    @Test
+    fun `request tostring redacts the token exchange body and url`() {
+        val http = FakeHttpClient()
+        runBlocking {
+            try {
+                AnthropicOAuthAuth(http, fixedPkce()).login(RecordingInteraction("the-secret-code"))
+            } catch (_: Exception) {
+            }
+        }
+        val rendered = http.requests.single().toString()
+        assertNoSecrets(
+            rendered,
+            listOf("the-secret-code", "sk-ant-oat", "access\":\"", pkce().verifier),
+            "toString: $rendered",
+        )
+    }
+
+    private fun assertNoSecrets(text: String?, secrets: List<String>, context: String) {
+        for (secret in secrets) {
+            assertTrue(!text.orEmpty().contains(secret), "secret leaked: $secret in $context")
         }
     }
 }
