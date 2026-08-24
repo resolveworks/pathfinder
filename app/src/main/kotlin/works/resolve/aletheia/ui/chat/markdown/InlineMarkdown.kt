@@ -110,7 +110,7 @@ private fun AnnotatedString.Builder.renderLink(node: Link, styles: InlineMarkdow
     }
 }
 
-/** Flattens a node subtree to its unstyled text, for link text/href comparison and image alt. */
+/** Flattens a node subtree to unstyled image alt text. */
 private fun plainText(node: Node): String = buildString {
     var child = node.firstChild
     while (child != null) {
