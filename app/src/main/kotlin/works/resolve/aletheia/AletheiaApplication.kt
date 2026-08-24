@@ -8,9 +8,9 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import works.resolve.aletheia.agent.NativeAgentFactory
 import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.ai.transport.OkHttpTransport
+import works.resolve.aletheia.ai.auth.CatalogAuthRegistry
 import works.resolve.aletheia.ai.auth.CredentialStore
-import works.resolve.aletheia.data.credentials.ApiKeyStore
-import works.resolve.aletheia.data.credentials.ApiKeyStoreAdapter
+import works.resolve.aletheia.ai.auth.ProviderAuthService
 import works.resolve.aletheia.data.credentials.EncryptedCredentialStore
 import works.resolve.aletheia.data.credentials.KeystoreAeadCipher
 import works.resolve.aletheia.data.sessions.SessionStore
@@ -33,8 +33,7 @@ import okhttp3.OkHttpClient
  *
  * - one shared [OkHttpClient]/[OkHttpTransport] for all provider requests;
  * - [CredentialStore] (pi's credential contract) on the Android-Keystore-backed
- *   [KeystoreAeadCipher], with a temporary [ApiKeyStore] adapter for current
- *   UI/agent call sites;
+ *   [KeystoreAeadCipher];
  * - [SettingsRepository] on a single Preferences DataStore file;
  * - [SessionStore] rooted under app-private `filesDir/sessions`;
  * - the generated multi-provider model catalog, parsed once from assets;
@@ -56,8 +55,19 @@ class AletheiaApplication : Application() {
         EncryptedCredentialStore(this, KeystoreAeadCipher())
     }
 
-    /** Temporary API-key-only view over [credentials] for existing call sites. */
-    val apiKeyStore: ApiKeyStore by lazy { ApiKeyStoreAdapter(credentials) }
+    /**
+     * Composition point for concrete OAuth flows (pi wires flows directly
+     * in provider definitions; Android composes them late). No flows are
+     * registered yet — provider OAuth networking lands with the production
+     * registry — so every catalog provider currently offers API-key login
+     * only.
+     */
+    val authRegistry: CatalogAuthRegistry by lazy { CatalogAuthRegistry.EMPTY }
+
+    /** Login/logout orchestration over the catalog, registry, and credential store. */
+    val authService: ProviderAuthService by lazy {
+        ProviderAuthService(catalog = modelCatalog, registry = authRegistry, credentials = credentials)
+    }
 
     val settingsRepository: SettingsRepository by lazy {
         SettingsRepository(settingsDataStore)
@@ -82,8 +92,9 @@ class AletheiaApplication : Application() {
         initializer {
             ChatViewModel(
                 settingsRepository = settingsRepository,
-                credentials = apiKeyStore,
+                credentials = credentials,
                 catalog = modelCatalog,
+                authService = authService,
                 sessionStore = sessionStore,
                 agentFactory = agentFactory,
             )

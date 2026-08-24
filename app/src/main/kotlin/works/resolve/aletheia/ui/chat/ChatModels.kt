@@ -2,6 +2,10 @@ package works.resolve.aletheia.ui.chat
 
 import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable
+import works.resolve.aletheia.ai.auth.AuthEvent
+import works.resolve.aletheia.ai.auth.AuthMethodInfo
+import works.resolve.aletheia.ai.auth.AuthPrompt
+import works.resolve.aletheia.ai.auth.AuthType
 import works.resolve.aletheia.data.sessions.SessionSummary
 
 enum class ChatRole {
@@ -86,6 +90,78 @@ data class ProviderAuthPrompt(
     val secret: Boolean,
 )
 
+/** Kind of an interactive auth prompt (projection of pi `AuthPrompt`). */
+enum class AuthPromptKind {
+    TEXT,
+    SECRET,
+    SELECT,
+    MANUAL_CODE,
+}
+
+/** One selectable option of a [AuthPromptKind.SELECT] prompt (pi's option ids/labels). */
+data class AuthPromptOption(
+    val id: String,
+    val label: String,
+    val description: String? = null,
+)
+
+/**
+ * A suspended login prompt awaiting a user answer: only prompt metadata —
+ * never the answer, which lives solely in the suspended prompt reply.
+ */
+data class PendingAuthPrompt(
+    val kind: AuthPromptKind,
+    val message: String,
+    val placeholder: String? = null,
+    val options: List<AuthPromptOption> = emptyList(),
+)
+
+/**
+ * An in-flight provider login (pi's login dialog): the chosen method plus
+ * the ordered [AuthEvent]s shown so far and the single pending prompt, if
+ * any. Contains only non-secret event metadata (messages, URLs, user
+ * codes); access/refresh tokens and manual codes never enter this state.
+ */
+data class ProviderAuthFlow(
+    val providerId: String,
+    val method: AuthMethodInfo,
+    val events: List<AuthEvent> = emptyList(),
+    val pendingPrompt: PendingAuthPrompt? = null,
+)
+
+/** UI projection of a pi `AuthPrompt` — metadata only, never values. */
+internal fun projectAuthPrompt(prompt: AuthPrompt): PendingAuthPrompt =
+    when (prompt) {
+        is AuthPrompt.Text -> PendingAuthPrompt(AuthPromptKind.TEXT, prompt.message, prompt.placeholder)
+        is AuthPrompt.Secret -> PendingAuthPrompt(AuthPromptKind.SECRET, prompt.message, prompt.placeholder)
+        is AuthPrompt.Select -> PendingAuthPrompt(
+            AuthPromptKind.SELECT,
+            prompt.message,
+            options = prompt.options.map { AuthPromptOption(it.id, it.label, it.description) },
+        )
+        is AuthPrompt.ManualCode -> PendingAuthPrompt(AuthPromptKind.MANUAL_CODE, prompt.message, prompt.placeholder)
+    }
+
+/** What the provider-auth screen shows first for a provider's method list. */
+enum class ProviderAuthScreenMode {
+    /** More than one method: pick account/subscription vs API key (pi's auth-type selector). */
+    METHOD_CHOICE,
+    /** Sole API-key method: the existing all-fields form directly. */
+    API_KEY_FORM,
+    /** Sole OAuth method: start the account login flow immediately (pi's login dialog). */
+    START_OAUTH,
+    /** No login method available (neither catalog prompts nor a registered flow). */
+    NO_METHODS,
+}
+
+/** Pi's `startProviderLogin` routing, reduced to a pure screen-mode decision. */
+internal fun providerAuthScreenMode(methods: List<AuthMethodInfo>): ProviderAuthScreenMode = when {
+    methods.size > 1 -> ProviderAuthScreenMode.METHOD_CHOICE
+    methods.size == 1 && methods[0].type == AuthType.API_KEY -> ProviderAuthScreenMode.API_KEY_FORM
+    methods.size == 1 -> ProviderAuthScreenMode.START_OAUTH
+    else -> ProviderAuthScreenMode.NO_METHODS
+}
+
 /** The committed provider+model selection (from settings), projected for display. */
 data class SelectedModel(
     val providerId: String,
@@ -159,5 +235,7 @@ data class ChatUiState(
     val treeRows: List<TreeRow> = emptyList(),
     /** In-memory tree-panel filter (never persisted). */
     val treeFilter: TreeFilter = TreeFilter.DEFAULT,
+    /** The in-flight provider login flow, or null (see [ProviderAuthFlow]; never secrets). */
+    val authFlow: ProviderAuthFlow? = null,
     val error: String? = null,
 )

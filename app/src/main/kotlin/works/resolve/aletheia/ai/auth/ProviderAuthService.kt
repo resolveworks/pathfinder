@@ -108,6 +108,34 @@ class ProviderAuthService(
     }
 
     /**
+     * Side-effect-free configured check (pi's `getProviderAuthStatus`
+     * configured flag, per this catalog/registry pair): an API-key credential
+     * is configured iff every catalog prompt has a value; an OAuth
+     * credential is configured iff a flow is registered (pi: a stored
+     * credential without a matching handler resolves as unconfigured). No
+     * token refresh and no network calls.
+     */
+    suspend fun isConfigured(providerId: String): Boolean {
+        val provider = requireProvider(providerId)
+        val credential = try {
+            credentials.read(providerId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            throw ModelsError(
+                ModelsErrorCode.AUTH,
+                "Failed to read stored credential for provider '$providerId'",
+                error,
+            )
+        }
+        return when (credential) {
+            is ApiKeyCredential -> provider.isCredentialComplete(credential.key, credential.env)
+            is OAuthCredential -> registry.oauthAuth(provider) != null
+            null -> false
+        }
+    }
+
+    /**
      * Run the selected method's login and persist its credential (pi's
      * `Models.login`). The stored credential is replaced atomically — only
      * after a successful login — via [CredentialStore.modify]. Returns the

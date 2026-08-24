@@ -13,8 +13,14 @@ import works.resolve.aletheia.ai.core.UserMessage
 import works.resolve.aletheia.ai.providers.AuthPrompt
 import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.agent.AgentFactory
-import works.resolve.aletheia.ai.auth.ApiKeyCredential
-import works.resolve.aletheia.data.credentials.ApiKeyStore
+import works.resolve.aletheia.ai.auth.AuthEvent
+import works.resolve.aletheia.ai.auth.AuthInteraction
+import works.resolve.aletheia.ai.auth.AuthMethodInfo
+import works.resolve.aletheia.ai.auth.AuthPrompt as AuthInteractionPrompt
+import works.resolve.aletheia.ai.auth.AuthType
+import works.resolve.aletheia.ai.auth.CredentialStore
+import works.resolve.aletheia.ai.auth.ModelsError
+import works.resolve.aletheia.ai.auth.ProviderAuthService
 import works.resolve.aletheia.data.settings.ModelSettings
 import works.resolve.aletheia.data.settings.SettingsStore
 import works.resolve.aletheia.data.settings.SettingsRepository
@@ -24,6 +30,7 @@ import works.resolve.aletheia.data.sessions.Session
 import works.resolve.aletheia.data.sessions.SessionRepository
 import works.resolve.aletheia.data.sessions.SessionSummary
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -86,8 +93,9 @@ import kotlinx.coroutines.withContext
  */
 class ChatViewModel(
     private val settingsRepository: SettingsStore,
-    private val credentials: ApiKeyStore,
+    private val credentials: CredentialStore,
     private val catalog: ProviderCatalog,
+    private val authService: ProviderAuthService,
     private val sessionStore: SessionRepository,
     private val agentFactory: AgentFactory,
 ) : ViewModel() {
@@ -175,7 +183,7 @@ class ChatViewModel(
     fun removeProviderCredential(providerId: String) {
         viewModelScope.launch {
             try {
-                credentials.deleteCredential(providerId)
+                authService.logout(providerId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -617,18 +625,18 @@ class ChatViewModel(
         if (rejectWhileBusy()) return
 
         val provider = catalog.getProvider(providerId)
-        val credential = try {
-            credentials.getCredential(providerId)
+        // Credential-completeness gate (pi's rule: a provider is configured
+        // only when its stored credential resolves — every API-key prompt
+        // has a value, or a stored OAuth credential has a registered flow).
+        val providerConfigured = try {
+            provider != null && authService.isConfigured(providerId)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             setError(ERROR_CREDENTIAL_SAVE)
             return
         }
-        // Credential-completeness gate (pi's rule: a provider is configured
-        // only when every auth prompt has a value — e.g. Cloudflare also
-        // needs account/gateway ids, not just the API key).
-        if (provider == null || !provider.isCredentialComplete(credential?.key, credential?.env ?: emptyMap())) {
+        if (!providerConfigured) {
             setError(ERROR_CREDENTIAL_INCOMPLETE)
             return
         }
@@ -684,6 +692,12 @@ class ChatViewModel(
             setError(ERROR_UNKNOWN_PROVIDER)
             return
         }
+        // One auth flow at a time: a key save must not race an in-flight
+        // account login (pi serializes logins through the credential store).
+        if (isAuthProviderBusy()) {
+            setError(ERROR_AUTH_IN_PROGRESS)
+            return
+        }
         // The first auth prompt is the API key (stored in credential.key);
         // every other prompt fills its env slot. Each input is the value —
         // a complete save replaces the stored credential wholesale (pi's
@@ -703,26 +717,43 @@ class ChatViewModel(
             setError(missingCredentialError(missing))
             return
         }
+        // Save through the provider-neutral login orchestration: the form's
+        // values answer the catalog's own prompts (in order) through an
+        // in-memory interaction, and the credential is persisted only after
+        // the login succeeds — an unconditional replacement of whatever was
+        // stored (account↔key switches replace the credential type). The
+        // answers live only in this local interaction, never in UI state.
+        val answers = buildList {
+            provider.auth.prompts.forEachIndexed { index, prompt ->
+                add(if (index == 0) newKey else env[prompt.envKey].orEmpty())
+            }
+        }
         try {
-            credentials.setCredential(providerId, ApiKeyCredential(newKey, env))
+            authService.login(providerId, AuthType.API_KEY, FormAuthInteraction(answers))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             setError(ERROR_CREDENTIAL_SAVE)
             return
         }
+        onCredentialStored()
+    }
 
+    /**
+     * Shared post-login success path (pi's `completeProviderAuthentication`):
+     * bumps the credential-success epoch so the UI closes the auth screen
+     * only after confirmed persistence, refreshes every credential-derived
+     * surface, and — while still in the forced first-run flow — completes
+     * configuration when the persisted model settings are now usable, else
+     * advances to the model-settings step.
+     */
+    private suspend fun onCredentialStored() {
         // Success signal for the UI layer: only a confirmed persistence
         // closes the credential form (it pops one ProviderAuth entry when
         // this epoch changes); a failed or incomplete save above returns
         // without bumping it, so the form and its typed inputs survive.
         updateState { it.copy(credentialSuccessEpoch = it.credentialSuccessEpoch + 1) }
 
-        // Partly mirrors pi's completeProviderAuthentication: logging in
-        // completes configuration (direct transition to the chat) when valid
-        // model settings are already selected; otherwise the forced first-run flow
-        // advances to its second step — the model settings form — with an
-        // epoch bump so configured models are immediately selectable.
         val nowConfigured = isConfigured(currentSettings)
         refreshOptions(nowConfigured)
         if (_uiState.value.status == ChatStatus.NeedsConfiguration) {
@@ -740,15 +771,146 @@ class ChatViewModel(
         }
     }
 
+    // ---- interactive provider login (OAuth/account flows) ----
+
+    /** The in-flight login coroutine, if any (cancelled by user cancel or ViewModel clear). */
+    private var authJob: Job? = null
+
+    /** Reply channel of the currently suspended login prompt, if any. */
+    private var pendingPromptReply: CompletableDeferred<String>? = null
+
+    private fun isAuthProviderBusy(): Boolean =
+        _uiState.value.authFlow != null || authJob?.isActive == true
+
+    /**
+     * Starts the selected method's login flow (pi's `startProviderLogin`).
+     * Events accumulate as non-secret projections; a suspended prompt is
+     * exposed as the single pending prompt and answered via
+     * [submitAuthPrompt]; only [AuthType.API_KEY] with a sole method is
+     * normally started through the all-fields form instead. Concurrent
+     * flows are rejected: one login at a time, exactly like pi's modal
+     * login dialog.
+     */
+    fun beginProviderAuthLogin(providerId: String, method: AuthMethodInfo) {
+        if (isAuthProviderBusy()) {
+            setError(ERROR_AUTH_IN_PROGRESS)
+            return
+        }
+        if (providerAuthMethods(providerId).none { it.type == method.type }) {
+            setError(ERROR_UNKNOWN_PROVIDER)
+            return
+        }
+        authJob = viewModelScope.launch {
+            updateState { it.copy(authFlow = ProviderAuthFlow(providerId, method)) }
+            try {
+                authService.login(providerId, method.type, UiAuthInteraction())
+            } catch (e: CancellationException) {
+                // User cancel or ViewModel teardown: no credential was
+                // mutated (login persists only on success); clear and stop.
+                updateState { it.copy(authFlow = null) }
+                return@launch
+            } catch (e: Exception) {
+                updateState { it.copy(authFlow = null) }
+                setError(ERROR_AUTH_LOGIN)
+                return@launch
+            }
+            updateState { it.copy(authFlow = null) }
+            onCredentialStored()
+        }
+    }
+
+    /**
+     * Answers the pending login prompt. The answer crosses straight into
+     * the suspended login coroutine; it is never stored in UI state, saved,
+     * or logged. A no-op when no prompt is pending.
+     */
+    fun submitAuthPrompt(answer: String) {
+        pendingPromptReply?.complete(answer)
+    }
+
+    /**
+     * Cancels the in-flight login (pi's dialog cancel): the login coroutine
+     * and any pending prompt are cancelled, no credential is mutated, and
+     * the flow state clears. A no-op when no flow is active.
+     */
+    fun cancelProviderAuthLogin() {
+        pendingPromptReply?.cancel(CancellationException("Login cancelled"))
+        pendingPromptReply = null
+        authJob?.cancel()
+        // Belt-and-braces for a flow suspended outside a prompt: the login
+        // coroutine's cancellation handler clears the state above.
+        if (authJob?.isActive != true) {
+            updateState { it.copy(authFlow = null) }
+        }
+    }
+
+    /**
+     * Bridges the ported [AuthInteraction] onto UI state: `notify` appends
+     * the non-secret event projection; `prompt` exposes one pending prompt
+     * and suspends on a [CompletableDeferred] — cancellation (user cancel,
+     * ViewModel teardown) aborts the whole login, per pi's AbortSignal.
+     */
+    private inner class UiAuthInteraction : AuthInteraction {
+        override suspend fun prompt(prompt: AuthInteractionPrompt): String {
+            val reply = CompletableDeferred<String>()
+            pendingPromptReply = reply
+            updateState { state ->
+                state.copy(authFlow = state.authFlow?.copy(pendingPrompt = projectAuthPrompt(prompt)))
+            }
+            try {
+                return reply.await()
+            } finally {
+                pendingPromptReply = null
+                updateState { state ->
+                    state.copy(authFlow = state.authFlow?.copy(pendingPrompt = null))
+                }
+            }
+        }
+
+        override suspend fun notify(event: AuthEvent) {
+            updateState { state ->
+                state.copy(authFlow = state.authFlow?.copy(events = state.authFlow.events + event))
+            }
+        }
+    }
+
+    /** In-memory [AuthInteraction] answering fixed form values in order. */
+    private class FormAuthInteraction(
+        answers: List<String>,
+    ) : AuthInteraction {
+        private val remaining = ArrayDeque(answers)
+
+        override suspend fun prompt(prompt: AuthInteractionPrompt): String = remaining.removeFirst()
+
+        override suspend fun notify(event: AuthEvent) {}
+    }
+
+    /**
+     * The provider's selectable auth methods (pi's login menu entries), or
+     * an empty list for an unknown provider. Never touches credentials.
+     */
+    fun providerAuthMethods(providerId: String): List<AuthMethodInfo> =
+        try {
+            authService.authMethods(providerId)
+        } catch (e: ModelsError) {
+            emptyList()
+        }
+
     /**
      * True iff settings name a catalog provider+model AND the provider's
-     * credential is complete (every auth prompt has a value).
+     * stored credential resolves (API-key completeness or a registered
+     * OAuth flow for a stored OAuth credential).
      */
     private suspend fun isConfigured(settings: ModelSettings): Boolean {
         val provider = catalog.getProvider(settings.providerId) ?: return false
         if (provider.model(settings.modelId) == null) return false
-        val credential = credentials.getCredential(settings.providerId)
-        return provider.isCredentialComplete(credential?.key, credential?.env ?: emptyMap())
+        return try {
+            authService.isConfigured(provider.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /**
@@ -760,11 +922,10 @@ class ChatViewModel(
         val providerOptions = try {
             catalog.providers
                 .map { provider ->
-                    val credential = credentials.getCredential(provider.id)
                     ProviderOption(
                         id = provider.id,
                         name = provider.name,
-                        configured = provider.isCredentialComplete(credential?.key, credential?.env ?: emptyMap()),
+                        configured = authService.isConfigured(provider.id),
                     )
                 }
                 .sortedBy { it.name }
@@ -890,6 +1051,8 @@ class ChatViewModel(
         const val ERROR_SESSION_MISSING = "That chat no longer exists"
         const val ERROR_SESSION_SAVE = "Could not save the chat"
         const val ERROR_BUSY = "Wait for the response to finish first"
+        const val ERROR_AUTH_IN_PROGRESS = "A sign-in is already in progress"
+        const val ERROR_AUTH_LOGIN = "Could not complete sign-in"
         const val ERROR_ALREADY_STREAMING = "A response is already streaming"
         const val ERROR_ALREADY_AT_POINT = "Already at this point"
         const val ERROR_ENTRY_MISSING = "Message not found"

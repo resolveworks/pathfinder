@@ -126,6 +126,22 @@ object TestCatalogs {
                   "contextWindow": 128000, "maxTokens": 8192
                 }
               ]
+            },
+            {
+              "id": "oauth-only",
+              "name": "OAuth Only",
+              "baseUrl": "https://oauth.test/v1",
+              "auth": {},
+              "models": [
+                {
+                  "id": "account-model", "name": "Account Model",
+                  "api": "openai-completions", "provider": "oauth-only",
+                  "input": ["text"],
+                  "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                  "compat": {"supportsStore": false, "supportsDeveloperRole": false},
+                  "contextWindow": 128000, "maxTokens": 8192
+                }
+              ]
             }
           ]
         }
@@ -135,6 +151,9 @@ object TestCatalogs {
     val ZAI: CatalogProvider = CATALOG.getProvider("zai")!!
 
     val CLOUDFLARE: CatalogProvider = CATALOG.getProvider("cloudflare-ai-gateway")!!
+
+    /** Promptless provider: OAuth-only (pi's openai-codex shape). */
+    val OAUTH_ONLY: CatalogProvider = CATALOG.getProvider("oauth-only")!!
 
     val MODELS: List<Model> = ZAI.models
 

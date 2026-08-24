@@ -44,6 +44,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -74,6 +75,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -88,6 +90,9 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import works.resolve.aletheia.R
+import works.resolve.aletheia.ai.auth.AuthEvent
+import works.resolve.aletheia.ai.auth.AuthMethodInfo
+import works.resolve.aletheia.ai.auth.AuthType
 import works.resolve.aletheia.data.sessions.SessionSummary
 import works.resolve.aletheia.ui.chat.markdown.MarkdownText
 import works.resolve.aletheia.ui.theme.AletheiaTheme
@@ -121,6 +126,10 @@ fun ChatRoute(
         onSaveProviderCredential = viewModel::saveProviderCredential,
         onRemoveProviderCredential = viewModel::removeProviderCredential,
         authPrompts = viewModel::providerAuthPrompts,
+        authMethods = viewModel::providerAuthMethods,
+        onBeginProviderAuthLogin = viewModel::beginProviderAuthLogin,
+        onSubmitAuthPrompt = viewModel::submitAuthPrompt,
+        onCancelProviderAuthLogin = viewModel::cancelProviderAuthLogin,
         onRefreshProviderStatus = viewModel::refreshProviderStatus,
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
@@ -162,6 +171,10 @@ fun ChatScreen(
     onSaveProviderCredential: (providerId: String, apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
     onRemoveProviderCredential: (providerId: String) -> Unit,
     authPrompts: (providerId: String) -> List<ProviderAuthPrompt>,
+    authMethods: (providerId: String) -> List<AuthMethodInfo>,
+    onBeginProviderAuthLogin: (providerId: String, method: AuthMethodInfo) -> Unit,
+    onSubmitAuthPrompt: (answer: String) -> Unit,
+    onCancelProviderAuthLogin: () -> Unit,
     onRefreshProviderStatus: () -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
@@ -389,13 +402,20 @@ fun ChatScreen(
                                 val option = uiState.providerOptions
                                     .firstOrNull { it.id == key.providerId }
                                 if (option != null) {
-                                    ProviderAuthContent(
+                                    ProviderAuthEntry(
                                         provider = option,
+                                        flow = uiState.authFlow?.takeIf { it.providerId == key.providerId },
                                         prompts = authPrompts(key.providerId),
+                                        methods = authMethods(key.providerId),
                                         onSave = { apiKeyInput, envInputs ->
                                             onSaveProviderCredential(key.providerId, apiKeyInput, envInputs)
                                         },
                                         onRemove = { onRemoveProviderCredential(key.providerId) },
+                                        onBeginLogin = { method ->
+                                            onBeginProviderAuthLogin(key.providerId, method)
+                                        },
+                                        onSubmitPrompt = onSubmitAuthPrompt,
+                                        onCancelLogin = onCancelProviderAuthLogin,
                                         onClose = popBackStack,
                                     )
                                 }
@@ -846,6 +866,318 @@ private fun ProviderAuthContent(
     }
 }
 
+// ---- provider auth (pi's /login method selection and login dialog) ----
+
+/**
+ * The provider-auth screen: routes between pi's three login surfaces — the
+ * authentication-method selector (account/subscription vs API key, shown
+ * only when the provider offers more than one method), the all-fields
+ * API-key form (a sole API-key method goes straight there), and the
+ * interactive login flow (a sole OAuth method starts immediately). While a
+ * login flow for this provider is in flight, it replaces whatever surface
+ * was showing (pi's login dialog replaces the editor).
+ */
+@Composable
+private fun ProviderAuthEntry(
+    provider: ProviderOption,
+    flow: ProviderAuthFlow?,
+    prompts: List<ProviderAuthPrompt>,
+    methods: List<AuthMethodInfo>,
+    onSave: (apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
+    onRemove: () -> Unit,
+    onBeginLogin: (method: AuthMethodInfo) -> Unit,
+    onSubmitPrompt: (answer: String) -> Unit,
+    onCancelLogin: () -> Unit,
+    onClose: () -> Unit,
+) {
+    // System back during an active flow cancels the login first (pi's
+    // dialog escape); otherwise back pops the screen as usual.
+    BackHandler(enabled = flow != null) { onCancelLogin() }
+
+    if (flow != null) {
+        AuthFlowContent(
+            flow = flow,
+            onSubmit = onSubmitPrompt,
+            onCancel = onCancelLogin,
+        )
+        return
+    }
+
+    var showApiKeyForm by remember(provider.id) {
+        mutableStateOf(providerAuthScreenMode(methods) == ProviderAuthScreenMode.API_KEY_FORM)
+    }
+    when (providerAuthScreenMode(methods)) {
+        ProviderAuthScreenMode.API_KEY_FORM -> ProviderAuthContent(
+            provider = provider,
+            prompts = prompts,
+            onSave = onSave,
+            onRemove = onRemove,
+            onClose = onClose,
+        )
+        ProviderAuthScreenMode.METHOD_CHOICE -> if (showApiKeyForm) {
+            ProviderAuthContent(
+                provider = provider,
+                prompts = prompts,
+                onSave = onSave,
+                onRemove = onRemove,
+                onClose = onClose,
+            )
+        } else {
+            AuthMethodSelectorContent(
+                providerName = provider.name,
+                methods = methods,
+                onSelect = { method ->
+                    if (method.type == AuthType.API_KEY) {
+                        showApiKeyForm = true
+                    } else {
+                        onBeginLogin(method)
+                    }
+                },
+            )
+        }
+        ProviderAuthScreenMode.START_OAUTH -> {
+            val method = methods.first()
+            // Sole account method: start immediately (pi's startProviderLogin
+            // opens the login dialog without a selector step).
+            LaunchedEffect(provider.id) { onBeginLogin(method) }
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Text(
+                    text = stringResource(R.string.auth_waiting),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = onCancelLogin) {
+                    Text(stringResource(R.string.action_cancel_sign_in))
+                }
+            }
+        }
+        ProviderAuthScreenMode.NO_METHODS -> Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = stringResource(R.string.auth_no_methods),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+/**
+ * Authentication-method selector (pi's auth-type selector): one row per
+ * offered method, labeled with the method's own label (the catalog label
+ * or the OAuth login label) and supporting text distinguishing
+ * account/subscription sign-in from an API key.
+ */
+@Composable
+private fun AuthMethodSelectorContent(
+    providerName: String,
+    methods: List<AuthMethodInfo>,
+    onSelect: (method: AuthMethodInfo) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.auth_method_title, providerName),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Spacer(Modifier.size(16.dp))
+        methods.forEach { method ->
+            ListItem(
+                headlineContent = { Text(method.label) },
+                supportingContent = {
+                    Text(
+                        stringResource(
+                            if (method.isSubscription) R.string.auth_method_account else R.string.auth_method_api_key,
+                        ),
+                    )
+                },
+                trailingContent = {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+                },
+                modifier = Modifier.clickable { onSelect(method) },
+            )
+            HorizontalDivider()
+        }
+    }
+}
+
+/**
+ * Interactive login flow (pi's login dialog): ordered progress/info events
+ * and the pending prompt, when one is suspended. Links, auth URLs, and the
+ * device verification URI open only through explicit user-triggered
+ * buttons ([LocalUriHandler.openUri]) — nothing auto-launches. Text/Secret/
+ * ManualCode answers live in ephemeral `remember` state only (never
+ * `rememberSaveable`) and cross straight back into the suspended prompt.
+ */
+@Composable
+private fun AuthFlowContent(
+    flow: ProviderAuthFlow,
+    onSubmit: (answer: String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    val uriHandler = LocalUriHandler.current
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        if (flow.pendingPrompt == null) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    text = stringResource(R.string.auth_waiting),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        flow.events.forEach { event ->
+            AuthEventItem(event = event, onOpenUri = { url -> uriHandler.openUri(url) })
+        }
+        flow.pendingPrompt?.let { prompt ->
+            AuthPromptItem(prompt = prompt, onSubmit = onSubmit, onCancel = onCancel)
+        }
+        TextButton(onClick = onCancel) {
+            Text(stringResource(R.string.action_cancel_sign_in))
+        }
+    }
+}
+
+/** One login event: info text with links, auth URL, device code, or progress. */
+@Composable
+private fun AuthEventItem(
+    event: AuthEvent,
+    onOpenUri: (url: String) -> Unit,
+) {
+    when (event) {
+        is AuthEvent.Info -> {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(event.message, style = MaterialTheme.typography.bodyMedium)
+                event.links.forEach { link ->
+                    FilledTonalButton(onClick = { onOpenUri(link.url) }) {
+                        Text(link.label ?: link.url)
+                    }
+                }
+            }
+        }
+        is AuthEvent.AuthUrl -> {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = event.url,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+                event.instructions?.let {
+                    Text(it, style = MaterialTheme.typography.bodyMedium)
+                }
+                Button(onClick = { onOpenUri(event.url) }) {
+                    Text(stringResource(R.string.auth_open_url))
+                }
+            }
+        }
+        is AuthEvent.DeviceCode -> {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = event.verificationUri,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+                Text(
+                    text = stringResource(R.string.auth_user_code, event.userCode),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Button(onClick = { onOpenUri(event.verificationUri) }) {
+                    Text(stringResource(R.string.auth_open_url))
+                }
+            }
+        }
+        is AuthEvent.Progress -> Text(
+            text = event.message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * The pending prompt: a selection list (submitting an option id) or an
+ * ephemeral single-line input (Text/Secret/ManualCode). The answer never
+ * enters saved or hoisted state — it is passed straight to [onSubmit].
+ */
+@Composable
+private fun AuthPromptItem(
+    prompt: PendingAuthPrompt,
+    onSubmit: (answer: String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(prompt.message, style = MaterialTheme.typography.bodyLarge)
+        prompt.placeholder?.let {
+            Text(
+                text = stringResource(R.string.auth_prompt_placeholder, it),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (prompt.kind == AuthPromptKind.SELECT) {
+            prompt.options.forEach { option ->
+                ListItem(
+                    headlineContent = { Text(option.label) },
+                    supportingContent = option.description?.let { desc -> { Text(desc) } },
+                    modifier = Modifier.clickable { onSubmit(option.id) },
+                )
+                HorizontalDivider()
+            }
+        } else {
+            // Ephemeral, keyed by the prompt itself so a new prompt resets
+            // the field; never rememberSaveable (no process-death retention).
+            var answer by remember(prompt.message) { mutableStateOf("") }
+            val secret = prompt.kind == AuthPromptKind.SECRET
+            OutlinedTextField(
+                value = answer,
+                onValueChange = { answer = it },
+                label = { Text(prompt.message) },
+                visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onSubmit(answer) }),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { onSubmit(answer) }) {
+                    Text(stringResource(R.string.action_submit))
+                }
+                TextButton(onClick = onCancel) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        }
+    }
+}
+
 // ---- conversation ----
 
 /**
@@ -1162,6 +1494,11 @@ private val PREVIEW_CLOUDFLARE_PROMPTS = listOf(
     ProviderAuthPrompt("CLOUDFLARE_ACCOUNT_ID", "Enter the Cloudflare account ID", secret = false),
 )
 
+private val PREVIEW_AUTH_METHODS = listOf(
+    AuthMethodInfo(works.resolve.aletheia.ai.auth.AuthType.OAUTH, "Sign in with a Z.AI account", isSubscription = true),
+    AuthMethodInfo(works.resolve.aletheia.ai.auth.AuthType.API_KEY, "Z.AI API key", isSubscription = false),
+)
+
 private val PREVIEW_SELECTED_MODEL = SelectedModel(
     providerId = "zai",
     providerName = "Z.AI",
@@ -1175,6 +1512,7 @@ private fun PreviewChatScreen(
     startKey: NavKey = ChatNavKey,
     extraKeys: List<NavKey> = emptyList(),
     authPrompts: (String) -> List<ProviderAuthPrompt> = { emptyList() },
+    authMethods: (String) -> List<AuthMethodInfo> = { emptyList() },
 ) {
     AletheiaTheme {
         ChatScreen(
@@ -1187,6 +1525,10 @@ private fun PreviewChatScreen(
             onSaveProviderCredential = { _, _, _ -> },
             onRemoveProviderCredential = { },
             authPrompts = authPrompts,
+            authMethods = authMethods,
+            onBeginProviderAuthLogin = { _, _ -> },
+            onSubmitAuthPrompt = { },
+            onCancelProviderAuthLogin = { },
             onRefreshProviderStatus = {},
             onNewSession = {},
             onSwitchSession = {},
@@ -1299,6 +1641,66 @@ private fun ChatScreenProviderAuthPreview() {
         authPrompts = { providerId ->
             if (providerId == "cloudflare-ai-gateway") PREVIEW_CLOUDFLARE_PROMPTS else emptyList()
         },
+        authMethods = { providerId ->
+            if (providerId == "cloudflare-ai-gateway") {
+                listOf(AuthMethodInfo(works.resolve.aletheia.ai.auth.AuthType.API_KEY, "Cloudflare API key", isSubscription = false))
+            } else {
+                emptyList()
+            }
+        },
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenAuthMethodChoicePreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            providerOptions = PREVIEW_PROVIDER_OPTIONS,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            configured = true,
+        ),
+        extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("zai")),
+        authPrompts = { providerId ->
+            if (providerId == "zai") {
+                listOf(ProviderAuthPrompt("ZAI_API_KEY", "Enter Z.AI API key", secret = true))
+            } else {
+                emptyList()
+            }
+        },
+        authMethods = { providerId -> if (providerId == "zai") PREVIEW_AUTH_METHODS else emptyList() },
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenAuthFlowPreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            providerOptions = PREVIEW_PROVIDER_OPTIONS,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            configured = true,
+            authFlow = ProviderAuthFlow(
+                providerId = "zai",
+                method = PREVIEW_AUTH_METHODS.first(),
+                events = listOf(
+                    AuthEvent.Info("Open the link and sign in", emptyList()),
+                    AuthEvent.AuthUrl("https://auth.example.invalid/authorize", "Approve the request"),
+                    AuthEvent.DeviceCode("ABCD-1234", "https://verify.example.invalid/device"),
+                    AuthEvent.Progress("Waiting for approval"),
+                ),
+                pendingPrompt = PendingAuthPrompt(
+                    kind = AuthPromptKind.MANUAL_CODE,
+                    message = "Enter the code shown in the browser",
+                ),
+            ),
+        ),
+        extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("zai")),
+        authMethods = { providerId -> if (providerId == "zai") PREVIEW_AUTH_METHODS else emptyList() },
     )
 }
 

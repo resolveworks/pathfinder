@@ -34,6 +34,17 @@
     <string name="action_back">Back</string>
 
 
+    <string name="action_submit">Submit</string>
+    <string name="action_cancel_sign_in">Cancel sign-in</string>
+    <string name="auth_method_title">Sign in to %1$s</string>
+    <string name="auth_method_account">Account / subscription</string>
+    <string name="auth_method_api_key">API key</string>
+    <string name="auth_waiting">Waiting for the provider…</string>
+    <string name="auth_no_methods">No sign-in methods are available for this provider</string>
+    <string name="auth_open_url">Open link</string>
+    <string name="auth_user_code">Code: %1$s</string>
+    <string name="auth_prompt_placeholder">e.g. %1$s</string>
+
     <string name="role_user">You</string>
     <string name="role_assistant">Assistant</string>
     <string name="role_assistant_failed">Assistant — failed</string>
