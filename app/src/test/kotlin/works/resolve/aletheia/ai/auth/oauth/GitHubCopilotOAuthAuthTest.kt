@@ -280,11 +280,12 @@ class GitHubCopilotOAuthAuthTest {
     @Test
     fun `non-ok device code response fails with status and body`() = runTest {
         val http = FakeHttpClient()
-        http.script += { json(404, "not found") }
+        http.script += { json(404, """{"error":"not_found","error_description":"no such client"}""") }
         val error = assertFailsWith<IllegalStateException> {
             auth(http).login(RecordingInteraction())
         }
-        assertEquals("404: not found", error.message)
+        // Structured error detail is preserved; the raw body never reaches the message.
+        assertEquals("404: not_found: no such client", error.message)
     }
 
     // --- Copilot token exchange / expiry math ---
@@ -446,7 +447,7 @@ class GitHubCopilotOAuthAuthTest {
         )
         // Three 429s exhaust maxRetries=2 (retry-after 0 keeps virtual time still);
         // pi treats this as best-effort: the batch stops, login still succeeds.
-        repeat(3) { http.script += { json(429, "slow down", mapOf("retry-after" to listOf("0"))) } }
+        repeat(3) { http.script += { json(429, """{"error":"rate_limited"}""", mapOf("retry-after" to listOf("0"))) } }
 
         val credential = auth(http, now = { testScheduler.currentTime }).login(RecordingInteraction())
 
@@ -664,5 +665,188 @@ class GitHubCopilotOAuthAuthTest {
         assertEquals("GitHub Copilot", a.name)
         assertTrue(a.isSubscription)
         assertNull(a.loginLabel)
+    }
+
+    // --- verification URI trust + normalization ---
+
+    @Test
+    fun `verification uri normalization mirrors WHATWG href form`() {
+        val a = auth(FakeHttpClient())
+        assertEquals(
+            "https://github.com/login/device",
+            a.validateVerificationUri("HTTPS://GitHub.COM:443/login/device"),
+        )
+        assertEquals("https://github.com/", a.validateVerificationUri("https://github.com"))
+        assertEquals("https://github.com/", a.validateVerificationUri("https://GITHUB.com"))
+        assertEquals(
+            "http://github.com/login?x=1#frag",
+            a.validateVerificationUri("http://github.com:80/login?x=1#frag"),
+        )
+        // Non-default ports are kept.
+        assertEquals(
+            "https://github.com:8443/login",
+            a.validateVerificationUri("https://github.com:8443/login"),
+        )
+    }
+
+    @Test
+    fun `authority-less and malformed verification uris are rejected`() {
+        val a = auth(FakeHttpClient())
+        for (bad in listOf("http:foo", "https:", "//github.com", "file:///bin/sh", "github.com/login", "not a url")) {
+            val error = assertFailsWith<IllegalStateException>(bad) { a.validateVerificationUri(bad) }
+            assertEquals("Untrusted verification_uri in device code response", error.message)
+        }
+        // Control characters make the URI unparseable → untrusted.
+        val error = assertFailsWith<IllegalStateException> {
+            a.validateVerificationUri("https://github.com/lo\u0000gin")
+        }
+        assertEquals("Untrusted verification_uri in device code response", error.message)
+    }
+
+    @Test
+    fun `login rejects authority-less verification uri from the server`() = runTest {
+        val http = FakeHttpClient()
+        http.script += { ok("""{"device_code":"DC","user_code":"ABCD-1234","verification_uri":"http:foo","expires_in":900}""") }
+        val error = assertFailsWith<IllegalStateException> {
+            auth(http).login(RecordingInteraction())
+        }
+        assertEquals("Untrusted verification_uri in device code response", error.message)
+    }
+
+    // --- Retry-After numeric parsing (JS parseFloat semantics) ---
+
+    @Test
+    fun `retry-after numeric parsing mirrors js parseFloat`() {
+        val a = auth(FakeHttpClient())
+        assertEquals(1.0, a.parseFloatPrefix("1x"))
+        assertEquals(-1.0, a.parseFloatPrefix("-1x"))
+        assertEquals(2.5, a.parseFloatPrefix(" 2.5 sec"))
+        assertEquals(100.0, a.parseFloatPrefix("1e2foo"))
+        assertEquals(0.5, a.parseFloatPrefix(".5"))
+        assertEquals(3.0, a.parseFloatPrefix("+3"))
+        assertNull(a.parseFloatPrefix("soon"))
+        assertNull(a.parseFloatPrefix(""))
+        assertNull(a.parseFloatPrefix("Infinity"))
+        assertNull(a.parseFloatPrefix("e5"))
+    }
+
+    // --- bounded retry budget caps attempt timeouts ---
+
+    @Test
+    fun `attempt timeouts are capped by the remaining elapsed budget`() = runTest {
+        val http = FakeHttpClient()
+        // A manual clock the fake client advances on each exchange.
+        var clock = 0L
+        http.script += { ok(deviceCodeJson()) }
+        http.script += { ok("""{"access_token":"gho_g"}""") }
+        http.script += { ok(copilotTokenJson()) }
+        // Login's models fetch (maxRetries=2, budget 5000ms): the first
+        // attempt consumes 3000ms of the budget before returning a 429.
+        http.script += { request ->
+            clock += 3000
+            json(429, """{"error":"rate_limited"}""", mapOf("retry-after" to listOf("0")))
+        }
+        http.script += { ok(modelsJson(modelEntry("gpt-4.1"))) }
+        val flow = GitHubCopilotOAuthAuth(http = http, knownModelIds = setOf("gpt-4.1"), now = { clock })
+
+        val credential = flow.login(RecordingInteraction())
+
+        // The retried attempt received only the remaining budget (2000ms),
+        // not a fresh 5s — total elapsed cannot exceed the budget.
+        assertEquals(5000, http.requests[3].timeoutMs)
+        assertEquals(2000, http.requests[4].timeoutMs)
+        assertEquals(
+            listOf("gpt-4.1"),
+            (credential.extras["availableModelIds"] as JsonArray).map { (it as JsonPrimitive).content },
+        )
+    }
+
+    @Test
+    fun `retry sleep that cannot fit the budget returns the last 429`() = runTest {
+        val http = FakeHttpClient()
+        var clock = 0L
+        http.script += { ok(deviceCodeJson()) }
+        http.script += { ok("""{"access_token":"gho_g"}""") }
+        http.script += { ok(copilotTokenJson()) }
+        // Login's models fetch: 4500ms of the 5000ms budget already consumed,
+        // and the 429 demands a 1000ms sleep that cannot fit the remaining 500ms.
+        http.script += { request ->
+            clock += 4500
+            json(429, """{"error":"rate_limited"}""", mapOf("retry-after" to listOf("1")))
+        }
+        val flow = GitHubCopilotOAuthAuth(http = http, knownModelIds = setOf("gpt-4.1"), now = { clock })
+
+        val error = assertFailsWith<IllegalStateException> {
+            flow.login(RecordingInteraction())
+        }
+        // The last 429 is returned (budget exhausted before another attempt).
+        assertEquals("429: rate_limited", error.message)
+        assertEquals(4, http.requests.size)
+    }
+
+    // --- error-message secret safety ---
+
+    @Test
+    fun `raw response bodies never reach error messages`() {
+        val a = auth(FakeHttpClient())
+        val token = "gho_secret_access_ABC123"
+        // Unparseable body carrying a token.
+        val unparseable = a.statusError(500, "token=$token".toByteArray())
+        assertEquals("500: <redacted response body>", unparseable.message)
+        assertTrue(token !in unparseable.message!!)
+        // Non-error JSON object carrying a token.
+        val nonError = a.statusError(500, """{"token":"$token"}""".toByteArray())
+        assertEquals("500: <redacted response body>", nonError.message)
+        // Structured error fields are preserved and safe.
+        val structured = a.statusError(429, """{"error":"rate_limited","error_description":"too many"}""".toByteArray())
+        assertEquals("429: rate_limited: too many", structured.message)
+    }
+
+    @Test
+    fun `live flow errors never echo token values`() = runTest {
+        val http = FakeHttpClient()
+        val token = "tid=1;exp=9;proxy-ep=proxy.individual.githubcopilot.com"
+        http.script += { ok(deviceCodeJson()) }
+        http.script += { ok("""{"access_token":"gho_x"}""") }
+        http.script += { json(403, """{"message":"bad token $token","token":"$token"}""") }
+
+        val error = assertFailsWith<IllegalStateException> {
+            auth(http).login(RecordingInteraction())
+        }
+        assertTrue(token !in error.message!!)
+        assertTrue("gho_x" !in error.message!!)
+        // Request/response toStrings never carry bodies or bearer values either.
+        for (request in http.requests) {
+            assertTrue(token !in request.toString())
+            assertTrue("gho_x" !in request.toString())
+        }
+        val response = OAuthHttpResponse(500, emptyMap(), """{"x":"$token"}""".toByteArray())
+        assertTrue(token !in response.toString())
+    }
+
+    // --- policy enablement resilience ---
+
+    @Test
+    fun `non-IOException transport failure continues the batch`() = runTest {
+        val http = FakeHttpClient()
+        http.happyPath(
+            modelsBody = modelsJson(
+                modelEntry("claude-sonnet-5", state = "unconfigured"),
+                modelEntry("grok-4.6", state = "unconfigured"),
+            ),
+            policyResponses = listOf(ok("""{"policy":{"state":"enabled"}}""")),
+        )
+        // First enablement dies with a non-IOException transport failure...
+        http.script.add(4) { throw IllegalStateException("tls blew up") }
+        // ...but it is consumed in order, so drop the ok() and keep one success
+        // for the second model (already queued above).
+
+        val credential = auth(http).login(RecordingInteraction())
+
+        // The first model's enablement failed, the second succeeded and is merged.
+        assertEquals(
+            listOf("claude-sonnet-5", "grok-4.6"),
+            (credential.extras["availableModelIds"] as JsonArray).map { (it as JsonPrimitive).content },
+        )
     }
 }

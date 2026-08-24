@@ -1,6 +1,5 @@
 package works.resolve.aletheia.ai.auth.oauth
 
-import java.io.IOException
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoField
 import java.util.Base64
@@ -48,8 +47,11 @@ import works.resolve.aletheia.ai.auth.OAuthCredential
  *   bounded 30s exchange like the other Aletheia flows; pi's per-attempt
  *   5s `AbortSignal.timeout` inside the rate-limit retry is kept verbatim.
  * - [OAuthHttpResponse] carries no HTTP reason phrase, so pi's
- *   `${status} ${statusText}: ${text}` error messages become
- *   `${status}: ${text}` here.
+ *   `${status} ${statusText}` prefix becomes `${status}`. Raw response
+ *   bodies are never interpolated into error messages (a security
+ *   divergence from pi's `await response.text()`): only structured
+ *   `error`/`error_description` fields from a JSON error object are
+ *   preserved; unparseable or non-error bodies are redacted.
  * - pi's `GITHUB_COPILOT_MODELS` membership check (`Object.hasOwn`) uses the
  *   generated static model catalog; the constructor receives the same ids
  *   ([knownModelIds]) from the generated `models-catalog.json` provider
@@ -260,7 +262,10 @@ class GitHubCopilotOAuthAuth(
      * Port of pi `fetchWithRateLimitRetry`: retries 429s with exponential
      * backoff (500ms * 2^retry), honoring `Retry-After` (seconds or
      * HTTP-date) and stopping at the retry count or elapsed budget. Sleeps
-     * are cancellable; per-attempt timeout is pi's 5s `AbortSignal.timeout`.
+     * are cancellable; per-attempt timeout is pi's 5s `AbortSignal.timeout`
+     * clamped to the remaining elapsed budget (pi's `AbortSignal.any` of
+     * per-attempt and budget signals), so retries can never spend more than
+     * the budget on a fresh full request timeout.
      */
     private suspend fun fetchWithRateLimitRetry(
         url: String,
@@ -273,13 +278,19 @@ class GitHubCopilotOAuthAuth(
             if (retryPolicy.maxRetries > 0 && retryPolicy.maxElapsedMs > 0) now() + retryPolicy.maxElapsedMs else null
         var retry = 0
         while (true) {
+            val attemptTimeoutMs =
+                if (retryDeadline == null) {
+                    PER_ATTEMPT_TIMEOUT_MS.toLong()
+                } else {
+                    (retryDeadline - now()).coerceIn(1L, PER_ATTEMPT_TIMEOUT_MS.toLong())
+                }
             val response = http.execute(
                 OAuthHttpRequest(
                     method = method,
                     url = url,
                     headers = headers,
                     body = body,
-                    timeoutMs = PER_ATTEMPT_TIMEOUT_MS,
+                    timeoutMs = attemptTimeoutMs.toInt(),
                 ),
             )
             if (response.status != 429 || retry == retryPolicy.maxRetries) return response
@@ -287,7 +298,7 @@ class GitHubCopilotOAuthAuth(
             val retryAfter = response.headers["retry-after"]?.firstOrNull()
             var delayMs: Double = 500.0 * 2.0.pow(retry)
             if (retryAfter != null) {
-                val seconds = retryAfter.toDoubleOrNull()
+                val seconds = parseFloatPrefix(retryAfter)
                 delayMs =
                     if (seconds != null && seconds.isFinite()) {
                         seconds * 1000
@@ -333,7 +344,7 @@ class GitHubCopilotOAuthAuth(
             retryPolicy = retryPolicy,
         )
         if (response.status !in 200..299) {
-            throw IllegalStateException("${response.status}: ${response.body.toString(Charsets.UTF_8)}")
+            throw statusError(response.status, response.body)
         }
         val raw = try {
             Json.parseToJsonElement(response.body.toString(Charsets.UTF_8))
@@ -349,7 +360,7 @@ class GitHubCopilotOAuthAuth(
             OAuthHttpRequest(method = method, url = url, headers = headers, body = body, timeoutMs = REQUEST_TIMEOUT_MS),
         )
         if (response.status !in 200..299) {
-            throw IllegalStateException("${response.status}: ${response.body.toString(Charsets.UTF_8)}")
+            throw statusError(response.status, response.body)
         }
         return try {
             Json.parseToJsonElement(response.body.toString(Charsets.UTF_8))
@@ -404,20 +415,13 @@ class GitHubCopilotOAuthAuth(
         }
 
         // The verification URI is opened in the user's browser and to prevent `open` from
-        // opening an executable or similar, we force it to be a URL.
-        val parsedUri = try {
-            java.net.URI(verificationUri)
-        } catch (_: Exception) {
-            null
-        }
-        if (parsedUri == null || parsedUri.scheme != "https" && parsedUri.scheme != "http") {
-            throw IllegalStateException("Untrusted verification_uri in device code response")
-        }
+        // opening an executable or similar, we force it to be an http(s) URL.
+        val normalizedUri = validateVerificationUri(verificationUri)
 
         return DeviceCodeResponse(
             deviceCode = deviceCode,
             userCode = userCode,
-            verificationUri = parsedUri.toString(),
+            verificationUri = normalizedUri,
             intervalSeconds = interval,
             expiresInSeconds = expiresIn,
         )
@@ -540,9 +544,9 @@ class GitHubCopilotOAuthAuth(
 
     /**
      * Port of pi `enableGitHubCopilotModel`: POSTs
-     * `{"state":"enabled"}` to the model's policy endpoint. Network failures
-     * (except cancellation) return false; an exhausted 429 throws; any other
-     * non-ok status returns false.
+     * `{"state":"enabled"}` to the model's policy endpoint. Any
+     * non-cancellation failure (network error, other non-ok status) returns
+     * false; an exhausted 429 throws.
      */
     private suspend fun enableGitHubCopilotModel(
         token: String,
@@ -567,19 +571,22 @@ class GitHubCopilotOAuthAuth(
             )
         } catch (error: CancellationException) {
             throw error
-        } catch (error: IOException) {
+        } catch (error: Exception) {
+            // pi catches any non-abort fetch failure and reports false; the
+            // batch continues with the next model.
             return false
         }
         if (response.status == 429) {
-            throw IllegalStateException("${response.status}: ${response.body.toString(Charsets.UTF_8)}")
+            throw statusError(response.status, response.body)
         }
         return response.status in 200..299
     }
 
     /**
      * Port of pi `enableGitHubCopilotModels`: policy updates are best
-     * effort; a failed enablement (or an exhausted 429) stops the batch;
-     * cancellation always propagates.
+     * effort; a false enablement (any non-cancellation transport failure)
+     * continues with the next model, and only a thrown error (exhausted
+     * rate limiting) stops the batch; cancellation always propagates.
      */
     private suspend fun enableGitHubCopilotModels(
         token: String,
@@ -635,6 +642,74 @@ class GitHubCopilotOAuthAuth(
             ?.toDoubleOrNull()
             ?.takeIf { it.isFinite() }
 
+    /**
+     * Safe non-OK failure for a status/body pair (Aletheia security
+     * divergence from pi's raw `response.text()` interpolation): the message
+     * carries the status plus only structured `error`/`error_description`
+     * string fields from a JSON error object; anything else (unparseable
+     * body, non-object JSON, no error fields) is fully redacted so response
+     * bodies can never leak credential material into exceptions or logs.
+     */
+    internal fun statusError(status: Int, body: ByteArray): IllegalStateException =
+        IllegalStateException("$status: ${safeErrorDetail(body)}")
+
+    private fun safeErrorDetail(body: ByteArray): String {
+        val parsed = try {
+            Json.parseToJsonElement(body.toString(Charsets.UTF_8))
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            return REDACTED_BODY
+        }
+        val obj = parsed as? JsonObject ?: return REDACTED_BODY
+        val error = obj.stringField("error")
+        val description = obj.stringField("error_description")
+        return listOfNotNull(error, description).joinToString(": ").ifEmpty { REDACTED_BODY }
+    }
+
+    /**
+     * Port of JS `Number.parseFloat` for the `Retry-After` numeric form: the
+     * longest numeric prefix of the trimmed value parses (`"1x"`, `" 2.5 sec"`,
+     * `"1e2foo"`), anything else (no numeric prefix, `"Infinity"`) is null.
+     */
+    internal fun parseFloatPrefix(value: String): Double? {
+        val trimmed = value.trim()
+        val match = Regex("""^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?""").find(trimmed)
+            ?: return null
+        return match.value.toDoubleOrNull()
+    }
+
+    /**
+     * Trust check plus normalization for the device flow's verification URI
+     * (pi parses with WHATWG `new URL` and returns `parsedUri.href`).
+     *
+     * Divergence from pi (documented per AGENTS.md): the JDK has no href
+     * normalizer, so the safe form is rebuilt here — lower-cased scheme and
+     * host, scheme-default ports (`:80`/`:443`) omitted, empty path becomes
+     * `/`, query and fragment preserved verbatim. The check is equally
+     * strict-or-stricter than WHATWG: the URI must carry an http(s) scheme
+     * and a non-empty authority, and anything `URI` rejects (opaque
+     * authority-less forms like `http:foo`, control characters, invalid
+     * escapes) is treated as untrusted rather than opened.
+     */
+    internal fun validateVerificationUri(raw: String): String {
+        val uri = try {
+            java.net.URI(raw)
+        } catch (_: Exception) {
+            null
+        } ?: throw IllegalStateException("Untrusted verification_uri in device code response")
+        val scheme = uri.scheme?.lowercase(Locale.ROOT)
+        if ((scheme != "https" && scheme != "http") || uri.host.isNullOrEmpty()) {
+            throw IllegalStateException("Untrusted verification_uri in device code response")
+        }
+        val host = uri.host.lowercase(Locale.ROOT)
+        val defaultPort = (scheme == "https" && uri.port == 443) || (scheme == "http" && uri.port == 80)
+        val port = if (uri.port != -1 && !defaultPort) ":${uri.port}" else ""
+        val path = uri.rawPath.takeIf { it.isNotEmpty() } ?: "/"
+        val query = uri.rawQuery?.let { "?$it" } ?: ""
+        val fragment = uri.rawFragment?.let { "#$it" } ?: ""
+        return "$scheme://$host$port$path$query$fragment"
+    }
+
     private fun jsonPolicyBody(): ByteArray =
         buildJsonObject { put("state", "enabled") }.toString().toByteArray(Charsets.UTF_8)
 
@@ -671,6 +746,9 @@ class GitHubCopilotOAuthAuth(
 
         /** Bounded exchange timeout for pi's otherwise-unbounded `fetchJson` calls (Aletheia divergence). */
         const val REQUEST_TIMEOUT_MS: Int = 30_000
+
+        /** Redaction marker for response bodies that carry no safe structured error detail. */
+        internal const val REDACTED_BODY: String = "<redacted response body>"
 
         private val PROXY_EP_REGEX = Regex("proxy-ep=([^;]+)")
     }
