@@ -903,12 +903,14 @@ private fun ConversationContent(
             uiState.streamingMessage?.let { streaming ->
                 item(key = streaming.id) {
                     val hasVisibleText = streaming.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() }
+                    val hasThinking = streaming.blocks.any { it is ChatBlock.Thinking }
                     MessageItem(
-                        message = if (hasVisibleText || streaming.error != null) {
+                        message = if (hasVisibleText || hasThinking || streaming.error != null) {
                             streaming
                         } else {
-                            // No visible body yet (e.g. thinking-only stream):
-                            // same "…" placeholder as before.
+                            // No visible content at all yet: same "…" placeholder
+                            // as before. A thinking-only stream renders its real
+                            // blocks (thinking header + loader) instead.
                             streaming.copy(blocks = listOf(ChatBlock.Text(STREAMING_PLACEHOLDER)))
                         },
                         isStreaming = true,
@@ -951,7 +953,10 @@ private fun MessageItem(
                                 ThinkingBlock(
                                     text = block.text,
                                     expanded = expanded,
-                                    showLoader = isStreaming,
+                                    // Loader only while thinking is actively being
+                                    // produced: the streaming message's LAST block
+                                    // and a Thinking block (earlier runs are done).
+                                    showLoader = isStreaming && index == message.blocks.lastIndex,
                                     onToggle = { thinkingOverrides[key] = !expanded },
                                 )
                             }
