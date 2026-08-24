@@ -1,5 +1,9 @@
 package works.resolve.aletheia.ai.core
 
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+
 /**
  * Model metadata and OpenAI Chat Completions compatibility flags, ported from
  * pi's Model type and OpenAICompletionsCompat. Only the flags the ZAI/OpenAI
@@ -18,6 +22,8 @@ data class Model(
     val contextWindow: Int = 4096,
     val maxTokens: Int = 4096,
     val compat: OpenAiCompletionsCompat = OpenAiCompletionsCompat(),
+    /** Per-model HTTP headers (e.g. github-copilot, nvidia). */
+    val headers: Map<String, String> = emptyMap(),
 )
 
 /** Per-million-token reference rates. */
@@ -31,7 +37,7 @@ data class ModelCost(
 /** How the provider expects the max output token limit to be spelled. */
 enum class MaxTokensField { MAX_COMPLETION_TOKENS, MAX_TOKENS }
 
-enum class ThinkingFormat { OPENAI, ZAI }
+enum class ThinkingFormat { OPENAI, ZAI, QWEN, DEEPSEEK, BASETEN, OPENROUTER, ANT_LING, TOGETHER }
 
 data class OpenAiCompletionsCompat(
     val supportsStore: Boolean = true,
@@ -45,7 +51,30 @@ data class OpenAiCompletionsCompat(
     val thinkingFormat: ThinkingFormat = ThinkingFormat.OPENAI,
     /** ZAI tool-call streaming flag (`tool_stream: true`). */
     val zaiToolStream: Boolean = false,
+    /** Baseten chat_template_args: template kwargs before $var resolution. */
+    val chatTemplateArgs: Map<String, ChatTemplateKwargValue> = emptyMap(),
 )
+
+/**
+ * A chat-template kwarg value, mirroring pi's ChatTemplateKwargValue: either a
+ * plain JSON scalar or a `$var` reference resolved at request time.
+ */
+sealed interface ChatTemplateKwargValue {
+    data class Scalar(val value: JsonElement) : ChatTemplateKwargValue
+
+    /** `$var` reference. [varName] is e.g. "thinking.enabled". */
+    data class Ref(
+        val varName: String,
+        val omitWhenOff: Boolean = false,
+    ) : ChatTemplateKwargValue
+
+    companion object {
+        fun of(value: String): ChatTemplateKwargValue = Scalar(JsonPrimitive(value))
+        fun of(value: Double): ChatTemplateKwargValue = Scalar(JsonPrimitive(value))
+        fun of(value: Boolean): ChatTemplateKwargValue = Scalar(JsonPrimitive(value))
+        fun ofNull(): ChatTemplateKwargValue = Scalar(JsonNull)
+    }
+}
 
 /**
  * Computes reference cost in USD from token usage and the model's per-million
