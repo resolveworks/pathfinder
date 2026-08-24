@@ -144,6 +144,42 @@ class ProviderAuthServiceTest {
     }
 
     @Test
+    fun `production OpenRouter offers API key and account methods`() {
+        val provider = CatalogProvider(
+            id = "openrouter",
+            name = "OpenRouter",
+            baseUrl = "https://openrouter.ai/api/v1",
+            auth = CatalogProviderAuthMetadata(
+                label = "OpenRouter API key",
+                oauth = ProviderOAuth("OpenRouter OAuth", loginLabel = "Sign in with OpenRouter"),
+                prompts = listOf(CatalogPrompt("OPENROUTER_API_KEY", "Enter OpenRouter API key")),
+            ),
+            models = listOf(
+                Model(
+                    id = "test-model",
+                    name = "Test Model",
+                    api = "openai-completions",
+                    provider = "openrouter",
+                    baseUrl = "https://openrouter.ai/api/v1",
+                ),
+            ),
+        )
+        val methods = ProviderAuthService(
+            ProviderCatalog(listOf(provider)),
+            ProductionCatalogAuthRegistry,
+            InMemoryCredentialStore(),
+        ).authMethods("openrouter")
+
+        assertEquals(
+            listOf(
+                AuthMethodInfo(AuthType.API_KEY, "OpenRouter API key", false),
+                AuthMethodInfo(AuthType.OAUTH, "Sign in with OpenRouter", false),
+            ),
+            methods,
+        )
+    }
+
+    @Test
     fun `lists oauth method for oauth-only provider`() {
         val methods = service(
             catalog(apiKey = false, oauth = true),

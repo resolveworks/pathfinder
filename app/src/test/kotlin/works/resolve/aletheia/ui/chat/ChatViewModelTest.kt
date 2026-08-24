@@ -233,7 +233,6 @@ class ChatViewModelTest {
 
         fun newViewModel(): ChatViewModel = ChatViewModel(
             settingsRepository = settingsStore,
-            credentials = credentials,
             catalog = works.resolve.aletheia.ai.testing.TestCatalogs.CATALOG,
             authService = authService,
             sessionStore = sessions,
@@ -1200,7 +1199,7 @@ class ChatViewModelTest {
             mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
         )
         vm.uiState.first { it.providerOptions.first { o -> o.id == "cloudflare-ai-gateway" }.configured }
-        val filled = (h.credentials.creds["cloudflare-ai-gateway"] as ApiKeyCredential)!!
+        val filled = h.credentials.creds["cloudflare-ai-gateway"] as ApiKeyCredential
         assertEquals("cf-key", filled.key)
         assertEquals(mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"), filled.env)
 
@@ -1212,7 +1211,7 @@ class ChatViewModelTest {
             mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc-2", "CLOUDFLARE_GATEWAY_ID" to "gw-2"),
         )
         vm.uiState.first { it.credentialSuccessEpoch == 2L }
-        val rotated = (h.credentials.creds["cloudflare-ai-gateway"] as ApiKeyCredential)!!
+        val rotated = h.credentials.creds["cloudflare-ai-gateway"] as ApiKeyCredential
         assertEquals("cf-key-2", rotated.key)
         assertEquals(
             mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc-2", "CLOUDFLARE_GATEWAY_ID" to "gw-2"),
@@ -1717,8 +1716,7 @@ class ChatViewModelTest {
         val thirdId = (forked.entries.first { e ->
             e is works.resolve.aletheia.data.sessions.MessageEntry &&
                 e.message is works.resolve.aletheia.ai.core.UserMessage &&
-                (e.message as works.resolve.aletheia.ai.core.UserMessage).content
-                    .filterIsInstance<TextContent>().first().text == "Third"
+                e.message.content.filterIsInstance<TextContent>().first().text == "Third"
         }).id
         val childIds = restored.treeRows.filter { it.path.contains(assistantEntryId) && it.path.size == forkParent.path.size + 1 }.map { it.id }
         assertEquals(2, childIds.size)

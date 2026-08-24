@@ -10,6 +10,7 @@ import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.ai.transport.OkHttpTransport
 import works.resolve.aletheia.ai.auth.CatalogAuthRegistry
 import works.resolve.aletheia.ai.auth.CredentialStore
+import works.resolve.aletheia.ai.auth.ProductionCatalogAuthRegistry
 import works.resolve.aletheia.ai.auth.ProviderAuthService
 import works.resolve.aletheia.data.credentials.EncryptedCredentialStore
 import works.resolve.aletheia.data.credentials.KeystoreAeadCipher
@@ -55,14 +56,8 @@ class AletheiaApplication : Application() {
         EncryptedCredentialStore(this, KeystoreAeadCipher())
     }
 
-    /**
-     * Composition point for concrete OAuth flows (pi wires flows directly
-     * in provider definitions; Android composes them late). No flows are
-     * registered yet — provider OAuth networking lands with the production
-     * registry — so every catalog provider currently offers API-key login
-     * only.
-     */
-    val authRegistry: CatalogAuthRegistry by lazy { CatalogAuthRegistry.EMPTY }
+    /** Concrete OAuth flows shared by login UI and runtime auth resolution. */
+    val authRegistry: CatalogAuthRegistry by lazy { ProductionCatalogAuthRegistry }
 
     /** Login/logout orchestration over the catalog, registry, and credential store. */
     val authService: ProviderAuthService by lazy {
@@ -84,7 +79,12 @@ class AletheiaApplication : Application() {
     }
 
     val agentFactory: NativeAgentFactory by lazy {
-        NativeAgentFactory(credentials = credentials, catalog = modelCatalog, transport = transport)
+        NativeAgentFactory(
+            credentials = credentials,
+            catalog = modelCatalog,
+            transport = transport,
+            authRegistry = authRegistry,
+        )
     }
 
     /** Conventional creation point for the chat controller. */
@@ -92,7 +92,6 @@ class AletheiaApplication : Application() {
         initializer {
             ChatViewModel(
                 settingsRepository = settingsRepository,
-                credentials = credentials,
                 catalog = modelCatalog,
                 authService = authService,
                 sessionStore = sessionStore,

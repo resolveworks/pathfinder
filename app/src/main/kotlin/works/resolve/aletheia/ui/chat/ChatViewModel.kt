@@ -18,7 +18,6 @@ import works.resolve.aletheia.ai.auth.AuthInteraction
 import works.resolve.aletheia.ai.auth.AuthMethodInfo
 import works.resolve.aletheia.ai.auth.AuthPrompt as AuthInteractionPrompt
 import works.resolve.aletheia.ai.auth.AuthType
-import works.resolve.aletheia.ai.auth.CredentialStore
 import works.resolve.aletheia.ai.auth.ModelsError
 import works.resolve.aletheia.ai.auth.ProviderAuthService
 import works.resolve.aletheia.data.settings.ModelSettings
@@ -93,7 +92,6 @@ import kotlinx.coroutines.withContext
  */
 class ChatViewModel(
     private val settingsRepository: SettingsStore,
-    private val credentials: CredentialStore,
     private val catalog: ProviderCatalog,
     private val authService: ProviderAuthService,
     private val sessionStore: SessionRepository,

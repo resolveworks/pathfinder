@@ -16,6 +16,8 @@ import works.resolve.aletheia.ai.auth.ApiKeyCredential
 import works.resolve.aletheia.ai.auth.Credential
 import works.resolve.aletheia.ai.auth.CredentialInfo
 import works.resolve.aletheia.ai.auth.CredentialStore
+import works.resolve.aletheia.ai.auth.OAuthCredential
+import works.resolve.aletheia.ai.auth.ProductionCatalogAuthRegistry
 import works.resolve.aletheia.data.settings.ModelSettings
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -313,6 +315,67 @@ class NativeAgentFactoryTest {
             agent.prompt("ping")
 
             assertEquals("https://model.test/v1/chat/completions", transport.requests.single().url)
+        }
+    }
+
+    @Test
+    fun `stored OpenRouter OAuth credential authenticates runtime request`() {
+        runBlocking {
+            val model = Model(
+                id = "test-model",
+                name = "Test Model",
+                api = "openai-completions",
+                provider = "openrouter",
+                baseUrl = "https://openrouter.test/api/v1",
+            )
+            val openRouterCatalog = ProviderCatalog(
+                listOf(
+                    CatalogProvider(
+                        id = "openrouter",
+                        name = "OpenRouter",
+                        baseUrl = "https://openrouter.test/api/v1",
+                        auth = works.resolve.aletheia.ai.providers.ProviderAuth(
+                            label = "OpenRouter API key",
+                            oauth = works.resolve.aletheia.ai.providers.ProviderOAuth(
+                                name = "OpenRouter OAuth",
+                                loginLabel = "Sign in with OpenRouter",
+                            ),
+                            prompts = listOf(
+                                works.resolve.aletheia.ai.providers.AuthPrompt(
+                                    "OPENROUTER_API_KEY",
+                                    "Enter OpenRouter API key",
+                                ),
+                            ),
+                        ),
+                        models = listOf(model),
+                    ),
+                ),
+            )
+            val store = FakeCredentialStore(
+                OAuthCredential(
+                    access = "openrouter-oauth-test-key",
+                    refresh = "",
+                    expires = Long.MAX_VALUE,
+                ),
+            )
+            val transport = RecordingTransport()
+            val agent = NativeAgentFactory(
+                credentials = store,
+                catalog = openRouterCatalog,
+                transport = transport,
+                authRegistry = ProductionCatalogAuthRegistry,
+            ).create(
+                ModelSettings(providerId = "openrouter", modelId = model.id),
+                "s1",
+                emptyList(),
+            )
+
+            agent.prompt("ping")
+
+            val request = transport.requests.single()
+            assertEquals("https://openrouter.test/api/v1/chat/completions", request.url)
+            assertEquals("openrouter-oauth-test-key", request.bearerToken)
+            assertEquals(0, store.modifyCalls, "a permanent OpenRouter credential must not refresh")
         }
     }
 
