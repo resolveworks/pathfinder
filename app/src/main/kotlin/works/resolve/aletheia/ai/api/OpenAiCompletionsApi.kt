@@ -5,7 +5,9 @@ import works.resolve.aletheia.ai.core.AssistantMessage
 import works.resolve.aletheia.ai.core.AssistantMessageEvent
 import works.resolve.aletheia.ai.core.Context
 import works.resolve.aletheia.ai.core.Model
+import works.resolve.aletheia.ai.core.ModelThinkingLevel
 import works.resolve.aletheia.ai.core.OpenAiCompletionsOptions
+import works.resolve.aletheia.ai.core.SimpleStreamOptions
 import works.resolve.aletheia.ai.core.StopReason
 import works.resolve.aletheia.ai.core.TextContent
 import works.resolve.aletheia.ai.core.ThinkingContent
@@ -49,10 +51,30 @@ class OpenAiCompletionsApi(
     private val nowMs: () -> Long = System::currentTimeMillis,
 ) : ChatApi {
 
+    /** pi's streamSimple for openai-completions: clamps the thinking level
+     * against the model and max tokens against the estimated context before
+     * delegating to [stream]. */
+    override fun streamSimple(
+        model: Model,
+        context: Context,
+        options: SimpleStreamOptions,
+    ): Flow<AssistantMessageEvent> {
+        val clamped = options.reasoning?.let {
+            works.resolve.aletheia.ai.core.clampThinkingLevel(model, ModelThinkingLevel.valueOf(it.name))
+        }
+        val effort = if (clamped == ModelThinkingLevel.OFF) null else clamped
+        val maxTokens = works.resolve.aletheia.ai.utils.clampMaxTokensToContext(
+            model,
+            context,
+            options.maxTokens ?: model.maxTokens,
+        )
+        return stream(model, context, options.toStreamOptions(effort).copy(maxTokens = maxTokens))
+    }
+
     /** Internal control-flow signal: stop consuming the body after `[DONE]`. */
     private class DoneSentinel : RuntimeException()
 
-    override fun stream(
+    fun stream(
         model: Model,
         context: Context,
         options: OpenAiCompletionsOptions,

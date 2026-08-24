@@ -256,6 +256,81 @@ class AnthropicMessagesStreamTest {
     }
 
     @Test
+    fun `oauth tool_use names round-trip through fromClaudeCodeName`() = runTest {
+        val tool = Tool(
+            name = "read",
+            description = "reads a file",
+            parameters = Json.parseToJsonElement("{}"),
+        )
+        val toolContext = Context(
+            messages = listOf(UserMessage.ofText("hi")),
+            tools = listOf(tool),
+        )
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            messageStart(),
+            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_3","name":"Read","input":{"path":"a.txt"}}}""",
+            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"pa"}}""",
+            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"th\":2}"}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            messageDelta(stopReason = "tool_use"),
+            messageStop,
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport)
+                .stream(claude, toolContext, AnthropicMessagesOptions(apiKey = "sk-ant-oat-abc"))
+                .toList()
+                .last(),
+        )
+        val call = assertIs<ToolCall>(done.message.content.single())
+        // CC-cased "Read" maps back to the provided tool's real name.
+        assertEquals("read", call.name)
+        // Streamed partial JSON wins over the content_block_start seed.
+        assertEquals("""{"path":2}""", call.arguments)
+        // The request sent the CC-cased tool name (pi's toClaudeCodeName).
+        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertEquals(
+            "Read",
+            body["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `tool arguments are seeded from content_block_start input`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            messageStart(),
+            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_4","name":"noop","input":{"path":"a.txt"}}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            messageDelta(stopReason = "tool_use"),
+            messageStop,
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+        )
+        assertEquals(
+            """{"path":"a.txt"}""",
+            assertIs<ToolCall>(done.message.content.single()).arguments,
+        )
+    }
+
+    @Test
+    fun `non-oauth tool_use names pass through unmapped`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            messageStart(),
+            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_5","name":"Read"}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            messageDelta(stopReason = "tool_use"),
+            messageStop,
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+        )
+        assertEquals("Read", assertIs<ToolCall>(done.message.content.single()).name)
+    }
+
+    @Test
     fun `stop reason mapping covers length refusal pause and sensitive`() = runTest {
         val transport = FakeTransport()
 

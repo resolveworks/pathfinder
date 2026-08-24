@@ -38,7 +38,9 @@ import kotlinx.serialization.json.longOrNull
  * bearer auth headers with beta negotiation, SSE event handling for
  * message_start / content_block_start / content_block_delta /
  * content_block_stop / message_delta / message_stop, text / thinking /
- * signature / tool-input deltas keyed by the upstream block index, usage and
+ * signature / tool-input deltas keyed by the upstream block index, OAuth
+ * tool-name round-tripping through fromClaudeCodeName, seeding tool
+ * arguments from content_block_start input, usage and
  * cost accounting from message_start plus message_delta, stop-reason mapping,
  * and stop/error semantics (stream must end with a stop reason after
  * message_stop).
@@ -65,7 +67,7 @@ class AnthropicMessagesApi(
     private val transport: HttpStreamingTransport,
     private val retry: ProviderRetry = ProviderRetry(),
     private val nowMs: () -> Long = System::currentTimeMillis,
-) {
+) : ChatApi {
 
     /** pi's stream(model, context, options) for anthropic-messages. */
     fun stream(
@@ -74,11 +76,11 @@ class AnthropicMessagesApi(
         options: AnthropicMessagesOptions = AnthropicMessagesOptions(),
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = nowMs()
-        val state = AnthropicStreamState(model, startedAtMs)
+        val isOAuth = options.apiKey?.let { isOAuthToken(it) } ?: false
+        val state = AnthropicStreamState(model, startedAtMs, isOAuth)
         try {
             assertRequestAuth(model.provider, options.apiKey, options.headers)
 
-            val isOAuth = options.apiKey?.let { isOAuthToken(it) } ?: false
             val retention = resolveCacheRetention(options.cacheRetention, options.env)
             val cacheSessionId = if (retention == CacheRetention.NONE) null else options.sessionId
 
@@ -135,10 +137,10 @@ class AnthropicMessagesApi(
      * are encoded as a terminal Error event here, matching this codebase's
      * stream-error convention (see Events.kt).
      */
-    fun streamSimple(
+    override fun streamSimple(
         model: Model,
         context: Context,
-        options: SimpleStreamOptions = SimpleStreamOptions(),
+        options: SimpleStreamOptions,
     ): Flow<AssistantMessageEvent> = flow {
         try {
             assertRequestAuth(model.provider, options.apiKey, options.headers)
@@ -351,7 +353,11 @@ private fun kotlinx.serialization.json.JsonElement?.stringOrNull(): String? =
  * Accumulates the streamed Anthropic response, pi's output/blocks state.
  * Blocks are keyed by the upstream `index` field; events interleave freely.
  */
-internal class AnthropicStreamState(private val model: Model, private val timestampMs: Long) {
+internal class AnthropicStreamState(
+    private val model: Model,
+    private val timestampMs: Long,
+    private val isOAuth: Boolean = false,
+) {
     private sealed interface Block {
         val streamIndex: Int
     }
@@ -368,6 +374,8 @@ internal class AnthropicStreamState(private val model: Model, private val timest
     private class Tool(override val streamIndex: Int) : Block {
         var id = ""
         var name = ""
+        /** pi seeds `arguments` from content_block_start input; kept as raw JSON here. */
+        var seedJson: String? = null
         val partialJson = StringBuilder()
     }
 
@@ -432,7 +440,10 @@ internal class AnthropicStreamState(private val model: Model, private val timest
             }
             "tool_use" -> Tool(index).apply {
                 id = contentBlock["id"].stringOrNull() ?: ""
-                name = contentBlock["name"].stringOrNull() ?: ""
+                var blockName = contentBlock["name"].stringOrNull() ?: ""
+                if (isOAuth) blockName = fromClaudeCodeName(blockName, context.tools)
+                name = blockName
+                (contentBlock["input"] as? JsonObject)?.let { seedJson = it.toString() }
             }
             else -> return emptyList()
         }
@@ -547,7 +558,10 @@ internal class AnthropicStreamState(private val model: Model, private val timest
     private fun toolCallOf(block: Tool): ToolCall = ToolCall(
         id = block.id,
         name = block.name,
-        arguments = block.partialJson.toString().ifBlank { "{}" },
+        // pi replaces the seed with parseStreamingJson(partialJson) at stop;
+        // here the streamed JSON wins when present and the seed (or "{}" for
+        // a blank buffer) stands in otherwise, preserving partial snapshots.
+        arguments = block.partialJson.toString().ifBlank { block.seedJson ?: "{}" },
     )
 
     /** Anthropic doesn't provide total_tokens; compute from components, like pi. */

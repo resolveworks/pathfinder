@@ -5,7 +5,6 @@ import works.resolve.aletheia.ai.core.AssistantMessage
 import works.resolve.aletheia.ai.core.AssistantMessageEvent
 import works.resolve.aletheia.ai.core.Context
 import works.resolve.aletheia.ai.core.Model
-import works.resolve.aletheia.ai.core.OpenAiCompletionsOptions
 import works.resolve.aletheia.ai.core.SimpleStreamOptions
 import works.resolve.aletheia.ai.core.StopReason
 import works.resolve.aletheia.ai.testing.TestCatalogs
@@ -40,10 +39,10 @@ class ModelsTest {
         var calls = 0
         var lastResolverOverrides: Pair<String?, Map<String, String>>? = null
 
-        override fun stream(
+        override fun streamSimple(
             model: Model,
             context: Context,
-            options: OpenAiCompletionsOptions,
+            options: SimpleStreamOptions,
         ): Flow<AssistantMessageEvent> =
             flow {
                 calls += 1

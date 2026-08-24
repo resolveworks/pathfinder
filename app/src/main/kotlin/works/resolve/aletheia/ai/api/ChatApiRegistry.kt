@@ -13,25 +13,25 @@ import works.resolve.aletheia.ai.utils.ProviderRetry
 object ChatApiRegistry {
 
     const val OPENAI_COMPLETIONS = "openai-completions"
+    const val ANTHROPIC_MESSAGES = "anthropic-messages"
     const val GOOGLE_GENERATIVE_AI = "google-generative-ai"
     const val MISTRAL_CONVERSATIONS = "mistral-conversations"
 
     /** API ids with a runtime implementation. */
     val SUPPORTED_API_IDS: Set<String> = setOf(
         OPENAI_COMPLETIONS,
+        ANTHROPIC_MESSAGES,
         GOOGLE_GENERATIVE_AI,
         MISTRAL_CONVERSATIONS,
     )
 
     fun isSupported(apiId: String): Boolean = apiId in SUPPORTED_API_IDS
 
-    /**
-     * Builds the API implementation for [apiId], or null when the protocol
-     * has no Kotlin port yet (anthropic-messages, openai-responses, ...).
-     */
+    /** Builds the API implementation for [apiId], or null when it has no Kotlin port yet. */
     fun create(apiId: String, transport: HttpStreamingTransport, retry: ProviderRetry): ChatApi? =
         when (apiId) {
             OPENAI_COMPLETIONS -> OpenAiCompletionsApi(transport, retry)
+            ANTHROPIC_MESSAGES -> AnthropicMessagesApi(transport, retry)
             GOOGLE_GENERATIVE_AI -> GoogleGenerativeAiApi(transport, retry)
             MISTRAL_CONVERSATIONS -> MistralConversationsApi(transport, retry)
             else -> null

@@ -98,7 +98,7 @@ class MistralConversationsApi(
 
     private class DoneSentinel : RuntimeException()
 
-    override fun stream(
+    fun stream(
         model: Model,
         context: Context,
         options: OpenAiCompletionsOptions,
@@ -211,7 +211,7 @@ class MistralConversationsApi(
      * reasoning_effort per model, clamps max tokens against the context, and
      * forwards the tool choice.
      */
-    fun streamSimple(
+    override fun streamSimple(
         model: Model,
         context: Context,
         options: SimpleStreamOptions,

@@ -574,17 +574,17 @@ class ProviderCatalogTest {
         val catalog = realAsset()
         val entry = catalog.getProvider("cloudflare-ai-gateway")!!
         val runtime = entry.toRuntimeProvider(FakeTransport())
-        // anthropic-messages and openai-responses have no Kotlin port yet:
-        // the runtime api map only carries the implemented protocol, so the
-        // provider still lists and openai-completions models still stream.
-        assertEquals(setOf("openai-completions"), runtime.apis.keys)
+        // openai-responses has no Kotlin port yet: the runtime api map only
+        // carries implemented protocols, so the provider still lists and its
+        // openai-completions / anthropic-messages models still stream.
+        assertEquals(setOf("openai-completions", "anthropic-messages"), runtime.apis.keys)
         val completionsModel = entry.models.first { it.api == "openai-completions" }
-        val unsupportedModel = entry.models.first { it.api != "openai-completions" }
+        val unsupportedModel = entry.models.first { it.api == "openai-responses" }
         val models = Models(listOf(runtime))
         assertEquals(completionsModel.id, models.getModel("cloudflare-ai-gateway", completionsModel.id)!!.id)
         val error = assertFailsWith<IllegalArgumentException> {
             models.stream(unsupportedModel, Context(messages = emptyList()))
         }
-        assertTrue(error.message!!.contains("no API implementation for 'anthropic-messages'"))
+        assertTrue(error.message!!.contains("no API implementation for 'openai-responses'"))
     }
 }

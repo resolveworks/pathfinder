@@ -4,7 +4,8 @@ import works.resolve.aletheia.ai.api.GoogleRequest.CommonOptions
 import works.resolve.aletheia.ai.api.GoogleRequest.GoogleThinking
 import works.resolve.aletheia.ai.core.Context
 import works.resolve.aletheia.ai.core.Model
-import works.resolve.aletheia.ai.core.OpenAiCompletionsOptions
+import works.resolve.aletheia.ai.core.SimpleStreamOptions
+import works.resolve.aletheia.ai.core.ToolChoice
 import works.resolve.aletheia.ai.core.mergeHeaders
 import works.resolve.aletheia.ai.transport.HttpStreamingTransport
 import works.resolve.aletheia.ai.utils.ProviderRetry
@@ -68,20 +69,14 @@ class GoogleGenerativeAiApi(
      * [GoogleRequest.thinkingForSimpleStream] (Gemini 3 levels, Gemma 4
      * levels, or Gemini 2.5 budgets).
      */
-    override fun stream(
+    override fun streamSimple(
         model: Model,
         context: Context,
-        options: OpenAiCompletionsOptions,
+        options: SimpleStreamOptions,
     ): Flow<works.resolve.aletheia.ai.core.AssistantMessageEvent> {
-        val effort = options.reasoningEffort?.let {
-            works.resolve.aletheia.ai.core.ModelThinkingLevel.valueOf(it.name)
-        }
         val thinking = GoogleRequest.thinkingForSimpleStream(
             model,
-            effort?.let { level ->
-                works.resolve.aletheia.ai.core.ThinkingLevel.entries
-                    .firstOrNull { it.name == level.name }
-            },
+            options.reasoning,
             options.thinkingBudgets,
             gemmaSupported = true,
         )
@@ -92,12 +87,22 @@ class GoogleGenerativeAiApi(
                 apiKey = options.apiKey,
                 sessionId = options.sessionId,
                 temperature = options.temperature,
-                maxTokens = options.maxTokens,
+                maxTokens = works.resolve.aletheia.ai.utils.clampMaxTokensToContext(
+                    model,
+                    context,
+                    options.maxTokens ?: model.maxTokens,
+                ),
                 timeoutMs = options.timeoutMs,
                 maxRetries = options.maxRetries,
                 maxRetryDelayMs = options.maxRetryDelayMs,
                 env = options.env,
                 headers = options.headers,
+                toolChoice = when (options.toolChoice) {
+                    null -> null
+                    ToolChoice.Auto -> "auto"
+                    ToolChoice.None -> "none"
+                    ToolChoice.Any, ToolChoice.Required, is ToolChoice.Function -> "any"
+                },
                 thinking = thinking,
             ),
         )

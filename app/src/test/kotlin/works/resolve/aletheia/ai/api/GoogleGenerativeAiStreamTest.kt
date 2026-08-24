@@ -4,7 +4,6 @@ import works.resolve.aletheia.ai.core.AssistantMessageEvent
 import works.resolve.aletheia.ai.core.Context
 import works.resolve.aletheia.ai.core.InputModality
 import works.resolve.aletheia.ai.core.Model
-import works.resolve.aletheia.ai.core.OpenAiCompletionsOptions
 import works.resolve.aletheia.ai.core.SimpleStreamOptions
 import works.resolve.aletheia.ai.core.StopReason
 import works.resolve.aletheia.ai.core.TextContent
@@ -346,10 +345,10 @@ class GoogleGenerativeAiStreamTest {
     fun `chatapi options path resolves gemini3 thinking levels`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
-        api(transport).stream(
+        api(transport).streamSimple(
             geminiModel(id = "gemini-3-pro-preview"),
             context,
-            OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = works.resolve.aletheia.ai.core.ModelThinkingLevel.MEDIUM),
+            SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.MEDIUM),
         ).toList()
         val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
         val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject

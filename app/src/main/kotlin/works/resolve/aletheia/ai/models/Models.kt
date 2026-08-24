@@ -1,7 +1,6 @@
 package works.resolve.aletheia.ai.models
 
 import works.resolve.aletheia.ai.api.ChatApi
-import works.resolve.aletheia.ai.api.streamSimple
 import works.resolve.aletheia.ai.core.AssistantMessage
 import works.resolve.aletheia.ai.core.AssistantMessageEvent
 import works.resolve.aletheia.ai.core.Context
