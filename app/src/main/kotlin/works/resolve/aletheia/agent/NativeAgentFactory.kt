@@ -10,28 +10,39 @@ import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.ai.providers.normalizeBaseUrl
 import works.resolve.aletheia.ai.transport.HttpStreamingTransport
 import works.resolve.aletheia.ai.utils.ProviderRetry
-import works.resolve.aletheia.ai.auth.ApiKeyCredential
-import works.resolve.aletheia.data.credentials.ApiKeyStore
+import works.resolve.aletheia.ai.auth.AuthContext
+import works.resolve.aletheia.ai.auth.AuthResolutionOverrides
+import works.resolve.aletheia.ai.auth.CatalogAuthRegistry
+import works.resolve.aletheia.ai.auth.CatalogAuthProviderRef
+import works.resolve.aletheia.ai.auth.CredentialStore
+import works.resolve.aletheia.ai.auth.NoopAuthContext
+import works.resolve.aletheia.ai.auth.resolveProviderAuth
 import works.resolve.aletheia.data.settings.ModelSettings
 
 /**
  * Production [AgentFactory]: builds the native agent from the persisted
  * configuration, serving any provider/model pair the generated catalog knows.
  *
- * All credential ownership lives behind the provider's auth resolver (pi's
+ * All credential ownership lives behind the ported auth resolution (pi's
  * auth.resolve): credentials are read once per request inside Models.stream's
  * lazy flow, so a rotated or completed credential takes effect on the next
- * prompt. An explicit request key is shaped by the same resolver without
- * reading the store. The API key never enters the agent, its options, or any
- * log; an incomplete credential resolves to null (defense in depth on top of
- * the UI's CatalogProvider.isCredentialComplete gate) and surfaces as a
- * single safe Error event from Models.
+ * prompt. Both stored API-key and OAuth credentials resolve through
+ * [resolveProviderAuth] with the catalog-backed provider auth; explicit
+ * request overrides keep pi's precedence (explicit key wins, explicit env
+ * merges over stored env per field). The credential never enters the agent,
+ * its options, or any log; an incomplete or unhandled credential resolves to
+ * null (defense in depth on top of the UI's CatalogProvider.isCredentialComplete
+ * gate) and surfaces as a single safe Error event from Models.
  */
 class NativeAgentFactory(
-    private val credentials: ApiKeyStore,
+    private val credentials: CredentialStore,
     private val catalog: ProviderCatalog,
     private val transport: HttpStreamingTransport,
     private val retry: ProviderRetry = ProviderRetry(),
+    /** Android has no ambient env; tests inject real [AuthContext]s. */
+    private val authContext: AuthContext = NoopAuthContext,
+    /** Maps catalog OAuth-capable providers to concrete flows (empty for now). */
+    private val authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
 ) : AgentFactory {
 
     override fun create(settings: ModelSettings, sessionId: String, initialTranscript: List<Message>): Agent {
@@ -53,7 +64,7 @@ class NativeAgentFactory(
         val provider = entry.toRuntimeProvider(
             transport = transport,
             retry = retry,
-            authResolver = catalogAuthResolver(entry, credentials),
+            authResolver = catalogAuthResolver(entry, credentials, authContext, authRegistry),
         )
         val models = Models(listOf(provider))
 
@@ -78,23 +89,30 @@ class NativeAgentFactory(
  * an explicit request key/env is shaped by the provider's auth semantics
  * without reading stored credentials; otherwise the stored credential is
  * read per request with explicit env merged over stored env per field before
- * completeness and shaping. Returns null when unconfigured.
+ * completeness and shaping. A stored OAuth credential resolves (and
+ * refreshes) through the provider's registered OAuth flow, when one is
+ * registered. Returns null when unconfigured.
  */
 internal fun catalogAuthResolver(
     entry: CatalogProvider,
-    credentials: ApiKeyStore,
+    credentials: CredentialStore,
+    authContext: AuthContext = NoopAuthContext,
+    authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
 ): suspend (apiKey: String?, env: Map<String, String>) -> ResolvedAuth? =
     { explicitKey, explicitEnv ->
-        if (explicitKey != null && entry.isCredentialComplete(explicitKey, explicitEnv)) {
-            entry.toResolvedAuth(explicitKey, explicitEnv)
-        } else if (explicitKey != null) {
-            // Incomplete explicit auth: unconfigured, never a partial fallback.
-            null
-        } else {
-            credentials.getCredential(entry.id)
-                ?.let { credential -> ApiKeyCredential(credential.key, credential.env + explicitEnv) }
-                ?.takeIf { entry.isCredentialComplete(it.key, it.env) }
-                ?.let { credential -> credential.key?.let { entry.toResolvedAuth(it, credential.env) } }
+        val overrides =
+            if (explicitKey == null && explicitEnv.isEmpty()) {
+                null
+            } else {
+                AuthResolutionOverrides(apiKey = explicitKey, env = explicitEnv)
+            }
+        resolveProviderAuth(
+            provider = CatalogAuthProviderRef(entry, authRegistry),
+            credentials = credentials,
+            authContext = authContext,
+            overrides = overrides,
+        )?.let { result ->
+            ResolvedAuth(apiKey = result.auth.apiKey, env = result.env, headers = result.auth.headers)
         }
     }
 

@@ -74,7 +74,7 @@ class AletheiaApplication : Application() {
     }
 
     val agentFactory: NativeAgentFactory by lazy {
-        NativeAgentFactory(credentials = apiKeyStore, catalog = modelCatalog, transport = transport)
+        NativeAgentFactory(credentials = credentials, catalog = modelCatalog, transport = transport)
     }
 
     /** Conventional creation point for the chat controller. */

@@ -17,6 +17,7 @@ import works.resolve.aletheia.ai.core.ModelThinkingLevel
 import works.resolve.aletheia.ai.core.OpenAiCompletionsCompat
 import works.resolve.aletheia.ai.core.ThinkingFormat
 import works.resolve.aletheia.ai.core.ThinkingLevelMap
+import works.resolve.aletheia.ai.auth.ModelAuth
 import works.resolve.aletheia.ai.models.Provider
 import works.resolve.aletheia.ai.models.ResolvedAuth
 import works.resolve.aletheia.ai.transport.HttpStreamingTransport
@@ -98,23 +99,28 @@ class CatalogProvider(
         missingAuthPrompts(key, env).isEmpty()
 
     /**
-     * Resolves a complete stored credential into the AI-layer auth shape
+     * Resolves a complete credential's key into the auth-layer request shape
      * (pi's cloudflare-auth.ts): ordinary providers resolve to a normal
      * apiKey; a bearer-header provider (Cloudflare AI Gateway) resolves to a
      * `Bearer <key>` request header on its named header with the default
      * Authorization/x-api-key paths removed and no apiKey.
      */
-    fun toResolvedAuth(key: String, env: Map<String, String>): ResolvedAuth {
-        val bearerHeaderName = bearerHeaderName ?: return ResolvedAuth(apiKey = key, env = env)
-        return ResolvedAuth(
-            apiKey = null,
-            env = env,
+    fun toModelAuth(key: String, env: Map<String, String>): ModelAuth {
+        val bearerHeaderName = bearerHeaderName
+            ?: return ModelAuth(apiKey = key)
+        return ModelAuth(
             headers = mapOf(
                 bearerHeaderName to "Bearer $key",
                 "Authorization" to null,
                 "x-api-key" to null,
             ),
         )
+    }
+
+    /** [toModelAuth] projected onto the models-layer [ResolvedAuth] shape. */
+    fun toResolvedAuth(key: String, env: Map<String, String>): ResolvedAuth {
+        val auth = toModelAuth(key, env)
+        return ResolvedAuth(apiKey = auth.apiKey, env = env, headers = auth.headers)
     }
 
     /**

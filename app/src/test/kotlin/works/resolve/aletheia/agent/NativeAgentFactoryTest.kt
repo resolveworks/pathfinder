@@ -13,7 +13,9 @@ import works.resolve.aletheia.ai.transport.SseEvent
 import works.resolve.aletheia.ai.transport.TransportRequest
 import works.resolve.aletheia.ai.transport.TransportResponse
 import works.resolve.aletheia.ai.auth.ApiKeyCredential
-import works.resolve.aletheia.data.credentials.ApiKeyStore
+import works.resolve.aletheia.ai.auth.Credential
+import works.resolve.aletheia.ai.auth.CredentialInfo
+import works.resolve.aletheia.ai.auth.CredentialStore
 import works.resolve.aletheia.data.settings.ModelSettings
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -38,22 +40,30 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 class NativeAgentFactoryTest {
 
-    private class FakeApiKeyStore(initialCredential: ApiKeyCredential? = null) : ApiKeyStore {
+    private class FakeCredentialStore(initialCredential: Credential? = null) : CredentialStore {
         val credential = MutableStateFlow(initialCredential)
-        var getCredentialCalls = 0
-        var setCredentialCalls = 0
+        var readCalls = 0
+        var modifyCalls = 0
 
-        override suspend fun getCredential(providerId: String): ApiKeyCredential? {
-            getCredentialCalls++
+        override suspend fun read(providerId: String): Credential? {
+            readCalls++
             return credential.value
         }
 
-        override suspend fun setCredential(providerId: String, credential: ApiKeyCredential) {
-            setCredentialCalls++
-            this.credential.value = credential
+        override suspend fun list(): List<CredentialInfo> =
+            credential.value?.let { listOf(CredentialInfo(it.javaClass.simpleName, it.type)) } ?: emptyList()
+
+        override suspend fun modify(
+            providerId: String,
+            update: suspend (current: Credential?) -> Credential?,
+        ): Credential? {
+            modifyCalls++
+            val next = update(credential.value)
+            if (next != null) credential.value = next
+            return next ?: credential.value
         }
 
-        override suspend fun deleteCredential(providerId: String) {
+        override suspend fun delete(providerId: String) {
             credential.value = null
         }
     }
@@ -77,7 +87,7 @@ class NativeAgentFactoryTest {
 
     private val catalog: ProviderCatalog = TestCatalogs.CATALOG
 
-    private fun factory(store: FakeApiKeyStore, transport: RecordingTransport): AgentFactory =
+    private fun factory(store: FakeCredentialStore, transport: RecordingTransport): AgentFactory =
         NativeAgentFactory(credentials = store, catalog = catalog, transport = transport)
 
     private fun settings(
@@ -90,7 +100,7 @@ class NativeAgentFactoryTest {
     @Test
     fun `rejects an unsupported provider`() {
         assertFailsWith<IllegalArgumentException> {
-            factory(FakeApiKeyStore(ApiKeyCredential("k")), RecordingTransport())
+            factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
                 .create(settings(providerId = "openai"), "s1", emptyList())
         }
     }
@@ -98,7 +108,7 @@ class NativeAgentFactoryTest {
     @Test
     fun `rejects an unknown model`() {
         assertFailsWith<IllegalArgumentException> {
-            factory(FakeApiKeyStore(ApiKeyCredential("k")), RecordingTransport())
+            factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
                 .create(settings(modelId = "gpt-4"), "s1", emptyList())
         }
     }
@@ -111,7 +121,7 @@ class NativeAgentFactoryTest {
             UserMessage.ofText("hello"),
             UserMessage.ofText("again"),
         )
-        val agent = factory(FakeApiKeyStore(ApiKeyCredential("k")), RecordingTransport())
+        val agent = factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
             .create(settings(), "s1", transcript)
         assertEquals(transcript, agent.state.value.messages)
         // Copied defensively: later mutation of the source list is invisible.
@@ -124,7 +134,7 @@ class NativeAgentFactoryTest {
     @Test
     fun `prompt uses the selected model, effective base URL, and the lazily resolved current credential`() {
         runBlocking {
-            val store = FakeApiKeyStore(ApiKeyCredential("factory-test-key-1"))
+            val store = FakeCredentialStore(ApiKeyCredential("factory-test-key-1"))
             val transport = RecordingTransport()
             val agent = factory(store, transport)
                 .create(settings(), "s1", emptyList())
@@ -141,7 +151,7 @@ class NativeAgentFactoryTest {
             assertTrue(last is works.resolve.aletheia.ai.core.AssistantMessage)
             assertEquals("Hi", (last.content.single() as TextContent).text)
 
-            assertEquals(1, store.getCredentialCalls)
+            assertEquals(1, store.readCalls)
             val request = transport.requests.single()
             // Catalog base URL, normalized (trailing slashes dropped) + endpoint.
             assertEquals("https://api.z.ai/api/coding/paas/v4/chat/completions", request.url)
@@ -156,7 +166,7 @@ class NativeAgentFactoryTest {
     @Test
     fun `credential env and bearer header override reach the request`() {
         runBlocking {
-            val store = FakeApiKeyStore(
+            val store = FakeCredentialStore(
                 ApiKeyCredential(
                     key = "cf-factory-test-key",
                     env = mapOf(
@@ -194,7 +204,7 @@ class NativeAgentFactoryTest {
             // Explicit key but the required gateway env is missing: the
             // resolver must reject it (null), producing a single unconfigured
             // Error event and no network request.
-            val store = FakeApiKeyStore(null)
+            val store = FakeCredentialStore(null)
             val entry = catalog.getProvider("cloudflare-ai-gateway")!!
             val transport = RecordingTransport()
             val provider = entry.toRuntimeProvider(
@@ -225,7 +235,7 @@ class NativeAgentFactoryTest {
             // Stored credential carries account/gateway ids; the explicit
             // request env must win per field before completeness/shaping
             // (pi's stored-credential env override).
-            val store = FakeApiKeyStore(
+            val store = FakeCredentialStore(
                 ApiKeyCredential(
                     key = "cf-factory-test-key",
                     env = mapOf(
@@ -292,7 +302,7 @@ class NativeAgentFactoryTest {
                 ),
             )
             val transport = RecordingTransport()
-            val agent = NativeAgentFactory(FakeApiKeyStore(ApiKeyCredential("k")), catalog, transport)
+            val agent = NativeAgentFactory(FakeCredentialStore(ApiKeyCredential("k")), catalog, transport)
                 .create(ModelSettings(providerId = "multi", modelId = "m"), "s1", emptyList())
 
             agent.prompt("ping")
@@ -306,7 +316,7 @@ class NativeAgentFactoryTest {
         runBlocking {
             // Cloudflare requires key + both gateway env values; the key alone
             // is incomplete, so the resolver must return null (defense in depth).
-            val store = FakeApiKeyStore(ApiKeyCredential("cf-incomplete-key"))
+            val store = FakeCredentialStore(ApiKeyCredential("cf-incomplete-key"))
             val transport = RecordingTransport()
             val agent = factory(store, transport)
                 .create(
