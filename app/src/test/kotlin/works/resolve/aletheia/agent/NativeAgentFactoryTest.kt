@@ -36,16 +36,16 @@ class NativeAgentFactoryTest {
 
     private class FakeApiKeyStore(initialCredential: ApiKeyCredential? = null) : ApiKeyStore {
         val credential = MutableStateFlow(initialCredential)
-        var getApiKeyCalls = 0
-        var setApiKeyCalls = 0
+        var getCredentialCalls = 0
+        var setCredentialCalls = 0
 
         override suspend fun getCredential(providerId: String): ApiKeyCredential? {
-            getApiKeyCalls++
+            getCredentialCalls++
             return credential.value
         }
 
         override suspend fun setCredential(providerId: String, credential: ApiKeyCredential) {
-            setApiKeyCalls++
+            setCredentialCalls++
             this.credential.value = credential
         }
 
@@ -146,7 +146,7 @@ class NativeAgentFactoryTest {
             assertTrue(last is works.resolve.aletheia.ai.core.AssistantMessage)
             assertEquals("Hi", (last.content.single() as TextContent).text)
 
-            assertEquals(1, store.getApiKeyCalls)
+            assertEquals(1, store.getCredentialCalls)
             val request = transport.requests.single()
             // Overridden base URL, normalized (trailing slashes dropped) + endpoint.
             assertEquals("https://example.test/api/v4/chat/completions", request.url)
