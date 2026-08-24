@@ -31,6 +31,9 @@
     <string name="action_back">Back</string>
 
     <string name="configuration_base_url">Base URL (optional)</string>
+    <string name="model_settings_advanced">Advanced</string>
+    <string name="model_settings_advanced_expand">Show advanced settings</string>
+    <string name="model_settings_advanced_collapse">Hide advanced settings</string>
     <string name="configuration_base_url_hint">https://api.z.ai/api/coding/paas/v4</string>
     <string name="configuration_api_key_keep_hint">Leave blank to keep the stored key</string>
 
