@@ -12,7 +12,7 @@ import works.resolve.aletheia.ai.core.Model
 import works.resolve.aletheia.ai.core.StopReason
 import works.resolve.aletheia.ai.core.TextContent
 import works.resolve.aletheia.ai.core.ThinkingContent
-import works.resolve.aletheia.data.credentials.ApiKeyCredential
+import works.resolve.aletheia.ai.auth.ApiKeyCredential
 import works.resolve.aletheia.data.credentials.ApiKeyStore
 import works.resolve.aletheia.data.settings.SettingsRepository
 import works.resolve.aletheia.data.settings.SettingsStore

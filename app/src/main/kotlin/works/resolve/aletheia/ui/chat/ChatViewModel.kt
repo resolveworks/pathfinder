@@ -13,7 +13,7 @@ import works.resolve.aletheia.ai.core.UserMessage
 import works.resolve.aletheia.ai.providers.AuthPrompt
 import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.agent.AgentFactory
-import works.resolve.aletheia.data.credentials.ApiKeyCredential
+import works.resolve.aletheia.ai.auth.ApiKeyCredential
 import works.resolve.aletheia.data.credentials.ApiKeyStore
 import works.resolve.aletheia.data.settings.ModelSettings
 import works.resolve.aletheia.data.settings.SettingsStore

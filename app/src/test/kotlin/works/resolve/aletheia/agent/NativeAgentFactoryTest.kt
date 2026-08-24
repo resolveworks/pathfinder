@@ -12,7 +12,7 @@ import works.resolve.aletheia.ai.transport.HttpStreamingTransport
 import works.resolve.aletheia.ai.transport.SseEvent
 import works.resolve.aletheia.ai.transport.TransportRequest
 import works.resolve.aletheia.ai.transport.TransportResponse
-import works.resolve.aletheia.data.credentials.ApiKeyCredential
+import works.resolve.aletheia.ai.auth.ApiKeyCredential
 import works.resolve.aletheia.data.credentials.ApiKeyStore
 import works.resolve.aletheia.data.settings.ModelSettings
 import kotlin.test.Test
