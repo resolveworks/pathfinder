@@ -19,8 +19,7 @@ import works.resolve.aletheia.ai.transport.SseEvent
 import works.resolve.aletheia.ai.transport.TransportRequest
 import works.resolve.aletheia.ai.transport.TransportResponse
 import works.resolve.aletheia.ai.utils.ProviderRetry
-import works.resolve.aletheia.ai.utils.findUnresolvedPlaceholder
-import works.resolve.aletheia.ai.utils.substituteEnvPlaceholders
+import works.resolve.aletheia.ai.utils.resolveCloudflareBaseUrl
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -75,7 +74,7 @@ class OpenAiCompletionsApi(
                 .toString()
                 .toByteArray(Charsets.UTF_8)
 
-            // Base URL placeholders (e.g. Cloudflare account/gateway ids) are
+            // Base URL placeholders (Cloudflare account/gateway ids) are
             // substituted from the request-time env, mirroring pi's
             // cloudflare-stream wrapper. Headers merge like pi's
             // openai-completions createClient: model headers first, then the
@@ -86,17 +85,8 @@ class OpenAiCompletionsApi(
                 mergeHeaders(model.headers, options.headers),
                 mapOf("Accept" to "text/event-stream"),
             ).filterValues { it != null }.mapValues { it.value!! }
-            val url = substituteEnvPlaceholders(model.baseUrl, options.env)
+            val url = resolveCloudflareBaseUrl(model.baseUrl, options.env)
                 .trimEnd('/') + "/chat/completions"
-            // Defensive guard: a still-unresolved placeholder means the
-            // credential is incomplete; fail clearly instead of sending the
-            // placeholder itself to the provider.
-            findUnresolvedPlaceholder(url)?.let { placeholder ->
-                throw IllegalStateException(
-                    "Missing provider credential value for base URL placeholder $placeholder " +
-                        "(provider '${model.provider}')",
-                )
-            }
             val request = TransportRequest(
                 url = url,
                 bearerToken = apiKey,

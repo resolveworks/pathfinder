@@ -47,19 +47,9 @@ class OpenAiCompletionsStreamTest {
     )
 
     @Test
-    fun `unresolved base URL placeholder fails clearly before transport`() = runTest {
+    fun `cloudflare placeholders resolve from env before transport`() = runTest {
         val transport = FakeTransport()
         val cfModel = TestCatalogs.CLOUDFLARE.models.single()
-        // Incomplete credential: no env values, so the account/gateway
-        // placeholders survive substitution.
-        val events = api(transport)
-            .stream(cfModel, context, OpenAiCompletionsOptions(apiKey = "cf-key"))
-            .toList()
-        val error = assertIs<AssistantMessageEvent.Error>(events.single())
-        assertTrue(error.partial.errorMessage!!.contains("{CLOUDFLARE_ACCOUNT_ID}"))
-        assertTrue(error.partial.errorMessage!!.contains("cloudflare-ai-gateway"))
-        assertTrue(transport.requests.isEmpty())
-
         // Complete credential values resolve the URL and reach the transport.
         transport.enqueueResponse(
             sse(

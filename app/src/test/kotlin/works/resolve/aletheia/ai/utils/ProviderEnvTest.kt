@@ -6,21 +6,21 @@ import kotlin.test.assertEquals
 class ProviderEnvTest {
 
     @Test
-    fun `substitutes known placeholder`() {
+    fun `substitutes account id placeholder`() {
         assertEquals(
-            "https://gateway.acc.example/v1",
-            substituteEnvPlaceholders(
-                "https://gateway.{CLOUDFLARE_ACCOUNT_ID}.example/v1",
+            "https://gateway.acc.cloudflare.com/v1",
+            resolveCloudflareBaseUrl(
+                "https://gateway.{CLOUDFLARE_ACCOUNT_ID}.cloudflare.com/v1",
                 mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc"),
             ),
         )
     }
 
     @Test
-    fun `substitutes multiple placeholders`() {
+    fun `substitutes both cloudflare placeholders`() {
         assertEquals(
             "https://acc.gw.cloudflare.com/v1",
-            substituteEnvPlaceholders(
+            resolveCloudflareBaseUrl(
                 "https://{CLOUDFLARE_ACCOUNT_ID}.{CLOUDFLARE_GATEWAY_ID}.cloudflare.com/v1",
                 mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
             ),
@@ -28,10 +28,10 @@ class ProviderEnvTest {
     }
 
     @Test
-    fun `missing key leaves placeholder intact`() {
+    fun `missing value leaves placeholder intact like pi`() {
         assertEquals(
             "https://{CLOUDFLARE_ACCOUNT_ID}.example/v1",
-            substituteEnvPlaceholders(
+            resolveCloudflareBaseUrl(
                 "https://{CLOUDFLARE_ACCOUNT_ID}.example/v1",
                 mapOf("OTHER" to "x"),
             ),
@@ -39,16 +39,14 @@ class ProviderEnvTest {
     }
 
     @Test
-    fun `non-env braces untouched`() {
-        assertEquals(
-            "https://x.example/{model}",
-            substituteEnvPlaceholders("https://{ID}.example/{model}", mapOf("ID" to "x")),
-        )
+    fun `non-cloudflare braces untouched`() {
+        val url = "https://{ID}.example/{model}"
+        assertEquals(url, resolveCloudflareBaseUrl(url, mapOf("ID" to "x")))
     }
 
     @Test
     fun `empty env returns input unchanged`() {
-        val url = "https://{A}.example/v1"
-        assertEquals(url, substituteEnvPlaceholders(url, emptyMap()))
+        val url = "https://{CLOUDFLARE_ACCOUNT_ID}.example/v1"
+        assertEquals(url, resolveCloudflareBaseUrl(url, emptyMap()))
     }
 }

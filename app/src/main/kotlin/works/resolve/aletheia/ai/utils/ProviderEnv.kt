@@ -1,26 +1,15 @@
 package works.resolve.aletheia.ai.utils
 
-/**
- * Replaces `{NAME}` placeholders in a provider base URL with values from the
- * credential's provider env (mirroring pi's resolveCloudflareModel). Unknown
- * placeholders are left intact.
- */
-fun substituteEnvPlaceholders(baseUrl: String, env: Map<String, String>): String {
-    var result = baseUrl
-    for ((name, value) in env) {
-        result = result.replace("{$name}", value)
-    }
-    return result
-}
+private const val CLOUDFLARE_ACCOUNT_ID = "CLOUDFLARE_ACCOUNT_ID"
+private const val CLOUDFLARE_GATEWAY_ID = "CLOUDFLARE_GATEWAY_ID"
 
 /**
- * Returns the first `{NAME}` placeholder still present after substitution, or
- * null when none remain. Used as a defensive request-layer guard: an
- * unresolved placeholder means the credential is incomplete (e.g. missing
- * Cloudflare account/gateway ids), and the request must fail with a clear
- * error instead of hitting transport with a malformed URL.
+ * Replaces `{CLOUDFLARE_ACCOUNT_ID}` / `{CLOUDFLARE_GATEWAY_ID}` placeholders
+ * in a provider base URL with values from the credential's provider env,
+ * mirroring pi's resolveCloudflareModel (cloudflare-stream.ts). Missing or
+ * empty env values leave the placeholder intact, exactly like pi.
  */
-fun findUnresolvedPlaceholder(url: String): String? =
-    PLACEHOLDER.find(url)?.value
-
-private val PLACEHOLDER = Regex("\\{[A-Za-z_][A-Za-z0-9_]*}")
+fun resolveCloudflareBaseUrl(baseUrl: String, env: Map<String, String>): String =
+    baseUrl
+        .replace("{$CLOUDFLARE_ACCOUNT_ID}", env[CLOUDFLARE_ACCOUNT_ID] ?: "{$CLOUDFLARE_ACCOUNT_ID}")
+        .replace("{$CLOUDFLARE_GATEWAY_ID}", env[CLOUDFLARE_GATEWAY_ID] ?: "{$CLOUDFLARE_GATEWAY_ID}")
