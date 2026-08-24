@@ -30,7 +30,7 @@ class ModelsRegistryTest {
                     id = "zai",
                     name = "Z.AI",
                     baseUrl = TestCatalogs.ZAI.baseUrl,
-                    apiKeyResolver = { storedKey },
+                    authResolver = { storedKey?.let { ProviderCredential(it) } },
                     models = TestCatalogs.MODELS,
                     api = OpenAiCompletionsApi(
                         transport,
@@ -45,8 +45,7 @@ class ModelsRegistryTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
         models(transport, storedKey = "stored").stream(
-            "zai",
-            "glm-4.7",
+            TestCatalogs.GLM_4_7,
             Context(messages = listOf(UserMessage.ofText("hi"))),
             SimpleStreamOptions(apiKey = "explicit"),
         ).toList()
@@ -58,8 +57,7 @@ class ModelsRegistryTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
         models(transport, storedKey = "stored").stream(
-            "zai",
-            "glm-4.7",
+            TestCatalogs.GLM_4_7,
             Context(messages = listOf(UserMessage.ofText("hi"))),
         ).toList()
         assertEquals("stored", transport.requests.single().bearerToken)
@@ -69,12 +67,11 @@ class ModelsRegistryTest {
     fun `missing key surfaces as error event`() = runTest {
         val transport = FakeTransport()
         val events = models(transport, storedKey = null).stream(
-            "zai",
-            "glm-4.7",
+            TestCatalogs.GLM_4_7,
             Context(messages = listOf(UserMessage.ofText("hi"))),
         ).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.single())
-        assertTrue("No API key" in (error.error.errorMessage ?: ""))
+        assertTrue("Provider 'zai' is not configured" in (error.error.errorMessage ?: ""))
     }
 
     @Test
@@ -82,11 +79,10 @@ class ModelsRegistryTest {
         val transport = FakeTransport()
         val models = models(transport)
         assertFailsWithMessage<IllegalArgumentException>("Unknown provider") {
-            models.stream("nope", "x", Context(messages = emptyList()))
+            val alien = TestCatalogs.GLM_4_7.copy(provider = "nope")
+            models.stream(alien, Context(messages = emptyList()))
         }
-        assertFailsWithMessage<IllegalArgumentException>("Unknown model") {
-            models.stream("zai", "nope", Context(messages = emptyList()))
-        }
+        assertTrue(models.getModel("zai", "nope") == null, "unknown model id is not in the catalog")
     }
 
     @Test

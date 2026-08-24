@@ -18,6 +18,7 @@ import works.resolve.aletheia.ai.core.OpenAiCompletionsCompat
 import works.resolve.aletheia.ai.core.ThinkingFormat
 import works.resolve.aletheia.ai.core.ThinkingLevelMap
 import works.resolve.aletheia.ai.models.Provider
+import works.resolve.aletheia.ai.models.ProviderCredential
 import works.resolve.aletheia.ai.transport.HttpStreamingTransport
 import works.resolve.aletheia.ai.utils.ProviderRetry
 
@@ -80,30 +81,25 @@ class CatalogProvider(
         missingAuthPrompts(key, env).isEmpty()
 
     /**
-     * Builds the runtime provider for this catalog entry. A [baseUrl]
-     * override (normalized) is stamped onto every model, mirroring what the
-     * old ZaiProvider.create did for base-URL overrides.
+     * Builds the runtime provider for this catalog entry, wiring the
+     * transport/API pair and the auth resolver. Base-URL overrides are not
+     * stamped here: callers create their effective model once via
+     * `Model.copy(baseUrl = ...)` and stream that model (pi's requestModel).
      */
     fun toRuntimeProvider(
         transport: HttpStreamingTransport,
         retry: ProviderRetry = ProviderRetry(),
-        apiKeyResolver: (suspend () -> String?)? = null,
-        baseUrl: String = this.baseUrl,
-    ): Provider {
-        val effectiveBaseUrl = normalizeBaseUrl(baseUrl)
-        return Provider(
+        authResolver: (suspend () -> ProviderCredential?)? = null,
+    ): Provider =
+        Provider(
             id = id,
             name = name,
-            baseUrl = effectiveBaseUrl,
-            apiKeyResolver = apiKeyResolver,
-            models = if (effectiveBaseUrl == this.baseUrl) {
-                models
-            } else {
-                models.map { it.copy(baseUrl = effectiveBaseUrl) }
-            },
+            baseUrl = baseUrl,
+            authResolver = authResolver,
+            bearerHeaderName = bearerHeaderName,
+            models = models,
             api = OpenAiCompletionsApi(transport, retry) as ChatApi,
         )
-    }
 }
 
 /**

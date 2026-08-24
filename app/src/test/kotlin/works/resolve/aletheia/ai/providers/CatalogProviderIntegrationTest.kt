@@ -2,11 +2,11 @@ package works.resolve.aletheia.ai.providers
 
 import works.resolve.aletheia.ai.core.AssistantMessageEvent
 import works.resolve.aletheia.ai.core.Context
-import works.resolve.aletheia.ai.core.SimpleStreamOptions
 import works.resolve.aletheia.ai.core.StopReason
 import works.resolve.aletheia.ai.core.TextContent
 import works.resolve.aletheia.ai.core.UserMessage
 import works.resolve.aletheia.ai.models.Models
+import works.resolve.aletheia.ai.models.ProviderCredential
 import works.resolve.aletheia.ai.testing.TestCatalogs
 import works.resolve.aletheia.ai.transport.OkHttpTransport
 import kotlin.test.Test
@@ -58,15 +58,15 @@ class CatalogProviderIntegrationTest {
             val testKey = "zai-integration-test-key"
             val provider = TestCatalogs.ZAI.toRuntimeProvider(
                 transport = OkHttpTransport(),
-                apiKeyResolver = { testKey },
-                baseUrl = server.url("/v4").toString(),
+                authResolver = { ProviderCredential(testKey) },
             )
             val models = Models(listOf(provider))
 
             val events = runBlocking {
                 models.stream(
-                    "zai",
-                    "glm-4.7",
+                    // The effective model is the catalog model with the
+                    // normalized base-URL override stamped on (requestModel).
+                    TestCatalogs.GLM_4_7.copy(baseUrl = normalizeBaseUrl(server.url("/v4").toString())),
                     Context(messages = listOf(UserMessage.ofText("hi"))),
                 ).toList()
             }
@@ -121,32 +121,31 @@ class CatalogProviderIntegrationTest {
 
             val testKey = "cf-integration-test-key"
             val entry = TestCatalogs.CATALOG.getProvider("cloudflare-ai-gateway")!!
-            // Placeholder base URL redirected to the mock server; env values
-            // arrive through the options exactly like a resolved credential.
             val provider = entry.toRuntimeProvider(
                 transport = OkHttpTransport(),
-                apiKeyResolver = { testKey },
-                // Placeholders appended after server.url() so they stay literal
-                // braces (HttpUrl construction would percent-encode them); env
-                // values arrive through the options exactly like a resolved credential.
-                baseUrl = server.url("/v1").toString() +
-                    "/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat",
-            )
-            val models = Models(listOf(provider))
-
-            val events = runBlocking {
-                models.stream(
-                    "cloudflare-ai-gateway",
-                    "workers-ai/test-model",
-                    Context(messages = listOf(UserMessage.ofText("hi"))),
-                    SimpleStreamOptions(
+                authResolver = {
+                    ProviderCredential(
                         apiKey = testKey,
                         env = mapOf(
                             "CLOUDFLARE_ACCOUNT_ID" to "acct-123",
                             "CLOUDFLARE_GATEWAY_ID" to "gw-456",
                         ),
-                        bearerHeaderName = entry.bearerHeaderName,
+                    )
+                },
+            )
+            val models = Models(listOf(provider))
+
+            val events = runBlocking {
+                models.stream(
+                    // Placeholder base URL redirected to the mock server; braces
+                    // appended after server.url() so HttpUrl construction does not
+                    // percent-encode them. Placeholders are substituted with the
+                    // resolver's env at request time.
+                    entry.model("workers-ai/test-model")!!.copy(
+                        baseUrl = server.url("/v1").toString() +
+                            "/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat",
                     ),
+                    Context(messages = listOf(UserMessage.ofText("hi"))),
                 ).toList()
             }
 
