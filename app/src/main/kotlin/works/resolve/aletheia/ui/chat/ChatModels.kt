@@ -42,15 +42,37 @@ enum class ChatStatus {
     Failed,
 }
 
-/** Catalog entry for the model picker. */
-data class ChatModelOption(
+/** Row of the providers screen: one per catalog provider, with live auth status. */
+data class ProviderOption(
     val id: String,
     val name: String,
+    /** True iff a credential with a non-blank key is stored for this provider. */
+    val configured: Boolean,
+)
+
+/** Row of the model picker: one per model of a configured provider. */
+data class ModelOption(
+    val providerId: String,
+    val providerName: String,
+    val modelId: String,
+    val name: String,
+)
+
+/** The committed provider+model selection (from settings), projected for display. */
+data class SelectedModel(
+    val providerId: String,
+    val providerName: String,
+    val modelId: String,
+    val modelName: String,
+    /** Normalized base-URL override from settings, or null when none. */
+    val baseUrlOverride: String?,
+    /** The provider's catalog base URL (placeholder for the override field). */
+    val defaultBaseUrl: String,
 )
 
 /**
  * Immutable projection of the chat screen state. Contains only UI-safe data:
- * no API keys (only [hasApiKey]), no provider-request options, and no AI-core
+ * no API keys (only per-provider [ProviderOption.configured] flags), no provider-request options, and no AI-core
  * message objects.
  *
  * Navigation is signaled from this state rather than commanded: an
@@ -68,11 +90,14 @@ data class ChatUiState(
     val startKey: NavKey = ChatNavKey,
     /** Monotonic reset signal: any change tells the UI to rebuild the stack to [startKey]. */
     val navigationEpoch: Long = 0,
-    val modelOptions: List<ChatModelOption> = emptyList(),
-    val selectedModelId: String? = null,
-    val baseUrl: String? = null,
-    /** Whether a stored API key exists; the key itself never enters this state. */
-    val hasApiKey: Boolean = false,
+    /** Every catalog provider with live auth status; name-sorted (providers screen). */
+    val providerOptions: List<ProviderOption> = emptyList(),
+    /** Models of configured providers only; provider-name-then-model-name sorted. */
+    val modelOptions: List<ModelOption> = emptyList(),
+    /** The committed selection projected from settings, or null when unset/invalid. */
+    val selectedModel: SelectedModel? = null,
+    /** True iff the selection is catalog-valid AND a key exists for its provider. */
+    val configured: Boolean = false,
     val activeSessionId: String? = null,
     val sessionSummaries: List<SessionSummary> = emptyList(),
     val messages: List<ChatMessage> = emptyList(),
