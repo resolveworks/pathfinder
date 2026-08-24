@@ -66,11 +66,8 @@ fun MarkdownText(markdown: String, modifier: Modifier = Modifier) {
 /** Walks [parent]'s children and renders each block, mirroring pi's token loop. */
 @Composable
 private fun RenderBlocks(parent: Node, styles: InlineMarkdownStyles, inQuote: Boolean) {
-    var child = parent.firstChild
-    while (child != null) {
-        val next = child.next // capture before recursing; the list is shared state
+    for (child in parent.children()) {
         RenderBlock(child, styles, inQuote)
-        child = next
     }
 }
 
@@ -166,10 +163,8 @@ private fun CodeBlock(literal: String) {
 private fun ListBlock(listNode: Node, ordered: Boolean, styles: InlineMarkdownStyles, inQuote: Boolean) {
     val startNumber = (listNode as? OrderedList)?.startNumber ?: 1
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        var child = listNode.firstChild
         var itemIndex = 0
-        while (child != null) {
-            val next = child.next
+        for (child in listNode.children()) {
             if (child is ListItem) {
                 val taskMarker = child.firstChild as? TaskListItemMarker
                 val marker = when {
@@ -195,7 +190,6 @@ private fun ListBlock(listNode: Node, ordered: Boolean, styles: InlineMarkdownSt
             } else {
                 RenderBlock(child, styles, inQuote)
             }
-            child = next
         }
     }
 }
@@ -204,18 +198,12 @@ private fun ListBlock(listNode: Node, ordered: Boolean, styles: InlineMarkdownSt
 @Composable
 private fun Table(table: TableBlock, styles: InlineMarkdownStyles, inQuote: Boolean) {
     Column {
-        var section = table.firstChild
-        while (section != null) {
-            val nextSection = section.next
+        for (section in table.children()) {
             val isHead = section is TableHead
-            var row = section.firstChild
-            while (row != null) {
-                val nextRow = row.next
+            for (row in section.children()) {
                 if (row is TableRow) {
                     Row(modifier = Modifier.fillMaxWidth()) {
-                        var cell = row.firstChild
-                        while (cell != null) {
-                            val nextCell = cell.next
+                        for (cell in row.children()) {
                             if (cell is TableCell) {
                                 Text(
                                     text = cell.buildInlineMarkdown(styles),
@@ -228,16 +216,13 @@ private fun Table(table: TableBlock, styles: InlineMarkdownStyles, inQuote: Bool
                                     color = if (inQuote) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified,
                                 )
                             }
-                            cell = nextCell
                         }
                     }
                 }
-                row = nextRow
             }
             if (isHead) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
-            section = nextSection
         }
     }
 }
