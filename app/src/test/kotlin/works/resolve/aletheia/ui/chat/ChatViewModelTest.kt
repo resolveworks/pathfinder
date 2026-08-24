@@ -556,17 +556,18 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
+        // Missing key on initial configuration (before any credential is saved).
+        vm.saveModelSelection("zai", "glm-4.7", null)
+        vm.uiState.first { it.error != null }
+        assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
+        assertEquals(0, h.countSessions())
+        vm.dismissError()
+
         vm.saveProviderCredential("zai", "k", emptyMap())
         vm.saveModelSelection("zai", "not-a-model", null)
         vm.uiState.first { it.error != null }
         assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
         vm.dismissError()
-
-        // Missing key on initial configuration.
-        vm.saveModelSelection("zai", "glm-4.7", null)
-        vm.uiState.first { it.error != null }
-        assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
-        assertEquals(0, h.countSessions())
 
         // Complete configuration, then a factory-invalid base URL keeps the old agent.
         vm.configure(apiKey = "k")

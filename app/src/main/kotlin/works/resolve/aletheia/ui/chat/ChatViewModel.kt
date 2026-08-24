@@ -123,6 +123,10 @@ class ChatViewModel(
      * prompt keeps its stored env value. Mirrors pi's completeProviderAuthentication:
      * logging in completes configuration when valid model settings already
      * exist, otherwise the app stays NeedsConfiguration until a model is picked.
+     *
+     * Not busy-rejected: the agent resolves the credential once per request
+     * (inside its stream flow), so changing it mid-stream is safe — like pi's
+     * mid-conversation /login — and only affects the next request.
      */
     fun saveProviderCredential(providerId: String, apiKeyInput: String, envInputs: Map<String, String>) {
         viewModelScope.launch { saveProviderCredentialInternal(providerId, apiKeyInput, envInputs) }
@@ -132,6 +136,9 @@ class ChatViewModel(
      * Forgets the credential for [providerId]. Never tears down sessions or
      * the agent (credentials are read per request); only the derived status
      * surfaces (provider/model options and `configured`) are refreshed.
+     *
+     * Not busy-rejected: safe mid-stream for the same reason as
+     * [saveProviderCredential] — credentials are read per request.
      */
     fun removeProviderCredential(providerId: String) {
         viewModelScope.launch {
@@ -147,7 +154,12 @@ class ChatViewModel(
         }
     }
 
-    /** Re-reads credentials and recomputes the derived provider/model surfaces. */
+    /**
+     * Re-reads credentials and recomputes the derived provider/model surfaces.
+     *
+     * Not busy-rejected: credentials are read per request by the agent, so
+     * this cannot race a stream into an inconsistent state.
+     */
     fun refreshProviderStatus() {
         viewModelScope.launch {
             try {
