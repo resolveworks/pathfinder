@@ -1068,9 +1068,10 @@ class ChatViewModelTest {
         // the missing prompts — never the submitted values.
         vm.saveProviderCredential("cloudflare-ai-gateway", "cf-key", emptyMap())
         val state = vm.uiState.first { it.error != null }
-        assertTrue(state.error!!.contains("account ID"))
-        assertTrue(state.error!!.contains("gateway ID"))
-        assertFalse(state.error!!.contains("cf-key"))
+        val error = checkNotNull(state.error)
+        assertTrue(error.contains("account ID"))
+        assertTrue(error.contains("gateway ID"))
+        assertFalse(error.contains("cf-key"))
         assertNull(h.credentials.creds["cloudflare-ai-gateway"])
         assertFalse(vm.uiState.value.providerOptions.first { o -> o.id == "cloudflare-ai-gateway" }.configured)
         vm.dismissError()

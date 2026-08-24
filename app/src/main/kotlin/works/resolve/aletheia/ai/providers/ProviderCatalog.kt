@@ -62,11 +62,18 @@ class CatalogProvider(
      * empty list means the credential is complete. Values are never echoed —
      * only the prompt metadata is.
      */
-    fun missingAuthPrompts(key: String?, env: Map<String, String>): List<AuthPrompt> =
-        auth.prompts.mapIndexedNotNull { index, prompt ->
+    fun missingAuthPrompts(key: String?, env: Map<String, String>): List<AuthPrompt> {
+        val missing = auth.prompts.mapIndexedNotNull { index, prompt ->
             val value = if (index == 0) key else env[prompt.envKey]
             if (value.isNullOrBlank()) prompt else null
+        }.toMutableList()
+        // A provider with no auth prompts still requires a nonblank key:
+        // openai-completions always authenticates with a bearer token.
+        if (auth.prompts.isEmpty() && key.isNullOrBlank()) {
+            missing += AuthPrompt("API_KEY", "API key")
         }
+        return missing
+    }
 
     /** True iff every auth prompt has a nonblank value ([missingAuthPrompts] is empty). */
     fun isCredentialComplete(key: String?, env: Map<String, String>): Boolean =
