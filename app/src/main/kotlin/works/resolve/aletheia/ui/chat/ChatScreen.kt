@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
@@ -172,7 +173,7 @@ fun ChatScreen(
     val pushModelSettings: () -> Unit = { backStack.add(ModelSettingsNavKey) }
     val pushProviders: () -> Unit = { backStack.add(ProvidersNavKey) }
     val pushProviderAuth: (String) -> Unit = { backStack.add(ProviderAuthNavKey(it)) }
-    val popSettings: () -> Unit = {
+    val popBackStack: () -> Unit = {
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
     val topKey = backStack.lastOrNull() ?: ChatNavKey
@@ -206,7 +207,8 @@ fun ChatScreen(
 
         Scaffold(
             topBar = {
-                if (uiState.status == ChatStatus.Ready) {
+                if (uiState.status != ChatStatus.Loading) {
+                    val canPop = backStack.size > 1
                     ChatTopBar(
                         title = when (topKey) {
                             SettingsNavKey -> stringResource(R.string.settings_title)
@@ -217,7 +219,17 @@ fun ChatScreen(
                                 ?: stringResource(R.string.providers_title)
                             else -> stringResource(R.string.chat_title)
                         },
-                        onOpenDrawer = { scope.launch { drawerState.open() } },
+                        // The drawer belongs to the Chat root; nested
+                        // destinations navigate up instead. A forced root
+                        // (unconfigured app) is a dead end: no Up arrow.
+                        onOpenDrawer = if (topKey == ChatNavKey &&
+                            uiState.status == ChatStatus.Ready
+                        ) {
+                            { scope.launch { drawerState.open() } }
+                        } else {
+                            null
+                        },
+                        onBack = if (canPop) popBackStack else null,
                     )
                 }
             },
@@ -245,13 +257,9 @@ fun ChatScreen(
             ) {
                 when {
                     uiState.status == ChatStatus.Loading -> LoadingContent()
-                    // Any settings-family surface pushed on top of a failed
-                    // init replaces the error surface; popping returns to it.
-                    uiState.status == ChatStatus.Failed &&
-                        topKey !is SettingsNavKey &&
-                        topKey != ModelSettingsNavKey &&
-                        topKey != ProvidersNavKey &&
-                        topKey !is ProviderAuthNavKey -> FailedContent(
+                    // Any settings-family destination pushed on top of a
+                    // failed init replaces the error surface; popping returns.
+                    uiState.status == ChatStatus.Failed && topKey == ChatNavKey -> FailedContent(
                         error = uiState.error ?: stringResource(R.string.error_generic),
                         onOpenSettings = pushModelSettings,
                     )
@@ -269,14 +277,14 @@ fun ChatScreen(
                                 )
                             }
                             entry<ModelSettingsNavKey> {
-                                ConfigurationContent(
+                                ModelSettingsContent(
                                     uiState = uiState,
                                     onSave = onSaveModelSelection,
                                     onOpenProviders = pushProviders,
                                     onClose = if (uiState.status == ChatStatus.NeedsConfiguration) {
                                         null
                                     } else {
-                                        popSettings
+                                        popBackStack
                                     },
                                 )
                             }
@@ -298,7 +306,7 @@ fun ChatScreen(
                                             onSaveProviderCredential(key.providerId, apiKeyInput, envInputs)
                                         },
                                         onRemove = { onRemoveProviderCredential(key.providerId) },
-                                        onClose = popSettings,
+                                        onClose = popBackStack,
                                     )
                                 }
                             }
@@ -387,16 +395,25 @@ private fun ChatDrawerContent(
 @Composable
 private fun ChatTopBar(
     title: String,
-    onOpenDrawer: () -> Unit,
+    onOpenDrawer: (() -> Unit)?,
+    onBack: (() -> Unit)?,
 ) {
     TopAppBar(
         title = { Text(title) },
         navigationIcon = {
-            IconButton(onClick = onOpenDrawer) {
-                Icon(
-                    Icons.Default.Menu,
-                    contentDescription = stringResource(R.string.action_menu),
-                )
+            when {
+                onOpenDrawer != null -> IconButton(onClick = onOpenDrawer) {
+                    Icon(
+                        Icons.Default.Menu,
+                        contentDescription = stringResource(R.string.action_menu),
+                    )
+                }
+                onBack != null -> IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.action_back),
+                    )
+                }
             }
         },
     )
@@ -484,7 +501,7 @@ private fun SettingsContent(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ConfigurationContent(
+private fun ModelSettingsContent(
     uiState: ChatUiState,
     onSave: (providerId: String, modelId: String, baseUrl: String?) -> Unit,
     onOpenProviders: () -> Unit,
@@ -522,10 +539,6 @@ private fun ConfigurationContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(
-            text = stringResource(R.string.settings_model),
-            style = MaterialTheme.typography.headlineSmall,
-        )
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
@@ -618,13 +631,10 @@ private fun ProvidersContent(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .imePadding()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(
-            text = stringResource(R.string.providers_title),
-            style = MaterialTheme.typography.headlineSmall,
-        )
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
@@ -645,18 +655,24 @@ private fun ProvidersContent(
                         headlineContent = { Text(option.name) },
                         supportingContent = { Text(option.id) },
                         trailingContent = {
-                            Text(
-                                text = stringResource(
-                                    if (option.configured) R.string.provider_status_configured
-                                    else R.string.provider_status_unconfigured,
-                                ),
-                                color = if (option.configured) {
-                                    MaterialTheme.colorScheme.secondary
-                                } else {
-                                    MaterialTheme.colorScheme.outline
-                                },
-                                style = MaterialTheme.typography.labelMedium,
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = stringResource(
+                                        if (option.configured) R.string.provider_status_configured
+                                        else R.string.provider_status_unconfigured,
+                                    ),
+                                    color = if (option.configured) {
+                                        MaterialTheme.colorScheme.secondary
+                                    } else {
+                                        MaterialTheme.colorScheme.outline
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
+                                Icon(
+                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = null,
+                                )
+                            }
                         },
                         modifier = Modifier.clickable { onOpenProvider(option.id) },
                     )
@@ -666,10 +682,6 @@ private fun ProvidersContent(
         }
     }
 }
-
-/** Normalizes a catalog prompt message into a short field label. */
-private fun promptLabel(message: String): String =
-    message.removePrefix("Enter the ").removePrefix("Enter ")
 
 /**
  * Credential form for one provider (pi's auth dialog): one field per catalog
@@ -698,10 +710,6 @@ private fun ProviderAuthContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(
-            text = provider.name,
-            style = MaterialTheme.typography.headlineSmall,
-        )
         prompts.forEach { prompt ->
             val isSecret = prompt.secret
             OutlinedTextField(
@@ -709,7 +717,7 @@ private fun ProviderAuthContent(
                 onValueChange = {
                     if (isSecret) apiKeyInput = it else envInputs[prompt.envKey] = it
                 },
-                label = { Text(promptLabel(prompt.message)) },
+                label = { Text(prompt.message) },
                 visualTransformation = if (isSecret) PasswordVisualTransformation() else VisualTransformation.None,
                 supportingText = if (isSecret && provider.configured) {
                     { Text(stringResource(R.string.configuration_api_key_keep_hint)) }
@@ -720,6 +728,8 @@ private fun ProviderAuthContent(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        // Stacked so narrow widths never put Save, Cancel, and the
+        // destructive Forget action in one horizontal row.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = {
@@ -731,14 +741,13 @@ private fun ProviderAuthContent(
                 Text(stringResource(R.string.action_save))
             }
             TextButton(onClick = onClose) { Text(stringResource(R.string.action_cancel)) }
-            if (provider.configured) {
-                Spacer(Modifier.weight(1f))
-                TextButton(
-                    onClick = { confirmRemove = true },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                ) {
-                    Text(stringResource(R.string.action_remove_provider))
-                }
+        }
+        if (provider.configured) {
+            TextButton(
+                onClick = { confirmRemove = true },
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            ) {
+                Text(stringResource(R.string.action_remove_provider))
             }
         }
     }
