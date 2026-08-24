@@ -5,6 +5,7 @@ import works.resolve.aletheia.ai.core.AssistantMessage
 import works.resolve.aletheia.ai.core.AssistantMessageEvent
 import works.resolve.aletheia.ai.core.Context
 import works.resolve.aletheia.ai.core.Model
+import works.resolve.aletheia.ai.core.OpenAiCompletionsOptions
 import works.resolve.aletheia.ai.core.SimpleStreamOptions
 import works.resolve.aletheia.ai.core.StopReason
 import kotlinx.coroutines.CancellationException
@@ -17,9 +18,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Focused registry tests for credential resolution: resolver failures become
- * a terminal Error event, cancellation propagates, and explicit keys bypass
- * the resolver.
+ * Focused registry tests for auth resolution: resolver failures and missing
+ * credentials become a terminal Error event, cancellation propagates,
+ * explicit keys bypass the resolver, and env/bearer-header merging follows
+ * pi's applyAuth precedence.
  */
 class ModelsTest {
     private fun model() = Model(
@@ -32,12 +34,20 @@ class ModelsTest {
 
     private class RecordingApi : ChatApi {
         var lastApiKey: String? = null
+        var lastEnv: Map<String, String> = emptyMap()
+        var lastBearerHeaderName: String? = null
         var calls = 0
 
-        override fun stream(model: Model, context: Context, options: works.resolve.aletheia.ai.core.OpenAiCompletionsOptions): Flow<AssistantMessageEvent> =
+        override fun stream(
+            model: Model,
+            context: Context,
+            options: OpenAiCompletionsOptions,
+        ): Flow<AssistantMessageEvent> =
             flow {
                 calls += 1
                 lastApiKey = options.apiKey
+                lastEnv = options.env
+                lastBearerHeaderName = options.bearerHeaderName
                 val done = AssistantMessage(
                     content = emptyList(),
                     api = model.api,
@@ -58,14 +68,14 @@ class ModelsTest {
                     id = "prov",
                     name = "Provider",
                     baseUrl = "https://example.test",
-                    apiKeyResolver = { throw IllegalStateException("keystore exploded") },
+                    authResolver = { throw IllegalStateException("keystore exploded") },
                     models = listOf(model()),
                     api = api,
                 ),
             ),
         )
 
-        val events = registry.stream("prov", "m1", Context(messages = emptyList())).toList()
+        val events = registry.stream(model(), Context(messages = emptyList())).toList()
 
         assertEquals(1, events.size)
         val error = events.single() as AssistantMessageEvent.Error
@@ -77,9 +87,68 @@ class ModelsTest {
         assertTrue(error.error.timestamp > 0)
         // Safe generic message: no exception text.
         val message = error.error.errorMessage
-        assertTrue(message!!.contains("Failed to resolve stored API key"))
+        assertTrue(message!!.contains("Failed to resolve stored credential"))
         assertTrue(!message.contains("keystore exploded"))
         assertEquals(0, api.calls)
+    }
+
+    @Test
+    fun nullResolutionEmitsSingleErrorEvent() = runTest {
+        val api = RecordingApi()
+        val registry = Models(
+            listOf(
+                Provider(
+                    id = "prov",
+                    name = "Provider",
+                    baseUrl = "https://example.test",
+                    authResolver = { null },
+                    models = listOf(model()),
+                    api = api,
+                ),
+            ),
+        )
+
+        val events = registry.stream(model(), Context(messages = emptyList())).toList()
+
+        assertEquals(1, events.size)
+        val error = events.single() as AssistantMessageEvent.Error
+        assertEquals(StopReason.ERROR, error.reason)
+        assertTrue(error.error.errorMessage!!.contains("Provider is not configured"))
+        assertEquals(0, api.calls)
+    }
+
+    @Test
+    fun missingResolverEmitsSingleErrorEvent() = runTest {
+        val api = RecordingApi()
+        val registry = Models(
+            listOf(
+                Provider(
+                    id = "prov",
+                    name = "Provider",
+                    baseUrl = "https://example.test",
+                    models = listOf(model()),
+                    api = api,
+                ),
+            ),
+        )
+
+        val events = registry.stream(model(), Context(messages = emptyList())).toList()
+
+        assertEquals(1, events.size)
+        assertTrue(events.single() is AssistantMessageEvent.Error)
+        assertEquals(0, api.calls)
+    }
+
+    @Test
+    fun unknownProviderThrows() {
+        val registry = Models(emptyList())
+        val alien = model().copy(provider = "alien")
+        try {
+            registry.stream(alien, Context(messages = emptyList()))
+            throw AssertionError("Expected IllegalArgumentException")
+        } catch (error: IllegalArgumentException) {
+            assertTrue("Unknown provider" in (error.message ?: ""))
+        }
     }
 
     @Test
@@ -91,7 +160,7 @@ class ModelsTest {
                     id = "prov",
                     name = "Provider",
                     baseUrl = "https://example.test",
-                    apiKeyResolver = { throw CancellationException() },
+                    authResolver = { throw CancellationException() },
                     models = listOf(model()),
                     api = api,
                 ),
@@ -100,7 +169,7 @@ class ModelsTest {
 
         var thrown: Exception? = null
         try {
-            registry.stream("prov", "m1", Context(messages = emptyList())).toList()
+            registry.stream(model(), Context(messages = emptyList())).toList()
         } catch (e: Exception) {
             thrown = e
         }
@@ -118,9 +187,9 @@ class ModelsTest {
                     id = "prov",
                     name = "Provider",
                     baseUrl = "https://example.test",
-                    apiKeyResolver = {
+                    authResolver = {
                         resolverCalls += 1
-                        "resolved-key"
+                        ProviderCredential("resolved-key")
                     },
                     models = listOf(model()),
                     api = api,
@@ -128,13 +197,49 @@ class ModelsTest {
             ),
         )
 
-        val events =
-            registry.stream("prov", "m1", Context(messages = emptyList()), SimpleStreamOptions(apiKey = "explicit"))
-                .toList()
+        val events = registry
+            .stream(model(), Context(messages = emptyList()), SimpleStreamOptions(apiKey = "explicit"))
+            .toList()
 
         assertEquals(0, resolverCalls)
         assertEquals(1, api.calls)
         assertEquals("explicit", api.lastApiKey)
         assertTrue(events.single() is AssistantMessageEvent.Done)
+    }
+
+    @Test
+    fun resolvedCredentialMergesWithExplicitOptionsUsingPiPrecedence() = runTest {
+        val api = RecordingApi()
+        val registry = Models(
+            listOf(
+                Provider(
+                    id = "prov",
+                    name = "Provider",
+                    baseUrl = "https://example.test",
+                    authResolver = {
+                        ProviderCredential(
+                            apiKey = "resolved-key",
+                            env = mapOf("A" to "resolved-a", "B" to "resolved-b"),
+                        )
+                    },
+                    bearerHeaderName = "x-provider-auth",
+                    models = listOf(model()),
+                    api = api,
+                ),
+            ),
+        )
+
+        val events = registry.stream(
+            model(),
+            Context(messages = emptyList()),
+            SimpleStreamOptions(env = mapOf("B" to "explicit-b", "C" to "explicit-c")),
+        ).toList()
+
+        assertTrue(events.single() is AssistantMessageEvent.Done)
+        // Resolver supplies the key; env merges per field with the request on top.
+        assertEquals("resolved-key", api.lastApiKey)
+        assertEquals(mapOf("A" to "resolved-a", "B" to "explicit-b", "C" to "explicit-c"), api.lastEnv)
+        // Provider metadata fills an unset bearer-header option.
+        assertEquals("x-provider-auth", api.lastBearerHeaderName)
     }
 }

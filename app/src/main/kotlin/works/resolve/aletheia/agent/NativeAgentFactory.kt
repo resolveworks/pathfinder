@@ -1,29 +1,27 @@
 package works.resolve.aletheia.agent
 
-import works.resolve.aletheia.ai.core.AssistantMessage
-import works.resolve.aletheia.ai.core.AssistantMessageEvent
 import works.resolve.aletheia.ai.core.Message
 import works.resolve.aletheia.ai.core.SimpleStreamOptions
-import works.resolve.aletheia.ai.core.StopReason
 import works.resolve.aletheia.ai.models.Models
+import works.resolve.aletheia.ai.models.ProviderCredential
 import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.ai.providers.normalizeBaseUrl
 import works.resolve.aletheia.ai.transport.HttpStreamingTransport
 import works.resolve.aletheia.ai.utils.ProviderRetry
 import works.resolve.aletheia.data.credentials.ApiKeyStore
 import works.resolve.aletheia.data.settings.ModelSettings
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
 
 /**
  * Production [AgentFactory]: builds the native agent from the persisted
  * configuration, serving any provider/model pair the generated catalog knows.
  *
- * The API key never enters the agent, its options, or any log: credentials
- * are read once per request inside the streaming flow (the explicit
- * options.apiKey takes precedence in Models.stream, so the provider's lazy
- * resolver is skipped), and a rotated key takes effect on the next prompt.
+ * All credential ownership lives behind the provider's auth resolver (pi's
+ * auth.resolve): credentials are read once per request inside Models.stream's
+ * lazy flow, so a rotated or completed credential takes effect on the next
+ * prompt. The API key never enters the agent, its options, or any log; an
+ * incomplete credential resolves to null (defense in depth on top of the UI's
+ * CatalogProvider.isCredentialComplete gate) and surfaces as a single safe
+ * Error event from Models.
  */
 class NativeAgentFactory(
     private val credentials: ApiKeyStore,
@@ -39,17 +37,20 @@ class NativeAgentFactory(
             ?: throw IllegalArgumentException(
                 "Unknown model '${settings.modelId}' for provider '${settings.providerId}'",
             )
-        val baseUrl = normalizeBaseUrl(settings.baseUrl ?: entry.baseUrl)
+        // The selected effective model is created once (pi's requestModel):
+        // the catalog model with the normalized override/default base URL.
+        val effectiveModel = model.copy(baseUrl = normalizeBaseUrl(settings.baseUrl ?: entry.baseUrl))
 
         val provider = entry.toRuntimeProvider(
             transport = transport,
             retry = retry,
-            apiKeyResolver = { credentials.getApiKey(entry.id) },
-            baseUrl = baseUrl,
+            authResolver = {
+                credentials.getCredential(entry.id)
+                    ?.takeIf { entry.isCredentialComplete(it.key, it.env) }
+                    ?.let { credential -> ProviderCredential(credential.key, credential.env) }
+            },
         )
         val models = Models(listOf(provider))
-        // Use the possibly-override-stamped model from the runtime provider.
-        val effectiveModel = provider.models.first { it.id == settings.modelId }
 
         return Agent(
             model = effectiveModel,
@@ -59,46 +60,7 @@ class NativeAgentFactory(
                 maxRetries = MAX_RETRIES,
             ),
             streamFn = StreamFn { requestedModel, context, options ->
-                // Resolve the full credential once per request and merge it
-                // into the options (pi's applyAuth): key + env for base-URL
-                // placeholder substitution, and the provider's bearer-header
-                // override for Cloudflare-style gateways. The explicit
-                // options.apiKey takes precedence in Models.stream, so the
-                // provider's own lazy resolver is skipped.
-                flow {
-                    val credential = try {
-                        credentials.getCredential(entry.id)
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Exception) {
-                        emit(
-                            AssistantMessageEvent.Error(
-                                StopReason.ERROR,
-                                AssistantMessage(
-                                    content = emptyList(),
-                                    api = requestedModel.api,
-                                    provider = entry.id,
-                                    model = requestedModel.id,
-                                    stopReason = StopReason.ERROR,
-                                    errorMessage =
-                                        "Failed to resolve stored credential for provider '${entry.id}'",
-                                    timestamp = System.currentTimeMillis(),
-                                ),
-                            ),
-                        )
-                        return@flow
-                    }
-                    models.stream(
-                        entry.id,
-                        requestedModel.id,
-                        context,
-                        options.copy(
-                            apiKey = credential?.key,
-                            env = credential?.env ?: emptyMap(),
-                            bearerHeaderName = entry.bearerHeaderName,
-                        ),
-                    ).collect { emit(it) }
-                }
+                models.stream(requestedModel, context, options)
             },
         ).apply {
             if (initialTranscript.isNotEmpty()) replaceTranscript(initialTranscript)

@@ -14,6 +14,7 @@ import works.resolve.aletheia.data.settings.ModelSettings
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -198,6 +199,30 @@ class NativeAgentFactoryTest {
                 "credential env must be substituted into the base URL placeholders",
             )
             assertEquals("cf-aig-authorization", request.bearerHeaderName)
+        }
+    }
+
+    @Test
+    fun `an incomplete credential resolves to null and surfaces as a single error event`() {
+        runBlocking {
+            // Cloudflare requires key + both gateway env values; the key alone
+            // is incomplete, so the resolver must return null (defense in depth).
+            val store = FakeApiKeyStore(ApiKeyCredential("cf-incomplete-key"))
+            val transport = RecordingTransport()
+            val agent = factory(store, transport)
+                .create(
+                    settings(providerId = "cloudflare-ai-gateway", modelId = "workers-ai/test-model"),
+                    "s1",
+                    emptyList(),
+                )
+
+            agent.prompt("ping")
+
+            val last = agent.state.value.messages.last()
+            val error = assertIs<works.resolve.aletheia.ai.core.AssistantMessage>(last)
+            assertEquals(works.resolve.aletheia.ai.core.StopReason.ERROR, error.stopReason)
+            assertTrue("Provider is not configured" in (error.errorMessage ?: ""))
+            assertTrue(transport.requests.isEmpty(), "no request must be sent")
         }
     }
 }
