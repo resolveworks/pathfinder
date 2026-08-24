@@ -37,4 +37,16 @@
     <string name="role_assistant_failed">Assistant — failed</string>
 
     <string name="error_generic">Something went wrong</string>
+
+    <string name="tree_search_hint">Search conversation</string>
+    <string name="tree_clear_search">Clear search</string>
+    <string name="tree_filter_all">All</string>
+    <string name="tree_filter_user_only">User only</string>
+    <string name="tree_empty">This conversation has no history yet</string>
+    <string name="tree_no_matches">No entries match your search</string>
+    <string name="tree_role_user">You</string>
+    <string name="tree_role_assistant">Assistant</string>
+    <string name="tree_current_leaf">now</string>
+    <string name="tree_fold_branch">Fold branch</string>
+    <string name="tree_unfold_branch">Unfold branch</string>
 </resources>
