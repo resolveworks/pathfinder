@@ -1,6 +1,7 @@
 package works.resolve.aletheia.ai.auth
 
 import works.resolve.aletheia.ai.auth.oauth.AnthropicOAuthAuth
+import works.resolve.aletheia.ai.auth.oauth.GitHubCopilotOAuthAuth
 import works.resolve.aletheia.ai.auth.oauth.KimiCodingOAuthAuth
 import works.resolve.aletheia.ai.auth.oauth.OpenRouterOAuthAuth
 import works.resolve.aletheia.ai.auth.oauth.UrlConnectionOAuthHttpClient
@@ -13,8 +14,10 @@ import works.resolve.aletheia.ai.auth.oauth.XaiOAuthAuth
  * here because the flows are injected ports with an HTTP boundary).
  *
  * Currently registered: `anthropic` → [AnthropicOAuthAuth], `openrouter` →
- * [OpenRouterOAuthAuth], `kimi-coding` → [KimiCodingOAuthAuth], and `xai` →
- * [XaiOAuthAuth], all over the JDK
+ * [OpenRouterOAuthAuth], `kimi-coding` → [KimiCodingOAuthAuth], `xai` →
+ * [XaiOAuthAuth], and `github-copilot` → [GitHubCopilotOAuthAuth] (its
+ * static model-id set — pi's `GITHUB_COPILOT_MODELS` — is taken from the
+ * catalog entry passed to [oauthAuth], the same generated asset), all over the JDK
  * [UrlConnectionOAuthHttpClient]. New flows are added by extending the map
  * — never by leaking provider knowledge into the catalog bridge.
  */
@@ -28,6 +31,17 @@ object ProductionCatalogAuthRegistry : CatalogAuthRegistry {
         ),
     )
 
-    override fun oauthAuth(provider: works.resolve.aletheia.ai.providers.CatalogProvider): OAuthAuth? =
-        delegate.oauthAuth(provider)
+    override fun oauthAuth(provider: works.resolve.aletheia.ai.providers.CatalogProvider): OAuthAuth? {
+        // The Copilot flow's policy-enablement check needs the provider's
+        // static model ids (pi GITHUB_COPILOT_MODELS); the catalog entry is
+        // the same generated asset pi generates that list from, so the ids
+        // are read straight from it.
+        if (provider.id == "github-copilot") {
+            return GitHubCopilotOAuthAuth(
+                http = UrlConnectionOAuthHttpClient(),
+                knownModelIds = provider.models.map { it.id }.toSet(),
+            )
+        }
+        return delegate.oauthAuth(provider)
+    }
 }

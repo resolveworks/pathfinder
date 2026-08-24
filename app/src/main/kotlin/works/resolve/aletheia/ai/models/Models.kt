@@ -25,10 +25,16 @@ class ResolvedAuth(
     val env: Map<String, String> = emptyMap(),
     /** Resolved auth headers (pi's ProviderHeaders): a null value removes the header when merged. */
     val headers: Map<String, String?> = emptyMap(),
+    /**
+     * Credential-specific request base URL overriding the model's (pi
+     * `ModelAuth.baseUrl`, e.g. GitHub Copilot's per-account proxy
+     * endpoint); null keeps the model's own base URL. Not secret.
+     */
+    val baseUrl: String? = null,
 ) {
     override fun toString(): String =
         "ResolvedAuth(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
-            ", env=${env.keys}, headers=${headers.keys})"
+            ", env=${env.keys}, headers=${headers.keys}, baseUrl=$baseUrl)"
 }
 
 /**
@@ -140,6 +146,10 @@ class Models(
                 auth != null && auth.apiKey == null && authHeaders.isNotEmpty() -> null
                 else -> options.apiKey ?: auth?.apiKey
             }
+            // pi applyAuth: `auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model` —
+            // a credential-specific base URL (GitHub Copilot's proxy endpoint)
+            // overrides the model's catalog base URL for this request.
+            val requestModel = auth?.baseUrl?.let { model.copy(baseUrl = it) } ?: model
             val merged = options.copy(
                 apiKey = mergedApiKey,
                 env = if (auth == null || auth.env.isEmpty()) {
@@ -149,7 +159,7 @@ class Models(
                 },
                 headers = mergeHeaders(authHeaders, options.headers),
             )
-            api.streamSimple(model, context, merged).collect { emit(it) }
+            api.streamSimple(requestModel, context, merged).collect { emit(it) }
         }
     }
 

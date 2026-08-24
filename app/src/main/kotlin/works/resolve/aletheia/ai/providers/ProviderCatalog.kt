@@ -122,7 +122,7 @@ class CatalogProvider(
     /** [toModelAuth] projected onto the models-layer [ResolvedAuth] shape. */
     fun toResolvedAuth(key: String, env: Map<String, String>): ResolvedAuth {
         val auth = toModelAuth(key, env)
-        return ResolvedAuth(apiKey = auth.apiKey, env = env, headers = auth.headers)
+        return ResolvedAuth(apiKey = auth.apiKey, env = env, headers = auth.headers, baseUrl = auth.baseUrl)
     }
 
     /**

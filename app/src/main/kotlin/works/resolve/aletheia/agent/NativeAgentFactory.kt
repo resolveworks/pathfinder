@@ -112,7 +112,12 @@ internal fun catalogAuthResolver(
             authContext = authContext,
             overrides = overrides,
         )?.let { result ->
-            ResolvedAuth(apiKey = result.auth.apiKey, env = result.env, headers = result.auth.headers)
+            ResolvedAuth(
+                apiKey = result.auth.apiKey,
+                env = result.env,
+                headers = result.auth.headers,
+                baseUrl = result.auth.baseUrl,
+            )
         }
     }
 
