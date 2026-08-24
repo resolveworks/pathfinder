@@ -1,5 +1,6 @@
 package works.resolve.aletheia.ai.auth
 
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -57,19 +58,17 @@ interface CredentialStore {
  * persistent stores. Writes are serialized per provider through a mutex.
  */
 class InMemoryCredentialStore : CredentialStore {
-    private val credentials = mutableMapOf<String, Credential>()
-    private val locks = mutableMapOf<String, Mutex>()
+    private val credentials = ConcurrentHashMap<String, Credential>()
+    private val locks = ConcurrentHashMap<String, Mutex>()
 
-    private fun lockFor(providerId: String): Mutex = synchronized(locks) {
-        locks.getOrPut(providerId) { Mutex() }
-    }
+    private fun lockFor(providerId: String): Mutex = locks.computeIfAbsent(providerId) { Mutex() }
 
     override suspend fun read(providerId: String): Credential? = lockFor(providerId).withLock {
         credentials[providerId]
     }
 
-    override suspend fun list(): List<CredentialInfo> = synchronized(credentials) {
-        credentials.map { (providerId, credential) -> CredentialInfo(providerId, credential.type) }
+    override suspend fun list(): List<CredentialInfo> = credentials.entries.map { (providerId, credential) ->
+        CredentialInfo(providerId, credential.type)
     }
 
     override suspend fun modify(
@@ -84,8 +83,8 @@ class InMemoryCredentialStore : CredentialStore {
 
     override suspend fun delete(providerId: String): Unit = lockFor(providerId).withLock {
         credentials.remove(providerId)
-        synchronized(locks) {
-            locks.remove(providerId)
-        }
+        // The lock is deliberately retained: removing it here could hand a
+        // queued waiter the old mutex while a new caller creates a fresh one,
+        // breaking serialization.
     }
 }

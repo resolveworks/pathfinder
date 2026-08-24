@@ -5,7 +5,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.test.assertTrue
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
@@ -114,6 +113,24 @@ class EncryptedCredentialStoreTest {
         store.delete("openai")
         assertNull(store.read("openai"))
         assertTrue(!File(dir, "openai.bin").exists())
+    }
+
+    @Test
+    fun `list rejects corrupt or malformed entries instead of skipping them`() = runTest {
+        val dir = createTempDirectory()
+        val store = newStore(dir)
+        store.modify("openai") { ApiKeyCredential("sk") }
+        writeRaw(dir, "zai", "{bad}") // object-looking malformed record
+        assertFailsWith<CredentialFormatException> { store.list() }
+
+        // A decrypt failure (storage-level) also rejects.
+        val failing = EncryptedCredentialStore(
+            dir = dir,
+            encrypt = { it },
+            decrypt = { error("keystore failure") },
+        )
+        assertFailsWith<IllegalStateException> { failing.list() }
+        assertFailsWith<IllegalStateException> { failing.read("openai") }
     }
 
     @Test

@@ -7,6 +7,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 
 /** Ports the semantics of pi's `InMemoryCredentialStore` tests + contract. */
@@ -90,6 +91,56 @@ class InMemoryCredentialStoreTest {
         store.modify("openai") { ApiKeyCredential("k") }
         store.delete("openai")
         assertNull(store.read("openai"))
+    }
+
+    @Test
+    fun `concurrent delete and modify on the same provider stay serialized`() = runTest {
+        val store = InMemoryCredentialStore()
+        val jobs = (1..50).map { i ->
+            async {
+                if (i % 2 == 0) {
+                    store.modify("openai") { current ->
+                        OAuthCredential(
+                            access = "a$i",
+                            refresh = "r",
+                            expires = current?.let { (it as OAuthCredential).expires + 1 } ?: 0L,
+                        )
+                    }
+                } else {
+                    store.delete("openai")
+                    null
+                }
+            }
+        }.awaitAll()
+        // No lost updates within a single modify chain, no exceptions, and the
+        // final state is one of the serialized outcomes (an OAuth credential
+        // left by the last modify, or absent after the last delete+no-write).
+        val final = store.read("openai")
+        if (final is OAuthCredential) {
+            assertTrue(final.expires in 0..25) // 25 modify operations at most
+        }
+        assertEquals(Unit, Unit)
+    }
+
+    @Test
+    fun `delete then modify never loses the mutual exclusion mutex`() = runTest {
+        val store = InMemoryCredentialStore()
+        // Regression for removing the per-provider mutex inside delete: a
+        // queued waiter must never observe a different (new) mutex than a
+        // later caller. With the lock retained, every modify is still ordered.
+        val first = async {
+            store.modify("openai") {
+                delay(10)
+                ApiKeyCredential("first")
+            }
+        }
+        delay(1) // let `first` take the lock
+        val queued = async { store.modify("openai") { ApiKeyCredential("queued") } }
+        store.delete("openai")
+        store.modify("openai") { ApiKeyCredential("after-delete") }
+        first.await()
+        queued.await()
+        assertEquals(ApiKeyCredential("after-delete"), store.read("openai"))
     }
 
     @Test

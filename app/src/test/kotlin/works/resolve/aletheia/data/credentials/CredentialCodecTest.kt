@@ -26,8 +26,10 @@ class CredentialCodecTest {
     }
 
     @Test
-    fun `legacy record without key or type is rejected`() {
+    fun `malformed object-like json is rejected, not treated as a bare key`() {
+        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{bad}") }
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{}") }
+        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{\"type\":\"api_key\",\"key\":}") }
     }
 
     @Test
@@ -122,6 +124,19 @@ class CredentialCodecTest {
         val credential = ApiKeyCredential(key = "sk-SECRET", env = mapOf("A" to "1"))
         assertFalse(credential.toString().contains("sk-SECRET"))
         assertEquals("ApiKeyCredential(key=<redacted>, env=[A])", credential.toString())
+    }
+
+    @Test
+    fun `oauth reserved extra keys are rejected`() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            OAuthCredential(
+                access = "a",
+                refresh = "r",
+                expires = 1L,
+                extras = mapOf("refresh" to kotlinx.serialization.json.JsonPrimitive("evil")),
+            )
+        }
+        assertTrue(error.message.orEmpty().contains("refresh"))
     }
 
     @Test

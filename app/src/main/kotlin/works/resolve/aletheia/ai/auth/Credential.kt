@@ -49,10 +49,21 @@ data class OAuthCredential(
     val expires: Long,
     val extras: Map<String, JsonElement> = emptyMap(),
 ) : Credential {
+    init {
+        // Extra fields are written verbatim next to the canonical fields;
+        // reserved names would corrupt the record on encode.
+        val reserved = extras.keys intersect RESERVED_FIELDS
+        require(reserved.isEmpty()) { "OAuth extra fields must not use reserved names: $reserved" }
+    }
+
     override val type: CredentialType = CredentialType.OAUTH
 
     override fun toString(): String =
         "OAuthCredential(access=<redacted>, refresh=<redacted>, expires=$expires, extras=${extras.keys})"
+
+    companion object {
+        val RESERVED_FIELDS: Set<String> = setOf("type", "access", "refresh", "expires")
+    }
 }
 
 /** Non-secret credential metadata for account/status enumeration (pi `CredentialInfo`). */

@@ -52,15 +52,15 @@ object CredentialCodec {
     /** Decodes current and legacy shapes; throws [CredentialFormatException] on malformed input. */
     fun decode(raw: String): Credential {
         val trimmed = raw.trim()
-        val element = run {
-            if (trimmed.isEmpty() || trimmed.first() != '{' || trimmed.last() != '}') return legacyApiKey(trimmed)
-            try {
-                json.parseToJsonElement(trimmed)
-            } catch (_: Exception) {
-                return legacyApiKey(trimmed)
-            }
+        // Only true non-object bare text is a legacy API-key record;
+        // object-looking input must be valid typed JSON or it is malformed.
+        if (trimmed.isEmpty() || trimmed.first() != '{' || trimmed.last() != '}') return legacyApiKey(trimmed)
+        val element = try {
+            json.parseToJsonElement(trimmed)
+        } catch (_: Exception) {
+            throw CredentialFormatException("Malformed credential JSON")
         }
-        val obj = element as? JsonObject ?: return legacyApiKey(trimmed)
+        val obj = element as? JsonObject ?: throw CredentialFormatException("Credential JSON is not an object")
         return when (val type = (obj["type"] as? JsonPrimitive)?.takeIf { it.isString }?.content) {
             TYPE_API_KEY -> decodeApiKey(obj)
             TYPE_OAUTH -> decodeOAuth(obj)
@@ -88,14 +88,12 @@ object CredentialCodec {
         refresh = stringField(obj, "refresh"),
         expires = (obj["expires"] as? JsonPrimitive)?.content?.toLongOrNull()
             ?: throw CredentialFormatException("Missing or non-numeric expires"),
-        extras = obj.filterKeys { it !in OAUTH_KNOWN_FIELDS },
+        extras = obj.filterKeys { it !in OAuthCredential.RESERVED_FIELDS },
     )
 
     private fun stringField(obj: JsonObject, name: String): String =
         (obj[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
             ?: throw CredentialFormatException("Missing or non-string $name")
-
-    private val OAUTH_KNOWN_FIELDS = setOf("type", "access", "refresh", "expires")
 
     private const val TYPE_API_KEY = "api_key"
     private const val TYPE_OAUTH = "oauth"

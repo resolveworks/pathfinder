@@ -2,6 +2,7 @@ package works.resolve.aletheia.data.credentials
 
 import android.content.Context
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -36,11 +37,9 @@ class EncryptedCredentialStore(
         decrypt = cipher::decrypt,
     )
 
-    private val locks = mutableMapOf<String, Mutex>()
+    private val locks = ConcurrentHashMap<String, Mutex>()
 
-    private fun lockFor(providerId: String): Mutex = synchronized(locks) {
-        locks.getOrPut(providerId) { Mutex() }
-    }
+    private fun lockFor(providerId: String): Mutex = locks.computeIfAbsent(providerId) { Mutex() }
 
     private fun fileFor(providerId: String): File {
         require(PROVIDER_ID_REGEX.matches(providerId)) { "Invalid provider id" }
@@ -77,24 +76,22 @@ class EncryptedCredentialStore(
         decodeRaw(providerId)
     }
 
-    override suspend fun list(): List<CredentialInfo> = withContext(Dispatchers.IO) {
-        (dir.listFiles { f -> f.isFile && f.name.endsWith(FILE_SUFFIX) } ?: emptyArray())
-            .mapNotNull { file ->
-                // Metadata only: the type tag requires decryption, but no
-                // secret is exposed and no key command is executed.
-                val raw = try {
-                    String(decrypt(file.readBytes()), Charsets.UTF_8)
-                } catch (_: Exception) {
-                    return@mapNotNull null // Unreadable/corrupt entry: skip, never throw secrets-bearing errors.
-                }
-                val type = try {
-                    CredentialCodec.decode(raw).type
-                } catch (_: CredentialFormatException) {
-                    return@mapNotNull null
-                }
-                CredentialInfo(file.name.removeSuffix(FILE_SUFFIX), type)
-            }
-            .sortedBy { it.providerId }
+    override suspend fun list(): List<CredentialInfo> {
+        val names = withContext(Dispatchers.IO) {
+            (dir.listFiles { f -> f.isFile && f.name.endsWith(FILE_SUFFIX) } ?: emptyArray())
+                .map { it.name.removeSuffix(FILE_SUFFIX) }
+        }
+        val infos = mutableListOf<CredentialInfo>()
+        for (providerId in names) {
+            // Each entry is read under its provider lock so a same-provider
+            // modify/delete cannot interleave, and storage/format failures
+            // reject: configured credentials never silently disappear from
+            // the listing. Only the non-secret type tag is surfaced.
+            val credential = lockFor(providerId).withLock { decodeRaw(providerId) }
+                ?: continue // deleted between snapshot and lock: a race, not a failure
+            infos += CredentialInfo(providerId, credential.type)
+        }
+        return infos.sortedBy { it.providerId }
     }
 
     override suspend fun modify(

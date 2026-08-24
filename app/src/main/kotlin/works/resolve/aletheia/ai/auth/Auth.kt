@@ -14,11 +14,12 @@ package works.resolve.aletheia.ai.auth
 /**
  * Request auth for a single model request (pi `ModelAuth`). If a value cannot
  * be expressed as `apiKey`, `headers`, or `baseUrl`, it is provider config,
- * not auth.
+ * not auth. Header values are nullable (pi `ProviderHeaders`): null
+ * suppresses a lower-level default header during merging.
  */
 data class ModelAuth(
     val apiKey: String? = null,
-    val headers: Map<String, String> = emptyMap(),
+    val headers: Map<String, String?> = emptyMap(),
     val baseUrl: String? = null,
 )
 

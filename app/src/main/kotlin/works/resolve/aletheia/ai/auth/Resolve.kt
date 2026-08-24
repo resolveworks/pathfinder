@@ -1,5 +1,9 @@
 package works.resolve.aletheia.ai.auth
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
+
 /**
  * Ported from pi `packages/ai/src/auth/resolve.ts`: auth resolution shared by
  * model collections. A stored credential owns the provider: ambient/env is
@@ -7,8 +11,12 @@ package works.resolve.aletheia.ai.auth
  * failed refresh or for a credential type without a matching handler.
  *
  * Cancellation: pi races every operation against an `AbortSignal`; here the
- * suspend call's structured cancellation plays that role, so every await
- * point (including the refresh timeout) is cancellation-friendly.
+ * suspend call's structured cancellation plays that role. Caller
+ * cancellation ([CancellationException]) always propagates unwrapped; only
+ * genuine failures are wrapped in [ModelsError]. The internal 15s OAuth
+ * refresh timeout is pi's `AbortSignal.timeout` — it is an internal
+ * [TimeoutCancellationException], wrapped as an OAUTH error, and is distinct
+ * from external cancellation.
  */
 
 /** Pi `ModelsErrorCode` (auth-adjacent subset kept for future orchestrators). */
@@ -116,11 +124,9 @@ private const val DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 15_000L
  * OAuth resolution with double-checked locking (pi `resolveStoredOAuth`):
  * tokens with less than five minutes remaining lock, re-check expiry under
  * the lock, refresh once globally, and persist the rotated credential before
- * release.
- *
- * Port note: pi bounds the refresh network call with a 15s `AbortSignal`
- * timeout; here the caller's cancellation applies. A withTimeout wrapper can
- * be added when the refresh implementations are ported.
+ * release. The refresh network call is bounded by pi's 15s timeout
+ * (`AbortSignal.timeout` → [withTimeout]); an internal timeout is reported as
+ * an OAUTH error while external caller cancellation propagates unchanged.
  */
 private suspend fun resolveStoredOAuth(
     credentials: CredentialStore,
@@ -141,12 +147,18 @@ private suspend fun resolveStoredOAuth(
                 val currentOAuth = current as? OAuthCredential ?: return@modify null // logged out meanwhile
                 if (!expiresSoon(currentOAuth)) return@modify null // another request refreshed
                 try {
-                    oauth.refresh(currentOAuth)
+                    withTimeout(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS) { oauth.refresh(currentOAuth) }
+                } catch (error: TimeoutCancellationException) {
+                    throw ModelsError(ModelsErrorCode.OAUTH, "OAuth refresh timed out for $providerId after ${DEFAULT_OAUTH_REFRESH_TIMEOUT_MS}ms")
+                } catch (error: CancellationException) {
+                    throw error // caller cancellation of the whole resolution
                 } catch (error: Throwable) {
                     throw ModelsError(ModelsErrorCode.OAUTH, "OAuth refresh failed for $providerId", error)
                 }
             }
         } catch (error: ModelsError) {
+            throw error
+        } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
             throw ModelsError(ModelsErrorCode.AUTH, "Credential store modify failed for $providerId", error)
@@ -163,6 +175,8 @@ private suspend fun resolveStoredOAuth(
 
     return try {
         AuthResult(auth = oauth.toAuth(credential), source = "OAuth")
+    } catch (error: CancellationException) {
+        throw error
     } catch (error: Throwable) {
         throw ModelsError(ModelsErrorCode.OAUTH, "OAuth auth derivation failed for $providerId", error)
     }
@@ -176,6 +190,8 @@ private suspend fun resolveApiKey(
 ): AuthResult? =
     try {
         apiKey.resolve(authContext, credential)
+    } catch (error: CancellationException) {
+        throw error
     } catch (error: Throwable) {
         throw ModelsError(ModelsErrorCode.AUTH, "API key auth failed for provider $providerId", error)
     }
@@ -186,6 +202,8 @@ private suspend fun readCredential(
 ): Credential? =
     try {
         credentials.read(providerId)
+    } catch (error: CancellationException) {
+        throw error
     } catch (error: Throwable) {
         throw ModelsError(ModelsErrorCode.AUTH, "Credential store read failed for $providerId", error)
     }

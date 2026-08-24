@@ -5,8 +5,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 
 /** Ports the semantics of pi `packages/ai/src/auth/resolve.ts`. */
@@ -216,6 +220,80 @@ class ResolveProviderAuthTest {
         // OAuth credential stored, but only apiKey handler configured.
         val apiKey = StubApiKeyAuth(resolved = AuthResult(ModelAuth(apiKey = "ambient")))
         assertNull(resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext()))
+    }
+
+    @Test
+    fun `oauth refresh is bounded by the 15s internal timeout`() = runTest {
+        val store = InMemoryCredentialStore()
+        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = System.currentTimeMillis()) }
+        val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", System.currentTimeMillis() + 60 * 60 * 1000L)) {
+            override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
+                delay(Long.MAX_VALUE) // virtual time: fast-forwards past the 15s bound
+                error("unreachable")
+            }
+        }
+        val error = assertFailsWith<ModelsError> {
+            resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext())
+        }
+        assertEquals(ModelsErrorCode.OAUTH, error.code)
+        assertTrue(error.message.orEmpty().contains("timed out"))
+        // Internal timeout is not caller cancellation and does not tear down the caller.
+    }
+
+    @Test
+    fun `caller cancellation during refresh propagates as cancellation, not ModelsError`() = runTest {
+        val store = InMemoryCredentialStore()
+        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = System.currentTimeMillis()) }
+        val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", System.currentTimeMillis() + 60 * 60 * 1000L)) {
+            override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
+                awaitCancellation()
+            }
+        }
+        val job = launch {
+            try {
+                resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext())
+            } catch (e: ModelsError) {
+                error("cancellation must not be wrapped: ${e.message}")
+            }
+        }
+        job.cancel()
+        job.join()
+        assertTrue(job.isCancelled)
+    }
+
+    @Test
+    fun `caller cancellation during api key resolve propagates as cancellation`() = runTest {
+        val store = InMemoryCredentialStore()
+        val apiKey = StubApiKeyAuth(
+            resolveImpl = { awaitCancellation() },
+        )
+        val job = launch {
+            try {
+                resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext())
+            } catch (e: ModelsError) {
+                error("cancellation must not be wrapped: ${e.message}")
+            }
+        }
+        job.cancel()
+        job.join()
+        assertTrue(job.isCancelled)
+    }
+
+    @Test
+    fun `caller cancellation during credential read propagates as cancellation`() = runTest {
+        val store = object : CredentialStore by InMemoryCredentialStore() {
+            override suspend fun read(providerId: String): Credential? = awaitCancellation()
+        }
+        val job = launch {
+            try {
+                resolveProviderAuth(provider(), store, RecordingAuthContext())
+            } catch (e: ModelsError) {
+                error("cancellation must not be wrapped: ${e.message}")
+            }
+        }
+        job.cancel()
+        job.join()
+        assertTrue(job.isCancelled)
     }
 
     @Test
