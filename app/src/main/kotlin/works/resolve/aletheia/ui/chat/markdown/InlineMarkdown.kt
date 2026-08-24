@@ -5,6 +5,8 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -53,15 +55,15 @@ private fun AnnotatedString.Builder.render(node: Node, styles: InlineMarkdownSty
     when (node) {
         is Text -> append(node.literal)
 
-        is Emphasis -> styled(SpanStyle(fontStyle = FontStyle.Italic)) { renderChildren(node, styles) }
+        is Emphasis -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { renderChildren(node, styles) }
 
-        is StrongEmphasis -> styled(SpanStyle(fontWeight = FontWeight.Bold)) { renderChildren(node, styles) }
+        is StrongEmphasis -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { renderChildren(node, styles) }
 
-        is Strikethrough -> styled(
+        is Strikethrough -> withStyle(
             SpanStyle(textDecoration = TextDecoration.LineThrough),
         ) { renderChildren(node, styles) }
 
-        is Code -> styled(
+        is Code -> withStyle(
             SpanStyle(
                 fontFamily = styles.monospaceFontFamily,
                 background = styles.codeBackgroundColor,
@@ -101,24 +103,11 @@ private fun AnnotatedString.Builder.renderLink(node: Link, styles: InlineMarkdow
         color = styles.linkColor,
         textDecoration = TextDecoration.Underline,
     )
-    val start = length
-    renderChildren(node, styles)
-    val end = length
-    addStyle(linkStyle, start, end)
-    addLink(
-        LinkAnnotation.Url(node.destination, TextLinkStyles(linkStyle)),
-        start,
-        end,
-    )
-}
-
-private fun AnnotatedString.Builder.styled(
-    style: SpanStyle,
-    content: AnnotatedString.Builder.() -> Unit,
-) {
-    val start = length
-    content()
-    addStyle(style, start, length)
+    withStyle(linkStyle) {
+        withLink(LinkAnnotation.Url(node.destination, TextLinkStyles(linkStyle))) {
+            renderChildren(node, styles)
+        }
+    }
 }
 
 /** Flattens a node subtree to its unstyled text, for link text/href comparison and image alt. */
