@@ -113,7 +113,7 @@ class ModelsTest {
         assertEquals(1, events.size)
         val error = events.single() as AssistantMessageEvent.Error
         assertEquals(StopReason.ERROR, error.reason)
-        assertTrue(error.error.errorMessage!!.contains("Provider is not configured"))
+        assertTrue(error.error.errorMessage!!.contains("Provider 'prov' is not configured"))
         assertEquals(0, api.calls)
     }
 

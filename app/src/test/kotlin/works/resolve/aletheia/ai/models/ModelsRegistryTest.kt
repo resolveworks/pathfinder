@@ -71,7 +71,7 @@ class ModelsRegistryTest {
             Context(messages = listOf(UserMessage.ofText("hi"))),
         ).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.single())
-        assertTrue("Provider is not configured" in (error.error.errorMessage ?: ""))
+        assertTrue("Provider 'zai' is not configured" in (error.error.errorMessage ?: ""))
     }
 
     @Test

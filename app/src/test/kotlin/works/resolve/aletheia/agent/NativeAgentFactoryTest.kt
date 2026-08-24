@@ -2,6 +2,8 @@ package works.resolve.aletheia.agent
 
 import works.resolve.aletheia.ai.core.TextContent
 import works.resolve.aletheia.ai.core.UserMessage
+import works.resolve.aletheia.ai.core.Model
+import works.resolve.aletheia.ai.providers.CatalogProvider
 import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.ai.testing.TestCatalogs
 import works.resolve.aletheia.ai.transport.HttpStreamingTransport
@@ -203,6 +205,38 @@ class NativeAgentFactoryTest {
     }
 
     @Test
+    fun `effective base URL defaults from the model, not the provider`() {
+        runBlocking {
+            // A catalog whose model carries its own base URL (the pi invariant
+            // we honor: request-model selection defaults from model.baseUrl).
+            val modelBaseUrlModel = works.resolve.aletheia.ai.core.Model(
+                id = "m",
+                name = "M",
+                api = "openai-completions",
+                provider = "multi",
+                baseUrl = "https://model.test/v1",
+            )
+            val catalog = ProviderCatalog(
+                listOf(
+                    CatalogProvider(
+                        id = "multi",
+                        name = "Multi",
+                        baseUrl = "https://provider.test/v1",
+                        models = listOf(modelBaseUrlModel),
+                    ),
+                ),
+            )
+            val transport = RecordingTransport()
+            val agent = NativeAgentFactory(FakeApiKeyStore(ApiKeyCredential("k")), catalog, transport)
+                .create(ModelSettings(providerId = "multi", modelId = "m", baseUrl = null), "s1", emptyList())
+
+            agent.prompt("ping")
+
+            assertEquals("https://model.test/v1/chat/completions", transport.requests.single().url)
+        }
+    }
+
+    @Test
     fun `an incomplete credential resolves to null and surfaces as a single error event`() {
         runBlocking {
             // Cloudflare requires key + both gateway env values; the key alone
@@ -221,7 +255,7 @@ class NativeAgentFactoryTest {
             val last = agent.state.value.messages.last()
             val error = assertIs<works.resolve.aletheia.ai.core.AssistantMessage>(last)
             assertEquals(works.resolve.aletheia.ai.core.StopReason.ERROR, error.stopReason)
-            assertTrue("Provider is not configured" in (error.errorMessage ?: ""))
+            assertTrue("Provider 'cloudflare-ai-gateway' is not configured" in (error.errorMessage ?: ""))
             assertTrue(transport.requests.isEmpty(), "no request must be sent")
         }
     }

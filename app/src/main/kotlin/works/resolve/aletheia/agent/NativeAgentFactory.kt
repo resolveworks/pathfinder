@@ -39,7 +39,7 @@ class NativeAgentFactory(
             )
         // The selected effective model is created once (pi's requestModel):
         // the catalog model with the normalized override/default base URL.
-        val effectiveModel = model.copy(baseUrl = normalizeBaseUrl(settings.baseUrl ?: entry.baseUrl))
+        val effectiveModel = model.copy(baseUrl = normalizeBaseUrl(settings.baseUrl ?: model.baseUrl))
 
         val provider = entry.toRuntimeProvider(
             transport = transport,

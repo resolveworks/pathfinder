@@ -94,11 +94,11 @@ class Models(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                emitAuthError(model, provider, "Failed to resolve stored credential")
+                emitAuthError(model, provider, "Failed to resolve stored credential for provider '${provider.id}'")
                 return@flow
             }
             if (options.apiKey == null && auth == null) {
-                emitAuthError(model, provider, "Provider is not configured")
+                emitAuthError(model, provider, "Provider '${provider.id}' is not configured")
                 return@flow
             }
             val merged = options.copy(
@@ -114,7 +114,11 @@ class Models(
         }
     }
 
-    private suspend fun kotlinx.coroutines.flow.FlowCollector<AssistantMessageEvent>.emitAuthError(model: Model, provider: Provider, message: String) {
+    private suspend fun kotlinx.coroutines.flow.FlowCollector<AssistantMessageEvent>.emitAuthError(
+        model: Model,
+        provider: Provider,
+        message: String,
+    ) {
         emit(
             AssistantMessageEvent.Error(
                 StopReason.ERROR,
@@ -125,7 +129,7 @@ class Models(
                     model = model.id,
                     stopReason = StopReason.ERROR,
                     // Safe generic message: no exception or credential text.
-                    errorMessage = "$message for provider '${provider.id}'",
+                    errorMessage = message,
                     timestamp = System.currentTimeMillis(),
                 ),
             ),
