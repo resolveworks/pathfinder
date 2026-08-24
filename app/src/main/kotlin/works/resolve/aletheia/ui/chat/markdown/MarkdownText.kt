@@ -55,7 +55,6 @@ fun MarkdownText(markdown: String, modifier: Modifier = Modifier) {
     val document: Node = remember(markdown) { MarkdownParser.parser.parse(markdown) }
     val inlineStyles = InlineMarkdownStyles(
         linkColor = MaterialTheme.colorScheme.primary,
-        linkUrlColor = MaterialTheme.colorScheme.onSurfaceVariant,
         codeBackgroundColor = MaterialTheme.colorScheme.surfaceVariant,
         codeTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
     )
