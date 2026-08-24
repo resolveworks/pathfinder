@@ -18,10 +18,11 @@ import works.resolve.aletheia.data.settings.ModelSettings
  * All credential ownership lives behind the provider's auth resolver (pi's
  * auth.resolve): credentials are read once per request inside Models.stream's
  * lazy flow, so a rotated or completed credential takes effect on the next
- * prompt. The API key never enters the agent, its options, or any log; an
- * incomplete credential resolves to null (defense in depth on top of the UI's
- * CatalogProvider.isCredentialComplete gate) and surfaces as a single safe
- * Error event from Models.
+ * prompt. An explicit request key is shaped by the same resolver without
+ * reading the store. The API key never enters the agent, its options, or any
+ * log; an incomplete credential resolves to null (defense in depth on top of
+ * the UI's CatalogProvider.isCredentialComplete gate) and surfaces as a
+ * single safe Error event from Models.
  */
 class NativeAgentFactory(
     private val credentials: ApiKeyStore,
@@ -44,10 +45,16 @@ class NativeAgentFactory(
         val provider = entry.toRuntimeProvider(
             transport = transport,
             retry = retry,
-            authResolver = {
-                credentials.getCredential(entry.id)
-                    ?.takeIf { entry.isCredentialComplete(it.key, it.env) }
-                    ?.let { credential -> entry.toResolvedAuth(credential.key, credential.env) }
+            authResolver = { explicitKey ->
+                if (explicitKey != null) {
+                    // Explicit request key: shape it without touching the store
+                    // (pi's resolveProviderAuth overrides).
+                    entry.toResolvedAuth(explicitKey, emptyMap())
+                } else {
+                    credentials.getCredential(entry.id)
+                        ?.takeIf { entry.isCredentialComplete(it.key, it.env) }
+                        ?.let { credential -> entry.toResolvedAuth(credential.key, credential.env) }
+                }
             },
         )
         val models = Models(listOf(provider))

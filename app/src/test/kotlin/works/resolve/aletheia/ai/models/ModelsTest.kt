@@ -8,6 +8,7 @@ import works.resolve.aletheia.ai.core.Model
 import works.resolve.aletheia.ai.core.OpenAiCompletionsOptions
 import works.resolve.aletheia.ai.core.SimpleStreamOptions
 import works.resolve.aletheia.ai.core.StopReason
+import works.resolve.aletheia.ai.testing.TestCatalogs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -178,8 +179,9 @@ class ModelsTest {
     }
 
     @Test
-    fun explicitApiKeyBypassesResolver() = runTest {
-        var resolverCalls = 0
+    fun explicitApiKeyIsShapedByResolverWithoutReadingStoredCredentials() = runTest {
+        var storeReads = 0
+        var resolverKey: String? = null
         val api = RecordingApi()
         val registry = Models(
             listOf(
@@ -187,9 +189,15 @@ class ModelsTest {
                     id = "prov",
                     name = "Provider",
                     baseUrl = "https://example.test",
-                    authResolver = {
-                        resolverCalls += 1
-                        ResolvedAuth("resolved-key")
+                    authResolver = { explicitKey ->
+                        if (explicitKey != null) {
+                            // pi's resolveProviderAuth overrides: shape the
+                            // explicit key without touching the store.
+                            ResolvedAuth(apiKey = explicitKey)
+                        } else {
+                            storeReads += 1
+                            ResolvedAuth("resolved-key")
+                        }
                     },
                     models = listOf(model()),
                     api = api,
@@ -201,10 +209,71 @@ class ModelsTest {
             .stream(model(), Context(messages = emptyList()), SimpleStreamOptions(apiKey = "explicit"))
             .toList()
 
-        assertEquals(0, resolverCalls)
+        assertEquals(0, storeReads)
         assertEquals(1, api.calls)
         assertEquals("explicit", api.lastApiKey)
         assertTrue(events.single() is AssistantMessageEvent.Done)
+    }
+
+    @Test
+    fun cloudflareExplicitKeyAndEnvResolveToHeaderAuthOnly() = runTest {
+        val entry = TestCatalogs.CLOUDFLARE
+        var storeReads = 0
+        val api = RecordingApi()
+        // Factory-style resolver: explicit keys bypass the store but keep the
+        // provider's auth shaping (cf-aig-authorization).
+        val authResolver: suspend (String?) -> ResolvedAuth? = { explicitKey ->
+            if (explicitKey != null) {
+                entry.toResolvedAuth(explicitKey, emptyMap())
+            } else {
+                storeReads += 1
+                null
+            }
+        }
+        val registry = Models(
+            listOf(
+                Provider(
+                    id = entry.id,
+                    name = entry.name,
+                    baseUrl = entry.baseUrl,
+                    authResolver = authResolver,
+                    models = entry.models,
+                    api = api,
+                ),
+            ),
+        )
+
+        val events = registry.stream(
+            entry.models.single(),
+            Context(messages = emptyList()),
+            SimpleStreamOptions(
+                apiKey = "explicit-cf-key",
+                env = mapOf(
+                    "CLOUDFLARE_ACCOUNT_ID" to "acct-explicit",
+                    "CLOUDFLARE_GATEWAY_ID" to "gw-explicit",
+                ),
+            ),
+        ).toList()
+
+        assertEquals(0, storeReads)
+        assertTrue(events.single() is AssistantMessageEvent.Done)
+        // No apiKey path: the explicit key became a resolved header only.
+        assertEquals(null, api.lastApiKey)
+        assertEquals(
+            mapOf(
+                "cf-aig-authorization" to "Bearer explicit-cf-key",
+                "Authorization" to null,
+                "x-api-key" to null,
+            ),
+            api.lastHeaders,
+        )
+        assertEquals(
+            mapOf(
+                "CLOUDFLARE_ACCOUNT_ID" to "acct-explicit",
+                "CLOUDFLARE_GATEWAY_ID" to "gw-explicit",
+            ),
+            api.lastEnv,
+        )
     }
 
     @Test

@@ -41,8 +41,14 @@ class Provider(
     val id: String,
     val name: String,
     val baseUrl: String,
-    /** Resolves this provider's stored credential (pi's auth.resolve): key and/or headers + env. */
-    val authResolver: (suspend () -> ResolvedAuth?)? = null,
+    /**
+     * Resolves this provider's auth (pi's auth.resolve with request
+     * overrides): a non-null [apiKey] is an explicit request key that must be
+     * shaped by the provider's auth semantics (e.g. Cloudflare's
+     * cf-aig-authorization header) WITHOUT reading stored credentials; null
+     * means resolve the stored credential. Returns null when unconfigured.
+     */
+    val authResolver: (suspend (apiKey: String?) -> ResolvedAuth?)? = null,
     val models: List<Model>,
     val api: ChatApi,
 )
@@ -73,9 +79,11 @@ class Models(
      * Starts a chat stream for [model] (pi's streamSimple ownership): the
      * model's provider must be registered; auth is resolved lazily inside the
      * flow and merged with [options] using pi's applyAuth precedence —
-     * explicit request fields win (an explicit apiKey skips the resolver
-     * entirely), env values merge per field with the request on top, and
-     * resolved auth headers merge under explicit request headers
+     * explicit request fields win, but like pi's resolveProviderAuth an
+     * explicit apiKey is still passed through the provider's auth resolver so
+     * custom auth shaping (Cloudflare's header auth) applies to it, without
+     * reading stored credentials; env values merge per field with the request
+     * on top, and resolved auth headers merge under explicit request headers
      * case-insensitively (pi's mergeHeaders). An absent or failing credential resolution surfaces as a single safe terminal
      * [AssistantMessageEvent.Error] event; unknown providers throw
      * immediately.
@@ -90,12 +98,7 @@ class Models(
             // Resolve the credential lazily inside the flow so stored-credential
             // lookups can suspend without making stream() a suspend call.
             val auth = try {
-                if (options.apiKey != null) {
-                    // Explicit key bypasses the resolver entirely.
-                    null
-                } else {
-                    provider.authResolver?.invoke()
-                }
+                provider.authResolver?.invoke(options.apiKey)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -107,8 +110,16 @@ class Models(
                 return@flow
             }
             val authHeaders = auth?.headers ?: emptyMap()
+            // An explicit or resolved key normally wins per-field, but a
+            // header-shaped resolution (auth.apiKey == null with headers, e.g.
+            // Cloudflare) consumed the key into those headers; there is no
+            // default apiKey/Authorization path left to fill.
+            val mergedApiKey = when {
+                auth != null && auth.apiKey == null && authHeaders.isNotEmpty() -> null
+                else -> options.apiKey ?: auth?.apiKey
+            }
             val merged = options.copy(
-                apiKey = options.apiKey ?: auth?.apiKey,
+                apiKey = mergedApiKey,
                 env = if (auth == null || auth.env.isEmpty()) {
                     options.env
                 } else {

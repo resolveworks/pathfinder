@@ -164,6 +164,9 @@ fun mergeHeaders(
     return merged
 }
 
-/** True when [headers] sets a non-null value for [name] (case-insensitive), pi's hasHeader. */
+/**
+ * True when [headers] sets a non-blank value for [name] (case-insensitive),
+ * pi's hasHeader.
+ */
 fun hasHeader(headers: Map<String, String?>, name: String): Boolean =
-    headers.any { it.key.lowercase() == name && it.value != null }
+    headers.any { it.key.lowercase() == name && !it.value.isNullOrBlank() }

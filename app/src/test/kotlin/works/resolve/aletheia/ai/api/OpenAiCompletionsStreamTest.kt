@@ -124,6 +124,21 @@ class OpenAiCompletionsStreamTest {
     }
 
     @Test
+    fun `blank auth header does not stand in for an api key`() = runTest {
+        val transport = FakeTransport()
+        val events = api(transport)
+            .stream(
+                model,
+                context,
+                OpenAiCompletionsOptions(headers = mapOf("cf-aig-authorization" to " ")),
+            )
+            .toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.single())
+        assertTrue(error.partial.errorMessage!!.contains("No API key"))
+        assertTrue(transport.requests.isEmpty())
+    }
+
+    @Test
     fun `ordinary api key becomes the bearer token with mandatory accept header`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(
