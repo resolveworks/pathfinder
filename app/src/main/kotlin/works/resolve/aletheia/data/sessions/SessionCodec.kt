@@ -263,12 +263,14 @@ internal object SessionCodec {
         is TextContent -> buildJsonObject {
             put("type", "text")
             put("text", content.text)
+            content.textSignature?.let { put("textSignature", it) }
         }
 
         is ThinkingContent -> buildJsonObject {
             put("type", "thinking")
             put("thinking", content.thinking)
             content.thinkingSignature?.let { put("thinkingSignature", it) }
+            if (content.redacted) put("redacted", true)
         }
 
         is ImageContent -> buildJsonObject {
@@ -282,6 +284,7 @@ internal object SessionCodec {
             put("id", content.id)
             put("name", content.name)
             put("arguments", content.arguments)
+            content.thoughtSignature?.let { put("thoughtSignature", it) }
         }
     }
 
@@ -291,11 +294,13 @@ internal object SessionCodec {
         return when (val type = obj.string("type")) {
             "text" -> TextContent(
                 text = obj.string("text") ?: throw SessionDataException("Malformed session data: text content missing text"),
+                textSignature = obj.string("textSignature"),
             )
 
             "thinking" -> ThinkingContent(
                 thinking = obj.string("thinking") ?: throw SessionDataException("Malformed session data: thinking content missing thinking"),
                 thinkingSignature = obj.string("thinkingSignature"),
+                redacted = obj.boolean("redacted") ?: false,
             )
 
             "image" -> ImageContent(
@@ -307,6 +312,7 @@ internal object SessionCodec {
                 id = obj.string("id") ?: throw SessionDataException("Malformed session data: tool call missing id"),
                 name = obj.string("name") ?: throw SessionDataException("Malformed session data: tool call missing name"),
                 arguments = obj.string("arguments") ?: throw SessionDataException("Malformed session data: tool call missing arguments"),
+                thoughtSignature = obj.string("thoughtSignature"),
             )
 
             else -> throw SessionDataException("Unknown content type: $type")

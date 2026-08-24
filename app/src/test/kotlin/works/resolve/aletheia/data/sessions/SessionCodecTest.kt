@@ -4,6 +4,8 @@ import works.resolve.aletheia.ai.core.AssistantMessage
 import works.resolve.aletheia.ai.core.Cost
 import works.resolve.aletheia.ai.core.StopReason
 import works.resolve.aletheia.ai.core.TextContent
+import works.resolve.aletheia.ai.core.ThinkingContent
+import works.resolve.aletheia.ai.core.ToolCall
 import works.resolve.aletheia.ai.core.ToolResultMessage
 import works.resolve.aletheia.ai.core.Usage
 import works.resolve.aletheia.ai.core.UserMessage
@@ -131,6 +133,70 @@ class SessionCodecTest {
                           "message":{"role":"user","timestamp":0,"content":[]}}],"leafId":null}""",
         )
         assertNull(without.entries.single().parentId)
+    }
+
+    @Test
+    fun providerMetadataRoundTrips() {
+        val message = AssistantMessage(
+            content = listOf(
+                TextContent("answer", textSignature = "ts-1"),
+                ThinkingContent("th", thinkingSignature = "sig", redacted = true),
+                ToolCall("tc-1", "tool", "{}", thoughtSignature = "t_sig"),
+            ),
+            api = "api",
+            provider = "p",
+            model = "m",
+            usage = Usage(1, 2, 0, 0, 0, 3, Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
+            stopReason = StopReason.STOP,
+            timestamp = 1L,
+        )
+        val session = Session("s", "t", 1, 1, listOf(MessageEntry("m0", null, 1L, message)), "m0")
+        assertEquals(session, SessionCodec.decode(SessionCodec.encode(session)))
+    }
+
+    @Test
+    fun providerMetadataAbsentDecodesToDefaults() {
+        // v2 session written before replay-metadata fields existed.
+        val text = """
+            {"format":2,"id":"s","title":"t","createdAt":1,"updatedAt":1,
+             "entries":[{"type":"message","id":"m0","timestamp":1,
+               "message":{"role":"assistant","timestamp":1,
+                "content":[
+                  {"type":"text","text":"a"},
+                  {"type":"thinking","thinking":"th"},
+                  {"type":"toolCall","id":"tc","name":"tool","arguments":"{}"}],
+                "api":"api","provider":"p","model":"m","stopReason":"STOP",
+                "usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":2,
+                         "cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}}}}],
+             "leafId":"m0"}
+        """.trimIndent()
+        val content = (SessionCodec.decode(text).messages.single() as AssistantMessage).content
+        val textContent = content[0] as TextContent
+        val thinking = content[1] as ThinkingContent
+        val toolCall = content[2] as ToolCall
+        assertNull(textContent.textSignature)
+        assertNull(thinking.thinkingSignature)
+        assertEquals(false, thinking.redacted)
+        assertNull(toolCall.thoughtSignature)
+    }
+
+    @Test
+    fun absentMetadataFieldsOmittedFromEncoding() {
+        val message = AssistantMessage(
+            content = listOf(TextContent("a"), ThinkingContent("th"), ToolCall("tc", "tool", "{}")),
+            api = "api",
+            provider = "p",
+            model = "m",
+            usage = Usage(1, 2, 0, 0, 0, 3, Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
+            stopReason = StopReason.STOP,
+            timestamp = 1L,
+        )
+        val session = Session("s", "t", 1, 1, listOf(MessageEntry("m0", null, 1L, message)), "m0")
+        val encoded = SessionCodec.encode(session)
+        assertEquals(0, Regex("\"textSignature\"").findAll(encoded).count())
+        assertEquals(0, Regex("\"thinkingSignature\"").findAll(encoded).count())
+        assertEquals(0, Regex("\"thoughtSignature\"").findAll(encoded).count())
+        assertEquals(0, Regex("\"redacted\"").findAll(encoded).count())
     }
 
     private fun Session.activeTexts(): List<String> =
