@@ -183,7 +183,7 @@ class XaiOAuthAuth(
     internal fun credentialsFromTokenResponse(body: JsonObject, previousRefreshToken: String? = null): OAuthCredential {
         val access = requiredString(body, "access_token")
         val refresh =
-            if (body["refresh_token"] == null && previousRefreshToken != null) previousRefreshToken
+            if (body["refresh_token"] == null && !previousRefreshToken.isNullOrEmpty()) previousRefreshToken
             else requiredString(body, "refresh_token")
         val expiresInSeconds =
             if (body["expires_in"] == null) DEFAULT_TOKEN_LIFETIME_SECONDS
@@ -231,6 +231,15 @@ class XaiOAuthAuth(
      * Port of pi `validateVerificationUri`. The verification URI is opened in
      * the user's browser; force it to be an https URL so a malicious response
      * cannot make `open` launch something else.
+     *
+     * Divergence from pi (documented per AGENTS.md): pi returns the
+     * WHATWG-normalized `new URL(raw).href` (lower-cased host, default port
+     * `:443` removed, empty path becomes `/`). The JDK has no href-equivalent
+     * normalizer (`java.net.URL.toExternalForm` preserves host case and the
+     * default port; `java.net.URI.toString` preserves the raw form), so this
+     * port returns the parsed URI's string as-is after the same trust check.
+     * The check itself is equally strict-or-stricter: anything `URI` rejects
+     * (and WHATWG would accept) is treated as untrusted rather than opened.
      */
     private fun validateVerificationUri(raw: String): String {
         val url = try {
@@ -330,10 +339,12 @@ class XaiOAuthAuth(
         const val REQUEST_TIMEOUT_MS: Int = 30_000
 
         /**
-         * `application/x-www-form-urlencoded` serialization with the same
-         * semantics as pi's `new URLSearchParams(fields)`: unreserved
-         * characters pass through, everything else is percent-encoded (UTF-8),
-         * and spaces become `+`.
+         * `application/x-www-form-urlencoded` serialization matching pi's
+         * `new URLSearchParams(fields)` exactly, via the JDK
+         * [java.net.URLEncoder]: it encodes supplementary code points as their
+         * full UTF-8 sequences, `~` as `%7E`, and spaces as `+`, and like
+         * URLSearchParams it leaves `*`, `.-_`, and alphanumerics unescaped —
+         * no post-processing needed.
          */
         internal fun formUrlEncode(fields: Map<String, String>): ByteArray {
             val out = StringBuilder()
@@ -347,20 +358,7 @@ class XaiOAuthAuth(
         }
 
         private fun encodeTo(out: StringBuilder, value: String) {
-            for (char in value) {
-                when {
-                    char == ' ' -> out.append('+')
-                    char in 'a'..'z' || char in 'A'..'Z' || char in '0'..'9' -> out.append(char)
-                    char == '-' || char == '.' || char == '_' || char == '~' -> out.append(char)
-                    else -> {
-                        for (byte in char.toString().toByteArray(Charsets.UTF_8)) {
-                            out.append('%')
-                            out.append("0123456789ABCDEF"[byte.toInt() ushr 4 and 0xF])
-                            out.append("0123456789ABCDEF"[byte.toInt() and 0xF])
-                        }
-                    }
-                }
-            }
+            out.append(java.net.URLEncoder.encode(value, "UTF-8"))
         }
     }
 }

@@ -230,6 +230,20 @@ class XaiOAuthAuthTest {
         assertEquals("kept-refresh", credential.refresh)
     }
 
+    @Test
+    fun `omitted refresh_token with empty previous refresh fails validation (pi truthiness)`() {
+        val auth = XaiOAuthAuth(FakeHttpClient(), now = { 0L })
+        // pi retains previousRefreshToken only when truthy — an empty string is
+        // falsy, so the omitted field falls through to requiredString.
+        val error = assertFailsWith<IllegalStateException> {
+            auth.credentialsFromTokenResponse(
+                Json.parseToJsonElement("""{"access_token":"a2"}""") as JsonObject,
+                previousRefreshToken = "",
+            )
+        }
+        assertEquals("Invalid xAI OAuth response field: refresh_token", error.message)
+    }
+
     // --- polling outcomes (pi `pollForTokens`) ---
 
     @Test
@@ -373,8 +387,11 @@ class XaiOAuthAuthTest {
     @Test
     fun `form encoding matches URLSearchParams semantics`() {
         val encoded = XaiOAuthAuth.formUrlEncode(
-            mapOf("a b" to "c/d", "e" to "ü~.-_1"),
+            mapOf("a b" to "c/d", "e" to "ü~*.-_1\uD83D\uDE00"),
         ).toString(Charsets.UTF_8)
-        assertEquals("a+b=c%2Fd&e=%C3%BC~.-_1", encoded)
+        // URLSearchParams percent-encodes `~`, keeps `*`, `.-_` and
+        // alphanumerics, encodes spaces as `+`, and encodes the supplementary
+        // code point as its full UTF-8 sequence (not surrogate halves).
+        assertEquals("a+b=c%2Fd&e=%C3%BC%7E*.-_1%F0%9F%98%80", encoded)
     }
 }
