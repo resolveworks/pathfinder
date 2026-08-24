@@ -68,6 +68,12 @@ dependencies {
     implementation(libs.okhttp.sse)
     implementation(libs.kotlinx.serialization.json)
 
+    // Markdown parsing for message rendering (CommonMark + GFM extensions)
+    implementation(libs.commonmark)
+    implementation(libs.commonmark.ext.gfm.tables)
+    implementation(libs.commonmark.ext.gfm.strikethrough)
+    implementation(libs.commonmark.ext.task.list.items)
+
     // Unit tests
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)
