@@ -236,20 +236,18 @@ class SessionStoreTest {
         val id = store.create().id
 
         File(root, "$id.json").writeText(
-            """{"format":1,"id":"$id","title":"t","createdAt":1,"updatedAt":1,
-               "messages":[{"role":"system","timestamp":0}]}"""
+            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"system","timestamp":0}}],"leafId":"m0"}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
 
         File(root, "$id.json").writeText(
-            """{"format":1,"id":"$id","title":"t","createdAt":1,"updatedAt":1,
-               "messages":[{"role":"user","timestamp":0,"content":[{"type":"audio"}]}]}"""
+            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"user","timestamp":0,"content":[{"type":"audio"}]}}],"leafId":"m0"}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
 
         // Unknown format version.
         File(root, "$id.json").writeText(
-            """{"format":99,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"messages":[]}"""
+            """{"format":99,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[]}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
     }
@@ -352,32 +350,28 @@ class SessionStoreTest {
 
         // Missing assistant usage.
         File(root, "$id.json").writeText(
-            """{"format":1,"id":"$id","title":"t","createdAt":1,"updatedAt":1,
-               "messages":[{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m",
-               "stopReason":"STOP"}]}"""
+            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m",
+               "stopReason":"STOP"}}],"leafId":"m0"}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
 
         // Missing usage cost component.
         File(root, "$id.json").writeText(
-            """{"format":1,"id":"$id","title":"t","createdAt":1,"updatedAt":1,
-               "messages":[{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m",
+            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m",
                "stopReason":"STOP","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":2,
-               "cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0}}}]}"""
+               "cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0}}}}],"leafId":"m0"}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
 
         // Missing message timestamp.
         File(root, "$id.json").writeText(
-            """{"format":1,"id":"$id","title":"t","createdAt":1,"updatedAt":1,
-               "messages":[{"role":"user","content":[]}]}"""
+            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"user","content":[]}}],"leafId":"m0"}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
 
         // Missing tool-result isError.
         File(root, "$id.json").writeText(
-            """{"format":1,"id":"$id","title":"t","createdAt":1,"updatedAt":1,
-               "messages":[{"role":"toolResult","timestamp":0,"toolCallId":"c","toolName":"n","content":[]}]}"""
+            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"toolResult","timestamp":0,"toolCallId":"c","toolName":"n","content":[]}}],"leafId":"m0"}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
     }
@@ -389,34 +383,31 @@ class SessionStoreTest {
 
         // Quoted top-level format / timestamps.
         File(root, "$id.json").writeText(
-            """{"format":"1","id":"$id","title":"t","createdAt":1,"updatedAt":1,"messages":[]}"""
+            """{"format":"2","id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[]}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
         File(root, "$id.json").writeText(
-            """{"format":1,"id":"$id","title":"t","createdAt":"1","updatedAt":1,"messages":[]}"""
+            """{"format":2,"id":"$id","title":"t","createdAt":"1","updatedAt":1,"entries":[]}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
 
         // Quoted message timestamp.
         File(root, "$id.json").writeText(
-            """{"format":1,"id":"$id","title":"t","createdAt":1,"updatedAt":1,
-               "messages":[{"role":"user","timestamp":"7","content":[]}]}"""
+            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"user","timestamp":"7","content":[]}}],"leafId":"m0"}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
 
         // Quoted usage number.
         File(root, "$id.json").writeText(
-            """{"format":1,"id":"$id","title":"t","createdAt":1,"updatedAt":1,
-               "messages":[{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m",
+            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m",
                "stopReason":"STOP","usage":{"input":"1","output":1,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":2,
-               "cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}}}]}"""
+               "cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}}}}],"leafId":"m0"}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
 
         // Quoted isError.
         File(root, "$id.json").writeText(
-            """{"format":1,"id":"$id","title":"t","createdAt":1,"updatedAt":1,
-               "messages":[{"role":"toolResult","timestamp":0,"toolCallId":"c","toolName":"n","content":[],"isError":"false"}]}"""
+            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"toolResult","timestamp":0,"toolCallId":"c","toolName":"n","content":[],"isError":"false"}}],"leafId":"m0"}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
     }
@@ -426,7 +417,7 @@ class SessionStoreTest {
         val store = newStore()
         val id = store.create().id
         File(root, "$id.json").writeText(
-            """{"format":1,"id":"other","title":"t","createdAt":1,"updatedAt":1,"messages":[]}"""
+            """{"format":2,"id":"other","title":"t","createdAt":1,"updatedAt":1,"entries":[]}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
         // Corrupt entries are skipped by summaries.

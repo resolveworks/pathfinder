@@ -16,14 +16,12 @@ import works.resolve.aletheia.ai.auth.CredentialStore
  * `packages/ai/src/auth/types.ts`): stores one credential per provider as
  * AES-GCM ciphertext (via [KeystoreAeadCipher], backed by the Android
  * Keystore) in per-provider files under the app's private storage, serialized
- * with [CredentialCodec] (legacy bare-key and `{key,env}` entries migrate via
- * its decode fallbacks).
+ * with [CredentialCodec] (type-tagged JSON only).
  *
  * Writes are serialized per provider with an in-process mutex — the app is a
  * single Android process, so pi's cross-process file-lock requirement
  * collapses to this. Key material never leaves the credential boundary in
- * plaintext and is never logged. Reads that hit a legacy (untyped) record
- * transparently rewrite it in the current tagged shape on next write.
+ * plaintext and is never logged.
  */
 class EncryptedCredentialStore(
     private val dir: File,

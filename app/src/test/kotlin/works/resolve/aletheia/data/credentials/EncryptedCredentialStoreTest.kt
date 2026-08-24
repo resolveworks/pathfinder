@@ -50,23 +50,19 @@ class EncryptedCredentialStoreTest {
     }
 
     @Test
-    fun `legacy bare-key entry migrates and rewrites in tagged shape`() = runTest {
+    fun `legacy bare-key entry is rejected`() = runTest {
         val dir = createTempDirectory()
         writeRaw(dir, "openai", "sk-legacy")
         val store = newStore(dir)
-        assertEquals(ApiKeyCredential("sk-legacy"), store.read("openai"))
-        // A later write upgrades the record to the tagged codec shape.
-        store.modify("openai") { current -> current as ApiKeyCredential }
-        val onDisk = File(dir, "openai.bin").readBytes().map { (it - 1).toByte() }.toByteArray().decodeToString()
-        assertTrue(onDisk.contains("\"type\":\"api_key\""))
+        assertFailsWith<CredentialFormatException> { store.read("openai") }
     }
 
     @Test
-    fun `legacy key-env entry migrates`() = runTest {
+    fun `legacy untagged key-env entry is rejected`() = runTest {
         val dir = createTempDirectory()
         writeRaw(dir, "cloudflare", """{"key":"k","env":{"CLOUDFLARE_ACCOUNT_ID":"acc"}}""")
         val store = newStore(dir)
-        assertEquals(ApiKeyCredential("k", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc")), store.read("cloudflare"))
+        assertFailsWith<CredentialFormatException> { store.read("cloudflare") }
     }
 
     @Test

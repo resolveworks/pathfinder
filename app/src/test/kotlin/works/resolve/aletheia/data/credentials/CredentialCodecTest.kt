@@ -35,9 +35,11 @@ class CredentialCodecTest {
     }
 
     @Test
-    fun `genuine non-object legacy strings still migrate as bare keys`() {
-        assertEquals(ApiKeyCredential("sk-legacy"), CredentialCodec.decode("sk-legacy"))
-        assertEquals(ApiKeyCredential("weird {braces} inside"), CredentialCodec.decode("weird {braces} inside"))
+    fun `non-object strings are rejected, not treated as bare keys`() {
+        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("sk-legacy") }
+        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("weird {braces} inside") }
+        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("") }
+        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("   ") }
     }
 
     @Test
@@ -68,19 +70,13 @@ class CredentialCodecTest {
     }
 
     @Test
-    fun `legacy bare key entry decodes as key`() {
-        assertEquals(ApiKeyCredential("sk-legacy"), CredentialCodec.decode("sk-legacy"))
-    }
-
-    @Test
-    fun `legacy key-env record without type tag decodes as api key`() {
-        val raw = """{"key":"sk-legacy","env":{"A":"1"}}"""
-        assertEquals(ApiKeyCredential("sk-legacy", mapOf("A" to "1")), CredentialCodec.decode(raw))
+    fun `untagged key-env record is rejected`() {
+        val raw = """{"key":"sk-x","env":{"A":"1"}}"""
+        assertFailsWith<CredentialFormatException> { CredentialCodec.decode(raw) }
     }
 
     @Test
     fun `json object without key field or type tag is rejected`() {
-        // Neither the current nor a legacy shape: malformed, not a bare key.
         val raw = """{"not":"key"}"""
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode(raw) }
     }

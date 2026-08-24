@@ -63,12 +63,8 @@ internal object SessionCodec {
         val obj = element as? JsonObject
             ?: throw SessionDataException("Malformed session data: expected object")
         val version = obj.int("format") ?: throw SessionDataException("Unsupported session format")
-        if (version !in 1..FORMAT_VERSION) throw SessionDataException("Unsupported session format: $version")
-
-        return when (version) {
-            1 -> migrateV1(obj)
-            else -> decodeV2(obj)
-        }
+        if (version != FORMAT_VERSION) throw SessionDataException("Unsupported session format: $version")
+        return decodeV2(obj)
     }
 
     private fun decodeV2(obj: JsonObject): Session {
@@ -81,22 +77,6 @@ internal object SessionCodec {
             updatedAt = obj.long("updatedAt") ?: throw SessionDataException("Malformed session data: missing updatedAt"),
             entries = entries.map(::decodeEntry),
             leafId = obj.string("leafId"),
-        )
-    }
-
-    /** v1 files stored a flat message list; chain them into entries with
-     * Conversation.fromMessages semantics (leaf = last entry or null). */
-    private fun migrateV1(obj: JsonObject): Session {
-        val messages = (obj["messages"] as? JsonArray)
-            ?: throw SessionDataException("Malformed session data: missing messages")
-        val conversation = Conversation.fromMessages(messages.map(::decodeMessage))
-        return Session(
-            id = requireId(obj.string("id") ?: throw SessionDataException("Malformed session data: missing id")),
-            title = obj.string("title") ?: throw SessionDataException("Malformed session data: missing title"),
-            createdAt = obj.long("createdAt") ?: throw SessionDataException("Malformed session data: missing createdAt"),
-            updatedAt = obj.long("updatedAt") ?: throw SessionDataException("Malformed session data: missing updatedAt"),
-            entries = conversation.entries,
-            leafId = conversation.leafId,
         )
     }
 

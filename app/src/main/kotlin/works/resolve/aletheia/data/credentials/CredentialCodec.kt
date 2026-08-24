@@ -18,9 +18,9 @@ import works.resolve.aletheia.ai.auth.OAuthCredential
  *   provider-specific extra JSON fields are preserved verbatim and round trip
  *   through [OAuthCredential.extras].
  *
- * Legacy migrations (previous Aletheia format):
- * - a bare key string (no JSON framing) decodes as [ApiKeyCredential];
- * - `{"key":...,"env":{...}}` without a `type` tag decodes as [ApiKeyCredential].
+ * Decoded input must be a type-tagged JSON object; any other shape
+ * (blank text, bare key string, untagged object) throws
+ * [CredentialFormatException].
  */
 object CredentialCodec {
 
@@ -49,15 +49,10 @@ object CredentialCodec {
         }
     }
 
-    /** Decodes current and legacy shapes; throws [CredentialFormatException] on malformed input. */
+    /** Decodes a type-tagged JSON object; throws [CredentialFormatException] on any other input. */
     fun decode(raw: String): Credential {
-        val trimmed = raw.trim()
-        // Input starting with `{` is object-intended: it must parse as valid
-        // typed JSON (even without a closing brace) or it is malformed. Only
-        // genuine non-object bare text is a legacy API-key record.
-        if (trimmed.isEmpty() || trimmed.first() != '{') return legacyApiKey(trimmed)
         val element = try {
-            json.parseToJsonElement(trimmed)
+            json.parseToJsonElement(raw)
         } catch (_: Exception) {
             throw CredentialFormatException("Malformed credential JSON")
         }
@@ -71,14 +66,10 @@ object CredentialCodec {
         return when (type) {
             TYPE_API_KEY -> decodeApiKey(obj)
             TYPE_OAUTH -> decodeOAuth(obj)
-            null ->
-                // Legacy {key, env} record without a type tag.
-                if ("key" in obj) decodeApiKey(obj) else throw CredentialFormatException("Missing credential type")
+            null -> throw CredentialFormatException("Missing credential type")
             else -> throw CredentialFormatException("Unknown credential type: $type")
         }
     }
-
-    private fun legacyApiKey(raw: String): Credential = ApiKeyCredential(key = raw)
 
     private fun decodeApiKey(obj: JsonObject): ApiKeyCredential = ApiKeyCredential(
         key = obj["key"]?.let { key ->

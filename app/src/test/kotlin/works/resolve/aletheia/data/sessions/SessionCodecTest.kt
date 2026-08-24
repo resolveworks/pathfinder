@@ -136,34 +136,12 @@ class SessionCodecTest {
     }
 
     @Test
-    fun v1MigratesToChainedEntries() {
-        val text = """
-            {"format":1,"id":"sess-1","title":"t","createdAt":10,"updatedAt":20,
-             "messages":[
-               {"role":"user","timestamp":1,"content":[{"type":"text","text":"a"}]},
-               {"role":"assistant","timestamp":2,"content":[{"type":"text","text":"b"}],
-                "api":"api","provider":"p","model":"m","stopReason":"STOP",
-                "usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":2,
-                         "cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}}}
-             ]}
-        """.trimIndent()
-
-        val decoded = SessionCodec.decode(text)
-        assertEquals("sess-1", decoded.id)
-        assertEquals(2, decoded.entries.size)
-        assertNull(decoded.entries.first().parentId)
-        assertEquals(decoded.entries[0].id, decoded.entries[1].parentId)
-        assertEquals(decoded.entries.last().id, decoded.leafId)
-        assertEquals(listOf("a", "b"), decoded.activeTexts())
-    }
-
-    @Test
-    fun v1EmptyMessagesMigrateToEmptyEntriesAndNullLeaf() {
-        val text = """{"format":1,"id":"s","title":"t","createdAt":1,"updatedAt":1,"messages":[]}"""
-        val decoded = SessionCodec.decode(text)
-        assertEquals(0, decoded.entries.size)
-        assertNull(decoded.leafId)
-        assertEquals(0, decoded.messages.size)
+    fun v1Rejected() {
+        assertFailsWith<SessionDataException> {
+            SessionCodec.decode(
+                """{"format":1,"id":"s","title":"t","createdAt":1,"updatedAt":1,"messages":[]}""",
+            )
+        }
     }
 
     @Test
