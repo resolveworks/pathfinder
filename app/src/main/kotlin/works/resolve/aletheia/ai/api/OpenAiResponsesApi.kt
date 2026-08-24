@@ -18,6 +18,7 @@ import works.resolve.aletheia.ai.core.StopReason
 import works.resolve.aletheia.ai.core.ThinkingLevel
 import works.resolve.aletheia.ai.core.ToolChoice
 import works.resolve.aletheia.ai.core.Tool
+import works.resolve.aletheia.ai.core.mergeHeaders
 import works.resolve.aletheia.ai.transport.ProviderHttpException
 import works.resolve.aletheia.ai.transport.SseEvent
 import works.resolve.aletheia.ai.transport.TransportRequest
@@ -181,9 +182,13 @@ class OpenAiResponsesApi(
             val headers = OpenAiResponsesShared.mergeClientHeaders(
                 // Copilot dynamic headers (github-copilot only) sit between
                 // the model headers and the affinity/options headers, as in
-                // pi's openai-responses createClient (Object.assign order).
-                mapOf("User-Agent" to PI_USER_AGENT) + model.headers +
-                    copilotDynamicHeadersFor(model, context),
+                // pi's openai-responses createClient (Object.assign order);
+                // mergeHeaders keeps each layer case-insensitive like the
+                // SDK's eventual HTTP behavior.
+                mergeHeaders(
+                    mapOf("User-Agent" to PI_USER_AGENT),
+                    mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
+                ).filterValues { it != null }.mapValues { it.value!! },
                 cacheSessionId,
                 compat,
                 options.headers,

@@ -167,9 +167,19 @@ class GithubCopilotHeadersTest {
 
     private fun retry() = ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 })
 
-    /** Header lookups are case-insensitive at HTTP layer; assert the sent casing. */
-    private fun sent(request: works.resolve.aletheia.ai.transport.TransportRequest): Map<String, String> =
-        request.headers
+    /**
+     * Header lookups are case-insensitive at HTTP layer; assert the sent
+     * casing and that no lowercased name is duplicated (a later layer must
+     * replace, not coexist with, an earlier differently-cased name).
+     */
+    private fun sent(request: works.resolve.aletheia.ai.transport.TransportRequest): Map<String, String> {
+        val lowered = request.headers.keys.groupBy { it.lowercase() }
+        assertTrue(
+            lowered.values.all { it.size == 1 },
+            "duplicate header keys (case-insensitive): ${request.headers.keys}",
+        )
+        return request.headers
+    }
 
     private fun jsonBody(request: works.resolve.aletheia.ai.transport.TransportRequest) =
         Json.parseToJsonElement(request.body.decodeToString()).jsonObject
@@ -223,19 +233,21 @@ class GithubCopilotHeadersTest {
         OpenAiCompletionsApi(transport, retry()).stream(
             copilotModel(
                 "openai-completions",
-                headers = mapOf("X-Initiator" to "stale", "Copilot-Integration-Id" to "vscode"),
+                headers = mapOf("x-initiator" to "stale", "Copilot-Integration-Id" to "vscode"),
             ),
             userContext(),
             OpenAiCompletionsOptions(
                 apiKey = "tok",
-                headers = mapOf("Openai-Intent" to "custom-intent"),
+                headers = mapOf("openai-intent" to "custom-intent"),
             ),
         ).take(1).toList()
         val headers = sent(transport.requests.single())
-        // Dynamic headers override the model's static headers...
+        // Dynamic headers override the model's static headers case-insensitively...
         assertEquals("user", headers["X-Initiator"])
+        assertNull(headers["x-initiator"])
         // ...but explicit request headers override the dynamic ones.
-        assertEquals("custom-intent", headers["Openai-Intent"])
+        assertEquals("custom-intent", headers["openai-intent"])
+        assertNull(headers["Openai-Intent"])
     }
 
     @Test
@@ -305,17 +317,24 @@ class GithubCopilotHeadersTest {
         OpenAiResponsesApi(transport, retry()).stream(
             copilotModel(
                 "openai-responses",
-                headers = mapOf("X-Initiator" to "stale"),
+                headers = mapOf("x-initiator" to "stale", "user-agent" to "GitHubCopilotChat/1.0"),
             ),
             userContext(),
             OpenAiResponsesOptions(
                 apiKey = "tok",
-                headers = mapOf("Openai-Intent" to "custom-intent"),
+                headers = mapOf("openai-intent" to "custom-intent"),
             ),
         ).take(1).toList()
         val headers = sent(transport.requests.single())
+        // Dynamic headers override the model's static headers case-insensitively...
         assertEquals("user", headers["X-Initiator"])
-        assertEquals("custom-intent", headers["Openai-Intent"])
+        assertNull(headers["x-initiator"])
+        // ...the model header overrides the default User-Agent case-insensitively...
+        assertEquals("GitHubCopilotChat/1.0", headers["user-agent"])
+        assertNull(headers["User-Agent"])
+        // ...but explicit request headers override the dynamic ones.
+        assertEquals("custom-intent", headers["openai-intent"])
+        assertNull(headers["Openai-Intent"])
     }
 
     // =========================================================================
@@ -366,17 +385,21 @@ class GithubCopilotHeadersTest {
         AnthropicMessagesApi(transport, retry()).stream(
             copilotModel(
                 "anthropic-messages",
-                headers = mapOf("X-Initiator" to "stale", "User-Agent" to "GitHubCopilotChat/1.0"),
+                headers = mapOf("x-initiator" to "stale", "User-Agent" to "GitHubCopilotChat/1.0"),
             ),
             userContext(),
             AnthropicMessagesOptions(
                 apiKey = "tok",
-                headers = mapOf("Openai-Intent" to "custom-intent"),
+                headers = mapOf("openai-intent" to "custom-intent"),
             ),
         ).take(1).toList()
         val headers = sent(transport.requests.single())
+        // Dynamic headers override the model's static headers case-insensitively...
         assertEquals("user", headers["X-Initiator"])
-        assertEquals("custom-intent", headers["Openai-Intent"])
+        assertNull(headers["x-initiator"])
+        // ...but explicit request headers override the dynamic ones.
+        assertEquals("custom-intent", headers["openai-intent"])
+        assertNull(headers["Openai-Intent"])
         // Model static headers still flow through.
         assertEquals("GitHubCopilotChat/1.0", headers["User-Agent"])
     }

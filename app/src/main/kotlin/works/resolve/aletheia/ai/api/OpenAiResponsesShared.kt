@@ -1052,11 +1052,11 @@ object OpenAiResponsesShared {
         compat: ResolvedResponsesCompat,
         optionsHeaders: Map<String, String?>,
     ): Map<String, String> {
-        val merged = LinkedHashMap<String, String?>()
-        merged.putAll(modelHeaders)
-        merged.putAll(sessionAffinityHeaders(sessionId, compat))
-        // Options headers merge last so they can override defaults; null removes.
-        merged.putAll(mergeHeaders(merged, optionsHeaders))
+        val merged = mergeHeaders(
+            mergeHeaders(modelHeaders, sessionAffinityHeaders(sessionId, compat)),
+            // Options headers merge last so they can override defaults; null removes.
+            optionsHeaders,
+        )
         return merged.filterValues { it != null }.mapValues { it.value!! }
     }
 
