@@ -4,10 +4,12 @@ import works.resolve.aletheia.ai.core.Message
 import works.resolve.aletheia.ai.core.SimpleStreamOptions
 import works.resolve.aletheia.ai.models.Models
 import works.resolve.aletheia.ai.models.ResolvedAuth
+import works.resolve.aletheia.ai.providers.CatalogProvider
 import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.ai.providers.normalizeBaseUrl
 import works.resolve.aletheia.ai.transport.HttpStreamingTransport
 import works.resolve.aletheia.ai.utils.ProviderRetry
+import works.resolve.aletheia.data.credentials.ApiKeyCredential
 import works.resolve.aletheia.data.credentials.ApiKeyStore
 import works.resolve.aletheia.data.settings.ModelSettings
 
@@ -45,17 +47,7 @@ class NativeAgentFactory(
         val provider = entry.toRuntimeProvider(
             transport = transport,
             retry = retry,
-            authResolver = { explicitKey ->
-                if (explicitKey != null) {
-                    // Explicit request key: shape it without touching the store
-                    // (pi's resolveProviderAuth overrides).
-                    entry.toResolvedAuth(explicitKey, emptyMap())
-                } else {
-                    credentials.getCredential(entry.id)
-                        ?.takeIf { entry.isCredentialComplete(it.key, it.env) }
-                        ?.let { credential -> entry.toResolvedAuth(credential.key, credential.env) }
-                }
-            },
+            authResolver = catalogAuthResolver(entry, credentials),
         )
         val models = Models(listOf(provider))
 
@@ -73,13 +65,33 @@ class NativeAgentFactory(
             if (initialTranscript.isNotEmpty()) replaceTranscript(initialTranscript)
         }
     }
-
-    private companion object {
-        /** Finite per-request timeout (covers headers through stream end via the call timeout). */
-        const val REQUEST_TIMEOUT_MS = 5L * 60 * 1000
-
-        /** Minimal retry budget chosen by the app (pi provider-retry defaults to 0);
-         * one retry keeps worst-case request duration bounded on mobile. */
-        const val MAX_RETRIES = 1
-    }
 }
+
+/**
+ * The factory's provider auth resolver (pi's auth.resolve with overrides):
+ * an explicit request key/env is shaped by the provider's auth semantics
+ * without reading stored credentials; otherwise the stored credential is
+ * read per request with explicit env merged over stored env per field before
+ * completeness and shaping. Returns null when unconfigured.
+ */
+internal fun catalogAuthResolver(
+    entry: CatalogProvider,
+    credentials: ApiKeyStore,
+): suspend (apiKey: String?, env: Map<String, String>) -> ResolvedAuth? =
+    { explicitKey, explicitEnv ->
+        if (explicitKey != null) {
+            entry.toResolvedAuth(explicitKey, explicitEnv)
+        } else {
+            credentials.getCredential(entry.id)
+                ?.let { credential -> ApiKeyCredential(credential.key, credential.env + explicitEnv) }
+                ?.takeIf { entry.isCredentialComplete(it.key, it.env) }
+                ?.let { credential -> entry.toResolvedAuth(credential.key, credential.env) }
+        }
+    }
+
+/** Finite per-request timeout (covers headers through stream end via the call timeout). */
+private const val REQUEST_TIMEOUT_MS = 5L * 60 * 1000
+
+/** Minimal retry budget chosen by the app (pi provider-retry defaults to 0);
+ * one retry keeps worst-case request duration bounded on mobile. */
+private const val MAX_RETRIES = 1

@@ -110,7 +110,7 @@ class CatalogProvider(
     fun toRuntimeProvider(
         transport: HttpStreamingTransport,
         retry: ProviderRetry = ProviderRetry(),
-        authResolver: (suspend (apiKey: String?) -> ResolvedAuth?)? = null,
+        authResolver: (suspend (apiKey: String?, env: Map<String, String>) -> ResolvedAuth?)? = null,
     ): Provider =
         Provider(
             id = id,

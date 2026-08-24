@@ -1,8 +1,10 @@
 package works.resolve.aletheia.agent
 
+import works.resolve.aletheia.ai.core.SimpleStreamOptions
 import works.resolve.aletheia.ai.core.TextContent
 import works.resolve.aletheia.ai.core.UserMessage
 import works.resolve.aletheia.ai.core.Model
+import works.resolve.aletheia.ai.models.Models
 import works.resolve.aletheia.ai.providers.CatalogProvider
 import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.ai.testing.TestCatalogs
@@ -22,6 +24,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -205,6 +208,56 @@ class NativeAgentFactoryTest {
             assertEquals("Bearer cf-factory-test-key", request.headers["cf-aig-authorization"])
             assertFalse(request.headers.containsKey("Authorization"))
             assertFalse(request.headers.containsKey("authorization"))
+        }
+    }
+
+    @Test
+    fun `explicit env overrides stored env before auth shaping`() {
+        runBlocking {
+            // Stored credential carries account/gateway ids; the explicit
+            // request env must win per field before completeness/shaping
+            // (pi's stored-credential env override).
+            val store = FakeApiKeyStore(
+                ApiKeyCredential(
+                    key = "cf-factory-test-key",
+                    env = mapOf(
+                        "CLOUDFLARE_ACCOUNT_ID" to "stored-acct",
+                        "CLOUDFLARE_GATEWAY_ID" to "stored-gw",
+                    ),
+                ),
+            )
+            val entry = catalog.getProvider("cloudflare-ai-gateway")!!
+
+            val auth = catalogAuthResolver(entry, store)(
+                null,
+                mapOf("CLOUDFLARE_ACCOUNT_ID" to "explicit-acct"),
+            )!!
+
+            // Explicit account id won; stored gateway id survived.
+            assertEquals(
+                mapOf(
+                    "CLOUDFLARE_ACCOUNT_ID" to "explicit-acct",
+                    "CLOUDFLARE_GATEWAY_ID" to "stored-gw",
+                ),
+                auth.env,
+            )
+            assertEquals("Bearer cf-factory-test-key", auth.headers["cf-aig-authorization"])
+
+            // End to end: the merged env substitutes into the base URL via Models.
+            val transport = RecordingTransport()
+            val provider = entry.toRuntimeProvider(
+                transport = transport,
+                authResolver = catalogAuthResolver(entry, store),
+            )
+            Models(listOf(provider)).stream(
+                entry.model("workers-ai/test-model")!!,
+                works.resolve.aletheia.ai.core.Context(messages = emptyList()),
+                SimpleStreamOptions(env = mapOf("CLOUDFLARE_ACCOUNT_ID" to "explicit-acct")),
+            ).toList()
+            assertEquals(
+                "https://gateway.test/v1/explicit-acct/stored-gw/compat/chat/completions",
+                transport.requests.single().url,
+            )
         }
     }
 

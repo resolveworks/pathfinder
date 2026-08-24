@@ -43,12 +43,13 @@ class Provider(
     val baseUrl: String,
     /**
      * Resolves this provider's auth (pi's auth.resolve with request
-     * overrides): a non-null [apiKey] is an explicit request key that must be
+     * overrides): [apiKey]/[env] are explicit request overrides that must be
      * shaped by the provider's auth semantics (e.g. Cloudflare's
-     * cf-aig-authorization header) WITHOUT reading stored credentials; null
-     * means resolve the stored credential. Returns null when unconfigured.
+     * cf-aig-authorization header) WITHOUT reading stored credentials; a null
+     * [apiKey] with empty [env] means resolve the stored credential (explicit
+     * env still merges over stored env there). Returns null when unconfigured.
      */
-    val authResolver: (suspend (apiKey: String?) -> ResolvedAuth?)? = null,
+    val authResolver: (suspend (apiKey: String?, env: Map<String, String>) -> ResolvedAuth?)? = null,
     val models: List<Model>,
     val api: ChatApi,
 )
@@ -79,12 +80,13 @@ class Models(
      * Starts a chat stream for [model] (pi's streamSimple ownership): the
      * model's provider must be registered; auth is resolved lazily inside the
      * flow and merged with [options] using pi's applyAuth precedence —
-     * explicit request fields win, but like pi's resolveProviderAuth an
-     * explicit apiKey is still passed through the provider's auth resolver so
-     * custom auth shaping (Cloudflare's header auth) applies to it, without
-     * reading stored credentials; env values merge per field with the request
-     * on top, and resolved auth headers merge under explicit request headers
-     * case-insensitively (pi's mergeHeaders). An absent or failing credential resolution surfaces as a single safe terminal
+     * explicit request fields win, but like pi's resolveProviderAuth the
+     * explicit apiKey/env are still passed through the provider's auth
+     * resolver so custom auth shaping (Cloudflare's header auth) applies to
+     * them, without reading stored credentials; env values merge per field
+     * with the request on top, and resolved auth headers merge under explicit
+     * request headers case-insensitively (pi's mergeHeaders). An absent or
+     * failing credential resolution surfaces as a single safe terminal
      * [AssistantMessageEvent.Error] event; unknown providers throw
      * immediately.
      */
@@ -98,7 +100,7 @@ class Models(
             // Resolve the credential lazily inside the flow so stored-credential
             // lookups can suspend without making stream() a suspend call.
             val auth = try {
-                provider.authResolver?.invoke(options.apiKey)
+                provider.authResolver?.invoke(options.apiKey, options.env)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {

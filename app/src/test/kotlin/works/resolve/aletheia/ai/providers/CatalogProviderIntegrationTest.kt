@@ -58,7 +58,7 @@ class CatalogProviderIntegrationTest {
             val testKey = "zai-integration-test-key"
             val provider = TestCatalogs.ZAI.toRuntimeProvider(
                 transport = OkHttpTransport(),
-                authResolver = { ResolvedAuth(testKey) },
+                authResolver = { _, _ -> ResolvedAuth(testKey) },
             )
             val models = Models(listOf(provider))
 
@@ -123,7 +123,7 @@ class CatalogProviderIntegrationTest {
             val entry = TestCatalogs.CATALOG.getProvider("cloudflare-ai-gateway")!!
             val provider = entry.toRuntimeProvider(
                 transport = OkHttpTransport(),
-                authResolver = {
+                authResolver = { _, _ ->
                     entry.toResolvedAuth(
                         key = testKey,
                         env = mapOf(

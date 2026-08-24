@@ -38,6 +38,7 @@ class ModelsTest {
         var lastEnv: Map<String, String> = emptyMap()
         var lastHeaders: Map<String, String?> = emptyMap()
         var calls = 0
+        var lastResolverOverrides: Pair<String?, Map<String, String>>? = null
 
         override fun stream(
             model: Model,
@@ -69,7 +70,7 @@ class ModelsTest {
                     id = "prov",
                     name = "Provider",
                     baseUrl = "https://example.test",
-                    authResolver = { throw IllegalStateException("keystore exploded") },
+                    authResolver = { _, _ -> throw IllegalStateException("keystore exploded") },
                     models = listOf(model()),
                     api = api,
                 ),
@@ -102,7 +103,7 @@ class ModelsTest {
                     id = "prov",
                     name = "Provider",
                     baseUrl = "https://example.test",
-                    authResolver = { null },
+                    authResolver = { _, _ -> null },
                     models = listOf(model()),
                     api = api,
                 ),
@@ -161,7 +162,7 @@ class ModelsTest {
                     id = "prov",
                     name = "Provider",
                     baseUrl = "https://example.test",
-                    authResolver = { throw CancellationException() },
+                    authResolver = { _, _ -> throw CancellationException() },
                     models = listOf(model()),
                     api = api,
                 ),
@@ -189,13 +190,11 @@ class ModelsTest {
                     id = "prov",
                     name = "Provider",
                     baseUrl = "https://example.test",
-                    authResolver = { explicitKey ->
+                    authResolver = { explicitKey, explicitEnv ->
                         if (explicitKey != null) {
-                            // pi's resolveProviderAuth overrides: shape the
-                            // explicit key without touching the store.
+                            api.lastResolverOverrides = explicitKey to explicitEnv
                             ResolvedAuth(apiKey = explicitKey)
                         } else {
-                            storeReads += 1
                             ResolvedAuth("resolved-key")
                         }
                     },
@@ -206,13 +205,22 @@ class ModelsTest {
         )
 
         val events = registry
-            .stream(model(), Context(messages = emptyList()), SimpleStreamOptions(apiKey = "explicit"))
+            .stream(
+                model(),
+                Context(messages = emptyList()),
+                SimpleStreamOptions(apiKey = "explicit", env = mapOf("A" to "explicit-a")),
+            )
             .toList()
 
         assertEquals(0, storeReads)
         assertEquals(1, api.calls)
         assertEquals("explicit", api.lastApiKey)
         assertTrue(events.single() is AssistantMessageEvent.Done)
+        // The resolver received the explicit key and env (pi's overrides).
+        assertEquals(
+            "explicit" to mapOf("A" to "explicit-a"),
+            api.lastResolverOverrides,
+        )
     }
 
     @Test
@@ -222,9 +230,9 @@ class ModelsTest {
         val api = RecordingApi()
         // Factory-style resolver: explicit keys bypass the store but keep the
         // provider's auth shaping (cf-aig-authorization).
-        val authResolver: suspend (String?) -> ResolvedAuth? = { explicitKey ->
+        val authResolver: suspend (String?, Map<String, String>) -> ResolvedAuth? = { explicitKey, explicitEnv ->
             if (explicitKey != null) {
-                entry.toResolvedAuth(explicitKey, emptyMap())
+                entry.toResolvedAuth(explicitKey, explicitEnv)
             } else {
                 storeReads += 1
                 null
@@ -285,7 +293,7 @@ class ModelsTest {
                     id = "prov",
                     name = "Provider",
                     baseUrl = "https://example.test",
-                    authResolver = {
+                    authResolver = { _, _ ->
                         ResolvedAuth(
                             apiKey = "resolved-key",
                             env = mapOf("A" to "resolved-a", "B" to "resolved-b"),
