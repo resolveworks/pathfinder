@@ -19,6 +19,7 @@
     <string name="action_remove_provider">Forget provider</string>
     <string name="remove_provider_confirm">Forget the stored credential for %1$s?</string>
     <string name="model_search_hint">Search models</string>
+    <string name="model_selected">Selected</string>
     <string name="models_empty_configured_hint">Only showing models from configured providers</string>
     <string name="action_set_up_providers">Set up providers</string>
     <string name="action_configure">Configure</string>

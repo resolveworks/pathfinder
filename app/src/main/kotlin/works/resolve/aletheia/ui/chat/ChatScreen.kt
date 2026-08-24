@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
@@ -539,7 +540,14 @@ private fun ConfigurationContent(
                     headlineContent = { Text(option.name) },
                     supportingContent = { Text(option.providerName) },
                     trailingContent = if (isSelected) {
-                        { Text(stringResource(R.string.provider_status_configured)) }
+                        {
+                            // pi's model selector marks the current model with a check.
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = stringResource(R.string.model_selected),
+                                tint = MaterialTheme.colorScheme.secondary,
+                            )
+                        }
                     } else {
                         null
                     },
