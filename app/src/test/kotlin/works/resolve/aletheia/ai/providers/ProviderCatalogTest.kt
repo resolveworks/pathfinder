@@ -404,13 +404,14 @@ class ProviderCatalogTest {
     @Test
     fun `real asset contains the full generated provider set`() {
         val catalog = realAsset()
-        assertEquals(38, catalog.providers.size)
+        assertEquals(37, catalog.providers.size)
         // Model counts drift with every upstream pi refresh; assert structure
         // and known entries instead of pinning totals.
         assertTrue(catalog.providers.all { it.models.isNotEmpty() })
         assertTrue(catalog.providers.sumOf { it.models.size } > 1100)
         assertNull(catalog.getProvider("not-a-provider"))
         assertNull(catalog.getProvider("amazon-bedrock"))
+        assertNull(catalog.getProvider("google-vertex"))
         assertNull(catalog.getModel("zai", "not-a-model"))
         assertEquals("cf-aig-authorization", catalog.getProvider("cloudflare-ai-gateway")!!.bearerHeaderName)
         // Parsing already proved every compat field maps; sanity-check a couple
@@ -431,7 +432,6 @@ class ProviderCatalogTest {
                 "anthropic-messages",
                 "azure-openai-responses",
                 "google-generative-ai",
-                "google-vertex",
                 "mistral-conversations",
                 "openai-codex-responses",
                 "openai-completions",
@@ -458,13 +458,13 @@ class ProviderCatalogTest {
         // Simple env-key providers.
         assertEquals("ANTHROPIC_API_KEY", catalog.getProvider("anthropic")!!.auth.prompts.single().envKey)
         assertEquals("GEMINI_API_KEY", catalog.getProvider("google")!!.auth.prompts.single().envKey)
-        // Google Vertex adds non-secret project/location prompts.
-        val vertex = catalog.getProvider("google-vertex")!!.auth.prompts
+        // Non-secret extra prompts (Cloudflare account/gateway).
+        val gateway = catalog.getProvider("cloudflare-ai-gateway")!!.auth.prompts
         assertEquals(
-            listOf("GOOGLE_CLOUD_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"),
-            vertex.map { it.envKey },
+            listOf("CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"),
+            gateway.map { it.envKey },
         )
-        assertFalse(vertex[1].secret)
+        assertFalse(gateway[1].secret)
     }
 
     @Test

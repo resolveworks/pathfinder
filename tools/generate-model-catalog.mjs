@@ -8,9 +8,9 @@
 // mirroring how pi splits generated model data (src/providers/data/*.json)
 // from hand-written provider files (src/providers/*.ts).
 //
-// Dynamic providers (radius), llama.cpp, Amazon Bedrock, and
-// image-generation providers are deliberately excluded. OAuth flows are out
-// of scope, so OAuth-only providers keep their model list but carry no
+// Dynamic providers (radius), llama.cpp, Amazon Bedrock, Google Vertex AI,
+// and image-generation providers are deliberately excluded. OAuth flows are
+// out of scope, so OAuth-only providers keep their model list but carry no
 // API-key auth (auth: null).
 //
 // Usage:
@@ -45,18 +45,6 @@ const CLOUDFLARE_GATEWAY = {
 	secret: false,
 };
 
-/** Google Vertex AI login prompts (pi: providers/google-vertex.ts). */
-const VERTEX_PROJECT = {
-	envKey: "GOOGLE_CLOUD_PROJECT",
-	message: "Enter Google Cloud project ID",
-	secret: false,
-};
-const VERTEX_LOCATION = {
-	envKey: "GOOGLE_CLOUD_LOCATION",
-	message: "Enter Google Cloud location",
-	secret: false,
-};
-
 /**
  * Provider identity, mirroring pi's hand-written providers/*.ts entries.
  * Must cover every static provider in pi's generated models.json EXCEPT
@@ -69,7 +57,7 @@ const VERTEX_LOCATION = {
  */
 
 /** Static pi providers deliberately excluded from the aletheia catalog. */
-const EXCLUDED_PROVIDERS = new Set(["amazon-bedrock"]);
+const EXCLUDED_PROVIDERS = new Set(["amazon-bedrock", "google-vertex"]);
 
 const PROVIDER_IDENTITY = {
 	anthropic: { name: "Anthropic", label: "Anthropic API key", envKey: "ANTHROPIC_API_KEY" },
@@ -98,13 +86,6 @@ const PROVIDER_IDENTITY = {
 	fireworks: { name: "Fireworks", label: "Fireworks API key", envKey: "FIREWORKS_API_KEY" },
 	"github-copilot": { name: "GitHub Copilot", label: "GitHub Copilot token", envKey: "COPILOT_GITHUB_TOKEN" },
 	google: { name: "Google", label: "Gemini API key", envKey: "GEMINI_API_KEY" },
-	"google-vertex": {
-		name: "Google Vertex AI",
-		label: "Google Cloud API key",
-		envKey: "GOOGLE_CLOUD_API_KEY",
-		promptMessage: "Enter Google Cloud API key",
-		extraPrompts: [VERTEX_PROJECT, VERTEX_LOCATION],
-	},
 	groq: { name: "Groq", label: "Groq API key", envKey: "GROQ_API_KEY" },
 	huggingface: { name: "Hugging Face", label: "Hugging Face token", envKey: "HF_TOKEN" },
 	"kimi-coding": { name: "Kimi For Coding", label: "Kimi API key", envKey: "KIMI_API_KEY" },
@@ -145,7 +126,7 @@ const PROVIDER_IDENTITY = {
  * Builds the aletheia catalog from pi's generated models. Pure: takes pi's
  * models.json plus provenance and returns the catalog object. Every static
  * provider and every model API is kept; the identity map must exactly cover
- * the providers pi generated (38 at the time of writing) after the excluded
+ * the providers pi generated (37 at the time of writing) after the excluded
  * ones.
  */
 function buildCatalog(piModels, { piRevision = null } = {}) {
