@@ -343,6 +343,22 @@ class AnthropicMessagesPayloadTest {
     }
 
     @Test
+    fun `cross-provider transform strips tool thought signature while normalizing id`() {
+        val foreign = AssistantMessage(
+            content = listOf(ToolCall("call|foreign", "edit", "{}", thoughtSignature = "google-signature")),
+            api = "google-generative-ai",
+            provider = "google",
+            model = "gemini",
+            stopReason = StopReason.TOOL_USE,
+        )
+
+        val transformed = transformMessages(listOf(foreign), claude) { "normalized-id" }
+        val call = (transformed.first() as AssistantMessage).content.single() as ToolCall
+        assertEquals("normalized-id", call.id)
+        assertNull(call.thoughtSignature)
+    }
+
+    @Test
     fun `non-vision model downgrades images to deduplicated placeholders`() {
         val textModel = claude.copy(input = listOf(InputModality.TEXT))
         val context = Context(

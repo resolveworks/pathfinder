@@ -20,13 +20,10 @@ import works.resolve.aletheia.ai.core.ToolResultMessage
  *   redacted thinking cross-model, and converts other thinking to plain text
  *   (pi's cross-provider handoff: `<thinking>` tagging belongs to callers that
  *   want it; pi's anthropic adapter sends the bare text).
- * - Normalizes tool call IDs cross-provider via [normalizeToolCallId].
+ * - Strips provider-specific tool thought signatures cross-provider and
+ *   normalizes tool call IDs via [normalizeToolCallId].
  * - Skips errored/aborted assistant messages entirely.
  * - Inserts synthetic error tool results for orphaned tool calls.
- *
- * Divergence from pi: pi's ToolCall carries an optional `thoughtSignature`
- * that is stripped cross-provider; Aletheia's core ToolCall has no such field,
- * so there is nothing to strip here.
  */
 
 private const val NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)"
@@ -116,12 +113,16 @@ internal fun transformMessages(
                         }
                         is TextContent -> listOf(block)
                         is ToolCall -> {
-                            var normalized = block
+                            var normalized = if (!isSameModel && block.thoughtSignature != null) {
+                                block.copy(thoughtSignature = null)
+                            } else {
+                                block
+                            }
                             if (!isSameModel && normalizeToolCallId != null) {
                                 val normalizedId = normalizeToolCallId(block.id)
                                 if (normalizedId != block.id) {
                                     toolCallIdMap[block.id] = normalizedId
-                                    normalized = block.copy(id = normalizedId)
+                                    normalized = normalized.copy(id = normalizedId)
                                 }
                             }
                             listOf(normalized)
