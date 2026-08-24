@@ -93,10 +93,12 @@ data class SelectedModel(
  * message objects.
  *
  * Navigation is signaled from this state rather than commanded: an
- * unconfigured app sets [startKey] to [ProvidersNavKey], which the UI layer
- * honors by rebuilding its Nav3 back stack to exactly that root (a dead end:
- * back cannot leave it). After a successful credential save that does not
- * complete configuration, [startKey] moves to [ModelSettingsNavKey] with a
+ * unconfigured app sets [startKey] to [ProvidersNavKey] when no provider
+ * credential is complete (fresh install), or directly to
+ * [ModelSettingsNavKey] when one already is (restoration), and the UI layer
+ * honors this by rebuilding its Nav3 back stack to exactly that root (a dead
+ * end: back cannot leave it). After a successful credential save that does
+ * not complete configuration, [startKey] moves to [ModelSettingsNavKey] with a
  * [navigationEpoch] bump so configured models are immediately selectable;
  * every success that should return the user to the chat (adopting a session,
  * saving configuration) instead sets [startKey] to [ChatNavKey] and bumps the

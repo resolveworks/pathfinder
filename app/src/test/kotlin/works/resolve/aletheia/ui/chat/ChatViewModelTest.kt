@@ -1209,6 +1209,31 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun unconfiguredInit_withStoredCredential_startsAtModelStep() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        // Restoration case: a complete stored credential but no model
+        // settings — initialize starts at the model step, not providers.
+        h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
+
+        val vm = h.newViewModel()
+        val state = vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        assertEquals(ModelSettingsNavKey, state.startKey)
+        assertTrue(state.modelOptions.isNotEmpty())
+        assertTrue(state.modelOptions.all { it.providerId == "zai" })
+        assertTrue(state.providerOptions.first { it.id == "zai" }.configured)
+        assertFalse(state.toString().contains("stored-key"))
+        assertNull(state.activeSessionId)
+
+        // Saving a model selection completes configuration directly from here.
+        vm.saveModelSelection("zai", "glm-4.7", null)
+        val ready = vm.uiState.first { it.status == ChatStatus.Ready }
+        assertEquals(ChatNavKey, ready.startKey)
+        assertTrue(ready.navigationEpoch >= 1L)
+
+        vm.closeForTest()
+    }
+
+    @Test
     fun removeProviderCredential_unconfigures_butNeverTearsDownSessions() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()

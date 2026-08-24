@@ -59,9 +59,11 @@ import kotlinx.coroutines.withContext
  *
  * Navigation is state, not effects: an unconfigured app pins
  * [ChatUiState.startKey] to [ProvidersNavKey] (first-run step 1: pick a
- * provider and sign in), and after a credential save that does not complete
- * configuration it moves to [ModelSettingsNavKey] with an epoch bump (step
- * 2: pick a model — configured models are immediately selectable). Every
+ * provider and sign in), or directly to [ModelSettingsNavKey] when a
+ * complete provider credential already exists (restoration); after a
+ * credential save that does not complete configuration it moves to
+ * [ModelSettingsNavKey] with an epoch bump (step 2: pick a model —
+ * configured models are immediately selectable). Every
  * intent that should return the user to the chat (adopting a session, saving
  * configuration) sets [ChatUiState.startKey] to [ChatNavKey] and bumps
  * [ChatUiState.navigationEpoch] atomically with the rest of the state.
@@ -264,10 +266,15 @@ class ChatViewModel(
             if (!isConfigured(settings)) {
                 currentSettings = settings
                 refreshOptions()
+                // First-run vs restoration: when at least one provider
+                // credential is already complete, the model form is the
+                // useful forced root (the user can pick a model right away);
+                // only a fresh install forces the providers step first.
+                val hasConfiguredProvider = _uiState.value.modelOptions.isNotEmpty()
                 updateState {
                     it.copy(
                         status = ChatStatus.NeedsConfiguration,
-                        startKey = ProvidersNavKey,
+                        startKey = if (hasConfiguredProvider) ModelSettingsNavKey else ProvidersNavKey,
                         showThinking = settings.showThinking,
                         sessionSummaries = summaries,
                     )
