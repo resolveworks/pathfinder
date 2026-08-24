@@ -11,6 +11,7 @@
     <string name="settings_model">Model settings</string>
     <string name="settings_show_thinking">Show thinking</string>
     <string name="settings_show_thinking_hint">Show the model\'s reasoning as it thinks</string>
+    <string name="thinking_label">thinking</string>
     <string name="providers_title">Providers</string>
     <string name="provider_search_hint">Search providers</string>
     <string name="no_matching_providers">No matching providers</string>
