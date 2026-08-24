@@ -119,7 +119,7 @@ class SessionStoreTest {
         val store = newStore()
         val created = store.create("session one")
         now += 5
-        val saved = store.save(created.copy(messages = fullTranscript()))
+        val saved = store.save(created.withMessages(fullTranscript()))
 
         // Simulate restart: fresh store instance over the same directory.
         val reloaded = newStore().load(created.id)
@@ -129,11 +129,28 @@ class SessionStoreTest {
     }
 
     @Test
+    fun roundTripPreservesEntriesAndLeafId() = runTest {
+        val store = newStore()
+        val created = store.create("branchy")
+        now += 5
+        val root = MessageEntry("m0", null, 1L, UserMessage.ofText("a", 1L))
+        val left = MessageEntry("m1", "m0", 2L, UserMessage.ofText("b", 2L))
+        val right = MessageEntry("m2", "m0", 3L, UserMessage.ofText("c", 3L))
+        val saved = store.save(created.copy(entries = listOf(root, left, right), leafId = "m2"))
+
+        val reloaded = newStore().load(created.id)!!
+        assertEquals(saved, reloaded)
+        assertEquals(listOf(root, left, right), reloaded.entries)
+        assertEquals("m2", reloaded.leafId)
+        assertEquals(listOf("a", "c"), reloaded.messages.map { (it as UserMessage).content.single().let { c -> (c as TextContent).text } })
+    }
+
+    @Test
     fun saveBumpsUpdatedAtAndPersistsTitleAndTranscriptChanges() = runTest {
         val store = newStore()
         val created = store.create()
         now += 100
-        val saved = store.save(created.copy(title = "renamed", messages = listOf(UserMessage.ofText("hey", 7L))))
+        val saved = store.save(created.withMessages(listOf(UserMessage.ofText("hey", 7L))).copy(title = "renamed"))
         assertEquals(now, saved.updatedAt)
         assertEquals(created.createdAt, saved.createdAt)
 
@@ -158,7 +175,8 @@ class SessionStoreTest {
         val store = newStore()
         val id = store.create().id
         val messages = mutableListOf(UserMessage.ofText("a"))
-        store.save(Session(id, "t", 1, 1, messages))
+        val conversation = Conversation.fromMessages(messages)
+        store.save(Session(id, "t", 1, 1, entries = conversation.entries, leafId = conversation.leafId))
         messages.add(UserMessage.ofText("sneaky"))
 
         val loaded = store.load(id)!!
@@ -173,19 +191,19 @@ class SessionStoreTest {
         val store = newStore()
         val created = store.create()
         val messages = mutableListOf(UserMessage.ofText("a"))
-        store.save(created.copy(messages = messages))
+        store.save(created.withMessages(messages))
         messages.add(UserMessage.ofText("sneaky"))
         assertEquals(1, store.load(created.id)!!.messages.size)
     }
 
     @Test
     fun rejectsIdsWithTraversal() {
-        assertFailsWith<SessionDataException> { Session("../evil", "t", 1, 1, emptyList()) }
-        assertFailsWith<SessionDataException> { Session("a/b", "t", 1, 1, emptyList()) }
-        assertFailsWith<SessionDataException> { Session("a\\b", "t", 1, 1, emptyList()) }
-        assertFailsWith<SessionDataException> { Session("", "t", 1, 1, emptyList()) }
-        assertFailsWith<SessionDataException> { Session("a.b", "t", 1, 1, emptyList()) }
-        assertFailsWith<SessionDataException> { Session("x".repeat(65), "t", 1, 1, emptyList()) }
+        assertFailsWith<SessionDataException> { Session("../evil", "t", 1, 1, emptyList(), null) }
+        assertFailsWith<SessionDataException> { Session("a/b", "t", 1, 1, emptyList(), null) }
+        assertFailsWith<SessionDataException> { Session("a\\b", "t", 1, 1, emptyList(), null) }
+        assertFailsWith<SessionDataException> { Session("", "t", 1, 1, emptyList(), null) }
+        assertFailsWith<SessionDataException> { Session("a.b", "t", 1, 1, emptyList(), null) }
+        assertFailsWith<SessionDataException> { Session("x".repeat(65), "t", 1, 1, emptyList(), null) }
         runTest {
             val store = newStore()
             assertFailsWithSessionDataException { store.load("../secrets") }
@@ -275,7 +293,8 @@ class SessionStoreTest {
     fun sessionFilesContainNoCredentialMaterial() = runTest {
         val store = newStore()
         val id = store.create().id
-        store.save(Session(id, "t", 1, 1, fullTranscript()))
+        val full = Conversation.fromMessages(fullTranscript())
+        store.save(Session(id, "t", 1, 1, entries = full.entries, leafId = full.leafId))
         val text = File(root, "$id.json").readText()
         assertFalse(text.contains("apiKey", ignoreCase = true))
         assertFalse(text.contains("authorization"))
@@ -300,7 +319,7 @@ class SessionStoreTest {
         // Interleaved saves of different sizes must all land atomically.
         repeat(20) { i ->
             now += 1
-            store.save(created.copy(title = "t$i", messages = (0..i).map { UserMessage.ofText("m$it") }))
+            store.save(created.withMessages((0..i).map { UserMessage.ofText("m$it") }).copy(title = "t$i"))
         }
         val loaded = store.load(created.id)!!
         assertEquals(20, loaded.messages.size)
@@ -319,7 +338,7 @@ class SessionStoreTest {
         val store = newStoreWithIds()
         val created = store.create("tiny")
         assertEquals("0", created.id)
-        store.save(created.copy(messages = listOf(UserMessage.ofText("hi", 1L))))
+        store.save(created.withMessages(listOf(UserMessage.ofText("hi", 1L))))
         assertEquals(1, store.load("0")!!.messages.size)
         // No stray temp files remain.
         val names = root.listFiles()!!.map { it.name }

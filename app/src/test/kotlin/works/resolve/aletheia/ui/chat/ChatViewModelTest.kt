@@ -835,12 +835,10 @@ class ChatViewModelTest {
         // A persisted session whose user and assistant messages share a timestamp.
         val session = h.sessionStore.create("Collide")
         val saved = h.sessionStore.save(
-            session.copy(
-                messages = listOf(
-                    works.resolve.aletheia.ai.core.UserMessage.ofText("Hello", 123L),
-                    h.assistant("World").copy(timestamp = 123L),
-                ),
-            ),
+            session.withMessages(listOf(
+                works.resolve.aletheia.ai.core.UserMessage.ofText("Hello", 123L),
+                h.assistant("World").copy(timestamp = 123L),
+            )),
         )
         h.settings.setProviderId("zai")
         h.settings.setModelId("glm-4.7")
@@ -951,12 +949,10 @@ class ChatViewModelTest {
         // Seed a second session with a longer transcript in the store.
         val other = h.sessionStore.create("Other")
         h.sessionStore.save(
-            other.copy(
-                messages = listOf(
-                    works.resolve.aletheia.ai.core.UserMessage.ofText("Old", 1L),
-                    h.assistant("Stock").copy(timestamp = 2L),
-                ),
-            ),
+            other.withMessages(listOf(
+                works.resolve.aletheia.ai.core.UserMessage.ofText("Old", 1L),
+                h.assistant("Stock").copy(timestamp = 2L),
+            )),
         )
         val savesBefore = h.sessions.totalSaves
 
