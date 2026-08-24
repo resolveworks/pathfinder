@@ -107,7 +107,11 @@ class Models(
                 emitAuthError(model, provider, "Failed to resolve stored credential for provider '${provider.id}'")
                 return@flow
             }
-            if (options.apiKey == null && auth == null) {
+            // A provider with an auth resolver owns auth semantics: a null
+            // resolution always means unconfigured, even with an explicit
+            // request key (never fall back to a raw Authorization). Only a
+            // resolver-less provider may use a raw explicit apiKey directly.
+            if (auth == null && (provider.authResolver != null || options.apiKey == null)) {
                 emitAuthError(model, provider, "Provider '${provider.id}' is not configured")
                 return@flow
             }

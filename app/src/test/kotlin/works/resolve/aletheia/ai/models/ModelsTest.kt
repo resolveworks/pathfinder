@@ -180,6 +180,60 @@ class ModelsTest {
     }
 
     @Test
+    fun resolverNullForExplicitKeyNeverFallsBackToRawAuth() = runTest {
+        val api = RecordingApi()
+        val registry = Models(
+            listOf(
+                Provider(
+                    id = "prov",
+                    name = "Provider",
+                    baseUrl = "https://example.test",
+                    // Rejects explicit auth: null must mean unconfigured, not a
+                    // fallback to ordinary Authorization.
+                    authResolver = { explicitKey, _ ->
+                        if (explicitKey == null) ResolvedAuth("stored-key") else null
+                    },
+                    models = listOf(model()),
+                    api = api,
+                ),
+            ),
+        )
+
+        val events = registry
+            .stream(model(), Context(messages = emptyList()), SimpleStreamOptions(apiKey = "explicit"))
+            .toList()
+
+        assertEquals(1, events.size)
+        val error = events.single() as AssistantMessageEvent.Error
+        assertTrue(error.error.errorMessage!!.contains("Provider 'prov' is not configured"))
+        assertEquals(0, api.calls)
+    }
+
+    @Test
+    fun noResolverProviderUsesRawExplicitApiKey() = runTest {
+        val api = RecordingApi()
+        val registry = Models(
+            listOf(
+                Provider(
+                    id = "prov",
+                    name = "Provider",
+                    baseUrl = "https://example.test",
+                    models = listOf(model()),
+                    api = api,
+                ),
+            ),
+        )
+
+        val events = registry
+            .stream(model(), Context(messages = emptyList()), SimpleStreamOptions(apiKey = "explicit"))
+            .toList()
+
+        assertEquals(1, api.calls)
+        assertEquals("explicit", api.lastApiKey)
+        assertTrue(events.single() is AssistantMessageEvent.Done)
+    }
+
+    @Test
     fun explicitApiKeyIsShapedByResolverWithoutReadingStoredCredentials() = runTest {
         var storeReads = 0
         var resolverKey: String? = null
@@ -231,8 +285,10 @@ class ModelsTest {
         // Factory-style resolver: explicit keys bypass the store but keep the
         // provider's auth shaping (cf-aig-authorization).
         val authResolver: suspend (String?, Map<String, String>) -> ResolvedAuth? = { explicitKey, explicitEnv ->
-            if (explicitKey != null) {
+            if (explicitKey != null && entry.isCredentialComplete(explicitKey, explicitEnv)) {
                 entry.toResolvedAuth(explicitKey, explicitEnv)
+            } else if (explicitKey != null) {
+                null
             } else {
                 storeReads += 1
                 null

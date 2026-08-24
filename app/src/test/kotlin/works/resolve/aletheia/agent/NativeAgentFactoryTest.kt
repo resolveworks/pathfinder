@@ -212,6 +212,37 @@ class NativeAgentFactoryTest {
     }
 
     @Test
+    fun `incomplete explicit cloudflare key env is unconfigured with no api call`() {
+        runBlocking {
+            // Explicit key but the required gateway env is missing: the
+            // resolver must reject it (null), producing a single unconfigured
+            // Error event and no network request.
+            val store = FakeApiKeyStore(null)
+            val entry = catalog.getProvider("cloudflare-ai-gateway")!!
+            val transport = RecordingTransport()
+            val provider = entry.toRuntimeProvider(
+                transport = transport,
+                authResolver = catalogAuthResolver(entry, store),
+            )
+
+            val events = Models(listOf(provider)).stream(
+                entry.model("workers-ai/test-model")!!,
+                works.resolve.aletheia.ai.core.Context(messages = emptyList()),
+                SimpleStreamOptions(
+                    apiKey = "cf-explicit-key",
+                    env = mapOf("CLOUDFLARE_ACCOUNT_ID" to "acct-only"),
+                ),
+            ).toList()
+
+            val error = events.single() as works.resolve.aletheia.ai.core.AssistantMessageEvent.Error
+            assertTrue(
+                "Provider 'cloudflare-ai-gateway' is not configured" in (error.error.errorMessage ?: ""),
+            )
+            assertTrue(transport.requests.isEmpty(), "no request must be sent")
+        }
+    }
+
+    @Test
     fun `explicit env overrides stored env before auth shaping`() {
         runBlocking {
             // Stored credential carries account/gateway ids; the explicit

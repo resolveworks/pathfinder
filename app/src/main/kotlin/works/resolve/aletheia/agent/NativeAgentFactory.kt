@@ -79,8 +79,11 @@ internal fun catalogAuthResolver(
     credentials: ApiKeyStore,
 ): suspend (apiKey: String?, env: Map<String, String>) -> ResolvedAuth? =
     { explicitKey, explicitEnv ->
-        if (explicitKey != null) {
+        if (explicitKey != null && entry.isCredentialComplete(explicitKey, explicitEnv)) {
             entry.toResolvedAuth(explicitKey, explicitEnv)
+        } else if (explicitKey != null) {
+            // Incomplete explicit auth: unconfigured, never a partial fallback.
+            null
         } else {
             credentials.getCredential(entry.id)
                 ?.let { credential -> ApiKeyCredential(credential.key, credential.env + explicitEnv) }
