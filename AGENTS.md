@@ -63,9 +63,6 @@ patterns. Prefer documented current APIs over remembered ones.
   justifies its maintenance cost.
 
 The model catalog asset is generated from pi and must never be hand-edited.
-Generation should fail loudly on upstream drift. Unsupported upstream fields
-or providers must remain explicit, reviewed omissions with a rationale rather
-than being silently ignored.
 
 ## Security
 

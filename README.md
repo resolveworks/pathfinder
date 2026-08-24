@@ -63,13 +63,10 @@ The bundled model catalog is generated from pi and must not be edited by hand:
 
 ```bash
 node tools/generate-model-catalog.mjs          # PI_REPO_DIR or ~/Projects/pi
-node tools/generate-model-catalog.mjs --test   # drift-guard self-test
 ```
 
-Generation selects the catalog surface supported by the Kotlin runtime, records
-the source pi revision, and fails on unreviewed upstream changes. Deliberately
-unsupported providers, fields, or enum values must be explicit and justified;
-they must not disappear through permissive parsing.
+Generation selects the catalog surface supported by the Kotlin runtime and
+records the source pi revision.
 
 ## Build
 
