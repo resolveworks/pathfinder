@@ -165,7 +165,7 @@ private fun CodeBlock(literal: String) {
  */
 @Composable
 private fun ListBlock(listNode: Node, ordered: Boolean, styles: InlineMarkdownStyles, inQuote: Boolean) {
-    val startNumber = (listNode as? OrderedList)?.startNumber ?: 1
+    val startNumber = (listNode as? OrderedList)?.markerStartNumber ?: 1
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         var child = listNode.firstChild
         var itemIndex = 0
