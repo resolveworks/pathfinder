@@ -457,6 +457,13 @@ class AnthropicOAuthAuthTest {
         )
     }
 
+    @Test
+    fun `formEncode matches URLSearchParams including tilde`() {
+        // pi: new URLSearchParams({x: '~ *'}).toString() === "x=%7E+*",
+        // which is exactly JDK URLEncoder's output for the same input.
+        assertEquals("x=%7E+*", AnthropicOAuthAuth.formEncode(mapOf("x" to "~ *")))
+    }
+
     private fun assertNoSecrets(text: String?, secrets: List<String>, context: String) {
         for (secret in secrets) {
             assertTrue(!text.orEmpty().contains(secret), "secret leaked: $secret in $context")

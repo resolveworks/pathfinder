@@ -84,9 +84,8 @@ class AnthropicOAuthAuth(
         val challenge = pkce.generate()
         val verifier = challenge.verifier
 
-        // pi's URLSearchParams insertion order; every current parameter value
-        // (constants, base64url PKCE, localhost redirect URI, scopes) avoids
-        // `~` — see formEncode's encoding note.
+        // pi's URLSearchParams insertion order — see formEncode's encoding
+        // note.
         val authParams = linkedMapOf(
             "code" to "true",
             "client_id" to CLIENT_ID,
@@ -415,17 +414,11 @@ class AnthropicOAuthAuth(
         private val json = Json { ignoreUnknownKeys = true }
 
         /**
-         * `application/x-www-form-urlencoded` serialization for the authorize
-         * URL's query. NOT universally WHATWG `URLSearchParams`-equivalent:
-         * the JDK [java.net.URLEncoder] percent-encodes `~` (`%7E`) where
-         * URLSearchParams leaves it bare — the two differ only on that byte
-         * (`*`, alphanumerics, `.-_` are bare in both, space → `+` in both).
-         * Every current parameter value avoids `~`: the constants and
-         * localhost redirect URI contain none, the scopes use only `:` and
-         * space, and the PKCE state/challenge come from the URL-safe base64
-         * alphabet (A–Z, a–z, 0–9, `-`, `_`). So today's wire output is
-         * byte-identical to pi's `new URLSearchParams(fields).toString()`;
-         * any future parameter containing `~` must be encoded explicitly.
+         * `application/x-www-form-urlencoded` serialization matching pi's
+         * `new URLSearchParams(fields).toString()` byte for byte. The JDK
+         * [java.net.URLEncoder] uses the same WHATWG form-urlencoded set:
+         * alphanumerics, `*`, `-`, `.`, `_` stay bare, space becomes `+`, and
+         * every other byte (including `~` → `%7E`) is percent-encoded.
          */
         internal fun formEncode(fields: Map<String, String>): String =
             fields.entries.joinToString("&") { (name, value) ->
