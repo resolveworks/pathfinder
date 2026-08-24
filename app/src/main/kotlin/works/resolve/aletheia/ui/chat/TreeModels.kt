@@ -37,7 +37,7 @@ data class TreeRow(
     val isOnActivePath: Boolean,
     /** True when this entry is the conversation's current leaf. */
     val isCurrentLeaf: Boolean,
-    /** True for user-message entries (drives the role chip). */
+    /** True for user-message entries (the preview also prefixes the role). */
     val isUser: Boolean,
     /** True when this entry has more than one visible child (foldable). */
     val isBranchPoint: Boolean,

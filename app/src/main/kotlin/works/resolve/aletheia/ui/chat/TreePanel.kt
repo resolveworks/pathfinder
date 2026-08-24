@@ -1,18 +1,12 @@
 package works.resolve.aletheia.ui.chat
 
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -20,10 +14,11 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -39,10 +34,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -51,7 +43,9 @@ import works.resolve.aletheia.R
 /**
  * Panel rendering a conversation's branching history as a navigable tree,
  * ported from pi's /tree view: role-prefixed one-line previews, active-path
- * highlighting, a current-leaf marker, and foldable branch points.
+ * highlighting, a current-leaf marker, and foldable branch points. Rows are
+ * standard Material 3 [ListItem]s indented by depth; the role prefix lives
+ * in the preview text itself.
  *
  * The panel is purely presentational: it consumes [TreeRow]s produced by the
  * tree projection and reports navigation taps; fold and search state are
@@ -222,89 +216,57 @@ private fun TreeRowItem(
     onNavigate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val container = if (row.isOnActivePath) {
-        MaterialTheme.colorScheme.secondaryContainer
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
-    Row(
+    ListItem(
         modifier = modifier
             .fillMaxWidth()
-            .background(container)
             .clickable(onClick = onNavigate)
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // Tree guides: one column per ancestor level, a vertical line where
-        // pi's │ guides would appear (a Compose take on │ ├ └).
-        repeat(row.depth) {
-            TreeGuideLine()
-        }
-        // Fold affordance: chevron on expanded branch points, "+" when folded.
-        if (row.isBranchPoint) {
-            val foldDescription = stringResource(
-                if (folded) R.string.tree_unfold_branch else R.string.tree_fold_branch
-            )
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onToggleFold,
-                    )
-                    .semantics { contentDescription = foldDescription },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = if (folded) Icons.Filled.Add else Icons.Filled.KeyboardArrowDown,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            // Depth indent replaces pi's │ tree guides: each level shifts the
+            // row start, the standard indented-list idiom on Android.
+            .padding(start = (row.depth * TREE_INDENT_DP).dp),
+        colors = ListItemDefaults.colors(
+            containerColor = if (row.isOnActivePath) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                MaterialTheme.colorScheme.surface
             }
-        } else {
-            Box(modifier = Modifier.width(28.dp))
-        }
-        AssistChip(
-            onClick = onNavigate,
-            label = {
-                Text(
-                    stringResource(
-                        if (row.isUser) R.string.tree_role_user else R.string.tree_role_assistant
-                    )
-                )
-            },
-        )
-        Text(
-            text = row.preview,
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 8.dp),
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (row.isCurrentLeaf) {
+        ),
+        headlineContent = {
             Text(
-                text = stringResource(R.string.tree_current_leaf),
-                modifier = Modifier.padding(start = 8.dp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
+                text = row.preview,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-        }
-    }
+        },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (row.isCurrentLeaf) {
+                    Text(
+                        text = stringResource(R.string.tree_current_leaf),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(end = 8.dp),
+                    )
+                }
+                // Fold affordance mirrors pi's fold markers: a chevron on
+                // expanded branch points, "+" when folded.
+                if (row.isBranchPoint) {
+                    IconButton(onClick = onToggleFold) {
+                        Icon(
+                            imageVector = if (folded) Icons.Filled.Add else Icons.Filled.KeyboardArrowDown,
+                            contentDescription = stringResource(
+                                if (folded) R.string.tree_unfold_branch else R.string.tree_fold_branch
+                            ),
+                        )
+                    }
+                }
+            }
+        },
+    )
 }
 
-/** One indent level: a vertical guide line, the Compose equivalent of pi's │. */
-@Composable
-private fun TreeGuideLine(modifier: Modifier = Modifier) {
-    val lineColor = MaterialTheme.colorScheme.outlineVariant
-    Canvas(modifier = modifier.width(16.dp).height(32.dp)) {
-        val x = size.width / 2f
-        drawLine(lineColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.dp.toPx())
-    }
-}
+/** Start inset per tree depth level, in dp. */
+private val TREE_INDENT_DP = 16
 
 @Composable
 private fun EmptyTreeText(text: String, modifier: Modifier = Modifier) {
