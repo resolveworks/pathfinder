@@ -3,7 +3,7 @@ package works.resolve.aletheia.ui.chat
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** Tests for [filterTreeRows] and [treeRowGuide]. */
+/** Tests for [filterTreeRows] and [treeGuideCells]. */
 class TreePanelLogicTest {
 
     private fun row(
@@ -90,7 +90,7 @@ class TreePanelLogicTest {
         assertEquals(listOf("u1", "a1", "u2", "a2"), result.map { it.id })
     }
 
-    // ---- guide rendering (pi: TreeList.render prefix) ----
+    // ---- guide layout (pi: TreeList.render prefix) ----
 
     private fun guideRow(
         indent: Int,
@@ -110,35 +110,33 @@ class TreePanelLogicTest {
     )
 
     @Test
-    fun `roots and flat chains render without guides`() {
-        assertEquals("", treeRowGuide(guideRow(indent = 0), folded = false))
-        assertEquals("", treeRowGuide(guideRow(indent = 0), folded = true))
+    fun `roots and flat chains have no guide cells`() {
+        assertEquals(emptyList<TreeGuideCell>(), treeGuideCells(guideRow(indent = 0)))
     }
 
     @Test
-    fun `connectors render one cell before the body with fold markers`() {
-        // Plain connector, not foldable.
-        assertEquals("├─ ", treeRowGuide(guideRow(1, TreeConnector.TEE), folded = false))
-        assertEquals("└─ ", treeRowGuide(guideRow(1, TreeConnector.ELBOW), folded = false))
-        // Foldable segment start carries ⊟; folded carries ⊞ (pi's markers).
-        assertEquals("├⊟ ", treeRowGuide(guideRow(1, TreeConnector.TEE, foldable = true), folded = false))
-        assertEquals("└⊞ ", treeRowGuide(guideRow(1, TreeConnector.ELBOW, foldable = true), folded = true))
+    fun `connectors occupy the final cell before the body`() {
+        assertEquals(listOf(TreeGuideCell.TEE), treeGuideCells(guideRow(1, TreeConnector.TEE)))
+        assertEquals(listOf(TreeGuideCell.ELBOW), treeGuideCells(guideRow(1, TreeConnector.ELBOW)))
     }
 
     @Test
-    fun `gutters render at ancestor branch levels as verticals`() {
-        // First generation below a ├─ branch: gutter at level 0, blank cell.
-        assertEquals("│     ", treeRowGuide(guideRow(2, gutters = listOf(0)), folded = false))
-        // Below the last sibling there is no gutter.
-        assertEquals("      ", treeRowGuide(guideRow(2), folded = false))
-        // Deeper nesting keeps the outer gutter and adds the connector cell.
+    fun `gutters occupy ancestor branch levels`() {
         assertEquals(
-            "│     └─ ",
-            treeRowGuide(guideRow(3, TreeConnector.ELBOW, gutters = listOf(0)), folded = false),
+            listOf(TreeGuideCell.GUTTER, TreeGuideCell.EMPTY),
+            treeGuideCells(guideRow(2, gutters = listOf(0))),
         )
         assertEquals(
-            "│  │  ├─ ",
-            treeRowGuide(guideRow(3, TreeConnector.TEE, gutters = listOf(0, 1)), folded = false),
+            listOf(TreeGuideCell.EMPTY, TreeGuideCell.EMPTY),
+            treeGuideCells(guideRow(2)),
+        )
+        assertEquals(
+            listOf(TreeGuideCell.GUTTER, TreeGuideCell.EMPTY, TreeGuideCell.ELBOW),
+            treeGuideCells(guideRow(3, TreeConnector.ELBOW, gutters = listOf(0))),
+        )
+        assertEquals(
+            listOf(TreeGuideCell.GUTTER, TreeGuideCell.GUTTER, TreeGuideCell.TEE),
+            treeGuideCells(guideRow(3, TreeConnector.TEE, gutters = listOf(0, 1))),
         )
     }
 }

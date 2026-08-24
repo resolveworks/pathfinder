@@ -1,11 +1,18 @@
 package works.resolve.aletheia.ui.chat
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -14,7 +21,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -28,14 +34,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import works.resolve.aletheia.R
@@ -43,9 +48,10 @@ import works.resolve.aletheia.R
 /**
  * Panel rendering a conversation's branching history as a navigable tree,
  * ported from pi's /tree view: role-prefixed one-line previews, the accent •
- * marker on entries of the loaded path, and tree guides — │ gutters with
- * ├/└ connectors carrying pi's ⊟/⊞ fold markers — drawn as a monospace
- * prefix instead of indenting the rows.
+ * marker on entries of the loaded path, and pi-shaped tree guides. Android
+ * renders the guides with a Canvas and fold state with Material Symbols rather
+ * than terminal glyphs: unlike a monospace TUI, Android font fallback does not
+ * guarantee that │/├/└ and ⊟/⊞ share metrics or even a baseline.
  *
  * The panel is purely presentational: it consumes [TreeRow]s produced by the
  * tree projection and reports navigation taps; fold and search state are
@@ -159,33 +165,23 @@ internal fun filterTreeRows(
     }
 }
 
+/** One display cell per indent level, matching pi's three-column cells. */
+internal enum class TreeGuideCell { EMPTY, GUTTER, TEE, ELBOW }
+
 /**
- * The row's guide prefix, ported from pi's TreeList.render(): one
- * three-character cell per indent level, │ where an ancestor branch
- * continues below, and the ├/└ connector — carrying the fold marker (⊟
- * foldable, ⊞ folded, ─ otherwise) — in the last cell. Rows render
- * full-width; the guides encode the depth instead of an indent.
+ * Pure guide layout ported from pi's TreeList.render(). The UI draws these
+ * cells instead of asking Android fonts to align terminal box-drawing glyphs.
  */
-internal fun treeRowGuide(row: TreeRow, folded: Boolean): String {
-    val guide = StringBuilder()
-    for (level in 0 until row.indent) {
+internal fun treeGuideCells(row: TreeRow): List<TreeGuideCell> =
+    List(row.indent) { level ->
         when {
-            level in row.gutters -> guide.append("│  ")
-            level == row.indent - 1 && row.connector != TreeConnector.NONE -> guide
-                .append(if (row.connector == TreeConnector.ELBOW) '└' else '├')
-                .append(
-                    when {
-                        folded -> '⊞'
-                        row.isFoldable -> '⊟'
-                        else -> '─'
-                    }
-                )
-                .append(' ')
-            else -> guide.append("   ")
+            level in row.gutters -> TreeGuideCell.GUTTER
+            level != row.indent - 1 -> TreeGuideCell.EMPTY
+            row.connector == TreeConnector.TEE -> TreeGuideCell.TEE
+            row.connector == TreeConnector.ELBOW -> TreeGuideCell.ELBOW
+            else -> TreeGuideCell.EMPTY
         }
     }
-    return guide.toString()
-}
 
 @Composable
 private fun TreePanelHeader(
@@ -237,12 +233,9 @@ private fun TreePanelHeader(
 }
 
 /**
- * One full-width tree row. Tapping the row navigates to its entry; tapping
- * the guides of a foldable row folds or unfolds that row's descendants (pi's
- * fold acts on the row itself, so the ⊟/⊞ marker in the connector is the
- * affordance). Rows without a connector — roots — carry pi's ⊞ marker in
- * front of the text once folded; like pi, they expose no marker to fold with
- * while unfolded.
+ * One full-width tree row. The branch geometry is drawn continuously across
+ * the fixed-height row and the boxed plus/minus comes from Material Symbols.
+ * This is the narrow Android adaptation of pi's Unicode TUI prefix.
  */
 @Composable
 private fun TreeRowItem(
@@ -252,53 +245,164 @@ private fun TreeRowItem(
     onNavigate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    ListItem(
+    val foldLabel = stringResource(
+        if (folded) R.string.tree_unfold_branch else R.string.tree_fold_branch
+    )
+    val accent = MaterialTheme.colorScheme.primary
+
+    Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onNavigate),
-        leadingContent = {
-            val foldLabel = stringResource(
-                if (folded) R.string.tree_unfold_branch else R.string.tree_fold_branch
-            )
-            Text(
-                text = treeRowGuide(row, folded),
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            .height(TreeRowHeight)
+            .clickable(onClick = onNavigate)
+            .padding(horizontal = TreeRowHorizontalPadding),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (row.indent > 0) {
+            TreeGuide(
+                row = row,
+                folded = folded,
+                onToggleFold = onToggleFold,
+                foldLabel = foldLabel,
                 modifier = Modifier
-                    .then(
-                        if (row.isFoldable || folded) {
-                            Modifier.clickable(onClickLabel = foldLabel, onClick = onToggleFold)
-                        } else {
-                            Modifier
-                        }
-                    )
-                    // Widen the fold target around the connector a little.
-                    .padding(horizontal = 4.dp),
+                    .width(TreeGuideLevelWidth * row.indent)
+                    .fillMaxHeight(),
             )
-        },
-        headlineContent = {
-            val accent = MaterialTheme.colorScheme.primary
-            Text(
-                text = buildAnnotatedString {
-                    // pi's render(): a folded row without a connector (a
-                    // root) keeps its ⊞ fold marker in front of the text.
-                    if (folded && row.connector == TreeConnector.NONE) {
-                        withStyle(SpanStyle(color = accent)) { append("⊞ ") }
-                    }
-                    // Entries of the loaded path carry pi's • marker.
-                    if (row.isOnActivePath) {
-                        withStyle(SpanStyle(color = accent)) { append("• ") }
-                    }
-                    append(row.preview)
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        },
-    )
+        }
+
+        // Pi only exposes a root's fold marker after it has been folded.
+        if (folded && row.connector == TreeConnector.NONE) {
+            Box(
+                modifier = Modifier
+                    .size(RootFoldTargetSize)
+                    .clickable(
+                        onClickLabel = foldLabel,
+                        role = Role.Button,
+                        onClick = onToggleFold,
+                    ),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Icon(
+                    imageVector = TreeIcons.AddBox,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(TreeFoldIconSize),
+                )
+            }
+        }
+
+        if (row.isOnActivePath) {
+            Canvas(modifier = Modifier.size(ActivePathMarkerWidth, TreeRowHeight)) {
+                drawCircle(
+                    color = accent,
+                    radius = ActivePathDotRadius.toPx(),
+                    center = center.copy(x = ActivePathDotRadius.toPx()),
+                )
+            }
+        }
+
+        Text(
+            text = row.preview,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
+
+/** Canvas implementation of pi's │ gutters and ├/└ branch connectors. */
+@Composable
+private fun TreeGuide(
+    row: TreeRow,
+    folded: Boolean,
+    onToggleFold: () -> Unit,
+    foldLabel: String,
+    modifier: Modifier = Modifier,
+) {
+    val guideColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val cells = treeGuideCells(row)
+    val hasFoldIcon = row.connector != TreeConnector.NONE && (row.isFoldable || folded)
+    val interactionModifier = if (hasFoldIcon) {
+        Modifier.clickable(
+            onClickLabel = foldLabel,
+            role = Role.Button,
+            onClick = onToggleFold,
+        )
+    } else {
+        Modifier
+    }
+
+    Box(modifier = modifier.then(interactionModifier)) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val levelWidth = TreeGuideLevelWidth.toPx()
+            val branchXOffset = TreeGuideBranchX.toPx()
+            val centerY = size.height / 2f
+            val strokeWidth = TreeGuideStrokeWidth.toPx()
+            val iconStart = TreeGuideFoldIconX.toPx()
+            val plainConnectorEnd = TreeGuidePlainConnectorEnd.toPx()
+
+            cells.forEachIndexed { level, cell ->
+                val branchX = level * levelWidth + branchXOffset
+                when (cell) {
+                    TreeGuideCell.EMPTY -> Unit
+                    TreeGuideCell.GUTTER -> drawLine(
+                        color = guideColor,
+                        start = androidx.compose.ui.geometry.Offset(branchX, 0f),
+                        end = androidx.compose.ui.geometry.Offset(branchX, size.height),
+                        strokeWidth = strokeWidth,
+                        cap = StrokeCap.Butt,
+                    )
+                    TreeGuideCell.TEE, TreeGuideCell.ELBOW -> {
+                        drawLine(
+                            color = guideColor,
+                            start = androidx.compose.ui.geometry.Offset(branchX, 0f),
+                            end = androidx.compose.ui.geometry.Offset(
+                                branchX,
+                                if (cell == TreeGuideCell.TEE) size.height else centerY,
+                            ),
+                            strokeWidth = strokeWidth,
+                            cap = StrokeCap.Butt,
+                        )
+                        drawLine(
+                            color = guideColor,
+                            start = androidx.compose.ui.geometry.Offset(branchX, centerY),
+                            end = androidx.compose.ui.geometry.Offset(
+                                level * levelWidth + if (hasFoldIcon) iconStart else plainConnectorEnd,
+                                centerY,
+                            ),
+                            strokeWidth = strokeWidth,
+                            cap = StrokeCap.Butt,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (hasFoldIcon) {
+            Icon(
+                imageVector = if (folded) TreeIcons.AddBox else TreeIcons.IndeterminateCheckBox,
+                contentDescription = null,
+                tint = guideColor,
+                modifier = Modifier
+                    .offset(x = TreeGuideLevelWidth * (row.indent - 1) + TreeGuideFoldIconX)
+                    .align(Alignment.CenterStart)
+                    .size(TreeFoldIconSize),
+            )
+        }
+    }
+}
+
+private val TreeRowHeight = 56.dp
+private val TreeRowHorizontalPadding = 16.dp
+private val TreeGuideLevelWidth = 28.dp
+private val TreeGuideBranchX = 4.dp
+private val TreeGuideFoldIconX = 8.dp
+private val TreeGuidePlainConnectorEnd = 18.dp
+private val TreeGuideStrokeWidth = 1.dp
+private val TreeFoldIconSize = 18.dp
+private val RootFoldTargetSize = 24.dp
+private val ActivePathMarkerWidth = 14.dp
+private val ActivePathDotRadius = 2.dp
 
 @Composable
 private fun EmptyTreeText(text: String, modifier: Modifier = Modifier) {
