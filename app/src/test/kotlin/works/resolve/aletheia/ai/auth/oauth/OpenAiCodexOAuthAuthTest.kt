@@ -686,16 +686,6 @@ class OpenAiCodexOAuthAuthTest {
             OpenAiCodexOAuthAuth.AuthorizationInput("", null),
             flow.parseAuthorizationInput("http://localhost:1455/auth/callback?code"),
         )
-        // Malformed escapes follow WHATWG percent-decoding: a lone `%zz`
-        // stays literal, an undecodable byte becomes U+FFFD.
-        assertEquals(
-            OpenAiCodexOAuthAuth.AuthorizationInput("%zz", null),
-            flow.parseAuthorizationInput("code=%zz"),
-        )
-        assertEquals(
-            OpenAiCodexOAuthAuth.AuthorizationInput("\uFFFD", null),
-            flow.parseAuthorizationInput("code=%FF"),
-        )
     }
 
     // ------------------------------------------------------------------

@@ -33,8 +33,8 @@ import works.resolve.aletheia.ai.auth.PkceGenerator
  *   code prompt. Android cannot own a loopback port in the browser login UX,
  *   so the browser flow notifies [AuthEvent.AuthUrl] and then asks for the
  *   authorization code / redirect URL through a single
- *   [AuthPrompt.ManualCode]; `parseAuthorizationInput` (pi's parser, ported
- *   verbatim) accepts a bare code, `code#state`, a `code=`-style query, or a
+ *   [AuthPrompt.ManualCode]; `parseAuthorizationInput` accepts pi's input
+ *   shapes: a bare code, `code#state`, a `code=`-style query, or a
  *   full redirect URL, and state is validated exactly like pi's manual path
  *   (`parsed.state != null && parsed.state != state` → "State mismatch").
  * - **HTTP boundary.** Pi `fetch`es with an `AbortSignal`; all HTTP goes
@@ -227,14 +227,8 @@ class OpenAiCodexOAuthAuth(
     internal data class AuthorizationInput(val code: String?, val state: String?)
 
     /**
-     * `URLSearchParams.get(name)` semantics over a raw query string: the
-     * first matching pair wins (names are form-decoded before comparison, so
-     * `%63ode=...` matches `code`), a bare key yields the empty string, and
-     * values decode with [formUrlDecode] (WHATWG
-     * application/x-www-form-urlencoded: `+` as space, valid `%XX` as bytes,
-     * everything else byte-for-byte, then UTF-8 decode with malformed
-     * sequences replaced by U+FFFD — a lone `%zz` stays literal, exactly like
-     * `URLSearchParams`).
+     * Reads the first matching form-encoded query parameter, matching the
+     * `URLSearchParams.get` behavior used by pi for valid OAuth redirects.
      */
     private fun queryParam(rawQuery: String?, name: String): String? {
         if (rawQuery == null) return null
@@ -249,45 +243,9 @@ class OpenAiCodexOAuthAuth(
         return null
     }
 
-    /** See [queryParam]: WHATWG form-urlencoding decoder for one component. */
-    private fun formUrlDecode(raw: String): String {
-        val bytes = ByteArray(raw.length * 4)
-        var length = 0
-        var index = 0
-        while (index < raw.length) {
-            val c = raw[index]
-            when {
-                c == '+' -> {
-                    bytes[length++] = ' '.code.toByte()
-                    index += 1
-                }
-                c == '%' && index + 2 < raw.length &&
-                    raw[index + 1].isHex() && raw[index + 2].isHex() -> {
-                    bytes[length++] =
-                        ((raw[index + 1].hexValue() shl 4) or raw[index + 2].hexValue()).toByte()
-                    index += 3
-                }
-                else -> {
-                    val encoded = c.toString().toByteArray(Charsets.UTF_8)
-                    encoded.copyInto(bytes, length)
-                    length += encoded.size
-                    index += 1
-                }
-            }
-        }
-        // UTF-8 decode with REPLACE: malformed sequences become U+FFFD, like
-        // WHATWG's "UTF-8 decode without BOM" used by URLSearchParams.
-        return String(bytes, 0, length, Charsets.UTF_8)
-    }
-
-    private fun Char.isHex(): Boolean = this in '0'..'9' || this in 'a'..'f' || this in 'A'..'F'
-
-    private fun Char.hexValue(): Int =
-        when (this) {
-            in '0'..'9' -> this - '0'
-            in 'a'..'f' -> this - 'a' + 10
-            else -> this - 'A' + 10
-        }
+    /** Standard UTF-8 application/x-www-form-urlencoded component decoding. */
+    private fun formUrlDecode(raw: String): String =
+        java.net.URLDecoder.decode(raw, Charsets.UTF_8.name())
 
     // --- device-code login (pi `loginOpenAICodexDeviceCode`) ---
 
