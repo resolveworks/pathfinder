@@ -990,7 +990,7 @@ private fun ChatScreenNeedsConfigurationPreview() {
     PreviewChatScreen(
         ChatUiState(
             status = ChatStatus.NeedsConfiguration,
-            startKey = SettingsNavKey,
+            startKey = ProvidersNavKey,
             providerOptions = listOf(
                 ProviderOption("zai", "Z.AI", configured = false),
                 ProviderOption("cloudflare-ai-gateway", "Cloudflare AI Gateway", configured = false),
@@ -1047,10 +1047,10 @@ private fun ChatScreenModelSettingsEmptyPreview() {
     PreviewChatScreen(
         uiState = ChatUiState(
             status = ChatStatus.NeedsConfiguration,
-            startKey = SettingsNavKey,
+            startKey = ModelSettingsNavKey,
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
         ),
-        extraKeys = listOf(ModelSettingsNavKey),
     )
 }
 

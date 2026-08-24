@@ -93,13 +93,22 @@ data class SelectedModel(
  * message objects.
  *
  * Navigation is signaled from this state rather than commanded: an
- * unconfigured app sets [startKey] to [SettingsNavKey], which the UI layer
- * honors by rebuilding its Nav3 back stack to exactly that root (a dead end:
- * back cannot leave it). Every success that should return the user to the
- * chat (adopting a session, saving configuration) bumps the monotonic
- * [navigationEpoch], which the UI layer reads as a reset-to-[startKey] signal,
- * atomically with the rest of the state. The invariant `NeedsConfiguration
- * implies startKey == SettingsNavKey` holds by construction.
+ * unconfigured app sets [startKey] to [ProvidersNavKey] when no provider
+ * credential is complete (fresh install), or directly to
+ * [ModelSettingsNavKey] when one already is (restoration), and the UI layer
+ * honors this by rebuilding its Nav3 back stack to exactly that root (a dead
+ * end: back cannot leave it). After a successful credential save that does
+ * not complete configuration, [startKey] moves to [ModelSettingsNavKey] with a
+ * [navigationEpoch] bump so configured models are immediately selectable;
+ * every success that should return the user to the chat (adopting a session,
+ * saving configuration) instead sets [startKey] to [ChatNavKey] and bumps the
+ * monotonic [navigationEpoch], which the UI layer reads as a
+ * reset-to-[startKey] signal, atomically with the rest of the state. The
+ * invariant `NeedsConfiguration implies startKey == ProvidersNavKey ||
+ * startKey == ModelSettingsNavKey` holds by construction: the model-settings
+ * step only appears after a successful credential save during the forced
+ * first-run flow (back is a no-op there too, since the reset rebuilds the
+ * stack to exactly that root).
  */
 data class ChatUiState(
     val status: ChatStatus = ChatStatus.Loading,
