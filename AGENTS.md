@@ -21,6 +21,10 @@ as thin as possible.
 - Optimize for low maintenance. Avoid parallel domain models, speculative
   abstractions, bespoke UI primitives, compatibility shims, and dependencies
   whose value does not justify their upkeep.
+- Treat Aletheia app data as disposable during development. Implement only pi's
+  current data shapes and the app's current storage formats; reject old formats
+  instead of adding migrations or backward-compatibility paths unless explicitly
+  requested.
 - Target the latest GrapheneOS release and the latest Android platform and
   toolchain. Keep Kotlin, AGP, Compose, and AndroidX current; move forward to
   resolve compatibility problems rather than downgrading.
