@@ -541,6 +541,95 @@ class AnthropicMessagesStreamTest {
         assertEquals("cli", request.headers["x-app"])
     }
 
+    /**
+     * pi test/github-copilot-anthropic.test.ts: Copilot models via
+     * anthropic-messages use Bearer auth (no x-api-key), Copilot static model
+     * headers, and the dynamic X-Initiator / Openai-Intent headers.
+     */
+    private val copilotClaude = claude.copy(
+        id = "claude-sonnet-4.6",
+        provider = "github-copilot",
+        baseUrl = "https://api.individual.githubcopilot.com",
+        headers = mapOf(
+            "User-Agent" to "GitHubCopilotChat/1.0",
+            "Copilot-Integration-Id" to "vscode-chat",
+        ),
+        anthropicCompat = claude.anthropicCompat.copy(forceAdaptiveThinking = true),
+    )
+
+    @Test
+    fun `copilot stored session token uses bearer auth with copilot headers`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(textStream("ok"))
+        api(transport)
+            .stream(copilotClaude, context, AnthropicMessagesOptions(apiKey = "tid_copilot_session_test_token"))
+            .toList()
+        val request = transport.requests.single()
+        assertEquals("https://api.individual.githubcopilot.com/v1/messages", request.url)
+        assertEquals("tid_copilot_session_test_token", request.bearerToken)
+        // pi: apiKey null in the SDK client, so no x-api-key header at all.
+        assertTrue(request.headers.keys.none { it.equals("x-api-key", ignoreCase = true) })
+        // Copilot static headers from model.headers.
+        assertEquals("GitHubCopilotChat/1.0", request.headers["User-Agent"])
+        assertEquals("vscode-chat", request.headers["Copilot-Integration-Id"])
+        // Dynamic headers.
+        assertEquals("user", request.headers["X-Initiator"])
+        assertEquals("conversation-edits", request.headers["Openai-Intent"])
+        assertEquals("2023-06-01", request.headers["anthropic-version"])
+        assertEquals("application/json", request.headers["accept"])
+        assertEquals("true", request.headers["anthropic-dangerous-direct-browser-access"])
+        // Copilot does not support eager tool input streaming; the adaptive
+        // thinking model skips the interleaved beta, so no anthropic-beta.
+        assertNull(request.headers["anthropic-beta"])
+    }
+
+    @Test
+    fun `copilot api-key-shaped token still takes the bearer path`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(textStream("ok"))
+        // pi checks the Copilot branch before the OAuth branch, so even a
+        // token shaped like an Anthropic key stays on Bearer with Copilot
+        // headers (isOAuth false: no Claude Code system prompt or tool-name
+        // renaming).
+        api(transport)
+            .stream(copilotClaude, context, AnthropicMessagesOptions(apiKey = "sk-ant-api03-copilot"))
+            .toList()
+        val request = transport.requests.single()
+        assertEquals("sk-ant-api03-copilot", request.bearerToken)
+        assertTrue(request.headers.keys.none { it.equals("x-api-key", ignoreCase = true) })
+        assertEquals("user", request.headers["X-Initiator"])
+        val body = Json.parseToJsonElement(request.body.decodeToString()).jsonObject
+        assertTrue("You are Claude Code" !in request.body.decodeToString())
+        assertEquals("claude-sonnet-4.6", body["model"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `copilot explicit request headers override static and dynamic ones case-insensitively`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(textStream("ok"))
+        api(transport)
+            .stream(
+                copilotClaude,
+                context,
+                AnthropicMessagesOptions(
+                    apiKey = "tid_token",
+                    headers = mapOf(
+                        "copilot-integration-id" to "jetbrains",
+                        "OPENAI-INTENT" to "completion",
+                        // A null explicit header suppresses the dynamic one.
+                        "x-initiator" to null,
+                    ),
+                ),
+            )
+            .toList()
+        val request = transport.requests.single()
+        // Explicit headers win case-insensitively over model and dynamic headers.
+        assertEquals("jetbrains", request.headers["copilot-integration-id"])
+        assertEquals("completion", request.headers["OPENAI-INTENT"])
+        assertTrue(request.headers.keys.none { it.equals("x-initiator", ignoreCase = true) })
+        assertEquals("tid_token", request.bearerToken)
+    }
+
     @Test
     fun `session affinity header sent only when enabled with a session`() = runTest {
         val transport = FakeTransport()

@@ -78,7 +78,9 @@ class AnthropicMessagesApi(
         options: AnthropicMessagesOptions = AnthropicMessagesOptions(),
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = nowMs()
-        val isOAuth = options.apiKey?.let { isOAuthToken(it) } ?: false
+        // pi computes isOAuth from createClient; the Copilot branch (checked
+        // first) always yields a non-OAuth, Bearer-auth client.
+        val isOAuth = model.provider != "github-copilot" && options.apiKey?.let { isOAuthToken(it) } == true
         val state = AnthropicStreamState(model, startedAtMs, isOAuth)
         try {
             assertRequestAuth(model.provider, options.apiKey, options.headers)
@@ -284,6 +286,8 @@ internal const val ANTHROPIC_VERSION = "2023-06-01"
 
 /**
  * Builds the transport headers and auth, ported from pi's createClient.
+ * GitHub Copilot models use Bearer auth with Copilot static/dynamic headers
+ * and no x-api-key (pi's Copilot branch, checked before the OAuth branch);
  * API-key auth sends `x-api-key` (pi's SDK default header) plus
  * `anthropic-version`; OAuth tokens (sk-ant-oat) become a Bearer token with
  * Claude Code identity headers and betas.
@@ -305,6 +309,29 @@ private fun buildHeaders(
     }
     if (needsInterleavedBeta) {
         betaFeatures.add("interleaved-thinking-2025-05-14")
+    }
+
+    // Copilot: Bearer auth, selective betas (pi checks this branch before OAuth).
+    if (model.provider == "github-copilot") {
+        val base = buildMap<String, String?> {
+            put("accept", "application/json")
+            put("anthropic-dangerous-direct-browser-access", "true")
+            put("anthropic-version", ANTHROPIC_VERSION)
+            if (betaFeatures.isNotEmpty()) put("anthropic-beta", betaFeatures.joinToString(","))
+        }
+        val merged = filterNonNull(
+            mergeHeaders(
+                base,
+                // Copilot dynamic headers come after the model headers and
+                // before the options headers, as in pi's Copilot branch of
+                // anthropic-messages createClient mergeClientHeaders.
+                mergeHeaders(
+                    mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
+                    options.headers,
+                ),
+            ),
+        )
+        return merged to options.apiKey
     }
 
     if (isOAuth) {
@@ -344,13 +371,7 @@ private fun buildHeaders(
     val merged = filterNonNull(
         mergeHeaders(
             base,
-            // Copilot dynamic headers (github-copilot only) come after the
-            // model headers and before the options headers, as in pi's
-            // anthropic-messages createClient mergeClientHeaders order.
-            mergeHeaders(
-                mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
-                options.headers,
-            ),
+            mergeHeaders(model.headers, options.headers),
         ),
     )
     return merged to null

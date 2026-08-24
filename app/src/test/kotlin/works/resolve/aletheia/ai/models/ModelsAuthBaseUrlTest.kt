@@ -3,6 +3,7 @@ package works.resolve.aletheia.ai.models
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
@@ -97,7 +98,10 @@ class ModelsAuthBaseUrlTest {
         assertEquals(1, authServer.requestCount)
         val recorded = authServer.takeRequest()
         assertTrue(recorded.path!!.endsWith("/v1/messages"))
-        assertEquals("copilot-token", recorded.getHeader("x-api-key"))
+        // pi's Copilot branch of anthropic-messages createClient: Bearer auth,
+        // no x-api-key (port of github-copilot-anthropic.test.ts).
+        assertEquals("Bearer copilot-token", recorded.getHeader("Authorization"))
+        assertNull(recorded.getHeader("x-api-key"))
         // The model's own (catalog) endpoint was never contacted.
         assertEquals(0, catalogServer.requestCount)
     }
