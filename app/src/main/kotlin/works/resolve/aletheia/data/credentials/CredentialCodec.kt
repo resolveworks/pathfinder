@@ -52,16 +52,23 @@ object CredentialCodec {
     /** Decodes current and legacy shapes; throws [CredentialFormatException] on malformed input. */
     fun decode(raw: String): Credential {
         val trimmed = raw.trim()
-        // Only true non-object bare text is a legacy API-key record;
-        // object-looking input must be valid typed JSON or it is malformed.
-        if (trimmed.isEmpty() || trimmed.first() != '{' || trimmed.last() != '}') return legacyApiKey(trimmed)
+        // Input starting with `{` is object-intended: it must parse as valid
+        // typed JSON (even without a closing brace) or it is malformed. Only
+        // genuine non-object bare text is a legacy API-key record.
+        if (trimmed.isEmpty() || trimmed.first() != '{') return legacyApiKey(trimmed)
         val element = try {
             json.parseToJsonElement(trimmed)
         } catch (_: Exception) {
             throw CredentialFormatException("Malformed credential JSON")
         }
         val obj = element as? JsonObject ?: throw CredentialFormatException("Credential JSON is not an object")
-        return when (val type = (obj["type"] as? JsonPrimitive)?.takeIf { it.isString }?.content) {
+        val typeField = obj["type"]
+        val type = when {
+            typeField == null -> null
+            typeField is JsonPrimitive && typeField.isString -> typeField.content
+            else -> throw CredentialFormatException("Credential type is not a string")
+        }
+        return when (type) {
             TYPE_API_KEY -> decodeApiKey(obj)
             TYPE_OAUTH -> decodeOAuth(obj)
             null ->
@@ -74,7 +81,10 @@ object CredentialCodec {
     private fun legacyApiKey(raw: String): Credential = ApiKeyCredential(key = raw)
 
     private fun decodeApiKey(obj: JsonObject): ApiKeyCredential = ApiKeyCredential(
-        key = (obj["key"] as? JsonPrimitive)?.takeIf { it.isString }?.content,
+        key = obj["key"]?.let { key ->
+            (key as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw CredentialFormatException("Key is not a string")
+        },
         env = obj["env"]?.let { env ->
             (env as? JsonObject)?.entries?.associate { (name, value) ->
                 name to ((value as? JsonPrimitive)?.takeIf { it.isString }?.content
@@ -86,7 +96,7 @@ object CredentialCodec {
     private fun decodeOAuth(obj: JsonObject): OAuthCredential = OAuthCredential(
         access = stringField(obj, "access"),
         refresh = stringField(obj, "refresh"),
-        expires = (obj["expires"] as? JsonPrimitive)?.content?.toLongOrNull()
+        expires = (obj["expires"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toLongOrNull()
             ?: throw CredentialFormatException("Missing or non-numeric expires"),
         extras = obj.filterKeys { it !in OAuthCredential.RESERVED_FIELDS },
     )

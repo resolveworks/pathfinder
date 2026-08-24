@@ -12,6 +12,8 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Ports the semantics of pi `packages/ai/src/auth/resolve.ts`. */
 class ResolveProviderAuthTest {
@@ -294,6 +296,49 @@ class ResolveProviderAuthTest {
         job.cancel()
         job.join()
         assertTrue(job.isCancelled)
+    }
+
+    @Test
+    fun `outer caller withTimeout cancellation is not wrapped as a refresh timeout`() = runTest {
+        val store = InMemoryCredentialStore()
+        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = System.currentTimeMillis()) }
+        val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", System.currentTimeMillis() + 60 * 60 * 1000L)) {
+            override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
+                delay(Long.MAX_VALUE) // virtual time advances past the caller's 1s bound
+                error("unreachable")
+            }
+        }
+        val thrown = withTimeoutOrNull(1000) {
+            try {
+                resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext())
+                null
+            } catch (e: ModelsError) {
+                error("outer cancellation must not be wrapped: ${e.message}")
+            }
+        }
+        // The caller's shorter timeout wins and surfaces as cancellation,
+        // not as an OAUTH ModelsError.
+        assertNull(thrown)
+    }
+
+    @Test
+    fun `blank override env value falls through to ambient`() = runTest {
+        val store = InMemoryCredentialStore()
+        // Ambient path: overrides.env overlays the context (pi's
+        // overlayEnvAuthContext `env[name] || base.env(name)`), so a blank
+        // override must not suppress the ambient value.
+        val apiKey = object : ApiKeyAuth {
+            override val name = "stub"
+            override suspend fun resolve(ctx: AuthContext, credential: ApiKeyCredential?): AuthResult? =
+                AuthResult(ModelAuth(apiKey = ctx.env("A")))
+        }
+        val result = resolveProviderAuth(
+            provider(apiKey = apiKey),
+            store,
+            RecordingAuthContext(env = mapOf("A" to "ambient-a")),
+            AuthResolutionOverrides(env = mapOf("A" to "")),
+        )
+        assertEquals("ambient-a", result?.auth?.apiKey)
     }
 
     @Test

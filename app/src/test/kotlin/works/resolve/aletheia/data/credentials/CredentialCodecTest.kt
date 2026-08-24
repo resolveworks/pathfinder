@@ -26,10 +26,39 @@ class CredentialCodecTest {
     }
 
     @Test
-    fun `malformed object-like json is rejected, not treated as a bare key`() {
+    fun `malformed object-intended json is rejected, not treated as a bare key`() {
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{bad}") }
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{}") }
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{\"type\":\"api_key\",\"key\":}") }
+        // Truncated object JSON (missing closing brace) must throw too.
+        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{\"type\":\"oauth\"") }
+    }
+
+    @Test
+    fun `genuine non-object legacy strings still migrate as bare keys`() {
+        assertEquals(ApiKeyCredential("sk-legacy"), CredentialCodec.decode("sk-legacy"))
+        assertEquals(ApiKeyCredential("weird {braces} inside"), CredentialCodec.decode("weird {braces} inside"))
+    }
+
+    @Test
+    fun `non-string type tag is rejected`() {
+        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("""{"type":123}""") }
+        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("""{"type":["api_key"]}""") }
+    }
+
+    @Test
+    fun `non-string api key is rejected instead of silently becoming null`() {
+        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("""{"type":"api_key","key":123}""") }
+        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("""{"key":null,"env":{}}""") }
+    }
+
+    @Test
+    fun `numeric-string oauth expires is rejected, json number is required`() {
+        assertFailsWith<CredentialFormatException> {
+            CredentialCodec.decode("""{"type":"oauth","access":"a","refresh":"r","expires":"123"}""")
+        }
+        val decoded = CredentialCodec.decode("""{"type":"oauth","access":"a","refresh":"r","expires":123}""")
+        assertEquals(123L, (decoded as OAuthCredential).expires)
     }
 
     @Test

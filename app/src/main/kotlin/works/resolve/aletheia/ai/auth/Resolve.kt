@@ -1,8 +1,7 @@
 package works.resolve.aletheia.ai.auth
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Ported from pi `packages/ai/src/auth/resolve.ts`: auth resolution shared by
@@ -112,7 +111,9 @@ interface AuthProviderRef {
 
 private fun overlayEnvAuthContext(base: AuthContext, env: Map<String, String>): AuthContext =
     object : AuthContext {
-        override suspend fun env(name: String): String? = env[name] ?: base.env(name)
+        // Pi: `env[name] || base.env(name)` — an empty override falls through
+        // to the ambient value instead of suppressing it.
+        override suspend fun env(name: String): String? = env[name]?.takeIf { it.isNotEmpty() } ?: base.env(name)
 
         override suspend fun fileExists(path: String): Boolean = base.fileExists(path)
     }
@@ -125,7 +126,8 @@ private const val DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 15_000L
  * tokens with less than five minutes remaining lock, re-check expiry under
  * the lock, refresh once globally, and persist the rotated credential before
  * release. The refresh network call is bounded by pi's 15s timeout
- * (`AbortSignal.timeout` → [withTimeout]); an internal timeout is reported as
+ * (`AbortSignal.timeout` → [withTimeoutOrNull], which distinguishes its own
+ * timeout from external cancellation); an internal timeout is reported as
  * an OAUTH error while external caller cancellation propagates unchanged.
  */
 private suspend fun resolveStoredOAuth(
@@ -147,11 +149,13 @@ private suspend fun resolveStoredOAuth(
                 val currentOAuth = current as? OAuthCredential ?: return@modify null // logged out meanwhile
                 if (!expiresSoon(currentOAuth)) return@modify null // another request refreshed
                 try {
-                    withTimeout(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS) { oauth.refresh(currentOAuth) }
-                } catch (error: TimeoutCancellationException) {
-                    throw ModelsError(ModelsErrorCode.OAUTH, "OAuth refresh timed out for $providerId after ${DEFAULT_OAUTH_REFRESH_TIMEOUT_MS}ms")
+                    withTimeoutOrNull(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS) { oauth.refresh(currentOAuth) }
+                        ?: throw ModelsError(
+                            ModelsErrorCode.OAUTH,
+                            "OAuth refresh timed out for $providerId after ${DEFAULT_OAUTH_REFRESH_TIMEOUT_MS}ms",
+                        )
                 } catch (error: CancellationException) {
-                    throw error // caller cancellation of the whole resolution
+                    throw error // caller cancellation (incl. an outer withTimeout) — never wrapped
                 } catch (error: Throwable) {
                     throw ModelsError(ModelsErrorCode.OAUTH, "OAuth refresh failed for $providerId", error)
                 }

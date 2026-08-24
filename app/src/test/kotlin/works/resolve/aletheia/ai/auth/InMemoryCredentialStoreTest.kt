@@ -119,7 +119,6 @@ class InMemoryCredentialStoreTest {
         if (final is OAuthCredential) {
             assertTrue(final.expires in 0..25) // 25 modify operations at most
         }
-        assertEquals(Unit, Unit)
     }
 
     @Test
