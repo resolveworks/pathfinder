@@ -452,6 +452,23 @@ class ProviderCatalogTest {
         )
     }
 
+    @Test
+    fun `responses compat parses from the catalog asset`() {
+        val catalog = realAsset()
+        val openai = catalog.getModel("openai", "gpt-4")!!
+        assertEquals(true, openai.responsesCompat?.supportsStrictMode)
+        val opencode = catalog.getModel("opencode", "gpt-5")!!
+        assertEquals(
+            works.resolve.aletheia.ai.core.SessionAffinityFormat.OPENAI_NOSESSION,
+            opencode.responsesCompat?.sessionAffinityFormat,
+        )
+        val xai = catalog.getModel("xai", "grok-4.3")!!
+        assertEquals(false, xai.responsesCompat?.supportsLongCacheRetention)
+        // Only the Responses family carries responsesCompat.
+        val claude = catalog.getModel("anthropic", catalog.getProvider("anthropic")!!.models.first { it.api == "anthropic-messages" }.id)!!
+        assertNull(claude.responsesCompat)
+    }
+
     // ---- the real bundled asset ----
 
     private var realCatalog: ProviderCatalog? = null
@@ -574,17 +591,11 @@ class ProviderCatalogTest {
         val catalog = realAsset()
         val entry = catalog.getProvider("cloudflare-ai-gateway")!!
         val runtime = entry.toRuntimeProvider(FakeTransport())
-        // openai-responses has no Kotlin port yet: the runtime api map only
-        // carries implemented protocols, so the provider still lists and its
-        // openai-completions / anthropic-messages models still stream.
-        assertEquals(setOf("openai-completions", "anthropic-messages"), runtime.apis.keys)
+        // Only APIs without a Kotlin port are excluded from the runtime api
+        // map; openai-responses now streams like the rest.
+        assertEquals(setOf("openai-completions", "anthropic-messages", "openai-responses"), runtime.apis.keys)
         val completionsModel = entry.models.first { it.api == "openai-completions" }
-        val unsupportedModel = entry.models.first { it.api == "openai-responses" }
         val models = Models(listOf(runtime))
         assertEquals(completionsModel.id, models.getModel("cloudflare-ai-gateway", completionsModel.id)!!.id)
-        val error = assertFailsWith<IllegalArgumentException> {
-            models.stream(unsupportedModel, Context(messages = emptyList()))
-        }
-        assertTrue(error.message!!.contains("no API implementation for 'openai-responses'"))
     }
 }

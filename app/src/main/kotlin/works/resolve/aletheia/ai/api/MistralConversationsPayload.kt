@@ -1,5 +1,6 @@
 package works.resolve.aletheia.ai.api
 
+import works.resolve.aletheia.ai.core.CacheRetention
 import works.resolve.aletheia.ai.core.AssistantMessage
 import works.resolve.aletheia.ai.core.ContentType
 import works.resolve.aletheia.ai.core.Context
@@ -69,7 +70,7 @@ object MistralConversationsPayload {
 
     /** pi's shouldUsePromptCaching: caching unless explicitly disabled and a session exists. */
     fun shouldUsePromptCaching(options: MistralOptions): Boolean =
-        options.cacheRetention != works.resolve.aletheia.ai.core.CacheRetention.NONE && options.sessionId != null
+        options.cacheRetention != CacheRetention.NONE && options.sessionId != null
 
     private fun mapToolChoice(choice: ToolChoice): kotlinx.serialization.json.JsonElement = when (choice) {
         ToolChoice.Auto -> JsonPrimitive("auto")

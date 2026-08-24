@@ -16,6 +16,9 @@ object ChatApiRegistry {
     const val ANTHROPIC_MESSAGES = "anthropic-messages"
     const val GOOGLE_GENERATIVE_AI = "google-generative-ai"
     const val MISTRAL_CONVERSATIONS = "mistral-conversations"
+    const val OPENAI_RESPONSES = "openai-responses"
+    const val OPENAI_CODEX_RESPONSES = "openai-codex-responses"
+    const val AZURE_OPENAI_RESPONSES = "azure-openai-responses"
 
     /** API ids with a runtime implementation. */
     val SUPPORTED_API_IDS: Set<String> = setOf(
@@ -23,6 +26,9 @@ object ChatApiRegistry {
         ANTHROPIC_MESSAGES,
         GOOGLE_GENERATIVE_AI,
         MISTRAL_CONVERSATIONS,
+        OPENAI_RESPONSES,
+        OPENAI_CODEX_RESPONSES,
+        AZURE_OPENAI_RESPONSES,
     )
 
     fun isSupported(apiId: String): Boolean = apiId in SUPPORTED_API_IDS
@@ -34,6 +40,9 @@ object ChatApiRegistry {
             ANTHROPIC_MESSAGES -> AnthropicMessagesApi(transport, retry)
             GOOGLE_GENERATIVE_AI -> GoogleGenerativeAiApi(transport, retry)
             MISTRAL_CONVERSATIONS -> MistralConversationsApi(transport, retry)
+            OPENAI_RESPONSES -> OpenAiResponsesApi(transport, retry)
+            OPENAI_CODEX_RESPONSES -> OpenAICodexResponsesApi(transport)
+            AZURE_OPENAI_RESPONSES -> AzureOpenAiResponsesApi(transport, retry)
             else -> null
         }
 }

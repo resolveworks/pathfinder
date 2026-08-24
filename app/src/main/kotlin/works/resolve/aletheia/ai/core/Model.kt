@@ -24,6 +24,8 @@ data class Model(
     val compat: OpenAiCompletionsCompat = OpenAiCompletionsCompat(),
     /** Anthropic Messages API compatibility flags (pi's AnthropicMessagesCompat). */
     val anthropicCompat: AnthropicMessagesCompat = AnthropicMessagesCompat(),
+    /** OpenAI Responses-family compatibility flags; null for non-Responses models. */
+    val responsesCompat: OpenAiResponsesCompat? = null,
     /** Per-model HTTP headers (e.g. github-copilot, nvidia). */
     val headers: Map<String, String> = emptyMap(),
 )
@@ -34,6 +36,29 @@ data class ModelCost(
     val output: Double = 0.0,
     val cacheRead: Double = 0.0,
     val cacheWrite: Double = 0.0,
+)
+
+/** Session affinity header format for OpenAI Responses providers, pi's compat flag. */
+/** Pi's SessionAffinityFormat: "openai" | "openai-nosession" | "openrouter". */
+enum class SessionAffinityFormat { OPENAI, OPENAI_NOSESSION, OPENROUTER }
+
+/**
+ * OpenAI Responses API-family compatibility flags, ported from pi's
+ * OpenAIResponsesCompat. Defaults mirror pi's getCompat() resolution.
+ *
+ * Divergence from pi: supportsOpenAIGrammarTools is not ported — Aletheia has
+ * no grammar constrained-sampling support (Tool carries no constrainedSampling
+ * config), so grammar ("custom") tools are never emitted or replayed.
+ */
+data class OpenAiResponsesCompat(
+    val supportsDeveloperRole: Boolean = true,
+    /** null means auto-detect from provider/baseUrl (pi's detectSessionAffinityFormat). */
+    val sessionAffinityFormat: SessionAffinityFormat? = null,
+    val supportsLongCacheRetention: Boolean = true,
+    val supportsStrictMode: Boolean = false,
+    val supportsAdditionalTools: Boolean = false,
+    val supportsToolSearch: Boolean = false,
+    val supportsExplicitPromptCacheMode: Boolean = false,
 )
 
 /** How the provider expects the max output token limit to be spelled. */

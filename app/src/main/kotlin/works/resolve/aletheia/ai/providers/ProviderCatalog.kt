@@ -15,6 +15,8 @@ import works.resolve.aletheia.ai.core.Model
 import works.resolve.aletheia.ai.core.ModelCost
 import works.resolve.aletheia.ai.core.ModelThinkingLevel
 import works.resolve.aletheia.ai.core.OpenAiCompletionsCompat
+import works.resolve.aletheia.ai.core.OpenAiResponsesCompat
+import works.resolve.aletheia.ai.core.SessionAffinityFormat
 import works.resolve.aletheia.ai.core.ThinkingFormat
 import works.resolve.aletheia.ai.core.ThinkingLevelMap
 import works.resolve.aletheia.ai.auth.ModelAuth
@@ -279,8 +281,18 @@ private data class ModelDto(
         maxTokens = maxTokens,
         compat = compat.toDomain("${owner.id}/$id"),
         anthropicCompat = compat.toAnthropicDomain(),
+        responsesCompat = if (api in RESPONSES_FAMILY_APIS) compat.toResponsesDomain("${owner.id}/$id") else null,
         headers = headers,
     )
+
+    private companion object {
+        /** pi models carry OpenAIResponsesCompat only for the Responses family. */
+        val RESPONSES_FAMILY_APIS = setOf(
+            "openai-responses",
+            "openai-codex-responses",
+            "azure-openai-responses",
+        )
+    }
 }
 
 @Serializable
@@ -316,6 +328,13 @@ private data class CompatDto(
     val allowEmptySignature: Boolean? = null,
     val supportsStrictTools: Boolean? = null,
     val forceAdaptiveThinking: Boolean? = null,
+    // OpenAI Responses-family compat (pi's OpenAIResponsesCompat), consumed
+    // via Model.responsesCompat.
+    val supportsStrictMode: Boolean? = null,
+    val sessionAffinityFormat: String? = null,
+    val supportsAdditionalTools: Boolean? = null,
+    val supportsToolSearch: Boolean? = null,
+    val supportsExplicitPromptCacheMode: Boolean? = null,
     // Not yet modeled by the runtime: supportsStrictMode,
     // requiresReasoningContentOnAssistantMessages, deferredToolsMode,
     // cacheControlFormat — ignored via ignoreUnknownKeys.
@@ -342,6 +361,17 @@ private data class CompatDto(
             ?: emptyMap(),
     )
 
+    /** pi's getCompat (openai-responses) defaults apply per field when absent. */
+    fun toResponsesDomain(where: String) = OpenAiResponsesCompat(
+        supportsDeveloperRole = supportsDeveloperRole ?: true,
+        sessionAffinityFormat = sessionAffinityFormat?.let { parseSessionAffinityFormat(it, where) },
+        supportsLongCacheRetention = supportsLongCacheRetention ?: true,
+        supportsStrictMode = supportsStrictMode ?: false,
+        supportsAdditionalTools = supportsAdditionalTools ?: false,
+        supportsToolSearch = supportsToolSearch ?: false,
+        supportsExplicitPromptCacheMode = supportsExplicitPromptCacheMode ?: false,
+    )
+
     /** pi's getAnthropicCompat defaults apply per field when absent. */
     fun toAnthropicDomain() = AnthropicMessagesCompat(
         supportsEagerToolInputStreaming = supportsEagerToolInputStreaming ?: true,
@@ -353,6 +383,13 @@ private data class CompatDto(
         supportsStrictTools = supportsStrictTools ?: false,
         forceAdaptiveThinking = forceAdaptiveThinking,
     )
+}
+
+private fun parseSessionAffinityFormat(value: String, where: String): SessionAffinityFormat = when (value) {
+    "openai" -> SessionAffinityFormat.OPENAI
+    "openai-nosession" -> SessionAffinityFormat.OPENAI_NOSESSION
+    "openrouter" -> SessionAffinityFormat.OPENROUTER
+    else -> throw IllegalArgumentException("Unknown session affinity format '$value' for $where")
 }
 
 private fun parseInputModality(value: String, where: String): InputModality = when (value) {

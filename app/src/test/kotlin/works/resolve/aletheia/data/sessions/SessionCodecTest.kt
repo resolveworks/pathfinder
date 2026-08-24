@@ -34,6 +34,42 @@ class SessionCodecTest {
     }
 
     @Test
+    fun responsesReplayFieldsRoundTripAndStayOptional() {
+        val message = assistant("hi", 2L).copy(
+            responseId = "resp_1",
+            endTurn = true,
+            content = listOf(
+                TextContent("a", """{"v":1,"id":"msg_1"}"""),
+                ThinkingContent("t", """{"type":"reasoning"}"""),
+                ToolCall(
+                    id = "call|fc_1",
+                    name = "edit",
+                    arguments = "{}",
+                    namespace = "ns-1",
+                ),
+            ),
+        )
+        val session = branchedSession().copy(
+            entries = listOf(MessageEntry("m1", null, 2L, message)),
+            leafId = "m1",
+        )
+        val decoded = SessionCodec.decode(SessionCodec.encode(session))
+        assertEquals(message, (decoded.entries.single() as MessageEntry).message)
+
+        // Older payloads without the optional fields still decode.
+        val legacy = SessionCodec.decode(
+            SessionCodec.encode(session)
+                .replace(",\"endTurn\":true", "")
+                .replace(",\"namespace\":\"ns-1\"", "")
+                .replace(",\"textSignature\":\"{\\\"v\\\":1,\\\"id\\\":\\\"msg_1\\\"}\"", ""),
+        )
+        val legacyMessage = (legacy.entries.single() as MessageEntry).message as AssistantMessage
+        assertNull(legacyMessage.endTurn)
+        assertNull((legacyMessage.content[0] as TextContent).textSignature)
+        assertNull((legacyMessage.content[2] as works.resolve.aletheia.ai.core.ToolCall).namespace)
+    }
+
+    @Test
     fun v2RoundTripPreservesEntriesAndLeafId() {
         val session = branchedSession()
         val decoded = SessionCodec.decode(SessionCodec.encode(session))

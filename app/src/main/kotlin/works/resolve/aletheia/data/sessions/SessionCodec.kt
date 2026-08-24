@@ -171,6 +171,7 @@ internal object SessionCodec {
             message.rawStopReason?.let { put("rawStopReason", it) }
             message.responseId?.let { put("responseId", it) }
             message.responseModel?.let { put("responseModel", it) }
+            message.endTurn?.let { put("endTurn", it) }
         }
 
         is ToolResultMessage -> buildJsonObject {
@@ -203,6 +204,7 @@ internal object SessionCodec {
                 rawStopReason = obj.string("rawStopReason"),
                 responseId = obj.string("responseId"),
                 responseModel = obj.string("responseModel"),
+                endTurn = obj.boolean("endTurn"),
                 timestamp = obj.requireLong("timestamp", "message timestamp"),
             )
 
@@ -285,6 +287,7 @@ internal object SessionCodec {
             put("name", content.name)
             put("arguments", content.arguments)
             content.thoughtSignature?.let { put("thoughtSignature", it) }
+            content.namespace?.let { put("namespace", it) }
         }
     }
 
@@ -313,6 +316,7 @@ internal object SessionCodec {
                 name = obj.string("name") ?: throw SessionDataException("Malformed session data: tool call missing name"),
                 arguments = obj.string("arguments") ?: throw SessionDataException("Malformed session data: tool call missing arguments"),
                 thoughtSignature = obj.string("thoughtSignature"),
+                namespace = obj.string("namespace"),
             )
 
             else -> throw SessionDataException("Unknown content type: $type")

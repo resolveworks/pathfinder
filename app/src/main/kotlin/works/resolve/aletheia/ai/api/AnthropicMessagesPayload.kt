@@ -1,5 +1,6 @@
 package works.resolve.aletheia.ai.api
 
+import works.resolve.aletheia.ai.core.CacheRetention
 import works.resolve.aletheia.ai.core.Content
 import works.resolve.aletheia.ai.core.Context
 import works.resolve.aletheia.ai.core.ContentType
@@ -43,8 +44,6 @@ import kotlinx.serialization.json.put
  *   a separate `cacheWrite1h` usage component (see AnthropicMessagesApi).
  */
 
-/** pi's CacheRetention. */
-enum class CacheRetention { NONE, SHORT, LONG }
 
 /** pi's AnthropicEffort. */
 enum class AnthropicEffort { LOW, MEDIUM, HIGH, XHIGH, MAX }

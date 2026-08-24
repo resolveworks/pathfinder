@@ -1,6 +1,7 @@
 package works.resolve.aletheia.ai.api
 
 import works.resolve.aletheia.ai.core.AssistantMessage
+import works.resolve.aletheia.ai.core.CacheRetention
 import works.resolve.aletheia.ai.core.AssistantMessageEvent
 import works.resolve.aletheia.ai.core.Context
 import works.resolve.aletheia.ai.core.Model

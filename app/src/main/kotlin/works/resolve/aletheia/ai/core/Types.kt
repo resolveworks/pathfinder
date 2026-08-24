@@ -14,6 +14,9 @@ enum class InputModality { TEXT, IMAGE }
 /** Reasoning effort levels, mirroring pi's ThinkingLevel. */
 enum class ThinkingLevel { MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX }
 
+/** Prompt-cache retention preference, pi's CacheRetention. */
+enum class CacheRetention { SHORT, LONG, NONE }
+
 /** Thinking level including the "off" state. */
 enum class ModelThinkingLevel { OFF, MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX }
 
@@ -89,6 +92,8 @@ data class ToolCall(
      * same provider/model.
      */
     val thoughtSignature: String? = null,
+    /** OpenAI Responses namespace-scoped tool name (pi's ToolCall.namespace). */
+    val namespace: String? = null,
 ) : Content() {
     override val type: ContentType get() = ContentType.TOOL_CALL
 }
@@ -144,6 +149,8 @@ data class AssistantMessage(
     val rawStopReason: String? = null,
     val responseId: String? = null,
     val responseModel: String? = null,
+    /** Codex end-of-turn flag from the terminal response. */
+    val endTurn: Boolean? = null,
     override val timestamp: Long = 0L,
 ) : Message() {
     override val role: MessageRole get() = MessageRole.ASSISTANT
@@ -154,6 +161,8 @@ data class ToolResultMessage(
     val toolName: String,
     val content: List<Content>,
     val isError: Boolean = false,
+    /** Tool names this result made available (pi's addedToolNames, deferred tool loading). */
+    val addedToolNames: List<String> = emptyList(),
     override val timestamp: Long = 0L,
 ) : Message() {
     override val role: MessageRole get() = MessageRole.TOOL_RESULT
@@ -175,9 +184,6 @@ sealed interface ToolChoice {
     /** Force a specific named function tool. */
     data class Function(val name: String) : ToolChoice
 }
-
-/** Prompt-cache retention, mirroring pi's cacheRetention. */
-enum class CacheRetention { NONE, STANDARD }
 
 data class Context(
     val systemPrompt: String? = null,

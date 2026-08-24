@@ -65,7 +65,7 @@ data class MistralOptions(
     val toolChoice: ToolChoice? = null,
     val promptMode: MistralPromptMode? = null,
     val reasoningEffort: MistralReasoningEffort? = null,
-    val cacheRetention: CacheRetention = CacheRetention.STANDARD,
+    val cacheRetention: CacheRetention? = null,
 ) {
     override fun toString(): String =
         "MistralOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
@@ -472,7 +472,6 @@ internal fun usesPromptModeReasoning(model: Model): Boolean = model.reasoning &&
 internal fun mapReasoningEffort(model: Model, level: ModelThinkingLevel): MistralReasoningEffort =
     model.thinkingLevelMap?.forLevel(level) ?: "high"
 
-private fun toModelThinkingLevel(level: ThinkingLevel): ModelThinkingLevel = ModelThinkingLevel.valueOf(level.name)
 
 /**
  * Accumulates streamed Mistral content with pi's exact block semantics: one

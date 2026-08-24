@@ -94,10 +94,11 @@ data class SimpleStreamOptions(
     val maxTokens: Int? = null,
     val reasoning: ThinkingLevel? = null,
     val toolChoice: ToolChoice? = null,
-    val cacheRetention: CacheRetention = CacheRetention.STANDARD,
     val timeoutMs: Long? = null,
     val maxRetries: Int = 0,
     val maxRetryDelayMs: Long = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
+    /** Prompt-cache retention preference (pi's CacheRetention); null resolves from env/default. */
+    val cacheRetention: CacheRetention? = null,
     /** Per-request provider env (credential values merged in, pi's applyAuth). */
     val env: Map<String, String> = emptyMap(),
     /** Explicit request headers; merged over resolved auth headers (pi's applyAuth). */

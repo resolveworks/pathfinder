@@ -23,14 +23,20 @@ class ChatApiRegistryTest {
                 ChatApiRegistry.ANTHROPIC_MESSAGES,
                 ChatApiRegistry.GOOGLE_GENERATIVE_AI,
                 ChatApiRegistry.MISTRAL_CONVERSATIONS,
+                ChatApiRegistry.OPENAI_RESPONSES,
+                ChatApiRegistry.OPENAI_CODEX_RESPONSES,
+                ChatApiRegistry.AZURE_OPENAI_RESPONSES,
             ),
             ChatApiRegistry.SUPPORTED_API_IDS,
         )
         assertTrue(ChatApiRegistry.isSupported("anthropic-messages"))
         assertTrue(ChatApiRegistry.isSupported("google-generative-ai"))
         assertTrue(ChatApiRegistry.isSupported("mistral-conversations"))
+        assertTrue(ChatApiRegistry.isSupported("openai-responses"))
+        assertTrue(ChatApiRegistry.isSupported("openai-codex-responses"))
+        assertTrue(ChatApiRegistry.isSupported("azure-openai-responses"))
         assertFalse(ChatApiRegistry.isSupported("google-vertex"))
-        assertFalse(ChatApiRegistry.isSupported("openai-responses"))
+        assertFalse(ChatApiRegistry.isSupported("bedrock"))
     }
 
     @Test
@@ -39,7 +45,9 @@ class ChatApiRegistryTest {
         assertIs<AnthropicMessagesApi>(ChatApiRegistry.create("anthropic-messages", transport, retry))
         assertIs<GoogleGenerativeAiApi>(ChatApiRegistry.create("google-generative-ai", transport, retry))
         assertIs<MistralConversationsApi>(ChatApiRegistry.create("mistral-conversations", transport, retry))
+        assertIs<OpenAiResponsesApi>(ChatApiRegistry.create("openai-responses", transport, retry))
+        assertIs<OpenAICodexResponsesApi>(ChatApiRegistry.create("openai-codex-responses", transport, retry))
+        assertIs<AzureOpenAiResponsesApi>(ChatApiRegistry.create("azure-openai-responses", transport, retry))
         assertNull(ChatApiRegistry.create("google-vertex", transport, retry))
-        assertNull(ChatApiRegistry.create("openai-responses", transport, retry))
     }
 }
