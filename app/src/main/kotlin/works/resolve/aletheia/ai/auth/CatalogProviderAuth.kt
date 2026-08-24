@@ -26,6 +26,35 @@ class CatalogApiKeyAuth(private val entry: CatalogProvider) : ApiKeyAuth {
      * label-less entries, matching the old `"Anthropic API key"`-style labels. */
     override val name: String = entry.auth.label ?: "${entry.name} API key"
 
+    /**
+     * Interactive setup (pi's `envApiKeyAuth` login, generalized to the
+     * catalog's prompt list): prompts in catalog order — [AuthPrompt.Secret]
+     * or [AuthPrompt.Text] per prompt metadata — the first value becomes the
+     * credential key, later values their `env` slots. The prompt message is
+     * the catalog label verbatim. A blank value for a required prompt fails
+     * the login with [ModelsError] (code AUTH); nothing is stored because
+     * login orchestration persists only a returned credential. Values never
+     * reach logs: only prompt metadata flows through this method.
+     */
+    override val login: (suspend (interaction: AuthInteraction) -> ApiKeyCredential)? =
+        suspend { interaction ->
+            var key: String? = null
+            val env = mutableMapOf<String, String>()
+            entry.auth.prompts.forEachIndexed { index, prompt ->
+                val value = interaction.prompt(
+                    if (prompt.secret) AuthPrompt.Secret(prompt.message) else AuthPrompt.Text(prompt.message),
+                )
+                if (value.isBlank()) {
+                    throw ModelsError(
+                        ModelsErrorCode.AUTH,
+                        "${entry.name} requires a value for ${prompt.envKey}",
+                    )
+                }
+                if (index == 0) key = value else env[prompt.envKey] = value
+            }
+            ApiKeyCredential(key = key, env = env)
+        }
+
     override suspend fun resolve(ctx: AuthContext, credential: ApiKeyCredential?): AuthResult? {
         val prompts = entry.auth.prompts
         val env = credential?.env?.toMutableMap() ?: mutableMapOf()
