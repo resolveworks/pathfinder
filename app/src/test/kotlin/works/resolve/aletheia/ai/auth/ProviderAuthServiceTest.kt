@@ -180,6 +180,35 @@ class ProviderAuthServiceTest {
     }
 
     @Test
+    fun `production Anthropic offers API key and Claude Pro Max account methods`() {
+        val provider = CatalogProvider(
+            id = "anthropic",
+            name = "Anthropic",
+            baseUrl = "https://api.anthropic.com",
+            auth = CatalogProviderAuthMetadata(
+                label = "Anthropic API key",
+                oauth = ProviderOAuth("Anthropic (Claude Pro/Max)", isSubscription = true),
+                prompts = listOf(CatalogPrompt("ANTHROPIC_API_KEY", "Enter Anthropic API key")),
+            ),
+            models = emptyList(),
+        )
+        val methods = ProviderAuthService(
+            ProviderCatalog(listOf(provider)),
+            ProductionCatalogAuthRegistry,
+            InMemoryCredentialStore(),
+        ).authMethods("anthropic")
+
+        assertEquals(
+            listOf(
+                AuthMethodInfo(AuthType.API_KEY, "Anthropic API key", false),
+                // No loginLabel on the flow: falls back to its name (pi's default).
+                AuthMethodInfo(AuthType.OAUTH, "Anthropic (Claude Pro/Max)", true),
+            ),
+            methods,
+        )
+    }
+
+    @Test
     fun `lists oauth method for oauth-only provider`() {
         val methods = service(
             catalog(apiKey = false, oauth = true),
