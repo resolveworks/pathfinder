@@ -9,6 +9,7 @@ import works.resolve.aletheia.ai.core.Content
 import works.resolve.aletheia.ai.core.Message
 import works.resolve.aletheia.ai.core.TextContent
 import works.resolve.aletheia.ai.core.UserMessage
+import works.resolve.aletheia.ai.providers.AuthPrompt
 import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.agent.AgentFactory
 import works.resolve.aletheia.data.credentials.ApiKeyCredential
@@ -498,16 +499,20 @@ class ChatViewModel(
         }
         if (rejectWhileBusy()) return
 
-        val key = try {
-            credentials.getApiKey(providerId)
+        val provider = catalog.getProvider(providerId)
+        val credential = try {
+            credentials.getCredential(providerId)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             setError(ERROR_CREDENTIAL_SAVE)
             return
         }
-        if (key.isNullOrBlank()) {
-            setError(ERROR_KEY_REQUIRED)
+        // Credential-completeness gate (pi's rule: a provider is configured
+        // only when every auth prompt has a value — e.g. Cloudflare also
+        // needs account/gateway ids, not just the API key).
+        if (provider == null || !provider.isCredentialComplete(credential?.key, credential?.env ?: emptyMap())) {
+            setError(ERROR_CREDENTIAL_INCOMPLETE)
             return
         }
 
@@ -572,15 +577,13 @@ class ChatViewModel(
             setError(ERROR_CREDENTIAL_SAVE)
             return
         }
-        // Blank key input keeps the stored key; the very first save requires one.
-        val newKey = apiKeyInput.trim().takeIf { it.isNotEmpty() } ?: existing?.key
-        if (newKey.isNullOrBlank()) {
-            setError(ERROR_KEY_REQUIRED)
-            return
-        }
         // The first auth prompt is the API key (stored in credential.key);
         // every other prompt fills its env slot. Blank values keep the
-        // previously stored env value (same rule as the key field).
+        // previously stored value (same rule for every prompt). A first-time
+        // or still-incomplete credential is rejected rather than persisted
+        // (pi's cloudflare auth resolution: unconfigured unless every required
+        // value exists). The error names the missing prompts — never values.
+        val newKey = apiKeyInput.trim().takeIf { it.isNotEmpty() } ?: existing?.key
         val env = buildMap<String, String> {
             provider.auth.prompts.drop(1).forEach { prompt ->
                 val input = envInputs[prompt.envKey]?.trim()
@@ -588,6 +591,11 @@ class ChatViewModel(
                     ?: existing?.env[prompt.envKey]
                 if (value != null) put(prompt.envKey, value)
             }
+        }
+        val missing = provider.missingAuthPrompts(newKey, env)
+        if (newKey == null || missing.isNotEmpty()) {
+            setError(missingCredentialError(missing))
+            return
         }
         try {
             credentials.setCredential(providerId, ApiKeyCredential(newKey, env))
@@ -615,10 +623,16 @@ class ChatViewModel(
         }
     }
 
-    /** True iff settings name a catalog provider+model AND a key exists for the provider. */
-    private suspend fun isConfigured(settings: ModelSettings): Boolean =
-        catalog.getModel(settings.providerId, settings.modelId) != null &&
-            !credentials.getApiKey(settings.providerId).isNullOrBlank()
+    /**
+     * True iff settings name a catalog provider+model AND the provider's
+     * credential is complete (every auth prompt has a value).
+     */
+    private suspend fun isConfigured(settings: ModelSettings): Boolean {
+        val provider = catalog.getProvider(settings.providerId) ?: return false
+        if (provider.model(settings.modelId) == null) return false
+        val credential = credentials.getCredential(settings.providerId)
+        return provider.isCredentialComplete(credential?.key, credential?.env ?: emptyMap())
+    }
 
     /**
      * Recomputes every credential-derived surface (providers screen rows,
@@ -629,10 +643,11 @@ class ChatViewModel(
         val providerOptions = try {
             catalog.providers
                 .map { provider ->
+                    val credential = credentials.getCredential(provider.id)
                     ProviderOption(
                         id = provider.id,
                         name = provider.name,
-                        configured = !credentials.getApiKey(provider.id).isNullOrBlank(),
+                        configured = provider.isCredentialComplete(credential?.key, credential?.env ?: emptyMap()),
                     )
                 }
                 .sortedBy { it.name }
@@ -750,7 +765,8 @@ class ChatViewModel(
         const val TITLE_MAX_LENGTH = 48
 
         const val ERROR_INIT = "Could not load chat data"
-        const val ERROR_KEY_REQUIRED = "An API key is required"
+        const val ERROR_CREDENTIAL_INCOMPLETE =
+            "Complete this provider's sign-in values before using its models"
         const val ERROR_UNKNOWN_MODEL = "Unknown model"
         const val ERROR_UNKNOWN_PROVIDER = "Unknown provider"
         const val ERROR_CREDENTIAL_SAVE = "Could not store the API key"
@@ -762,6 +778,11 @@ class ChatViewModel(
         const val ERROR_SESSION_SAVE = "Could not save the chat"
         const val ERROR_BUSY = "Wait for the response to finish first"
         const val ERROR_ALREADY_STREAMING = "A response is already streaming"
+
+        /** Actionable, secret-free message naming the still-missing auth prompts. */
+        fun missingCredentialError(missing: List<AuthPrompt>): String =
+            "Sign-in values are still needed: " +
+                missing.joinToString(", ") { prompt -> prompt.message.ifEmpty { prompt.envKey } }
 
         /** Single-line, bounded title from the first user prompt. */
         fun deriveTitle(messages: List<Message>): String? {

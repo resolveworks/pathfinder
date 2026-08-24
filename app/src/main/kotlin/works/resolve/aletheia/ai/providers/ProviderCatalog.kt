@@ -55,6 +55,24 @@ class CatalogProvider(
     fun model(id: String): Model? = models.firstOrNull { it.id == id }
 
     /**
+     * Auth prompts still missing values given a candidate credential: the
+     * first prompt maps to the API key ([key]); every later prompt maps to
+     * its [env] slot. All catalog auth prompts are required (pi's Cloudflare
+     * auth resolution returns unconfigured unless every value exists), so an
+     * empty list means the credential is complete. Values are never echoed —
+     * only the prompt metadata is.
+     */
+    fun missingAuthPrompts(key: String?, env: Map<String, String>): List<AuthPrompt> =
+        auth.prompts.mapIndexedNotNull { index, prompt ->
+            val value = if (index == 0) key else env[prompt.envKey]
+            if (value.isNullOrBlank()) prompt else null
+        }
+
+    /** True iff every auth prompt has a nonblank value ([missingAuthPrompts] is empty). */
+    fun isCredentialComplete(key: String?, env: Map<String, String>): Boolean =
+        missingAuthPrompts(key, env).isEmpty()
+
+    /**
      * Builds the runtime provider for this catalog entry. A [baseUrl]
      * override (normalized) is stamped onto every model, mirroring what the
      * old ZaiProvider.create did for base-URL overrides.

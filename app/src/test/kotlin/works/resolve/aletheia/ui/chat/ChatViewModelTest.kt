@@ -1063,24 +1063,30 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        // Key only: the env map stays empty.
+        // A key-only save is incomplete for Cloudflare (account/gateway ids
+        // are required too): rejected, nothing persisted, safe error naming
+        // the missing prompts — never the submitted values.
         vm.saveProviderCredential("cloudflare-ai-gateway", "cf-key", emptyMap())
-        vm.uiState.first { it.providerOptions.first { o -> o.id == "cloudflare-ai-gateway" }.configured }
-        val first = h.credentials.creds["cloudflare-ai-gateway"]!!
-        assertEquals("cf-key", first.key)
-        assertTrue(first.env.isEmpty())
+        val state = vm.uiState.first { it.error != null }
+        assertTrue(state.error!!.contains("account ID"))
+        assertTrue(state.error!!.contains("gateway ID"))
+        assertFalse(state.error!!.contains("cf-key"))
+        assertNull(h.credentials.creds["cloudflare-ai-gateway"])
+        assertFalse(vm.uiState.value.providerOptions.first { o -> o.id == "cloudflare-ai-gateway" }.configured)
+        vm.dismissError()
 
-        // Blank key keeps the stored key; env slots are filled.
+        // A complete save persists key plus env.
         vm.saveProviderCredential(
             "cloudflare-ai-gateway",
-            "   ",
+            "cf-key",
             mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
         )
+        vm.uiState.first { it.providerOptions.first { o -> o.id == "cloudflare-ai-gateway" }.configured }
         val filled = h.credentials.creds["cloudflare-ai-gateway"]!!
         assertEquals("cf-key", filled.key)
         assertEquals(mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"), filled.env)
 
-        // Blank env values keep the stored ones; a new key rotates.
+        // Blank key and blank env values keep the stored ones; a new key rotates.
         vm.saveProviderCredential("cloudflare-ai-gateway", "cf-key-2", mapOf("CLOUDFLARE_ACCOUNT_ID" to " "))
         val rotated = h.credentials.creds["cloudflare-ai-gateway"]!!
         assertEquals("cf-key-2", rotated.key)
@@ -1096,6 +1102,28 @@ class ChatViewModelTest {
         h.credentials.failWrites = true
         vm.saveProviderCredential("zai", "k", emptyMap())
         vm.uiState.first { it.error != null }
+        vm.closeForTest()
+    }
+
+    @Test
+    fun saveModelSelection_rejectsIncompleteCloudflareCredential() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+        // A key-only credential is incomplete for Cloudflare (account/gateway
+        // ids required): model selection is gated with a safe error and the
+        // provider never counts as configured.
+        h.credentials.creds["cloudflare-ai-gateway"] = ApiKeyCredential("cf", emptyMap())
+        vm.refreshProviderStatus()
+        assertFalse(vm.uiState.value.providerOptions.first { o -> o.id == "cloudflare-ai-gateway" }.configured)
+        assertTrue(vm.uiState.value.modelOptions.none { it.providerId == "cloudflare-ai-gateway" })
+
+        vm.saveModelSelection("cloudflare-ai-gateway", "workers-ai/test-model", null)
+        vm.uiState.first { it.error != null }
+        assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
+        assertEquals(0, h.countSessions())
+
         vm.closeForTest()
     }
 

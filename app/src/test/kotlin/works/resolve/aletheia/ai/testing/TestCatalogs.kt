@@ -134,6 +134,8 @@ object TestCatalogs {
 
     val ZAI: CatalogProvider = CATALOG.getProvider("zai")!!
 
+    val CLOUDFLARE: CatalogProvider = CATALOG.getProvider("cloudflare-ai-gateway")!!
+
     val MODELS: List<Model> = ZAI.models
 
     val GLM_4_7: Model = ZAI.model("glm-4.7")!!
