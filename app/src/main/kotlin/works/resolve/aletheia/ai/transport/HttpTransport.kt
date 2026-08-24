@@ -22,6 +22,8 @@ data class TransportRequest(
     val url: String,
     /** Auth token sent as a Bearer credential; never logged or included in toString(). */
     val bearerToken: String?,
+    /** Header name for the Bearer credential; null means the default "Authorization". */
+    val bearerHeaderName: String? = null,
     val headers: Map<String, String> = emptyMap(),
     val body: ByteArray,
     val timeoutMs: Long? = null,
@@ -29,6 +31,7 @@ data class TransportRequest(
     override fun toString(): String =
         "TransportRequest(url=$url, bearerToken=" +
             (bearerToken?.let { "<redacted>" } ?: "null") +
+            ", bearerHeaderName=$bearerHeaderName" +
             ", headers=${headers.keys}, body=<${body.size} bytes>" +
             ", timeoutMs=$timeoutMs)"
 
@@ -36,12 +39,13 @@ data class TransportRequest(
         other is TransportRequest &&
             other.url == url &&
             other.bearerToken == bearerToken &&
+            other.bearerHeaderName == bearerHeaderName &&
             other.headers == headers &&
             other.body.contentEquals(body) &&
             other.timeoutMs == timeoutMs
 
     override fun hashCode(): Int =
-        31 * (31 * (31 * url.hashCode() + bearerToken.hashCode()) + headers.hashCode()) + body.contentHashCode()
+        31 * (31 * (31 * (31 * url.hashCode() + bearerToken.hashCode()) + bearerHeaderName.hashCode()) + headers.hashCode()) + body.contentHashCode()
 }
 
 /** One complete SSE data event; framing/UTF-8/multiline handling lives below this boundary. */

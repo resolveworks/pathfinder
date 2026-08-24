@@ -163,6 +163,32 @@ class OkHttpTransportTest {
     }
 
     @Test
+    fun `custom bearerHeaderName replaces the default Authorization header`() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: ok\n\n"),
+        )
+        server.start()
+        runBlocking {
+            transport().post(
+                TransportRequest(
+                    url = server.url("/v1/chat/completions").toString(),
+                    bearerToken = "secret-token",
+                    bearerHeaderName = "cf-aig-authorization",
+                    body = "{}".toByteArray(),
+                ),
+            ).events.toList()
+        }
+        val recorded = server.takeRequest()
+        assertEquals("Bearer secret-token", recorded.getHeader("cf-aig-authorization"))
+        assertNull(recorded.getHeader("Authorization"))
+        server.shutdown()
+    }
+
+    @Test
     fun `no auth header when bearer token absent`() {
         val server = MockWebServer()
         server.enqueue(

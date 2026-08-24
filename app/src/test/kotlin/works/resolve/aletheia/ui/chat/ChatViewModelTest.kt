@@ -11,6 +11,7 @@ import works.resolve.aletheia.ai.core.Message
 import works.resolve.aletheia.ai.core.Model
 import works.resolve.aletheia.ai.core.StopReason
 import works.resolve.aletheia.ai.core.TextContent
+import works.resolve.aletheia.data.credentials.ApiKeyCredential
 import works.resolve.aletheia.data.credentials.ApiKeyStore
 import works.resolve.aletheia.data.settings.SettingsRepository
 import works.resolve.aletheia.data.settings.SettingsStore
@@ -71,12 +72,13 @@ class ChatViewModelTest {
     private class FakeApiKeyStore : ApiKeyStore {
         val keys = mutableMapOf<String, String>()
         var lastSet: String? = null
-        override suspend fun getApiKey(providerId: String): String? = keys[providerId]
-        override suspend fun setApiKey(providerId: String, apiKey: String) {
-            keys[providerId] = apiKey
-            lastSet = apiKey
+        override suspend fun getCredential(providerId: String): ApiKeyCredential? =
+            keys[providerId]?.let { ApiKeyCredential(it) }
+        override suspend fun setCredential(providerId: String, credential: ApiKeyCredential) {
+            keys[providerId] = credential.key
+            lastSet = credential.key
         }
-        override suspend fun deleteApiKey(providerId: String) {
+        override suspend fun deleteCredential(providerId: String) {
             keys.remove(providerId)
         }
     }

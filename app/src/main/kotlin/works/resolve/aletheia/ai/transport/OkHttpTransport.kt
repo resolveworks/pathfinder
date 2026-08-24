@@ -41,7 +41,7 @@ class OkHttpTransport(
         val builder = Request.Builder()
             .url(request.url)
             .post(request.body.toRequestBody("application/json".toMediaType()))
-        request.bearerToken?.let { builder.header("Authorization", "Bearer $it") }
+        request.bearerToken?.let { builder.header(request.bearerHeaderName ?: "Authorization", "Bearer $it") }
         for ((name, value) in request.headers) {
             builder.header(name, value)
         }
