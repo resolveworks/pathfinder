@@ -12,8 +12,6 @@ interface SettingsStore {
 
     suspend fun setModelId(modelId: String)
 
-    suspend fun setBaseUrl(baseUrl: String?)
-
     suspend fun setActiveSessionId(sessionId: String?)
 
     suspend fun setShowThinking(showThinking: Boolean)

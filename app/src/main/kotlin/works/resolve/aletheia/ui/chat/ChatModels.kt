@@ -77,8 +77,6 @@ data class ModelOption(
     val providerName: String,
     val modelId: String,
     val name: String,
-    /** The provider's catalog base URL; placeholder for the override field. */
-    val defaultBaseUrl: String = "",
 )
 
 /** UI-safe projection of a catalog auth prompt: env slot, message, secret flag. */
@@ -94,10 +92,6 @@ data class SelectedModel(
     val providerName: String,
     val modelId: String,
     val modelName: String,
-    /** Normalized base-URL override from settings, or null when none. */
-    val baseUrlOverride: String?,
-    /** The provider's catalog base URL (placeholder for the override field). */
-    val defaultBaseUrl: String,
 )
 
 /**

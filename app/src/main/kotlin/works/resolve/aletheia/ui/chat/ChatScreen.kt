@@ -144,7 +144,7 @@ fun ChatScreen(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
-    onSaveModelSelection: (providerId: String, modelId: String, baseUrl: String?) -> Unit,
+    onSaveModelSelection: (providerId: String, modelId: String) -> Unit,
     onSaveProviderCredential: (providerId: String, apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
     onRemoveProviderCredential: (providerId: String) -> Unit,
     authPrompts: (providerId: String) -> List<ProviderAuthPrompt>,
@@ -516,14 +516,14 @@ private fun SettingsContent(
 
 /**
  * Model settings screen (pi's /model): a searchable picker over models of
- * configured providers only, plus the base-URL override for the local
- * selection. Picking a row only changes local state; Save commits it.
+ * configured providers only. Picking a row only changes local state; Save
+ * commits it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ModelSettingsContent(
     uiState: ChatUiState,
-    onSave: (providerId: String, modelId: String, baseUrl: String?) -> Unit,
+    onSave: (providerId: String, modelId: String) -> Unit,
     onOpenProviders: () -> Unit,
     onClose: (() -> Unit)?,
 ) {
@@ -533,9 +533,6 @@ private fun ModelSettingsContent(
     }
     var selection by remember(uiState.selectedModel, uiState.modelOptions) {
         mutableStateOf(preselected)
-    }
-    var baseUrl by remember(uiState.selectedModel) {
-        mutableStateOf(uiState.selectedModel?.baseUrlOverride.orEmpty())
     }
     val filteredOptions = uiState.modelOptions.filter { option ->
         val q = query.trim()
@@ -600,48 +597,9 @@ private fun ModelSettingsContent(
                 Text(stringResource(R.string.action_set_up_providers))
             }
         }
-        if (selection != null) {
-            // Advanced disclosure keeps the base-URL override out of sight until
-            // needed; the local value survives collapsing so Save keeps it.
-            var advancedExpanded by remember(uiState.selectedModel) {
-                mutableStateOf(!uiState.selectedModel?.baseUrlOverride.isNullOrBlank())
-            }
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.model_settings_advanced)) },
-                trailingContent = {
-                    Icon(
-                        imageVector = if (advancedExpanded) {
-                            Icons.Default.KeyboardArrowUp
-                        } else {
-                            Icons.Default.KeyboardArrowDown
-                        },
-                        contentDescription = stringResource(
-                            if (advancedExpanded) R.string.model_settings_advanced_collapse
-                            else R.string.model_settings_advanced_expand,
-                        ),
-                    )
-                },
-                modifier = Modifier.clickable { advancedExpanded = !advancedExpanded },
-            )
-            if (advancedExpanded) {
-                OutlinedTextField(
-                    value = baseUrl,
-                    onValueChange = { baseUrl = it },
-                    label = { Text(stringResource(R.string.configuration_base_url)) },
-                    placeholder = {
-                        Text(
-                            selection?.defaultBaseUrl?.takeIf { it.isNotEmpty() }
-                                ?: stringResource(R.string.configuration_base_url_hint),
-                        )
-                    },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = { selection?.let { onSave(it.providerId, it.modelId, baseUrl) } },
+                onClick = { selection?.let { onSave(it.providerId, it.modelId) } },
                 enabled = selection != null,
             ) {
                 Text(stringResource(R.string.action_save))
@@ -735,7 +693,6 @@ private fun ProvidersContent(
  * does not clear the inputs — the form is popped (and its inputs disposed)
  * only after the save is confirmed successful via the state's
  * credential-success epoch, so a failed save retains them for correction.
- * Blank secret input keeps the stored key.
  */
 @Composable
 private fun ProviderAuthContent(
@@ -766,11 +723,6 @@ private fun ProviderAuthContent(
                 },
                 label = { Text(prompt.message) },
                 visualTransformation = if (isSecret) PasswordVisualTransformation() else VisualTransformation.None,
-                supportingText = if (isSecret && provider.configured) {
-                    { Text(stringResource(R.string.configuration_api_key_keep_hint)) }
-                } else {
-                    null
-                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -1081,14 +1033,12 @@ private val PREVIEW_MODEL_OPTIONS = listOf(
         providerName = "Z.AI",
         modelId = "model-a",
         name = "Preview Model A",
-        defaultBaseUrl = "https://api.example.invalid/v4",
     ),
     ModelOption(
         providerId = "zai",
         providerName = "Z.AI",
         modelId = "model-b",
         name = "Preview Model B",
-        defaultBaseUrl = "https://api.example.invalid/v4",
     ),
 )
 
@@ -1109,8 +1059,6 @@ private val PREVIEW_SELECTED_MODEL = SelectedModel(
     providerName = "Z.AI",
     modelId = "model-a",
     modelName = "Preview Model A",
-    baseUrlOverride = null,
-    defaultBaseUrl = "https://api.example.invalid/v4",
 )
 
 @Composable
@@ -1127,7 +1075,7 @@ private fun PreviewChatScreen(
             onDraftChange = {},
             onSend = {},
             onStop = {},
-            onSaveModelSelection = { _, _, _ -> },
+            onSaveModelSelection = { _, _ -> },
             onSaveProviderCredential = { _, _, _ -> },
             onRemoveProviderCredential = { },
             authPrompts = authPrompts,

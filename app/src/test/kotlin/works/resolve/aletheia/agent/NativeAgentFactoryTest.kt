@@ -83,8 +83,7 @@ class NativeAgentFactoryTest {
     private fun settings(
         providerId: String = "zai",
         modelId: String = "glm-4.7",
-        baseUrl: String? = null,
-    ) = ModelSettings(providerId = providerId, modelId = modelId, baseUrl = baseUrl)
+    ) = ModelSettings(providerId = providerId, modelId = modelId)
 
     // ---- validation ----
 
@@ -101,14 +100,6 @@ class NativeAgentFactoryTest {
         assertFailsWith<IllegalArgumentException> {
             factory(FakeApiKeyStore(ApiKeyCredential("k")), RecordingTransport())
                 .create(settings(modelId = "gpt-4"), "s1", emptyList())
-        }
-    }
-
-    @Test
-    fun `rejects a blank base URL`() {
-        assertFailsWith<IllegalArgumentException> {
-            factory(FakeApiKeyStore(ApiKeyCredential("k")), RecordingTransport())
-                .create(settings(baseUrl = "   "), "s1", emptyList())
         }
     }
 
@@ -136,7 +127,7 @@ class NativeAgentFactoryTest {
             val store = FakeApiKeyStore(ApiKeyCredential("factory-test-key-1"))
             val transport = RecordingTransport()
             val agent = factory(store, transport)
-                .create(settings(baseUrl = "https://example.test/api/v4//"), "s1", emptyList())
+                .create(settings(), "s1", emptyList())
 
             // Rotating the stored credential after construction must be observed
             // at prompt time: the resolver stays lazy and reads the store per request.
@@ -152,27 +143,13 @@ class NativeAgentFactoryTest {
 
             assertEquals(1, store.getCredentialCalls)
             val request = transport.requests.single()
-            // Overridden base URL, normalized (trailing slashes dropped) + endpoint.
-            assertEquals("https://example.test/api/v4/chat/completions", request.url)
+            // Catalog base URL, normalized (trailing slashes dropped) + endpoint.
+            assertEquals("https://api.z.ai/api/coding/paas/v4/chat/completions", request.url)
             assertEquals("factory-test-key-2", request.bearerToken)
             assertTrue(request.timeoutMs != null && request.timeoutMs > 0)
 
             val body = Json.parseToJsonElement(String(request.body)).jsonObject
             assertEquals("glm-4.7", body["model"]!!.jsonPrimitive.content)
-        }
-    }
-
-    @Test
-    fun `default base URL is used when no override is set`() {
-        runBlocking {
-            val store = FakeApiKeyStore(ApiKeyCredential("factory-test-key-1"))
-            val transport = RecordingTransport()
-            val agent = factory(store, transport).create(settings(), "s1", emptyList())
-            agent.prompt("ping")
-            assertEquals(
-                "https://api.z.ai/api/coding/paas/v4/chat/completions",
-                transport.requests.single().url,
-            )
         }
     }
 
@@ -316,7 +293,7 @@ class NativeAgentFactoryTest {
             )
             val transport = RecordingTransport()
             val agent = NativeAgentFactory(FakeApiKeyStore(ApiKeyCredential("k")), catalog, transport)
-                .create(ModelSettings(providerId = "multi", modelId = "m", baseUrl = null), "s1", emptyList())
+                .create(ModelSettings(providerId = "multi", modelId = "m"), "s1", emptyList())
 
             agent.prompt("ping")
 

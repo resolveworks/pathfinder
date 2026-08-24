@@ -17,7 +17,6 @@ class SettingsRepository(
     private object Keys {
         val PROVIDER_ID = stringPreferencesKey("provider_id")
         val MODEL_ID = stringPreferencesKey("model_id")
-        val BASE_URL = stringPreferencesKey("base_url")
         val ACTIVE_SESSION_ID = stringPreferencesKey("active_session_id")
         val SHOW_THINKING = booleanPreferencesKey("show_thinking")
     }
@@ -26,7 +25,6 @@ class SettingsRepository(
         ModelSettings(
             providerId = prefs[Keys.PROVIDER_ID] ?: "",
             modelId = prefs[Keys.MODEL_ID] ?: "",
-            baseUrl = prefs[Keys.BASE_URL]?.takeIf { it.isNotBlank() },
             activeSessionId = prefs[Keys.ACTIVE_SESSION_ID]?.takeIf { it.isNotBlank() },
             showThinking = prefs[Keys.SHOW_THINKING] ?: false,
         )
@@ -38,13 +36,6 @@ class SettingsRepository(
 
     override suspend fun setModelId(modelId: String) {
         dataStore.edit { it[Keys.MODEL_ID] = modelId }
-    }
-
-    override suspend fun setBaseUrl(baseUrl: String?) {
-        dataStore.edit { prefs ->
-            val value = baseUrl?.trim().orEmpty()
-            if (value.isEmpty()) prefs.remove(Keys.BASE_URL) else prefs[Keys.BASE_URL] = value
-        }
     }
 
     override suspend fun setActiveSessionId(sessionId: String?) {

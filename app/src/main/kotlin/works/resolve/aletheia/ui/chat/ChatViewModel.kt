@@ -118,19 +118,24 @@ class ChatViewModel(
     }
 
     /**
-     * Persists the selected provider+model (+ optional base-URL override) and
-     * (re)builds the agent. Requires a stored credential for [providerId].
+     * Persists the selected provider+model and (re)builds the agent.
+     * Requires a stored credential for [providerId].
      */
-    fun saveModelSelection(providerId: String, modelId: String, baseUrl: String?) {
-        viewModelScope.launch { saveModelSelectionInternal(providerId, modelId, baseUrl) }
+    fun saveModelSelection(providerId: String, modelId: String) {
+        viewModelScope.launch { saveModelSelectionInternal(providerId, modelId) }
     }
 
     /**
-     * Saves (or merges into) the credential for [providerId]: a blank
-     * [apiKeyInput] keeps the stored key; a blank value for any other auth
-     * prompt keeps its stored env value. Mirrors pi's completeProviderAuthentication:
-     * logging in completes configuration when valid model settings already
-     * exist, otherwise the app stays NeedsConfiguration until a model is picked.
+     * Saves a fresh credential for [providerId] (pi's /login semantics):
+     * every prompt's input is its value and a complete save replaces the
+     * stored credential wholesale — pi's logins (e.g. `envApiKeyAuth`,
+     * `cloudflareAIGatewayAuth`) re-prompt everything and never merge with
+     * stored values. Blank/missing required values are rejected with an
+     * error naming the missing prompts.
+     *
+     * Note the deliberate divergence from pi's
+     * `completeProviderAuthentication`, which also auto-selects a default
+     * model after login: aletheia instead forces the model picker step.
      *
      * Not busy-rejected: the agent resolves the credential once per request
      * (inside its stream flow), so changing it mid-stream is safe — like pi's
@@ -503,7 +508,7 @@ class ChatViewModel(
 
     // ---- intent internals ----
 
-    private suspend fun saveModelSelectionInternal(providerId: String, modelId: String, baseUrl: String?) {
+    private suspend fun saveModelSelectionInternal(providerId: String, modelId: String) {
         val trimmedModelId = modelId.trim()
         if (catalog.getModel(providerId, trimmedModelId) == null) {
             setError(ERROR_UNKNOWN_MODEL)
@@ -528,11 +533,9 @@ class ChatViewModel(
             return
         }
 
-        val normalizedBaseUrl = baseUrl?.trim()?.takeIf { it.isNotEmpty() }
         val candidate = ModelSettings(
             providerId = providerId,
             modelId = trimmedModelId,
-            baseUrl = normalizedBaseUrl,
             activeSessionId = activeSession?.id,
             // The display preference is owned by setShowThinking; preserve it
             // so agent rebuilds never drift from what the user picked.
@@ -581,31 +584,22 @@ class ChatViewModel(
             setError(ERROR_UNKNOWN_PROVIDER)
             return
         }
-        val existing = try {
-            credentials.getCredential(providerId)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE)
-            return
-        }
         // The first auth prompt is the API key (stored in credential.key);
-        // every other prompt fills its env slot. Blank values keep the
-        // previously stored value (same rule for every prompt). A first-time
-        // or still-incomplete credential is rejected rather than persisted
+        // every other prompt fills its env slot. Each input is the value —
+        // a complete save replaces the stored credential wholesale (pi's
+        // login semantics: nothing survives from the previous credential).
+        // A still-incomplete credential is rejected rather than persisted
         // (pi's cloudflare auth resolution: unconfigured unless every required
         // value exists). The error names the missing prompts — never values.
-        val newKey = apiKeyInput.trim().takeIf { it.isNotEmpty() } ?: existing?.key
+        val newKey = apiKeyInput.trim()
         val env = buildMap<String, String> {
             provider.auth.prompts.drop(1).forEach { prompt ->
-                val input = envInputs[prompt.envKey]?.trim()
-                val value = input?.takeIf { it.isNotEmpty() }
-                    ?: existing?.env[prompt.envKey]
-                if (value != null) put(prompt.envKey, value)
+                val value = envInputs[prompt.envKey]?.trim()
+                if (!value.isNullOrEmpty()) put(prompt.envKey, value)
             }
         }
-        val missing = provider.missingAuthPrompts(newKey, env)
-        if (newKey == null || missing.isNotEmpty()) {
+        val missing = provider.missingAuthPrompts(newKey.ifEmpty { null }, env)
+        if (newKey.isEmpty() || missing.isNotEmpty()) {
             setError(missingCredentialError(missing))
             return
         }
@@ -624,9 +618,9 @@ class ChatViewModel(
         // without bumping it, so the form and its typed inputs survive.
         updateState { it.copy(credentialSuccessEpoch = it.credentialSuccessEpoch + 1) }
 
-        // Mirrors pi's completeProviderAuthentication: logging in completes
-        // configuration (direct transition to the chat) when valid model
-        // settings are already selected; otherwise the forced first-run flow
+        // Partly mirrors pi's completeProviderAuthentication: logging in
+        // completes configuration (direct transition to the chat) when valid
+        // model settings are already selected; otherwise the forced first-run flow
         // advances to its second step — the model settings form — with an
         // epoch bump so configured models are immediately selectable.
         val nowConfigured = isConfigured(currentSettings)
@@ -699,7 +693,6 @@ class ChatViewModel(
                         providerName = provider.name,
                         modelId = model.id,
                         name = model.name,
-                        defaultBaseUrl = provider.baseUrl,
                     )
                 }
             }
@@ -722,8 +715,6 @@ class ChatViewModel(
             providerName = provider.name,
             modelId = model.id,
             modelName = model.name,
-            baseUrlOverride = settings.baseUrl,
-            defaultBaseUrl = provider.baseUrl,
         )
     }
 
@@ -732,7 +723,6 @@ class ChatViewModel(
         try {
             settingsRepository.setProviderId(settings.providerId)
             settingsRepository.setModelId(settings.modelId)
-            settingsRepository.setBaseUrl(settings.baseUrl)
             return true
         } catch (e: CancellationException) {
             throw e

@@ -7,8 +7,6 @@ package works.resolve.aletheia.data.settings
 data class ModelSettings(
     val providerId: String = "",
     val modelId: String = "",
-    /** Optional base URL override for OpenAI-compatible endpoints. */
-    val baseUrl: String? = null,
     val activeSessionId: String? = null,
     /**
      * Display-only preference: show the model's reasoning while it thinks.

@@ -41,8 +41,8 @@ class NativeAgentFactory(
                 "Unknown model '${settings.modelId}' for provider '${settings.providerId}'",
             )
         // The selected effective model is created once (pi's requestModel):
-        // the catalog model with the normalized override/default base URL.
-        val effectiveModel = model.copy(baseUrl = normalizeBaseUrl(settings.baseUrl ?: model.baseUrl))
+        // the catalog model with its normalized base URL.
+        val effectiveModel = model.copy(baseUrl = normalizeBaseUrl(model.baseUrl))
 
         val provider = entry.toRuntimeProvider(
             transport = transport,

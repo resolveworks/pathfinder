@@ -150,7 +150,7 @@ class ProviderCatalog(val providers: List<CatalogProvider>) {
 }
 
 /**
- * Normalizes a base-URL override: trimmed, with all trailing slashes dropped.
+ * Normalizes a base URL: trimmed, with all trailing slashes dropped.
  * Reuses the logic previously owned by ZaiProvider.
  */
 internal fun normalizeBaseUrl(url: String): String {

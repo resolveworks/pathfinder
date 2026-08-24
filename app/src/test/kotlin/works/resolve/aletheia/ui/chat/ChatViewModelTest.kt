@@ -101,10 +101,6 @@ class ChatViewModelTest {
             if (failWrites) throw java.io.IOException("settings write failed")
             delegate.setModelId(modelId)
         }
-        override suspend fun setBaseUrl(baseUrl: String?) {
-            if (failWrites) throw java.io.IOException("settings write failed")
-            delegate.setBaseUrl(baseUrl)
-        }
         override suspend fun setActiveSessionId(sessionId: String?) {
             if (failActiveSessionWrites) throw java.io.IOException("active session write failed")
             delegate.setActiveSessionId(sessionId)
@@ -161,8 +157,8 @@ class ChatViewModelTest {
         /** Scripted stream flows per prompt; queued before send(). */
         val scriptedStreams = ConcurrentLinkedQueue<Flow<AssistantMessageEvent>>()
 
-        /** Base URLs rejected by the fake factory (validation-error path). */
-        val rejectedBaseUrls = mutableSetOf<String>()
+        /** Model ids rejected by the fake factory (validation-error path). */
+        val rejectedModelIds = mutableSetOf<String>()
 
         /** When set, the factory rejects every configuration. */
         var rejectAll = false
@@ -170,7 +166,7 @@ class ChatViewModelTest {
 
         val factory = AgentFactory { settings, _, transcript ->
             check(!rejectAll) { "factory unavailable" }
-            settings.baseUrl?.let { require(it !in rejectedBaseUrls) { "baseUrl rejected" } }
+            require(settings.modelId !in rejectedModelIds) { "model rejected" }
             Agent(
                 model = testModel,
                 streamFn = StreamFn { _, _, _ ->
@@ -227,11 +223,10 @@ class ChatViewModelTest {
     /** Configures zai in two intents: optional credential save, then model selection. */
     private fun ChatViewModel.configure(
         modelId: String = "glm-4.7",
-        baseUrl: String? = null,
         apiKey: String = "",
     ) {
         if (apiKey.isNotEmpty()) saveProviderCredential("zai", apiKey, emptyMap())
-        saveModelSelection("zai", modelId, baseUrl)
+        saveModelSelection("zai", modelId)
     }
 
     // ---- tests ----
@@ -607,58 +602,66 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
         // Missing key on initial configuration (before any credential is saved).
-        vm.saveModelSelection("zai", "glm-4.7", null)
+        vm.saveModelSelection("zai", "glm-4.7")
         vm.uiState.first { it.error != null }
         assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
         assertEquals(0, h.countSessions())
         vm.dismissError()
 
         vm.saveProviderCredential("zai", "k", emptyMap())
-        vm.saveModelSelection("zai", "not-a-model", null)
+        vm.saveModelSelection("zai", "not-a-model")
         vm.uiState.first { it.error != null }
         assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
         vm.dismissError()
 
-        // Complete configuration, then a factory-invalid base URL keeps the old agent.
+        // Complete configuration, then a factory-rejected model keeps the old agent.
         vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
         val agentsBefore = h.createdAgents.size
 
-        h.rejectedBaseUrls += "https://bad.example"
-        vm.configure(baseUrl = "https://bad.example")
+        h.rejectedModelIds += "glm-5.3"
+        vm.configure(modelId = "glm-5.3")
         vm.uiState.first { it.error != null }
         assertEquals(agentsBefore, h.createdAgents.size)
         // Same agent still bound: sending still works through the old agent.
         assertTrue(vm.uiState.value.status == ChatStatus.Ready)
-        // The invalid base URL was never persisted.
-        assertNull(h.settings.currentSettings().baseUrl)
+        // The rejected selection was never persisted.
         assertEquals("glm-4.7", h.settings.currentSettings().modelId)
 
         vm.closeForTest()
     }
 
     @Test
-    fun blankKeyRetention_keepsStoredKey() = runTest(mainDispatcherRule.scheduler) {
+    fun blankKeySave_isRejected_andCompleteSaveReplacesStoredKey() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.configure(baseUrl = "https://api.example.com/v1/", apiKey = "first-key")
+        vm.configure(apiKey = "first-key")
         vm.uiState.first { it.status == ChatStatus.Ready }
         assertEquals("first-key", h.credentials.creds["zai"]!!.key)
-        assertEquals(1, h.createdAgents.size)
 
-        // Blank key input retains the stored key; blank base URL clears it.
-        vm.configure(modelId = "glm-5.3", baseUrl = "   ")
-        vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
-
+        // Pi's logins replace wholesale, so a blank key input no longer keeps
+        // the stored key: it is a missing required value. The save is rejected
+        // with an error naming the missing prompt — never its value — and the
+        // stored credential and status are left untouched.
+        vm.saveProviderCredential("zai", "   ", emptyMap())
+        vm.uiState.first { it.error != null }
         val state = vm.uiState.value
+        val error = checkNotNull(state.error)
+        assertTrue(error.contains("API key"))
+        assertFalse(error.contains("first-key"))
+        assertFalse(state.toString().contains("first-key"))
         assertEquals(ChatStatus.Ready, state.status)
         assertTrue(state.providerOptions.first { o -> o.id == "zai" }.configured)
         assertEquals("first-key", h.credentials.creds["zai"]!!.key)
-        assertNull(state.selectedModel?.baseUrlOverride)
-        assertNull(h.settings.currentSettings().baseUrl)
-        // Agent rebuilt for the same session/transcript with new settings.
-        assertEquals(2, h.createdAgents.size)
+        vm.dismissError()
+
+        // A complete re-save replaces the stored key wholesale (replace, not
+        // merge) and the app keeps working.
+        vm.saveProviderCredential("zai", "second-key", emptyMap())
+        vm.uiState.first { it.credentialSuccessEpoch == 2L }
+        assertEquals("second-key", h.credentials.creds["zai"]!!.key)
+        assertEquals(1, h.createdAgents.size)
 
         vm.closeForTest()
     }
@@ -690,7 +693,7 @@ class ChatViewModelTest {
         assertEquals(sessionId, vm.uiState.value.activeSessionId)
         vm.dismissError()
 
-        vm.saveModelSelection("zai", "glm-5.3", null)
+        vm.saveModelSelection("zai", "glm-5.3")
         vm.uiState.first { it.error != null }
         assertEquals("glm-4.7", vm.uiState.value.selectedModel?.modelId)
         vm.dismissError()
@@ -752,7 +755,7 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun initFactoryFailure_isFailed_neverReady_andInvalidBaseUrlNotPersisted() = runTest(mainDispatcherRule.scheduler) {
+    fun initFactoryFailure_isFailed_neverReady_andRejectedConfigNotPersisted() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         // Persist a fully valid-looking configuration, but the factory is down.
         h.settings.setProviderId("zai")
@@ -768,15 +771,15 @@ class ChatViewModelTest {
         assertNull(h.settings.currentSettings().activeSessionId)
         vm.closeForTest()
 
-        // Restart after a rejected base URL: the invalid value was never
-        // persisted, so the previous valid configuration still works.
+        // Restart after a factory-rejected model: the invalid selection was
+        // never persisted, so the previous valid configuration still works.
         val h2 = Harness()
         val vm2 = h2.newViewModel()
         vm2.uiState.first { it.status == ChatStatus.NeedsConfiguration }
         vm2.configure(apiKey = "k")
         vm2.uiState.first { it.status == ChatStatus.Ready }
-        h2.rejectedBaseUrls += "https://bad.example"
-        vm2.configure(baseUrl = "https://bad.example")
+        h2.rejectedModelIds += "glm-5.3"
+        vm2.configure(modelId = "glm-5.3")
         vm2.uiState.first { it.error != null }
         assertEquals("glm-4.7", vm2.uiState.value.selectedModel?.modelId)
         vm2.closeForTest()
@@ -785,31 +788,43 @@ class ChatViewModelTest {
         val state3 = vm3.uiState.first { it.status == ChatStatus.Ready }
         assertNull(state3.error)
         assertEquals("glm-4.7", state3.selectedModel?.modelId)
-        assertNull(h2.settings.currentSettings().baseUrl)
         vm3.closeForTest()
     }
 
     @Test
-    fun keyStoredBeforeLaterFailure_isRetainedOnBlankKeyRetry() = runTest(mainDispatcherRule.scheduler) {
+    fun storedCredential_survivesFailedReSave_completeRetryReplaces() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        // The key is stored, but the factory rejects the base URL afterwards.
-        h.rejectedBaseUrls += "https://bad.example"
+        // The key is stored, but the factory rejects the model afterwards.
+        h.rejectedModelIds += "glm-5.3"
         vm.saveProviderCredential("zai", "first-key", emptyMap())
-        vm.configure(baseUrl = "https://bad.example")
+        vm.configure(modelId = "glm-5.3")
         vm.uiState.first { it.error != null }
         val state = vm.uiState.value
         assertEquals(ChatStatus.NeedsConfiguration, state.status)
         assertEquals("first-key", h.credentials.creds["zai"]!!.key)
         assertTrue(state.providerOptions.first { o -> o.id == "zai" }.configured)
         assertFalse(state.toString().contains("first-key"))
+        vm.dismissError()
 
-        // Blank-key retry retains the stored key and completes.
+        // An incomplete re-save (blank key: pi logins re-prompt everything,
+        // nothing is merged) is rejected; the stored credential survives and
+        // the key never leaks into state.
+        vm.saveProviderCredential("zai", "  ", emptyMap())
+        vm.uiState.first { it.error != null }
+        assertFalse(checkNotNull(vm.uiState.value.error).contains("first-key"))
+        assertEquals("first-key", h.credentials.creds["zai"]!!.key)
+        assertFalse(vm.uiState.value.toString().contains("first-key"))
+        vm.dismissError()
+
+        // A complete re-save (everything re-entered) completes configuration.
+        vm.saveProviderCredential("zai", "second-key", emptyMap())
+        vm.uiState.first { it.credentialSuccessEpoch == 2L }
         vm.configure()
         vm.uiState.first { it.status == ChatStatus.Ready }
-        assertEquals("first-key", h.credentials.creds["zai"]!!.key)
+        assertEquals("second-key", h.credentials.creds["zai"]!!.key)
 
         vm.closeForTest()
     }
@@ -881,16 +896,14 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.Ready }
 
         h.settingsStore.failWrites = true
-        vm.configure(modelId = "glm-5.3", baseUrl = "https://new.example")
+        vm.configure(modelId = "glm-5.3")
         vm.uiState.first { it.error != null }
 
         val state = vm.uiState.value
         assertEquals(ChatStatus.Ready, state.status)
         assertEquals("glm-4.7", state.selectedModel?.modelId)
-        assertNull(state.selectedModel?.baseUrlOverride)
         // Persisted settings unchanged.
         assertEquals("glm-4.7", h.settings.currentSettings().modelId)
-        assertNull(h.settings.currentSettings().baseUrl)
 
         // The previous agent is still bound: chatting still works and persists.
         h.settingsStore.failWrites = false
@@ -1108,7 +1121,7 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun saveProviderCredential_mergesKeyAndEnvValues() = runTest(mainDispatcherRule.scheduler) {
+    fun saveProviderCredential_replacesCredentialWholesale() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
@@ -1137,13 +1150,34 @@ class ChatViewModelTest {
         assertEquals("cf-key", filled.key)
         assertEquals(mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"), filled.env)
 
-        // Blank key and blank env values keep the stored ones; a new key rotates.
-        vm.saveProviderCredential("cloudflare-ai-gateway", "cf-key-2", mapOf("CLOUDFLARE_ACCOUNT_ID" to " "))
+        // A complete re-save with different values fully replaces key and
+        // env (pi logins never merge: no stale old values survive).
+        vm.saveProviderCredential(
+            "cloudflare-ai-gateway",
+            "cf-key-2",
+            mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc-2", "CLOUDFLARE_GATEWAY_ID" to "gw-2"),
+        )
+        vm.uiState.first { it.credentialSuccessEpoch == 2L }
         val rotated = h.credentials.creds["cloudflare-ai-gateway"]!!
         assertEquals("cf-key-2", rotated.key)
-        assertEquals(mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"), rotated.env)
+        assertEquals(
+            mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc-2", "CLOUDFLARE_GATEWAY_ID" to "gw-2"),
+            rotated.env,
+        )
 
-        // The very first save with a blank key is rejected (no existing key).
+        // An incomplete re-save (missing env: replace semantics, nothing is
+        // merged from the stored credential) is rejected; the old credential
+        // is untouched and the error never echoes values.
+        vm.saveProviderCredential("cloudflare-ai-gateway", "cf-key-3", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc-3"))
+        vm.uiState.first { it.error != null }
+        val retryError = checkNotNull(vm.uiState.value.error)
+        assertTrue(retryError.contains("gateway ID"))
+        assertFalse(retryError.contains("cf-key"))
+        assertFalse(retryError.contains("acc-3"))
+        assertEquals(rotated, h.credentials.creds["cloudflare-ai-gateway"])
+        vm.dismissError()
+
+        // A save with a blank key is rejected (the key is always required).
         vm.saveProviderCredential("zai", "   ", emptyMap())
         vm.uiState.first { it.error != null }
         assertFalse(vm.uiState.value.providerOptions.first { o -> o.id == "zai" }.configured)
@@ -1170,7 +1204,7 @@ class ChatViewModelTest {
         assertFalse(vm.uiState.value.providerOptions.first { o -> o.id == "cloudflare-ai-gateway" }.configured)
         assertTrue(vm.uiState.value.modelOptions.none { it.providerId == "cloudflare-ai-gateway" })
 
-        vm.saveModelSelection("cloudflare-ai-gateway", "workers-ai/test-model", null)
+        vm.saveModelSelection("cloudflare-ai-gateway", "workers-ai/test-model")
         vm.uiState.first { it.error != null }
         assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
         assertEquals(0, h.countSessions())
@@ -1234,7 +1268,7 @@ class ChatViewModelTest {
 
         // Step 2: saving a model selection completes configuration and enters
         // the chat as before.
-        vm.saveModelSelection("zai", "glm-4.7", null)
+        vm.saveModelSelection("zai", "glm-4.7")
         val ready = vm.uiState.first { it.status == ChatStatus.Ready }
         assertEquals(ChatNavKey, ready.startKey)
         assertTrue(ready.navigationEpoch >= 3L)
@@ -1260,7 +1294,7 @@ class ChatViewModelTest {
         assertNull(state.activeSessionId)
 
         // Saving a model selection completes configuration directly from here.
-        vm.saveModelSelection("zai", "glm-4.7", null)
+        vm.saveModelSelection("zai", "glm-4.7")
         val ready = vm.uiState.first { it.status == ChatStatus.Ready }
         assertEquals(ChatNavKey, ready.startKey)
         assertTrue(ready.navigationEpoch >= 1L)
@@ -1319,7 +1353,7 @@ class ChatViewModelTest {
         assertTrue(state.modelOptions.isNotEmpty())
 
         // Model selection for an unknown provider is rejected safely.
-        vm.saveModelSelection("not-a-provider", "glm-4.7", null)
+        vm.saveModelSelection("not-a-provider", "glm-4.7")
         vm.uiState.first { it.error != null }
         assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
         assertEquals(0, h.countSessions())
