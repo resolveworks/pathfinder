@@ -1357,6 +1357,197 @@ class ChatViewModelTest {
         vm.closeForTest()
     }
 
+    // ---- tree navigation (pi's navigateTree, reduced) ----
+
+    /** Runs one scripted exchange and waits for its persistence. */
+    private suspend fun ChatViewModel.exchange(
+        h: Harness,
+        text: String,
+        reply: String,
+    ) {
+        h.scriptedStreams.add(h.gatedStream(reply, CompletableDeferred<Unit>().apply { complete(Unit) }))
+        onDraftChange(text)
+        send()
+        uiState.first { !it.isStreaming && it.messages.size >= 2 }
+    }
+
+    @Test
+    fun navigateToAssistantEntry_truncatesTranscript_andRoundtripPreservesBranches() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        vm.exchange(h, "Hello", "world")
+        vm.exchange(h, "Again", "fine")
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 4 }
+        assertEquals(4, vm.uiState.value.treeRows.size)
+        assertTrue(vm.uiState.value.treeRows.last().isCurrentLeaf)
+
+        // Navigate to the first assistant answer: transcript truncates to the
+        // root..that-entry path, tree rows keep every entry.
+        val assistantEntryId = vm.uiState.value.treeRows[1].id
+        vm.navigateToTreeEntry(assistantEntryId)
+        val truncated = vm.uiState.first { it.messages.size == 2 }
+        assertEquals(4, truncated.treeRows.size)
+        assertEquals(assistantEntryId, truncated.treeRows.first { it.isCurrentLeaf }.id)
+        assertTrue(truncated.treeRows[0].isOnActivePath)
+        assertFalse(truncated.treeRows[3].isOnActivePath)
+        assertEquals("world", truncated.messages[1].singleText())
+
+        // Entries + leafId persist (branch structure survives the save).
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+        val saved = h.sessionStore.load(sessionId)!!
+        assertEquals(4, saved.entries.size)
+        assertEquals(assistantEntryId, saved.leafId)
+
+        // A new exchange from here forks: the second user message becomes a
+        // SIBLING of the old one under the same assistant entry.
+        vm.exchange(h, "Third", "forked")
+        vm.uiState.first { it.messages.size == 4 && it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 4 }
+        val forked = h.sessionStore.load(sessionId)!!
+        assertEquals(6, forked.entries.size)
+        assertEquals(4, forked.messages.size)
+        val childrenOfTarget = forked.entries.filter { it.parentId == assistantEntryId }
+        assertEquals(2, childrenOfTarget.map { it.id }.toSet().size)
+
+        // Roundtrip: a fresh ViewModel restores the branched session intact.
+        vm.closeForTest()
+        val vm2 = h.newViewModel()
+        val restored = vm2.uiState.first { it.status == ChatStatus.Ready && it.activeSessionId == sessionId }
+        assertEquals(4, restored.messages.size)
+        assertEquals("Third", restored.messages[2].singleText())
+        assertEquals(6, restored.treeRows.size)
+        val forkParent = restored.treeRows.first { it.isBranchPoint }
+        assertEquals(assistantEntryId, forkParent.id)
+        // Active branch reads first among the fork's children.
+        val thirdId = (forked.entries.first { e ->
+            e is works.resolve.aletheia.data.sessions.MessageEntry &&
+                e.message is works.resolve.aletheia.ai.core.UserMessage &&
+                (e.message as works.resolve.aletheia.ai.core.UserMessage).content
+                    .filterIsInstance<TextContent>().first().text == "Third"
+        }).id
+        val childIds = restored.treeRows.filter { it.path.contains(assistantEntryId) && it.path.size == forkParent.path.size + 1 }.map { it.id }
+        assertEquals(2, childIds.size)
+        assertEquals(thirdId, childIds.first())
+        vm2.closeForTest()
+    }
+
+    @Test
+    fun navigateToUserMessage_restoresDraft_andNextSendForksAsSibling() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        vm.exchange(h, "Hello", "world")
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+
+        // Re-edit the user prompt: draft is restored, active path empties
+        // (the leaf resets to the root), and the tree keeps both entries.
+        val userEntryId = vm.uiState.value.treeRows[0].id
+        vm.navigateToTreeEntry(userEntryId)
+        val reedit = vm.uiState.first { it.draft == "Hello" }
+        assertEquals(0, reedit.messages.size)
+        assertEquals(2, reedit.treeRows.size)
+        assertTrue(reedit.canSend)
+
+        // The next send appends as a sibling (a second root), not a child.
+        vm.exchange(h, "Hello edited", "rewritten")
+        vm.uiState.first { it.messages.size == 2 && it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+        val saved = h.sessionStore.load(sessionId)!!
+        assertEquals(4, saved.entries.size)
+        val roots = saved.entries.filter { it.parentId == null }
+        assertEquals(setOf(userEntryId), roots.dropLast(1).map { it.id }.toSet())
+        assertEquals(2, roots.size)
+        assertEquals("Hello edited", (saved.messages[0] as works.resolve.aletheia.ai.core.UserMessage).content.filterIsInstance<TextContent>().first().text)
+
+        // Tree rows show both roots, active one first.
+        val rows = vm.uiState.value.treeRows
+        assertEquals(4, rows.size)
+        assertTrue(rows[0].isCurrentLeaf || rows[1].isCurrentLeaf)
+        assertTrue(rows.none { it.isBranchPoint })
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun navigateToCurrentLeaf_orUnknownEntry_isRejectedSafely() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        vm.exchange(h, "Hello", "world")
+        val leafId = vm.uiState.value.treeRows.last().id
+
+        vm.navigateToTreeEntry(leafId)
+        vm.uiState.first { it.error == "Already at this point" }
+        assertEquals(2, vm.uiState.value.messages.size)
+        vm.dismissError()
+
+        vm.navigateToTreeEntry("no-such-entry")
+        vm.uiState.first { it.error != null }
+        assertEquals(2, vm.uiState.value.messages.size)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun navigateWhileStreaming_isBusyRejected() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        vm.exchange(h, "Hello", "world")
+        val firstEntry = vm.uiState.value.treeRows[0].id
+
+        val gate = CompletableDeferred<Unit>()
+        h.scriptedStreams.add(h.gatedStream("slow", gate))
+        vm.onDraftChange("Second")
+        vm.send()
+        vm.uiState.first { it.isStreaming }
+
+        vm.navigateToTreeEntry(firstEntry)
+        vm.uiState.first { it.error != null }
+        assertEquals(3, vm.uiState.value.messages.size) // user message already committed
+        vm.dismissError()
+
+        gate.complete(Unit)
+        vm.uiState.first { !it.isStreaming && it.messages.size == 4 }
+        vm.uiState.first { it.sessionSummaries.first().messageCount == 4 }
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun setTreeFilter_reprojectsRowsInMemory() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        vm.exchange(h, "Hello", "world")
+        vm.setTreeFilter(TreeFilter.USER_ONLY)
+        val filtered = vm.uiState.first { it.treeFilter == TreeFilter.USER_ONLY }.treeRows
+        assertEquals(listOf(true), filtered.map { it.isUser })
+        assertEquals(1, filtered.size)
+        assertEquals("You: Hello", filtered[0].preview)
+        // Default view restored on demand; nothing persisted.
+        vm.setTreeFilter(TreeFilter.DEFAULT)
+        assertEquals(2, vm.uiState.value.treeRows.size)
+
+        vm.closeForTest()
+    }
+
     // ---- thinking block projection ----
 
     /** Text-only convenience for single-text-block assertions. */
