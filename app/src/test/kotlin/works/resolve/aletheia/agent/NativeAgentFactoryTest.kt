@@ -6,6 +6,7 @@ import works.resolve.aletheia.ai.transport.HttpStreamingTransport
 import works.resolve.aletheia.ai.transport.SseEvent
 import works.resolve.aletheia.ai.transport.TransportRequest
 import works.resolve.aletheia.ai.transport.TransportResponse
+import works.resolve.aletheia.data.credentials.ApiKeyCredential
 import works.resolve.aletheia.data.credentials.ApiKeyStore
 import works.resolve.aletheia.data.settings.ModelSettings
 import kotlin.test.Test
@@ -31,17 +32,17 @@ class NativeAgentFactoryTest {
         var getApiKeyCalls = 0
         var setApiKeyCalls = 0
 
-        override suspend fun getApiKey(providerId: String): String? {
+        override suspend fun getCredential(providerId: String): ApiKeyCredential? {
             getApiKeyCalls++
-            return key.value
+            return key.value?.let { ApiKeyCredential(it) }
         }
 
-        override suspend fun setApiKey(providerId: String, apiKey: String) {
+        override suspend fun setCredential(providerId: String, credential: ApiKeyCredential) {
             setApiKeyCalls++
-            key.value = apiKey
+            key.value = credential.key
         }
 
-        override suspend fun deleteApiKey(providerId: String) {
+        override suspend fun deleteCredential(providerId: String) {
             key.value = null
         }
     }
