@@ -256,6 +256,16 @@ class ProviderCatalogTest {
         assertFalse(TestCatalogs.ZAI.isCredentialComplete(null, emptyMap()))
     }
 
+    @Test
+    fun `provider with no auth prompts still requires a key`() {
+        val provider = ProviderCatalog.parse(
+            """{"providers":[{"id":"p","name":"P","baseUrl":"u","models":[]}]}""",
+        ).getProvider("p")!!
+        assertFalse(provider.isCredentialComplete(null, emptyMap()))
+        assertFalse(provider.isCredentialComplete("  ", emptyMap()))
+        assertTrue(provider.isCredentialComplete("k", emptyMap()))
+    }
+
     // ---- fail-fast on unknown enum values ----
 
     @Test
