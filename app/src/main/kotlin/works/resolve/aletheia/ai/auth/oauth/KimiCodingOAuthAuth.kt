@@ -1,13 +1,13 @@
 package works.resolve.aletheia.ai.auth.oauth
 
 import java.io.IOException
-import java.net.SocketTimeoutException
 import java.net.URI
 import java.net.URLEncoder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.doubleOrNull
@@ -29,7 +29,7 @@ import works.resolve.aletheia.ai.auth.OAuthCredential
  * Divergence from pi (documented per AGENTS.md): pi resolves the OAuth host
  * from `KIMI_CODE_OAUTH_HOST`/`KIMI_OAUTH_HOST` provider env overrides; the
  * Android process has no ambient provider env at this layer, so this port
- * always uses pi's default host [DEFAULT_OAUTH_HOST] (the upstream default
+ * always uses pi's default host [OAUTH_HOST] (the upstream default
  * when neither override is set). The [now] clock supplier is injectable for
  * deterministic tests only; production callers use the system-clock default.
  *
@@ -132,7 +132,7 @@ class KimiCodingOAuthAuth(
     }
 
     /** Port of pi `parseTokenResponse`. */
-    internal fun parseTokenResponse(json: JsonObject?, operation: String): TokenResponse {
+    internal fun parseTokenResponse(json: JsonElement?, operation: String): TokenResponse {
         val accessToken = json?.string("access_token")
         val refreshToken = json?.string("refresh_token")
         val expiresIn = json?.number("expires_in")
@@ -329,51 +329,72 @@ class KimiCodingOAuthAuth(
 
         /**
          * Port of pi `formUrlEncode` (`new URLSearchParams(fields).toString()`):
-         * application/x-www-form-urlencoded serialization. [URLEncoder] matches
-         * except that it emits `+` for spaces where `URLSearchParams` uses
-         * `%20` (identical server-side decoding); the replacement keeps the
-         * wire bytes byte-for-byte identical to pi's.
+         * application/x-www-form-urlencoded serialization — space becomes `+`,
+         * exactly like `URLSearchParams` (and `URLEncoder`) on the wire.
          */
         internal fun formUrlEncode(fields: Map<String, String>): ByteArray =
             fields.entries.joinToString("&") { (name, value) ->
                 urlEncode(name) + "=" + urlEncode(value)
             }.toByteArray(Charsets.UTF_8)
 
-        private fun urlEncode(value: String): String =
-            URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+        private fun urlEncode(value: String): String = URLEncoder.encode(value, "UTF-8")
 
-        /** Port of pi `readJson`: any non-object (or unparseable) body becomes null. */
-        internal fun readJson(response: OAuthHttpResponse): JsonObject? {
+        /**
+         * Port of pi `readJson`: JS `typeof [] === "object"`, so any non-null
+         * JSON object *or array* is returned as-is (pi keeps it for
+         * `JSON.stringify` in malformed-response errors); scalars and
+         * unparseable bodies become null. Field access still only succeeds on
+         * [JsonObject], matching pi's `json?.field` → `undefined` on arrays.
+         */
+        internal fun readJson(response: OAuthHttpResponse): JsonElement? {
             val parsed = try {
                 Json.parseToJsonElement(response.body.toString(Charsets.UTF_8))
             } catch (_: Exception) {
                 return null
             }
-            return parsed as? JsonObject
+            return if (parsed is JsonObject || parsed is kotlinx.serialization.json.JsonArray) parsed else null
         }
 
-        /** The verification URI is opened in the user's browser; only http(s) URLs are trusted (pi `trustedHttpUrl`). */
+        /**
+         * The verification URI is opened in the user's browser; only http(s)
+         * URLs are trusted (pi `trustedHttpUrl`). Like pi's `url.href` return,
+         * the value is the normalized URL form, rebuilt from the parsed [URI]
+         * — a small JDK-only equivalent of WHATWG href normalization (e.g. the
+         * root path `/` is added for empty paths; default ports are hidden).
+         */
         internal fun trustedHttpUrl(value: String?): String? {
             if (value.isNullOrEmpty()) return null
             return try {
                 val uri = URI(value)
-                if (uri.scheme != "http" && uri.scheme != "https") null
-                else value
+                if (uri.scheme != "http" && uri.scheme != "https") {
+                    null
+                } else {
+                    buildString {
+                        append(uri.scheme).append("://").append(uri.rawAuthority ?: "")
+                        append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
+                        uri.rawQuery?.let { append('?').append(it) }
+                        uri.rawFragment?.let { append('#').append(it) }
+                    }
+                }
             } catch (_: Exception) {
                 null
             }
         }
 
-        /** pi reads string fields with `typeof === "string"`. */
-        private fun JsonObject?.string(name: String): String? =
-            (this?.get(name) as? JsonPrimitive)?.takeIf { it.isString }?.content
+        /** pi reads string fields with `typeof === "string"`; arrays have no fields (→ `undefined`). */
+        private fun JsonElement?.string(name: String): String? =
+            ((this as? JsonObject)?.get(name) as? JsonPrimitive)?.takeIf { it.isString }?.content
 
-        /** pi reads numeric fields with `typeof === "number"` + `Number.isFinite`. */
-        private fun JsonObject?.number(name: String): Double? =
-            (this?.get(name) as? JsonPrimitive)?.doubleOrNull
+        /**
+         * pi reads numeric fields with `typeof === "number"` +
+         * `Number.isFinite`; quoted numeric strings (JSON string primitives)
+         * are rejected so callers apply their fallbacks, exactly like pi.
+         */
+        private fun JsonElement?.number(name: String): Double? =
+            ((this as? JsonObject)?.get(name) as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull
 
         /** pi's `JSON.stringify(json)` rendering (`"null"` for null, compact JSON otherwise). */
-        private fun JsonObject?.jsonString(): String = this?.toString() ?: "null"
+        private fun JsonElement?.jsonString(): String = this?.toString() ?: "null"
 
         /** pi's `: ${await response.text()}` suffix for error bodies. */
         private fun OAuthHttpResponse.errorTextSuffix(): String {

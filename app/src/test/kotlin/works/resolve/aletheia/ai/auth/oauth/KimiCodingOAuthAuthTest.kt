@@ -449,8 +449,9 @@ class KimiCodingOAuthAuthTest {
 
     @Test
     fun `formUrlEncode matches URLSearchParams percent-encoding`() {
+        // URLSearchParams.toString() encodes spaces as '+' on the wire
         assertEquals(
-            "a=1&b=hello%20world&c=x%2By",
+            "a=1&b=hello+world&c=x%2By",
             KimiCodingOAuthAuth.formUrlEncode(
                 linkedMapOf("a" to "1", "b" to "hello world", "c" to "x+y"),
             ).toString(Charsets.UTF_8),
@@ -458,13 +459,65 @@ class KimiCodingOAuthAuthTest {
     }
 
     @Test
-    fun `trustedHttpUrl accepts only http and https`() {
+    fun `trustedHttpUrl accepts only http and https and normalizes like URL href`() {
         assertEquals("https://a.example/x", KimiCodingOAuthAuth.trustedHttpUrl("https://a.example/x"))
         assertEquals("http://a.example/x", KimiCodingOAuthAuth.trustedHttpUrl("http://a.example/x"))
+        // URL.href adds the root path for authority-only URLs; so does toExternalForm
+        assertEquals("https://a.example/", KimiCodingOAuthAuth.trustedHttpUrl("https://a.example"))
         assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl("ftp://a.example/x"))
         assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl("javascript:alert(1)"))
         assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl(""))
         assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl(null))
         assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl("not a url"))
+    }
+
+    @Test
+    fun `quoted numeric interval and expires_in fall back to defaults`() = runTest {
+        // pi requires typeof number: '"interval":"2"' is a string, so the fallback applies
+        val (flow, http) = newFlow { request ->
+            if (request.url.endsWith("device_authorization")) {
+                json(200, deviceAuthorizationBody(interval = "\"interval\":\"2\"", expires = "\"expires_in\":\"600\""))
+            } else {
+                json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}")
+            }
+        }
+        val interaction = RecordingInteraction()
+
+        flow.login(interaction)
+
+        assertEquals(5, (interaction.events.single() as AuthEvent.DeviceCode).intervalSeconds)
+        assertEquals(15 * 60, (interaction.events.single() as AuthEvent.DeviceCode).expiresInSeconds)
+        assertEquals(5_000, http.requests[1].first)
+    }
+
+    @Test
+    fun `quoted numeric expires_in in a token response fails as missing fields`() = runTest {
+        val (flow, _) = newFlow { request ->
+            if (request.url.endsWith("device_authorization")) {
+                json(200, deviceAuthorizationBody())
+            } else {
+                json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":\"60\"}")
+            }
+        }
+
+        val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
+        assertEquals(
+            "Kimi Code token poll response missing fields: " +
+                "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":\"60\"}",
+            error.message,
+        )
+    }
+
+    @Test
+    fun `array device authorization body renders in the malformed-response error`() = runTest {
+        // JS typeof [] === "object", so pi's readJson keeps the array and
+        // JSON.stringify renders it; field lookup fails like json?.field → undefined
+        val (flow, _) = newFlow { json(200, "[\"device_code\"]") }
+
+        val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
+        assertEquals(
+            "Invalid Kimi Code device authorization response: [\"device_code\"]",
+            error.message,
+        )
     }
 }
