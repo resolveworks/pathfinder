@@ -823,12 +823,23 @@ private fun ProviderAuthContent(
 
 // ---- conversation ----
 
+/** Concatenated text of the text blocks; the displayable body (thinking is not rendered yet). */
+private fun ChatMessage.displayText(): String =
+    blocks.filterIsInstance<ChatBlock.Text>().joinToString("\n\n") { it.text }
+
 @Composable
 private fun ConversationContent(uiState: ChatUiState) {
     val listState = rememberLazyListState()
     val messageCount = uiState.messages.size
     val streamingId = uiState.streamingMessage?.id
-    val streamingLength = uiState.streamingMessage?.text?.length
+    // Covers text AND thinking so a later chunk keeps auto-scrolling during
+    // thinking-only streaming; thinking changes alone also advance it.
+    val streamingLength = uiState.streamingMessage?.blocks?.sumOf { block ->
+        when (block) {
+            is ChatBlock.Text -> block.text.length
+            is ChatBlock.Thinking -> block.text.length
+        }
+    }
 
     LaunchedEffect(messageCount, streamingId, streamingLength) {
         val total = messageCount + if (streamingId != null) 1 else 0
@@ -850,12 +861,15 @@ private fun ConversationContent(uiState: ChatUiState) {
             }
             uiState.streamingMessage?.let { streaming ->
                 item(key = streaming.id) {
+                    val hasVisibleText = streaming.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() }
                     MessageItem(
-                        streaming.copy(
-                            text = streaming.text.ifEmpty {
-                                if (streaming.error == null) STREAMING_PLACEHOLDER else ""
-                            },
-                        ),
+                        if (hasVisibleText || streaming.error != null) {
+                            streaming
+                        } else {
+                            // No visible body yet (e.g. thinking-only stream):
+                            // same "…" placeholder as before.
+                            streaming.copy(blocks = listOf(ChatBlock.Text(STREAMING_PLACEHOLDER)))
+                        },
                     )
                 }
             }
@@ -871,9 +885,9 @@ private fun MessageItem(message: ChatMessage) {
         // goes through MarkdownText.
         headlineContent = {
             if (message.role == ChatRole.Assistant) {
-                MarkdownText(markdown = message.text)
+                MarkdownText(markdown = message.displayText())
             } else {
-                Text(message.text)
+                Text(message.displayText())
             }
         },
         overlineContent = {
@@ -1123,10 +1137,10 @@ private fun ChatScreenReadyStreamingPreview() {
                 ),
             ),
             messages = listOf(
-                ChatMessage(id = "m1", role = ChatRole.User, text = "Hello there"),
-                ChatMessage(id = "m2", role = ChatRole.Assistant, text = "Hi! How can I help?"),
+                ChatMessage(id = "m1", role = ChatRole.User, blocks = listOf(ChatBlock.Text("Hello there"))),
+                ChatMessage(id = "m2", role = ChatRole.Assistant, blocks = listOf(ChatBlock.Text("Hi! How can I help?"))),
             ),
-            streamingMessage = ChatMessage(id = "streaming-1", role = ChatRole.Assistant, text = "Sure, "),
+            streamingMessage = ChatMessage(id = "streaming-1", role = ChatRole.Assistant, blocks = listOf(ChatBlock.Text("Sure, "))),
             isStreaming = true,
         ),
     )

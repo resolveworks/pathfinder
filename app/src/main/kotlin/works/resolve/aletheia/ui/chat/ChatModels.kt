@@ -9,11 +9,24 @@ enum class ChatRole {
     Assistant,
 }
 
+/**
+ * Ordered unit of a chat message body: text or model reasoning (thinking),
+ * in the order the content was produced.
+ */
+sealed class ChatBlock {
+    /** Plain (assistant: markdown) text part. */
+    data class Text(val text: String) : ChatBlock()
+
+    /** Model reasoning part; rendering is owned by a later chunk. */
+    data class Thinking(val text: String) : ChatBlock()
+}
+
 data class ChatMessage(
     /** Stable UI key; unique even when timestamps collide. */
     val id: String,
     val role: ChatRole,
-    val text: String,
+    /** Body blocks in content order; consecutive thinking parts are pre-merged. */
+    val blocks: List<ChatBlock>,
     /** User-facing failure text for error/aborted assistant messages. */
     val error: String? = null,
 )

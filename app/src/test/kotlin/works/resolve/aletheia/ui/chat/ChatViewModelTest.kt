@@ -11,6 +11,7 @@ import works.resolve.aletheia.ai.core.Message
 import works.resolve.aletheia.ai.core.Model
 import works.resolve.aletheia.ai.core.StopReason
 import works.resolve.aletheia.ai.core.TextContent
+import works.resolve.aletheia.ai.core.ThinkingContent
 import works.resolve.aletheia.data.credentials.ApiKeyCredential
 import works.resolve.aletheia.data.credentials.ApiKeyStore
 import works.resolve.aletheia.data.settings.SettingsRepository
@@ -410,7 +411,7 @@ class ChatViewModelTest {
         val mid = vm.uiState.value
         assertEquals(1, mid.messages.size)
         assertEquals(ChatRole.User, mid.messages[0].role)
-        assertEquals("Hello", mid.messages[0].text)
+        assertEquals("Hello", mid.messages[0].singleText())
         assertFalse(mid.canSend)
         assertEquals("", mid.draft)
 
@@ -421,7 +422,7 @@ class ChatViewModelTest {
         val done = vm.uiState.value
         assertNull(done.streamingMessage)
         assertEquals(ChatRole.Assistant, done.messages[1].role)
-        assertEquals("world", done.messages[1].text)
+        assertEquals("world", done.messages[1].singleText())
         assertNull(done.error)
 
         // Session persisted with both messages and a derived title.
@@ -560,7 +561,7 @@ class ChatViewModelTest {
 
         vm.switchSession(firstId)
         val restored = vm.uiState.first { it.activeSessionId == firstId && it.messages.size == 2 }
-        assertEquals("Hello", restored.messages[0].text)
+        assertEquals("Hello", restored.messages[0].singleText())
 
         vm.closeForTest()
     }
@@ -1322,6 +1323,84 @@ class ChatViewModelTest {
         vm.uiState.first { it.error != null }
         assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
         assertEquals(0, h.countSessions())
+
+        vm.closeForTest()
+    }
+
+    // ---- thinking block projection ----
+
+    /** Text-only convenience for single-text-block assertions. */
+    private fun ChatMessage.singleText(): String =
+        blocks.single().let { it as ChatBlock.Text }.text
+
+    @Test
+    fun projection_mergesThinkingRuns_dropsBlanks_preservesOrder() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        val assistant = h.assistant("").copy(
+            content = listOf(
+                ThinkingContent("alpha"),
+                ThinkingContent("beta"),
+                TextContent("first"),
+                ThinkingContent("   "),
+                TextContent("  "),
+                TextContent("second"),
+                ThinkingContent(" lone "),
+            ),
+        )
+        h.createdAgents.last().replaceTranscript(listOf(works.resolve.aletheia.ai.core.UserMessage.ofText("hi"), assistant))
+
+        val state = vm.uiState.first { it.messages.size == 2 }
+        val blocks = state.messages[1].blocks
+        assertEquals(
+            listOf(
+                ChatBlock.Thinking("alpha\n\nbeta"),
+                ChatBlock.Text("first"),
+                ChatBlock.Text("second"),
+                ChatBlock.Thinking("lone"),
+            ),
+            blocks,
+        )
+        // User message → a single Text block.
+        assertEquals(listOf(ChatBlock.Text("hi")), state.messages[0].blocks)
+        // The display preference is untouched by projection.
+        assertEquals(state.showThinking, h.settings.currentSettings().showThinking)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun projection_thinkingOnlyStreaming_yieldsThinkingBlock() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        val gate = CompletableDeferred<Unit>()
+        h.scriptedStreams.add(
+            flow {
+                emit(AssistantMessageEvent.Start(h.assistant("")))
+                val partial = h.assistant("").copy(content = listOf(ThinkingContent("reasoning so far")))
+                emit(AssistantMessageEvent.ThinkingDelta(0, "reasoning", partial))
+                gate.await()
+                emit(AssistantMessageEvent.Done(StopReason.STOP, partial))
+            },
+        )
+        vm.onDraftChange("hi")
+        vm.send()
+
+        vm.uiState.first { it.streamingMessage?.blocks?.isNotEmpty() == true }
+        val streaming = vm.uiState.value.streamingMessage!!
+        assertEquals(listOf(ChatBlock.Thinking("reasoning so far")), streaming.blocks)
+
+        // Let the stream finish so teardown never abandons it.
+        gate.complete(Unit)
+        vm.uiState.first { !it.isStreaming }
 
         vm.closeForTest()
     }

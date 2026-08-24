@@ -8,6 +8,7 @@ import works.resolve.aletheia.ai.core.AssistantMessage
 import works.resolve.aletheia.ai.core.Content
 import works.resolve.aletheia.ai.core.Message
 import works.resolve.aletheia.ai.core.TextContent
+import works.resolve.aletheia.ai.core.ThinkingContent
 import works.resolve.aletheia.ai.core.UserMessage
 import works.resolve.aletheia.ai.providers.AuthPrompt
 import works.resolve.aletheia.ai.providers.ProviderCatalog
@@ -827,9 +828,11 @@ class ChatViewModel(
 }
 
 /**
- * UI projection of the committed transcript: text (and error) only; thinking
- * is dropped. Keys are stable per committed index+role+timestamp so that
- * same-millisecond user/assistant messages can never collide.
+ * UI projection of the committed transcript as ordered blocks: text parts
+ * stay separate, runs of consecutive thinking parts merge into one block
+ * (pi's assistant-message semantics), and blank parts drop. Keys are stable
+ * per committed index+role+timestamp so that same-millisecond
+ * user/assistant messages can never collide.
  */
 private fun projectCommitted(messages: List<Message>): List<ChatMessage> =
     messages.mapIndexed { index, message ->
@@ -837,12 +840,12 @@ private fun projectCommitted(messages: List<Message>): List<ChatMessage> =
             is UserMessage -> ChatMessage(
                 id = "msg-$index-${message.timestamp}",
                 role = ChatRole.User,
-                text = message.content.textParts(),
+                blocks = message.content.toChatBlocks(),
             )
             is AssistantMessage -> ChatMessage(
                 id = "msg-$index-${message.timestamp}",
                 role = ChatRole.Assistant,
-                text = message.content.textParts(),
+                blocks = message.content.toChatBlocks(),
                 error = message.errorMessage,
             )
             else -> null
@@ -854,9 +857,37 @@ private fun projectStreaming(message: AssistantMessage): ChatMessage =
     ChatMessage(
         id = "streaming-${message.timestamp}",
         role = ChatRole.Assistant,
-        text = message.content.textParts(),
+        blocks = message.content.toChatBlocks(),
         error = message.errorMessage,
     )
 
-private fun List<Content>.textParts(): String =
-    asSequence().filterIsInstance<TextContent>().joinToString(separator = "") { it.text }
+/**
+ * Projects content into ordered blocks: each non-blank [TextContent] becomes
+ * its own [ChatBlock.Text]; runs of consecutive [ThinkingContent] merge into
+ * one [ChatBlock.Thinking] joined with "\n\n" and trimmed (dropped when the
+ * merged result is blank).
+ */
+private fun List<Content>.toChatBlocks(): List<ChatBlock> {
+    val blocks = mutableListOf<ChatBlock>()
+    var thinkingRun: MutableList<String>? = null
+    fun flushThinking() {
+        thinkingRun?.let { run ->
+            run.joinToString("\n\n").trim().takeIf { it.isNotEmpty() }?.let { merged ->
+                blocks.add(ChatBlock.Thinking(merged))
+            }
+        }
+        thinkingRun = null
+    }
+    for (part in this) {
+        when (part) {
+            is ThinkingContent -> (thinkingRun ?: mutableListOf<String>().also { thinkingRun = it }).add(part.thinking)
+            is TextContent -> {
+                flushThinking()
+                part.text.takeIf { it.isNotBlank() }?.let { blocks.add(ChatBlock.Text(it)) }
+            }
+            else -> flushThinking()
+        }
+    }
+    flushThinking()
+    return blocks
+}
