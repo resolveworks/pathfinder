@@ -1,6 +1,7 @@
 package works.resolve.aletheia.ai.api
 
 import works.resolve.aletheia.ai.core.Context
+import works.resolve.aletheia.ai.core.ChatTemplateKwargValue
 import works.resolve.aletheia.ai.core.ContentType
 import works.resolve.aletheia.ai.core.InputModality
 import works.resolve.aletheia.ai.core.MaxTokensField
@@ -11,6 +12,7 @@ import works.resolve.aletheia.ai.core.ModelThinkingLevel
 import works.resolve.aletheia.ai.core.OpenAiCompletionsCompat
 import works.resolve.aletheia.ai.core.OpenAiCompletionsOptions
 import works.resolve.aletheia.ai.core.ThinkingFormat
+import works.resolve.aletheia.ai.core.ThinkingLevelMap
 import works.resolve.aletheia.ai.core.Tool
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -70,64 +72,179 @@ object OpenAiCompletionsPayload {
             body["tools"] = JsonArray(emptyList())
         }
 
-        applyThinking(model, options, compat)?.let { (thinking, effort) ->
-            body.putAll(thinking)
-            if (effort != null) {
-                body["reasoning_effort"] = JsonPrimitive(effort)
-            }
-        }
+        applyThinking(model, options, compat)?.let { body.putAll(it) }
 
         return JsonObject(body)
     }
 
-    /** Returns extra params (e.g. `thinking`) and the resolved reasoning_effort. */
+    /** Returns the extra thinking-related params to merge into the request body. */
     private fun applyThinking(
         model: Model,
         options: OpenAiCompletionsOptions,
         compat: OpenAiCompletionsCompat,
-    ): Pair<Map<String, JsonElement>, String?>? {
+    ): Map<String, JsonElement>? {
         if (!model.reasoning) return null
         // Direct OFF never enables reasoning; it is equivalent to no effort.
         val effort = options.reasoningEffort?.takeIf { it != ModelThinkingLevel.OFF }
+        val map = model.thinkingLevelMap
 
         /** Unspecified passes the level through; explicit null omits the field. */
         fun mappedEffort(level: ModelThinkingLevel): String? {
-            val map = model.thinkingLevelMap ?: return level.name.lowercase()
+            if (map == null) return level.name.lowercase()
             return if (map.isSpecified(level)) map.forLevel(level) else level.name.lowercase()
         }
 
-        if (compat.thinkingFormat == ThinkingFormat.ZAI) {
-            val thinking = if (effort != null) {
-                buildJsonObject {
-                    put("type", "enabled")
-                    put("clear_thinking", false)
+        /** Pi's `map?.off !== null`: false only for an explicit null OFF entry. */
+        val explicitNullOff = map?.isSpecified(ModelThinkingLevel.OFF) == true &&
+            map.forLevel(ModelThinkingLevel.OFF) == null
+
+        fun effortParam(): Pair<String, JsonElement>? =
+            mappedEffort(effort!!)?.let { "reasoning_effort" to JsonPrimitive(it) }
+
+        when (compat.thinkingFormat) {
+            ThinkingFormat.ZAI -> {
+                val thinking = if (effort != null) {
+                    buildJsonObject {
+                        put("type", "enabled")
+                        put("clear_thinking", false)
+                    }
+                } else {
+                    buildJsonObject { put("type", "disabled") }
                 }
-            } else {
-                buildJsonObject { put("type", "disabled") }
+                val params = mutableListOf<Pair<String, JsonElement>>("thinking" to thinking)
+                if (effort != null && compat.supportsReasoningEffort) {
+                    effortParam()?.let { params.add(it) }
+                }
+                return params.toMap()
             }
-            if (effort == null || !compat.supportsReasoningEffort) {
-                return mapOf("thinking" to thinking) to null
+
+            ThinkingFormat.QWEN -> {
+                val params = mutableListOf<Pair<String, JsonElement>>("enable_thinking" to JsonPrimitive(effort != null))
+                if (effort != null && compat.supportsReasoningEffort) {
+                    effortParam()?.let { params.add(it) }
+                }
+                return params.toMap()
             }
-            return mapOf("thinking" to thinking) to mappedEffort(effort)
+
+            ThinkingFormat.DEEPSEEK -> {
+                val params = mutableListOf<Pair<String, JsonElement>>()
+                val thinking = if (effort != null) {
+                    "enabled"
+                } else if (!explicitNullOff) {
+                    "disabled"
+                } else {
+                    null
+                }
+                thinking?.let { params.add("thinking" to buildJsonObject { put("type", it) }) }
+                if (effort != null && compat.supportsReasoningEffort) {
+                    effortParam()?.let { params.add(it) }
+                }
+                return params.toMap()
+            }
+
+            ThinkingFormat.OPENROUTER -> {
+                val offEffort = map?.takeIf { it.isSpecified(ModelThinkingLevel.OFF) }
+                    ?.forLevel(ModelThinkingLevel.OFF)
+                val effortValue = when {
+                    effort != null -> mappedEffort(effort)
+                    !explicitNullOff -> offEffort ?: "none"
+                    else -> null
+                }
+                return effortValue?.let {
+                    mapOf("reasoning" to buildJsonObject { put("effort", it) })
+                }
+            }
+
+            ThinkingFormat.TOGETHER -> {
+                val params = mutableListOf<Pair<String, JsonElement>>(
+                    "reasoning" to buildJsonObject { put("enabled", effort != null) },
+                )
+                if (effort != null && compat.supportsReasoningEffort) {
+                    effortParam()?.let { params.add(it) }
+                }
+                return params.toMap()
+            }
+
+            ThinkingFormat.ANT_LING -> {
+                if (effort == null) return null
+                // Pi requires an explicitly mapped string; no level-name fallback.
+                val mapped = map?.takeIf { it.isSpecified(effort) }?.forLevel(effort)
+                return mapped?.let { mapOf("reasoning" to buildJsonObject { put("effort", it) }) }
+            }
+
+            ThinkingFormat.BASETEN -> {
+                val params = mutableListOf<Pair<String, JsonElement>>()
+                buildChatTemplateValues(compat, effort, map)?.let {
+                    params.add("chat_template_args" to it)
+                }
+                if (compat.supportsReasoningEffort) {
+                    // Pi maps the OFF entry when effort is null; no fallback then.
+                    val value = if (effort != null) {
+                        mappedEffort(effort)
+                    } else {
+                        map?.takeIf { it.isSpecified(ModelThinkingLevel.OFF) }
+                            ?.forLevel(ModelThinkingLevel.OFF)
+                    }
+                    value?.let { params.add("reasoning_effort" to JsonPrimitive(it)) }
+                }
+                return params.toMap()
+            }
+
+            ThinkingFormat.OPENAI -> {
+                // OpenAI-style reasoning_effort.
+                if (!compat.supportsReasoningEffort) return null
+                if (effort != null) {
+                    return effortParam()?.let { mapOf(it) }
+                }
+                // Only an explicitly mapped non-null off value is sent.
+                val off = if (map?.isSpecified(ModelThinkingLevel.OFF) == true) {
+                    map.forLevel(ModelThinkingLevel.OFF)
+                } else {
+                    null
+                }
+                return off?.let { mapOf("reasoning_effort" to JsonPrimitive(it)) }
+            }
+        }
+    }
+
+    /** Resolves compat.chatTemplateArgs into wire values; null when empty. */
+    private fun buildChatTemplateValues(
+        compat: OpenAiCompletionsCompat,
+        effort: ModelThinkingLevel?,
+        map: ThinkingLevelMap?,
+    ): JsonObject? {
+        fun resolve(value: ChatTemplateKwargValue): JsonElement? = when (value) {
+            is ChatTemplateKwargValue.Scalar -> value.value
+            is ChatTemplateKwargValue.Ref -> {
+                if (effort == null && value.omitWhenOff) return@resolve null
+                when (value.varName) {
+                    "thinking.enabled" -> JsonPrimitive(effort != null)
+                    "thinking.budget" -> null // thinking budgets unsupported here
+                    "thinking.effort" -> {
+                        if (effort != null) {
+                            // Explicit null mapping omits; unspecified falls back to the level name.
+                            val mapped = if (map?.isSpecified(effort) == true) {
+                                map.forLevel(effort)
+                            } else {
+                                effort.name.lowercase()
+                            }
+                            mapped?.let { JsonPrimitive(it) }
+                        } else {
+                            // No effort: only an explicitly mapped OFF string is sent.
+                            map?.takeIf { it.isSpecified(ModelThinkingLevel.OFF) }
+                                ?.forLevel(ModelThinkingLevel.OFF)
+                                ?.let { JsonPrimitive(it) as JsonElement }
+                        }
+                    }
+                    else -> null
+                }
+            }
         }
 
-        // OpenAI-style reasoning_effort.
-        if (compat.supportsReasoningEffort) {
-            if (effort != null) {
-                return emptyMap<String, JsonElement>() to mappedEffort(effort)
-            }
-            // Only an explicitly mapped non-null off value is sent.
-            val map = model.thinkingLevelMap
-            val off = if (map?.isSpecified(ModelThinkingLevel.OFF) == true) {
-                map.forLevel(ModelThinkingLevel.OFF)
-            } else {
-                null
-            }
-            if (off != null) {
-                return emptyMap<String, JsonElement>() to off
-            }
+        val resolved = compat.chatTemplateArgs.mapNotNull { (k, v) ->
+            resolve(v)?.let { k to it }
         }
-        return null
+        return resolved.toMap().takeIf { it.isNotEmpty() }?.let { JsonObject(it) }
     }
 
     fun convertMessages(
