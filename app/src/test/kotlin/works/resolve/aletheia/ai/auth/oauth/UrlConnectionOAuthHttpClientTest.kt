@@ -126,6 +126,46 @@ class UrlConnectionOAuthHttpClientTest {
         assertTrue("body=<10 bytes>" in res.toString())
     }
 
+    @Test
+    fun `toString redacts URL query, fragment, and user-info secrets`() {
+        val secret = "or-v1-supersecret"
+        val url =
+            "https://openrouter.ai/api/v1/auth/keys?code=$secret&token=abc123#frag-$secret"
+        val request = OAuthHttpRequest("POST", url, emptyMap(), ByteArray(0), 30_000)
+        val rendered = request.toString()
+
+        assertTrue(secret !in rendered)
+        assertTrue("abc123" !in rendered)
+        assertTrue("frag-" !in rendered)
+        assertTrue("url=https://openrouter.ai/api/v1/auth/keys" in rendered)
+
+        // User-info credentials must not surface either.
+        val withUserInfo = OAuthHttpRequest(
+            "POST",
+            "https://user:pass123@openrouter.ai/api/v1/auth/keys",
+            emptyMap(),
+            ByteArray(0),
+            30_000,
+        )
+        assertTrue("pass123" !in withUserInfo.toString())
+        assertTrue("user:pass123@" !in withUserInfo.toString())
+        assertTrue("url=https://openrouter.ai/api/v1/auth/keys" in withUserInfo.toString())
+
+        // Non-default ports survive; unparseable URLs degrade to a generic marker.
+        val ported = OAuthHttpRequest(
+            "POST",
+            "http://127.0.0.1:8080/callback?code=$secret",
+            emptyMap(),
+            ByteArray(0),
+            30_000,
+        )
+        assertTrue("url=http://127.0.0.1:8080/callback" in ported.toString())
+        assertTrue(secret !in ported.toString())
+
+        val garbage = OAuthHttpRequest("POST", "not a url at all", emptyMap(), ByteArray(0), 30_000)
+        assertTrue("url=<redacted-url>" in garbage.toString())
+    }
+
     private fun readRequest(socket: java.net.Socket) {
         val input = socket.getInputStream()
         var contentLength = 0

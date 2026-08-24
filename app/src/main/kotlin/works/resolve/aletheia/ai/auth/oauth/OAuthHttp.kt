@@ -9,7 +9,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
  * Minimal provider-neutral OAuth HTTP boundary (the narrow Android stand-in
- * for pi's `fetch` in `packages/ai/src/auth/oauth directory files`): a single JSON request
+ * for pi's `fetch` in the files under `packages/ai/src/auth/oauth/`): a single JSON request
  * executed with bounded timeouts, returning status/body/headers for the flow
  * to interpret — matching pi, non-2xx handling is the caller's decision, not
  * the transport's.
@@ -30,7 +30,10 @@ interface OAuthHttpClient {
 /**
  * One OAuth HTTP exchange (pi's fetch arguments). [body] is JSON bytes and
  * may carry secrets (verifier, authorization code); it is redacted in
- * [toString].
+ * [toString]. So is the request URL: query strings, fragments, and
+ * user-info may carry codes/tokens, so [toString] surfaces only the safe
+ * `scheme://host[:port]/path` form and falls back to a generic
+ * `<redacted-url>` for anything unparseable.
  */
 data class OAuthHttpRequest(
     val method: String,
@@ -41,8 +44,25 @@ data class OAuthHttpRequest(
     val timeoutMs: Int,
 ) {
     override fun toString(): String =
-        "OAuthHttpRequest(method=$method, url=$url, headers=${headers.keys}, " +
+        "OAuthHttpRequest(method=$method, url=$safeUrlString, headers=${headers.keys}, " +
             "body=<${body.size} bytes>, timeoutMs=$timeoutMs)"
+
+    /** The URL without query, fragment, or user-info — safe for logs/errors. */
+    private val safeUrlString: String
+        get() = try {
+            val uri = java.net.URI(url)
+            if (uri.scheme == null || uri.host == null) {
+                "<redacted-url>"
+            } else {
+                buildString {
+                    append(uri.scheme).append("://").append(uri.host)
+                    if (uri.port != -1) append(":").append(uri.port)
+                    uri.rawPath?.takeIf { it.isNotEmpty() }?.let { append(it) }
+                }
+            }
+        } catch (_: Exception) {
+            "<redacted-url>"
+        }
 
     override fun equals(other: Any?): Boolean =
         other is OAuthHttpRequest &&
