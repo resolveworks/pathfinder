@@ -42,6 +42,13 @@ import org.commonmark.node.Paragraph
 import org.commonmark.node.ThematicBreak
 
 /**
+ * Prose styling for rendered text blocks: text color and italics. A block-level
+ * analog of pi's thinking/quote overrides (`{ color, italic }`); [Color.Unspecified]
+ * with [italic] false renders with theme defaults.
+ */
+private data class ProseStyle(val color: Color = Color.Unspecified, val italic: Boolean = false, val dimmed: Boolean = false)
+
+/**
  * Renders a markdown string as structured Compose content, porting pi's block-level
  * markdown rendering (`Markdown.render()` / `renderToken()`) to Material 3.
  *
@@ -49,14 +56,10 @@ import org.commonmark.node.ThematicBreak
  * [buildInlineMarkdown][Node.buildInlineMarkdown] builder with values resolved from
  * [MaterialTheme] here; this layer owns block structure: headings, lists, quotes,
  * tables, code blocks, and rules.
+ *
+ * @param color prose text color override; [Color.Unspecified] keeps theme defaults.
+ * @param italic renders prose in italics (e.g. thinking traces); quotes force this on.
  */
-/**
- * Prose styling for rendered text blocks: text color and italics. A block-level
- * analog of pi's thinking/quote overrides (`{ color, italic }`); [Color.Unspecified]
- * with [italic] false renders with theme defaults.
- */
-private data class ProseStyle(val color: Color = Color.Unspecified, val italic: Boolean = false, val dimmed: Boolean = false)
-
 @Composable
 fun MarkdownText(
     markdown: String,
