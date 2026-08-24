@@ -103,8 +103,15 @@ data class SelectedModel(
  * every success that should return the user to the chat (adopting a session,
  * saving configuration) instead sets [startKey] to [ChatNavKey] and bumps the
  * monotonic [navigationEpoch], which the UI layer reads as a
- * reset-to-[startKey] signal, atomically with the rest of the state. The
- * invariant `NeedsConfiguration implies startKey == ProvidersNavKey ||
+ * reset-to-[startKey] signal, atomically with the rest of the state. A
+ * successful provider-credential save additionally bumps the monotonic
+ * [credentialSuccessEpoch]; the UI layer reacts by popping one credential
+ * form off the stack when one is still on top — composed safely with the
+ * reset above because first-run saves already rebuild the stack to a
+ * single-entry root that cannot be popped. A failed or incomplete save
+ * leaves [credentialSuccessEpoch] unchanged so the form and its typed
+ * inputs stay intact for correction.
+ * The invariant `NeedsConfiguration implies startKey == ProvidersNavKey ||
  * startKey == ModelSettingsNavKey` holds by construction: the model-settings
  * step only appears after a successful credential save during the forced
  * first-run flow (back is a no-op there too, since the reset rebuilds the
@@ -116,6 +123,14 @@ data class ChatUiState(
     val startKey: NavKey = ChatNavKey,
     /** Monotonic reset signal: any change tells the UI to rebuild the stack to [startKey]. */
     val navigationEpoch: Long = 0,
+    /**
+     * Monotonic success signal for provider-credential saves: incremented
+     * only after a credential has been successfully persisted (never on a
+     * validation or storage failure). The UI pops exactly one
+     * [ProviderAuthNavKey] entry when this changes while such an entry is
+     * still on top of the stack; single-entry roots are never popped.
+     */
+    val credentialSuccessEpoch: Long = 0,
     /** Every catalog provider with live auth status; name-sorted (providers screen). */
     val providerOptions: List<ProviderOption> = emptyList(),
     /** Models of configured providers only; provider-name-then-model-name sorted. */

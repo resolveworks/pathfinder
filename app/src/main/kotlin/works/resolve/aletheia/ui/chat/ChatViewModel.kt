@@ -617,6 +617,12 @@ class ChatViewModel(
             return
         }
 
+        // Success signal for the UI layer: only a confirmed persistence
+        // closes the credential form (it pops one ProviderAuth entry when
+        // this epoch changes); a failed or incomplete save above returns
+        // without bumping it, so the form and its typed inputs survive.
+        updateState { it.copy(credentialSuccessEpoch = it.credentialSuccessEpoch + 1) }
+
         // Mirrors pi's completeProviderAuthentication: logging in completes
         // configuration (direct transition to the chat) when valid model
         // settings are already selected; otherwise the forced first-run flow
