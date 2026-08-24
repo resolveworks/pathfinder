@@ -3,6 +3,7 @@ package works.resolve.aletheia.ai.auth
 import works.resolve.aletheia.ai.auth.oauth.AnthropicOAuthAuth
 import works.resolve.aletheia.ai.auth.oauth.GitHubCopilotOAuthAuth
 import works.resolve.aletheia.ai.auth.oauth.KimiCodingOAuthAuth
+import works.resolve.aletheia.ai.auth.oauth.OpenAiCodexOAuthAuth
 import works.resolve.aletheia.ai.auth.oauth.OpenRouterOAuthAuth
 import works.resolve.aletheia.ai.auth.oauth.UrlConnectionOAuthHttpClient
 import works.resolve.aletheia.ai.auth.oauth.XaiOAuthAuth
@@ -15,9 +16,10 @@ import works.resolve.aletheia.ai.auth.oauth.XaiOAuthAuth
  *
  * Currently registered: `anthropic` → [AnthropicOAuthAuth], `openrouter` →
  * [OpenRouterOAuthAuth], `kimi-coding` → [KimiCodingOAuthAuth], `xai` →
- * [XaiOAuthAuth], and `github-copilot` → [GitHubCopilotOAuthAuth] (its
- * static model-id set — pi's `GITHUB_COPILOT_MODELS` — is taken from the
- * catalog entry passed to [oauthAuth], the same generated asset), all over the JDK
+ * [XaiOAuthAuth], `openai-codex` → [OpenAiCodexOAuthAuth], and
+ * `github-copilot` → [GitHubCopilotOAuthAuth] (its static model-id set — pi's
+ * `GITHUB_COPILOT_MODELS` — is taken from the catalog entry passed to
+ * [oauthAuth], the same generated asset), all over the JDK
  * [UrlConnectionOAuthHttpClient]. New flows are added by extending the map
  * — never by leaking provider knowledge into the catalog bridge.
  */
@@ -28,6 +30,7 @@ object ProductionCatalogAuthRegistry : CatalogAuthRegistry {
             "openrouter" to OpenRouterOAuthAuth(UrlConnectionOAuthHttpClient()),
             "kimi-coding" to KimiCodingOAuthAuth(UrlConnectionOAuthHttpClient()),
             "xai" to XaiOAuthAuth(UrlConnectionOAuthHttpClient()),
+            "openai-codex" to OpenAiCodexOAuthAuth(UrlConnectionOAuthHttpClient()),
         ),
     )
 

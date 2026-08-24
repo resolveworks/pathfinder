@@ -4,11 +4,11 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import kotlin.test.assertNull
 import java.io.File
 import works.resolve.aletheia.ai.auth.oauth.AnthropicOAuthAuth
 import works.resolve.aletheia.ai.auth.oauth.GitHubCopilotOAuthAuth
 import works.resolve.aletheia.ai.auth.oauth.KimiCodingOAuthAuth
+import works.resolve.aletheia.ai.auth.oauth.OpenAiCodexOAuthAuth
 import works.resolve.aletheia.ai.auth.oauth.OpenRouterOAuthAuth
 import works.resolve.aletheia.ai.auth.oauth.XaiOAuthAuth
 import works.resolve.aletheia.ai.providers.CatalogProvider
@@ -23,6 +23,7 @@ class ProductionCatalogAuthRegistryTest {
         assertIs<OpenRouterOAuthAuth>(ProductionCatalogAuthRegistry.oauthAuth(provider("openrouter")))
         assertIs<KimiCodingOAuthAuth>(ProductionCatalogAuthRegistry.oauthAuth(provider("kimi-coding")))
         assertIs<XaiOAuthAuth>(ProductionCatalogAuthRegistry.oauthAuth(provider("xai")))
+        assertIs<OpenAiCodexOAuthAuth>(ProductionCatalogAuthRegistry.oauthAuth(provider("openai-codex")))
 
         // The Copilot flow receives the catalog entry's model ids as pi's
         // GITHUB_COPILOT_MODELS equivalent.
@@ -32,9 +33,6 @@ class ProductionCatalogAuthRegistryTest {
             ),
         )
         assertEquals(setOf("gpt-4.1", "claude-sonnet-5"), copilot.knownModelIdsForTest())
-
-        // Codex remains hidden until its concrete pi flow is accepted.
-        assertNull(ProductionCatalogAuthRegistry.oauthAuth(provider("openai-codex")))
     }
 
     /**

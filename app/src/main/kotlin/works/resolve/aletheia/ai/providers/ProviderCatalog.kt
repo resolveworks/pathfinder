@@ -86,10 +86,9 @@ class CatalogProvider(
             val value = if (index == 0) key else env[prompt.envKey]
             if (value.isNullOrBlank()) prompt else null
         }.toMutableList()
-        // A provider with no auth prompts (OAuth-only providers like
-        // openai-codex, whose OAuth flow is not implemented) still requires
-        // a nonblank key before it can be considered configured — it stays
-        // unconfigurable until the auth foundation lands.
+        // API-key completeness is false for providers with no key prompts
+        // (OAuth-only providers such as openai-codex). OAuth configuration is
+        // evaluated separately by ProviderAuthService and the auth registry.
         if (auth.prompts.isEmpty() && key.isNullOrBlank()) {
             missing += AuthPrompt("API_KEY", "API key")
         }
