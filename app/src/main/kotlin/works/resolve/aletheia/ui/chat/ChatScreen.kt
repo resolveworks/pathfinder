@@ -62,6 +62,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -823,12 +824,40 @@ private fun ProviderAuthContent(
 
 // ---- conversation ----
 
-/** Concatenated text of the text blocks; the displayable body (thinking is not rendered yet). */
+/** Concatenated text of the text blocks; the displayable body for user (plain-text) messages. */
 private fun ChatMessage.displayText(): String =
     blocks.filterIsInstance<ChatBlock.Text>().joinToString("\n\n") { it.text }
 
+/**
+ * Persists per-thinking-block expanded overrides across process death as two
+ * parallel flat lists (key, value, key, value, …); both [String] and [Boolean]
+ * are Bundle-saveable.
+ */
+private fun thinkingOverridesSaver() = listSaver<MutableMap<String, Boolean>, Any>(
+    save = { map ->
+        buildList {
+            map.forEach { (key, expanded) ->
+                add(key)
+                add(expanded)
+            }
+        }
+    },
+    restore = { list ->
+        mutableStateMapOf<String, Boolean>().apply {
+            var i = 0
+            while (i + 1 < list.size) {
+                put(list[i] as String, list[i + 1] as Boolean)
+                i += 2
+            }
+        }
+    },
+)
+
 @Composable
-private fun ConversationContent(uiState: ChatUiState) {
+private fun ConversationContent(
+    uiState: ChatUiState,
+    initialThinkingOverrides: Map<String, Boolean> = emptyMap(),
+) {
     val listState = rememberLazyListState()
     val messageCount = uiState.messages.size
     val streamingId = uiState.streamingMessage?.id
@@ -846,6 +875,14 @@ private fun ConversationContent(uiState: ChatUiState) {
         if (total > 0) listState.scrollToItem(total - 1)
     }
 
+    // Per-block expanded overrides (ephemeral view state keyed by stable
+    // "messageId:blockIndex"): a block the user never tapped keeps following
+    // the persisted showThinking default; a tapped block locks in the user's
+    // choice and outlives later changes to the setting.
+    val thinkingOverrides = rememberSaveable(saver = thinkingOverridesSaver()) {
+        mutableStateMapOf<String, Boolean>().apply { putAll(initialThinkingOverrides) }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         if (messageCount == 0 && streamingId == null) {
             Text(
@@ -856,20 +893,27 @@ private fun ConversationContent(uiState: ChatUiState) {
         }
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
             items(uiState.messages, key = ChatMessage::id) { message ->
-                MessageItem(message)
+                MessageItem(
+                    message = message,
+                    showThinking = uiState.showThinking,
+                    thinkingOverrides = thinkingOverrides,
+                )
                 HorizontalDivider()
             }
             uiState.streamingMessage?.let { streaming ->
                 item(key = streaming.id) {
                     val hasVisibleText = streaming.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() }
                     MessageItem(
-                        if (hasVisibleText || streaming.error != null) {
+                        message = if (hasVisibleText || streaming.error != null) {
                             streaming
                         } else {
                             // No visible body yet (e.g. thinking-only stream):
                             // same "…" placeholder as before.
                             streaming.copy(blocks = listOf(ChatBlock.Text(STREAMING_PLACEHOLDER)))
                         },
+                        isStreaming = true,
+                        showThinking = uiState.showThinking,
+                        thinkingOverrides = thinkingOverrides,
                     )
                 }
             }
@@ -877,15 +921,43 @@ private fun ConversationContent(uiState: ChatUiState) {
     }
 }
 
+/**
+ * One chat row. User messages render plain concatenated text; assistant
+ * messages render their blocks in content order — text blocks as markdown,
+ * thinking blocks as collapsible [ThinkingBlock]s whose default expanded
+ * state follows [showThinking] until the user taps one (then the per-block
+ * [thinkingOverrides] entry wins, surviving changes to the setting).
+ */
 @Composable
-private fun MessageItem(message: ChatMessage) {
+private fun MessageItem(
+    message: ChatMessage,
+    showThinking: Boolean,
+    thinkingOverrides: MutableMap<String, Boolean>,
+    isStreaming: Boolean = false,
+) {
     ListItem(
         // pi renders user markdown literally (markers preserved, not parsed);
         // the MVP equivalent here is plain text, so only the assistant path
         // goes through MarkdownText.
         headlineContent = {
             if (message.role == ChatRole.Assistant) {
-                MarkdownText(markdown = message.displayText())
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    message.blocks.forEachIndexed { index, block ->
+                        when (block) {
+                            is ChatBlock.Text -> MarkdownText(markdown = block.text)
+                            is ChatBlock.Thinking -> {
+                                val key = "${message.id}:$index"
+                                val expanded = thinkingOverrides[key] ?: showThinking
+                                ThinkingBlock(
+                                    text = block.text,
+                                    expanded = expanded,
+                                    showLoader = isStreaming,
+                                    onToggle = { thinkingOverrides[key] = !expanded },
+                                )
+                            }
+                        }
+                    }
+                }
             } else {
                 Text(message.displayText())
             }
@@ -908,6 +980,56 @@ private fun MessageItem(message: ChatMessage) {
             }
         },
     )
+}
+
+/**
+ * Collapsible unit for one thinking run (pi's assistant-message thinking):
+ * a tappable header row — lowercase "thinking" label, a small loader only
+ * while the owning message is still streaming, and an expand chevron — plus,
+ * when expanded, the reasoning rendered as dimmed italic markdown.
+ */
+@Composable
+private fun ThinkingBlock(
+    text: String,
+    expanded: Boolean,
+    showLoader: Boolean,
+    onToggle: () -> Unit,
+) {
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle)
+                .padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.thinking_label),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (showLoader) {
+                CircularProgressIndicator(
+                    strokeWidth = 1.5.dp,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            Icon(
+                imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (expanded) {
+            MarkdownText(
+                markdown = text,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                italic = true,
+            )
+        }
+    }
 }
 
 @Composable
@@ -1115,6 +1237,38 @@ private fun ChatScreenProviderAuthPreview() {
             if (providerId == "cloudflare-ai-gateway") PREVIEW_CLOUDFLARE_PROMPTS else emptyList()
         },
     )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ConversationContentThinkingPreview() {
+    AletheiaTheme {
+        ConversationContent(
+            uiState = ChatUiState(
+                status = ChatStatus.Ready,
+                // Default collapsed; the explicit per-block overrides below
+                // expand the first run only, exercising both states at once.
+                showThinking = false,
+                messages = listOf(
+                    ChatMessage(
+                        id = "m1",
+                        role = ChatRole.User,
+                        blocks = listOf(ChatBlock.Text("What is 2 + 2?")),
+                    ),
+                    ChatMessage(
+                        id = "m2",
+                        role = ChatRole.Assistant,
+                        blocks = listOf(
+                            ChatBlock.Thinking("The user asks a simple arithmetic question. *2 + 2* equals **4** — no tools needed."),
+                            ChatBlock.Text("2 + 2 = **4**."),
+                            ChatBlock.Thinking("Answered directly; offering the derivation seems unnecessary."),
+                        ),
+                    ),
+                ),
+            ),
+            initialThinkingOverrides = mapOf("m2:0" to true),
+        )
+    }
 }
 
 @Preview(showBackground = true)
