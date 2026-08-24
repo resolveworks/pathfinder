@@ -822,15 +822,12 @@ private fun ConversationContent(
         }
     }
 
-    // Target one PAST the last item (totalItemsCount): measure finds nothing
-    // forward, backfills upward (LazyListMeasure "scroll back" branch), and the
-    // viewport lands with the end of ALL content at the bottom edge — the true
-    // bottom of the transcript, not the top of the last item. Applied during the
-    // same remeasure that delivers new/changed items, so no top-of-transcript
-    // flash on session open or while streaming.
-    LaunchedEffect(messageCount, streamingId, streamingLength) {
-        val total = messageCount + if (streamingId != null) 1 else 0
-        if (total > 0) listState.requestScrollToItem(total)
+    // A reversed lazy list makes index 0 the bottom of the viewport. Reset to
+    // that valid index whenever a session opens, a message is added, or the
+    // streaming item grows. Including activeSessionId matters when switching
+    // between transcripts that happen to contain the same number of messages.
+    LaunchedEffect(uiState.activeSessionId, messageCount, streamingId, streamingLength) {
+        if (messageCount > 0 || streamingId != null) listState.requestScrollToItem(0)
     }
 
     // Per-block expanded overrides (ephemeral view state keyed by stable
@@ -849,15 +846,13 @@ private fun ConversationContent(
                 modifier = Modifier.align(Alignment.Center),
             )
         }
-        LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-            items(uiState.messages, key = ChatMessage::id) { message ->
-                MessageItem(
-                    message = message,
-                    showThinking = uiState.showThinking,
-                    thinkingOverrides = thinkingOverrides,
-                )
-                HorizontalDivider()
-            }
+        LazyColumn(
+            state = listState,
+            reverseLayout = true,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            // reverseLayout places the first item at the bottom, so emit the
+            // newest item first while preserving chronological visual order.
             uiState.streamingMessage?.let { streaming ->
                 item(key = streaming.id) {
                     val hasVisibleText = streaming.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() }
@@ -876,6 +871,14 @@ private fun ConversationContent(
                         thinkingOverrides = thinkingOverrides,
                     )
                 }
+            }
+            items(uiState.messages.asReversed(), key = ChatMessage::id) { message ->
+                MessageItem(
+                    message = message,
+                    showThinking = uiState.showThinking,
+                    thinkingOverrides = thinkingOverrides,
+                )
+                HorizontalDivider()
             }
         }
     }
