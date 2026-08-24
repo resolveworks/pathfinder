@@ -358,19 +358,33 @@ class KimiCodingOAuthAuth(
         /**
          * The verification URI is opened in the user's browser; only http(s)
          * URLs are trusted (pi `trustedHttpUrl`). Like pi's `url.href` return,
-         * the value is the normalized URL form, rebuilt from the parsed [URI]
-         * — a small JDK-only equivalent of WHATWG href normalization (e.g. the
-         * root path `/` is added for empty paths; default ports are hidden).
+         * the value is the normalized URL form, rebuilt from the parsed [URI]:
+         * lowercase scheme, root path `/` for empty paths, and default ports
+ * :80/:443 omitted.
+         *
+         * Divergence from pi (documented per AGENTS.md): WHATWG URL accepts
+         * authority-less/opaque forms like `https:foo`; [URI] (and this port)
+         * reject them by requiring a non-empty host, because a provider device
+         * authorization response should always carry an absolute verification
+         * URL. This is the narrow safety boundary.
          */
         internal fun trustedHttpUrl(value: String?): String? {
             if (value.isNullOrEmpty()) return null
             return try {
                 val uri = URI(value)
-                if (uri.scheme != "http" && uri.scheme != "https") {
+                val scheme = uri.scheme?.lowercase()
+                val host = uri.host?.lowercase()
+                val port = uri.port
+                if ((scheme != "http" && scheme != "https") || host.isNullOrEmpty()) {
                     null
                 } else {
                     buildString {
-                        append(uri.scheme).append("://").append(uri.rawAuthority ?: "")
+                        append(scheme).append("://")
+                        uri.rawUserInfo?.let { append(it).append('@') }
+                        append(host)
+                        if (port != -1 && !(scheme == "http" && port == 80) && !(scheme == "https" && port == 443)) {
+                            append(':').append(port)
+                        }
                         append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
                         uri.rawQuery?.let { append('?').append(it) }
                         uri.rawFragment?.let { append('#').append(it) }

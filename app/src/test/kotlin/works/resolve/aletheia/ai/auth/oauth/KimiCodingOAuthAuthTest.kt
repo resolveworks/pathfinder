@@ -462,13 +462,33 @@ class KimiCodingOAuthAuthTest {
     fun `trustedHttpUrl accepts only http and https and normalizes like URL href`() {
         assertEquals("https://a.example/x", KimiCodingOAuthAuth.trustedHttpUrl("https://a.example/x"))
         assertEquals("http://a.example/x", KimiCodingOAuthAuth.trustedHttpUrl("http://a.example/x"))
-        // URL.href adds the root path for authority-only URLs; so does toExternalForm
+        // URL.href adds the root path for authority-only URLs
         assertEquals("https://a.example/", KimiCodingOAuthAuth.trustedHttpUrl("https://a.example"))
         assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl("ftp://a.example/x"))
         assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl("javascript:alert(1)"))
         assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl(""))
         assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl(null))
         assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl("not a url"))
+    }
+
+    @Test
+    fun `trustedHttpUrl rejects authority-less and opaque http forms`() {
+        // WHATWG normalizes these; this port rejects them (narrow safety divergence)
+        assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl("https:foo"))
+        assertEquals(null, KimiCodingOAuthAuth.trustedHttpUrl("https:///path"))
+    }
+
+    @Test
+    fun `trustedHttpUrl normalizes scheme and host case like URL href`() {
+        assertEquals("https://auth.example/Device", KimiCodingOAuthAuth.trustedHttpUrl("HTTPS://AUTH.EXAMPLE/Device"))
+        assertEquals("https://a.example/?q=1#f", KimiCodingOAuthAuth.trustedHttpUrl("https://A.EXAMPLE/?q=1#f"))
+    }
+
+    @Test
+    fun `trustedHttpUrl omits default ports but keeps explicit others`() {
+        assertEquals("http://a.example/", KimiCodingOAuthAuth.trustedHttpUrl("http://a.example:80/"))
+        assertEquals("https://a.example/", KimiCodingOAuthAuth.trustedHttpUrl("https://a.example:443/"))
+        assertEquals("https://a.example:8443/", KimiCodingOAuthAuth.trustedHttpUrl("https://a.example:8443/"))
     }
 
     @Test
