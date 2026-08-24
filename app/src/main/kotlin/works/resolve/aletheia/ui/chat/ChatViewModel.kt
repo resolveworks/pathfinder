@@ -361,13 +361,16 @@ class ChatViewModel(
                 // useful forced root (the user can pick a model right away);
                 // only a fresh install forces the providers step first.
                 val hasConfiguredProvider = _uiState.value.modelOptions.isNotEmpty()
-                // Re-selection projection: the provider resolves but the
-                // persisted model is not in its credential-filtered set
-                // (pi's getAvailable would drop it) — surface a safe error
+                // Re-selection projection: the persisted model exists in the
+                // static provider catalog but is not in its credential-filtered
+                // set (pi's getAvailable would drop it) — surface a safe error
                 // instead of running or sending with it; the forced
-                // model-settings step collects the replacement.
+                // model-settings step collects the replacement. A corrupt or
+                // unknown model id is NOT "no longer available for this
+                // account": no error is added for it.
                 val providerConfigured = try {
-                    catalog.getProvider(settings.providerId) != null &&
+                    catalog.getProvider(settings.providerId)
+                        ?.model(settings.modelId) != null &&
                         authService.isConfigured(settings.providerId)
                 } catch (e: CancellationException) {
                     throw e
@@ -636,10 +639,18 @@ class ChatViewModel(
 
     private suspend fun saveModelSelectionInternal(providerId: String, modelId: String) {
         val trimmedModelId = modelId.trim()
-        // Validate against the credential-filtered set (pi's getAvailable /
-        // filterModels rule): a GitHub Copilot OAuth credential can narrow
-        // the selectable models to its availableModelIds, so a catalog id the
-        // account cannot use is rejected exactly like an unknown one.
+        val provider = catalog.getProvider(providerId)
+        // Static catalog existence first: an unknown provider or an id the
+        // catalog has never carried is always ERROR_UNKNOWN_MODEL, never a
+        // credential error or an availability message.
+        if (provider == null || provider.model(trimmedModelId) == null) {
+            setError(ERROR_UNKNOWN_MODEL)
+            return
+        }
+        // Then the credential-filtered set (pi's getAvailable / filterModels
+        // rule): a GitHub Copilot OAuth credential can narrow the selectable
+        // models to its availableModelIds, so a static catalog id the account
+        // cannot use is rejected exactly like an unknown one.
         val selectable = try {
             authService.availableModels(providerId)
         } catch (e: CancellationException) {
@@ -654,7 +665,6 @@ class ChatViewModel(
         }
         if (rejectWhileBusy()) return
 
-        val provider = catalog.getProvider(providerId)
         // Credential-completeness gate (pi's rule: a provider is configured
         // only when its stored credential resolves — every API-key prompt
         // has a value, or a stored OAuth credential has a registered flow).

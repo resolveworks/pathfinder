@@ -2064,4 +2064,44 @@ class ChatViewModelTest {
 
             vm.closeForTest()
         }
+
+    @Test
+    fun unknownProviderAndStaticUnknownModel_rejectedAsUnknownModel() =
+        runTest(mainDispatcherRule.scheduler) {
+            val h = Harness()
+            // A configured Copilot credential so a credential read would
+            // otherwise succeed — these must still fail statically.
+            h.credentials.creds["github-copilot"] = copilotCredential(stringArray("gpt-4.1"))
+            val vm = h.newViewModel()
+            vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+            // Unknown provider: unknown-model error, never a credential error.
+            vm.saveModelSelection("no-such-provider", "gpt-4.1")
+            mainDispatcherRule.scheduler.advanceUntilIdle()
+            assertEquals("Unknown model", vm.uiState.value.error)
+
+            // Static id the catalog has never carried, on a known provider.
+            vm.saveModelSelection("github-copilot", "not-a-catalog-model")
+            mainDispatcherRule.scheduler.advanceUntilIdle()
+            assertEquals("Unknown model", vm.uiState.value.error)
+
+            vm.closeForTest()
+        }
+
+    @Test
+    fun persistedUnknownModelId_isNotMarkedUnavailable() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        h.credentials.creds["github-copilot"] = copilotCredential(stringArray("gpt-4.1"))
+        h.settings.setProviderId("github-copilot")
+        // Corrupt id the static catalog never carried: not "no longer
+        // available for this account" — no re-selection error is projected.
+        h.settings.setModelId("corrupt-model-id")
+        val vm = h.newViewModel()
+
+        val state = vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        assertNull(state.error)
+        assertFalse(state.canSend)
+
+        vm.closeForTest()
+    }
 }
