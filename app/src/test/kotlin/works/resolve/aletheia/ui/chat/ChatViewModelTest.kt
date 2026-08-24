@@ -566,6 +566,40 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun credentialSave_success_bumpsSuccessEpoch_failedOrIncompleteDoesNot() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+        // Incomplete save (blank key, nothing stored): error, no epoch bump.
+        vm.saveProviderCredential("zai", "   ", emptyMap())
+        vm.uiState.first { it.error != null }
+        assertEquals(0, vm.uiState.value.credentialSuccessEpoch)
+        vm.dismissError()
+
+        // Storage failure: error, no epoch bump, form inputs conceptually kept.
+        h.credentials.failWrites = true
+        vm.saveProviderCredential("zai", "k", emptyMap())
+        vm.uiState.first { it.error != null }
+        assertEquals(0, vm.uiState.value.credentialSuccessEpoch)
+        assertNull(h.credentials.creds["zai"])
+        vm.dismissError()
+        h.credentials.failWrites = false
+
+        // Confirmed persistence bumps exactly once per successful save.
+        vm.saveProviderCredential("zai", "k", emptyMap())
+        vm.uiState.first { it.credentialSuccessEpoch == 1L }
+        assertEquals("k", h.credentials.creds["zai"]!!.key)
+
+        // A second successful save bumps again (monotonic).
+        vm.saveProviderCredential("zai", "k2", emptyMap())
+        vm.uiState.first { it.credentialSuccessEpoch == 2L }
+        assertEquals("k2", h.credentials.creds["zai"]!!.key)
+
+        vm.closeForTest()
+    }
+
+    @Test
     fun invalidModel_andFactoryValidation_areRejectedSafely() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()

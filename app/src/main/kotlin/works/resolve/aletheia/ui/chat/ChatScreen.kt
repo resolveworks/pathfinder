@@ -130,7 +130,10 @@ fun ChatRoute(
  *
  * The API-key input lives exclusively in Compose memory: it is never saved
  * across process death, logged, or written to any state that outlives the
- * configuration form, and it is cleared as soon as it is submitted.
+ * configuration form. Submitting does not clear it — the form is popped
+ * (and its inputs disposed) only after the save is confirmed successful
+ * via the state's credential-success epoch, so a failed save retains the
+ * typed inputs for correction.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -169,6 +172,20 @@ fun ChatScreen(
     LaunchedEffect(uiState.startKey, uiState.navigationEpoch) {
         backStack.clear()
         backStack.add(uiState.startKey)
+    }
+
+    // Successful credential save: pop exactly one credential form
+    // (state-driven — no ViewModel navigation callback). Guarded so it
+    // composes safely with the reset above, which runs first: first-run
+    // saves bump both epochs and the reset already rebuilt the stack to a
+    // single-entry root (ModelSettings/Chat), which is never popped; a
+    // Ready-state save bumps only this epoch, returning the user from
+    // ProviderAuth to Providers. A failed or incomplete save never bumps
+    // this epoch, so the form and its typed inputs stay intact.
+    LaunchedEffect(uiState.credentialSuccessEpoch) {
+        if (backStack.size > 1 && backStack.lastOrNull() is ProviderAuthNavKey) {
+            backStack.removeAt(backStack.lastIndex)
+        }
     }
 
     val pushSettings: () -> Unit = { backStack.add(SettingsNavKey) }
@@ -713,8 +730,11 @@ private fun ProvidersContent(
  * Credential form for one provider (pi's auth dialog): one field per catalog
  * prompt in order — the first is the secret API key, later prompts fill env
  * slots. All inputs live in plain Compose memory only: never saved across
- * process death or recomposition-surviving state, never logged, and cleared
- * on submit. Blank secret input keeps the stored key.
+ * process death or recomposition-surviving state, never logged. Submitting
+ * does not clear the inputs — the form is popped (and its inputs disposed)
+ * only after the save is confirmed successful via the state's
+ * credential-success epoch, so a failed save retains them for correction.
+ * Blank secret input keeps the stored key.
  */
 @Composable
 private fun ProviderAuthContent(
@@ -758,11 +778,7 @@ private fun ProviderAuthContent(
         // destructive Forget action in one horizontal row.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = {
-                    onSave(apiKeyInput, envInputs.toMap())
-                    apiKeyInput = ""
-                    envInputs.clear()
-                },
+                onClick = { onSave(apiKeyInput, envInputs.toMap()) },
             ) {
                 Text(stringResource(R.string.action_save))
             }
