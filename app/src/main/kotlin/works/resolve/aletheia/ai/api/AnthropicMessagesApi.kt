@@ -60,7 +60,8 @@ import kotlinx.serialization.json.longOrNull
  *   recorded (totalTokens sums the shared components, like pi).
  * - pi's SDK client sends a pi User-Agent; the OkHttp transport's own default
  *   user agent stands.
- * - github-copilot dynamic headers, deferred tool loading, server-side
+ * - github-copilot dynamic headers are ported
+ *   (GithubCopilotHeaders.kt); deferred tool loading, server-side
  *   fallbacks, metadata, and strict tool sampling are not ported (no surface
  *   needs them).
  */
@@ -340,7 +341,18 @@ private fun buildHeaders(
         },
         sessionAffinity,
     )
-    val merged = filterNonNull(mergeHeaders(base, mergeHeaders(model.headers, options.headers)))
+    val merged = filterNonNull(
+        mergeHeaders(
+            base,
+            // Copilot dynamic headers (github-copilot only) come after the
+            // model headers and before the options headers, as in pi's
+            // anthropic-messages createClient mergeClientHeaders order.
+            mergeHeaders(
+                mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
+                options.headers,
+            ),
+        ),
+    )
     return merged to null
 }
 

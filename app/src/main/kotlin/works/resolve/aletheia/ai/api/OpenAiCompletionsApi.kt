@@ -100,11 +100,16 @@ class OpenAiCompletionsApi(
             // substituted from the request-time env, mirroring pi's
             // cloudflare-stream wrapper. Headers merge like pi's
             // openai-completions createClient: model headers first, then the
-            // merged request/auth headers (explicit requests win), then the
+            // Copilot dynamic headers (github-copilot only; they override
+            // model headers), then the merged request/auth headers (explicit
+            // requests win), then the
             // always-sent Accept header, which can never be overridden
             // (a null request value cannot remove it).
             val mergedHeaders = mergeHeaders(
-                mergeHeaders(model.headers, options.headers),
+                mergeHeaders(
+                    mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
+                    options.headers,
+                ),
                 mapOf("Accept" to "text/event-stream"),
             ).filterValues { it != null }.mapValues { it.value!! }
             val url = resolveCloudflareBaseUrl(model.baseUrl, options.env)

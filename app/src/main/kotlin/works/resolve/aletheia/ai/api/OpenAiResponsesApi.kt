@@ -179,7 +179,11 @@ class OpenAiResponsesApi(
             val cacheSessionId = if (cacheRetention == CacheRetention.NONE) null else options.sessionId
 
             val headers = OpenAiResponsesShared.mergeClientHeaders(
-                mapOf("User-Agent" to PI_USER_AGENT) + model.headers,
+                // Copilot dynamic headers (github-copilot only) sit between
+                // the model headers and the affinity/options headers, as in
+                // pi's openai-responses createClient (Object.assign order).
+                mapOf("User-Agent" to PI_USER_AGENT) + model.headers +
+                    copilotDynamicHeadersFor(model, context),
                 cacheSessionId,
                 compat,
                 options.headers,

@@ -52,8 +52,8 @@ import works.resolve.aletheia.ai.core.mergeHeaders
  *   supportsOpenAIGrammarTools flag) are omitted; grammar tools replay as
  *   plain function calls.
  * - samplingParams / onPayload / onResponse request hooks are not ported.
- * - GitHub Copilot dynamic headers (buildCopilotDynamicHeaders) are not
- *   ported; only static model headers and the affinity headers are sent.
+ * - GitHub Copilot dynamic headers are ported (GithubCopilotHeaders.kt);
+ *   beyond them only static model headers and the affinity headers are sent.
  */
 object OpenAiResponsesShared {
 
