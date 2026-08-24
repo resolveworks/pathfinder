@@ -25,6 +25,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
@@ -581,19 +583,43 @@ private fun ModelSettingsContent(
             }
         }
         if (selection != null) {
-            OutlinedTextField(
-                value = baseUrl,
-                onValueChange = { baseUrl = it },
-                label = { Text(stringResource(R.string.configuration_base_url)) },
-                placeholder = {
-                    Text(
-                        selection?.defaultBaseUrl?.takeIf { it.isNotEmpty() }
-                            ?: stringResource(R.string.configuration_base_url_hint),
+            // Advanced disclosure keeps the base-URL override out of sight until
+            // needed; the local value survives collapsing so Save keeps it.
+            var advancedExpanded by remember(uiState.selectedModel) {
+                mutableStateOf(!uiState.selectedModel?.baseUrlOverride.isNullOrBlank())
+            }
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.model_settings_advanced)) },
+                trailingContent = {
+                    Icon(
+                        imageVector = if (advancedExpanded) {
+                            Icons.Default.KeyboardArrowUp
+                        } else {
+                            Icons.Default.KeyboardArrowDown
+                        },
+                        contentDescription = stringResource(
+                            if (advancedExpanded) R.string.model_settings_advanced_collapse
+                            else R.string.model_settings_advanced_expand,
+                        ),
                     )
                 },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.clickable { advancedExpanded = !advancedExpanded },
             )
+            if (advancedExpanded) {
+                OutlinedTextField(
+                    value = baseUrl,
+                    onValueChange = { baseUrl = it },
+                    label = { Text(stringResource(R.string.configuration_base_url)) },
+                    placeholder = {
+                        Text(
+                            selection?.defaultBaseUrl?.takeIf { it.isNotEmpty() }
+                                ?: stringResource(R.string.configuration_base_url_hint),
+                        )
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
