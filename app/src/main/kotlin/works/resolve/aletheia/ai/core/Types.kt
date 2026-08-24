@@ -50,6 +50,12 @@ enum class ContentType { TEXT, THINKING, IMAGE, TOOL_CALL }
 
 data class TextContent(
     val text: String,
+    /**
+     * Opaque thought-signature replay data Google attaches to a text part
+     * (google-shared.ts `textSignature`); only meaningful for the same
+     * provider/model.
+     */
+    val textSignature: String? = null,
 ) : Content() {
     override val type: ContentType get() = ContentType.TEXT
 }
@@ -77,6 +83,12 @@ data class ToolCall(
     val name: String,
     /** Raw JSON arguments string exactly as the provider streamed/replayed them. */
     val arguments: String,
+    /**
+     * Opaque thought-signature replay data Google attaches to a functionCall
+     * part (google-shared.ts `thoughtSignature`); only meaningful for the
+     * same provider/model.
+     */
+    val thoughtSignature: String? = null,
 ) : Content() {
     override val type: ContentType get() = ContentType.TOOL_CALL
 }

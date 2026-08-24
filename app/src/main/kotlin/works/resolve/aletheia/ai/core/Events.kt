@@ -102,6 +102,8 @@ data class SimpleStreamOptions(
     val env: Map<String, String> = emptyMap(),
     /** Explicit request headers; merged over resolved auth headers (pi's applyAuth). */
     val headers: Map<String, String?> = emptyMap(),
+    /** Per-level thinking token budgets (pi's ThinkingBudgets); consumed by budget-based adapters. */
+    val thinkingBudgets: Map<ThinkingLevel, Int> = emptyMap(),
 ) {
     override fun toString(): String =
         "SimpleStreamOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
@@ -122,6 +124,7 @@ data class SimpleStreamOptions(
             maxRetryDelayMs = maxRetryDelayMs,
             env = env,
             headers = headers,
+            thinkingBudgets = thinkingBudgets,
         )
 }
 
@@ -140,6 +143,8 @@ data class OpenAiCompletionsOptions(
     val env: Map<String, String> = emptyMap(),
     /** Explicit request headers; merged over resolved auth headers (pi's applyAuth). */
     val headers: Map<String, String?> = emptyMap(),
+    /** Per-level thinking token budgets (pi's ThinkingBudgets); consumed by budget-based adapters. */
+    val thinkingBudgets: Map<ThinkingLevel, Int> = emptyMap(),
 ) {
     override fun toString(): String =
         "OpenAiCompletionsOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
