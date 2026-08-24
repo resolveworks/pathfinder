@@ -5,7 +5,7 @@ import works.resolve.aletheia.ai.core.AssistantMessageEvent
 import works.resolve.aletheia.ai.core.Context
 import works.resolve.aletheia.ai.core.SimpleStreamOptions
 import works.resolve.aletheia.ai.core.UserMessage
-import works.resolve.aletheia.ai.providers.ZaiModels
+import works.resolve.aletheia.ai.testing.TestCatalogs
 import works.resolve.aletheia.ai.testing.FakeTransport
 import works.resolve.aletheia.ai.testing.sse
 import works.resolve.aletheia.ai.utils.ProviderRetry
@@ -27,11 +27,11 @@ class ModelsRegistryTest {
         Models(
             listOf(
                 Provider(
-                    id = ZaiModels.PROVIDER_ID,
+                    id = "zai",
                     name = "Z.AI",
-                    baseUrl = ZaiModels.BASE_URL,
+                    baseUrl = TestCatalogs.ZAI.baseUrl,
                     apiKeyResolver = { storedKey },
-                    models = ZaiModels.ALL,
+                    models = TestCatalogs.MODELS,
                     api = OpenAiCompletionsApi(
                         transport,
                         ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),

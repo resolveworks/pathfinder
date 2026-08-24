@@ -96,12 +96,16 @@ data class SimpleStreamOptions(
     val timeoutMs: Long? = null,
     val maxRetries: Int = 0,
     val maxRetryDelayMs: Long = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
+    /** Per-request provider env (credential values merged in, pi's applyAuth). */
+    val env: Map<String, String> = emptyMap(),
+    /** Bearer header override (e.g. cf-aig-authorization); null = Authorization. */
+    val bearerHeaderName: String? = null,
 ) {
     override fun toString(): String =
         "SimpleStreamOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
             ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
             ", reasoning=$reasoning, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
-            ", maxRetryDelayMs=$maxRetryDelayMs)"
+            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, bearerHeaderName=$bearerHeaderName)"
 
     fun toStreamOptions(reasoningEffort: ModelThinkingLevel?): OpenAiCompletionsOptions =
         OpenAiCompletionsOptions(
@@ -113,6 +117,8 @@ data class SimpleStreamOptions(
             timeoutMs = timeoutMs,
             maxRetries = maxRetries,
             maxRetryDelayMs = maxRetryDelayMs,
+            env = env,
+            bearerHeaderName = bearerHeaderName,
         )
 }
 
@@ -127,10 +133,14 @@ data class OpenAiCompletionsOptions(
     val timeoutMs: Long? = null,
     val maxRetries: Int = 0,
     val maxRetryDelayMs: Long = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
+    /** Per-request provider env (credential values merged in, pi's applyAuth). */
+    val env: Map<String, String> = emptyMap(),
+    /** Bearer header override (e.g. cf-aig-authorization); null = Authorization. */
+    val bearerHeaderName: String? = null,
 ) {
     override fun toString(): String =
         "OpenAiCompletionsOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
             ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
             ", reasoningEffort=$reasoningEffort, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
-            ", maxRetryDelayMs=$maxRetryDelayMs)"
+            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, bearerHeaderName=$bearerHeaderName)"
 }

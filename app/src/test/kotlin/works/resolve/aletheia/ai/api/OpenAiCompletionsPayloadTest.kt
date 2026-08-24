@@ -11,7 +11,7 @@ import works.resolve.aletheia.ai.core.Tool
 import works.resolve.aletheia.ai.core.ToolCall
 import works.resolve.aletheia.ai.core.ToolResultMessage
 import works.resolve.aletheia.ai.core.UserMessage
-import works.resolve.aletheia.ai.providers.ZaiModels
+import works.resolve.aletheia.ai.testing.TestCatalogs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -29,7 +29,7 @@ import kotlinx.serialization.json.longOrNull
 
 class OpenAiCompletionsPayloadTest {
 
-    private val model = ZaiModels.GLM_5_2
+    private val model = TestCatalogs.GLM_5_2
     private val schema = Json.parseToJsonElement(
         """{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}""",
     )
@@ -95,7 +95,7 @@ class OpenAiCompletionsPayloadTest {
         val b = body(
             Context(messages = listOf(UserMessage.ofText("hi"))),
             OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.HIGH),
-            model = ZaiModels.GLM_4_7,
+            model = TestCatalogs.GLM_4_7,
         )
         assertEquals("enabled", b["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertFalse(b.containsKey("reasoning_effort"), "glm-4.7 has no effort support")

@@ -10,7 +10,7 @@ import works.resolve.aletheia.ai.core.TextContent
 import works.resolve.aletheia.ai.core.ThinkingContent
 import works.resolve.aletheia.ai.core.ToolCall
 import works.resolve.aletheia.ai.core.UserMessage
-import works.resolve.aletheia.ai.providers.ZaiModels
+import works.resolve.aletheia.ai.testing.TestCatalogs
 import works.resolve.aletheia.ai.transport.ProviderHttpException
 import works.resolve.aletheia.ai.transport.SseEvent
 import works.resolve.aletheia.ai.transport.TransportRequest
@@ -37,7 +37,7 @@ import kotlinx.serialization.json.longOrNull
 
 class OpenAiCompletionsStreamTest {
 
-    private val model = ZaiModels.GLM_5_2
+    private val model = TestCatalogs.GLM_5_2
     private val context = Context(messages = listOf(UserMessage.ofText("hi")))
 
     private fun api(transport: FakeTransport) = OpenAiCompletionsApi(
@@ -539,7 +539,7 @@ class OpenAiCompletionsStreamTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
         api(transport).streamSimple(
-            ZaiModels.GLM_4_7,
+            TestCatalogs.GLM_4_7,
             context,
             SimpleStreamOptions(apiKey = "k", reasoning = works.resolve.aletheia.ai.core.ThinkingLevel.LOW),
         ).toList()
@@ -554,7 +554,7 @@ class OpenAiCompletionsStreamTest {
         transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
         // glm-5.3 clamps MEDIUM up to HIGH; a non-reasoning model clamps to OFF.
         api(transport).streamSimple(
-            ZaiModels.GLM_5_3,
+            TestCatalogs.GLM_5_3,
             context,
             SimpleStreamOptions(apiKey = "k", reasoning = works.resolve.aletheia.ai.core.ThinkingLevel.MEDIUM),
         ).toList()
@@ -562,7 +562,7 @@ class OpenAiCompletionsStreamTest {
         assertEquals("enabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("high", body["reasoning_effort"]!!.jsonPrimitive.content)
 
-        val nonReasoning = ZaiModels.GLM_4_7.copy(reasoning = false)
+        val nonReasoning = TestCatalogs.GLM_4_7.copy(reasoning = false)
         transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
         api(transport).streamSimple(
             nonReasoning,
@@ -594,7 +594,7 @@ class OpenAiCompletionsStreamTest {
         // glm-5.3 has minimal explicitly null; direct request for it enables
         // thinking but omits reasoning_effort (pi's null semantics).
         api(transport).stream(
-            ZaiModels.GLM_5_3,
+            TestCatalogs.GLM_5_3,
             context,
             OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.MINIMAL),
         ).toList()

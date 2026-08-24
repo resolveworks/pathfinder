@@ -17,6 +17,7 @@ import works.resolve.aletheia.ai.transport.SseEvent
 import works.resolve.aletheia.ai.transport.TransportRequest
 import works.resolve.aletheia.ai.transport.TransportResponse
 import works.resolve.aletheia.ai.utils.ProviderRetry
+import works.resolve.aletheia.ai.utils.substituteEnvPlaceholders
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -65,10 +66,17 @@ class OpenAiCompletionsApi(
                 .toString()
                 .toByteArray(Charsets.UTF_8)
 
+            // Base URL placeholders (e.g. Cloudflare account/gateway ids) are
+            // substituted from the request-time env, mirroring pi's
+            // cloudflare-stream wrapper. Model headers are merged first so the
+            // always-sent Accept header can never be overridden.
+            val url = substituteEnvPlaceholders(model.baseUrl, options.env)
+                .trimEnd('/') + "/chat/completions"
             val request = TransportRequest(
-                url = model.baseUrl.trimEnd('/') + "/chat/completions",
+                url = url,
                 bearerToken = apiKey,
-                headers = mapOf("Accept" to "text/event-stream"),
+                bearerHeaderName = options.bearerHeaderName,
+                headers = model.headers + mapOf("Accept" to "text/event-stream"),
                 body = body,
                 timeoutMs = options.timeoutMs,
             )

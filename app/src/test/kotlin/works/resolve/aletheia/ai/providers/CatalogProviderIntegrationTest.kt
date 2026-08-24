@@ -7,10 +7,12 @@ import works.resolve.aletheia.ai.core.StopReason
 import works.resolve.aletheia.ai.core.TextContent
 import works.resolve.aletheia.ai.core.UserMessage
 import works.resolve.aletheia.ai.models.Models
+import works.resolve.aletheia.ai.testing.TestCatalogs
 import works.resolve.aletheia.ai.transport.OkHttpTransport
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
@@ -23,12 +25,12 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 
 /**
- * Canned full-stack integration test: Models registry -> ZaiProvider factory
- * -> OpenAiCompletionsApi -> OkHttpTransport -> MockWebServer. No live
- * credential or network is used; the API key is a distinctive test value and
- * is never logged.
+ * Canned full-stack integration tests: catalog entry -> runtime provider ->
+ * Models registry -> OpenAiCompletionsApi -> OkHttpTransport -> MockWebServer.
+ * No live credential or network is used; test keys are distinctive values and
+ * are never logged.
  */
-class ZaiProviderIntegrationTest {
+class CatalogProviderIntegrationTest {
 
     @Test
     fun `streams glm through the full native stack against a mock server`() {
@@ -42,19 +44,19 @@ class ZaiProviderIntegrationTest {
                     .setBody(
                         """
                         data: {"id":"resp-int","model":"glm-4.7","choices":[{"delta":{"content":"Hel"}}]}
-                        
+
                         data: {"choices":[{"delta":{"content":"lo"}}]}
-                        
+
                         data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}
-                        
+
                         data: [DONE]
-                        
+
                         """.trimIndent(),
                     ),
             )
 
             val testKey = "zai-integration-test-key"
-            val provider = ZaiProvider.create(
+            val provider = TestCatalogs.ZAI.toRuntimeProvider(
                 transport = OkHttpTransport(),
                 apiKeyResolver = { testKey },
                 baseUrl = server.url("/v4").toString(),
@@ -91,6 +93,76 @@ class ZaiProviderIntegrationTest {
             assertEquals(true, body["stream"]!!.jsonPrimitive.booleanOrNull)
             assertTrue(body["max_tokens"]!!.jsonPrimitive.longOrNull!! > 0)
             assertTrue(body.containsKey("thinking"), "ZAI payload should carry the thinking field")
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `cloudflare gateway substitutes base URL placeholders and uses the bearer header override`() {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "text/event-stream")
+                    .setBody(
+                        """
+                        data: {"choices":[{"delta":{"content":"ok"}}]}
+
+                        data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+                        data: [DONE]
+
+                        """.trimIndent(),
+                    ),
+            )
+
+            val testKey = "cf-integration-test-key"
+            val entry = TestCatalogs.CATALOG.getProvider("cloudflare-ai-gateway")!!
+            // Placeholder base URL redirected to the mock server; env values
+            // arrive through the options exactly like a resolved credential.
+            val provider = entry.toRuntimeProvider(
+                transport = OkHttpTransport(),
+                apiKeyResolver = { testKey },
+                // Placeholders appended after server.url() so they stay literal
+                // braces (HttpUrl construction would percent-encode them); env
+                // values arrive through the options exactly like a resolved credential.
+                baseUrl = server.url("/v1").toString() +
+                    "/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat",
+            )
+            val models = Models(listOf(provider))
+
+            val events = runBlocking {
+                models.stream(
+                    "cloudflare-ai-gateway",
+                    "workers-ai/test-model",
+                    Context(messages = listOf(UserMessage.ofText("hi"))),
+                    SimpleStreamOptions(
+                        apiKey = testKey,
+                        env = mapOf(
+                            "CLOUDFLARE_ACCOUNT_ID" to "acct-123",
+                            "CLOUDFLARE_GATEWAY_ID" to "gw-456",
+                        ),
+                        bearerHeaderName = entry.bearerHeaderName,
+                    ),
+                ).toList()
+            }
+
+            val done = assertIs<AssistantMessageEvent.Done>(events.last())
+            assertEquals(StopReason.STOP, done.reason)
+            assertEquals("ok", assertIs<TextContent>(done.message.content.single()).text)
+
+            // Placeholders were substituted into the request URL and the bearer
+            // credential went out on cf-aig-authorization, not Authorization.
+            val recorded = server.takeRequest()
+            assertEquals(
+                "/v1/acct-123/gw-456/compat/chat/completions",
+                recorded.path,
+            )
+            assertEquals("Bearer $testKey", recorded.getHeader("cf-aig-authorization"))
+            assertNull(recorded.getHeader("Authorization"))
         } finally {
             server.shutdown()
         }
