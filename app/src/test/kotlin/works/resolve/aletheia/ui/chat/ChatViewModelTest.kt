@@ -1420,8 +1420,7 @@ class ChatViewModelTest {
         assertEquals(4, restored.messages.size)
         assertEquals("Third", restored.messages[2].singleText())
         assertEquals(6, restored.treeRows.size)
-        val forkParent = restored.treeRows.first { it.isBranchPoint }
-        assertEquals(assistantEntryId, forkParent.id)
+        val forkParent = restored.treeRows.first { it.id == assistantEntryId }
         // Active branch reads first among the fork's children.
         val thirdId = (forked.entries.first { e ->
             e is works.resolve.aletheia.data.sessions.MessageEntry &&
@@ -1470,7 +1469,7 @@ class ChatViewModelTest {
         val rows = vm.uiState.value.treeRows
         assertEquals(4, rows.size)
         assertTrue(rows[0].isCurrentLeaf || rows[1].isCurrentLeaf)
-        assertTrue(rows.none { it.isBranchPoint })
+        assertTrue(rows.none { it.connector != TreeConnector.NONE })
 
         vm.closeForTest()
     }
@@ -1561,7 +1560,6 @@ class ChatViewModelTest {
         vm.exchange(h, "Hello", "world")
         vm.setTreeFilter(TreeFilter.USER_ONLY)
         val filtered = vm.uiState.first { it.treeFilter == TreeFilter.USER_ONLY }.treeRows
-        assertEquals(listOf(true), filtered.map { it.isUser })
         assertEquals(1, filtered.size)
         assertEquals("You: Hello", filtered[0].preview)
         // Default view restored on demand; nothing persisted.

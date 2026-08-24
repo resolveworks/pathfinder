@@ -3,7 +3,7 @@ package works.resolve.aletheia.ui.chat
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** Tests for [filterTreeRows]: search token matching and fold visibility. */
+/** Tests for [filterTreeRows] and [treeRowGuide]. */
 class TreePanelLogicTest {
 
     private fun row(
@@ -13,11 +13,12 @@ class TreePanelLogicTest {
     ): TreeRow = TreeRow(
         id = id,
         path = path,
-        depth = path.size - 1,
+        indent = path.size - 1,
+        connector = TreeConnector.NONE,
+        gutters = emptyList(),
         isOnActivePath = false,
         isCurrentLeaf = false,
-        isUser = false,
-        isBranchPoint = false,
+        isFoldable = false,
         preview = preview,
     )
 
@@ -27,6 +28,8 @@ class TreePanelLogicTest {
         row("u2", listOf("u1", "a1", "u2"), "You: show a Kotlin example"),
         row("a2", listOf("u1", "a1", "u2", "a2"), "Assistant: here is a ViewModel"),
     )
+
+    // ---- search and fold visibility (pi: TreeList.applyFilter) ----
 
     @Test
     fun `empty query and no folds return all rows`() {
@@ -52,7 +55,7 @@ class TreePanelLogicTest {
     }
 
     @Test
-    fun `folding a branch point hides descendants but not siblings`() {
+    fun `folding a row hides its descendants but not siblings`() {
         val forked = listOf(
             row("root", listOf("root"), "root"),
             row("left", listOf("root", "left"), "left child"),
@@ -64,7 +67,7 @@ class TreePanelLogicTest {
     }
 
     @Test
-    fun `folding mid-tree hides only the subtree below it`() {
+    fun `fold mid-tree hides only the subtree below it`() {
         val result = filterTreeRows(tree, "", setOf("a1"))
         assertEquals(listOf("u1", "a1"), result.map { it.id })
 
@@ -85,5 +88,57 @@ class TreePanelLogicTest {
     fun `folding a leaf id hides nothing but itself stays visible`() {
         val result = filterTreeRows(tree, "", setOf("a2"))
         assertEquals(listOf("u1", "a1", "u2", "a2"), result.map { it.id })
+    }
+
+    // ---- guide rendering (pi: TreeList.render prefix) ----
+
+    private fun guideRow(
+        indent: Int,
+        connector: TreeConnector = TreeConnector.NONE,
+        gutters: List<Int> = emptyList(),
+        foldable: Boolean = false,
+    ): TreeRow = TreeRow(
+        id = "x",
+        path = List(indent + 1) { "a$it" },
+        indent = indent,
+        connector = connector,
+        gutters = gutters,
+        isOnActivePath = false,
+        isCurrentLeaf = false,
+        isFoldable = foldable,
+        preview = "p",
+    )
+
+    @Test
+    fun `roots and flat chains render without guides`() {
+        assertEquals("", treeRowGuide(guideRow(indent = 0), folded = false))
+        assertEquals("", treeRowGuide(guideRow(indent = 0), folded = true))
+    }
+
+    @Test
+    fun `connectors render one cell before the body with fold markers`() {
+        // Plain connector, not foldable.
+        assertEquals("├─ ", treeRowGuide(guideRow(1, TreeConnector.TEE), folded = false))
+        assertEquals("└─ ", treeRowGuide(guideRow(1, TreeConnector.ELBOW), folded = false))
+        // Foldable segment start carries ⊟; folded carries ⊞ (pi's markers).
+        assertEquals("├⊟ ", treeRowGuide(guideRow(1, TreeConnector.TEE, foldable = true), folded = false))
+        assertEquals("└⊞ ", treeRowGuide(guideRow(1, TreeConnector.ELBOW, foldable = true), folded = true))
+    }
+
+    @Test
+    fun `gutters render at ancestor branch levels as verticals`() {
+        // First generation below a ├─ branch: gutter at level 0, blank cell.
+        assertEquals("│     ", treeRowGuide(guideRow(2, gutters = listOf(0)), folded = false))
+        // Below the last sibling there is no gutter.
+        assertEquals("      ", treeRowGuide(guideRow(2), folded = false))
+        // Deeper nesting keeps the outer gutter and adds the connector cell.
+        assertEquals(
+            "│     └─ ",
+            treeRowGuide(guideRow(3, TreeConnector.ELBOW, gutters = listOf(0)), folded = false),
+        )
+        assertEquals(
+            "│  │  ├─ ",
+            treeRowGuide(guideRow(3, TreeConnector.TEE, gutters = listOf(0, 1)), folded = false),
+        )
     }
 }

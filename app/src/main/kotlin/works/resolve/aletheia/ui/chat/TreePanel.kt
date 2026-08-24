@@ -3,22 +3,18 @@ package works.resolve.aletheia.ui.chat
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -32,20 +28,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import works.resolve.aletheia.R
 
 /**
  * Panel rendering a conversation's branching history as a navigable tree,
- * ported from pi's /tree view: role-prefixed one-line previews, active-path
- * highlighting, a current-leaf marker, and foldable branch points. Rows are
- * standard Material 3 [ListItem]s indented by depth; the role prefix lives
- * in the preview text itself.
+ * ported from pi's /tree view: role-prefixed one-line previews, the accent •
+ * marker on entries of the loaded path, and tree guides — │ gutters with
+ * ├/└ connectors carrying pi's ⊟/⊞ fold markers — drawn as a monospace
+ * prefix instead of indenting the rows.
  *
  * The panel is purely presentational: it consumes [TreeRow]s produced by the
  * tree projection and reports navigation taps; fold and search state are
@@ -66,8 +66,8 @@ fun TreePanel(
     modifier: Modifier = Modifier,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
-    // Folded branch-point ids. Cleared whenever the search query changes so
-    // matches inside collapsed branches become visible (pi does the same).
+    // Folded row ids. Cleared whenever the search query or filter mode
+    // changes (pi resets folds on both).
     var foldedIds by rememberSaveable(
         stateSaver = listSaver<Set<String>, String>(save = { it.toList() }, restore = { it.toSet() })
     ) { mutableStateOf(emptySet()) }
@@ -105,14 +105,14 @@ private fun TreePanelContent(
     Column(modifier = modifier) {
         TreePanelHeader(
             query = query,
-            onQueryChange = { newQuery ->
-                // Fold-clear on query change so matches inside collapsed
-                // branches become visible (pi does the same).
-                onFoldedIdsChange(emptySet())
-                onQueryChange(newQuery)
-            },
+            onQueryChange = onQueryChange,
             filter = filter,
-            onFilterChange = onFilterChange,
+            onFilterChange = { newFilter ->
+                // Filter changes reset folds (pi does the same), so entries
+                // hidden by a stale fold become visible again.
+                onFoldedIdsChange(emptySet())
+                onFilterChange(newFilter)
+            },
         )
 
         val visibleRows = filterTreeRows(rows = rows, query = query, foldedIds = foldedIds)
@@ -123,7 +123,7 @@ private fun TreePanelContent(
                 items(visibleRows, key = { it.id }) { row ->
                     TreeRowItem(
                         row = row,
-                        folded = row.isBranchPoint && row.id in foldedIds,
+                        folded = row.id in foldedIds,
                         onToggleFold = {
                             onFoldedIdsChange(
                                 if (row.id in foldedIds) foldedIds - row.id else foldedIds + row.id
@@ -157,6 +157,34 @@ internal fun filterTreeRows(
         // path ends with the row's own id; every element before it is an ancestor
         row.path.dropLast(1).none { it in foldedIds }
     }
+}
+
+/**
+ * The row's guide prefix, ported from pi's TreeList.render(): one
+ * three-character cell per indent level, │ where an ancestor branch
+ * continues below, and the ├/└ connector — carrying the fold marker (⊟
+ * foldable, ⊞ folded, ─ otherwise) — in the last cell. Rows render
+ * full-width; the guides encode the depth instead of an indent.
+ */
+internal fun treeRowGuide(row: TreeRow, folded: Boolean): String {
+    val guide = StringBuilder()
+    for (level in 0 until row.indent) {
+        when {
+            level in row.gutters -> guide.append("│  ")
+            level == row.indent - 1 && row.connector != TreeConnector.NONE -> guide
+                .append(if (row.connector == TreeConnector.ELBOW) '└' else '├')
+                .append(
+                    when {
+                        folded -> '⊞'
+                        row.isFoldable -> '⊟'
+                        else -> '─'
+                    }
+                )
+                .append(' ')
+            else -> guide.append("   ")
+        }
+    }
+    return guide.toString()
 }
 
 @Composable
@@ -208,6 +236,14 @@ private fun TreePanelHeader(
     }
 }
 
+/**
+ * One full-width tree row. Tapping the row navigates to its entry; tapping
+ * the guides of a foldable row folds or unfolds that row's descendants (pi's
+ * fold acts on the row itself, so the ⊟/⊞ marker in the connector is the
+ * affordance). Rows without a connector — roots — carry pi's ⊞ marker in
+ * front of the text once folded; like pi, they expose no marker to fold with
+ * while unfolded.
+ */
 @Composable
 private fun TreeRowItem(
     row: TreeRow,
@@ -219,63 +255,59 @@ private fun TreeRowItem(
     ListItem(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onNavigate)
-            // Depth indent replaces pi's │ tree guides: each level shifts the
-            // row start, the standard indented-list idiom on Android.
-            .padding(start = (row.depth * TREE_INDENT_DP).dp),
-        colors = ListItemDefaults.colors(
-            containerColor = if (row.isOnActivePath) {
-                MaterialTheme.colorScheme.secondaryContainer
-            } else {
-                MaterialTheme.colorScheme.surface
-            }
-        ),
-        headlineContent = {
+            .clickable(onClick = onNavigate),
+        leadingContent = {
+            val foldLabel = stringResource(
+                if (folded) R.string.tree_unfold_branch else R.string.tree_fold_branch
+            )
             Text(
-                text = row.preview,
+                text = treeRowGuide(row, folded),
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .then(
+                        if (row.isFoldable || folded) {
+                            Modifier.clickable(onClickLabel = foldLabel, onClick = onToggleFold)
+                        } else {
+                            Modifier
+                        }
+                    )
+                    // Widen the fold target around the connector a little.
+                    .padding(horizontal = 4.dp),
+            )
+        },
+        headlineContent = {
+            val accent = MaterialTheme.colorScheme.primary
+            Text(
+                text = buildAnnotatedString {
+                    // pi's render(): a folded row without a connector (a
+                    // root) keeps its ⊞ fold marker in front of the text.
+                    if (folded && row.connector == TreeConnector.NONE) {
+                        withStyle(SpanStyle(color = accent)) { append("⊞ ") }
+                    }
+                    // Entries of the loaded path carry pi's • marker.
+                    if (row.isOnActivePath) {
+                        withStyle(SpanStyle(color = accent)) { append("• ") }
+                    }
+                    append(row.preview)
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         },
-        trailingContent = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (row.isCurrentLeaf) {
-                    Text(
-                        text = stringResource(R.string.tree_current_leaf),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(end = 8.dp),
-                    )
-                }
-                // Fold affordance mirrors pi's fold markers: a chevron on
-                // expanded branch points, "+" when folded.
-                if (row.isBranchPoint) {
-                    IconButton(onClick = onToggleFold) {
-                        Icon(
-                            imageVector = if (folded) Icons.Filled.Add else Icons.Filled.KeyboardArrowDown,
-                            contentDescription = stringResource(
-                                if (folded) R.string.tree_unfold_branch else R.string.tree_fold_branch
-                            ),
-                        )
-                    }
-                }
-            }
-        },
     )
 }
 
-/** Start inset per tree depth level, in dp. */
-private val TREE_INDENT_DP = 16
-
 @Composable
 private fun EmptyTreeText(text: String, modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+    Box(modifier = modifier.fillMaxSize().padding(24.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
         Text(
             text = text,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            textAlign = TextAlign.Center,
         )
     }
 }
@@ -285,29 +317,32 @@ private fun EmptyTreeText(text: String, modifier: Modifier = Modifier) {
 private fun row(
     id: String,
     parentPath: List<String>,
-    depth: Int,
+    indent: Int,
+    connector: TreeConnector = TreeConnector.NONE,
+    gutters: List<Int> = emptyList(),
     onActivePath: Boolean = false,
     currentLeaf: Boolean = false,
-    user: Boolean = false,
-    branchPoint: Boolean = false,
+    foldable: Boolean = false,
     preview: String,
 ): TreeRow = TreeRow(
     id = id,
     path = parentPath + id,
-    depth = depth,
+    indent = indent,
+    connector = connector,
+    gutters = gutters,
     isOnActivePath = onActivePath,
     isCurrentLeaf = currentLeaf,
-    isUser = user,
-    isBranchPoint = branchPoint,
+    isFoldable = foldable,
     preview = preview,
 )
 
 @Preview(showBackground = true)
 @Composable
 private fun TreePanelLinearPreview() {
+    // Linear chain: everything at indent 0, the whole path loaded.
     val rows = listOf(
-        row("u1", emptyList(), 0, onActivePath = true, user = true, preview = "You: explain MVVM"),
-        row("a1", listOf("u1"), 1, onActivePath = true, currentLeaf = true, preview = "Assistant: MVVM separates…"),
+        row("u1", emptyList(), 0, onActivePath = true, foldable = true, preview = "You: explain MVVM"),
+        row("a1", listOf("u1"), 0, onActivePath = true, currentLeaf = true, preview = "Assistant: MVVM separates…"),
     )
     MaterialTheme {
         TreePanel(
@@ -323,20 +358,19 @@ private fun TreePanelLinearPreview() {
 @Preview(showBackground = true)
 @Composable
 private fun TreePanelForkedPreview() {
-    // Root → branch point → abandoned branch (folded) and the active branch.
+    // Mirrors pi's tree for a three-way fork: the active branch first with a
+    // │ gutter below its connector, abandoned branches after, last one └─.
     val rows = listOf(
-        row("u1", emptyList(), 0, onActivePath = true, user = true, preview = "You: write a haiku"),
-        row("a1", listOf("u1"), 1, onActivePath = true, branchPoint = true, preview = "Assistant: silent snow…"),
-        // Abandoned branch (off the active path), itself a fork, folded here
-        row("u2a", listOf("u1", "a1"), 2, user = true, branchPoint = true, preview = "You: make it shorter"),
-        row("a2a", listOf("u1", "a1", "u2a"), 3, preview = "Assistant: snow falls"),
-        row("a2c", listOf("u1", "a1", "u2a"), 3, preview = "Assistant: snow drifts"),
-        // Active branch
-        row("u2b", listOf("u1", "a1"), 2, onActivePath = true, user = true, preview = "You: make it longer"),
-        row("a2b", listOf("u1", "a1", "u2b"), 3, onActivePath = true, currentLeaf = true, preview = "Assistant: silent snow drifts down…"),
+        row("u1", emptyList(), 0, onActivePath = true, foldable = true, preview = "You: write a haiku"),
+        row("u2b", listOf("u1"), 1, TreeConnector.TEE, foldable = true, onActivePath = true, preview = "You: make it longer"),
+        row("a2b", listOf("u1", "u2b"), 2, gutters = listOf(0), onActivePath = true, currentLeaf = true, preview = "Assistant: silent snow drifts…"),
+        row("u2a", listOf("u1"), 1, TreeConnector.TEE, foldable = true, preview = "You: make it shorter"),
+        row("a2a", listOf("u1", "u2a"), 2, gutters = listOf(0), preview = "Assistant: snow falls"),
+        row("a1", listOf("u1"), 1, TreeConnector.ELBOW, foldable = true, preview = "Assistant: silent snow…"),
+        row("a1x", listOf("u1", "a1"), 2, preview = "Assistant: snow drifts"),
     )
-    // The abandoned branch point (u2a) starts folded.
-    val folded = remember { mutableStateOf(setOf("u2a")) }
+    // The first answer (a1) starts folded, hiding its child.
+    val folded = remember { mutableStateOf(setOf("a1")) }
     MaterialTheme {
         TreePanelContent(
             rows = rows,

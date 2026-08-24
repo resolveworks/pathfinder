@@ -46,7 +46,6 @@
     <string name="tree_filter_user_only">User only</string>
     <string name="tree_empty">This conversation has no history yet</string>
     <string name="tree_no_matches">No entries match your search</string>
-    <string name="tree_current_leaf">now</string>
     <string name="tree_fold_branch">Fold branch</string>
     <string name="tree_unfold_branch">Unfold branch</string>
 </resources>
