@@ -34,8 +34,9 @@ class ResolvedAuth(
 
 /**
  * Provider identity, auth semantics, and model catalog — the pi Provider
- * concept. A provider owns which API implementation serves its models; the
- * registry dispatches by the model's provider id.
+ * concept. A provider owns which API implementations serve its models,
+ * keyed by model API id (pi's `api: Api | Record<ApiId, Api>`); the
+ * registry dispatches by the model's provider id and `model.api`.
  */
 class Provider(
     val id: String,
@@ -51,8 +52,19 @@ class Provider(
      */
     val authResolver: (suspend (apiKey: String?, env: Map<String, String>) -> ResolvedAuth?)? = null,
     val models: List<Model>,
-    val api: ChatApi,
-)
+    val apis: Map<String, ChatApi>,
+) {
+    /** Single-API convenience (pi's `api: Api` provider shape). */
+    constructor(
+        id: String,
+        name: String,
+        baseUrl: String,
+        authResolver: (suspend (apiKey: String?, env: Map<String, String>) -> ResolvedAuth?)? = null,
+        models: List<Model>,
+        apiId: String,
+        api: ChatApi,
+    ) : this(id, name, baseUrl, authResolver, models, mapOf(apiId to api))
+}
 
 /**
  * Registry dispatching chat streams by provider and model, resolving auth
@@ -96,6 +108,11 @@ class Models(
         options: SimpleStreamOptions = SimpleStreamOptions(),
     ): Flow<AssistantMessageEvent> {
         val provider = requireProvider(model)
+        val api = provider.apis[model.api]
+            ?: throw IllegalArgumentException(
+                "Provider '${provider.id}' has no API implementation for '${model.api}'" +
+                    " (model '${model.id}')",
+            )
         return flow {
             // Resolve the credential lazily inside the flow so stored-credential
             // lookups can suspend without making stream() a suspend call.
@@ -133,7 +150,7 @@ class Models(
                 },
                 headers = mergeHeaders(authHeaders, options.headers),
             )
-            provider.api.streamSimple(model, context, merged).collect { emit(it) }
+            api.streamSimple(model, context, merged).collect { emit(it) }
         }
     }
 

@@ -6,8 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
-import works.resolve.aletheia.ai.api.ChatApi
-import works.resolve.aletheia.ai.api.OpenAiCompletionsApi
+import works.resolve.aletheia.ai.api.ChatApiRegistry
 import works.resolve.aletheia.ai.core.ChatTemplateKwargValue
 import works.resolve.aletheia.ai.core.InputModality
 import works.resolve.aletheia.ai.core.MaxTokensField
@@ -33,9 +32,19 @@ data class AuthPrompt(
     val secret: Boolean = true,
 )
 
-/** Provider auth metadata: a label plus the prompts that fill its env slots. */
+/** OAuth capability metadata (pi's lazyOAuth blocks): declarative only —
+ * no flow implementation ships. [loginLabel] defaults to the name in pi. */
+data class ProviderOAuth(
+    val name: String,
+    val loginLabel: String? = null,
+    val isSubscription: Boolean = false,
+)
+
+/** Provider auth metadata: a label, OAuth capability for providers that
+ * offer account login, and the prompts that fill its env slots. */
 data class ProviderAuth(
     val label: String? = null,
+    val oauth: ProviderOAuth? = null,
     val prompts: List<AuthPrompt> = emptyList(),
 )
 
@@ -56,6 +65,10 @@ class CatalogProvider(
 ) {
     fun model(id: String): Model? = models.firstOrNull { it.id == id }
 
+    /** The distinct model API ids this provider's models use (pi's provider
+     * api-map keys), regardless of whether a Kotlin implementation exists. */
+    val apis: Set<String> get() = models.mapTo(mutableSetOf()) { it.api }
+
     /**
      * Auth prompts still missing values given a candidate credential: the
      * first prompt maps to the API key ([key]); every later prompt maps to
@@ -69,8 +82,10 @@ class CatalogProvider(
             val value = if (index == 0) key else env[prompt.envKey]
             if (value.isNullOrBlank()) prompt else null
         }.toMutableList()
-        // A provider with no auth prompts still requires a nonblank key:
-        // openai-completions always authenticates with a bearer token.
+        // A provider with no auth prompts (OAuth-only providers like
+        // openai-codex, whose OAuth flow is not implemented) still requires
+        // a nonblank key before it can be considered configured — it stays
+        // unconfigurable until the auth foundation lands.
         if (auth.prompts.isEmpty() && key.isNullOrBlank()) {
             missing += AuthPrompt("API_KEY", "API key")
         }
@@ -102,8 +117,12 @@ class CatalogProvider(
     }
 
     /**
-     * Builds the runtime provider for this catalog entry, wiring the
-     * transport/API pair and the auth resolver. Base-URL overrides are not
+     * Builds the runtime provider for this catalog entry, wiring an API
+     * implementation per model API id (pi's `Record<ApiId, Api>` provider
+     * shape) and the auth resolver. APIs without a Kotlin implementation
+     * are simply absent from the map, so catalog parsing and provider
+     * listing work and streaming one of those models fails with a clear
+     * unsupported-API error from Models.stream. Base-URL overrides are not
      * stamped here: callers create their effective model once via
      * `Model.copy(baseUrl = ...)` and stream that model (pi's requestModel).
      */
@@ -118,16 +137,19 @@ class CatalogProvider(
             baseUrl = baseUrl,
             authResolver = authResolver,
             models = models,
-            api = OpenAiCompletionsApi(transport, retry) as ChatApi,
+            apis = apis.mapNotNull { apiId ->
+                ChatApiRegistry.create(apiId, transport, retry)?.let { apiId to it }
+            }.toMap(),
         )
 }
 
 /**
- * The parsed models-catalog asset: every openai-completions provider pi
- * knows about. Parsing is lenient about unknown object fields and ignores
- * compat flags the runtime does not model yet, but fails fast on unknown
- * enum values — the asset ships inside the APK, so a mismatch is a build
- * bug, not a runtime condition to paper over.
+ * The parsed models-catalog asset: every static provider pi knows about,
+ * with all of each provider's model APIs (only some of which have runtime
+ * implementations; see ChatApiRegistry). Parsing is lenient about unknown
+ * object fields and ignores compat fields the runtime does not model yet,
+ * but fails fast on unknown enum values — the asset ships inside the APK,
+ * so a mismatch is a build bug, not a runtime condition to paper over.
  */
 class ProviderCatalog(val providers: List<CatalogProvider>) {
 
@@ -191,9 +213,23 @@ private data class ProviderDto(
 @Serializable
 private data class AuthDto(
     val label: String? = null,
+    val oauth: OAuthDto? = null,
     val prompts: List<PromptDto> = emptyList(),
 ) {
-    fun toDomain() = ProviderAuth(label = label, prompts = prompts.map { it.toDomain() })
+    fun toDomain() = ProviderAuth(
+        label = label,
+        oauth = oauth?.toDomain(),
+        prompts = prompts.map { it.toDomain() },
+    )
+}
+
+@Serializable
+private data class OAuthDto(
+    val name: String,
+    val loginLabel: String? = null,
+    val isSubscription: Boolean = false,
+) {
+    fun toDomain() = ProviderOAuth(name, loginLabel, isSubscription)
 }
 
 @Serializable

@@ -1,5 +1,6 @@
 package works.resolve.aletheia.agent
 
+import works.resolve.aletheia.ai.api.ChatApiRegistry
 import works.resolve.aletheia.ai.core.Message
 import works.resolve.aletheia.ai.core.SimpleStreamOptions
 import works.resolve.aletheia.ai.models.Models
@@ -40,6 +41,11 @@ class NativeAgentFactory(
             ?: throw IllegalArgumentException(
                 "Unknown model '${settings.modelId}' for provider '${settings.providerId}'",
             )
+        // Fail fast on APIs without a Kotlin implementation (the catalog
+        // carries all of pi's model APIs); streaming would reject it too.
+        require(ChatApiRegistry.isSupported(model.api)) {
+            "Unsupported API '${model.api}' for provider '${settings.providerId}' (model '${settings.modelId}')"
+        }
         // The selected effective model is created once (pi's requestModel):
         // the catalog model with its normalized base URL.
         val effectiveModel = model.copy(baseUrl = normalizeBaseUrl(model.baseUrl))

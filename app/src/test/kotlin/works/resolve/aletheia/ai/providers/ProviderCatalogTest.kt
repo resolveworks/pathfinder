@@ -1,6 +1,9 @@
 package works.resolve.aletheia.ai.providers
 
+import works.resolve.aletheia.ai.models.Models
+import works.resolve.aletheia.ai.testing.FakeTransport
 import works.resolve.aletheia.ai.testing.TestCatalogs
+import works.resolve.aletheia.ai.core.Context
 import works.resolve.aletheia.ai.core.ChatTemplateKwargValue
 import works.resolve.aletheia.ai.core.InputModality
 import works.resolve.aletheia.ai.core.MaxTokensField
@@ -401,12 +404,14 @@ class ProviderCatalogTest {
     @Test
     fun `real asset contains the full generated provider set`() {
         val catalog = realAsset()
-        assertEquals(26, catalog.providers.size)
+        assertEquals(37, catalog.providers.size)
         // Model counts drift with every upstream pi refresh; assert structure
         // and known entries instead of pinning totals.
         assertTrue(catalog.providers.all { it.models.isNotEmpty() })
-        assertTrue(catalog.providers.sumOf { it.models.size } > 500)
+        assertTrue(catalog.providers.sumOf { it.models.size } > 1100)
         assertNull(catalog.getProvider("not-a-provider"))
+        assertNull(catalog.getProvider("amazon-bedrock"))
+        assertNull(catalog.getProvider("google-vertex"))
         assertNull(catalog.getModel("zai", "not-a-model"))
         assertEquals("cf-aig-authorization", catalog.getProvider("cloudflare-ai-gateway")!!.bearerHeaderName)
         // Parsing already proved every compat field maps; sanity-check a couple
@@ -416,5 +421,102 @@ class ProviderCatalogTest {
         assertIs<ChatTemplateKwargValue.Ref>(kimi.compat.chatTemplateArgs["enable_thinking"])
         val copilot = catalog.getModel("github-copilot", "gpt-4.1")!!
         assertTrue("User-Agent" in copilot.headers)
+    }
+
+    @Test
+    fun `real asset spans all pi model APIs`() {
+        val catalog = realAsset()
+        val apis = catalog.providers.flatMapTo(mutableSetOf()) { it.apis }
+        assertEquals(
+            setOf(
+                "anthropic-messages",
+                "azure-openai-responses",
+                "google-generative-ai",
+                "mistral-conversations",
+                "openai-codex-responses",
+                "openai-completions",
+                "openai-responses",
+            ),
+            apis,
+        )
+        // Mixed-API providers keep every model (pi's Record<ApiId, Api>).
+        assertEquals(
+            setOf("anthropic-messages", "openai-completions", "openai-responses"),
+            catalog.getProvider("cloudflare-ai-gateway")!!.apis,
+        )
+        assertEquals(setOf("openai-responses"), catalog.getProvider("openai")!!.apis)
+        assertEquals(setOf("openai-completions"), catalog.getProvider("zai")!!.apis)
+    }
+
+    @Test
+    fun `real asset auth metadata covers new providers`() {
+        val catalog = realAsset()
+        // OAuth-only provider: models kept, auth carries OAuth capability
+        // metadata only — no API-key prompts, no placeholder env key.
+        val codex = catalog.getProvider("openai-codex")!!
+        assertTrue(codex.models.isNotEmpty())
+        assertEquals(emptyList<AuthPrompt>(), codex.auth.prompts)
+        assertEquals(
+            ProviderOAuth(name = "OpenAI (ChatGPT Plus/Pro)", isSubscription = true),
+            codex.auth.oauth,
+        )
+        // Simple env-key providers.
+        assertEquals("ANTHROPIC_API_KEY", catalog.getProvider("anthropic")!!.auth.prompts.single().envKey)
+        assertEquals("GEMINI_API_KEY", catalog.getProvider("google")!!.auth.prompts.single().envKey)
+        // Non-secret extra prompts (Cloudflare account/gateway).
+        val gateway = catalog.getProvider("cloudflare-ai-gateway")!!.auth.prompts
+        assertEquals(
+            listOf("CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"),
+            gateway.map { it.envKey },
+        )
+        assertFalse(gateway[1].secret)
+    }
+
+    @Test
+    fun `real asset keeps OAuth capability metadata for the six OAuth providers`() {
+        val catalog = realAsset()
+        val expected = mapOf(
+            "anthropic" to ProviderOAuth("Anthropic (Claude Pro/Max)", isSubscription = true),
+            "github-copilot" to ProviderOAuth("GitHub Copilot", isSubscription = true),
+            "kimi-coding" to ProviderOAuth(
+                "Kimi Code (subscription)",
+                loginLabel = "Sign in with Kimi Code",
+                isSubscription = true,
+            ),
+            "openai-codex" to ProviderOAuth("OpenAI (ChatGPT Plus/Pro)", isSubscription = true),
+            "openrouter" to ProviderOAuth("OpenRouter OAuth", loginLabel = "Sign in with OpenRouter"),
+            "xai" to ProviderOAuth(
+                "xAI (Grok/X subscription)",
+                loginLabel = "Sign in with SuperGrok or X Premium",
+                isSubscription = true,
+            ),
+        )
+        for (provider in catalog.providers) {
+            assertEquals(expected[provider.id], provider.auth.oauth)
+        }
+        // OAuth-capable providers other than openai-codex keep their API-key
+        // prompt shape alongside the OAuth metadata.
+        for (id in expected.keys - "openai-codex") {
+            assertTrue(catalog.getProvider(id)!!.auth.prompts.isNotEmpty())
+        }
+    }
+
+    @Test
+    fun `mixed api provider runtime dispatch registers only implemented apis`() {
+        val catalog = realAsset()
+        val entry = catalog.getProvider("cloudflare-ai-gateway")!!
+        val runtime = entry.toRuntimeProvider(FakeTransport())
+        // anthropic-messages and openai-responses have no Kotlin port yet:
+        // the runtime api map only carries the implemented protocol, so the
+        // provider still lists and openai-completions models still stream.
+        assertEquals(setOf("openai-completions"), runtime.apis.keys)
+        val completionsModel = entry.models.first { it.api == "openai-completions" }
+        val unsupportedModel = entry.models.first { it.api != "openai-completions" }
+        val models = Models(listOf(runtime))
+        assertEquals(completionsModel.id, models.getModel("cloudflare-ai-gateway", completionsModel.id)!!.id)
+        val error = assertFailsWith<IllegalArgumentException> {
+            models.stream(unsupportedModel, Context(messages = emptyList()))
+        }
+        assertTrue(error.message!!.contains("no API implementation for 'anthropic-messages'"))
     }
 }

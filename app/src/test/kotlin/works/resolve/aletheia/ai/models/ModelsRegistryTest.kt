@@ -32,7 +32,8 @@ class ModelsRegistryTest {
                     baseUrl = TestCatalogs.ZAI.baseUrl,
                     authResolver = { explicitKey, _ -> explicitKey?.let { ResolvedAuth(it) } ?: storedKey?.let { ResolvedAuth(it) } },
                     models = TestCatalogs.MODELS,
-                    api = OpenAiCompletionsApi(
+                    apiId = "openai-completions",
+                        api = OpenAiCompletionsApi(
                         transport,
                         ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),
                     ),
