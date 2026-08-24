@@ -69,26 +69,48 @@ class Conversation(
      * Tree over all entries. Roots are entries with null or self parentId, or
      * whose parent is missing (orphans get promoted to roots, like pi).
      * Children are sorted oldest-first by timestamp.
+     *
+     * Built iteratively (leaves-first) rather than with recursion: a linear
+     * session makes the tree as deep as the transcript, and pi's getTree()
+     * documents the stack overflow that recursion causes on deep trees.
      */
     fun tree(): List<SessionTreeNode> {
         val byId = entries.associateBy { it.id }
-        val childrenOf = HashMap<String?, MutableList<SessionEntry>>()
-        val roots = ArrayList<SessionEntry>()
-        for (entry in entries) {
+
+        fun isRoot(entry: SessionEntry): Boolean {
             val pid = entry.parentId
-            when {
-                pid == null || pid == entry.id || byId[pid] == null -> roots += entry
-                else -> childrenOf.getOrPut(pid) { mutableListOf() } += entry
+            return pid == null || pid == entry.id || byId[pid] == null
+        }
+
+        // Children grouped by (existing) parent id.
+        val childrenOf = HashMap<String?, MutableList<SessionEntry>>()
+        for (entry in entries) {
+            if (!isRoot(entry)) childrenOf.getOrPut(entry.parentId!!) { mutableListOf() } += entry
+        }
+
+        // Leaves-first pass: create each node once all of its children's
+        // subtrees exist, so no recursion is needed regardless of depth.
+        val pending = childrenOf.mapValues { it.value.size }.toMutableMap()
+        val subtrees = HashMap<String, SessionTreeNode>()
+        val rootNodes = ArrayList<SessionTreeNode>()
+        val stack = ArrayDeque(entries.filter { (pending[it.id] ?: 0) == 0 })
+        while (stack.isNotEmpty()) {
+            val entry = stack.removeLast()
+            val children = (childrenOf[entry.id] ?: emptyList())
+                .mapNotNull { subtrees[it.id] }
+                .sortedBy { it.entry.timestamp }
+            val node = SessionTreeNode(entry, children)
+            if (isRoot(entry)) {
+                rootNodes += node
+            } else {
+                val pid = entry.parentId!!
+                subtrees[entry.id] = node
+                val remaining = (pending[pid] ?: 0) - 1
+                pending[pid] = remaining
+                if (remaining == 0) stack.addLast(byId.getValue(pid))
             }
         }
-        fun node(entry: SessionEntry): SessionTreeNode =
-            SessionTreeNode(
-                entry = entry,
-                children = (childrenOf[entry.id] ?: emptyList())
-                    .sortedBy { it.timestamp }
-                    .map(::node),
-            )
-        return roots.sortedBy { it.timestamp }.map(::node)
+        return rootNodes.sortedBy { it.entry.timestamp }
     }
 
     companion object {

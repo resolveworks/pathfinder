@@ -128,6 +128,27 @@ class ConversationTest {
         assertNull(Conversation.fromMessages(emptyList()).leafId)
     }
 
+    @Test
+    fun deepLinearConversationDoesNotOverflowStack() {
+        var next = 0
+        var tick = 0L
+        var conversation = Conversation(
+            emptyList(), null,
+            idGenerator = { "d${next++}" },
+            clock = { ++tick },
+        )
+        repeat(20_000) { conversation = conversation.append(msg("m$it")) }
+
+        var node = conversation.tree().single()
+        var height = 1
+        while (node.children.isNotEmpty()) {
+            node = node.children.single()
+            height++
+        }
+        assertEquals(20_000, height)
+        assertEquals(conversation.leafId, node.entry.id)
+    }
+
     private fun List<works.resolve.aletheia.ai.core.Message>.texts(): List<String> =
         map { (it as UserMessage).content.single().let { (it as works.resolve.aletheia.ai.core.TextContent).text } }
 }
