@@ -47,6 +47,45 @@ class OpenAiCompletionsStreamTest {
     )
 
     @Test
+    fun `unresolved base URL placeholder fails clearly before transport`() = runTest {
+        val transport = FakeTransport()
+        val cfModel = TestCatalogs.CLOUDFLARE.models.single()
+        // Incomplete credential: no env values, so the account/gateway
+        // placeholders survive substitution.
+        val events = api(transport)
+            .stream(cfModel, context, OpenAiCompletionsOptions(apiKey = "cf-key"))
+            .toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.single())
+        assertTrue(error.partial.errorMessage!!.contains("{CLOUDFLARE_ACCOUNT_ID}"))
+        assertTrue(error.partial.errorMessage!!.contains("cloudflare-ai-gateway"))
+        assertTrue(transport.requests.isEmpty())
+
+        // Complete credential values resolve the URL and reach the transport.
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
+                "[DONE]",
+            ),
+        )
+        val done = api(transport)
+            .stream(
+                cfModel,
+                context,
+                OpenAiCompletionsOptions(
+                    apiKey = "cf-key",
+                    env = mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
+                ),
+            )
+            .toList()
+            .last()
+        assertIs<AssistantMessageEvent.Done>(done)
+        assertEquals(
+            "https://gateway.test/v1/acc/gw/compat/chat/completions",
+            transport.requests.single().url,
+        )
+    }
+
+    @Test
     fun `streams text with start delta end done`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(

@@ -1,5 +1,6 @@
 package works.resolve.aletheia.ai.providers
 
+import works.resolve.aletheia.ai.testing.TestCatalogs
 import works.resolve.aletheia.ai.core.ChatTemplateKwargValue
 import works.resolve.aletheia.ai.core.InputModality
 import works.resolve.aletheia.ai.core.MaxTokensField
@@ -210,6 +211,49 @@ class ProviderCatalogTest {
             ).getModel("p", "m")!!
             assertEquals(expected, model.compat.thinkingFormat, "thinkingFormat '$raw'")
         }
+    }
+
+    // ---- credential completeness ----
+
+    @Test
+    fun `cloudflare credential is incomplete without every auth prompt value`() {
+        val provider = TestCatalogs.CLOUDFLARE
+        // Key only: account/gateway ids are still missing.
+        assertFalse(provider.isCredentialComplete("cf-key", emptyMap()))
+        assertEquals(
+            listOf("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"),
+            provider.missingAuthPrompts("cf-key", emptyMap()).map { it.envKey },
+        )
+        // Gateway id still missing; blank values count as missing.
+        assertFalse(provider.isCredentialComplete("cf-key", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc")))
+        assertFalse(
+            provider.isCredentialComplete(
+                "cf-key",
+                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "  "),
+            ),
+        )
+        // No key at all (first prompt): incomplete even with both env ids.
+        assertFalse(
+            provider.isCredentialComplete(
+                null,
+                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
+            ),
+        )
+    }
+
+    @Test
+    fun `credential is complete when every auth prompt has a value`() {
+        val provider = TestCatalogs.CLOUDFLARE
+        assertTrue(
+            provider.isCredentialComplete(
+                "cf-key",
+                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
+            ),
+        )
+        assertTrue(provider.missingAuthPrompts("cf-key", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw")).isEmpty())
+        // A single-prompt provider (zai) is complete with just the key.
+        assertTrue(TestCatalogs.ZAI.isCredentialComplete("zai-key", emptyMap()))
+        assertFalse(TestCatalogs.ZAI.isCredentialComplete(null, emptyMap()))
     }
 
     // ---- fail-fast on unknown enum values ----

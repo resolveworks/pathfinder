@@ -17,6 +17,7 @@ import works.resolve.aletheia.ai.transport.SseEvent
 import works.resolve.aletheia.ai.transport.TransportRequest
 import works.resolve.aletheia.ai.transport.TransportResponse
 import works.resolve.aletheia.ai.utils.ProviderRetry
+import works.resolve.aletheia.ai.utils.findUnresolvedPlaceholder
 import works.resolve.aletheia.ai.utils.substituteEnvPlaceholders
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -72,6 +73,15 @@ class OpenAiCompletionsApi(
             // always-sent Accept header can never be overridden.
             val url = substituteEnvPlaceholders(model.baseUrl, options.env)
                 .trimEnd('/') + "/chat/completions"
+            // Defensive guard: a still-unresolved placeholder means the
+            // credential is incomplete; fail clearly instead of sending the
+            // placeholder itself to the provider.
+            findUnresolvedPlaceholder(url)?.let { placeholder ->
+                throw IllegalStateException(
+                    "Missing provider credential value for base URL placeholder $placeholder " +
+                        "(provider '${model.provider}')",
+                )
+            }
             val request = TransportRequest(
                 url = url,
                 bearerToken = apiKey,
