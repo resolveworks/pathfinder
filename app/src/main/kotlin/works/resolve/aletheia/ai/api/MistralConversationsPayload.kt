@@ -3,7 +3,6 @@ package works.resolve.aletheia.ai.api
 import works.resolve.aletheia.ai.core.AssistantMessage
 import works.resolve.aletheia.ai.core.ContentType
 import works.resolve.aletheia.ai.core.Context
-import works.resolve.aletheia.ai.core.InputModality
 import works.resolve.aletheia.ai.core.Message
 import works.resolve.aletheia.ai.core.MessageRole
 import works.resolve.aletheia.ai.core.Model
@@ -98,20 +97,17 @@ object MistralConversationsPayload {
     }
 
     /**
-     * Converts the provider-agnostic conversation to Mistral wire messages,
-     * ported from pi's `toChatMessages`. Tool call IDs coming from other APIs
-     * are normalized through [normalizer] (pi's transformMessages hook), and
-     * the same mapping is applied to the matching tool-result messages.
+     * Converts already-transformed conversation messages (see [transformMessages])
+ * to Mistral wire messages, ported from pi's `toChatMessages`, which receives
+ * the output of pi's transformMessages: foreign thinking has already become
+ * plain text, tool call IDs are already normalized (with tool results
+     * remapped), and synthetic results already exist for orphaned tool calls.
      */
     fun toChatMessages(
         messages: List<Message>,
-        model: Model,
-        normalizer: (id: String) -> String = { it },
+        supportsImages: Boolean,
     ): List<JsonObject> {
-        val supportsImages = model.input.contains(InputModality.IMAGE)
         val result = mutableListOf<JsonObject>()
-        // Original -> normalized tool call IDs (pi's transformMessages toolCallIdMap).
-        val toolCallIdMap = mutableMapOf<String, String>()
 
         for (msg in messages) {
             when (msg.role) {
@@ -165,9 +161,6 @@ object MistralConversationsPayload {
 
                 MessageRole.ASSISTANT -> {
                     val assistant = msg as AssistantMessage
-                    val isSameModel = assistant.provider == model.provider &&
-                        assistant.api == model.api &&
-                        assistant.model == model.id
                     val contentParts = mutableListOf<JsonObject>()
                     val toolCalls = mutableListOf<JsonObject>()
 
@@ -204,17 +197,9 @@ object MistralConversationsPayload {
                             }
                             ContentType.TOOL_CALL -> {
                                 val call = block as works.resolve.aletheia.ai.core.ToolCall
-                                var id = call.id
-                                if (!isSameModel) {
-                                    val normalized = normalizer(id)
-                                    if (normalized != id) {
-                                        toolCallIdMap[id] = normalized
-                                        id = normalized
-                                    }
-                                }
                                 toolCalls.add(
                                     buildJsonObject {
-                                        put("id", id)
+                                        put("id", call.id)
                                         put("type", "function")
                                         put(
                                             "function",
@@ -260,7 +245,7 @@ object MistralConversationsPayload {
                     result.add(
                         buildJsonObject {
                             put("role", "tool")
-                            put("tool_call_id", toolCallIdMap[toolMsg.toolCallId] ?: toolMsg.toolCallId)
+                            put("tool_call_id", toolMsg.toolCallId)
                             put("name", toolMsg.toolName)
                             put("content", contentChunks)
                         },

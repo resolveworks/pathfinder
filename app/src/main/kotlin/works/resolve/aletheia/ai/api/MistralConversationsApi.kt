@@ -4,6 +4,7 @@ import works.resolve.aletheia.ai.core.AssistantMessage
 import works.resolve.aletheia.ai.core.AssistantMessageEvent
 import works.resolve.aletheia.ai.core.CacheRetention
 import works.resolve.aletheia.ai.core.Context
+import works.resolve.aletheia.ai.core.InputModality
 import works.resolve.aletheia.ai.core.Model
 import works.resolve.aletheia.ai.core.ModelThinkingLevel
 import works.resolve.aletheia.ai.core.OpenAiCompletionsOptions
@@ -146,8 +147,11 @@ class MistralConversationsApi(
                 ?: throw IllegalStateException("No API key for provider: ${model.provider}")
 
             val normalizer = MistralToolCallIdNormalizer()
-            var wireMessages =
-                MistralConversationsPayload.toChatMessages(context.messages, model) { normalizer.normalize(it) }
+            val transformedMessages = transformMessages(context.messages, model) { normalizer.normalize(it) }
+            var wireMessages = MistralConversationsPayload.toChatMessages(
+                transformedMessages,
+                model.input.contains(InputModality.IMAGE),
+            )
             if (!context.systemPrompt.isNullOrEmpty()) {
                 wireMessages = listOf(
                     works.resolve.aletheia.ai.api.buildMistralSystemMessage(context.systemPrompt),

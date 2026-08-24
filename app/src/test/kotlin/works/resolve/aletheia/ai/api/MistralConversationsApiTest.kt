@@ -510,25 +510,161 @@ class MistralConversationsApiTest {
     }
 
     @Test
-    fun `non-image models replace images with placeholders`() = runTest {
+    fun `non-image models replace images with in-place deduplicated placeholders`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
         api(transport).stream(
             mistralModel(input = listOf(InputModality.TEXT)),
             Context(
                 messages = listOf(
-                    UserMessage(listOf(TextContent("look"), ImageContent("aGVsbG8=", "image/png"))),
+                    UserMessage(
+                        listOf(
+                            TextContent("look"),
+                            ImageContent("aGVsbG8=", "image/png"),
+                            ImageContent("aGVsbG8=", "image/png"),
+                            TextContent("again"),
+                            ImageContent("aGVsbG8=", "image/jpeg"),
+                        ),
+                    ),
                 ),
             ),
             MistralOptions(apiKey = "test"),
         ).toList()
         val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
             .jsonObject["messages"]!!.jsonArray
-        // The user message keeps its text chunk; the image is simply dropped
-        // (pi emits the omission notice only when nothing else remains).
-        val content = messages[0].jsonObject["content"]!!.jsonArray
-        assertEquals("""{"type":"text","text":"look"}""", content[0].toString())
-        assertEquals(1, content.size)
+        // pi's transformMessages inserts the omission notice in place of each
+        // image run (deduplicated), keeping surrounding text.
+        assertEquals(
+            """[{"type":"text","text":"look"},""" +
+                """{"type":"text","text":"(image omitted: model does not support images)"},""" +
+                """{"type":"text","text":"again"},""" +
+                """{"type":"text","text":"(image omitted: model does not support images)"}]""",
+            messages[0].jsonObject["content"].toString(),
+        )
+    }
+
+    @Test
+    fun `non-image models downgrade tool result images to a placeholder line`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
+        api(transport).stream(
+            mistralModel(input = listOf(InputModality.TEXT)),
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(ToolCall("abc123456", "lookup", "{}")),
+                        api = model.api,
+                        provider = model.provider,
+                        model = model.id,
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                    ToolResultMessage(
+                        toolCallId = "abc123456",
+                        toolName = "lookup",
+                        content = listOf(TextContent("found"), ImageContent("aGVsbG8=", "image/png")),
+                    ),
+                    UserMessage.ofText("thanks"),
+                ),
+            ),
+            MistralOptions(apiKey = "test"),
+        ).toList()
+        val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
+            .jsonObject["messages"]!!.jsonArray
+        // pi's transformMessages turns the image into a placeholder text block;
+        // buildToolResultText then joins it into the tool text.
+        assertEquals(
+            "found\n(tool image omitted: model does not support images)",
+            messages[1].jsonObject["content"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `orphaned tool calls get synthetic error results and errored turns are skipped`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
+        api(transport).stream(
+            model,
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            TextContent("partial"),
+                            ToolCall("abc123456", "lookup", "{}"),
+                        ),
+                        api = "openai-responses",
+                        provider = "openai",
+                        model = "gpt-x",
+                        stopReason = StopReason.ERROR,
+                        errorMessage = "boom",
+                    ),
+                    AssistantMessage(
+                        content = listOf(
+                            TextContent("will call"),
+                            ToolCall("resp_orphan|with-pipes", "lookup", "{}"),
+                        ),
+                        api = "openai-responses",
+                        provider = "openai",
+                        model = "gpt-x",
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                    UserMessage.ofText("interrupted"),
+                ),
+            ),
+            MistralOptions(apiKey = "test"),
+        ).toList()
+        val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
+            .jsonObject["messages"]!!.jsonArray
+        // The errored assistant turn is dropped entirely.
+        assertEquals(3, messages.size)
+        assertEquals("assistant", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
+        // A synthetic error tool result follows the orphaned (normalized) call.
+        val callId = messages[0].jsonObject["tool_calls"]!!.jsonArray[0]
+            .jsonObject["id"]!!.jsonPrimitive.content
+        assertEquals(9, callId.length)
+        assertTrue(callId.all { it.isLetterOrDigit() })
+        assertEquals("tool", messages[1].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals(callId, messages[1].jsonObject["tool_call_id"]!!.jsonPrimitive.content)
+        assertEquals(
+            "[tool error] No result provided",
+            messages[1].jsonObject["content"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content,
+        )
+        assertEquals("user", messages[2].jsonObject["role"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `cross-model thinking replays as plain text`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
+        api(transport).stream(
+            model,
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent("deep thought", thinkingSignature = "sig"),
+                            ThinkingContent("redacted", redacted = true),
+                            TextContent("answer"),
+                        ),
+                        api = "anthropic-messages",
+                        provider = "anthropic",
+                        model = "claude-x",
+                        stopReason = StopReason.STOP,
+                    ),
+                    UserMessage.ofText("continue"),
+                ),
+            ),
+            MistralOptions(apiKey = "test"),
+        ).toList()
+        val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
+            .jsonObject["messages"]!!.jsonArray
+        // pi's transformMessages: foreign thinking becomes text, redacted is
+        // dropped; only same-model thinking replays as a thinking chunk.
+        assertEquals(
+            """[{"role":"assistant","prefix":false,""" +
+                """"content":[{"type":"text","text":"deep thought"},{"type":"text","text":"answer"}]},""" +
+                """{"role":"user","content":"continue"}]""",
+            messages.toString(),
+        )
     }
 
     private fun captureStreamSimplePayload(

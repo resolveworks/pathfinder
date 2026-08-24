@@ -14,9 +14,14 @@ object ChatApiRegistry {
 
     const val OPENAI_COMPLETIONS = "openai-completions"
     const val GOOGLE_GENERATIVE_AI = "google-generative-ai"
+    const val MISTRAL_CONVERSATIONS = "mistral-conversations"
 
     /** API ids with a runtime implementation. */
-    val SUPPORTED_API_IDS: Set<String> = setOf(OPENAI_COMPLETIONS, GOOGLE_GENERATIVE_AI)
+    val SUPPORTED_API_IDS: Set<String> = setOf(
+        OPENAI_COMPLETIONS,
+        GOOGLE_GENERATIVE_AI,
+        MISTRAL_CONVERSATIONS,
+    )
 
     fun isSupported(apiId: String): Boolean = apiId in SUPPORTED_API_IDS
 
@@ -28,6 +33,7 @@ object ChatApiRegistry {
         when (apiId) {
             OPENAI_COMPLETIONS -> OpenAiCompletionsApi(transport, retry)
             GOOGLE_GENERATIVE_AI -> GoogleGenerativeAiApi(transport, retry)
+            MISTRAL_CONVERSATIONS -> MistralConversationsApi(transport, retry)
             else -> null
         }
 }
