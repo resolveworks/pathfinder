@@ -404,12 +404,13 @@ class ProviderCatalogTest {
     @Test
     fun `real asset contains the full generated provider set`() {
         val catalog = realAsset()
-        assertEquals(39, catalog.providers.size)
+        assertEquals(38, catalog.providers.size)
         // Model counts drift with every upstream pi refresh; assert structure
         // and known entries instead of pinning totals.
         assertTrue(catalog.providers.all { it.models.isNotEmpty() })
-        assertTrue(catalog.providers.sumOf { it.models.size } > 1300)
+        assertTrue(catalog.providers.sumOf { it.models.size } > 1100)
         assertNull(catalog.getProvider("not-a-provider"))
+        assertNull(catalog.getProvider("amazon-bedrock"))
         assertNull(catalog.getModel("zai", "not-a-model"))
         assertEquals("cf-aig-authorization", catalog.getProvider("cloudflare-ai-gateway")!!.bearerHeaderName)
         // Parsing already proved every compat field maps; sanity-check a couple
@@ -429,7 +430,6 @@ class ProviderCatalogTest {
             setOf(
                 "anthropic-messages",
                 "azure-openai-responses",
-                "bedrock-converse-stream",
                 "google-generative-ai",
                 "google-vertex",
                 "mistral-conversations",

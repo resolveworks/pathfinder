@@ -8,9 +8,10 @@
 // mirroring how pi splits generated model data (src/providers/data/*.json)
 // from hand-written provider files (src/providers/*.ts).
 //
-// Dynamic providers (radius), llama.cpp, and image-generation providers are
-// deliberately excluded. OAuth flows are out of scope, so OAuth-only
-// providers keep their model list but carry no API-key auth (auth: null).
+// Dynamic providers (radius), llama.cpp, Amazon Bedrock, and
+// image-generation providers are deliberately excluded. OAuth flows are out
+// of scope, so OAuth-only providers keep their model list but carry no
+// API-key auth (auth: null).
 //
 // Usage:
 //   node tools/generate-model-catalog.mjs          # PI_REPO_DIR or ~/Projects/pi
@@ -58,20 +59,19 @@ const VERTEX_LOCATION = {
 
 /**
  * Provider identity, mirroring pi's hand-written providers/*.ts entries.
- * Must cover EVERY static provider in pi's generated models.json
- * (buildCatalog fails otherwise). `label` is the envApiKeyAuth display name,
+ * Must cover every static provider in pi's generated models.json EXCEPT
+ * the deliberately excluded ones in EXCLUDED_PROVIDERS (buildCatalog fails
+ * otherwise). `label` is the envApiKeyAuth display name,
  * `envKey` its environment variable, `promptMessage` overrides the default
  * "Enter <label>" prompt text, `extraPrompts` adds non-key env prompts, and
  * `authless: true` marks OAuth-only providers whose API-key auth is out of
  * scope (models kept, auth omitted).
  */
+
+/** Static pi providers deliberately excluded from the aletheia catalog. */
+const EXCLUDED_PROVIDERS = new Set(["amazon-bedrock"]);
+
 const PROVIDER_IDENTITY = {
-	"amazon-bedrock": {
-		name: "Amazon Bedrock",
-		label: "Amazon Bedrock bearer token",
-		envKey: "AWS_BEARER_TOKEN_BEDROCK",
-		promptMessage: "Enter Amazon Bedrock bearer token",
-	},
 	anthropic: { name: "Anthropic", label: "Anthropic API key", envKey: "ANTHROPIC_API_KEY" },
 	"ant-ling": { name: "Ant Ling", label: "Ant Ling API key", envKey: "ANT_LING_API_KEY" },
 	"azure-openai-responses": {
@@ -145,20 +145,26 @@ const PROVIDER_IDENTITY = {
  * Builds the aletheia catalog from pi's generated models. Pure: takes pi's
  * models.json plus provenance and returns the catalog object. Every static
  * provider and every model API is kept; the identity map must exactly cover
- * the providers pi generated (39 at the time of writing).
+ * the providers pi generated (38 at the time of writing) after the excluded
+ * ones.
  */
 function buildCatalog(piModels, { piRevision = null } = {}) {
-	for (const providerId of Object.keys(piModels)) {
+	const providers = [];
+	for (const [providerId, models] of Object.entries(piModels)) {
+		if (EXCLUDED_PROVIDERS.has(providerId)) continue;
 		if (!(providerId in PROVIDER_IDENTITY)) {
 			throw new Error(`pi static provider '${providerId}' has no PROVIDER_IDENTITY entry`);
 		}
 	}
-	const providers = [];
-	for (const [providerId, identity] of Object.entries(PROVIDER_IDENTITY)) {
+	for (const [providerId] of Object.entries(PROVIDER_IDENTITY)) {
+		if (EXCLUDED_PROVIDERS.has(providerId)) {
+			throw new Error(`PROVIDER_IDENTITY entry '${providerId}' is also in EXCLUDED_PROVIDERS`);
+		}
 		const models = Object.values(piModels[providerId] ?? {});
 		if (models.length === 0) {
 			throw new Error(`PROVIDER_IDENTITY entry '${providerId}' has no models in pi's generated catalog`);
 		}
+		const identity = PROVIDER_IDENTITY[providerId];
 		const entry = {
 			id: providerId,
 			name: identity.name,
