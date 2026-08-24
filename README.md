@@ -2,7 +2,7 @@
 
 A native Android chat app for the [pi](https://pi.dev) agent stack, written in Kotlin
 with Jetpack Compose. The native agent runtime is wired in: configure any of the
-bundled OpenAI Chat-Completions providers (26 providers, 663 models generated from
+bundled OpenAI Chat-Completions providers (26 providers generated from
 pi's catalog), manage per-provider credentials, stream chat responses, and switch
 between persistent sessions. Agent tools, including `web_search` and `web_fetch`,
 are out of scope for the MVP.

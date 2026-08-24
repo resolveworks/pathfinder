@@ -82,18 +82,30 @@ export const SUPPORTED_COMPAT_FIELDS = /** @type {const} */ ([
 ]);
 
 /**
- * compat fields pi emits that this MVP intentionally does not model. Unknown
- * fields not listed here fail generation; adding one here documents that the
- * field was reviewed and deemed irrelevant/unsupported for the MVP (the
- * Kotlin parser also ignores them via ignoreUnknownKeys as defense in depth).
+ * compat fields pi emits that aletheia deliberately does not model yet.
+ * These are an explicit, reviewed decision about current scope — not a claim
+ * of irrelevance. Grouped by why they are unmodeled:
+ *   - Protocol features this MVP never sends (strict tool schemas,
+ *     prompt-cache retention, deferred tool scheduling, Anthropic-style
+ *     cache control): supportsStrictMode, supportsLongCacheRetention,
+ *     deferredToolsMode, cacheControlFormat.
+ *   - Runtime request/response behaviors that may become relevant for plain
+ *     multi-turn or session-affinity support later, currently accepted as
+ *     unmodeled: sendSessionAffinityHeaders,
+ *     requiresReasoningContentOnAssistantMessages.
+ * An unknown field not listed here fails generation; the Kotlin parser also
+ * ignores listed fields via ignoreUnknownKeys as defense in depth.
  */
 export const UNSUPPORTED_COMPAT_FIELDS = /** @type {const} */ ([
-	"supportsLongCacheRetention",
+	// Not applicable to this MVP's request shapes.
 	"supportsStrictMode",
-	"sendSessionAffinityHeaders",
-	"requiresReasoningContentOnAssistantMessages",
+	"supportsLongCacheRetention",
 	"deferredToolsMode",
 	"cacheControlFormat",
+	// Accepted as unmodeled for current scope; revisit for multi-turn and
+	// session-affinity work.
+	"sendSessionAffinityHeaders",
+	"requiresReasoningContentOnAssistantMessages",
 ]);
 
 /**
@@ -151,7 +163,7 @@ export const PROVIDER_IDENTITY = {
 	"qwen-token-plan-cn": { name: "Qwen Token Plan CN", label: "Qwen Token Plan CN API key", envKey: "QWEN_TOKEN_PLAN_CN_API_KEY" },
 	"qwen-token-plan-individual": {
 		name: "Qwen Token Plan Individual",
-		label: "Qwen Token Plan API key",
+		label: "Qwen Token Plan Individual API key",
 		envKey: "QWEN_TOKEN_PLAN_API_KEY",
 	},
 	together: { name: "Together", label: "Together API key", envKey: "TOGETHER_API_KEY" },
