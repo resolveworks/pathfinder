@@ -264,13 +264,12 @@ object GoogleShared {
                             emptyList()
                         }
 
-                    val hasText = textResult.isNotEmpty()
                     val hasImages = imageContent.isNotEmpty()
                     val modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id)
 
                     // Use "output" for success, "error" for errors, per SDK docs.
                     val responseValue = when {
-                        hasText -> OpenAiCompletionsPayload.sanitizeSurrogates(textResult)
+                        textResult.isNotEmpty() -> OpenAiCompletionsPayload.sanitizeSurrogates(textResult)
                         hasImages -> "(see attached image)"
                         else -> ""
                     }
@@ -505,8 +504,6 @@ object GoogleShared {
     ): List<Message> {
         val toolCallIdMap = mutableMapOf<String, String>()
         val supportsImages = model.input.contains(InputModality.IMAGE)
-
-        data class Transformed(val msg: Message)
 
         val transformed = messages.map { msg ->
             when (msg.role) {

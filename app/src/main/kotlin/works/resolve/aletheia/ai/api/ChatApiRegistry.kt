@@ -13,9 +13,10 @@ import works.resolve.aletheia.ai.utils.ProviderRetry
 object ChatApiRegistry {
 
     const val OPENAI_COMPLETIONS = "openai-completions"
+    const val GOOGLE_GENERATIVE_AI = "google-generative-ai"
 
     /** API ids with a runtime implementation. */
-    val SUPPORTED_API_IDS: Set<String> = setOf(OPENAI_COMPLETIONS)
+    val SUPPORTED_API_IDS: Set<String> = setOf(OPENAI_COMPLETIONS, GOOGLE_GENERATIVE_AI)
 
     fun isSupported(apiId: String): Boolean = apiId in SUPPORTED_API_IDS
 
@@ -26,6 +27,7 @@ object ChatApiRegistry {
     fun create(apiId: String, transport: HttpStreamingTransport, retry: ProviderRetry): ChatApi? =
         when (apiId) {
             OPENAI_COMPLETIONS -> OpenAiCompletionsApi(transport, retry)
+            GOOGLE_GENERATIVE_AI -> GoogleGenerativeAiApi(transport, retry)
             else -> null
         }
 }
