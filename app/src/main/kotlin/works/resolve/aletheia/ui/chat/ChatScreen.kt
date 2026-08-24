@@ -1008,54 +1008,6 @@ private fun ChatScreenModelSettingsPreview() {
 
 @Preview(showBackground = true)
 @Composable
-private fun ChatScreenMarkdownPreview() {
-    PreviewChatScreen(
-        uiState = ChatUiState(
-            status = ChatStatus.Ready,
-            modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
-            activeSessionId = "s1",
-            sessionSummaries = listOf(
-                SessionSummary(
-                    id = "s1",
-                    title = "Preview chat",
-                    createdAt = 0L,
-                    updatedAt = 0L,
-                    messageCount = 2,
-                ),
-            ),
-            messages = listOf(
-                ChatMessage(id = "m1", role = ChatRole.User, text = "Explain *this* function"),
-                ChatMessage(
-                    id = "m2",
-                    role = ChatRole.Assistant,
-                    text = """
-                    ### Sure!
-
-                    Here's how it works:
-
-                    1. Parse the input
-                    2. Apply the transform
-
-                    ```kotlin
-                    fun transform(input: String): String = input.trim()
-                    ```
-                    """.trimIndent(),
-                ),
-            ),
-            streamingMessage = ChatMessage(
-                id = "streaming-1",
-                role = ChatRole.Assistant,
-                text = "The transform also handles **whitespace**, and",
-            ),
-            isStreaming = true,
-        ),
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
 private fun ChatScreenModelSettingsEmptyPreview() {
     PreviewChatScreen(
         uiState = ChatUiState(
