@@ -360,7 +360,7 @@ class KimiCodingOAuthAuth(
          * URLs are trusted (pi `trustedHttpUrl`). Like pi's `url.href` return,
          * the value is the normalized URL form, rebuilt from the parsed [URI]:
          * lowercase scheme, root path `/` for empty paths, and default ports
- * :80/:443 omitted.
+         * `:80`/`:443` omitted.
          *
          * Divergence from pi (documented per AGENTS.md): WHATWG URL accepts
          * authority-less/opaque forms like `https:foo`; [URI] (and this port)

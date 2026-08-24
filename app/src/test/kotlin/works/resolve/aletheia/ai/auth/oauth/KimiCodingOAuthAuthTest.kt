@@ -19,6 +19,7 @@ import works.resolve.aletheia.ai.auth.OAuthCredential
  * bound to the test scheduler's virtual clock so `expires` computations are
  * stable. Virtual request timestamps are recorded for interval assertions.
  */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class KimiCodingOAuthAuthTest {
 
     private class RecordingInteraction : AuthInteraction {
