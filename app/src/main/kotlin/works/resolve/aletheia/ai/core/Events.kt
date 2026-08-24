@@ -93,6 +93,8 @@ data class SimpleStreamOptions(
     val temperature: Double? = null,
     val maxTokens: Int? = null,
     val reasoning: ThinkingLevel? = null,
+    val toolChoice: ToolChoice? = null,
+    val cacheRetention: CacheRetention = CacheRetention.STANDARD,
     val timeoutMs: Long? = null,
     val maxRetries: Int = 0,
     val maxRetryDelayMs: Long = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
@@ -104,7 +106,8 @@ data class SimpleStreamOptions(
     override fun toString(): String =
         "SimpleStreamOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
             ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
-            ", reasoning=$reasoning, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
+            ", reasoning=$reasoning, toolChoice=$toolChoice, cacheRetention=$cacheRetention" +
+            ", timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
             ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys})"
 
     fun toStreamOptions(reasoningEffort: ModelThinkingLevel?): OpenAiCompletionsOptions =

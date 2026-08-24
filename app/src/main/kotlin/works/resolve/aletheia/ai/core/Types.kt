@@ -154,6 +154,19 @@ data class Tool(
     val parameters: JsonElement,
 )
 
+/** Tool selection mode, mirroring pi's toolChoice option. */
+sealed interface ToolChoice {
+    data object Auto : ToolChoice
+    data object None : ToolChoice
+    data object Any : ToolChoice
+    data object Required : ToolChoice
+    /** Force a specific named function tool. */
+    data class Function(val name: String) : ToolChoice
+}
+
+/** Prompt-cache retention, mirroring pi's cacheRetention. */
+enum class CacheRetention { NONE, STANDARD }
+
 data class Context(
     val systemPrompt: String? = null,
     val messages: List<Message>,
