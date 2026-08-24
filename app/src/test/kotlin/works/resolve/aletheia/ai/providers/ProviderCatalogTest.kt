@@ -70,6 +70,50 @@ class ProviderCatalogTest {
     }
 
     @Test
+    fun `toResolvedAuth maps credentials to normal api keys or resolved headers`() {
+        val cf = ProviderCatalog.parse(
+            """
+            {
+              "providers": [
+                {
+                  "id": "cf",
+                  "name": "Cloudflare",
+                  "baseUrl": "https://gateway.test/v1",
+                  "bearerHeaderName": "cf-aig-authorization",
+                  "models": []
+                }
+              ]
+            }
+            """,
+        ).getProvider("cf")!!
+
+        // Cloudflare AI Gateway: header auth only, no default apiKey path.
+        val cfAuth = cf.toResolvedAuth("cf-key", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acct"))
+        assertNull(cfAuth.apiKey)
+        assertEquals(
+            mapOf(
+                "cf-aig-authorization" to "Bearer cf-key",
+                "Authorization" to null,
+                "x-api-key" to null,
+            ),
+            cfAuth.headers,
+        )
+        assertEquals(mapOf("CLOUDFLARE_ACCOUNT_ID" to "acct"), cfAuth.env)
+
+        // Ordinary providers: plain apiKey auth with no headers.
+        val plain = ProviderCatalog.parse(
+            """
+            {
+              "providers": [{"id": "zai", "name": "ZAI", "baseUrl": "https://z.test", "models": []}]
+            }
+            """,
+        ).getProvider("zai")!!
+        val plainAuth = plain.toResolvedAuth("sk-key", emptyMap())
+        assertEquals("sk-key", plainAuth.apiKey)
+        assertEquals(emptyMap(), plainAuth.headers)
+    }
+
+    @Test
     fun `parses every compat flag, chatTemplateArgs ref and scalar, and model headers`() {
         val catalog = ProviderCatalog.parse(
             """
