@@ -30,6 +30,14 @@ data object SettingsNavKey : NavKey
 @Serializable
 data object ModelSettingsNavKey : NavKey
 
+/** Navigation 3 destination key: the provider credential list (pi's /login). */
+@Serializable
+data object ProvidersNavKey : NavKey
+
+/** Navigation 3 destination key: the credential form of one provider. */
+@Serializable
+data class ProviderAuthNavKey(val providerId: String) : NavKey
+
 /** Outcome of initial load of settings, credentials, and sessions. */
 enum class ChatStatus {
     /** Initial load in progress. */
@@ -56,6 +64,15 @@ data class ModelOption(
     val providerName: String,
     val modelId: String,
     val name: String,
+    /** The provider's catalog base URL; placeholder for the override field. */
+    val defaultBaseUrl: String = "",
+)
+
+/** UI-safe projection of a catalog auth prompt: env slot, message, secret flag. */
+data class ProviderAuthPrompt(
+    val envKey: String,
+    val message: String,
+    val secret: Boolean,
 )
 
 /** The committed provider+model selection (from settings), projected for display. */

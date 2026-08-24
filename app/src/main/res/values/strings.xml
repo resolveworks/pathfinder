@@ -11,6 +11,17 @@
     <string name="settings_model">Model settings</string>
     <string name="settings_show_thinking">Show thinking</string>
     <string name="settings_show_thinking_hint">Show the model\'s reasoning as it thinks</string>
+    <string name="providers_title">Providers</string>
+    <string name="provider_search_hint">Search providers</string>
+    <string name="no_matching_providers">No matching providers</string>
+    <string name="provider_status_configured">configured</string>
+    <string name="provider_status_unconfigured">unconfigured</string>
+    <string name="action_remove_provider">Forget provider</string>
+    <string name="remove_provider_confirm">Forget the stored credential for %1$s?</string>
+    <string name="model_search_hint">Search models</string>
+    <string name="model_selected">Selected</string>
+    <string name="models_empty_configured_hint">Only showing models from configured providers</string>
+    <string name="action_set_up_providers">Set up providers</string>
     <string name="action_configure">Configure</string>
     <string name="action_save">Save</string>
     <string name="action_cancel">Cancel</string>

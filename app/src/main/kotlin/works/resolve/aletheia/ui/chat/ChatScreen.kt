@@ -23,18 +23,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -57,14 +55,18 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -100,6 +102,9 @@ fun ChatRoute(
         onSend = viewModel::send,
         onStop = viewModel::stop,
         onSaveModelSelection = viewModel::saveModelSelection,
+        onSaveProviderCredential = viewModel::saveProviderCredential,
+        onRemoveProviderCredential = viewModel::removeProviderCredential,
+        authPrompts = viewModel::providerAuthPrompts,
         onRefreshProviderStatus = viewModel::refreshProviderStatus,
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
@@ -133,6 +138,9 @@ fun ChatScreen(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onSaveModelSelection: (providerId: String, modelId: String, baseUrl: String?) -> Unit,
+    onSaveProviderCredential: (providerId: String, apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
+    onRemoveProviderCredential: (providerId: String) -> Unit,
+    authPrompts: (providerId: String) -> List<ProviderAuthPrompt>,
     onRefreshProviderStatus: () -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
@@ -162,6 +170,8 @@ fun ChatScreen(
 
     val pushSettings: () -> Unit = { backStack.add(SettingsNavKey) }
     val pushModelSettings: () -> Unit = { backStack.add(ModelSettingsNavKey) }
+    val pushProviders: () -> Unit = { backStack.add(ProvidersNavKey) }
+    val pushProviderAuth: (String) -> Unit = { backStack.add(ProviderAuthNavKey(it)) }
     val popSettings: () -> Unit = {
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
@@ -201,6 +211,10 @@ fun ChatScreen(
                         title = when (topKey) {
                             SettingsNavKey -> stringResource(R.string.settings_title)
                             ModelSettingsNavKey -> stringResource(R.string.settings_model)
+                            ProvidersNavKey -> stringResource(R.string.providers_title)
+                            is ProviderAuthNavKey -> uiState.providerOptions
+                                .firstOrNull { it.id == topKey.providerId }?.name
+                                ?: stringResource(R.string.providers_title)
                             else -> stringResource(R.string.chat_title)
                         },
                         onOpenDrawer = { scope.launch { drawerState.open() } },
@@ -234,7 +248,10 @@ fun ChatScreen(
                     // Any settings-family surface pushed on top of a failed
                     // init replaces the error surface; popping returns to it.
                     uiState.status == ChatStatus.Failed &&
-                        topKey != SettingsNavKey && topKey != ModelSettingsNavKey -> FailedContent(
+                        topKey !is SettingsNavKey &&
+                        topKey != ModelSettingsNavKey &&
+                        topKey != ProvidersNavKey &&
+                        topKey !is ProviderAuthNavKey -> FailedContent(
                         error = uiState.error ?: stringResource(R.string.error_generic),
                         onOpenSettings = pushModelSettings,
                     )
@@ -247,6 +264,7 @@ fun ChatScreen(
                                 SettingsContent(
                                     showThinking = uiState.showThinking,
                                     onOpenModelSettings = pushModelSettings,
+                                    onOpenProviders = pushProviders,
                                     onToggleShowThinking = onToggleShowThinking,
                                 )
                             }
@@ -254,13 +272,35 @@ fun ChatScreen(
                                 ConfigurationContent(
                                     uiState = uiState,
                                     onSave = onSaveModelSelection,
-                                    onRefreshProviderStatus = onRefreshProviderStatus,
+                                    onOpenProviders = pushProviders,
                                     onClose = if (uiState.status == ChatStatus.NeedsConfiguration) {
                                         null
                                     } else {
                                         popSettings
                                     },
                                 )
+                            }
+                            entry<ProvidersNavKey> {
+                                ProvidersContent(
+                                    providerOptions = uiState.providerOptions,
+                                    onRefresh = onRefreshProviderStatus,
+                                    onOpenProvider = pushProviderAuth,
+                                )
+                            }
+                            entry<ProviderAuthNavKey> { key ->
+                                val option = uiState.providerOptions
+                                    .firstOrNull { it.id == key.providerId }
+                                if (option != null) {
+                                    ProviderAuthContent(
+                                        provider = option,
+                                        prompts = authPrompts(key.providerId),
+                                        onSave = { apiKeyInput, envInputs ->
+                                            onSaveProviderCredential(key.providerId, apiKeyInput, envInputs)
+                                        },
+                                        onRemove = { onRemoveProviderCredential(key.providerId) },
+                                        onClose = popSettings,
+                                    )
+                                }
                             }
                         },
                     )
@@ -394,13 +434,14 @@ private fun FailedContent(error: String, onOpenSettings: () -> Unit) {
 }
 
 /**
- * Settings root: a submenu listing. Rows push the model configuration form
- * or toggle display preferences directly.
+ * Settings root: a submenu listing. Rows push the model configuration form,
+ * the provider credential list, or toggle display preferences directly.
  */
 @Composable
 private fun SettingsContent(
     showThinking: Boolean,
     onOpenModelSettings: () -> Unit,
+    onOpenProviders: () -> Unit,
     onToggleShowThinking: (Boolean) -> Unit,
 ) {
     Column(
@@ -414,6 +455,13 @@ private fun SettingsContent(
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },
             modifier = Modifier.clickable(onClick = onOpenModelSettings),
+        )
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.providers_title)) },
+            trailingContent = {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+            },
+            modifier = Modifier.clickable(onClick = onOpenProviders),
         )
         ListItem(
             headlineContent = { Text(stringResource(R.string.settings_show_thinking)) },
@@ -430,32 +478,217 @@ private fun SettingsContent(
 }
 
 /**
- * Mechanical shim over the new multi-provider state: a plain model picker
- * (configured providers only) plus the base-URL override. The full providers
- * and model screens are built by the next chunk; credentials are managed
- * there, not on this surface.
+ * Model settings screen (pi's /model): a searchable picker over models of
+ * configured providers only, plus the base-URL override for the local
+ * selection. Picking a row only changes local state; Save commits it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConfigurationContent(
     uiState: ChatUiState,
     onSave: (providerId: String, modelId: String, baseUrl: String?) -> Unit,
-    onRefreshProviderStatus: () -> Unit,
+    onOpenProviders: () -> Unit,
     onClose: (() -> Unit)?,
 ) {
-    LaunchedEffect(Unit) { onRefreshProviderStatus() }
-
-    val initialSelection: Pair<String, String>? = uiState.selectedModel
-        ?.let { it.providerId to it.modelId }
-        ?: uiState.modelOptions.firstOrNull()
-            ?.let { it.providerId to it.modelId }
-    var selection by remember(uiState.selectedModel, uiState.modelOptions) {
-        mutableStateOf(initialSelection)
+    var query by rememberSaveable { mutableStateOf("") }
+    val preselected = uiState.modelOptions.firstOrNull { option ->
+        uiState.selectedModel?.let { option.providerId == it.providerId && option.modelId == it.modelId } == true
     }
-    var modelMenuOpen by remember { mutableStateOf(false) }
+    var selection by remember(uiState.selectedModel, uiState.modelOptions) {
+        mutableStateOf(preselected)
+    }
     var baseUrl by remember(uiState.selectedModel) {
         mutableStateOf(uiState.selectedModel?.baseUrlOverride.orEmpty())
     }
+    val filteredOptions = uiState.modelOptions.filter { option ->
+        val q = query.trim()
+        q.isEmpty() || option.name.contains(q, ignoreCase = true) ||
+            option.modelId.contains(q, ignoreCase = true) ||
+            option.providerName.contains(q, ignoreCase = true)
+    }
+    val listState = rememberLazyListState()
+    LaunchedEffect(Unit) {
+        preselected?.let { selected ->
+            filteredOptions.indexOfFirst { it.modelId == selected.modelId && it.providerId == selected.providerId }
+                .takeIf { it >= 0 }
+                ?.let { listState.scrollToItem(it) }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.settings_model),
+            style = MaterialTheme.typography.headlineSmall,
+        )
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            label = { Text(stringResource(R.string.model_search_hint)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
+            items(filteredOptions, key = { "${it.providerId}/${it.modelId}" }) { option ->
+                val isSelected = selection?.providerId == option.providerId &&
+                    selection?.modelId == option.modelId
+                ListItem(
+                    headlineContent = { Text(option.name) },
+                    supportingContent = { Text(option.providerName) },
+                    trailingContent = if (isSelected) {
+                        {
+                            // pi's model selector marks the current model with a check.
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = stringResource(R.string.model_selected),
+                                tint = MaterialTheme.colorScheme.secondary,
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    modifier = Modifier.clickable { selection = option },
+                )
+                HorizontalDivider()
+            }
+        }
+        if (uiState.modelOptions.isEmpty()) {
+            Text(
+                text = stringResource(R.string.models_empty_configured_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = onOpenProviders) {
+                Text(stringResource(R.string.action_set_up_providers))
+            }
+        }
+        if (selection != null) {
+            OutlinedTextField(
+                value = baseUrl,
+                onValueChange = { baseUrl = it },
+                label = { Text(stringResource(R.string.configuration_base_url)) },
+                placeholder = {
+                    Text(
+                        selection?.defaultBaseUrl?.takeIf { it.isNotEmpty() }
+                            ?: stringResource(R.string.configuration_base_url_hint),
+                    )
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { selection?.let { onSave(it.providerId, it.modelId, baseUrl) } },
+                enabled = selection != null,
+            ) {
+                Text(stringResource(R.string.action_save))
+            }
+            onClose?.let { close ->
+                TextButton(onClick = close) { Text(stringResource(R.string.action_cancel)) }
+            }
+        }
+    }
+}
+
+/**
+ * Providers screen (pi's /login list): every catalog provider with live
+ * configured/unconfigured status, filtered by name/id substring.
+ */
+@Composable
+private fun ProvidersContent(
+    providerOptions: List<ProviderOption>,
+    onRefresh: () -> Unit,
+    onOpenProvider: (providerId: String) -> Unit,
+) {
+    LaunchedEffect(Unit) { onRefresh() }
+
+    var query by rememberSaveable { mutableStateOf("") }
+    val filtered = providerOptions.filter { option ->
+        val q = query.trim()
+        q.isEmpty() || option.name.contains(q, ignoreCase = true) ||
+            option.id.contains(q, ignoreCase = true)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.providers_title),
+            style = MaterialTheme.typography.headlineSmall,
+        )
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            label = { Text(stringResource(R.string.provider_search_hint)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (filtered.isEmpty()) {
+            Text(
+                text = stringResource(R.string.no_matching_providers),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            LazyColumn {
+                items(filtered, key = ProviderOption::id) { option ->
+                    ListItem(
+                        headlineContent = { Text(option.name) },
+                        supportingContent = { Text(option.id) },
+                        trailingContent = {
+                            Text(
+                                text = stringResource(
+                                    if (option.configured) R.string.provider_status_configured
+                                    else R.string.provider_status_unconfigured,
+                                ),
+                                color = if (option.configured) {
+                                    MaterialTheme.colorScheme.secondary
+                                } else {
+                                    MaterialTheme.colorScheme.outline
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        },
+                        modifier = Modifier.clickable { onOpenProvider(option.id) },
+                    )
+                    HorizontalDivider()
+                }
+            }
+        }
+    }
+}
+
+/** Normalizes a catalog prompt message into a short field label. */
+private fun promptLabel(message: String): String =
+    message.removePrefix("Enter the ").removePrefix("Enter ")
+
+/**
+ * Credential form for one provider (pi's auth dialog): one field per catalog
+ * prompt in order — the first is the secret API key, later prompts fill env
+ * slots. All inputs live in plain Compose memory only: never saved across
+ * process death or recomposition-surviving state, never logged, and cleared
+ * on submit. Blank secret input keeps the stored key.
+ */
+@Composable
+private fun ProviderAuthContent(
+    provider: ProviderOption,
+    prompts: List<ProviderAuthPrompt>,
+    onSave: (apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
+    onRemove: () -> Unit,
+    onClose: () -> Unit,
+) {
+    var apiKeyInput by remember { mutableStateOf("") }
+    val envInputs = remember(prompts) { mutableStateMapOf<String, String>() }
+    var confirmRemove by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -466,72 +699,74 @@ private fun ConfigurationContent(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(
-            text = stringResource(R.string.settings_title),
+            text = provider.name,
             style = MaterialTheme.typography.headlineSmall,
         )
-
-        ExposedDropdownMenuBox(
-            expanded = modelMenuOpen,
-            onExpandedChange = { modelMenuOpen = it },
-        ) {
-            val selected = selection?.let { (p, m) ->
-                uiState.modelOptions.firstOrNull { it.providerId == p && it.modelId == m }
-            }
+        prompts.forEach { prompt ->
+            val isSecret = prompt.secret
             OutlinedTextField(
-                value = selected?.let { "${it.name} · ${it.providerName}" }
-                    ?: selection?.second
-                    ?: "",
-                onValueChange = {},
-                readOnly = true,
-                label = { Text(stringResource(R.string.configuration_model)) },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelMenuOpen) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
-            )
-            DropdownMenu(
-                expanded = modelMenuOpen,
-                onDismissRequest = { modelMenuOpen = false },
-            ) {
-                uiState.modelOptions.forEach { option ->
-                    DropdownMenuItem(
-                        text = { Text("${option.name} · ${option.providerName}") },
-                        onClick = {
-                            selection = option.providerId to option.modelId
-                            modelMenuOpen = false
-                        },
-                    )
-                }
-            }
-        }
-
-        if (selection != null) {
-            OutlinedTextField(
-                value = baseUrl,
-                onValueChange = { baseUrl = it },
-                label = { Text(stringResource(R.string.configuration_base_url)) },
-                placeholder = {
-                    Text(
-                        uiState.selectedModel?.defaultBaseUrl
-                            ?: stringResource(R.string.configuration_base_url_hint),
-                    )
+                value = if (isSecret) apiKeyInput else envInputs[prompt.envKey].orEmpty(),
+                onValueChange = {
+                    if (isSecret) apiKeyInput = it else envInputs[prompt.envKey] = it
+                },
+                label = { Text(promptLabel(prompt.message)) },
+                visualTransformation = if (isSecret) PasswordVisualTransformation() else VisualTransformation.None,
+                supportingText = if (isSecret && provider.configured) {
+                    { Text(stringResource(R.string.configuration_api_key_keep_hint)) }
+                } else {
+                    null
                 },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = { selection?.let { (p, m) -> onSave(p, m, baseUrl) } },
-                enabled = selection != null,
+                onClick = {
+                    onSave(apiKeyInput, envInputs.toMap())
+                    apiKeyInput = ""
+                    envInputs.clear()
+                },
             ) {
                 Text(stringResource(R.string.action_save))
             }
-            onClose?.let { close ->
-                TextButton(onClick = close) { Text(stringResource(R.string.action_cancel)) }
+            TextButton(onClick = onClose) { Text(stringResource(R.string.action_cancel)) }
+            if (provider.configured) {
+                Spacer(Modifier.weight(1f))
+                TextButton(
+                    onClick = { confirmRemove = true },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) {
+                    Text(stringResource(R.string.action_remove_provider))
+                }
             }
         }
+    }
+
+    if (confirmRemove) {
+        val name = provider.name
+        AlertDialog(
+            onDismissRequest = { confirmRemove = false },
+            title = { Text(stringResource(R.string.action_remove_provider)) },
+            text = { Text(stringResource(R.string.remove_provider_confirm, name)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmRemove = false
+                        onRemove()
+                        onClose()
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) {
+                    Text(stringResource(R.string.action_remove_provider))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRemove = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
     }
 }
 
@@ -649,8 +884,32 @@ private fun Composer(
 // ---- previews ----
 
 private val PREVIEW_MODEL_OPTIONS = listOf(
-    ModelOption(providerId = "zai", providerName = "Z.AI", modelId = "model-a", name = "Preview Model A"),
-    ModelOption(providerId = "zai", providerName = "Z.AI", modelId = "model-b", name = "Preview Model B"),
+    ModelOption(
+        providerId = "zai",
+        providerName = "Z.AI",
+        modelId = "model-a",
+        name = "Preview Model A",
+        defaultBaseUrl = "https://api.example.invalid/v4",
+    ),
+    ModelOption(
+        providerId = "zai",
+        providerName = "Z.AI",
+        modelId = "model-b",
+        name = "Preview Model B",
+        defaultBaseUrl = "https://api.example.invalid/v4",
+    ),
+)
+
+private val PREVIEW_PROVIDER_OPTIONS = listOf(
+    ProviderOption("anthropic", "Anthropic", configured = true),
+    ProviderOption("cloudflare-ai-gateway", "Cloudflare AI Gateway", configured = true),
+    ProviderOption("openai", "OpenAI", configured = false),
+    ProviderOption("zai", "Z.AI", configured = false),
+)
+
+private val PREVIEW_CLOUDFLARE_PROMPTS = listOf(
+    ProviderAuthPrompt("CLOUDFLARE_API_KEY", "Enter the Cloudflare API key", secret = true),
+    ProviderAuthPrompt("CLOUDFLARE_ACCOUNT_ID", "Enter the Cloudflare account ID", secret = false),
 )
 
 private val PREVIEW_SELECTED_MODEL = SelectedModel(
@@ -667,16 +926,19 @@ private fun PreviewChatScreen(
     uiState: ChatUiState,
     startKey: NavKey = ChatNavKey,
     extraKeys: List<NavKey> = emptyList(),
+    authPrompts: (String) -> List<ProviderAuthPrompt> = { emptyList() },
 ) {
-    val backStack = rememberNavBackStack(startKey).apply { addAll(extraKeys) }
     AletheiaTheme {
         ChatScreen(
             uiState = uiState,
-            backStack = rememberNavBackStack(startKey),
+            backStack = rememberNavBackStack(startKey).apply { addAll(extraKeys) },
             onDraftChange = {},
             onSend = {},
             onStop = {},
             onSaveModelSelection = { _, _, _ -> },
+            onSaveProviderCredential = { _, _, _ -> },
+            onRemoveProviderCredential = { },
+            authPrompts = authPrompts,
             onRefreshProviderStatus = {},
             onNewSession = {},
             onSwitchSession = {},
@@ -789,6 +1051,52 @@ private fun ChatScreenMarkdownPreview() {
             ),
             isStreaming = true,
         ),
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenModelSettingsEmptyPreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.NeedsConfiguration,
+            startKey = SettingsNavKey,
+            providerOptions = PREVIEW_PROVIDER_OPTIONS,
+        ),
+        extraKeys = listOf(ModelSettingsNavKey),
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenProvidersPreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            providerOptions = PREVIEW_PROVIDER_OPTIONS,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            configured = true,
+        ),
+        extraKeys = listOf(SettingsNavKey, ProvidersNavKey),
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenProviderAuthPreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            providerOptions = PREVIEW_PROVIDER_OPTIONS,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            configured = true,
+        ),
+        extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("cloudflare-ai-gateway")),
+        authPrompts = { providerId ->
+            if (providerId == "cloudflare-ai-gateway") PREVIEW_CLOUDFLARE_PROMPTS else emptyList()
+        },
     )
 }
 
