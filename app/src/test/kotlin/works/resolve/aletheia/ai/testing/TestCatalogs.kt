@@ -128,6 +128,47 @@ object TestCatalogs {
               ]
             },
             {
+              "id": "github-copilot",
+              "name": "GitHub Copilot",
+              "baseUrl": "https://api.individual.githubcopilot.com",
+              "auth": {
+                "label": "GitHub Copilot token",
+                "oauth": {"name": "GitHub Copilot", "isSubscription": true},
+                "prompts": [
+                  {"envKey": "COPILOT_GITHUB_TOKEN", "message": "Enter GitHub Copilot token", "secret": true}
+                ]
+              },
+              "models": [
+                {
+                  "id": "claude-haiku-4.5", "name": "Claude Haiku 4.5",
+                  "api": "openai-completions", "provider": "github-copilot",
+                  "baseUrl": "https://api.individual.githubcopilot.com",
+                  "input": ["text"],
+                  "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                  "compat": {"supportsStore": false, "supportsDeveloperRole": false},
+                  "contextWindow": 200000, "maxTokens": 8192
+                },
+                {
+                  "id": "gpt-4.1", "name": "GPT-4.1",
+                  "api": "openai-completions", "provider": "github-copilot",
+                  "baseUrl": "https://api.individual.githubcopilot.com",
+                  "input": ["text"],
+                  "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                  "compat": {"supportsStore": false, "supportsDeveloperRole": false},
+                  "contextWindow": 1000000, "maxTokens": 32768
+                },
+                {
+                  "id": "gpt-4.5", "name": "GPT-4.5",
+                  "api": "openai-completions", "provider": "github-copilot",
+                  "baseUrl": "https://api.individual.githubcopilot.com",
+                  "input": ["text"],
+                  "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                  "compat": {"supportsStore": false, "supportsDeveloperRole": false},
+                  "contextWindow": 400000, "maxTokens": 32768
+                }
+              ]
+            },
+            {
               "id": "oauth-only",
               "name": "OAuth Only",
               "baseUrl": "https://oauth.test/v1",
@@ -154,6 +195,10 @@ object TestCatalogs {
 
     /** Promptless provider: OAuth-only (pi's openai-codex shape). */
     val OAUTH_ONLY: CatalogProvider = CATALOG.getProvider("oauth-only")!!
+
+    /** GitHub Copilot fixture mirroring the generated catalog entry's shape
+     * (API-key prompt + subscription OAuth, three static models). */
+    val GITHUB_COPILOT: CatalogProvider = CATALOG.getProvider("github-copilot")!!
 
     val MODELS: List<Model> = ZAI.models
 

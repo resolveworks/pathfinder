@@ -1,7 +1,9 @@
 package works.resolve.aletheia.ai.auth
 
+import works.resolve.aletheia.ai.core.Model
 import works.resolve.aletheia.ai.providers.CatalogProvider
 import works.resolve.aletheia.ai.providers.ProviderCatalog
+import works.resolve.aletheia.ai.providers.filterCatalogModels
 import kotlinx.coroutines.CancellationException
 
 /**
@@ -133,6 +135,35 @@ class ProviderAuthService(
             is OAuthCredential -> registry.oauthAuth(provider) != null
             null -> false
         }
+    }
+
+    /**
+     * The provider's credential-filtered static models: pi's
+     * `Models.getAvailable` per-provider slice
+     * (`provider.filterModels?.(models, credential) ?? models`), reduced to
+     * one provider. Reads the stored credential through [CredentialStore] and
+     * applies the provider's filter (GitHub Copilot's `availableModelIds`;
+     * see [works.resolve.aletheia.ai.providers.filterCatalogModels]) — static
+     * catalog only, never dynamic discovery. Exposes model metadata only,
+     * never credential values; a read failure throws [ModelsError] like
+     * [isConfigured]. Unlike pi's getAvailable, the configured gate is not
+     * applied here: callers compose it with their own per-provider
+     * configured flags (the same aggregate rule pi applies).
+     */
+    suspend fun availableModels(providerId: String): List<Model> {
+        val provider = requireProvider(providerId)
+        val credential = try {
+            credentials.read(providerId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            throw ModelsError(
+                ModelsErrorCode.AUTH,
+                "Failed to read stored credential for provider '$providerId'",
+                error,
+            )
+        }
+        return filterCatalogModels(provider, credential)
     }
 
     /**

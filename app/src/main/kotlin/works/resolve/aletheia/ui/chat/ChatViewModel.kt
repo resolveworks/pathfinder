@@ -50,7 +50,13 @@ import kotlinx.coroutines.withContext
  *
  * Provider auth status (`configured`/`unconfigured`) is derived live from
  * the credential store — never persisted in settings — and the model picker
- * only lists models of configured providers (pi's model-selector rule).
+ * only lists models of configured providers (pi's model-selector rule),
+ * narrowed per provider by pi's credential-based `filterModels` (GitHub
+ * Copilot's `availableModelIds` extra; pi's getAvailable).
+ * A persisted selection that the credential's filtered set no longer
+ * contains is never treated as runnable: initialization projects a
+ * re-selection state (forced model-settings step plus a safe error),
+ * matching pi dropping the model from getAvailable.
  *
  * The agent itself is created through the injected [AgentFactory]
  * (see [works.resolve.aletheia.agent]); the production implementation wires the native
@@ -355,12 +361,26 @@ class ChatViewModel(
                 // useful forced root (the user can pick a model right away);
                 // only a fresh install forces the providers step first.
                 val hasConfiguredProvider = _uiState.value.modelOptions.isNotEmpty()
+                // Re-selection projection: the provider resolves but the
+                // persisted model is not in its credential-filtered set
+                // (pi's getAvailable would drop it) — surface a safe error
+                // instead of running or sending with it; the forced
+                // model-settings step collects the replacement.
+                val providerConfigured = try {
+                    catalog.getProvider(settings.providerId) != null &&
+                        authService.isConfigured(settings.providerId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    false
+                }
                 updateState {
                     it.copy(
                         status = ChatStatus.NeedsConfiguration,
                         startKey = if (hasConfiguredProvider) ModelSettingsNavKey else ProvidersNavKey,
                         showThinking = settings.showThinking,
                         sessionSummaries = summaries,
+                        error = if (providerConfigured) ERROR_MODEL_UNAVAILABLE else it.error,
                     )
                 }
                 return
@@ -616,7 +636,19 @@ class ChatViewModel(
 
     private suspend fun saveModelSelectionInternal(providerId: String, modelId: String) {
         val trimmedModelId = modelId.trim()
-        if (catalog.getModel(providerId, trimmedModelId) == null) {
+        // Validate against the credential-filtered set (pi's getAvailable /
+        // filterModels rule): a GitHub Copilot OAuth credential can narrow
+        // the selectable models to its availableModelIds, so a catalog id the
+        // account cannot use is rejected exactly like an unknown one.
+        val selectable = try {
+            authService.availableModels(providerId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            setError(ERROR_CREDENTIAL_SAVE)
+            return
+        }
+        if (selectable.none { it.id == trimmedModelId }) {
             setError(ERROR_UNKNOWN_MODEL)
             return
         }
@@ -895,13 +927,22 @@ class ChatViewModel(
         }
 
     /**
-     * True iff settings name a catalog provider+model AND the provider's
-     * stored credential resolves (API-key completeness or a registered
-     * OAuth flow for a stored OAuth credential).
+     * True iff settings name a catalog provider+model the stored credential
+     * can still use (the model must be in the credential-filtered set, pi's
+     * getAvailable) AND the provider's stored credential resolves
+     * (API-key completeness or a registered OAuth flow for a stored OAuth
+     * credential).
      */
     private suspend fun isConfigured(settings: ModelSettings): Boolean {
         val provider = catalog.getProvider(settings.providerId) ?: return false
-        if (provider.model(settings.modelId) == null) return false
+        val selectable = try {
+            authService.availableModels(provider.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return false
+        }
+        if (selectable.none { it.id == settings.modelId }) return false
         return try {
             authService.isConfigured(provider.id)
         } catch (e: CancellationException) {
@@ -942,11 +983,22 @@ class ChatViewModel(
             return
         }
         val configuredIds = providerOptions.filter { it.configured }.map { it.id }.toSet()
-        // Pi's model-selector rule: only models from configured providers.
+        // Pi's model-selector rule: only models from configured providers,
+        // and only the credential-filtered set each provider exposes
+        // (pi's getAvailable: filterModels over the static list — GitHub
+        // Copilot's availableModelIds).
         val modelOptions = catalog.providers
             .filter { it.id in configuredIds }
             .flatMap { provider ->
-                provider.models.map { model ->
+                val available = try {
+                    authService.availableModels(provider.id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    setError(ERROR_CREDENTIAL_SAVE)
+                    return
+                }
+                available.map { model ->
                     ModelOption(
                         providerId = provider.id,
                         providerName = provider.name,
@@ -956,19 +1008,29 @@ class ChatViewModel(
                 }
             }
             .sortedWith(compareBy({ it.providerName }, { it.name }))
+        val selectedModel = selectedModelProjection(currentSettings)
         updateState {
             it.copy(
                 providerOptions = providerOptions,
                 modelOptions = modelOptions,
-                selectedModel = selectedModelProjection(currentSettings),
+                selectedModel = selectedModel,
                 configured = configured,
             )
         }
     }
 
-    private fun selectedModelProjection(settings: ModelSettings): SelectedModel? {
+    private suspend fun selectedModelProjection(settings: ModelSettings): SelectedModel? {
         val provider = catalog.getProvider(settings.providerId) ?: return null
-        val model = provider.model(settings.modelId) ?: return null
+        // Same credential-filtered set as the picker (pi's getAvailable): a
+        // persisted selection the account can no longer use projects away.
+        val available = try {
+            authService.availableModels(provider.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+        val model = available?.firstOrNull { it.id == settings.modelId } ?: return null
         return SelectedModel(
             providerId = provider.id,
             providerName = provider.name,
@@ -1040,6 +1102,8 @@ class ChatViewModel(
         const val ERROR_CREDENTIAL_INCOMPLETE =
             "Complete this provider's sign-in values before using its models"
         const val ERROR_UNKNOWN_MODEL = "Unknown model"
+        const val ERROR_MODEL_UNAVAILABLE =
+            "That model is no longer available for this account — pick another model"
         const val ERROR_UNKNOWN_PROVIDER = "Unknown provider"
         const val ERROR_CREDENTIAL_SAVE = "Could not store the API key"
         const val ERROR_SETTINGS_SAVE = "Could not save the configuration"

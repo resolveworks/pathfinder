@@ -33,6 +33,9 @@ import works.resolve.aletheia.data.sessions.SessionRepository
 import works.resolve.aletheia.data.sessions.SessionStore
 import java.io.File
 import java.util.concurrent.ConcurrentLinkedQueue
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CompletableDeferred
@@ -187,9 +190,16 @@ class ChatViewModelTest {
             name = "OAuth Only Account",
             loginLabel = "Sign in with an account",
         )
+        val oauthCopilot = FakeOAuthAuth(
+            name = "GitHub Copilot",
+            loginLabel = "Sign in with GitHub",
+            isSubscription = true,
+        )
         val authService = ProviderAuthService(
             catalog = works.resolve.aletheia.ai.testing.TestCatalogs.CATALOG,
-            registry = MapCatalogAuthRegistry(mapOf("zai" to oauthZai, "oauth-only" to oauthOnly)),
+            registry = MapCatalogAuthRegistry(
+                mapOf("zai" to oauthZai, "oauth-only" to oauthOnly, "github-copilot" to oauthCopilot),
+            ),
             credentials = credentials,
         )
         val dataStoreScope = CoroutineScope(SupervisorJob() + mainDispatcherRule.testDispatcher)
@@ -285,6 +295,20 @@ class ChatViewModelTest {
         if (apiKey.isNotEmpty()) saveProviderCredential("zai", apiKey, emptyMap())
         saveModelSelection("zai", modelId)
     }
+
+    /** Stored Copilot OAuth credential with the given availableModelIds extra. */
+    private fun copilotCredential(availableModelIds: JsonElement? = null): OAuthCredential =
+        OAuthCredential(
+            access = "copilot-access",
+            refresh = "copilot-refresh",
+            expires = Long.MAX_VALUE,
+            extras = availableModelIds?.let { mapOf("availableModelIds" to it) } ?: emptyMap(),
+        )
+
+    private fun stringArray(vararg ids: String): JsonArray = JsonArray(ids.map { JsonPrimitive(it) })
+
+    private fun ChatViewModel.copilotModelOptions(): List<String> =
+        uiState.value.modelOptions.filter { it.providerId == "github-copilot" }.map { it.modelId }
 
     // ---- tests ----
 
@@ -1146,7 +1170,10 @@ class ChatViewModelTest {
 
         // All catalog providers listed (name-sorted), all unconfigured, so the
         // model picker is empty: pi's "only configured providers" rule.
-        assertEquals(listOf("Cloudflare AI Gateway", "OAuth Only", "Z.AI"), state.providerOptions.map { it.name })
+        assertEquals(
+            listOf("Cloudflare AI Gateway", "GitHub Copilot", "OAuth Only", "Z.AI"),
+            state.providerOptions.map { it.name },
+        )
         assertTrue(state.providerOptions.none { it.configured })
         assertTrue(state.modelOptions.isEmpty())
 
@@ -1936,4 +1963,105 @@ class ChatViewModelTest {
 
         vm.closeForTest()
     }
+
+    // ---- GitHub Copilot credential-based model filtering (pi's filterModels) ----
+
+    @Test
+    fun copilotOAuthAvailableModelIds_narrowsModelOptions() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        h.credentials.creds["github-copilot"] = copilotCredential(stringArray("gpt-4.1"))
+        val vm = h.newViewModel()
+
+        val state = vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        assertEquals(listOf("gpt-4.1"), vm.copilotModelOptions())
+        assertTrue(state.providerOptions.first { it.id == "github-copilot" }.configured)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun copilotOAuthMalformedAvailableModelIds_showsAllModels() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        // Mixed (string + number) array: not entirely strings, so pi keeps
+        // the full static list.
+        h.credentials.creds["github-copilot"] = copilotCredential(
+            JsonArray(listOf(JsonPrimitive("gpt-4.1"), JsonPrimitive(7))),
+        )
+        val vm = h.newViewModel()
+
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        assertEquals(listOf("claude-haiku-4.5", "gpt-4.1", "gpt-4.5"), vm.copilotModelOptions())
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun copilotOAuthEmptyAvailableModelIds_showsNoModelsButStaysConfigured() =
+        runTest(mainDispatcherRule.scheduler) {
+            val h = Harness()
+            h.credentials.creds["github-copilot"] = copilotCredential(stringArray())
+            val vm = h.newViewModel()
+
+            val state = vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+            assertEquals(emptyList<String>(), vm.copilotModelOptions())
+            assertTrue(state.providerOptions.first { it.id == "github-copilot" }.configured)
+
+            vm.closeForTest()
+        }
+
+    @Test
+    fun copilotLogoutThenApiKeySwitch_showsAllModelsAgain() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        h.credentials.creds["github-copilot"] = copilotCredential(stringArray("gpt-4.1"))
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration && it.modelOptions.isNotEmpty() }
+
+        // Logout: no credential ⇒ the provider is unconfigured, so pi's
+        // getAvailable contributes nothing (not even unfiltered models).
+        vm.removeProviderCredential("github-copilot")
+        mainDispatcherRule.scheduler.advanceUntilIdle()
+        assertEquals(emptyList<String>(), vm.copilotModelOptions())
+        assertFalse(vm.uiState.value.providerOptions.first { it.id == "github-copilot" }.configured)
+
+        // Switching to an API-key credential (COPILOT_GITHUB_TOKEN prompt) is
+        // complete and never filtered ⇒ every static model returns.
+        h.credentials.creds["github-copilot"] = ApiKeyCredential(key = "tok")
+        vm.refreshProviderStatus()
+        mainDispatcherRule.scheduler.advanceUntilIdle()
+        assertEquals(listOf("claude-haiku-4.5", "gpt-4.1", "gpt-4.5"), vm.copilotModelOptions())
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun persistedCopilotSelectionUnavailable_projectsReselection_notRunnable() =
+        runTest(mainDispatcherRule.scheduler) {
+            val h = Harness()
+            h.credentials.creds["github-copilot"] = copilotCredential(stringArray("gpt-4.1"))
+            h.settings.setProviderId("github-copilot")
+            h.settings.setModelId("gpt-4.5")
+            val vm = h.newViewModel()
+
+            val state = vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+            // Forced re-selection step with a safe error; never Ready, so
+            // send() can never run with the filtered-out model.
+            assertEquals(ModelSettingsNavKey, state.startKey)
+            assertNotNull(state.error)
+            assertFalse(state.canSend)
+            assertNull(state.selectedModel)
+            assertEquals(listOf("gpt-4.1"), vm.copilotModelOptions())
+
+            // The unavailable model is rejected exactly like an unknown one.
+            vm.saveModelSelection("github-copilot", "gpt-4.5")
+            mainDispatcherRule.scheduler.advanceUntilIdle()
+            assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
+            assertNotNull(vm.uiState.value.error)
+
+            // Selecting an available model completes configuration.
+            vm.saveModelSelection("github-copilot", "gpt-4.1")
+            vm.uiState.first { it.status == ChatStatus.Ready }
+            assertEquals("gpt-4.1", vm.uiState.value.selectedModel?.modelId)
+
+            vm.closeForTest()
+        }
 }
