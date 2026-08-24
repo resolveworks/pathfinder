@@ -15,13 +15,4 @@ interface ApiKeyStore {
     suspend fun setCredential(providerId: String, credential: ApiKeyCredential)
 
     suspend fun deleteCredential(providerId: String)
-
-    /** The stored API key for [providerId], or null when none is stored. */
-    suspend fun getApiKey(providerId: String): String? =
-        getCredential(providerId)?.key
-
-    suspend fun setApiKey(providerId: String, apiKey: String) =
-        setCredential(providerId, ApiKeyCredential(apiKey))
-
-    suspend fun deleteApiKey(providerId: String) = deleteCredential(providerId)
 }
