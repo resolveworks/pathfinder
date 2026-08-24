@@ -2,6 +2,8 @@ package works.resolve.aletheia.agent
 
 import works.resolve.aletheia.ai.core.TextContent
 import works.resolve.aletheia.ai.core.UserMessage
+import works.resolve.aletheia.ai.providers.ProviderCatalog
+import works.resolve.aletheia.ai.testing.TestCatalogs
 import works.resolve.aletheia.ai.transport.HttpStreamingTransport
 import works.resolve.aletheia.ai.transport.SseEvent
 import works.resolve.aletheia.ai.transport.TransportRequest
@@ -12,38 +14,40 @@ import works.resolve.aletheia.data.settings.ModelSettings
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.Json
 
 /**
  * Focused JVM tests for the production factory: validation, transcript
  * copying, and end-to-end wiring through the native stack against a fake
- * transport. The fake key is a distinctive test value and is never printed.
+ * transport and the shared catalog fixture. The fake key is a distinctive
+ * test value and is never printed.
  */
 class NativeAgentFactoryTest {
 
-    private class FakeApiKeyStore(initialKey: String? = null) : ApiKeyStore {
-        val key = MutableStateFlow(initialKey)
+    private class FakeApiKeyStore(initialCredential: ApiKeyCredential? = null) : ApiKeyStore {
+        val credential = MutableStateFlow(initialCredential)
         var getApiKeyCalls = 0
         var setApiKeyCalls = 0
 
         override suspend fun getCredential(providerId: String): ApiKeyCredential? {
             getApiKeyCalls++
-            return key.value?.let { ApiKeyCredential(it) }
+            return credential.value
         }
 
         override suspend fun setCredential(providerId: String, credential: ApiKeyCredential) {
             setApiKeyCalls++
-            key.value = credential.key
+            this.credential.value = credential
         }
 
         override suspend fun deleteCredential(providerId: String) {
-            key.value = null
+            credential.value = null
         }
     }
 
@@ -64,8 +68,10 @@ class NativeAgentFactoryTest {
         }
     }
 
+    private val catalog: ProviderCatalog = TestCatalogs.CATALOG
+
     private fun factory(store: FakeApiKeyStore, transport: RecordingTransport): AgentFactory =
-        NativeAgentFactory(credentials = store, transport = transport)
+        NativeAgentFactory(credentials = store, catalog = catalog, transport = transport)
 
     private fun settings(
         providerId: String = "zai",
@@ -78,7 +84,7 @@ class NativeAgentFactoryTest {
     @Test
     fun `rejects an unsupported provider`() {
         assertFailsWith<IllegalArgumentException> {
-            factory(FakeApiKeyStore("k"), RecordingTransport())
+            factory(FakeApiKeyStore(ApiKeyCredential("k")), RecordingTransport())
                 .create(settings(providerId = "openai"), "s1", emptyList())
         }
     }
@@ -86,7 +92,7 @@ class NativeAgentFactoryTest {
     @Test
     fun `rejects an unknown model`() {
         assertFailsWith<IllegalArgumentException> {
-            factory(FakeApiKeyStore("k"), RecordingTransport())
+            factory(FakeApiKeyStore(ApiKeyCredential("k")), RecordingTransport())
                 .create(settings(modelId = "gpt-4"), "s1", emptyList())
         }
     }
@@ -94,7 +100,7 @@ class NativeAgentFactoryTest {
     @Test
     fun `rejects a blank base URL`() {
         assertFailsWith<IllegalArgumentException> {
-            factory(FakeApiKeyStore("k"), RecordingTransport())
+            factory(FakeApiKeyStore(ApiKeyCredential("k")), RecordingTransport())
                 .create(settings(baseUrl = "   "), "s1", emptyList())
         }
     }
@@ -107,7 +113,7 @@ class NativeAgentFactoryTest {
             UserMessage.ofText("hello"),
             UserMessage.ofText("again"),
         )
-        val agent = factory(FakeApiKeyStore("k"), RecordingTransport())
+        val agent = factory(FakeApiKeyStore(ApiKeyCredential("k")), RecordingTransport())
             .create(settings(), "s1", transcript)
         assertEquals(transcript, agent.state.value.messages)
         // Copied defensively: later mutation of the source list is invisible.
@@ -118,16 +124,16 @@ class NativeAgentFactoryTest {
     // ---- wiring through the native stack ----
 
     @Test
-    fun `prompt uses the selected model, effective base URL, and the lazily resolved current key`() {
+    fun `prompt uses the selected model, effective base URL, and the lazily resolved current credential`() {
         runBlocking {
-            val store = FakeApiKeyStore("factory-test-key-1")
+            val store = FakeApiKeyStore(ApiKeyCredential("factory-test-key-1"))
             val transport = RecordingTransport()
             val agent = factory(store, transport)
                 .create(settings(baseUrl = "https://example.test/api/v4//"), "s1", emptyList())
 
-            // Rotating the stored key after construction must be observed at
-            // prompt time: the resolver stays lazy and reads the store per request.
-            store.key.value = "factory-test-key-2"
+            // Rotating the stored credential after construction must be observed
+            // at prompt time: the resolver stays lazy and reads the store per request.
+            store.credential.value = ApiKeyCredential("factory-test-key-2")
 
             agent.prompt("ping")
 
@@ -141,7 +147,8 @@ class NativeAgentFactoryTest {
             val request = transport.requests.single()
             // Overridden base URL, normalized (trailing slashes dropped) + endpoint.
             assertEquals("https://example.test/api/v4/chat/completions", request.url)
-            assertEquals("Bearer factory-test-key-2", request.bearerToken?.let { "Bearer $it" })
+            assertEquals("factory-test-key-2", request.bearerToken)
+            assertNull(request.bearerHeaderName, "zai uses the default Authorization header")
             assertTrue(request.timeoutMs != null && request.timeoutMs > 0)
 
             val body = Json.parseToJsonElement(String(request.body)).jsonObject
@@ -152,11 +159,45 @@ class NativeAgentFactoryTest {
     @Test
     fun `default base URL is used when no override is set`() {
         runBlocking {
-            val store = FakeApiKeyStore("factory-test-key-1")
+            val store = FakeApiKeyStore(ApiKeyCredential("factory-test-key-1"))
             val transport = RecordingTransport()
             val agent = factory(store, transport).create(settings(), "s1", emptyList())
             agent.prompt("ping")
-            assertEquals("https://api.z.ai/api/coding/paas/v4/chat/completions", transport.requests.single().url)
+            assertEquals(
+                "https://api.z.ai/api/coding/paas/v4/chat/completions",
+                transport.requests.single().url,
+            )
+        }
+    }
+
+    @Test
+    fun `credential env and bearer header override reach the request`() {
+        runBlocking {
+            val store = FakeApiKeyStore(
+                ApiKeyCredential(
+                    key = "cf-factory-test-key",
+                    env = mapOf(
+                        "CLOUDFLARE_ACCOUNT_ID" to "acct-9",
+                        "CLOUDFLARE_GATEWAY_ID" to "gw-8",
+                    ),
+                ),
+            )
+            val transport = RecordingTransport()
+            val agent = factory(store, transport)
+                .create(
+                    settings(providerId = "cloudflare-ai-gateway", modelId = "workers-ai/test-model"),
+                    "s1",
+                    emptyList(),
+                )
+            agent.prompt("ping")
+
+            val request = transport.requests.single()
+            assertEquals(
+                "https://gateway.test/v1/acct-9/gw-8/compat/chat/completions",
+                request.url,
+                "credential env must be substituted into the base URL placeholders",
+            )
+            assertEquals("cf-aig-authorization", request.bearerHeaderName)
         }
     }
 }

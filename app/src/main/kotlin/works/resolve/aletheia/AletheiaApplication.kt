@@ -6,6 +6,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import works.resolve.aletheia.agent.NativeAgentFactory
+import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.ai.transport.OkHttpTransport
 import works.resolve.aletheia.data.credentials.CredentialStore
 import works.resolve.aletheia.data.credentials.KeystoreAeadCipher
@@ -31,7 +32,8 @@ import okhttp3.OkHttpClient
  * - [CredentialStore] on the Android-Keystore-backed [KeystoreAeadCipher];
  * - [SettingsRepository] on a single Preferences DataStore file;
  * - [SessionStore] rooted under app-private `filesDir/sessions`;
- * - [NativeAgentFactory] wiring the native Z.AI runtime.
+ * - the generated multi-provider model catalog, parsed once from assets;
+ * - [NativeAgentFactory] wiring the native runtime to any catalog provider.
  */
 class AletheiaApplication : Application() {
 
@@ -57,8 +59,14 @@ class AletheiaApplication : Application() {
         SessionStore(File(filesDir, SESSIONS_DIRECTORY))
     }
 
+    /** Generated model catalog, parsed once from the bundled asset. */
+    val modelCatalog: ProviderCatalog by lazy {
+        assets.open("models-catalog.json").bufferedReader().use { it.readText() }
+            .let(ProviderCatalog.Companion::parse)
+    }
+
     val agentFactory: NativeAgentFactory by lazy {
-        NativeAgentFactory(credentials = credentials, transport = transport)
+        NativeAgentFactory(credentials = credentials, catalog = modelCatalog, transport = transport)
     }
 
     /** Conventional creation point for the chat controller. */
@@ -67,6 +75,7 @@ class AletheiaApplication : Application() {
             ChatViewModel(
                 settingsRepository = settingsRepository,
                 credentials = credentials,
+                catalog = modelCatalog,
                 sessionStore = sessionStore,
                 agentFactory = agentFactory,
             )

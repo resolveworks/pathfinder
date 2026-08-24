@@ -9,7 +9,7 @@ import works.resolve.aletheia.ai.core.Content
 import works.resolve.aletheia.ai.core.Message
 import works.resolve.aletheia.ai.core.TextContent
 import works.resolve.aletheia.ai.core.UserMessage
-import works.resolve.aletheia.ai.providers.ZaiModels
+import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.agent.AgentFactory
 import works.resolve.aletheia.data.credentials.ApiKeyStore
 import works.resolve.aletheia.data.settings.ModelSettings
@@ -60,11 +60,21 @@ import kotlinx.coroutines.withContext
 class ChatViewModel(
     private val settingsRepository: SettingsStore,
     private val credentials: ApiKeyStore,
+    catalog: ProviderCatalog,
     private val sessionStore: SessionRepository,
     private val agentFactory: AgentFactory,
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(ChatUiState(modelOptions = CATALOG_OPTIONS))
+    // Catalog-driven shim (Wave 3 reworks the UI): the MVP provider is still
+    // fixed to Z.AI, but its model list and validation now come from the
+    // injected generated catalog.
+    private val zaiProvider = catalog.getProvider(PROVIDER_ID)
+        ?: error("Model catalog is missing the '$PROVIDER_ID' provider")
+    private val catalogOptions: List<ChatModelOption> =
+        zaiProvider.models.map { ChatModelOption(id = it.id, name = it.name) }
+    private val catalogIds: Set<String> = zaiProvider.models.map { it.id }.toSet()
+
+    private val _uiState = MutableStateFlow(ChatUiState(modelOptions = catalogOptions))
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
     /** Current committed configuration; updated on init and successful save. */
@@ -182,7 +192,7 @@ class ChatViewModel(
             val summaries = sessionStore.summaries()
 
             val configured = settings.providerId == PROVIDER_ID &&
-                settings.modelId in CATALOG_IDS &&
+                settings.modelId in catalogIds &&
                 hasKey
 
             if (!configured) {
@@ -192,7 +202,7 @@ class ChatViewModel(
                         status = ChatStatus.NeedsConfiguration,
                         startKey = SettingsNavKey,
                         hasApiKey = hasKey,
-                        selectedModelId = settings.modelId.takeIf { m -> m in CATALOG_IDS },
+                        selectedModelId = settings.modelId.takeIf { m -> m in catalogIds },
                         baseUrl = settings.baseUrl,
                         showThinking = settings.showThinking,
                         sessionSummaries = summaries,
@@ -426,7 +436,7 @@ class ChatViewModel(
 
     private suspend fun saveConfigurationInternal(modelId: String, baseUrl: String?, apiKeyInput: String) {
         val trimmedModelId = modelId.trim()
-        if (trimmedModelId !in CATALOG_IDS) {
+        if (trimmedModelId !in catalogIds) {
             setError(ERROR_UNKNOWN_MODEL)
             return
         }
@@ -553,13 +563,9 @@ class ChatViewModel(
     }
 
     private companion object {
-        const val PROVIDER_ID = ZaiModels.PROVIDER_ID
+        const val PROVIDER_ID = "zai"
         const val DEFAULT_SESSION_TITLE = "New chat"
         const val TITLE_MAX_LENGTH = 48
-
-        val CATALOG_OPTIONS: List<ChatModelOption> =
-            ZaiModels.ALL.map { ChatModelOption(id = it.id, name = it.name) }
-        val CATALOG_IDS: Set<String> = ZaiModels.ALL.map { it.id }.toSet()
 
         const val ERROR_INIT = "Could not load chat data"
         const val ERROR_KEY_REQUIRED = "An API key is required for the initial configuration"

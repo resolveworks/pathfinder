@@ -10,7 +10,7 @@ import works.resolve.aletheia.ai.core.ToolCall
 import works.resolve.aletheia.ai.core.ToolResultMessage
 import works.resolve.aletheia.ai.core.Usage
 import works.resolve.aletheia.ai.core.UserMessage
-import works.resolve.aletheia.ai.providers.ZaiModels
+import works.resolve.aletheia.ai.testing.TestCatalogs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -154,7 +154,7 @@ class TokenEstimateTest {
 
     @Test
     fun `clamping keeps 4096 safety tokens and minimum one output`() {
-        val model = ZaiModels.GLM_5_2
+        val model = TestCatalogs.GLM_5_2
         val context = Context(messages = listOf(UserMessage.ofText("hi"))) // 1 token
 
         // Room exists: explicit value retained.
@@ -167,7 +167,7 @@ class TokenEstimateTest {
 
     @Test
     fun `non-positive context window skips clamping`() {
-        val model = ZaiModels.GLM_5_2.copy(contextWindow = 0)
+        val model = TestCatalogs.GLM_5_2.copy(contextWindow = 0)
         val context = Context(messages = listOf(UserMessage.ofText("hi")))
         assertEquals(5000, clampMaxTokensToContext(model, context, 5000))
         assertEquals(1, clampMaxTokensToContext(model, context, 0))

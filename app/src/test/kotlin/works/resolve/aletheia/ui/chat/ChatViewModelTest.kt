@@ -181,6 +181,7 @@ class ChatViewModelTest {
         fun newViewModel(): ChatViewModel = ChatViewModel(
             settingsRepository = settingsStore,
             credentials = credentials,
+            catalog = works.resolve.aletheia.ai.testing.TestCatalogs.CATALOG,
             sessionStore = sessions,
             agentFactory = factory,
         )
