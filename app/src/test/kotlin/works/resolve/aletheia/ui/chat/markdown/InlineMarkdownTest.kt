@@ -17,7 +17,6 @@ class InlineMarkdownTest {
 
     private val styles = InlineMarkdownStyles(
         linkColor = Color.Blue,
-        linkUrlColor = Color.Gray,
         codeBackgroundColor = Color.LightGray,
         codeTextColor = Color.Red,
     )
@@ -84,9 +83,9 @@ class InlineMarkdownTest {
     }
 
     @Test
-    fun linkWithDistinctTextAppendsHrefSuffix() {
+    fun linkWithDistinctTextIsClickableWithoutHrefSuffix() {
         val result = render("see [docs](https://example.com)")
-        assertEquals("see docs (https://example.com)", result.text)
+        assertEquals("see docs", result.text)
 
         val link = result.annotationsSingle()
         assertTrue(link is LinkAnnotation.Url)
@@ -94,9 +93,6 @@ class InlineMarkdownTest {
 
         val linkSpan = result.spanStyles.first { it.item.textDecoration == TextDecoration.Underline }
         assertEquals(4..8, linkSpan.start..linkSpan.end)
-
-        val suffixSpan = result.spanStyles.first { it.item.color == styles.linkUrlColor }
-        assertEquals(8..30, suffixSpan.start..suffixSpan.end)
     }
 
     @Test

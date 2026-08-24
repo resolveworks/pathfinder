@@ -29,8 +29,6 @@ import org.commonmark.node.Text
  */
 data class InlineMarkdownStyles(
     val linkColor: Color,
-    /** Color for the " (href)" suffix appended when link text differs from the href. */
-    val linkUrlColor: Color,
     val codeBackgroundColor: Color,
     val codeTextColor: Color = Color.Unspecified,
     val monospaceFontFamily: FontFamily = FontFamily.Monospace,
@@ -112,16 +110,6 @@ private fun AnnotatedString.Builder.renderLink(node: Link, styles: InlineMarkdow
         start,
         end,
     )
-
-    // pi's fallback rule: when the visible text differs from the href (ignoring a
-    // mailto: prefix), append the href in parentheses with a secondary color.
-    val visibleText = plainText(node)
-    val hrefForComparison = node.destination.removePrefix("mailto:")
-    if (visibleText != node.destination && visibleText != hrefForComparison) {
-        val suffixStart = length
-        append(" (${node.destination})")
-        addStyle(SpanStyle(color = styles.linkUrlColor), suffixStart, length)
-    }
 }
 
 private fun AnnotatedString.Builder.styled(
