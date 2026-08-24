@@ -76,6 +76,7 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import works.resolve.aletheia.R
 import works.resolve.aletheia.data.sessions.SessionSummary
+import works.resolve.aletheia.ui.chat.markdown.MarkdownText
 import works.resolve.aletheia.ui.theme.AletheiaTheme
 import kotlinx.coroutines.launch
 
@@ -579,7 +580,16 @@ private fun ConversationContent(uiState: ChatUiState) {
 @Composable
 private fun MessageItem(message: ChatMessage) {
     ListItem(
-        headlineContent = { Text(message.text) },
+        // pi renders user markdown literally (markers preserved, not parsed);
+        // the MVP equivalent here is plain text, so only the assistant path
+        // goes through MarkdownText.
+        headlineContent = {
+            if (message.role == ChatRole.Assistant) {
+                MarkdownText(markdown = message.text)
+            } else {
+                Text(message.text)
+            }
+        },
         overlineContent = {
             Text(
                 when {
@@ -731,6 +741,54 @@ private fun ChatScreenModelSettingsPreview() {
             configured = true,
         ),
         extraKeys = listOf(SettingsNavKey, ModelSettingsNavKey),
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenMarkdownPreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            configured = true,
+            activeSessionId = "s1",
+            sessionSummaries = listOf(
+                SessionSummary(
+                    id = "s1",
+                    title = "Preview chat",
+                    createdAt = 0L,
+                    updatedAt = 0L,
+                    messageCount = 2,
+                ),
+            ),
+            messages = listOf(
+                ChatMessage(id = "m1", role = ChatRole.User, text = "Explain *this* function"),
+                ChatMessage(
+                    id = "m2",
+                    role = ChatRole.Assistant,
+                    text = """
+                    ### Sure!
+
+                    Here's how it works:
+
+                    1. Parse the input
+                    2. Apply the transform
+
+                    ```kotlin
+                    fun transform(input: String): String = input.trim()
+                    ```
+                    """.trimIndent(),
+                ),
+            ),
+            streamingMessage = ChatMessage(
+                id = "streaming-1",
+                role = ChatRole.Assistant,
+                text = "The transform also handles **whitespace**, and",
+            ),
+            isStreaming = true,
+        ),
     )
 }
 
