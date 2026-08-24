@@ -1476,6 +1476,29 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun navigateToUserMessage_preservesNonBlankDraft() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        vm.exchange(h, "Hello", "world")
+        vm.uiState.first { it.treeRows.size == 2 }
+
+        vm.onDraftChange("half-typed draft")
+        val userEntryId = vm.uiState.value.treeRows[0].id
+        vm.navigateToTreeEntry(userEntryId)
+
+        // pi's navigateTree loads the re-edit text into the editor only when
+        // it is empty; a typed draft is never clobbered by navigation.
+        val state = vm.uiState.first { it.messages.isEmpty() }
+        assertEquals("half-typed draft", state.draft)
+
+        vm.closeForTest()
+    }
+
+    @Test
     fun navigateToCurrentLeaf_orUnknownEntry_isRejectedSafely() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()

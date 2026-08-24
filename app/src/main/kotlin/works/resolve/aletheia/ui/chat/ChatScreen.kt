@@ -125,6 +125,8 @@ fun ChatRoute(
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
         onToggleShowThinking = viewModel::setShowThinking,
+        onNavigateTreeEntry = viewModel::navigateToTreeEntry,
+        onTreeFilterChange = viewModel::setTreeFilter,
         onDismissError = viewModel::dismissError,
         modifier = modifier,
     )
@@ -164,6 +166,8 @@ fun ChatScreen(
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
     onToggleShowThinking: (Boolean) -> Unit,
+    onNavigateTreeEntry: (entryId: String) -> Unit,
+    onTreeFilterChange: (TreeFilter) -> Unit,
     onDismissError: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -347,6 +351,8 @@ fun ChatScreen(
                                     ConversationPager(
                                         uiState = uiState,
                                         pagerState = pagerState,
+                                        onNavigateTreeEntry = onNavigateTreeEntry,
+                                        onTreeFilterChange = onTreeFilterChange,
                                     )
                                 } else {
                                     ConversationContent(uiState = uiState)
@@ -844,46 +850,28 @@ private fun ProviderAuthContent(
 
 /**
  * Two-page swipeable chat surface: page 0 is the conversation, page 1 the
- * session tree (a placeholder until the real panel lands). The drawer keeps
- * its stock behavior (built-in edge-swipe-to-open + menu button); only the
- * pager's own gestures handle page swiping.
+ * session-tree panel ([TreePanel] over [ChatUiState.treeRows]). The drawer
+ * keeps its stock behavior (built-in edge-swipe-to-open + menu button); only
+ * the pager's own gestures handle page swiping.
  */
 @Composable
 private fun ConversationPager(
     uiState: ChatUiState,
     pagerState: PagerState,
+    onNavigateTreeEntry: (entryId: String) -> Unit,
+    onTreeFilterChange: (TreeFilter) -> Unit,
 ) {
     HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
         when (page) {
-            TreePageIndex -> TreePageContent()
+            TreePageIndex -> TreePanel(
+                rows = uiState.treeRows,
+                filter = uiState.treeFilter,
+                onFilterChange = onTreeFilterChange,
+                onNavigate = onNavigateTreeEntry,
+                modifier = Modifier.fillMaxSize(),
+            )
             else -> ConversationContent(uiState = uiState)
         }
-    }
-}
-
-/**
- * PLACEHOLDER: centered title + muted empty-state text standing in for the
- * real session-tree panel. Swap the body for the panel composable when it
- * lands; keep the title until then.
- */
-@Composable
-private fun TreePageContent() {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = stringResource(R.string.tree_title),
-            style = MaterialTheme.typography.titleLarge,
-        )
-        Spacer(Modifier.size(16.dp))
-        Text(
-            text = stringResource(R.string.tree_page_placeholder),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
     }
 }
 
@@ -1203,6 +1191,8 @@ private fun PreviewChatScreen(
             onNewSession = {},
             onSwitchSession = {},
             onToggleShowThinking = {},
+            onNavigateTreeEntry = {},
+            onTreeFilterChange = {},
             onDismissError = {},
             modifier = Modifier,
         )

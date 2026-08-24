@@ -267,14 +267,17 @@ class ChatViewModel(
             } else {
                 activeConversation.branch(id)
             }
+            val reeditText = userMessage
+                ?.content
+                ?.filterIsInstance<TextContent>()
+                ?.joinToString("") { part -> part.text }
             agent?.replaceTranscript(activeConversation.activeMessages())
             updateState {
                 it.copy(
-                    draft = userMessage
-                        ?.content
-                        ?.filterIsInstance<TextContent>()
-                        ?.joinToString("") { part -> part.text }
-                        ?: it.draft,
+                    // pi's navigateTree loads the re-edit text into the
+                    // editor only when it is empty; a typed draft is never
+                    // clobbered by navigation.
+                    draft = if (it.draft.isBlank()) reeditText ?: it.draft else it.draft,
                     treeRows = buildTreeRows(activeConversation, it.treeFilter),
                 )
             }
