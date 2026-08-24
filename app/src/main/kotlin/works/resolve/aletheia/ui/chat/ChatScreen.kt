@@ -822,9 +822,15 @@ private fun ConversationContent(
         }
     }
 
+    // Target one PAST the last item (totalItemsCount): measure finds nothing
+    // forward, backfills upward (LazyListMeasure "scroll back" branch), and the
+    // viewport lands with the end of ALL content at the bottom edge — the true
+    // bottom of the transcript, not the top of the last item. Applied during the
+    // same remeasure that delivers new/changed items, so no top-of-transcript
+    // flash on session open or while streaming.
     LaunchedEffect(messageCount, streamingId, streamingLength) {
         val total = messageCount + if (streamingId != null) 1 else 0
-        if (total > 0) listState.scrollToItem(total - 1)
+        if (total > 0) listState.requestScrollToItem(total)
     }
 
     // Per-block expanded overrides (ephemeral view state keyed by stable
