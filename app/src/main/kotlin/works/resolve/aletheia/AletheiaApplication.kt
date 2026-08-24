@@ -8,7 +8,10 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import works.resolve.aletheia.agent.NativeAgentFactory
 import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.ai.transport.OkHttpTransport
-import works.resolve.aletheia.data.credentials.CredentialStore
+import works.resolve.aletheia.ai.auth.CredentialStore
+import works.resolve.aletheia.data.credentials.ApiKeyStore
+import works.resolve.aletheia.data.credentials.ApiKeyStoreAdapter
+import works.resolve.aletheia.data.credentials.EncryptedCredentialStore
 import works.resolve.aletheia.data.credentials.KeystoreAeadCipher
 import works.resolve.aletheia.data.sessions.SessionStore
 import works.resolve.aletheia.data.settings.SettingsRepository
@@ -29,7 +32,9 @@ import okhttp3.OkHttpClient
  * The graph is deliberately flat and conventional:
  *
  * - one shared [OkHttpClient]/[OkHttpTransport] for all provider requests;
- * - [CredentialStore] on the Android-Keystore-backed [KeystoreAeadCipher];
+ * - [CredentialStore] (pi's credential contract) on the Android-Keystore-backed
+ *   [KeystoreAeadCipher], with a temporary [ApiKeyStore] adapter for current
+ *   UI/agent call sites;
  * - [SettingsRepository] on a single Preferences DataStore file;
  * - [SessionStore] rooted under app-private `filesDir/sessions`;
  * - the generated multi-provider model catalog, parsed once from assets;
@@ -48,8 +53,11 @@ class AletheiaApplication : Application() {
     }
 
     val credentials: CredentialStore by lazy {
-        CredentialStore(this, KeystoreAeadCipher())
+        EncryptedCredentialStore(this, KeystoreAeadCipher())
     }
+
+    /** Temporary API-key-only view over [credentials] for existing call sites. */
+    val apiKeyStore: ApiKeyStore by lazy { ApiKeyStoreAdapter(credentials) }
 
     val settingsRepository: SettingsRepository by lazy {
         SettingsRepository(settingsDataStore)
@@ -66,7 +74,7 @@ class AletheiaApplication : Application() {
     }
 
     val agentFactory: NativeAgentFactory by lazy {
-        NativeAgentFactory(credentials = credentials, catalog = modelCatalog, transport = transport)
+        NativeAgentFactory(credentials = apiKeyStore, catalog = modelCatalog, transport = transport)
     }
 
     /** Conventional creation point for the chat controller. */
@@ -74,7 +82,7 @@ class AletheiaApplication : Application() {
         initializer {
             ChatViewModel(
                 settingsRepository = settingsRepository,
-                credentials = credentials,
+                credentials = apiKeyStore,
                 catalog = modelCatalog,
                 sessionStore = sessionStore,
                 agentFactory = agentFactory,

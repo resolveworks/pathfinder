@@ -10,7 +10,7 @@ import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.ai.providers.normalizeBaseUrl
 import works.resolve.aletheia.ai.transport.HttpStreamingTransport
 import works.resolve.aletheia.ai.utils.ProviderRetry
-import works.resolve.aletheia.data.credentials.ApiKeyCredential
+import works.resolve.aletheia.ai.auth.ApiKeyCredential
 import works.resolve.aletheia.data.credentials.ApiKeyStore
 import works.resolve.aletheia.data.settings.ModelSettings
 
@@ -94,7 +94,7 @@ internal fun catalogAuthResolver(
             credentials.getCredential(entry.id)
                 ?.let { credential -> ApiKeyCredential(credential.key, credential.env + explicitEnv) }
                 ?.takeIf { entry.isCredentialComplete(it.key, it.env) }
-                ?.let { credential -> entry.toResolvedAuth(credential.key, credential.env) }
+                ?.let { credential -> credential.key?.let { entry.toResolvedAuth(it, credential.env) } }
         }
     }
 
