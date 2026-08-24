@@ -62,6 +62,29 @@ class ModelsTest {
     }
 
     @Test
+    fun modelWhoseApiHasNoImplementationFailsClearly() = runTest {
+        val api = RecordingApi()
+        val unsupported = model().copy(id = "m2", api = "anthropic-messages")
+        val registry = Models(
+            listOf(
+                Provider(
+                    id = "prov",
+                    name = "Provider",
+                    baseUrl = "https://example.test",
+                    models = listOf(model(), unsupported),
+                    apis = mapOf("openai-completions" to api),
+                ),
+            ),
+        )
+        val error = runCatching {
+            registry.stream(unsupported, Context(messages = emptyList()))
+        }.exceptionOrNull()
+        assertTrue(error is IllegalArgumentException)
+        assertTrue(error!!.message!!.contains("no API implementation for 'anthropic-messages'"))
+        assertEquals(0, api.calls)
+    }
+
+    @Test
     fun resolverFailureEmitsSingleErrorEvent() = runTest {
         val api = RecordingApi()
         val registry = Models(
@@ -72,6 +95,7 @@ class ModelsTest {
                     baseUrl = "https://example.test",
                     authResolver = { _, _ -> throw IllegalStateException("keystore exploded") },
                     models = listOf(model()),
+                    apiId = "openai-completions",
                     api = api,
                 ),
             ),
@@ -105,6 +129,7 @@ class ModelsTest {
                     baseUrl = "https://example.test",
                     authResolver = { _, _ -> null },
                     models = listOf(model()),
+                    apiId = "openai-completions",
                     api = api,
                 ),
             ),
@@ -129,6 +154,7 @@ class ModelsTest {
                     name = "Provider",
                     baseUrl = "https://example.test",
                     models = listOf(model()),
+                    apiId = "openai-completions",
                     api = api,
                 ),
             ),
@@ -164,6 +190,7 @@ class ModelsTest {
                     baseUrl = "https://example.test",
                     authResolver = { _, _ -> throw CancellationException() },
                     models = listOf(model()),
+                    apiId = "openai-completions",
                     api = api,
                 ),
             ),
@@ -194,6 +221,7 @@ class ModelsTest {
                         if (explicitKey == null) ResolvedAuth("stored-key") else null
                     },
                     models = listOf(model()),
+                    apiId = "openai-completions",
                     api = api,
                 ),
             ),
@@ -219,6 +247,7 @@ class ModelsTest {
                     name = "Provider",
                     baseUrl = "https://example.test",
                     models = listOf(model()),
+                    apiId = "openai-completions",
                     api = api,
                 ),
             ),
@@ -253,6 +282,7 @@ class ModelsTest {
                         }
                     },
                     models = listOf(model()),
+                    apiId = "openai-completions",
                     api = api,
                 ),
             ),
@@ -302,6 +332,7 @@ class ModelsTest {
                     baseUrl = entry.baseUrl,
                     authResolver = authResolver,
                     models = entry.models,
+                    apiId = "openai-completions",
                     api = api,
                 ),
             ),
@@ -360,6 +391,7 @@ class ModelsTest {
                         )
                     },
                     models = listOf(model()),
+                    apiId = "openai-completions",
                     api = api,
                 ),
             ),

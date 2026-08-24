@@ -2,11 +2,15 @@
 // Generates app/src/main/assets/models-catalog.json for aletheia.
 //
 // Runs pi's model-catalog generator (models.dev et al.) from a local pi
-// checkout, keeps only the providers aletheia supports (OpenAI Chat
-// Completions API), and merges each provider's hand-curated identity —
-// display name and API-key auth metadata — mirroring how pi splits generated
-// model data (src/providers/data/*.json) from hand-written provider files
-// (src/providers/*.ts).
+// checkout, keeps every static pi-ai provider and ALL of each provider's
+// model APIs (not just openai-completions), and merges each provider's
+// hand-curated identity — display name and API-key auth metadata —
+// mirroring how pi splits generated model data (src/providers/data/*.json)
+// from hand-written provider files (src/providers/*.ts).
+//
+// Dynamic providers (radius), llama.cpp, and image-generation providers are
+// deliberately excluded. OAuth flows are out of scope, so OAuth-only
+// providers keep their model list but carry no API-key auth (auth: null).
 //
 // Usage:
 //   node tools/generate-model-catalog.mjs          # PI_REPO_DIR or ~/Projects/pi
@@ -28,8 +32,6 @@ const repoRoot = resolve(__dirname, "..");
 const piRepo = process.env.PI_REPO_DIR ?? join(process.env.HOME ?? "", "Projects", "pi");
 const output = join(repoRoot, "app/src/main/assets/models-catalog.json");
 
-const API = "openai-completions";
-
 /** Cloudflare login prompts (pi: providers/cloudflare-auth.ts). */
 const CLOUDFLARE_ACCOUNT = {
 	envKey: "CLOUDFLARE_ACCOUNT_ID",
@@ -42,13 +44,41 @@ const CLOUDFLARE_GATEWAY = {
 	secret: false,
 };
 
+/** Google Vertex AI login prompts (pi: providers/google-vertex.ts). */
+const VERTEX_PROJECT = {
+	envKey: "GOOGLE_CLOUD_PROJECT",
+	message: "Enter Google Cloud project ID",
+	secret: false,
+};
+const VERTEX_LOCATION = {
+	envKey: "GOOGLE_CLOUD_LOCATION",
+	message: "Enter Google Cloud location",
+	secret: false,
+};
+
 /**
- * Provider identity, mirroring pi's hand-written providers/*.ts entries that
- * use the openai-completions API. Keyed by provider id; `label` is the
- * envApiKeyAuth display name, `envKey` its environment variable.
+ * Provider identity, mirroring pi's hand-written providers/*.ts entries.
+ * Must cover EVERY static provider in pi's generated models.json
+ * (buildCatalog fails otherwise). `label` is the envApiKeyAuth display name,
+ * `envKey` its environment variable, `promptMessage` overrides the default
+ * "Enter <label>" prompt text, `extraPrompts` adds non-key env prompts, and
+ * `authless: true` marks OAuth-only providers whose API-key auth is out of
+ * scope (models kept, auth omitted).
  */
 const PROVIDER_IDENTITY = {
+	"amazon-bedrock": {
+		name: "Amazon Bedrock",
+		label: "Amazon Bedrock bearer token",
+		envKey: "AWS_BEARER_TOKEN_BEDROCK",
+		promptMessage: "Enter Amazon Bedrock bearer token",
+	},
+	anthropic: { name: "Anthropic", label: "Anthropic API key", envKey: "ANTHROPIC_API_KEY" },
 	"ant-ling": { name: "Ant Ling", label: "Ant Ling API key", envKey: "ANT_LING_API_KEY" },
+	"azure-openai-responses": {
+		name: "Azure OpenAI",
+		label: "Azure OpenAI API key",
+		envKey: "AZURE_OPENAI_API_KEY",
+	},
 	baseten: { name: "Baseten", label: "Baseten API key", envKey: "BASETEN_API_KEY" },
 	cerebras: { name: "Cerebras", label: "Cerebras API key", envKey: "CEREBRAS_API_KEY" },
 	"cloudflare-ai-gateway": {
@@ -67,11 +97,25 @@ const PROVIDER_IDENTITY = {
 	deepseek: { name: "DeepSeek", label: "DeepSeek API key", envKey: "DEEPSEEK_API_KEY" },
 	fireworks: { name: "Fireworks", label: "Fireworks API key", envKey: "FIREWORKS_API_KEY" },
 	"github-copilot": { name: "GitHub Copilot", label: "GitHub Copilot token", envKey: "COPILOT_GITHUB_TOKEN" },
+	google: { name: "Google", label: "Gemini API key", envKey: "GEMINI_API_KEY" },
+	"google-vertex": {
+		name: "Google Vertex AI",
+		label: "Google Cloud API key",
+		envKey: "GOOGLE_CLOUD_API_KEY",
+		promptMessage: "Enter Google Cloud API key",
+		extraPrompts: [VERTEX_PROJECT, VERTEX_LOCATION],
+	},
 	groq: { name: "Groq", label: "Groq API key", envKey: "GROQ_API_KEY" },
 	huggingface: { name: "Hugging Face", label: "Hugging Face token", envKey: "HF_TOKEN" },
+	"kimi-coding": { name: "Kimi For Coding", label: "Kimi API key", envKey: "KIMI_API_KEY" },
+	minimax: { name: "MiniMax", label: "MiniMax API key", envKey: "MINIMAX_API_KEY" },
+	"minimax-cn": { name: "MiniMax CN", label: "MiniMax CN API key", envKey: "MINIMAX_CN_API_KEY" },
+	mistral: { name: "Mistral", label: "Mistral API key", envKey: "MISTRAL_API_KEY" },
 	moonshotai: { name: "Moonshot AI", label: "Moonshot AI API key", envKey: "MOONSHOT_API_KEY" },
 	"moonshotai-cn": { name: "Moonshot AI CN", label: "Moonshot AI API key", envKey: "MOONSHOT_API_KEY" },
 	nvidia: { name: "NVIDIA", label: "NVIDIA API key", envKey: "NVIDIA_API_KEY" },
+	openai: { name: "OpenAI", label: "OpenAI API key", envKey: "OPENAI_API_KEY" },
+	"openai-codex": { name: "OpenAI Codex", label: "OpenAI Codex token", envKey: "OPENAI_CODEX_TOKEN", authless: true },
 	opencode: { name: "OpenCode Zen", label: "OpenCode API key", envKey: "OPENCODE_API_KEY" },
 	"opencode-go": { name: "OpenCode Go", label: "OpenCode API key", envKey: "OPENCODE_API_KEY" },
 	openrouter: { name: "OpenRouter", label: "OpenRouter API key", envKey: "OPENROUTER_API_KEY" },
@@ -83,6 +127,12 @@ const PROVIDER_IDENTITY = {
 		envKey: "QWEN_TOKEN_PLAN_API_KEY",
 	},
 	together: { name: "Together", label: "Together API key", envKey: "TOGETHER_API_KEY" },
+	"vercel-ai-gateway": {
+		name: "Vercel AI Gateway",
+		label: "Vercel AI Gateway API key",
+		envKey: "AI_GATEWAY_API_KEY",
+	},
+	xai: { name: "xAI", label: "xAI API key", envKey: "XAI_API_KEY" },
 	xiaomi: { name: "Xiaomi", label: "Xiaomi API key", envKey: "XIAOMI_API_KEY" },
 	"xiaomi-token-plan-ams": { name: "Xiaomi Token Plan AMS", label: "Xiaomi Token Plan AMS API key", envKey: "XIAOMI_TOKEN_PLAN_AMS_API_KEY" },
 	"xiaomi-token-plan-cn": { name: "Xiaomi Token Plan CN", label: "Xiaomi Token Plan CN API key", envKey: "XIAOMI_TOKEN_PLAN_CN_API_KEY" },
@@ -93,24 +143,41 @@ const PROVIDER_IDENTITY = {
 
 /**
  * Builds the aletheia catalog from pi's generated models. Pure: takes pi's
- * models.json plus provenance and returns the catalog object.
+ * models.json plus provenance and returns the catalog object. Every static
+ * provider and every model API is kept; the identity map must exactly cover
+ * the providers pi generated (39 at the time of writing).
  */
 function buildCatalog(piModels, { piRevision = null } = {}) {
+	for (const providerId of Object.keys(piModels)) {
+		if (!(providerId in PROVIDER_IDENTITY)) {
+			throw new Error(`pi static provider '${providerId}' has no PROVIDER_IDENTITY entry`);
+		}
+	}
 	const providers = [];
-
 	for (const [providerId, identity] of Object.entries(PROVIDER_IDENTITY)) {
-		const models = Object.values(piModels[providerId] ?? {}).filter((model) => model.api === API);
+		const models = Object.values(piModels[providerId] ?? {});
+		if (models.length === 0) {
+			throw new Error(`PROVIDER_IDENTITY entry '${providerId}' has no models in pi's generated catalog`);
+		}
 		const entry = {
 			id: providerId,
 			name: identity.name,
+			// Providers whose models span multiple base URLs keep the first
+			// model's URL here; each model always carries its own baseUrl.
 			baseUrl: models[0].baseUrl,
-			auth: {
-				label: identity.label,
-				prompts: [
-					{ envKey: identity.envKey, message: `Enter ${identity.label}`, secret: true },
-					...(identity.extraPrompts ?? []),
-				],
-			},
+			auth: identity.authless
+				? null
+				: {
+						label: identity.label,
+						prompts: [
+							{
+								envKey: identity.envKey,
+								message: identity.promptMessage ?? `Enter ${identity.label}`,
+								secret: true,
+							},
+							...(identity.extraPrompts ?? []),
+						],
+					},
 			models,
 		};
 		if (identity.bearerHeaderName) entry.bearerHeaderName = identity.bearerHeaderName;
@@ -156,6 +223,9 @@ const isCli = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(impo
 if (isCli) {
 	const catalog = buildCatalog(generatePiCatalog(), { piRevision: piGitRevision() });
 	const totalModels = catalog.providers.reduce((sum, p) => sum + p.models.length, 0);
+	const apiIds = new Set(catalog.providers.flatMap((p) => p.models.map((m) => m.api)));
 	writeFileSync(output, JSON.stringify(catalog) + "\n");
-	console.log(`Wrote ${output}: ${catalog.providers.length} providers, ${totalModels} ${API} models`);
+	console.log(
+		`Wrote ${output}: ${catalog.providers.length} providers, ${totalModels} models, APIs: ${[...apiIds].sort().join(", ")}`,
+	);
 }
