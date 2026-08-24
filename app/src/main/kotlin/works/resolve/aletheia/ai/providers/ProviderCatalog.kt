@@ -18,7 +18,7 @@ import works.resolve.aletheia.ai.core.OpenAiCompletionsCompat
 import works.resolve.aletheia.ai.core.ThinkingFormat
 import works.resolve.aletheia.ai.core.ThinkingLevelMap
 import works.resolve.aletheia.ai.models.Provider
-import works.resolve.aletheia.ai.models.ProviderCredential
+import works.resolve.aletheia.ai.models.ResolvedAuth
 import works.resolve.aletheia.ai.transport.HttpStreamingTransport
 import works.resolve.aletheia.ai.utils.ProviderRetry
 
@@ -42,8 +42,9 @@ data class ProviderAuth(
 /**
  * A provider as described by the generated models-catalog asset: identity,
  * base URL, auth prompts, optional bearer-header override (Cloudflare AI
- * Gateway's `cf-aig-authorization`), and its model list. Pure data; the
- * transport/API pair is injected when a runtime [Provider] is built.
+ * Gateway's `cf-aig-authorization`, resolved into a request header), and its
+ * model list. Pure data; the transport/API pair is injected when a runtime
+ * [Provider] is built.
  */
 class CatalogProvider(
     val id: String,
@@ -81,6 +82,26 @@ class CatalogProvider(
         missingAuthPrompts(key, env).isEmpty()
 
     /**
+     * Resolves a complete stored credential into the AI-layer auth shape
+     * (pi's cloudflare-auth.ts): ordinary providers resolve to a normal
+     * apiKey; a bearer-header provider (Cloudflare AI Gateway) resolves to a
+     * `Bearer <key>` request header on its named header with the default
+     * Authorization/x-api-key paths removed and no apiKey.
+     */
+    fun toResolvedAuth(key: String, env: Map<String, String>): ResolvedAuth {
+        val bearerHeaderName = bearerHeaderName ?: return ResolvedAuth(apiKey = key, env = env)
+        return ResolvedAuth(
+            apiKey = null,
+            env = env,
+            headers = mapOf(
+                bearerHeaderName to "Bearer $key",
+                "Authorization" to null,
+                "x-api-key" to null,
+            ),
+        )
+    }
+
+    /**
      * Builds the runtime provider for this catalog entry, wiring the
      * transport/API pair and the auth resolver. Base-URL overrides are not
      * stamped here: callers create their effective model once via
@@ -89,14 +110,13 @@ class CatalogProvider(
     fun toRuntimeProvider(
         transport: HttpStreamingTransport,
         retry: ProviderRetry = ProviderRetry(),
-        authResolver: (suspend () -> ProviderCredential?)? = null,
+        authResolver: (suspend () -> ResolvedAuth?)? = null,
     ): Provider =
         Provider(
             id = id,
             name = name,
             baseUrl = baseUrl,
             authResolver = authResolver,
-            bearerHeaderName = bearerHeaderName,
             models = models,
             api = OpenAiCompletionsApi(transport, retry) as ChatApi,
         )

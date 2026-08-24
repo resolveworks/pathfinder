@@ -35,7 +35,7 @@ class ModelsTest {
     private class RecordingApi : ChatApi {
         var lastApiKey: String? = null
         var lastEnv: Map<String, String> = emptyMap()
-        var lastBearerHeaderName: String? = null
+        var lastHeaders: Map<String, String?> = emptyMap()
         var calls = 0
 
         override fun stream(
@@ -47,7 +47,7 @@ class ModelsTest {
                 calls += 1
                 lastApiKey = options.apiKey
                 lastEnv = options.env
-                lastBearerHeaderName = options.bearerHeaderName
+                lastHeaders = options.headers
                 val done = AssistantMessage(
                     content = emptyList(),
                     api = model.api,
@@ -189,7 +189,7 @@ class ModelsTest {
                     baseUrl = "https://example.test",
                     authResolver = {
                         resolverCalls += 1
-                        ProviderCredential("resolved-key")
+                        ResolvedAuth("resolved-key")
                     },
                     models = listOf(model()),
                     api = api,
@@ -217,12 +217,15 @@ class ModelsTest {
                     name = "Provider",
                     baseUrl = "https://example.test",
                     authResolver = {
-                        ProviderCredential(
+                        ResolvedAuth(
                             apiKey = "resolved-key",
                             env = mapOf("A" to "resolved-a", "B" to "resolved-b"),
+                            headers = mapOf(
+                                "cf-aig-authorization" to "Bearer resolved-key",
+                                "Authorization" to null,
+                            ),
                         )
                     },
-                    bearerHeaderName = "x-provider-auth",
                     models = listOf(model()),
                     api = api,
                 ),
@@ -232,14 +235,23 @@ class ModelsTest {
         val events = registry.stream(
             model(),
             Context(messages = emptyList()),
-            SimpleStreamOptions(env = mapOf("B" to "explicit-b", "C" to "explicit-c")),
+            SimpleStreamOptions(
+                env = mapOf("B" to "explicit-b", "C" to "explicit-c"),
+                headers = mapOf("CF-AIG-AUTHORIZATION" to "Bearer explicit-override"),
+            ),
         ).toList()
 
         assertTrue(events.single() is AssistantMessageEvent.Done)
         // Resolver supplies the key; env merges per field with the request on top.
         assertEquals("resolved-key", api.lastApiKey)
         assertEquals(mapOf("A" to "resolved-a", "B" to "explicit-b", "C" to "explicit-c"), api.lastEnv)
-        // Provider metadata fills an unset bearer-header option.
-        assertEquals("x-provider-auth", api.lastBearerHeaderName)
+        // Explicit request headers win over resolved auth headers case-insensitively.
+        assertEquals(
+            mapOf(
+                "Authorization" to null,
+                "CF-AIG-AUTHORIZATION" to "Bearer explicit-override",
+            ),
+            api.lastHeaders,
+        )
     }
 }

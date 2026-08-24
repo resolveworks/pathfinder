@@ -3,6 +3,7 @@ package works.resolve.aletheia.ai
 import works.resolve.aletheia.ai.core.OpenAiCompletionsOptions
 import works.resolve.aletheia.ai.core.SimpleStreamOptions
 import works.resolve.aletheia.ai.core.StreamOptions
+import works.resolve.aletheia.ai.models.ResolvedAuth
 import works.resolve.aletheia.ai.transport.TransportRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -40,21 +41,52 @@ class SecretRedactionTest {
     }
 
     @Test
-    fun `SimpleStreamOptions toString omits api key`() {
-        val options = SimpleStreamOptions(apiKey = secret, temperature = 0.7)
+    fun `SimpleStreamOptions toString omits api key and header values`() {
+        val options = SimpleStreamOptions(
+            apiKey = secret,
+            temperature = 0.7,
+            headers = mapOf("cf-aig-authorization" to "Bearer $secret"),
+        )
         assertFalse(options.toString().contains(secret))
         assertTrue(options.toString().contains("<redacted>"))
+        assertTrue(options.toString().contains("cf-aig-authorization"))
         assertFalse(SimpleStreamOptions(apiKey = null).toString().contains("redacted"))
         assertEquals(options, options.copy())
     }
 
     @Test
-    fun `OpenAiCompletionsOptions toString omits api key`() {
-        val options = OpenAiCompletionsOptions(apiKey = secret, maxTokens = 100)
+    fun `OpenAiCompletionsOptions toString omits api key and header values`() {
+        val options = OpenAiCompletionsOptions(
+            apiKey = secret,
+            maxTokens = 100,
+            headers = mapOf("cf-aig-authorization" to "Bearer $secret"),
+        )
         assertFalse(options.toString().contains(secret))
         assertTrue(options.toString().contains("<redacted>"))
+        assertTrue(options.toString().contains("cf-aig-authorization"))
         assertFalse(OpenAiCompletionsOptions(apiKey = null).toString().contains("redacted"))
         assertEquals(options, options.copy())
+    }
+
+    @Test
+    fun `ResolvedAuth toString omits api key and header values`() {
+        val auth = ResolvedAuth(
+            apiKey = secret,
+            env = mapOf("CLOUDFLARE_ACCOUNT_ID" to "acct"),
+            headers = mapOf(
+                "cf-aig-authorization" to "Bearer $secret",
+                "Authorization" to null,
+            ),
+        )
+        val rendered = auth.toString()
+        assertFalse(rendered.contains(secret))
+        assertTrue(rendered.contains("<redacted>"))
+        assertTrue(rendered.contains("cf-aig-authorization"))
+        assertFalse(rendered.contains("Bearer"))
+
+        val noKey = ResolvedAuth(headers = mapOf("cf-aig-authorization" to "Bearer x")).toString()
+        assertFalse(noKey.contains("redacted"))
+        assertTrue(noKey.contains("apiKey=null"))
     }
 
     @Test

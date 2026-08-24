@@ -98,14 +98,14 @@ data class SimpleStreamOptions(
     val maxRetryDelayMs: Long = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     /** Per-request provider env (credential values merged in, pi's applyAuth). */
     val env: Map<String, String> = emptyMap(),
-    /** Bearer header override (e.g. cf-aig-authorization); null = Authorization. */
-    val bearerHeaderName: String? = null,
+    /** Explicit request headers; merged over resolved auth headers (pi's applyAuth). */
+    val headers: Map<String, String?> = emptyMap(),
 ) {
     override fun toString(): String =
         "SimpleStreamOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
             ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
             ", reasoning=$reasoning, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
-            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, bearerHeaderName=$bearerHeaderName)"
+            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys})"
 
     fun toStreamOptions(reasoningEffort: ModelThinkingLevel?): OpenAiCompletionsOptions =
         OpenAiCompletionsOptions(
@@ -118,7 +118,7 @@ data class SimpleStreamOptions(
             maxRetries = maxRetries,
             maxRetryDelayMs = maxRetryDelayMs,
             env = env,
-            bearerHeaderName = bearerHeaderName,
+            headers = headers,
         )
 }
 
@@ -135,12 +135,35 @@ data class OpenAiCompletionsOptions(
     val maxRetryDelayMs: Long = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     /** Per-request provider env (credential values merged in, pi's applyAuth). */
     val env: Map<String, String> = emptyMap(),
-    /** Bearer header override (e.g. cf-aig-authorization); null = Authorization. */
-    val bearerHeaderName: String? = null,
+    /** Explicit request headers; merged over resolved auth headers (pi's applyAuth). */
+    val headers: Map<String, String?> = emptyMap(),
 ) {
     override fun toString(): String =
         "OpenAiCompletionsOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
             ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
             ", reasoningEffort=$reasoningEffort, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
-            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, bearerHeaderName=$bearerHeaderName)"
+            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys})"
 }
+
+/**
+ * Merges provider headers, porting pi's mergeHeaders: [override] wins
+ * case-insensitively per header name, and a null override value removes the
+ * header entirely.
+ */
+fun mergeHeaders(
+    base: Map<String, String?>,
+    override: Map<String, String?>,
+): Map<String, String?> {
+    if (base.isEmpty() && override.isEmpty()) return emptyMap()
+    val merged = LinkedHashMap(base)
+    for ((name, value) in override) {
+        val lowerName = name.lowercase()
+        merged.keys.filter { it.lowercase() == lowerName }.forEach { merged.remove(it) }
+        merged[name] = value
+    }
+    return merged
+}
+
+/** True when [headers] sets a non-null value for [name] (case-insensitive), pi's hasHeader. */
+fun hasHeader(headers: Map<String, String?>, name: String): Boolean =
+    headers.any { it.key.lowercase() == name && it.value != null }

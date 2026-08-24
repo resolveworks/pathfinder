@@ -22,7 +22,8 @@ import okhttp3.sse.EventSources
 /**
  * Production [HttpStreamingTransport] backed by OkHttp and Square's okhttp-sse.
  *
- * - Sends JSON POST requests with a Bearer token; the token is never logged.
+ * - Sends JSON POST requests with a Bearer Authorization token; the token is
+ *   never logged.
  * - Applies the request timeout via OkHttp's per-call timeout (using a
  *   [Call.Factory] wrapper so the SSE factory still honors it).
  * - Delegates SSE framing (UTF-8, CR/LF, comments, BOM, multiline data) to
@@ -41,7 +42,7 @@ class OkHttpTransport(
         val builder = Request.Builder()
             .url(request.url)
             .post(request.body.toRequestBody("application/json".toMediaType()))
-        request.bearerToken?.let { builder.header(request.bearerHeaderName ?: "Authorization", "Bearer $it") }
+        request.bearerToken?.let { builder.header("Authorization", "Bearer $it") }
         for ((name, value) in request.headers) {
             builder.header(name, value)
         }

@@ -6,7 +6,7 @@ import works.resolve.aletheia.ai.core.StopReason
 import works.resolve.aletheia.ai.core.TextContent
 import works.resolve.aletheia.ai.core.UserMessage
 import works.resolve.aletheia.ai.models.Models
-import works.resolve.aletheia.ai.models.ProviderCredential
+import works.resolve.aletheia.ai.models.ResolvedAuth
 import works.resolve.aletheia.ai.testing.TestCatalogs
 import works.resolve.aletheia.ai.transport.OkHttpTransport
 import kotlin.test.Test
@@ -58,7 +58,7 @@ class CatalogProviderIntegrationTest {
             val testKey = "zai-integration-test-key"
             val provider = TestCatalogs.ZAI.toRuntimeProvider(
                 transport = OkHttpTransport(),
-                authResolver = { ProviderCredential(testKey) },
+                authResolver = { ResolvedAuth(testKey) },
             )
             val models = Models(listOf(provider))
 
@@ -124,8 +124,8 @@ class CatalogProviderIntegrationTest {
             val provider = entry.toRuntimeProvider(
                 transport = OkHttpTransport(),
                 authResolver = {
-                    ProviderCredential(
-                        apiKey = testKey,
+                    entry.toResolvedAuth(
+                        key = testKey,
                         env = mapOf(
                             "CLOUDFLARE_ACCOUNT_ID" to "acct-123",
                             "CLOUDFLARE_GATEWAY_ID" to "gw-456",

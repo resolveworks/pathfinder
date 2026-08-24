@@ -163,7 +163,7 @@ class OkHttpTransportTest {
     }
 
     @Test
-    fun `custom bearerHeaderName replaces the default Authorization header`() {
+    fun `request headers replace the default Authorization header`() {
         val server = MockWebServer()
         server.enqueue(
             MockResponse()
@@ -177,14 +177,17 @@ class OkHttpTransportTest {
                 TransportRequest(
                     url = server.url("/v1/chat/completions").toString(),
                     bearerToken = "secret-token",
-                    bearerHeaderName = "cf-aig-authorization",
+                    headers = mapOf(
+                        "Authorization" to "Basic custom",
+                        "cf-aig-authorization" to "Bearer gateway-token",
+                    ),
                     body = "{}".toByteArray(),
                 ),
             ).events.toList()
         }
         val recorded = server.takeRequest()
-        assertEquals("Bearer secret-token", recorded.getHeader("cf-aig-authorization"))
-        assertNull(recorded.getHeader("Authorization"))
+        assertEquals("Basic custom", recorded.getHeader("Authorization"))
+        assertEquals("Bearer gateway-token", recorded.getHeader("cf-aig-authorization"))
         server.shutdown()
     }
 

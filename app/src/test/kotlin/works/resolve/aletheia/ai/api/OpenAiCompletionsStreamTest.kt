@@ -86,6 +86,63 @@ class OpenAiCompletionsStreamTest {
     }
 
     @Test
+    fun `header auth replaces model headers and needs no api key`() = runTest {
+        val transport = FakeTransport()
+        val headerModel = model.copy(
+            headers = mapOf("X-Model-Header" to "model-value", "Accept" to "text/plain"),
+        )
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
+                "[DONE]",
+            ),
+        )
+        val done = api(transport)
+            .stream(
+                headerModel,
+                context,
+                OpenAiCompletionsOptions(
+                    headers = mapOf(
+                        "cf-aig-authorization" to "Bearer cf-key",
+                        "authorization" to null,
+                        "x-model-header" to "request-value",
+                    ),
+                ),
+            )
+            .toList()
+            .last()
+        assertIs<AssistantMessageEvent.Done>(done)
+        val request = transport.requests.single()
+        assertNull(request.bearerToken)
+        assertEquals("Bearer cf-key", request.headers["cf-aig-authorization"])
+        // Case-insensitive: the explicit request value replaced the model's
+        // differently-cased header, and no Authorization header is sent.
+        assertEquals("request-value", request.headers["x-model-header"])
+        assertTrue(request.headers.keys.none { it.equals("authorization", ignoreCase = true) })
+        // Mandatory Accept header survives and cannot be overridden.
+        assertEquals("text/event-stream", request.headers["Accept"])
+    }
+
+    @Test
+    fun `ordinary api key becomes the bearer token with mandatory accept header`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
+                "[DONE]",
+            ),
+        )
+        val done = api(transport)
+            .stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key"))
+            .toList()
+            .last()
+        assertIs<AssistantMessageEvent.Done>(done)
+        val request = transport.requests.single()
+        assertEquals("test-key", request.bearerToken)
+        assertEquals("text/event-stream", request.headers["Accept"])
+    }
+
+    @Test
     fun `streams text with start delta end done`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(

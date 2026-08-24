@@ -8,21 +8,28 @@ import works.resolve.aletheia.ai.core.Context
 import works.resolve.aletheia.ai.core.Model
 import works.resolve.aletheia.ai.core.SimpleStreamOptions
 import works.resolve.aletheia.ai.core.StopReason
+import works.resolve.aletheia.ai.core.mergeHeaders
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
 /**
- * A resolved provider credential (pi's `api_key` auth result): the API key
- * plus provider env values (e.g. Cloudflare account/gateway ids) substituted
- * into base-URL placeholders at request time. Pure AI-layer type; it never
- * exposes how the app stores credentials.
+ * A resolved provider credential (pi's auth resolve result): the API key (or,
+ * for header-auth providers, resolved auth headers), plus provider env values
+ * (e.g. Cloudflare account/gateway ids) substituted into base-URL
+ * placeholders at request time. Pure AI-layer type; it never exposes how the
+ * app stores credentials.
  */
-class ProviderCredential(
-    val apiKey: String,
+class ResolvedAuth(
+    /** Bearer API key; null when auth is carried entirely by [headers]. */
+    val apiKey: String? = null,
     val env: Map<String, String> = emptyMap(),
+    /** Resolved auth headers (pi's ProviderHeaders): a null value removes the header when merged. */
+    val headers: Map<String, String?> = emptyMap(),
 ) {
-    override fun toString(): String = "ProviderCredential(apiKey=<redacted>, env=${env.keys})"
+    override fun toString(): String =
+        "ResolvedAuth(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
+            ", env=${env.keys}, headers=${headers.keys})"
 }
 
 /**
@@ -34,10 +41,8 @@ class Provider(
     val id: String,
     val name: String,
     val baseUrl: String,
-    /** Resolves this provider's stored credential (pi's auth.resolve): key + env. */
-    val authResolver: (suspend () -> ProviderCredential?)? = null,
-    /** Bearer header override (e.g. Cloudflare's cf-aig-authorization); null = Authorization. */
-    val bearerHeaderName: String? = null,
+    /** Resolves this provider's stored credential (pi's auth.resolve): key and/or headers + env. */
+    val authResolver: (suspend () -> ResolvedAuth?)? = null,
     val models: List<Model>,
     val api: ChatApi,
 )
@@ -69,9 +74,9 @@ class Models(
      * model's provider must be registered; auth is resolved lazily inside the
      * flow and merged with [options] using pi's applyAuth precedence —
      * explicit request fields win (an explicit apiKey skips the resolver
-     * entirely), env values merge per field with the request on top, and the
-     * provider's bearer-header metadata fills an unset option. An absent or
-     * failing credential resolution surfaces as a single safe terminal
+     * entirely), env values merge per field with the request on top, and
+     * resolved auth headers merge under explicit request headers
+     * case-insensitively (pi's mergeHeaders). An absent or failing credential resolution surfaces as a single safe terminal
      * [AssistantMessageEvent.Error] event; unknown providers throw
      * immediately.
      */
@@ -101,14 +106,15 @@ class Models(
                 emitAuthError(model, provider, "Provider '${provider.id}' is not configured")
                 return@flow
             }
+            val authHeaders = auth?.headers ?: emptyMap()
             val merged = options.copy(
-                apiKey = options.apiKey ?: auth!!.apiKey,
+                apiKey = options.apiKey ?: auth?.apiKey,
                 env = if (auth == null || auth.env.isEmpty()) {
                     options.env
                 } else {
                     auth.env + options.env
                 },
-                bearerHeaderName = options.bearerHeaderName ?: provider.bearerHeaderName,
+                headers = mergeHeaders(authHeaders, options.headers),
             )
             provider.api.streamSimple(model, context, merged).collect { emit(it) }
         }

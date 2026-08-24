@@ -12,6 +12,8 @@ import works.resolve.aletheia.ai.core.ThinkingContent
 import works.resolve.aletheia.ai.core.ToolCall
 import works.resolve.aletheia.ai.core.Usage
 import works.resolve.aletheia.ai.core.calculateCost
+import works.resolve.aletheia.ai.core.hasHeader
+import works.resolve.aletheia.ai.core.mergeHeaders
 import works.resolve.aletheia.ai.transport.ProviderHttpException
 import works.resolve.aletheia.ai.transport.SseEvent
 import works.resolve.aletheia.ai.transport.TransportRequest
@@ -60,8 +62,14 @@ class OpenAiCompletionsApi(
         val startedAtMs = nowMs()
         val state = StreamingState(model, startedAtMs)
         try {
+            // Header-based auth (e.g. Cloudflare's cf-aig-authorization) needs
+            // no apiKey; pi's getClientApiKey allows both headers to stand in.
+            val hasAuthHeader = hasHeader(options.headers, "authorization") ||
+                hasHeader(options.headers, "cf-aig-authorization")
             val apiKey = options.apiKey
-                ?: throw IllegalStateException("No API key for provider: ${model.provider}")
+                ?: if (hasAuthHeader) null else throw IllegalStateException(
+                    "No API key for provider: ${model.provider}",
+                )
 
             val body = OpenAiCompletionsPayload.buildRequestBody(model, context, options)
                 .toString()
@@ -69,8 +77,15 @@ class OpenAiCompletionsApi(
 
             // Base URL placeholders (e.g. Cloudflare account/gateway ids) are
             // substituted from the request-time env, mirroring pi's
-            // cloudflare-stream wrapper. Model headers are merged first so the
-            // always-sent Accept header can never be overridden.
+            // cloudflare-stream wrapper. Headers merge like pi's
+            // openai-completions createClient: model headers first, then the
+            // merged request/auth headers (explicit requests win), then the
+            // always-sent Accept header, which can never be overridden
+            // (a null request value cannot remove it).
+            val mergedHeaders = mergeHeaders(
+                mergeHeaders(model.headers, options.headers),
+                mapOf("Accept" to "text/event-stream"),
+            ).filterValues { it != null }.mapValues { it.value!! }
             val url = substituteEnvPlaceholders(model.baseUrl, options.env)
                 .trimEnd('/') + "/chat/completions"
             // Defensive guard: a still-unresolved placeholder means the
@@ -85,8 +100,7 @@ class OpenAiCompletionsApi(
             val request = TransportRequest(
                 url = url,
                 bearerToken = apiKey,
-                bearerHeaderName = options.bearerHeaderName,
-                headers = model.headers + mapOf("Accept" to "text/event-stream"),
+                headers = mergedHeaders,
                 body = body,
                 timeoutMs = options.timeoutMs,
             )

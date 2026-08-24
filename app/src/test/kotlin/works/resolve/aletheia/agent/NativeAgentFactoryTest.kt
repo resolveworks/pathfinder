@@ -15,6 +15,7 @@ import works.resolve.aletheia.data.credentials.ApiKeyStore
 import works.resolve.aletheia.data.settings.ModelSettings
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
@@ -151,7 +152,6 @@ class NativeAgentFactoryTest {
             // Overridden base URL, normalized (trailing slashes dropped) + endpoint.
             assertEquals("https://example.test/api/v4/chat/completions", request.url)
             assertEquals("factory-test-key-2", request.bearerToken)
-            assertNull(request.bearerHeaderName, "zai uses the default Authorization header")
             assertTrue(request.timeoutMs != null && request.timeoutMs > 0)
 
             val body = Json.parseToJsonElement(String(request.body)).jsonObject
@@ -200,7 +200,11 @@ class NativeAgentFactoryTest {
                 request.url,
                 "credential env must be substituted into the base URL placeholders",
             )
-            assertEquals("cf-aig-authorization", request.bearerHeaderName)
+            // Header-based auth: cf-aig-authorization only, no bearer token.
+            assertNull(request.bearerToken)
+            assertEquals("Bearer cf-factory-test-key", request.headers["cf-aig-authorization"])
+            assertFalse(request.headers.containsKey("Authorization"))
+            assertFalse(request.headers.containsKey("authorization"))
         }
     }
 

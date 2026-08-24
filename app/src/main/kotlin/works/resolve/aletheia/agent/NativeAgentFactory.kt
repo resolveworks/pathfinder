@@ -3,7 +3,7 @@ package works.resolve.aletheia.agent
 import works.resolve.aletheia.ai.core.Message
 import works.resolve.aletheia.ai.core.SimpleStreamOptions
 import works.resolve.aletheia.ai.models.Models
-import works.resolve.aletheia.ai.models.ProviderCredential
+import works.resolve.aletheia.ai.models.ResolvedAuth
 import works.resolve.aletheia.ai.providers.ProviderCatalog
 import works.resolve.aletheia.ai.providers.normalizeBaseUrl
 import works.resolve.aletheia.ai.transport.HttpStreamingTransport
@@ -47,7 +47,7 @@ class NativeAgentFactory(
             authResolver = {
                 credentials.getCredential(entry.id)
                     ?.takeIf { entry.isCredentialComplete(it.key, it.env) }
-                    ?.let { credential -> ProviderCredential(credential.key, credential.env) }
+                    ?.let { credential -> entry.toResolvedAuth(credential.key, credential.env) }
             },
         )
         val models = Models(listOf(provider))
