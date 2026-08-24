@@ -647,8 +647,12 @@ class GitHubCopilotOAuthAuth(
      * divergence from pi's raw `response.text()` interpolation): the message
      * carries the status plus only structured `error`/`error_description`
      * string fields from a JSON error object; anything else (unparseable
-     * body, non-object JSON, no error fields) is fully redacted so response
-     * bodies can never leak credential material into exceptions or logs.
+     * body, non-object JSON, no error fields) is fully redacted, so raw
+     * response bodies never reach exceptions. Note the guarantee's limit:
+     * `error`/`error_description` are provider-authored text and could
+     * themselves echo request material; the app neither logs nor projects
+     * these exception messages, and credentials never travel in URLs or
+     * bodies where this port could attribute them.
      */
     internal fun statusError(status: Int, body: ByteArray): IllegalStateException =
         IllegalStateException("$status: ${safeErrorDetail(body)}")

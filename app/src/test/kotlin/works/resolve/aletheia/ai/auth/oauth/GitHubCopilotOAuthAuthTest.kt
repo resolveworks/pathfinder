@@ -829,23 +829,34 @@ class GitHubCopilotOAuthAuthTest {
     @Test
     fun `non-IOException transport failure continues the batch`() = runTest {
         val http = FakeHttpClient()
+        // Force the individual policy fallback: no picker-enabled models, so
+        // availableModelIds starts empty and only a successful policy
+        // enablement can add an id.
         http.happyPath(
             modelsBody = modelsJson(
-                modelEntry("claude-sonnet-5", state = "unconfigured"),
-                modelEntry("grok-4.6", state = "unconfigured"),
+                modelEntry("claude-sonnet-5", picker = false, state = "unconfigured"),
+                modelEntry("grok-4.6", picker = false, state = "unconfigured"),
             ),
-            policyResponses = listOf(ok("""{"policy":{"state":"enabled"}}""")),
         )
         // First enablement dies with a non-IOException transport failure...
-        http.script.add(4) { throw IllegalStateException("tls blew up") }
-        // ...but it is consumed in order, so drop the ok() and keep one success
-        // for the second model (already queued above).
+        http.script += { throw IllegalStateException("tls blew up") }
+        // ...the batch continues and the second model enables successfully.
+        http.script += { ok("""{"policy":{"state":"enabled"}}""") }
 
         val credential = auth(http).login(RecordingInteraction())
 
-        // The first model's enablement failed, the second succeeded and is merged.
+        // Both policy endpoints were actually requested, in order.
+        val policyUrls = http.requests.drop(4).map { it.url }
         assertEquals(
-            listOf("claude-sonnet-5", "grok-4.6"),
+            listOf(
+                "https://api.individual.githubcopilot.com/models/claude-sonnet-5/policy",
+                "https://api.individual.githubcopilot.com/models/grok-4.6/policy",
+            ),
+            policyUrls,
+        )
+        // Only the second (successfully enabled) model was added.
+        assertEquals(
+            listOf("grok-4.6"),
             (credential.extras["availableModelIds"] as JsonArray).map { (it as JsonPrimitive).content },
         )
     }
