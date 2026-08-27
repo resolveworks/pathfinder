@@ -9,6 +9,7 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelCost
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
+import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.core.ThinkingContent
 import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.ToolCall
@@ -531,5 +532,41 @@ class AnthropicMessagesPayloadTest {
         assertEquals("tx", sanitizeSurrogates(unpairedHigh))
         val unpairedLow = String(charArrayOf('t', 0xDE48.toChar(), 'x'))
         assertEquals("tx", sanitizeSurrogates(unpairedLow))
+    }
+
+    /** pi xhigh.test.ts / max-thinking.test.ts: xhigh/max clamp to the high budget. */
+    @Test
+    fun `xhigh and max clamp to the high thinking budget`() {
+        for (level in listOf(ThinkingLevel.XHIGH, ThinkingLevel.MAX)) {
+            val (maxTokens, thinkingBudget) =
+                adjustMaxTokensForThinking(baseMaxTokens = null, modelMaxTokens = 64_000, level)
+            assertEquals(64_000, maxTokens, "$level maxTokens")
+            assertEquals(DEFAULT_THINKING_BUDGETS.getValue(ThinkingLevel.HIGH), thinkingBudget, "$level budget")
+        }
+    }
+
+    /** pi thinkingBudgetForLevel: customBudgets merge over defaults. */
+    @Test
+    fun `custom thinking budgets override defaults per level`() {
+        val custom = mapOf(ThinkingLevel.MEDIUM to 1000, ThinkingLevel.XHIGH to 2000)
+        assertEquals(1000, thinkingBudgetForLevel(ThinkingLevel.MEDIUM, custom))
+        // xhigh clamps to high, which has no custom override, so the default high budget applies.
+        assertEquals(
+            DEFAULT_THINKING_BUDGETS.getValue(ThinkingLevel.HIGH),
+            thinkingBudgetForLevel(ThinkingLevel.XHIGH, custom),
+        )
+        // A custom high budget is used even after xhigh clamping.
+        assertEquals(2000, thinkingBudgetForLevel(ThinkingLevel.HIGH, mapOf(ThinkingLevel.HIGH to 2000)))
+    }
+
+    /** pi anthropic-messages.ts: `budget_tokens: options.thinkingBudgetTokens || 1024` — 0 coerces to 1024. */
+    @Test
+    fun `thinking budget tokens of zero coerces to 1024 like pi`() {
+        val context = Context(messages = listOf(UserMessage.ofText("hi")))
+        val budget = body(
+            context,
+            AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true, thinkingBudgetTokens = 0),
+        )["thinking"]!!.jsonObject
+        assertEquals(1024, budget["budget_tokens"]!!.jsonPrimitive.content.toInt())
     }
 }

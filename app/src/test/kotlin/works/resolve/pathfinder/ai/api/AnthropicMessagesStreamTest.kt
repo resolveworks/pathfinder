@@ -122,6 +122,37 @@ class AnthropicMessagesStreamTest {
         assertEquals("end_turn", done.message.rawStopReason)
     }
 
+    /** pi streamSimple forwards options.thinkingBudgets into the budget split. */
+    @Test
+    fun `streamSimple applies custom thinking budgets and clamps xhigh`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(textStream("hi"))
+        api(transport).streamSimple(
+            claude,
+            context,
+            SimpleStreamOptions(
+                apiKey = "k",
+                reasoning = ThinkingLevel.MEDIUM,
+                thinkingBudgets = mapOf(ThinkingLevel.MEDIUM to 4096),
+            ),
+        ).toList()
+
+        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertEquals(64_000, body["max_tokens"]!!.jsonPrimitive.content.toInt())
+        assertEquals(4096, body["thinking"]!!.jsonObject["budget_tokens"]!!.jsonPrimitive.content.toInt())
+
+        // xhigh clamps to the high budget instead of crashing (pi's clampReasoning).
+        val xhigh = FakeTransport()
+        xhigh.enqueueNamedResponse(textStream("hi"))
+        api(xhigh).streamSimple(
+            claude,
+            context,
+            SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.XHIGH),
+        ).toList()
+        val xhighBody = Json.parseToJsonElement(xhigh.requests.single().body.decodeToString()).jsonObject
+        assertEquals(16_384, xhighBody["thinking"]!!.jsonObject["budget_tokens"]!!.jsonPrimitive.content.toInt())
+    }
+
     @Test
     fun `usage from message_start survives message_delta omission and cost uses rates`() = runTest {
         val transport = FakeTransport()

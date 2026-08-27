@@ -163,7 +163,8 @@ class AnthropicMessagesApi(
                 effort = mapThinkingLevelToEffort(model, reasoning),
             )
         } else {
-            val (maxTokens, thinkingBudget) = adjustMaxTokensForThinking(base.maxTokens, model.maxTokens, reasoning)
+            val (maxTokens, thinkingBudget) =
+                adjustMaxTokensForThinking(base.maxTokens, model.maxTokens, reasoning, options.thinkingBudgets)
             val clamped = clampMaxTokensToContext(model, context, maxTokens)
             base.copy(
                 maxTokens = clamped,
