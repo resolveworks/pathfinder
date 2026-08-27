@@ -28,7 +28,11 @@ data class Model(
     val responsesCompat: OpenAiResponsesCompat? = null,
     /** Per-model HTTP headers (e.g. github-copilot, nvidia). */
     val headers: Map<String, String> = emptyMap(),
-)
+) {
+    // Reduction: pi's Model.samplingParams (types.ts:837, default sampling
+    // parameters merged under StreamOptions.samplingParams) is not ported; no
+    // adapter in scope applies per-model sampling defaults.
+}
 
 /**
  * Per-million-token reference rates (pi's ModelCostRates, types.ts:810-815).

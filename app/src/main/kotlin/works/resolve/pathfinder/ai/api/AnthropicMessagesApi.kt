@@ -6,6 +6,7 @@ import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
+import works.resolve.pathfinder.ai.core.toToolChoice
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
@@ -65,6 +66,9 @@ import kotlinx.serialization.json.longOrNull
  *   (GithubCopilotHeaders.kt); deferred tool loading, server-side
  *   fallbacks, metadata, and strict tool sampling are not ported (no surface
  *   needs them).
+ * - pi's ambient ANTHROPIC_AUTH_TOKEN (Authorization: Bearer header auth) and
+ *   ANTHROPIC_OAUTH_TOKEN (apiKey source) paths (providers/anthropic.ts:24-36)
+ *   are reduced to ANTHROPIC_API_KEY only — see ai/AGENTS.md.
  */
 class AnthropicMessagesApi(
     private val transport: HttpStreamingTransport,
@@ -155,8 +159,9 @@ class AnthropicMessagesApi(
         }
 
         val base = buildBaseOptions(model, context, options).copy(
-            // pi's streamSimple: toolChoice: options?.toolChoice (anthropic-messages.ts:834)
-            toolChoice = mapToolChoice(options.toolChoice),
+            // pi's streamSimple: toolChoice: options?.toolChoice (anthropic-messages.ts:834);
+            // the simple level carries only "auto" | "none" (types.ts:82).
+            toolChoice = mapToolChoice(options.toolChoice?.toToolChoice()),
         )
         val reasoning = options.reasoning
         val resolved: AnthropicMessagesOptions = if (reasoning == null) {

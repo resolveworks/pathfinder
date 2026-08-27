@@ -5,7 +5,7 @@ import works.resolve.pathfinder.ai.api.GoogleRequest.GoogleThinking
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
-import works.resolve.pathfinder.ai.core.ToolChoice
+import works.resolve.pathfinder.ai.core.SimpleToolChoice
 import works.resolve.pathfinder.ai.core.mergeHeaders
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
@@ -98,11 +98,12 @@ class GoogleGenerativeAiApi(
                 maxRetryDelayMs = options.maxRetryDelayMs,
                 env = options.env,
                 headers = options.headers,
+                // pi's google-generative-ai streamSimple forwards the narrow
+                // simple-API toolChoice ("auto" | "none", types.ts:82).
                 toolChoice = when (options.toolChoice) {
                     null -> null
-                    ToolChoice.Auto -> "auto"
-                    ToolChoice.None -> "none"
-                    ToolChoice.Any, ToolChoice.Required, is ToolChoice.Function -> "any"
+                    SimpleToolChoice.Auto -> "auto"
+                    SimpleToolChoice.None -> "none"
                 },
                 thinking = thinking,
             ),

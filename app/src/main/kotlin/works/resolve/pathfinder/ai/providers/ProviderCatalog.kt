@@ -180,7 +180,12 @@ class ProviderCatalog(val providers: List<CatalogProvider>) {
     }
 }
 
-/** Normalizes a base URL: trimmed, with all trailing slashes dropped. */
+/**
+ * Normalizes a base URL: trimmed, with all trailing slashes dropped.
+ * App-boundary addition: pi never normalizes base URLs (only pi-messages.ts
+ * strips trailing slashes at join time); this normalization is deliberate and
+ * used by NativeAgentFactory before requests are built.
+ */
 internal fun normalizeBaseUrl(url: String): String {
     val effective = url.trim().trimEnd('/')
     if (effective.isEmpty()) {

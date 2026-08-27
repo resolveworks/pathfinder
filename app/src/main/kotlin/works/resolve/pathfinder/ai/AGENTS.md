@@ -67,6 +67,12 @@ The following exclusions are deliberate:
 - **Image-generation providers** are outside the selected conversational AI
   provider surface. They require a separate media-generation product surface
   rather than another chat protocol adapter.
+- **Anthropic ambient auth-token paths** are deliberately reduced: pi maps
+  ANTHROPIC_AUTH_TOKEN to `Authorization: Bearer` header auth and
+  ANTHROPIC_OAUTH_TOKEN to an apiKey source (providers/anthropic.ts:24-36),
+  but Android has no ambient env, and the port's credential boundary is the
+  NoopAuthContext/keystore layer, so only ANTHROPIC_API_KEY is surfaced.
+  Revisit if ambient-token auth becomes relevant.
 
 Do not silently reintroduce an excluded provider through the catalog, a partial
 auth path, or a third-party SDK. An exclusion can be revisited explicitly if

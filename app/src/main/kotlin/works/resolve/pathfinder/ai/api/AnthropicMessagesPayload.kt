@@ -600,9 +600,9 @@ internal fun mapThinkingLevelToEffort(
 
 /**
  * Maps core ToolChoice to pi's AnthropicOptions.toolChoice wire shape
- * (anthropic-messages.ts:265). Divergence: pi's unified ToolChoice is only
- * "auto" | "none", so pi's streamSimple pass-through can never carry the
- * other shapes. The broader core enum here maps Required to Any because the
+ * (anthropic-messages.ts:265). The simple API now carries only the narrow
+ * pi ToolChoice (types.ts:82), so streamSimple pass-through can only produce
+ * Auto/None here; the remaining shapes map Required to Any because the
  * Anthropic protocol has no "required" (a tool must be called), matching the
  * Any/Required collapse in the other adapters.
  */

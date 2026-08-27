@@ -14,6 +14,7 @@ import works.resolve.pathfinder.ai.core.ThinkingContent
 import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.ToolCall
+import works.resolve.pathfinder.ai.core.SimpleToolChoice
 import works.resolve.pathfinder.ai.core.ToolChoice
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.UserMessage
@@ -541,7 +542,7 @@ class MistralConversationsApiTest {
         api(transport).streamSimple(
             model,
             context,
-            SimpleStreamOptions(apiKey = "k", toolChoice = ToolChoice.Auto),
+            SimpleStreamOptions(apiKey = "k", toolChoice = SimpleToolChoice.Auto),
         ).toList()
         val wire = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
         assertEquals("auto", wire["tool_choice"]!!.jsonPrimitive.content)

@@ -9,6 +9,7 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
+import works.resolve.pathfinder.ai.core.toToolChoice
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
@@ -244,7 +245,7 @@ class MistralConversationsApi(
                 maxRetryDelayMs = options.maxRetryDelayMs,
                 env = options.env,
                 headers = options.headers,
-                toolChoice = options.toolChoice,
+                toolChoice = options.toolChoice?.toToolChoice(),
                 cacheRetention = options.cacheRetention,
                 promptMode = if (useReasoning && usesPromptModeReasoning(model)) MistralPromptMode.REASONING else null,
                 reasoningEffort = if (useReasoning && usesReasoningEffort(model)) {
