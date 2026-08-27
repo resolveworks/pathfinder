@@ -26,6 +26,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -159,6 +160,9 @@ class OpenAiCompletionsApi(
             emit(AssistantMessageEvent.Done(state.stopReason, state.snapshot()))
         } catch (error: Exception) {
             if (error is CancellationException) throw error
+            // pi openai-completions.ts:693-696: the partial error message still
+            // carries the serialized reasoning details.
+            state.applyStreamedReasoningDetails()
             val finalMessage = state.snapshot().copy(
                 stopReason = StopReason.ERROR,
                 errorMessage = formatProviderError(error),
@@ -238,6 +242,15 @@ class OpenAiCompletionsApi(
 
         (delta["tool_calls"] as? JsonArray)?.forEach { element ->
             (element as? JsonObject)?.let { events += state.appendToolCallDelta(it) }
+        }
+
+        // pi openai-completions.ts:655-665: reasoning_details deltas keep the
+        // provider replay data in the thinking signature slot; they are not
+        // user-visible stream deltas, so no thinking_delta is emitted.
+        (delta["reasoning_details"] as? JsonArray)?.forEach { element ->
+            if (element is JsonObject && isOpenAiReasoningDetail(element)) {
+                state.appendReasoningDetail(LinkedHashMap(element))
+            }
         }
         return events
     }
@@ -361,6 +374,10 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     private var thinking = ""
     private var thinkingSignature: String? = null
 
+    // pi openai-completions.ts:332-334: reasoning_details are replay metadata,
+    // kept in memory during streaming and serialized once when finalized.
+    private var streamedReasoningDetails: MutableList<MutableMap<String, JsonElement>>? = null
+
     var usage: Usage = Usage()
     var stopReason: StopReason = StopReason.PENDING
     var errorMessage: String? = null
@@ -394,16 +411,45 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     }
 
     fun appendThinking(delta: String, signature: String): List<AssistantMessageEvent> {
+        val events = ensureThinkingBlock(signature)
+        thinking += delta
+        events.add(AssistantMessageEvent.ThinkingDelta(thinkingIndex, delta, snapshot()))
+        return events
+    }
+
+    /** pi's ensureThinkingBlock (openai-completions.ts:473). */
+    private fun ensureThinkingBlock(signature: String): MutableList<AssistantMessageEvent> {
         val events = mutableListOf<AssistantMessageEvent>()
         if (thinkingIndex == -1) {
             thinkingIndex = blocks.size
             blocks.add(Block.Thinking)
+            thinkingSignature = signature
             events.add(AssistantMessageEvent.ThinkingStart(thinkingIndex, snapshot()))
         }
-        thinkingSignature = signature
-        thinking += delta
-        events.add(AssistantMessageEvent.ThinkingDelta(thinkingIndex, delta, snapshot()))
         return events
+    }
+
+    /**
+     * pi openai-completions.ts:655-665: opens the thinking block (with an
+     * empty signature, overwritten at finish) and merges the delta into the
+     * accumulated reasoning details.
+     */
+    fun appendReasoningDetail(detail: MutableMap<String, JsonElement>) {
+        ensureThinkingBlock("")
+        val details = streamedReasoningDetails
+            ?: mutableListOf<MutableMap<String, JsonElement>>().also { streamedReasoningDetails = it }
+        appendOpenAIReasoningDetail(details, detail)
+    }
+
+    /**
+     * pi openai-completions.ts:335-338 applyStreamedReasoningDetails:
+     * serializes the accumulated details into the thinking signature once
+     * the block is finalized (including on error).
+     */
+    fun applyStreamedReasoningDetails() {
+        streamedReasoningDetails?.let {
+            thinkingSignature = JsonArray(it.map { detail -> JsonObject(detail) }).toString()
+        }
     }
 
     fun appendToolCallDelta(delta: JsonObject): List<AssistantMessageEvent> {
@@ -434,11 +480,16 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     }
 
     /** Emits the terminal event for every open block, exactly once per block. */
-    fun finish(): List<AssistantMessageEvent> = blocks.mapIndexed { index, block ->
-        when (block) {
-            Block.Text -> AssistantMessageEvent.TextEnd(index, text, snapshot())
-            Block.Thinking -> AssistantMessageEvent.ThinkingEnd(index, thinking, snapshot())
-            is Block.Tool -> AssistantMessageEvent.ToolCallEnd(index, toolCallOf(block.accumulator), snapshot())
+    fun finish(): List<AssistantMessageEvent> {
+        // pi finishBlock (openai-completions.ts:431) applies the serialized
+        // reasoning details before thinking_end.
+        applyStreamedReasoningDetails()
+        return blocks.mapIndexed { index, block ->
+            when (block) {
+                Block.Text -> AssistantMessageEvent.TextEnd(index, text, snapshot())
+                Block.Thinking -> AssistantMessageEvent.ThinkingEnd(index, thinking, snapshot())
+                is Block.Tool -> AssistantMessageEvent.ToolCallEnd(index, toolCallOf(block.accumulator), snapshot())
+            }
         }
     }
 
