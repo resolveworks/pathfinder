@@ -522,7 +522,7 @@ internal fun buildRequestBody(
             } else {
                 body["thinking"] = buildJsonObject {
                     put("type", "enabled")
-                    put("budget_tokens", options.thinkingBudgetTokens ?: 1024)
+                    put("budget_tokens", options.thinkingBudgetTokens?.takeIf { it != 0 } ?: 1024)
                     put("display", display.name.lowercase())
                 }
             }
@@ -564,16 +564,34 @@ internal val DEFAULT_THINKING_BUDGETS = mapOf(
     works.resolve.pathfinder.ai.core.ThinkingLevel.HIGH to 16384,
 )
 
-internal fun thinkingBudgetForLevel(level: works.resolve.pathfinder.ai.core.ThinkingLevel): Int =
-    DEFAULT_THINKING_BUDGETS[level]!!
+/** pi's clampReasoning: xhigh/max clamp to high before budget lookups. */
+internal fun clampReasoning(
+    level: works.resolve.pathfinder.ai.core.ThinkingLevel,
+): works.resolve.pathfinder.ai.core.ThinkingLevel =
+    if (level == works.resolve.pathfinder.ai.core.ThinkingLevel.XHIGH ||
+        level == works.resolve.pathfinder.ai.core.ThinkingLevel.MAX
+    ) {
+        works.resolve.pathfinder.ai.core.ThinkingLevel.HIGH
+    } else {
+        level
+    }
+
+internal fun thinkingBudgetForLevel(
+    level: works.resolve.pathfinder.ai.core.ThinkingLevel,
+    customBudgets: Map<works.resolve.pathfinder.ai.core.ThinkingLevel, Int> = emptyMap(),
+): Int {
+    val budgets = DEFAULT_THINKING_BUDGETS + customBudgets
+    return budgets[clampReasoning(level)]!!
+}
 
 /** pi's adjustMaxTokensForThinking: fit a thinking budget under the response ceiling. */
 internal fun adjustMaxTokensForThinking(
     baseMaxTokens: Int?,
     modelMaxTokens: Int,
     reasoningLevel: works.resolve.pathfinder.ai.core.ThinkingLevel,
+    customBudgets: Map<works.resolve.pathfinder.ai.core.ThinkingLevel, Int> = emptyMap(),
 ): Pair<Int, Int> {
-    var thinkingBudget = thinkingBudgetForLevel(reasoningLevel)
+    var thinkingBudget = thinkingBudgetForLevel(reasoningLevel, customBudgets)
     val maxTokens = if (baseMaxTokens == null) {
         modelMaxTokens
     } else {
