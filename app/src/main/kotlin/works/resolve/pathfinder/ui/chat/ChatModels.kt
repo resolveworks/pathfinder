@@ -33,6 +33,11 @@ data class ChatMessage(
     val blocks: List<ChatBlock>,
     /** User-facing failure text for error/aborted assistant messages. */
     val error: String? = null,
+    /**
+     * Marker row for a compaction cut in the active path (pi's CompactionEntry):
+     * renders as a minimal divider instead of message content.
+     */
+    val isCompactionMarker: Boolean = false,
 )
 
 /** Navigation 3 destination key: the conversation surface. */
@@ -236,6 +241,8 @@ data class ChatUiState(
     val isStreaming: Boolean = false,
     /** Transient auto-retry backoff status; null when not retrying. */
     val retryStatus: AutoRetryStatus? = null,
+    /** True between compaction_start and compaction_end (pi's compaction in-progress window). */
+    val isCompacting: Boolean = false,
     val canSend: Boolean = false,
     /** Display-only flag: whether to show the model's reasoning (never affects the agent). */
     val showThinking: Boolean = false,

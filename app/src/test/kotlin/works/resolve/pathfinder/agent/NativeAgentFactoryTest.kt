@@ -42,6 +42,9 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 class NativeAgentFactoryTest {
 
+    /** Compaction off: URL/auth tests are single-request and not about compaction. */
+    private val COMPACT_OFF = works.resolve.pathfinder.agent.compaction.CompactionSettings(enabled = false, reserveTokens = 16384, keepRecentTokens = 20000)
+
     private fun emptyConversation(): works.resolve.pathfinder.data.sessions.Conversation =
         works.resolve.pathfinder.data.sessions.Conversation(emptyList(), null)
 
@@ -314,7 +317,7 @@ class NativeAgentFactoryTest {
             )
             val transport = RecordingTransport()
             val agent = NativeAgentFactory(FakeCredentialStore(ApiKeyCredential("k")), catalog, transport)
-                .create(ModelSettings(providerId = "multi", modelId = "m"), "s1", emptyConversation())
+                .create(ModelSettings(providerId = "multi", modelId = "m", compaction = COMPACT_OFF), "s1", emptyConversation())
 
             agent.prompt("ping")
 
@@ -369,7 +372,7 @@ class NativeAgentFactoryTest {
                 transport = transport,
                 authRegistry = ProductionCatalogAuthRegistry,
             ).create(
-                ModelSettings(providerId = "openrouter", modelId = model.id),
+                ModelSettings(providerId = "openrouter", modelId = model.id, compaction = COMPACT_OFF),
                 "s1",
                 emptyConversation(),
             )

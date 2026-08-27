@@ -338,6 +338,9 @@ fun ChatScreen(
                                 maxAttempts = retry.maxAttempts,
                             )
                         }
+                        if (uiState.isCompacting) {
+                            CompactingStatusRow()
+                        }
                         Composer(
                             draft = uiState.draft,
                             onDraftChange = onDraftChange,
@@ -1313,17 +1316,42 @@ private fun ConversationContent(
                 }
             }
             items(uiState.messages.asReversed(), key = ChatMessage::id) { message ->
-                MessageItem(
-                    message = message,
-                    showThinking = uiState.showThinking,
-                    thinkingOverrides = thinkingOverrides,
-                )
+                if (message.isCompactionMarker) {
+                    CompactedDivider()
+                } else {
+                    MessageItem(
+                        message = message,
+                        showThinking = uiState.showThinking,
+                        thinkingOverrides = thinkingOverrides,
+                    )
+                }
                 HorizontalDivider()
             }
         }
     }
 }
 
+/**
+ * Minimal divider marking a compaction cut in the active path (pi's
+ * CompactionEntry): centered label between rules; the summary itself lives
+ * in LLM context only.
+ */
+@Composable
+private fun CompactedDivider() {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HorizontalDivider(modifier = Modifier.weight(1f))
+        Text(
+            text = stringResource(R.string.chat_compacted),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
+        HorizontalDivider(modifier = Modifier.weight(1f))
+    }
+}
 /**
  * One chat row. User messages render plain concatenated text; assistant
  * messages render their blocks in content order — text blocks as markdown,
@@ -1443,6 +1471,19 @@ private fun ThinkingBlock(
 private fun RetryStatusRow(attempt: Int, maxAttempts: Int, modifier: Modifier = Modifier) {
     Text(
         text = stringResource(R.string.chat_retrying, attempt, maxAttempts),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp),
+    )
+}
+
+/** Transient "Compacting…" status between compaction_start and compaction_end. */
+@Composable
+private fun CompactingStatusRow(modifier: Modifier = Modifier) {
+    Text(
+        text = stringResource(R.string.chat_compacting),
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier

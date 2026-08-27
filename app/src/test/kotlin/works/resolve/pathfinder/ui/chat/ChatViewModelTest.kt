@@ -3,6 +3,12 @@ package works.resolve.pathfinder.ui.chat
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.viewModelScope
 import works.resolve.pathfinder.agent.AgentSession
+import works.resolve.pathfinder.ai.api.ChatApi
+import works.resolve.pathfinder.ai.core.Context
+import works.resolve.pathfinder.ai.core.SimpleStreamOptions
+import works.resolve.pathfinder.ai.models.Models
+import works.resolve.pathfinder.ai.models.Provider
+import works.resolve.pathfinder.ai.models.ResolvedAuth
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentFactory
 import works.resolve.pathfinder.agent.StreamFn
@@ -221,6 +227,41 @@ class ChatViewModelTest {
         /** Scripted stream flows per prompt; queued before send(). */
         val scriptedStreams = ConcurrentLinkedQueue<Flow<AssistantMessageEvent>>()
 
+        /**
+         * Fake summarization stack for compaction tests: a faux provider
+         * serving [summaryResponses] through [Models.completeSimple]
+         * (CompactionLlmTest pattern), optionally gated mid-summary.
+         */
+        var compactionModels: Models? = null
+        val summaryResponses = ConcurrentLinkedQueue<AssistantMessage>()
+        var summaryGate: CompletableDeferred<Unit>? = null
+
+        fun installCompactionModels() {
+            val api = object : ChatApi {
+                override fun streamSimple(model: Model, context: Context, options: SimpleStreamOptions) = flow {
+                    summaryGate?.await()
+                    val response = summaryResponses.poll() ?: error("No summary response queued")
+                    if (response.stopReason == StopReason.ERROR || response.stopReason == StopReason.ABORTED) {
+                        emit(AssistantMessageEvent.Error(response.stopReason, response))
+                    } else {
+                        emit(AssistantMessageEvent.Done(response.stopReason, response))
+                    }
+                }
+            }
+            compactionModels = Models(
+                listOf(
+                    Provider(
+                        testModel.provider,
+                        testModel.provider,
+                        "https://faux.test",
+                        authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
+                        models = listOf(testModel),
+                        apis = mapOf(testModel.api to api),
+                    ),
+                ),
+            )
+        }
+
         /** Model ids rejected by the fake factory (validation-error path). */
         val rejectedModelIds = mutableSetOf<String>()
 
@@ -240,6 +281,8 @@ class ChatViewModelTest {
                 ),
                 conversation = conversation,
                 retrySettings = settings.retry,
+                compactionSettings = settings.compaction,
+                models = compactionModels,
             ).also { session -> createdAgents += session }
         }
 
@@ -547,6 +590,59 @@ class ChatViewModelTest {
         assertEquals(StopReason.ABORTED, assistant.stopReason)
 
         vm.closeForTest()
+    }
+
+    @Test
+    fun autoCompaction_showsStatus_persistsEntry_andProjectsMarker() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        h.installCompactionModels()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        // Threshold trigger: usage beyond contextWindow - reserveTokens.
+        val bigUsage = works.resolve.pathfinder.ai.core.Usage(input = 190_000, output = 10, totalTokens = 190_010)
+        h.scriptedStreams.add(
+            flowOf(
+                AssistantMessageEvent.Start(h.assistant("")),
+                AssistantMessageEvent.Done(StopReason.STOP, h.assistant("long").copy(usage = bigUsage)),
+            )
+        )
+        h.summaryResponses.add(h.assistant("SUMMARY"))
+        val gate = CompletableDeferred<Unit>()
+        h.summaryGate = gate
+        vm.onDraftChange("Hello")
+        vm.send()
+
+        // Mid-compaction: the transient status is visible while the turn's
+        // final message is already committed.
+        vm.uiState.first { it.isCompacting }
+        gate.complete(Unit)
+
+        vm.uiState.first { !it.isCompacting && !it.isStreaming }
+        val state = vm.uiState.value
+        assertFalse(state.isCompacting)
+        assertNull(state.retryStatus)
+        // The compaction cut projects as a divider marker in the transcript.
+        assertTrue(state.messages.any { it.isCompactionMarker })
+
+        // The compaction entry is persisted with the tree and survives adoption.
+        val sessionId = state.activeSessionId!!
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+        vm.closeForTest()
+        val vm2 = ChatViewModel(
+            settingsRepository = h.settingsStore,
+            catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
+            authService = h.authService,
+            sessionStore = h.sessions,
+            agentFactory = h.factory,
+        )
+        val restored = vm2.uiState.first { it.status == ChatStatus.Ready }
+        assertTrue(restored.messages.any { it.isCompactionMarker })
+        val loaded = h.sessionStore.load(sessionId)!!
+        assertTrue(loaded.entries.any { it is works.resolve.pathfinder.data.sessions.CompactionEntry })
+        vm2.closeForTest()
     }
 
     @Test

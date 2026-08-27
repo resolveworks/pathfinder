@@ -88,6 +88,8 @@ class NativeAgentFactory(
             ),
             conversation = conversation,
             retrySettings = settings.retry,
+            compactionSettings = settings.compaction,
+            models = models,
         )
     }
 }

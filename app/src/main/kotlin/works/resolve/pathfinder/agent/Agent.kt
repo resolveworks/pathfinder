@@ -242,6 +242,11 @@ class Agent(
             is AgentEvent.TurnStart,
             is AgentEvent.AutoRetryStart,
             is AgentEvent.AutoRetryEnd,
+            is AgentEvent.CompactionStart,
+            is AgentEvent.CompactionEnd,
+            is AgentEvent.SummarizationRetryScheduled,
+            is AgentEvent.SummarizationRetryAttemptStart,
+            AgentEvent.SummarizationRetryFinished,
             -> Unit
 
             is AgentEvent.MessageStart -> reduce { it.copy(streamingMessage = event.message as? AssistantMessage) }

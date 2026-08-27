@@ -5,8 +5,24 @@ import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.models.Models
 import works.resolve.pathfinder.ai.utils.Retry
+import works.resolve.pathfinder.ai.utils.RetryCallbacks
+import works.resolve.pathfinder.ai.utils.RetryPolicy
+import works.resolve.pathfinder.ai.utils.calculateContextTokens
+import works.resolve.pathfinder.ai.utils.estimateMessageTokens
 import works.resolve.pathfinder.ai.utils.isContextOverflow
+import works.resolve.pathfinder.ai.utils.isRecoverableLength
+import works.resolve.pathfinder.agent.compaction.CompactionErrorCode
+import works.resolve.pathfinder.agent.compaction.CompactionSettings
+import works.resolve.pathfinder.agent.compaction.CompactionResult as CompactionOutcome
+import works.resolve.pathfinder.agent.compaction.DEFAULT_COMPACTION_SETTINGS
+import works.resolve.pathfinder.agent.compaction.buildSessionContext
+import works.resolve.pathfinder.agent.compaction.compact
+import works.resolve.pathfinder.agent.compaction.estimateContextTokens
+import works.resolve.pathfinder.agent.compaction.getLatestCompactionEntry
+import works.resolve.pathfinder.agent.compaction.prepareCompaction
+import works.resolve.pathfinder.agent.compaction.shouldCompact
 import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.settings.RetrySettings
 import kotlinx.coroutines.CancellationException
@@ -40,7 +56,10 @@ import kotlinx.coroutines.withContext
  * Deliberate exclusions (documented at each boundary): pi's steer/follow-up
  * queues and queued-message continuation (`_queueSteer`/`_queueFollowUp`,
  * `agent.hasQueuedMessages()`), extension commands and hooks, prompt
- * templates/skills, and compaction (added in this port's later waves).
+ * templates/skills, manual compaction (`/compact` → `AgentSession.compact`),
+ * branch summarization, and the `session_before_compact`/`session_compact`/
+ * `session_compact_failed` extension events (pathfinder has no extension
+ * runner; only the default summarization path is ported).
  */
 class AgentSession(
     /** The single-run agent this session orchestrates. */
@@ -49,6 +68,15 @@ class AgentSession(
     conversation: Conversation = Conversation(emptyList(), null),
     /** Auto-retry budget for failed runs (pi's settings.retry, agent-session auto-retry). */
     val retrySettings: RetrySettings = RetrySettings(),
+    /** Compaction thresholds (pi's settings compaction object, `DEFAULT_COMPACTION_SETTINGS`). */
+    val compactionSettings: CompactionSettings = DEFAULT_COMPACTION_SETTINGS,
+    /**
+     * Provider stack used for compaction summarization (pi's
+     * `_getSummarizationRequestAuth` + `this.agent.streamFunction`). Null
+     * disables automatic compaction — the trigger checks then decline
+     * without events, which is how sessions without a usable provider ride.
+     */
+    private val models: Models? = null,
     /** Injectable backoff sleep so tests never wait. */
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) {
@@ -90,6 +118,18 @@ class AgentSession(
     /** Stateful classifier for transient provider errors (pi's isRetryableAssistantError). */
     private val retryClassifier = Retry()
 
+    /**
+     * True once an overflow compact-and-retry has been attempted for the
+     * current turn, pi's `_overflowRecoveryAttempted` (agent-session.ts:336):
+     * reset when a user message starts or a non-error/non-length assistant
+     * message completes.
+     */
+    private var overflowRecoveryAttempted = false
+
+    /** True while automatic compaction runs; guards prompt submission (pi's `_compactionAbortController` window). */
+    @Volatile
+    private var compactionInProgress = false
+
     private val _events = MutableSharedFlow<AgentEvent>()
 
     /**
@@ -129,6 +169,9 @@ class AgentSession(
      */
     suspend fun prompt(text: String) {
         synchronized(lock) {
+            if (compactionInProgress) {
+                throw IllegalStateException(COMPACTION_IN_PROGRESS)
+            }
             if (active) {
                 throw IllegalStateException(
                     "Agent is already processing a prompt. Wait for completion or abort it.",
@@ -196,6 +239,11 @@ class AgentSession(
      */
     private suspend fun processEvent(event: AgentEvent) {
         when (event) {
+            // A user message starting a turn clears the one-shot overflow
+            // recovery budget (pi's _handleAgentEvent, agent-session.ts ~627).
+            is AgentEvent.MessageStart -> {
+                if (event.message is UserMessage) overflowRecoveryAttempted = false
+            }
             is AgentEvent.MessageEnd -> {
                 // Pi's sessionManager.appendMessage on message_end: the tree
                 // is the persistence unit and is append-only, so removed
@@ -205,6 +253,9 @@ class AgentSession(
                 val assistant = event.message as? AssistantMessage
                 if (assistant != null) {
                     lastAssistantMessage = assistant
+                    if (assistant.stopReason != StopReason.ERROR && assistant.stopReason != StopReason.LENGTH) {
+                        overflowRecoveryAttempted = false
+                    }
                     // Reset the retry counter immediately on a successful
                     // assistant response (agent-session.ts ~684): fires at
                     // that message's completion, not at post-run.
@@ -247,8 +298,304 @@ class AgentSession(
             )
             retryAttempt = 0
         }
+
+        if (checkCompaction(msg)) {
+            return true
+        }
+
+        // Pi continues once more for queued steer/follow-up messages
+        // (`agent.hasQueuedMessages()`); pathfinder has no queues, so the
+        // post-run loop ends here.
         return false
     }
+
+    // ---- automatic compaction (pi agent-session.ts ~2104) ----
+
+    /**
+     * Dispatch automatic compaction after a run, ported from pi's
+     * `_checkCompaction` (agent-session.ts ~2104).
+     *
+     * Cases: (1) overflow with retry — a context-overflow error or
+     * recoverable length stop is removed from agent state, compacted, and
+     * the turn retried once; (2) overflow without retry — a successful
+     * response exceeded the context window, compacted without retry;
+     * (3) threshold — direct or estimated context usage crossed the
+     * configured threshold, compacted without retry.
+     *
+     * Divergence: pi's `skipAbortedCheck = false` parameter exists for its
+     * pre-prompt compaction dispatch (`compactIfNeeded before submission) —
+     * pathfinder dispatches compaction only post-run (there are no queued
+     * prompts that could overflow between turns), so the parameter has no
+     * call site and is not ported; aborted messages always skip here.
+     *
+     * @return Whether the post-run loop should continue the agent (overflow
+     *   recovery).
+     */
+    private suspend fun checkCompaction(assistantMessage: AssistantMessage): Boolean {
+        if (!compactionSettings.enabled) return false
+
+        // Skip if the message was aborted (user cancelled).
+        if (assistantMessage.stopReason == StopReason.ABORTED) return false
+
+        // No summarization provider: nothing compaction can do.
+        if (models == null) return false
+
+        val contextWindow = model.contextWindow
+
+        // Skip overflow checks when the message came from a different model:
+        // an overflow error from a model the user switched away from must not
+        // compact for the new model (pi's sameModel guard).
+        val sameModel =
+            assistantMessage.provider == model.provider && assistantMessage.model == model.id
+
+        // Skip when this assistant message predates the latest compaction
+        // boundary: stale pre-compaction usage/errors must not retrigger
+        // compaction on the first prompt after one just finished.
+        val compactionEntry = getLatestCompactionEntry(conversation.activeEntries())
+        if (compactionEntry != null && assistantMessage.timestamp <= compactionEntry.timestamp) {
+            return false
+        }
+
+        // Cases 1 and 2: context overflow.
+        val contextOverflow = sameModel && isContextOverflow(assistantMessage, contextWindow)
+        val recoverableLength = sameModel && isRecoverableLength(assistantMessage, model.maxTokens)
+        if (contextOverflow || recoverableLength) {
+            val willRetry = assistantMessage.stopReason != StopReason.STOP
+
+            // Case 2: the response completed successfully. Compact, but do
+            // not retry — agent.continue() cannot continue from a completed
+            // assistant response.
+            if (!willRetry) {
+                return runAutoCompaction(AgentEvent.CompactionReason.OVERFLOW, willRetry = false)
+            }
+
+            if (overflowRecoveryAttempted) {
+                _events.emit(
+                    AgentEvent.CompactionEnd(
+                        reason = AgentEvent.CompactionReason.OVERFLOW,
+                        aborted = false,
+                        willRetry = false,
+                        errorMessage = if (contextOverflow) {
+                            OVERFLOW_RECOVERY_FAILED
+                        } else {
+                            TRUNCATED_RECOVERY_FAILED
+                        },
+                    ),
+                )
+                return false
+            }
+
+            // Case 1: remove the failed or truncated message from agent
+            // state, compact, and retry once. The message remains in the
+            // session tree but is excluded from the retry context.
+            overflowRecoveryAttempted = true
+            val messages = agent.state.value.messages
+            if (messages.isNotEmpty() && messages.last() is AssistantMessage) {
+                agent.replaceTranscript(messages.dropLast(1))
+            }
+            return runAutoCompaction(AgentEvent.CompactionReason.OVERFLOW, willRetry)
+        }
+
+        // Case 3: threshold compaction without retry. For error messages or
+        // all-zero usage, estimate from message sizes; usage-backed
+        // estimates additionally verify the usage source is post-compaction
+        // (kept pre-compaction messages carry stale, larger usage).
+        val directContextTokens = calculateContextTokens(assistantMessage.usage)
+        val contextTokens: Int
+        if (assistantMessage.stopReason == StopReason.ERROR || directContextTokens == 0) {
+            val messages = agent.state.value.messages
+            val estimate = estimateContextTokens(messages)
+            if (estimate.lastUsageIndex != null) {
+                val usageMsg = messages[estimate.lastUsageIndex!!]
+                if (
+                    compactionEntry != null &&
+                    usageMsg is AssistantMessage &&
+                    usageMsg.timestamp <= compactionEntry.timestamp
+                ) {
+                    return false
+                }
+            }
+            contextTokens = estimate.tokens
+        } else {
+            contextTokens = directContextTokens
+        }
+        if (shouldCompact(contextTokens, contextWindow, compactionSettings)) {
+            return runAutoCompaction(AgentEvent.CompactionReason.THRESHOLD, willRetry = false)
+        }
+        return false
+    }
+
+    /**
+     * Execute threshold or overflow compaction, ported from pi's
+     * `_runAutoCompaction` (agent-session.ts ~1960).
+     *
+     * Exclusions: the `session_before_compact` extension hook (cancel or
+     * extension-supplied compaction) and the `session_compact`/
+     * `session_compact_failed` extension events have no extension runner in
+     * pathfinder, so only the default summary generator runs. Manual
+     * compaction (pi's `compact()`) enters through the same helper upstream
+     * but has no entry point here.
+     *
+     * Divergence: upstream signals abort through AbortControllers and emits
+     * `compaction_end{aborted:true}` only for its explicit signal checks;
+     * here compaction runs inside the prompt coroutine, so abort is plain
+     * cancellation and the aborted `compaction_end` is emitted under
+     * [NonCancellable] before rethrowing (the retry-end precedent).
+     *
+     * @return Whether the post-run loop should continue the agent.
+     */
+    private suspend fun runAutoCompaction(
+        reason: AgentEvent.CompactionReason,
+        willRetry: Boolean,
+    ): Boolean {
+        val summarizationModels = models ?: return false
+        var started = false
+        compactionInProgress = true
+        try {
+            val pathEntries = conversation.activeEntries()
+            val preparation = when (
+                val outcome = prepareCompaction(pathEntries, compactionSettings)
+            ) {
+                is CompactionOutcome.Err -> return false
+                is CompactionOutcome.Ok -> outcome.value ?: return false
+            }
+
+            _events.emit(AgentEvent.CompactionStart(reason))
+            started = true
+
+            val compactResult = when (
+                val outcome = compact(
+                    preparation,
+                    summarizationModels,
+                    model,
+                    retry = RetryPolicy(
+                        enabled = retrySettings.enabled,
+                        maxRetries = retrySettings.maxRetries,
+                        baseDelayMs = retrySettings.baseDelayMs,
+                    ),
+                    callbacks = summarizationRetryCallbacks(reason),
+                )
+            ) {
+                is CompactionOutcome.Err -> {
+                    if (outcome.error.code == CompactionErrorCode.ABORTED) {
+                        _events.emit(
+                            AgentEvent.CompactionEnd(reason = reason, aborted = true, willRetry = false),
+                        )
+                        return false
+                    }
+                    _events.emit(
+                        AgentEvent.CompactionEnd(
+                            reason = reason,
+                            aborted = false,
+                            willRetry = false,
+                            errorMessage = compactionFailureMessage(reason, outcome.error.message ?: "compaction failed"),
+                        ),
+                    )
+                    return false
+                }
+                is CompactionOutcome.Ok -> outcome.value
+            }
+
+            // Single append point: the tree either gains the compaction entry
+            // or does not — an abort mid-summarization leaves it untouched.
+            conversation = conversation.appendCompaction(
+                summary = compactResult.summary,
+                retainedTail = compactResult.retainedTail,
+                tokensBefore = compactResult.tokensBefore,
+                details = compactResult.details,
+                usage = compactResult.usage,
+            )
+            val sessionContext = buildSessionContext(conversation.activeEntries())
+            agent.replaceTranscript(sessionContext)
+            val estimatedTokensAfter = sessionContext.sumOf { estimateMessageTokens(it) }
+
+            _events.emit(
+                AgentEvent.CompactionEnd(
+                    reason = reason,
+                    result = AgentEvent.CompactionResult(
+                        summary = compactResult.summary,
+                        tokensBefore = compactResult.tokensBefore,
+                        estimatedTokensAfter = estimatedTokensAfter,
+                        usage = compactResult.usage,
+                        details = compactResult.details,
+                    ),
+                    aborted = false,
+                    willRetry = willRetry,
+                ),
+            )
+
+            if (willRetry) {
+                // The overflow response was persisted on message_end before
+                // checkCompaction removed it from agent state; rebuilding
+                // from the new compaction can restore that kept entry as the
+                // trailing message. agent.continue() (a plain run) would send
+                // from it, so remove the retriable error or truncated-length
+                // response again before continuing the interrupted turn
+                // (agent-session.ts ~2355).
+                val messages = agent.state.value.messages
+                val lastMsg = messages.lastOrNull()
+                if (lastMsg is AssistantMessage &&
+                    (lastMsg.stopReason == StopReason.ERROR || lastMsg.stopReason == StopReason.LENGTH)
+                ) {
+                    agent.replaceTranscript(messages.dropLast(1))
+                }
+                return true
+            }
+
+            // Pi continues once when steer/follow-up messages queued during
+            // compaction; no queues exist here.
+            return false
+        } catch (e: CancellationException) {
+            if (started) {
+                withContext(NonCancellable) {
+                    _events.emit(AgentEvent.CompactionEnd(reason = reason, aborted = true, willRetry = false))
+                }
+            }
+            throw e
+        } catch (e: Exception) {
+            if (started) {
+                _events.emit(
+                    AgentEvent.CompactionEnd(
+                        reason = reason,
+                        aborted = false,
+                        willRetry = false,
+                        errorMessage = compactionFailureMessage(reason, e.message ?: "compaction failed"),
+                    ),
+                )
+            }
+            return false
+        } finally {
+            compactionInProgress = false
+        }
+    }
+
+    /**
+     * Retry callbacks for the summary LLM calls, pi's
+     * `_summarizationRetryCallbacks` (agent-session.ts ~2837) reduced to the
+     * compaction source (branchSummary excluded).
+     */
+    private fun summarizationRetryCallbacks(reason: AgentEvent.CompactionReason): RetryCallbacks =
+        RetryCallbacks(
+            onRetryScheduled = { attempt, maxAttempts, delayMs, errorMessage ->
+                _events.emit(
+                    AgentEvent.SummarizationRetryScheduled(attempt, maxAttempts, delayMs, errorMessage),
+                )
+            },
+            onRetryAttemptStart = {
+                _events.emit(AgentEvent.SummarizationRetryAttemptStart(reason))
+            },
+            onRetryFinished = { _, _, _ ->
+                _events.emit(AgentEvent.SummarizationRetryFinished)
+            },
+        )
+
+    /** Pi's failure formatting for thrown/auto-compaction errors (agent-session.ts ~2365). */
+    private fun compactionFailureMessage(reason: AgentEvent.CompactionReason, message: String): String =
+        if (reason == AgentEvent.CompactionReason.OVERFLOW) {
+            "Context overflow recovery failed: $message"
+        } else {
+            "Auto-compaction failed: $message"
+        }
 
     /**
      * Ported from pi's `_isRetryableError` (agent-session.ts ~2825): context
@@ -320,5 +667,15 @@ class AgentSession(
     private companion object {
         /** Pi's literal backoff-cancel message (agent-session.ts _prepareRetry). */
         const val RETRY_CANCELLED = "Retry cancelled"
+
+        /** Pi's prompt-during-compaction rejection (agent-session.ts prompt). */
+        const val COMPACTION_IN_PROGRESS =
+            "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry."
+
+        /** Pi's one-shot overflow recovery failures (agent-session.ts _checkCompaction), verbatim. */
+        const val OVERFLOW_RECOVERY_FAILED =
+            "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model."
+        const val TRUNCATED_RECOVERY_FAILED =
+            "Truncated response recovery failed after one compact-and-retry attempt."
     }
 }

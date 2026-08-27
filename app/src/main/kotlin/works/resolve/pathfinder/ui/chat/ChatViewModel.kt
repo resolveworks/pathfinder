@@ -24,6 +24,7 @@ import works.resolve.pathfinder.ai.auth.ProviderAuthService
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.data.settings.SettingsRepository
+import works.resolve.pathfinder.data.sessions.CompactionEntry
 import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.sessions.MessageEntry
 import works.resolve.pathfinder.data.sessions.Session
@@ -550,6 +551,21 @@ class ChatViewModel(
                 it.copy(retryStatus = AutoRetryStatus(event.attempt, event.maxAttempts))
             }
             is AgentEvent.AutoRetryEnd -> updateState { it.copy(retryStatus = null) }
+            is AgentEvent.CompactionStart -> updateState { it.copy(isCompacting = true) }
+            is AgentEvent.CompactionEnd -> {
+                updateState { it.copy(isCompacting = false, treeRows = buildTreeRows(activeConversation, it.treeFilter)) }
+                // The compaction entry was appended to the tree before the
+                // end event; persist the grown tree.
+                if (activeConversation.entries.size > persistedEntryCount) {
+                    enqueuePersist()
+                }
+            }
+            // Summarization-retry telemetry is not surfaced in the UI yet
+            // (pi shows it in the spinner tooltip).
+            is AgentEvent.SummarizationRetryScheduled,
+            is AgentEvent.SummarizationRetryAttemptStart,
+            is AgentEvent.SummarizationRetryFinished,
+            -> Unit
             // The session tree appends on message_end (AgentSession, pi's
             // sessionManager.appendMessage); re-project rows and persist on
             // tree growth, not agent-transcript growth — an auto-retry or
@@ -1197,23 +1213,33 @@ private fun projectCommitted(liveMessages: List<Message>, conversation: Conversa
     live.addAll(liveMessages)
     val projected = mutableListOf<ChatMessage>()
     conversation.activeEntries().forEachIndexed { index, entry ->
-        if (entry !is MessageEntry || !live.contains(entry.message)) return@forEachIndexed
-        val message = entry.message
-        val chat = when (message) {
-            is UserMessage -> ChatMessage(
-                id = "msg-$index-${message.timestamp}",
-                role = ChatRole.User,
-                blocks = message.content.toChatBlocks(),
+        when {
+            // A compaction cut renders as a minimal divider marker (pi's UI
+            // shows the summary in a collapsible; pathfinder keeps the marker
+            // minimal — the summary itself lives in LLM context only).
+            entry is CompactionEntry -> projected.add(
+                ChatMessage(id = "compacted-${entry.id}", role = ChatRole.Assistant, blocks = emptyList(), isCompactionMarker = true),
             )
-            is AssistantMessage -> ChatMessage(
-                id = "msg-$index-${message.timestamp}",
-                role = ChatRole.Assistant,
-                blocks = message.content.toChatBlocks(),
-                error = message.errorMessage,
-            )
-            else -> null
+            entry !is MessageEntry || !live.contains(entry.message) -> Unit
+            else -> {
+                val message = entry.message
+                val chat = when (message) {
+                    is UserMessage -> ChatMessage(
+                        id = "msg-$index-${message.timestamp}",
+                        role = ChatRole.User,
+                        blocks = message.content.toChatBlocks(),
+                    )
+                    is AssistantMessage -> ChatMessage(
+                        id = "msg-$index-${message.timestamp}",
+                        role = ChatRole.Assistant,
+                        blocks = message.content.toChatBlocks(),
+                        error = message.errorMessage,
+                    )
+                    else -> null
+                }
+                chat?.let { projected.add(it) }
+            }
         }
-        chat?.let { projected.add(it) }
     }
     return projected
 }

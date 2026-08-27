@@ -36,6 +36,19 @@ fun defaultContextEntryTransform(pathEntries: List<SessionEntry>): List<SessionE
 }
 
 /**
+ * The latest compaction entry on a session path, or null (pi's
+ * `getLatestCompactionEntry`, coding-agent session-manager.ts:316); the
+ * boundary guard for stale pre-compaction usage/errors.
+ */
+fun getLatestCompactionEntry(entries: List<SessionEntry>): CompactionEntry? {
+    for (index in entries.indices.reversed()) {
+        val entry = entries[index]
+        if (entry is CompactionEntry) return entry
+    }
+    return null
+}
+
+/**
  * Project one context entry to the messages it contributes
  * (context.ts `sessionEntryToContextMessages`, reduced).
  */
