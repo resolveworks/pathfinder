@@ -1,6 +1,6 @@
-# distill
+# pathfinder
 
-A minimal native Android client for [pi](https://pi.dev). Distill ports the
+A minimal native Android client for [pi](https://pi.dev). Pathfinder ports the
 relevant pi runtime to pure Kotlin and keeps the Android application around it
 as thin as possible.
 
@@ -9,7 +9,7 @@ as thin as possible.
 - Pi is the behavioral source of truth. Mirror the current implementation in
   `~/Projects/pi` as closely as Kotlin and Android allow: preserve concepts,
   data shapes, event ordering, provider behavior, session semantics, and error
-  handling rather than designing Distill-specific equivalents.
+  handling rather than designing Pathfinder-specific equivalents.
 - Port selectively, but faithfully. Minimal scope means exposing a focused set
   of pi capabilities, not creating simpler competing semantics. Add capability
   by porting it from pi when possible.
@@ -21,7 +21,7 @@ as thin as possible.
 - Optimize for low maintenance. Avoid parallel domain models, speculative
   abstractions, bespoke UI primitives, compatibility shims, and dependencies
   whose value does not justify their upkeep.
-- Treat Distill app data as disposable during development. Implement only pi's
+- Treat Pathfinder app data as disposable during development. Implement only pi's
   current data shapes and the app's current storage formats; reject old formats
   instead of adding migrations or backward-compatibility paths unless explicitly
   requested.
@@ -35,8 +35,8 @@ Before changing ported behavior, read the corresponding source and package
 README under `~/Projects/pi/packages/`; do not work from remembered APIs. The
 main mappings are:
 
-- `works.resolve.distill.ai` mirrors `packages/ai`.
-- `works.resolve.distill.agent` mirrors `packages/agent`.
+- `works.resolve.pathfinder.ai` mirrors `packages/ai`.
+- `works.resolve.pathfinder.agent` mirrors `packages/agent`.
 - Conversation and session-tree behavior mirrors pi's session semantics.
 - Android UI behavior may adapt useful interaction semantics from
   `packages/coding-agent`, while remaining native Android UI.
@@ -62,7 +62,7 @@ patterns. Prefer documented current APIs over remembered ones.
 - Prefer Material 3 defaults, dynamic system color, edge-to-edge layout, and
   standard navigation and back behavior. Custom UI should exist only where the
   chat interaction has no adequate platform component.
-- `DistillApplication` is the manual composition root. Keep the dependency
+- `PathfinderApplication` is the manual composition root. Keep the dependency
   graph direct; add a DI framework only if the graph's complexity clearly
   justifies its maintenance cost.
 

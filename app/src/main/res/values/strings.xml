@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Distill</string>
+    <string name="app_name">Pathfinder</string>
 
     <string name="chat_title">Chat</string>
     <string name="chat_empty">Start the conversation below</string>

@@ -20,5 +20,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "distill"
+rootProject.name = "pathfinder"
 include(":app")

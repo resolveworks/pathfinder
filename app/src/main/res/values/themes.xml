@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Compose-only app: minimal platform theme, real theming lives in Compose. -->
-    <style name="Theme.Distill" parent="android:Theme.Material.NoActionBar" />
+    <style name="Theme.Pathfinder" parent="android:Theme.Material.NoActionBar" />
 </resources>

@@ -4,11 +4,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:name=".DistillApplication"
+        android:name=".PathfinderApplication"
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:theme="@style/Theme.Distill">
+        android:theme="@style/Theme.Pathfinder">
 
         <activity
             android:name=".MainActivity"

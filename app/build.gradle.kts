@@ -6,12 +6,12 @@ plugins {
 }
 
 android {
-    namespace = "works.resolve.distill"
+    namespace = "works.resolve.pathfinder"
     compileSdk = 37
     buildToolsVersion = "37.0.0"
 
     defaultConfig {
-        applicationId = "works.resolve.distill"
+        applicationId = "works.resolve.pathfinder"
         minSdk = 26
         targetSdk = 37
         versionCode = 1
@@ -63,7 +63,7 @@ dependencies {
     // Settings persistence
     implementation(libs.androidx.datastore.preferences)
 
-    // HTTP + JSON for the native provider layer (works.resolve.distill.ai)
+    // HTTP + JSON for the native provider layer (works.resolve.pathfinder.ai)
     implementation(libs.okhttp)
     implementation(libs.okhttp.sse)
     implementation(libs.kotlinx.serialization.json)

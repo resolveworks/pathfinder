@@ -1,6 +1,6 @@
-# distill
+# pathfinder
 
-Distill is a minimal native Android interface for [pi](https://pi.dev). It
+Pathfinder is a minimal native Android interface for [pi](https://pi.dev). It
 ports pi's relevant agent and model runtime to pure Kotlin, then surrounds it
 with a thin, conventional Android application.
 
@@ -34,8 +34,8 @@ evolve.
 The codebase has two boundaries:
 
 - The native Kotlin runtime owns model and provider behavior, streaming, agent
-  state, and conversation semantics. `works.resolve.distill.ai` follows pi's
-  `packages/ai`, while `works.resolve.distill.agent` follows
+  state, and conversation semantics. `works.resolve.pathfinder.ai` follows pi's
+  `packages/ai`, while `works.resolve.pathfinder.agent` follows
   `packages/agent`; session behavior likewise follows pi's branching session
   model.
 - The Android shell owns Compose UI, lifecycle, navigation, settings, secure
@@ -85,8 +85,8 @@ Provider credentials are stored per provider behind Android Keystore-backed
 encryption. API keys, message content, and model responses must never be
 logged.
 
-Operational lifecycle events use the `Distill` Logcat tag:
+Operational lifecycle events use the `Pathfinder` Logcat tag:
 
 ```bash
-adb logcat -v time -s Distill
+adb logcat -v time -s Pathfinder
 ```
