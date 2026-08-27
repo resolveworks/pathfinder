@@ -8,8 +8,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Model
@@ -195,6 +198,71 @@ class OpenAiCodexResponsesApiTest {
         assertEquals("answer", (done.message.content.single() as TextContent).text)
         assertEquals(10, done.message.usage.input)
         assertEquals(5, done.message.usage.output)
+    }
+
+    // Ports pi openai-codex-stream.test.ts "completes after response.completed even
+    // when the SSE body stays open".
+    @Test
+    fun `completes after response completed even when the sse body stays open`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueHangingResponse(
+            // response.output_item.added
+            """{"type":"response.output_item.added","output_index":0,
+            "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
+            """{"type":"response.output_text.delta","output_index":0,"delta":"Hello"}""",
+            """{"type":"response.completed","response":{"id":"resp_1","status":"completed","end_turn":false,
+            "usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}""",
+        )
+        val events = api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(StopReason.STOP, done.reason)
+        assertEquals(false, done.message.endTurn)
+        assertEquals("Hello", (done.message.content.single() as TextContent).text)
+    }
+
+    // Ports pi openai-codex-stream.test.ts "maps response.incomplete to stopReason
+    // length even when the SSE body stays open".
+    @Test
+    fun `response incomplete maps to length even when the sse body stays open`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueHangingResponse(
+            """{"type":"response.output_item.added","output_index":0,
+            "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
+            """{"type":"response.output_text.delta","output_index":0,"delta":"Hello"}""",
+            """{"type":"response.incomplete","response":{"id":"resp_1","status":"incomplete",
+            "incomplete_details":{"reason":"max_output_tokens"},
+            "usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}""",
+        )
+        val events = api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(StopReason.LENGTH, done.reason)
+        assertEquals("Hello", (done.message.content.single() as TextContent).text)
+    }
+
+    // Deltas must be emitted incrementally, before the terminal event (and any
+    // later body data) arrives: with a hanging body that never delivers a
+    // terminal event, the delta is still observed.
+    @Test
+    fun `deltas are emitted incrementally before the terminal event`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueHangingResponse(
+            """{"type":"response.output_item.added","output_index":0,
+            "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
+            """{"type":"response.output_text.delta","output_index":0,"delta":"partial"}""",
+        )
+        val events = ArrayList<AssistantMessageEvent>()
+        try {
+            withTimeout(1_000) {
+                api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).collect {
+                    events.add(it)
+                }
+            }
+        } catch (_: TimeoutCancellationException) {
+            // Expected: the body stays open with no terminal event.
+        }
+        val delta = events.filterIsInstance<AssistantMessageEvent.TextDelta>().single()
+        assertEquals("partial", delta.delta)
+        assertTrue(events.none { it is AssistantMessageEvent.Done })
     }
 
     @Test
