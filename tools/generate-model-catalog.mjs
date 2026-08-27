@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Generates app/src/main/assets/models-catalog.json for aletheia.
+// Generates app/src/main/assets/models-catalog.json for distill.
 //
 // Runs pi's model-catalog generator (models.dev et al.) from a local pi
 // checkout, keeps every static pi-ai provider and ALL of each provider's
@@ -76,7 +76,7 @@ const OAUTH_METADATA = {
 	xai: { name: "xAI (Grok/X subscription)", loginLabel: "Sign in with SuperGrok or X Premium", isSubscription: true },
 };
 
-/** Static pi providers deliberately excluded from the aletheia catalog. */
+/** Static pi providers deliberately excluded from the distill catalog. */
 const EXCLUDED_PROVIDERS = new Set(["amazon-bedrock", "google-vertex"]);
 
 /** Display names for OAuth-only providers (no PROVIDER_IDENTITY entry). */
@@ -145,7 +145,7 @@ const PROVIDER_IDENTITY = {
 };
 
 /**
- * Builds the aletheia catalog from pi's generated models. Pure: takes pi's
+ * Builds the distill catalog from pi's generated models. Pure: takes pi's
  * models.json plus provenance and returns the catalog object. Every static
  * provider and every model API is kept; the identity map must exactly cover
  * the providers pi generated (37 at the time of writing) after the excluded
@@ -244,7 +244,7 @@ function buildCatalog(piModels, { piRevision = null } = {}) {
 
 function generatePiCatalog() {
 	const packageDir = join(piRepo, "packages", "ai");
-	const tmp = mkdtempSync(join(tmpdir(), "aletheia-model-catalog-"));
+	const tmp = mkdtempSync(join(tmpdir(), "distill-model-catalog-"));
 	try {
 		execFileSync(
 			process.execPath,

@@ -1,0 +1,702 @@
+package works.resolve.distill.ai.api
+
+import works.resolve.distill.ai.core.AssistantMessage
+import works.resolve.distill.ai.core.AssistantMessageEvent
+import works.resolve.distill.ai.core.Context
+import works.resolve.distill.ai.core.ImageContent
+import works.resolve.distill.ai.core.InputModality
+import works.resolve.distill.ai.core.Model
+import works.resolve.distill.ai.core.ModelCost
+import works.resolve.distill.ai.core.SimpleStreamOptions
+import works.resolve.distill.ai.core.StopReason
+import works.resolve.distill.ai.core.TextContent
+import works.resolve.distill.ai.core.ThinkingContent
+import works.resolve.distill.ai.core.ThinkingLevel
+import works.resolve.distill.ai.core.Tool
+import works.resolve.distill.ai.core.ToolCall
+import works.resolve.distill.ai.core.ToolChoice
+import works.resolve.distill.ai.core.ToolResultMessage
+import works.resolve.distill.ai.core.UserMessage
+import works.resolve.distill.ai.testing.FakeTransport
+import works.resolve.distill.ai.testing.sse
+import works.resolve.distill.ai.transport.NetworkException
+import works.resolve.distill.ai.utils.ProviderRetry
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertContains
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
+/**
+ * Canned tests for the native Mistral Chat Completions adapter, porting the
+ * scenarios of pi's mistral-http-transport, mistral-raw-stop-reason,
+ * mistral-reasoning-mode, and mistral-tool-schema tests. No live network: the
+ * scripted FakeTransport stands in for fetch().
+ */
+class MistralConversationsApiTest {
+
+    private val model = mistralModel()
+    private val context = Context(messages = listOf(UserMessage.ofText("hello")))
+
+    private fun api(transport: FakeTransport) = MistralConversationsApi(
+        transport,
+        ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),
+        nowMs = { 1_770_000_000_000L },
+    )
+
+    private fun terminalEvent(finishReason: String = "stop") = """
+        {"id":"mistral-response-id","model":"${model.id}",
+         "choices":[{"index":0,"finish_reason":"$finishReason","delta":{}}],
+         "usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+    """.trimIndent()
+
+    @Test
+    fun `serializes payloads to the Mistral wire format`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
+        val imageModel = mistralModel(input = listOf(InputModality.TEXT, InputModality.IMAGE))
+
+        val done = api(transport).stream(
+            imageModel,
+            Context(
+                systemPrompt = "Be precise",
+                messages = listOf(
+                    UserMessage(
+                        listOf(
+                            TextContent("describe"),
+                            ImageContent("aGVsbG8=", "image/png"),
+                        ),
+                    ),
+                ),
+                tools = listOf(
+                    Tool(
+                        name = "lookup",
+                        description = "Look something up",
+                        parameters = Json.parseToJsonElement(
+                            """{"type":"object","properties":{"query":{"type":"string"}}}""",
+                        ),
+                    ),
+                ),
+            ),
+            MistralOptions(
+                apiKey = "secret",
+                sessionId = "session-1",
+                headers = mapOf("x-custom" to "value"),
+                maxTokens = 123,
+                promptMode = MistralPromptMode.REASONING,
+                reasoningEffort = "high",
+                toolChoice = ToolChoice.Function("lookup"),
+            ),
+        ).toList().last()
+        assertIs<AssistantMessageEvent.Done>(done)
+
+        val request = transport.requests.single()
+        assertEquals("https://api.mistral.ai/v1/chat/completions", request.url)
+        assertEquals("secret", request.bearerToken)
+        assertEquals("text/event-stream", request.headers["accept"])
+        assertEquals("session-1", request.headers["x-affinity"])
+        assertEquals("value", request.headers["x-custom"])
+
+        val wire = Json.parseToJsonElement(request.body.decodeToString()).jsonObject
+        assertEquals(model.id, wire["model"]!!.jsonPrimitive.content)
+        assertEquals(123, wire["max_tokens"]!!.jsonPrimitive.content.toInt())
+        assertEquals("reasoning", wire["prompt_mode"]!!.jsonPrimitive.content)
+        assertEquals("high", wire["reasoning_effort"]!!.jsonPrimitive.content)
+        assertEquals("session-1", wire["prompt_cache_key"]!!.jsonPrimitive.content)
+        assertEquals(
+            """{"type":"function","function":{"name":"lookup"}}""",
+            wire["tool_choice"].toString(),
+        )
+        assertFalse(wire.containsKey("maxTokens"))
+        assertFalse(wire.containsKey("promptMode"))
+        assertFalse(wire.containsKey("reasoningEffort"))
+        assertFalse(wire.containsKey("promptCacheKey"))
+
+        val tools = wire["tools"]!!.jsonArray
+        assertEquals(1, tools.size)
+        assertEquals(
+            """{"type":"function","function":{"name":"lookup","description":"Look something up",""" +
+                """"parameters":{"type":"object","properties":{"query":{"type":"string"}}},"strict":false}}""",
+            tools[0].toString(),
+        )
+
+        assertEquals(
+            """[{"role":"system","content":"Be precise"},{"role":"user","content":[""" +
+                """{"type":"text","text":"describe"},""" +
+                """{"type":"image_url","image_url":"data:image/png;base64,aGVsbG8="}]}]""",
+            wire["messages"].toString(),
+        )
+    }
+
+    @Test
+    fun `serializes assistant thinking, tool calls, and tool results for replay`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
+        val imageModel = mistralModel(input = listOf(InputModality.TEXT, InputModality.IMAGE))
+
+        api(transport).stream(
+            imageModel,
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent("reason"),
+                            TextContent("answer"),
+                            ToolCall("abc123456", "lookup", """{"query":"pi"}"""),
+                        ),
+                        api = model.api,
+                        provider = model.provider,
+                        model = model.id,
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                    ToolResultMessage(
+                        toolCallId = "abc123456",
+                        toolName = "lookup",
+                        content = listOf(
+                            TextContent("found"),
+                            ImageContent("aGVsbG8=", "image/png"),
+                        ),
+                    ),
+                ),
+            ),
+            MistralOptions(apiKey = "test"),
+        ).toList()
+
+        val wire = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertEquals(
+            """[{"role":"assistant","prefix":false,"content":[""" +
+                """{"type":"thinking","thinking":[{"type":"text","text":"reason"}]},""" +
+                """{"type":"text","text":"answer"}],""" +
+                """"tool_calls":[{"id":"abc123456","type":"function",""" +
+                """"function":{"name":"lookup","arguments":"{\"query\":\"pi\"}"},"index":0}]},""" +
+                """{"role":"tool","tool_call_id":"abc123456","name":"lookup","content":[""" +
+                """{"type":"text","text":"found"},""" +
+                """{"type":"image_url","image_url":"data:image/png;base64,aGVsbG8="}]}]""",
+            wire["messages"].toString(),
+        )
+    }
+
+    @Test
+    fun `normalizes foreign tool call ids on replay`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
+
+        api(transport).stream(
+            model,
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ToolCall("resp_abc|with-pipes-and-more", "lookup", """{"q":1}"""),
+                        ),
+                        api = "openai-responses",
+                        provider = "openai",
+                        model = "gpt-x",
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                    ToolResultMessage(
+                        toolCallId = "resp_abc|with-pipes-and-more",
+                        toolName = "lookup",
+                        content = listOf(TextContent("ok")),
+                    ),
+                ),
+            ),
+            MistralOptions(apiKey = "test"),
+        ).toList()
+
+        val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
+            .jsonObject["messages"]!!.jsonArray
+        val callId = messages[0].jsonObject["tool_calls"]!!.jsonArray[0]
+            .jsonObject["id"]!!.jsonPrimitive.content
+        assertEquals(9, callId.length)
+        assertTrue(callId.all { it.isLetterOrDigit() })
+        // The tool result is remapped to the normalized id.
+        assertEquals(callId, messages[1].jsonObject["tool_call_id"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `parses native thinking, text, tool calls, and cached-token usage`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"id":"response-1","choices":[{"index":0,"finish_reason":null,
+                   "delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"reason"}]}]}}]}""",
+                """{"id":"response-1","choices":[{"index":0,"finish_reason":null,
+                   "delta":{"content":[{"type":"text","text":"answer"}]}}]}""",
+                """{"id":"response-1","choices":[{"index":0,"finish_reason":null,
+                   "delta":{"tool_calls":[{"id":"abc123456","index":0,
+                   "function":{"name":"lookup","arguments":"{\"query\":"}}]}}]}""",
+                """{"id":"response-1","choices":[{"index":0,"finish_reason":"tool_calls",
+                   "delta":{"tool_calls":[{"id":"abc123456","index":0,
+                   "function":{"name":"lookup","arguments":"\"pi\"}"}}]}}],
+                   "usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14,
+                   "prompt_tokens_details":{"cached_tokens":3}}}""",
+                "[DONE]",
+            ),
+        )
+
+        val events = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        val message = done.message
+        assertEquals(StopReason.TOOL_USE, message.stopReason)
+        assertEquals("tool_calls", message.rawStopReason)
+        assertEquals("response-1", message.responseId)
+        assertEquals(
+            listOf(
+                ThinkingContent("reason"),
+                TextContent("answer"),
+                ToolCall("abc123456", "lookup", """{"query":"pi"}"""),
+            ),
+            message.content,
+        )
+        assertEquals(7, message.usage.input)
+        assertEquals(4, message.usage.output)
+        assertEquals(3, message.usage.cacheRead)
+        assertEquals(0, message.usage.cacheWrite)
+        assertEquals(14, message.usage.totalTokens)
+        // Cost from the model rates: 2.0/1M in, 6.0/1M out, 0.5/1M cached.
+        assertEquals(7 * 2.0 / 1_000_000 + 4 * 6.0 / 1_000_000 + 3 * 0.5 / 1_000_000, message.usage.cost.total)
+
+        // Event ordering mirrors pi: blocks open/close in stream order, the
+        // open text block ends when the tool call starts, toolcall_end comes last.
+        val kinds = events.drop(1).dropLast(1).map { it::class.simpleName }
+        assertEquals(
+            listOf(
+                "ThinkingStart", "ThinkingDelta", "ThinkingEnd",
+                "TextStart", "TextDelta", "TextEnd",
+                "ToolCallStart", "ToolCallDelta", "ToolCallDelta", "ToolCallEnd",
+            ),
+            kinds,
+        )
+    }
+
+    @Test
+    fun `parses plain string content deltas`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"id":"response-bytewise","choices":[{"index":0,"finish_reason":"stop",
+                   "delta":{"content":"héllo 🌍"}}],
+                   "usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}""",
+                "[DONE]",
+            ),
+        )
+        val done = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+            .last()
+        assertIs<AssistantMessageEvent.Done>(done)
+        assertEquals(listOf(TextContent("héllo 🌍")), done.message.content)
+    }
+
+    @Test
+    fun `honors case-insensitive header overrides and explicit affinity suppression`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
+        val headerModel = model.copy(
+            headers = mapOf("Authorization" to "Bearer model-key", "X-Affinity" to "model-affinity"),
+        )
+
+        api(transport).stream(
+            headerModel,
+            context,
+            MistralOptions(
+                apiKey = "request-key",
+                sessionId = "automatic-affinity",
+                headers = mapOf(
+                    "authorization" to null,
+                    "x-affinity" to null,
+                    "User-Agent" to "custom-agent",
+                ),
+            ),
+        ).toList()
+
+        val headers = transport.requests.single().headers
+        assertNull(transport.requests.single().bearerToken)
+        assertFalse(headers.keys.any { it.lowercase() == "authorization" })
+        assertFalse(headers.keys.any { it.lowercase() == "x-affinity" })
+        assertEquals("custom-agent", headers["User-Agent"])
+    }
+
+    @Test
+    fun `applies the request timeout while waiting for a chunk`() = runTest {
+        val transport = FakeTransport()
+        transport.outcomes.add {
+            throw NetworkException(java.io.IOException("timeout"))
+        }
+        val error = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test", timeoutMs = 5))
+            .toList()
+            .last()
+        val errorEvent = assertIs<AssistantMessageEvent.Error>(error)
+        assertEquals(StopReason.ERROR, errorEvent.error.stopReason)
+        assertContains(errorEvent.error.errorMessage ?: "", "timeout")
+    }
+
+    @Test
+    fun `preserves HTTP status and response bodies in errors`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueError(403, """{"message":"blocked by gateway"}""")
+        val error = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+            .last()
+        val errorEvent = assertIs<AssistantMessageEvent.Error>(error)
+        assertEquals(StopReason.ERROR, errorEvent.error.stopReason)
+        assertEquals(
+            """Mistral API error (403): {"message":"blocked by gateway"}""",
+            errorEvent.error.errorMessage,
+        )
+    }
+
+    @Test
+    fun `missing api key fails without emitting a start event`() = runTest {
+        val transport = FakeTransport()
+        val events = api(transport)
+            .stream(model, context, MistralOptions())
+            .toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.single())
+        assertEquals("No API key for provider: mistral", error.error.errorMessage)
+    }
+
+    @Test
+    fun `missing finish reason is an error`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"id":"r","choices":[{"index":0,"finish_reason":null,"delta":{"content":"hi"}}]}""",
+                "[DONE]",
+            ),
+        )
+        val error = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+            .last()
+        assertIs<AssistantMessageEvent.Error>(error)
+        assertEquals("Mistral stream ended without a finish reason", error.error.errorMessage)
+    }
+
+    @Test
+    fun `preserves raw finish reasons for successful stops`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent("stop"), "[DONE]"))
+        val done = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+            .last()
+        assertIs<AssistantMessageEvent.Done>(done)
+        assertEquals(StopReason.STOP, done.reason)
+        assertEquals("stop", done.message.rawStopReason)
+        assertNull(done.message.errorMessage)
+    }
+
+    @Test
+    fun `preserves raw finish reasons for provider error stops`() = runTest {
+        for (reason in listOf("error", "unmapped_error")) {
+            val transport = FakeTransport()
+            transport.enqueueResponse(sse(terminalEvent(reason), "[DONE]"))
+            val error = api(transport)
+                .stream(model, context, MistralOptions(apiKey = "test"))
+                .toList()
+                .last()
+            val errorEvent = assertIs<AssistantMessageEvent.Error>(error)
+            assertEquals(StopReason.ERROR, errorEvent.error.stopReason)
+            assertEquals(reason, errorEvent.error.rawStopReason)
+            assertEquals("Provider stopped with: $reason", errorEvent.error.errorMessage)
+        }
+    }
+
+    @Test
+    fun `maps length and model_length to LENGTH`() = runTest {
+        for (reason in listOf("length", "model_length")) {
+            val transport = FakeTransport()
+            transport.enqueueResponse(sse(terminalEvent(reason), "[DONE]"))
+            val done = api(transport)
+                .stream(model, context, MistralOptions(apiKey = "test"))
+                .toList()
+                .last()
+            assertIs<AssistantMessageEvent.Done>(done)
+            assertEquals(StopReason.LENGTH, done.reason)
+        }
+    }
+
+    @Test
+    fun `streamSimple uses reasoning_effort for Mistral Small and Medium`() = runTest {
+        for (id in listOf("mistral-small-2603", "mistral-small-latest", "mistral-medium-3.5")) {
+            val payload = captureStreamSimplePayload(
+                mistralModel(id = id, reasoning = true),
+                SimpleStreamOptions(apiKey = "test", reasoning = ThinkingLevel.MEDIUM),
+            )
+            assertNull(payload["prompt_mode"])
+            assertEquals("high", payload["reasoning_effort"]!!.jsonPrimitive.content)
+        }
+    }
+
+    @Test
+    fun `streamSimple omits reasoning controls when thinking is off`() = runTest {
+        for (id in listOf("mistral-small-2603", "mistral-medium-3.5")) {
+            val payload = captureStreamSimplePayload(
+                mistralModel(id = id, reasoning = true),
+                SimpleStreamOptions(apiKey = "test"),
+            )
+            assertNull(payload["reasoning_effort"])
+            assertNull(payload["prompt_mode"])
+        }
+    }
+
+    @Test
+    fun `streamSimple uses prompt_mode for Magistral reasoning models`() = runTest {
+        val payload = captureStreamSimplePayload(
+            mistralModel(id = "magistral-medium-latest", reasoning = true),
+            SimpleStreamOptions(apiKey = "test", reasoning = ThinkingLevel.MEDIUM),
+        )
+        assertEquals("reasoning", payload["prompt_mode"]!!.jsonPrimitive.content)
+        assertNull(payload["reasoning_effort"])
+    }
+
+    @Test
+    fun `streamSimple uses the session id as prompt cache key`() = runTest {
+        val payload = captureStreamSimplePayload(
+            model,
+            SimpleStreamOptions(apiKey = "test", sessionId = "session-123"),
+        )
+        assertEquals("session-123", payload["prompt_cache_key"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `streamSimple omits prompt cache key when cache retention is disabled`() = runTest {
+        val payload = captureStreamSimplePayload(
+            model,
+            SimpleStreamOptions(
+                apiKey = "test",
+                sessionId = "session-123",
+                cacheRetention = works.resolve.distill.ai.core.CacheRetention.NONE,
+            ),
+        )
+        assertNull(payload["prompt_cache_key"])
+    }
+
+    @Test
+    fun `streamSimple maps tool choice and requires an api key`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
+        api(transport).streamSimple(
+            model,
+            context,
+            SimpleStreamOptions(apiKey = "k", toolChoice = ToolChoice.Auto),
+        ).toList()
+        val wire = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertEquals("auto", wire["tool_choice"]!!.jsonPrimitive.content)
+
+        val transport2 = FakeTransport()
+        // pi throws synchronously before opening the stream; nothing is
+        // requested and no events are produced.
+        val thrown = kotlin.test.assertFailsWith<IllegalStateException> {
+            api(transport2).streamSimple(model, context, SimpleStreamOptions())
+        }
+        assertEquals("No API key for provider: mistral", thrown.message)
+        assertTrue(transport2.requests.isEmpty())
+    }
+
+    @Test
+    fun `non-image models replace images with in-place deduplicated placeholders`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
+        api(transport).stream(
+            mistralModel(input = listOf(InputModality.TEXT)),
+            Context(
+                messages = listOf(
+                    UserMessage(
+                        listOf(
+                            TextContent("look"),
+                            ImageContent("aGVsbG8=", "image/png"),
+                            ImageContent("aGVsbG8=", "image/png"),
+                            TextContent("again"),
+                            ImageContent("aGVsbG8=", "image/jpeg"),
+                        ),
+                    ),
+                ),
+            ),
+            MistralOptions(apiKey = "test"),
+        ).toList()
+        val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
+            .jsonObject["messages"]!!.jsonArray
+        // pi's transformMessages inserts the omission notice in place of each
+        // image run (deduplicated), keeping surrounding text.
+        assertEquals(
+            """[{"type":"text","text":"look"},""" +
+                """{"type":"text","text":"(image omitted: model does not support images)"},""" +
+                """{"type":"text","text":"again"},""" +
+                """{"type":"text","text":"(image omitted: model does not support images)"}]""",
+            messages[0].jsonObject["content"].toString(),
+        )
+    }
+
+    @Test
+    fun `non-image models downgrade tool result images to a placeholder line`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
+        api(transport).stream(
+            mistralModel(input = listOf(InputModality.TEXT)),
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(ToolCall("abc123456", "lookup", "{}")),
+                        api = model.api,
+                        provider = model.provider,
+                        model = model.id,
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                    ToolResultMessage(
+                        toolCallId = "abc123456",
+                        toolName = "lookup",
+                        content = listOf(TextContent("found"), ImageContent("aGVsbG8=", "image/png")),
+                    ),
+                    UserMessage.ofText("thanks"),
+                ),
+            ),
+            MistralOptions(apiKey = "test"),
+        ).toList()
+        val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
+            .jsonObject["messages"]!!.jsonArray
+        // pi's transformMessages turns the image into a placeholder text block;
+        // buildToolResultText then joins it into the tool text.
+        assertEquals(
+            "found\n(tool image omitted: model does not support images)",
+            messages[1].jsonObject["content"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `orphaned tool calls get synthetic error results and errored turns are skipped`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
+        api(transport).stream(
+            model,
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            TextContent("partial"),
+                            ToolCall("abc123456", "lookup", "{}"),
+                        ),
+                        api = "openai-responses",
+                        provider = "openai",
+                        model = "gpt-x",
+                        stopReason = StopReason.ERROR,
+                        errorMessage = "boom",
+                    ),
+                    AssistantMessage(
+                        content = listOf(
+                            TextContent("will call"),
+                            ToolCall("resp_orphan|with-pipes", "lookup", "{}"),
+                        ),
+                        api = "openai-responses",
+                        provider = "openai",
+                        model = "gpt-x",
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                    UserMessage.ofText("interrupted"),
+                ),
+            ),
+            MistralOptions(apiKey = "test"),
+        ).toList()
+        val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
+            .jsonObject["messages"]!!.jsonArray
+        // The errored assistant turn is dropped entirely.
+        assertEquals(3, messages.size)
+        assertEquals("assistant", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
+        // A synthetic error tool result follows the orphaned (normalized) call.
+        val callId = messages[0].jsonObject["tool_calls"]!!.jsonArray[0]
+            .jsonObject["id"]!!.jsonPrimitive.content
+        assertEquals(9, callId.length)
+        assertTrue(callId.all { it.isLetterOrDigit() })
+        assertEquals("tool", messages[1].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals(callId, messages[1].jsonObject["tool_call_id"]!!.jsonPrimitive.content)
+        assertEquals(
+            "[tool error] No result provided",
+            messages[1].jsonObject["content"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content,
+        )
+        assertEquals("user", messages[2].jsonObject["role"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `cross-model thinking replays as plain text`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
+        api(transport).stream(
+            model,
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent("deep thought", thinkingSignature = "sig"),
+                            ThinkingContent("redacted", redacted = true),
+                            TextContent("answer"),
+                        ),
+                        api = "anthropic-messages",
+                        provider = "anthropic",
+                        model = "claude-x",
+                        stopReason = StopReason.STOP,
+                    ),
+                    UserMessage.ofText("continue"),
+                ),
+            ),
+            MistralOptions(apiKey = "test"),
+        ).toList()
+        val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
+            .jsonObject["messages"]!!.jsonArray
+        // pi's transformMessages: foreign thinking becomes text, redacted is
+        // dropped; only same-model thinking replays as a thinking chunk.
+        assertEquals(
+            """[{"role":"assistant","prefix":false,""" +
+                """"content":[{"type":"text","text":"deep thought"},{"type":"text","text":"answer"}]},""" +
+                """{"role":"user","content":"continue"}]""",
+            messages.toString(),
+        )
+    }
+
+    private fun captureStreamSimplePayload(
+        streamModel: Model,
+        options: SimpleStreamOptions,
+    ): kotlinx.serialization.json.JsonObject {
+        val transport = FakeTransport()
+        // The request is allowed to fail after the payload is captured.
+        transport.outcomes.add { throw NetworkException(java.io.IOException("no route")) }
+        val result = kotlinx.coroutines.runBlocking {
+            api(transport).streamSimple(streamModel, context, options).toList()
+        }
+        assertTrue(result.last() is AssistantMessageEvent.Error)
+        assertEquals(1, transport.requests.size)
+        return Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+    }
+}
+
+/** Mirrors pi's getModel("mistral", ...) values used by the upstream tests. */
+internal fun mistralModel(
+    id: String = "mistral-large-latest",
+    reasoning: Boolean = false,
+    input: List<InputModality> = listOf(InputModality.TEXT),
+): Model = Model(
+    id = id,
+    name = id,
+    api = "mistral-conversations",
+    provider = "mistral",
+    baseUrl = "https://api.mistral.ai",
+    reasoning = reasoning,
+    input = input,
+    cost = ModelCost(input = 2.0, output = 6.0, cacheRead = 0.5),
+    contextWindow = 131_000,
+    maxTokens = 131_000,
+)

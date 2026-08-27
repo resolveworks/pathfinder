@@ -2,15 +2,15 @@
 
 ## pi
 
-The provider/chat streaming layer (under `app/src/main/kotlin/works/resolve/aletheia/ai/`)
-and the agent loop (under `app/src/main/kotlin/works/resolve/aletheia/agent/`) are
+The provider/chat streaming layer (under `app/src/main/kotlin/works/resolve/distill/ai/`)
+and the agent loop (under `app/src/main/kotlin/works/resolve/distill/agent/`) are
 Kotlin ports of portions of [pi](https://pi.dev) (the local pi project at
 `~/Projects/pi`). Those portions are:
 
 Copyright (c) 2025 Mario Zechner
 
 Licensed under the MIT License reproduced below. The attribution here applies
-to the ported portions only; it does not place a license on aletheia as a
+to the ported portions only; it does not place a license on distill as a
 whole.
 
 ```
