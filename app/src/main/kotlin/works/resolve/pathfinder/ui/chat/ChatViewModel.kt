@@ -2,8 +2,8 @@ package works.resolve.pathfinder.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentEvent
+import works.resolve.pathfinder.agent.AgentSession
 import works.resolve.pathfinder.agent.AgentState
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.Content
@@ -61,7 +61,10 @@ import kotlinx.coroutines.withContext
  *
  * The agent itself is created through the injected [AgentFactory]
  * (see [works.resolve.pathfinder.agent]); the production implementation wires the native
- * Z.AI runtime.
+ * Z.AI runtime. The factory returns the [AgentSession] facade (pi's
+ * agent-session), which owns the session tree, the retry budget, and (in
+ * later waves) compaction; this ViewModel only projects its state/events
+ * and persists tree snapshots.
  *
  * Transcript persistence runs through a single latest-snapshot pipeline: at
  * most one save per session is in flight, superseded snapshots are coalesced,
@@ -113,30 +116,23 @@ class ChatViewModel(
     /** Current committed configuration; updated on init and successful save. */
     private var currentSettings: ModelSettings = ModelSettings()
 
-    private var agent: Agent? = null
+    private var agent: AgentSession? = null
     private var agentStateJob: Job? = null
     private var agentEventsJob: Job? = null
     private var activeSession: Session? = null
 
     /**
      * The conversation tree of [activeSession]: the transcript source of
-     * truth for persistence and tree navigation. Kept in lockstep with the
-     * bound agent's committed transcript (which mirrors the active path).
+     * truth for persistence and tree navigation. Owned by the bound
+     * [AgentSession] (pi's agent-session owns the session manager); this
+     * ViewModel reads it for projection and persistence, and navigates it
+     * through [AgentSession.replaceConversation].
      */
-    private var activeConversation: Conversation = Conversation(emptyList(), null)
+    private val activeConversation: Conversation
+        get() = agent?.conversation ?: Conversation(emptyList(), null)
 
-    /** Count of active-path messages already persisted for [activeSession]. */
-    private var persistedMessageCount: Int = 0
-
-    /**
-     * Active-path conversation entries no longer present in the agent
-     * transcript. Non-zero only while an agent auto-retry has removed the
-     * trailing error assistant message from agent state (pi keeps that
-     * message in the session/history, and so does the append-only tree);
-     * tree re-navigation and session switches rebuild both sides together
-     * and reset it to zero.
-     */
-    private var conversationOffset = 0
+    /** Count of active-session entries already persisted. */
+    private var persistedEntryCount: Int = 0
 
     /** Latest unsaved conversation snapshot for its owning session. */
     private var pendingPersist: Pair<Session, Conversation>? = null
@@ -284,7 +280,7 @@ class ChatViewModel(
                 return@launch
             }
             val userMessage = (entry as? MessageEntry)?.message as? UserMessage
-            activeConversation = if (userMessage != null) {
+            val updated = if (userMessage != null) {
                 // Re-edit: the next append lands as a sibling of the target.
                 val parent = entry.parentId?.let { pid -> activeConversation.entry(pid) }
                 if (parent != null) activeConversation.branch(parent.id) else activeConversation.resetLeaf()
@@ -295,15 +291,16 @@ class ChatViewModel(
                 ?.content
                 ?.filterIsInstance<TextContent>()
                 ?.joinToString("") { part -> part.text }
-            agent?.replaceTranscript(activeConversation.activeMessages())
-            conversationOffset = 0
+            val session = agent ?: return@launch
+            session.replaceConversation(updated)
             updateState {
                 it.copy(
                     // pi's navigateTree loads the re-edit text into the
                     // editor only when it is empty; a typed draft is never
                     // clobbered by navigation.
                     draft = if (it.draft.isBlank()) reeditText ?: it.draft else it.draft,
-                    treeRows = buildTreeRows(activeConversation, it.treeFilter),
+                    messages = projectCommitted(session.agent.state.value.messages, updated),
+                    treeRows = buildTreeRows(updated, it.treeFilter),
                 )
             }
             enqueuePersist()
@@ -326,7 +323,7 @@ class ChatViewModel(
                     return@launch
                 }
                 val session = sessionStore.create(DEFAULT_SESSION_TITLE)
-                val newAgent = tryCreateAgent(currentSettings, session.id, emptyList()) ?: return@launch
+                val newAgent = tryCreateAgent(currentSettings, session.id, Conversation(emptyList(), null)) ?: return@launch
                 if (!activateSession(session, newAgent)) return@launch
             } catch (e: CancellationException) {
                 throw e
@@ -348,7 +345,11 @@ class ChatViewModel(
                         setError(ERROR_SESSION_SAVE)
                         return@launch
                     }
-                    val newAgent = tryCreateAgent(currentSettings, session.id, session.messages) ?: return@launch
+                    val newAgent = tryCreateAgent(
+                        currentSettings,
+                        session.id,
+                        Conversation(session.entries, session.leafId),
+                    ) ?: return@launch
                     if (!activateSession(session, newAgent)) return@launch
                 }
             } catch (e: CancellationException) {
@@ -405,7 +406,11 @@ class ChatViewModel(
             val session = resolveSession(settings, summaries)
             // Build the agent before committing any state: a factory failure
             // must never leave a Ready UI or persisted active-session id.
-            val newAgent = tryCreateAgent(settings, session.id, session.messages)
+            val newAgent = tryCreateAgent(
+                settings,
+                session.id,
+                Conversation(session.entries, session.leafId),
+            )
             if (newAgent == null) {
                 updateState {
                     it.copy(
@@ -458,7 +463,7 @@ class ChatViewModel(
      * Only called after the factory accepted the settings. Returns false when
      * persisting the active id fails; in that case nothing is committed.
      */
-    private suspend fun activateSession(session: Session, agent: Agent): Boolean {
+    private suspend fun activateSession(session: Session, agent: AgentSession): Boolean {
         try {
             settingsRepository.setActiveSessionId(session.id)
         } catch (e: CancellationException) {
@@ -471,19 +476,18 @@ class ChatViewModel(
         // immediately, and the new agent's transcript must never be observed
         // against the previous session (which could cross-write saves).
         activeSession = session
-        activeConversation = Conversation(session.entries, session.leafId)
-        persistedMessageCount = session.messages.size
-        conversationOffset = 0
+        persistedEntryCount = session.entries.size
         bindAgent(agent)
+        val conversation = agent.conversation
         val summaries = sessionStore.summaries()
         updateState {
             it.copy(
                 activeSessionId = session.id,
                 startKey = ChatNavKey,
                 navigationEpoch = it.navigationEpoch + 1,
-                messages = projectCommitted(session.messages),
+                messages = projectCommitted(agent.state.value.messages, conversation),
                 streamingMessage = null,
-                treeRows = buildTreeRows(activeConversation, it.treeFilter),
+                treeRows = buildTreeRows(conversation, it.treeFilter),
                 sessionSummaries = summaries,
             )
         }
@@ -494,7 +498,7 @@ class ChatViewModel(
      * Resolves the session and builds an agent for it: validation happens
      * before anything is committed. Returns null on failure (safe error set).
      */
-    private suspend fun prepareAdoption(settings: ModelSettings): Pair<Session, Agent>? {
+    private suspend fun prepareAdoption(settings: ModelSettings): Pair<Session, AgentSession>? {
         val session = try {
             resolveSession(settings, sessionStore.summaries())
         } catch (e: CancellationException) {
@@ -503,14 +507,22 @@ class ChatViewModel(
             setError(ERROR_SESSION_CREATE)
             return null
         }
-        val newAgent = tryCreateAgent(settings, session.id, session.messages) ?: return null
+        val newAgent = tryCreateAgent(
+            settings,
+            session.id,
+            Conversation(session.entries, session.leafId),
+        ) ?: return null
         return session to newAgent
     }
 
     /** Builds an agent or null (with a safe error surfaced) when the factory rejects the settings. */
-    private fun tryCreateAgent(settings: ModelSettings, sessionId: String, transcript: List<Message>): Agent? =
+    private fun tryCreateAgent(
+        settings: ModelSettings,
+        sessionId: String,
+        conversation: Conversation,
+    ): AgentSession? =
         try {
-            agentFactory.create(settings, sessionId, transcript)
+            agentFactory.create(settings, sessionId, conversation)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -518,78 +530,52 @@ class ChatViewModel(
             null
         }
 
-    private fun bindAgent(newAgent: Agent) {
+    private fun bindAgent(newAgent: AgentSession) {
         agentStateJob?.cancel()
         agentEventsJob?.cancel()
         agent = newAgent
         lastAgentError = null
         agentStateJob = viewModelScope.launch { newAgent.state.collect { state -> onAgentState(state) } }
-        // Retry status is event-driven (pi's auto_retry_start/end reach the
-        // UI as agent-session events); zero-replay flow, so the subscriber
-        // must be bound before any prompt starts.
+        // Session-level status (retry, and later compaction) and persistence
+        // points are event-driven (pi's auto_retry_start/end and message_end
+        // persistence reach the UI as agent-session events); zero-replay
+        // flow, so the subscriber must be bound before any prompt starts.
         agentEventsJob = viewModelScope.launch { newAgent.events.collect { event -> onAgentEvent(event) } }
     }
 
-    /** Projects auto-retry lifecycle events into the transient retry status surface. */
+    /** Projects session lifecycle events into transient UI surfaces and persistence. */
     private fun onAgentEvent(event: AgentEvent) {
         when (event) {
             is AgentEvent.AutoRetryStart -> updateState {
                 it.copy(retryStatus = AutoRetryStatus(event.attempt, event.maxAttempts))
             }
             is AgentEvent.AutoRetryEnd -> updateState { it.copy(retryStatus = null) }
+            // The session tree appends on message_end (AgentSession, pi's
+            // sessionManager.appendMessage); re-project rows and persist on
+            // tree growth, not agent-transcript growth — an auto-retry or
+            // overflow recovery removes the error message from agent state
+            // while the append-only tree keeps it.
+            is AgentEvent.MessageEnd -> {
+                updateState { it.copy(treeRows = buildTreeRows(activeConversation, it.treeFilter)) }
+                if (activeConversation.entries.size > persistedEntryCount) {
+                    enqueuePersist()
+                }
+            }
             else -> Unit
         }
     }
 
     private fun onAgentState(state: AgentState) {
-        syncConversation(state.messages)
         val agentError = state.errorMessage
         updateState {
             it.copy(
-                messages = projectCommitted(state.messages),
+                messages = projectCommitted(state.messages, activeConversation),
                 streamingMessage = state.streamingMessage?.let(::projectStreaming),
                 isStreaming = state.isStreaming,
-                treeRows = buildTreeRows(activeConversation, it.treeFilter),
                 error = agentError ?: it.error?.takeIf { e -> e != lastAgentError },
             )
         }
         lastAgentError = agentError
-
-        // Persist on conversation growth, not agent-transcript growth: an
-        // auto-retry removes the error message from the agent transcript while
-        // the conversation tree keeps it, so the conversation is the unit that
-        // must cross the persisted count.
-        if (activeConversation.activeMessages().size > persistedMessageCount) {
-            enqueuePersist()
-        }
-    }
-
-    /**
-     * Folds the agent's committed transcript into the conversation tree.
-     * The agent's transcript normally equals the conversation's active path
-     * (they are seeded together and only the agent appends), so growth is a
-     * strictly appended suffix that becomes children of the current leaf.
-     * Auto-retry is the one divergence (pi's _prepareRetry removes the
-     * trailing error assistant message from agent state but keeps it in the
-     * session/history): a shrink records the removed suffix in
-     * [conversationOffset] — the append-only tree never retracts it — and
-     * later growth appends only the messages beyond the retained prefix, so
-     * the error entry stays a permanent branch sibling in history while the
-     * retried response lands after it.
-     */
-    private fun syncConversation(messages: List<Message>) {
-        val activeCount = activeConversation.activeMessages().size
-        val agentBase = activeCount - conversationOffset
-        if (messages.size < agentBase) {
-            conversationOffset = activeCount - messages.size
-        } else if (messages.size > agentBase) {
-            var updated = activeConversation
-            for (message in messages.drop(agentBase)) {
-                updated = updated.append(message)
-            }
-            activeConversation = updated
-            conversationOffset = 0
-        }
     }
 
     // ---- persistence pipeline ----
@@ -642,7 +628,7 @@ class ChatViewModel(
                 )
                 if (activeSession?.id == session.id) {
                     activeSession = saved
-                    persistedMessageCount = saved.messages.size
+                    persistedEntryCount = saved.entries.size
                 }
                 val summaries = sessionStore.summaries()
                 if (activeSession?.id == session.id || _uiState.value.activeSessionId == session.id) {
@@ -657,28 +643,23 @@ class ChatViewModel(
     }
 
     /**
-     * Ensures the latest transcript of the active session is fully saved,
-     * retrying once from the current agent snapshot if a previous save
-     * failed. Returns false when the latest snapshot remains unsaved:
-     * callers must then keep the current session (and surface the save
-     * error) so an unsaved transcript is never abandoned.
+     * Ensures the latest conversation of the active session is fully saved,
+     * retrying once from the current tree if a previous save failed.
+     * Returns false when the latest snapshot remains unsaved: callers must
+     * then keep the current session (and surface the save error) so an
+     * unsaved transcript is never abandoned.
      */
     private suspend fun awaitPersistence(): Boolean {
         retryUnsavedSnapshot()
         persistJob?.join()
-        agent?.state?.value?.let { syncConversation(it.messages) }
         return pendingPersist == null &&
-            activeConversation.activeMessages().size <= persistedMessageCount
+            activeConversation.entries.size <= persistedEntryCount
     }
 
-    /** Explicitly re-enqueues the latest agent transcript when it is unsaved. */
+    /** Explicitly re-enqueues the latest conversation tree when it is unsaved. */
     private fun retryUnsavedSnapshot() {
-        val snapshot = agent?.state?.value ?: return
-        if (activeSession != null) {
-            syncConversation(snapshot.messages)
-            if (activeConversation.activeMessages().size > persistedMessageCount) {
-                enqueuePersist()
-            }
+        if (activeSession != null && activeConversation.entries.size > persistedEntryCount) {
+            enqueuePersist()
         }
     }
 
@@ -745,8 +726,7 @@ class ChatViewModel(
                 setError(ERROR_SESSION_SAVE)
                 return
             }
-            val transcript = agent?.state?.value?.messages ?: activeSession!!.messages
-            val newAgent = tryCreateAgent(candidate, activeSession!!.id, transcript) ?: return
+            val newAgent = tryCreateAgent(candidate, activeSession!!.id, activeConversation) ?: return
             if (!persistSettings(candidate)) return
             bindAgent(newAgent)
             currentSettings = candidate
@@ -1202,15 +1182,24 @@ class ChatViewModel(
 }
 
 /**
- * UI projection of the committed transcript as ordered blocks: text parts
- * stay separate, runs of consecutive thinking parts merge into one block
- * (pi's assistant-message semantics), and blank parts drop. Keys are stable
- * per committed index+role+timestamp so that same-millisecond
+ * UI projection of the committed transcript as ordered blocks: the active
+ * conversation path is the structural source (pi's session branch) but only
+ * entries still live in the agent transcript render — auto-retry and
+ * overflow recovery remove failed assistant messages from agent state while
+ * the append-only tree keeps them in history, exactly like pi's UI.
+ * Text parts stay separate, runs of consecutive thinking parts merge into
+ * one block (pi's assistant-message semantics), and blank parts drop. Keys
+ * are stable per path index+role+timestamp so that same-millisecond
  * user/assistant messages can never collide.
  */
-private fun projectCommitted(messages: List<Message>): List<ChatMessage> =
-    messages.mapIndexed { index, message ->
-        when (message) {
+private fun projectCommitted(liveMessages: List<Message>, conversation: Conversation): List<ChatMessage> {
+    val live = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Message, Boolean>())
+    live.addAll(liveMessages)
+    val projected = mutableListOf<ChatMessage>()
+    conversation.activeEntries().forEachIndexed { index, entry ->
+        if (entry !is MessageEntry || !live.contains(entry.message)) return@forEachIndexed
+        val message = entry.message
+        val chat = when (message) {
             is UserMessage -> ChatMessage(
                 id = "msg-$index-${message.timestamp}",
                 role = ChatRole.User,
@@ -1224,7 +1213,10 @@ private fun projectCommitted(messages: List<Message>): List<ChatMessage> =
             )
             else -> null
         }
-    }.filterNotNull()
+        chat?.let { projected.add(it) }
+    }
+    return projected
+}
 
 /** UI projection of the in-flight partial; distinct key namespace from committed messages. */
 private fun projectStreaming(message: AssistantMessage): ChatMessage =

@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ui.chat
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.viewModelScope
+import works.resolve.pathfinder.agent.AgentSession
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentFactory
 import works.resolve.pathfinder.agent.StreamFn
@@ -225,20 +226,21 @@ class ChatViewModelTest {
 
         /** When set, the factory rejects every configuration. */
         var rejectAll = false
-        val createdAgents = mutableListOf<Agent>()
+        val createdAgents = mutableListOf<AgentSession>()
 
-        val factory = AgentFactory { settings, _, transcript ->
+        val factory = AgentFactory { settings, _, conversation ->
             check(!rejectAll) { "factory unavailable" }
             require(settings.modelId !in rejectedModelIds) { "model rejected" }
-            Agent(
-                model = testModel,
-                streamFn = StreamFn { _, _, _ ->
-                    scriptedStreams.poll() ?: flow { kotlinx.coroutines.awaitCancellation() }
-                },
-            ).also { agent ->
-                agent.replaceTranscript(transcript)
-                createdAgents += agent
-            }
+            AgentSession(
+                agent = Agent(
+                    model = testModel,
+                    streamFn = StreamFn { _, _, _ ->
+                        scriptedStreams.poll() ?: flow { kotlinx.coroutines.awaitCancellation() }
+                    },
+                ),
+                conversation = conversation,
+                retrySettings = settings.retry,
+            ).also { session -> createdAgents += session }
         }
 
         fun newViewModel(): ChatViewModel = ChatViewModel(
@@ -1950,7 +1952,11 @@ class ChatViewModelTest {
                 ThinkingContent(" lone "),
             ),
         )
-        h.createdAgents.last().replaceTranscript(listOf(works.resolve.pathfinder.ai.core.UserMessage.ofText("hi"), assistant))
+        h.createdAgents.last().replaceConversation(
+            works.resolve.pathfinder.data.sessions.Conversation.fromMessages(
+                listOf(works.resolve.pathfinder.ai.core.UserMessage.ofText("hi"), assistant),
+            ),
+        )
 
         val state = vm.uiState.first { it.messages.size == 2 }
         val blocks = state.messages[1].blocks

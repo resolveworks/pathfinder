@@ -42,6 +42,10 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 class NativeAgentFactoryTest {
 
+    private fun emptyConversation(): works.resolve.pathfinder.data.sessions.Conversation =
+        works.resolve.pathfinder.data.sessions.Conversation(emptyList(), null)
+
+
     private class FakeCredentialStore(initialCredential: Credential? = null) : CredentialStore {
         val credential = MutableStateFlow(initialCredential)
         var readCalls = 0
@@ -103,7 +107,7 @@ class NativeAgentFactoryTest {
     fun `rejects an unsupported provider`() {
         assertFailsWith<IllegalArgumentException> {
             factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-                .create(settings(providerId = "openai"), "s1", emptyList())
+                .create(settings(providerId = "openai"), "s1", emptyConversation())
         }
     }
 
@@ -111,7 +115,7 @@ class NativeAgentFactoryTest {
     fun `rejects an unknown model`() {
         assertFailsWith<IllegalArgumentException> {
             factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-                .create(settings(modelId = "gpt-4"), "s1", emptyList())
+                .create(settings(modelId = "gpt-4"), "s1", emptyConversation())
         }
     }
 
@@ -124,7 +128,7 @@ class NativeAgentFactoryTest {
             UserMessage.ofText("again"),
         )
         val agent = factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-            .create(settings(), "s1", transcript)
+            .create(settings(), "s1", works.resolve.pathfinder.data.sessions.Conversation.fromMessages(transcript))
         assertEquals(transcript, agent.state.value.messages)
         // Copied defensively: later mutation of the source list is invisible.
         transcript.clear()
@@ -139,7 +143,7 @@ class NativeAgentFactoryTest {
             val store = FakeCredentialStore(ApiKeyCredential("factory-test-key-1"))
             val transport = RecordingTransport()
             val agent = factory(store, transport)
-                .create(settings(), "s1", emptyList())
+                .create(settings(), "s1", emptyConversation())
 
             // Rotating the stored credential after construction must be observed
             // at prompt time: the resolver stays lazy and reads the store per request.
@@ -182,7 +186,7 @@ class NativeAgentFactoryTest {
                 .create(
                     settings(providerId = "cloudflare-ai-gateway", modelId = "workers-ai/test-model"),
                     "s1",
-                    emptyList(),
+                    emptyConversation(),
                 )
             agent.prompt("ping")
 
@@ -310,7 +314,7 @@ class NativeAgentFactoryTest {
             )
             val transport = RecordingTransport()
             val agent = NativeAgentFactory(FakeCredentialStore(ApiKeyCredential("k")), catalog, transport)
-                .create(ModelSettings(providerId = "multi", modelId = "m"), "s1", emptyList())
+                .create(ModelSettings(providerId = "multi", modelId = "m"), "s1", emptyConversation())
 
             agent.prompt("ping")
 
@@ -367,7 +371,7 @@ class NativeAgentFactoryTest {
             ).create(
                 ModelSettings(providerId = "openrouter", modelId = model.id),
                 "s1",
-                emptyList(),
+                emptyConversation(),
             )
 
             agent.prompt("ping")
@@ -390,7 +394,7 @@ class NativeAgentFactoryTest {
                 .create(
                     settings(providerId = "cloudflare-ai-gateway", modelId = "workers-ai/test-model"),
                     "s1",
-                    emptyList(),
+                    emptyConversation(),
                 )
 
             agent.prompt("ping")

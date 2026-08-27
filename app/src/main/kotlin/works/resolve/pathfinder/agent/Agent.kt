@@ -6,16 +6,12 @@ import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
-import works.resolve.pathfinder.ai.core.UserMessage
-import works.resolve.pathfinder.ai.utils.Retry
-import works.resolve.pathfinder.ai.utils.isContextOverflow
 import works.resolve.pathfinder.data.settings.RetrySettings
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -41,21 +37,24 @@ data class AgentState(
 
 /**
  * Stateful wrapper around the low-level agent loop, ported from pi's Agent
- * class reduced to the state/lifecycle/prompt/abort subset needed by a
- * no-tools chat: it owns the transcript, reduces loop events into
+ * class reduced to the state/lifecycle/prompt/continue/abort subset needed
+ * by a no-tools chat: it owns the agent transcript, reduces loop events into
  * [AgentState] before notifying [events] observers, and synthesizes terminal
  * lifecycle when a run fails at this boundary.
  *
+ * One [prompt] (or [continueRun]) is exactly one run of the agent loop: the
+ * post-run orchestration pi layers above the Agent in agent-session
+ * (auto-retry, compaction) lives in [AgentSession] here, exactly like pi's
+ * layering (coding-agent `agent-session.ts` over `packages/agent/src/agent.ts`).
+ *
  * Queues, hooks, tools, images, and persistence are deliberately absent.
+ * Auto-retry settings ([RetrySettings]) are an [AgentSession] concern; this
+ * class has no retry behavior.
  */
 class Agent(
     val model: Model,
     val systemPrompt: String? = null,
     val streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
-    /** Auto-retry budget for failed runs (pi's settings.retry, agent-session auto-retry). */
-    val retrySettings: RetrySettings = RetrySettings(),
-    /** Injectable backoff sleep so tests never wait. */
-    private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val streamFn: StreamFn,
 ) {
     /** Guards [active] and transcript mutations; all critical sections are brief and non-suspending. */
@@ -72,20 +71,14 @@ class Agent(
     private var sawAgentEnd = false
 
     /**
-     * 1-indexed auto-retry attempt counter, pi's `_retryAttempt`
-     * (agent-session.ts). Reset on a successful assistant response, final
-     * failure, or cancelled backoff.
+     * Event sink installed by the owning [AgentSession] (pi's agent-session
+     * registers an agent event listener). Invoked synchronously from
+     * [processEvent] after the event has been reduced into [state] and
+     * emitted to [events], so a session sees the already-reduced state and
+     * full source-ordered events without flow-subscription races. Only one
+     * session may own an Agent.
      */
-    private var retryAttempt = 0
-
-    /**
-     * Last assistant message of the current run, pi's `_lastAssistantMessage`
-     * (agent-session.ts): consumed (nulled) by post-run handling.
-     */
-    private var lastAssistantMessage: AssistantMessage? = null
-
-    /** Stateful classifier for transient provider errors (pi's isRetryableAssistantError). */
-    private val retryClassifier = Retry()
+    internal var eventSink: suspend (AgentEvent) -> Unit = {}
 
     private val _state = MutableStateFlow(AgentState(model = model))
     val state: StateFlow<AgentState> = _state.asStateFlow()
@@ -106,16 +99,17 @@ class Agent(
     val events: SharedFlow<AgentEvent> = _events.asSharedFlow()
 
     /**
-     * Start a new prompt from [text]. Creates a timestamped user message and
-     * runs the loop against a snapshot of the committed transcript.
+     * Run one agent loop over [messages] (pi's `Agent.prompt(messages)`),
+     * appending them to the committed transcript and streaming one assistant
+     * response from the resulting snapshot.
      *
-     * @throws IllegalStateException when a prompt is already running.
+     * @throws IllegalStateException when a run is already active.
      * @throws CancellationException when aborted or when the caller is cancelled;
      *   in either case a synthetic ABORTED assistant message and full terminal
      *   lifecycle are committed first (in a non-cancellable context) so the
      *   transcript and UI cannot remain stuck.
      */
-    suspend fun prompt(text: String) {
+    suspend fun prompt(messages: List<Message>) {
         synchronized(lock) {
             if (active) {
                 throw IllegalStateException(
@@ -128,7 +122,6 @@ class Agent(
         sawAgentEnd = false
 
         try {
-            val prompt = UserMessage.ofText(text, System.currentTimeMillis())
             val contextSnapshot = Context(
                 systemPrompt = systemPrompt,
                 messages = _state.value.messages.toList(),
@@ -140,15 +133,7 @@ class Agent(
                 // job can run anything: an abort() that fires as soon as the
                 // state reports isStreaming is guaranteed to reach this job.
                 val job = launch(start = CoroutineStart.LAZY) {
-                    runAgentLoop(listOf(prompt), contextSnapshot, config) { event -> processEvent(event) }
-                    // Post-run auto-retry, pi's _runAgentPrompt loop
-                    // (agent-session.ts): after each completed run, retry a
-                    // retryable final error by continuing the agent with no
-                    // new prompts. The whole sequence lives in this one job so
-                    // abort() cancels both the active run and the backoff sleep.
-                    while (handlePostAgentRun()) {
-                        runContinue(config)
-                    }
+                    runAgentLoop(messages, contextSnapshot, config) { event -> processEvent(event) }
                 }
                 activeJob = job
                 reduce { it.copy(isStreaming = true, errorMessage = null) }
@@ -174,6 +159,15 @@ class Agent(
         }
     }
 
+    /**
+     * Continue the agent with no new prompts, pi's `agent.continue()` (pi
+     * packages/agent/src/agent.ts): a full run whose streams resume from the
+     * committed transcript unchanged.
+     */
+    suspend fun continueRun() {
+        prompt(emptyList())
+    }
+
     /** Abort the active prompt, if any. May be called from any coroutine.
      *
      * Safe to call at any moment from outside: once [AgentState.isStreaming]
@@ -188,7 +182,7 @@ class Agent(
      * Replace the committed transcript with a copy of [messages]. Only valid
      * while idle.
      *
-     * @throws IllegalStateException when a prompt is running.
+     * @throws IllegalStateException when a run is active.
      */
     fun replaceTranscript(messages: List<Message>) {
         synchronized(lock) {
@@ -203,7 +197,7 @@ class Agent(
     /**
      * Clear the committed transcript and any error. Only valid while idle.
      *
-     * @throws IllegalStateException when a prompt is running.
+     * @throws IllegalStateException when a run is active.
      */
     fun resetTranscript() {
         synchronized(lock) {
@@ -269,132 +263,7 @@ class Agent(
             }
         }
         _events.emit(event)
-
-        // Pi's agent-session tracks the run's last assistant message per
-        // append and resets the retry counter mid-run when a retried run
-        // finally produces a non-error assistant response (agent-session.ts
-        // ~684): auto_retry_end{success:true} fires at that message's
-        // completion, not at post-run. Mirrored here inside event reduction.
-        val assistant = (event as? AgentEvent.MessageEnd)?.message as? AssistantMessage
-        if (assistant != null) {
-            lastAssistantMessage = assistant
-            if (assistant.stopReason != StopReason.ERROR && retryAttempt > 0) {
-                val attempt = retryAttempt
-                retryAttempt = 0
-                _events.emit(AgentEvent.AutoRetryEnd(success = true, attempt = attempt))
-            }
-        }
-    }
-
-    // ---- auto-retry (pi agent-session.ts) ----
-
-    /**
-     * One agent continuation, pi's `agent.continue()`: a run with no new
-     * prompts that streams from the committed transcript unchanged.
-     * [sawAgentEnd] is reset so a failure of this run still synthesizes
-     * terminal lifecycle at the facade boundary, and [AgentState.errorMessage]
-     * is cleared like pi's Agent.run does before every run.
-     */
-    private suspend fun runContinue(config: AgentLoopConfig) {
-        sawAgentEnd = false
-        reduce { it.copy(errorMessage = null) }
-        val snapshot = Context(systemPrompt = systemPrompt, messages = _state.value.messages.toList())
-        runAgentLoop(emptyList(), snapshot, config) { event -> processEvent(event) }
-    }
-
-    /**
-     * Post-run handling, ported from pi's `_handlePostAgentRun`
-     * (agent-session.ts ~1101) reduced to the auto-retry branch (compaction
-     * and queued-message continuation are out of scope for this port):
-     * consumes [lastAssistantMessage]; when its final assistant message is a
-     * retryable error and the retry can be prepared, returns true so the
-     * caller continues the agent. Otherwise, when the run still errored after
-     * retries, emits `auto_retry_end{success:false}` with the final error and
-     * resets the counter.
-     */
-    private suspend fun handlePostAgentRun(): Boolean {
-        val msg = lastAssistantMessage
-        lastAssistantMessage = null
-        if (msg == null) return false
-
-        if (isRetryableError(msg) && prepareRetry(msg)) return true
-
-        if (msg.stopReason == StopReason.ERROR && retryAttempt > 0) {
-            _events.emit(
-                AgentEvent.AutoRetryEnd(success = false, attempt = retryAttempt, finalError = msg.errorMessage),
-            )
-            retryAttempt = 0
-        }
-        return false
-    }
-
-    /**
-     * Ported from pi's `_isRetryableError` (agent-session.ts ~2825): context
-     * overflow errors are NOT retryable (compaction's job upstream); every
-     * other retryable assistant error is.
-     */
-    private fun isRetryableError(message: AssistantMessage): Boolean {
-        if (isContextOverflow(message, model.contextWindow)) return false
-        return retryClassifier.isRetryableAssistantError(message)
-    }
-
-    /**
-     * Prepare a retry of [message] with exponential backoff, ported from pi's
-     * `_prepareRetry` (agent-session.ts ~2866). Returns true when the caller
-     * should continue the agent.
-     *
-     * Divergence (precedented in `ai/utils/Retry.kt`): pi sleeps through a
-     * dedicated retry AbortController; here abort is plain cancellation of
-     * the prompt coroutine, so the sleep's [CancellationException] is caught
-     * to emit the terminal `auto_retry_end{success:false, "Retry cancelled"}`
-     * under [NonCancellable] before rethrowing (prompt's existing abort
-     * contract). The error message is removed from AGENT STATE only — it
-     * stays in the persisted session/history, whose tree is append-only and
-     * synced from state growth, so a removal never retracts persisted entries.
-     */
-    private suspend fun prepareRetry(message: AssistantMessage): Boolean {
-        if (!retrySettings.enabled) return false
-
-        retryAttempt++
-        if (retryAttempt > retrySettings.maxRetries) {
-            // Preserve the completed attempt count so post-run handling can
-            // emit the final failure.
-            retryAttempt--
-            return false
-        }
-
-        val delayMs = retrySettings.baseDelayMs * (1L shl (retryAttempt - 1))
-
-        _events.emit(
-            AgentEvent.AutoRetryStart(
-                attempt = retryAttempt,
-                maxAttempts = retrySettings.maxRetries,
-                delayMs = delayMs,
-                errorMessage = message.errorMessage ?: "Unknown error",
-            ),
-        )
-
-        // Remove the error message from agent state (it stays in the
-        // session/history): only when the trailing message is an assistant
-        // message, exactly like pi.
-        val messages = _state.value.messages
-        if (messages.isNotEmpty() && messages.last() is AssistantMessage) {
-            val retained = messages.dropLast(1)
-            reduce { it.copy(messages = retained) }
-        }
-
-        try {
-            sleep(delayMs)
-        } catch (e: CancellationException) {
-            val attempt = retryAttempt
-            retryAttempt = 0
-            withContext(NonCancellable) {
-                _events.emit(AgentEvent.AutoRetryEnd(success = false, attempt = attempt, finalError = RETRY_CANCELLED))
-            }
-            throw e
-        }
-
-        return true
+        eventSink(event)
     }
 
     private fun reduce(reducer: (AgentState) -> AgentState) {
@@ -403,9 +272,6 @@ class Agent(
 
     private companion object {
         const val ABORT_ERROR_MESSAGE = "Run aborted"
-
-        /** Pi's literal backoff-cancel message (agent-session.ts _prepareRetry). */
-        const val RETRY_CANCELLED = "Retry cancelled"
 
         /**
          * Bounded, user-facing message for unexpected failures. Only the
