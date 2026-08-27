@@ -15,6 +15,7 @@ import works.resolve.pathfinder.ai.core.anthropicCompatOf
 import works.resolve.pathfinder.ai.core.calculateCost
 import works.resolve.pathfinder.ai.core.hasHeader
 import works.resolve.pathfinder.ai.core.mergeHeaders
+import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.TransportRequest
@@ -55,8 +56,9 @@ import kotlinx.serialization.json.longOrNull
  *   a protocol error and tool arguments are accumulated as the raw JSON
  *   string, matching the ported ToolCall model; a blank buffer finalizes as
  *   `{}`.
- * - pi's SDK client sends a pi User-Agent; the OkHttp transport's own default
- *   user agent stands.
+ * - The User-Agent is pi's getPiUserAgent() (ai/utils/PiUserAgent.kt), merged
+ *   first like pi's mergeClientHeaders; only its platform-string details
+ *   diverge.
  * - github-copilot dynamic headers are ported
  *   (GithubCopilotHeaders.kt); deferred tool loading, server-side
  *   fallbacks, metadata, and strict tool sampling are not ported (no surface
@@ -322,7 +324,7 @@ private fun buildHeaders(
         }
         val merged = filterNonNull(
             mergeHeaders(
-                base,
+                mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), base),
                 // Copilot dynamic headers come after the model headers and
                 // before the options headers, as in pi's Copilot branch of
                 // anthropic-messages createClient mergeClientHeaders.
@@ -349,7 +351,12 @@ private fun buildHeaders(
                 "x-app" to "cli",
             ),
         )
-        return filterNonNull(mergeHeaders(headers, mergeHeaders(model.headers, options.headers))) to options.apiKey
+        return filterNonNull(
+            mergeHeaders(
+                mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), headers),
+                mergeHeaders(model.headers, options.headers),
+            ),
+        ) to options.apiKey
     }
 
     val sessionAffinity: Map<String, String?> =
@@ -371,7 +378,7 @@ private fun buildHeaders(
     )
     val merged = filterNonNull(
         mergeHeaders(
-            base,
+            mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), base),
             mergeHeaders(model.headers, options.headers),
         ),
     )

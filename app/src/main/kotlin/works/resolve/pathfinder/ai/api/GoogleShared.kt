@@ -14,6 +14,7 @@ import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -191,7 +192,7 @@ object GoogleShared {
                                 if (block.text.isBlank() && thoughtSignature == null) continue
                                 parts.add(
                                     buildJsonObject {
-                                        put("text", OpenAiCompletionsPayload.sanitizeSurrogates(block.text))
+                                        put("text", sanitizeSurrogates(block.text))
                                         thoughtSignature?.let { put("thoughtSignature", it) }
                                     },
                                 )
@@ -206,7 +207,7 @@ object GoogleShared {
                                     parts.add(
                                         buildJsonObject {
                                             put("thought", true)
-                                            put("text", OpenAiCompletionsPayload.sanitizeSurrogates(block.thinking))
+                                            put("text", sanitizeSurrogates(block.thinking))
                                             thoughtSignature?.let { put("thoughtSignature", it) }
                                         },
                                     )
@@ -216,7 +217,7 @@ object GoogleShared {
                                     if (block.thinking.isBlank()) continue
                                     parts.add(
                                         buildJsonObject {
-                                            put("text", OpenAiCompletionsPayload.sanitizeSurrogates(block.thinking))
+                                            put("text", sanitizeSurrogates(block.thinking))
                                         },
                                     )
                                 }
@@ -269,7 +270,7 @@ object GoogleShared {
 
                     // Use "output" for success, "error" for errors, per SDK docs.
                     val responseValue = when {
-                        textResult.isNotEmpty() -> OpenAiCompletionsPayload.sanitizeSurrogates(textResult)
+                        textResult.isNotEmpty() -> sanitizeSurrogates(textResult)
                         hasImages -> "(see attached image)"
                         else -> ""
                     }
@@ -352,7 +353,7 @@ object GoogleShared {
         val parts = msg.content.mapNotNull { item ->
             when (item.type) {
                 ContentType.TEXT -> buildJsonObject {
-                    put("text", OpenAiCompletionsPayload.sanitizeSurrogates((item as TextContent).text))
+                    put("text", sanitizeSurrogates((item as TextContent).text))
                 }
 
                 ContentType.IMAGE -> {

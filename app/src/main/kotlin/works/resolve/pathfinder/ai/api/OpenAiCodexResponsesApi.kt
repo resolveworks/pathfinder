@@ -20,6 +20,7 @@ import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.ai.utils.getPiUserAgent
 
 /**
  * OpenAI Codex Responses streaming adapter, ported from pi's
@@ -280,7 +281,7 @@ internal fun buildCodexSSEHeaders(
     headers["Authorization"] = "Bearer $token"
     headers["chatgpt-account-id"] = accountId
     headers["originator"] = "pi"
-    headers["User-Agent"] = PI_USER_AGENT
+    headers["User-Agent"] = getPiUserAgent()
     headers["OpenAI-Beta"] = "responses=experimental"
     headers["accept"] = "text/event-stream"
     headers["content-type"] = "application/json"

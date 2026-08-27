@@ -9,6 +9,7 @@ import works.resolve.pathfinder.ai.core.ToolChoice
 import works.resolve.pathfinder.ai.core.mergeHeaders
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -27,8 +28,8 @@ import kotlinx.coroutines.flow.Flow
  *   is testable through the injected [HttpStreamingTransport].
  * - pi's synchronous `throw` for a missing API key (in `stream`/`streamSimple`)
  *   is encoded as a terminal Error event, per the ChatApi contract here.
- * - pi's User-Agent is `getPiUserAgent()`; this port sends
- *   [GoogleRequest.USER_AGENT].
+ * - pi's User-Agent is `getPiUserAgent()` (ai/utils/PiUserAgent.kt); the
+ *   only divergence is the platform-string details of that value.
  */
 class GoogleGenerativeAiApi(
     private val transport: HttpStreamingTransport,
@@ -126,7 +127,7 @@ class GoogleGenerativeAiApi(
 
         // pi: providerHeadersToRecord({"User-Agent": ..., ...model.headers, ...optionsHeaders})
         val headers = mergeHeaders(
-            mergeHeaders(mapOf("User-Agent" to GoogleRequest.USER_AGENT), model.headers),
+            mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), model.headers),
             options.headers,
         ).filterValues { it != null }
             .mapValues { it.value!! } + mapOf("x-goog-api-key" to apiKey)

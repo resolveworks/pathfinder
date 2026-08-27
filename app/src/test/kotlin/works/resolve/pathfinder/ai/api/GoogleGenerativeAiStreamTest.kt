@@ -25,6 +25,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import works.resolve.pathfinder.ai.utils.getPiUserAgent
 
 /**
  * Canned streaming tests for the Google Generative AI adapter, ported from
@@ -234,7 +235,7 @@ class GoogleGenerativeAiStreamTest {
         )
         assertEquals("k", request.headers["x-goog-api-key"])
         assertEquals("request-value", request.headers["x-model"])
-        assertEquals(GoogleRequest.USER_AGENT, request.headers["User-Agent"])
+        assertEquals(getPiUserAgent(), request.headers["User-Agent"])
         assertNull(request.bearerToken)
 
         val body = Json.parseToJsonElement(request.body.decodeToString()).jsonObject

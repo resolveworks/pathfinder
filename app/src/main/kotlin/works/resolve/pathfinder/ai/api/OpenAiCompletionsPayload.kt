@@ -16,6 +16,8 @@ import works.resolve.pathfinder.ai.core.ThinkingFormat
 import works.resolve.pathfinder.ai.core.ThinkingLevelMap
 import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.ToolChoice
+import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
+import works.resolve.pathfinder.ai.utils.shortHash
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -391,7 +393,7 @@ private fun normalizeToolCallId(id: String, provider: String): String {
         val itemId = id.substring(separatorIndex + 1).replace(Regex("[^a-zA-Z0-9_-]"), "_")
         val combinedId = if (itemId.isNotEmpty()) "${callId}_${itemId}" else callId
         if (combinedId.length <= 40) return combinedId
-        val hash = OpenAiResponsesShared.shortHash(id).take(8)
+        val hash = shortHash(id).take(8)
         val prefix = callId.take(maxOf(1, 40 - hash.length - 1))
         return "${prefix}_${hash}"
     }
@@ -556,32 +558,5 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
     private fun hasToolHistory(messages: List<Message>): Boolean = messages.any { msg ->
         msg.role == MessageRole.TOOL_RESULT ||
             (msg as? works.resolve.pathfinder.ai.core.AssistantMessage)?.content?.any { it.type == ContentType.TOOL_CALL } == true
-    }
-
-    /**
-     * Removes unpaired UTF-16 surrogates, which many providers reject during JSON
-     * parsing. Valid surrogate pairs (emoji, astral text) are preserved. Mirrors pi's
-     * sanitizeSurrogates.
-     */
-    internal fun sanitizeSurrogates(text: String): String {
-        val sb = StringBuilder(text.length)
-        var i = 0
-        while (i < text.length) {
-            val c = text[i]
-            when {
-                c.isHighSurrogate() -> {
-                    val next = if (i + 1 < text.length) text[i + 1] else ' '
-                    if (next.isLowSurrogate()) {
-                        sb.append(c).append(next)
-                        i++
-                    }
-                    // else: drop unpaired high surrogate
-                }
-                c.isLowSurrogate() -> Unit // drop unpaired low surrogate
-                else -> sb.append(c)
-            }
-            i++
-        }
-        return sb.toString()
     }
 }

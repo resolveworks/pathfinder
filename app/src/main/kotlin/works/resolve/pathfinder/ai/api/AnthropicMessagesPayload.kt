@@ -16,6 +16,7 @@ import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.anthropicCompatOf
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
+import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -94,36 +95,6 @@ data class AnthropicMessagesOptions(
             ", interleavedThinking=$interleavedThinking, toolChoice=$toolChoice" +
             ", cacheRetention=$cacheRetention, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
             ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys})"
-}
-
-/**
- * Removes unpaired Unicode surrogates, ported verbatim from pi's
- * sanitizeSurrogates (packages/ai/src/utils/sanitize-unicode.ts).
- */
-internal fun sanitizeSurrogates(text: String): String {
-    val sb = StringBuilder(text.length)
-    var i = 0
-    while (i < text.length) {
-        val c = text[i]
-        if (c.isHighSurrogate()) {
-            if (i + 1 < text.length && text[i + 1].isLowSurrogate()) {
-                sb.append(c).append(text[i + 1])
-                i += 2
-            } else {
-                i += 1
-            }
-        } else if (c.isLowSurrogate()) {
-            // Keep only if preceded by a high surrogate; that case is consumed above.
-            if (i > 0 && text[i - 1].isHighSurrogate()) {
-                sb.append(c)
-            }
-            i += 1
-        } else {
-            sb.append(c)
-            i += 1
-        }
-    }
-    return sb.toString()
 }
 
 /** pi's resolveCacheRetention: explicit value, then PI_CACHE_RETENTION=long, else short. */

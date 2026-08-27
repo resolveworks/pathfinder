@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.api
 
+import works.resolve.pathfinder.ai.utils.shortHash
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -15,12 +16,12 @@ class MistralConversationsPayloadTest {
     @Test
     fun `shortHash matches pi reference values`() {
         // Values produced by pi's shortHash (UTF-16 code-unit iteration).
-        assertEquals("k4n83c7h0j2b", mistralShortHash(""))
-        assertEquals("y0biex7f9bbh", mistralShortHash("abc"))
-        assertEquals("1nlso9v7di2pi", mistralShortHash("toolcall:0"))
-        assertEquals("1h9muox1to064d", mistralShortHash("openai-response-id-with-pipes|and-stuff-450-chars"))
-        assertEquals("ih6tp613o7wt8", mistralShortHash("héllo 🌍"))
-        assertEquals("144a7j62ld7en", mistralShortHash("abc:1"))
+        assertEquals("k4n83c7h0j2b", shortHash(""))
+        assertEquals("y0biex7f9bbh", shortHash("abc"))
+        assertEquals("1nlso9v7di2pi", shortHash("toolcall:0"))
+        assertEquals("1h9muox1to064d", shortHash("openai-response-id-with-pipes|and-stuff-450-chars"))
+        assertEquals("ih6tp613o7wt8", shortHash("héllo 🌍"))
+        assertEquals("144a7j62ld7en", shortHash("abc:1"))
     }
 
     @Test
@@ -33,9 +34,9 @@ class MistralConversationsPayloadTest {
         // Reference value from pi's deriveMistralToolCallId under node.
         assertEquals("knulnuw1n", deriveMistralToolCallId("toolcall:00", 0))
         // Empty normalized ids hash the raw string as seed.
-        assertEquals(mistralShortHash("---").take(9), deriveMistralToolCallId("---", 0))
+        assertEquals(shortHash("---").take(9), deriveMistralToolCallId("---", 0))
         // Later attempts append a discriminator to the seed.
-        assertEquals(mistralShortHash("abc:1").take(9), deriveMistralToolCallId("abc", 1))
+        assertEquals(shortHash("abc:1").take(9), deriveMistralToolCallId("abc", 1))
     }
 
     @Test

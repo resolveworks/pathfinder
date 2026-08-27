@@ -33,6 +33,8 @@ import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
+import works.resolve.pathfinder.ai.utils.shortHash
 
 /**
  * Canned tests for the shared OpenAI Responses machinery, ported alongside
@@ -71,25 +73,25 @@ class OpenAiResponsesSharedTest {
 
     @Test
     fun `shortHash matches pi's reference values`() {
-        assertEquals("y0biex7f9bbh", OpenAiResponsesShared.shortHash("abc"))
-        assertEquals("4jcgrciydsyu", OpenAiResponsesShared.shortHash("call_x|fc_abc"))
+        assertEquals("y0biex7f9bbh", shortHash("abc"))
+        assertEquals("4jcgrciydsyu", shortHash("call_x|fc_abc"))
     }
 
     @Test
     fun `shortHash is deterministic and length-bounded`() {
         val long = "x".repeat(500)
-        assertEquals(OpenAiResponsesShared.shortHash(long), OpenAiResponsesShared.shortHash(long))
-        assertTrue(OpenAiResponsesShared.shortHash(long).length <= 26)
+        assertEquals(shortHash(long), shortHash(long))
+        assertTrue(shortHash(long).length <= 26)
     }
 
     @Test
     fun `sanitizeSurrogates drops only unpaired surrogates`() {
         val paired = "Hello 🙈 World"
-        assertEquals(paired, OpenAiResponsesShared.sanitizeSurrogates(paired))
+        assertEquals(paired, sanitizeSurrogates(paired))
         val unpairedHigh = "Text ${"\uD83D"} here"
         val unpairedLow = "Text ${"\uDC00"} here"
-        assertEquals("Text  here", OpenAiResponsesShared.sanitizeSurrogates(unpairedHigh))
-        assertEquals("Text  here", OpenAiResponsesShared.sanitizeSurrogates(unpairedLow))
+        assertEquals("Text  here", sanitizeSurrogates(unpairedHigh))
+        assertEquals("Text  here", sanitizeSurrogates(unpairedLow))
     }
 
     @Test
@@ -240,7 +242,7 @@ class OpenAiResponsesSharedTest {
             OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
         )
         val id = input.single()["id"]!!.jsonPrimitive.content
-        assertEquals("1lfieqfu5oau7", OpenAiResponsesShared.shortHash(longId))
+        assertEquals("1lfieqfu5oau7", shortHash(longId))
         assertEquals("msg_1lfieqfu5oau7", id)
         assertTrue(id.length <= 64)
     }
@@ -319,7 +321,7 @@ class OpenAiResponsesSharedTest {
             OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
         )
         val item = input.first()
-        val expectedItemId = "fc_${OpenAiResponsesShared.shortHash(copilotItemId)}"
+        val expectedItemId = "fc_${shortHash(copilotItemId)}"
         assertEquals(expectedItemId, item["id"]!!.jsonPrimitive.content)
         assertTrue(item["id"]!!.jsonPrimitive.content.length <= 64)
         assertTrue(Regex("^fc_[A-Za-z0-9]+$").matches(item["id"]!!.jsonPrimitive.content))
@@ -454,7 +456,7 @@ class OpenAiResponsesSharedTest {
             ),
         )
         val expectedCallId =
-            "pi_tool_load_${OpenAiResponsesShared.shortHash("$toolCallId:deferred_tool")}"
+            "pi_tool_load_${shortHash("$toolCallId:deferred_tool")}"
         val call = input[1]
         val output = input[2]
         assertEquals("tool_search_call", call["type"]!!.jsonPrimitive.content)

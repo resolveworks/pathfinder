@@ -28,6 +28,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 
 /**
  * Request-construction tests for the anthropic-messages port, mirroring pi's

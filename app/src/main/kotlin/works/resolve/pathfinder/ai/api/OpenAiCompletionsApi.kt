@@ -24,6 +24,7 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.resolveCloudflareBaseUrl
+import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -120,7 +121,7 @@ class OpenAiCompletionsApi(
                 mergeHeaders(
                     mergeHeaders(
                         mergeHeaders(
-                            mergeHeaders(mapOf("User-Agent" to OPENAI_COMPLETIONS_USER_AGENT), model.headers),
+                            mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), model.headers),
                             copilotDynamicHeadersFor(model, context),
                         ),
                         sessionAffinityHeaders(model, cacheSessionId),
@@ -363,14 +364,6 @@ class OpenAiCompletionsApi(
         val json = Json { ignoreUnknownKeys = true }
     }
 }
-
-/**
- * Default User-Agent for OpenAI Chat Completions requests. pi sends
- * `getPiUserAgent()` (`pi (platform release; arch)`,
- * openai-completions.ts:751); Pathfinder identifies itself
- * (divergence: the Android client is not pi).
- */
-const val OPENAI_COMPLETIONS_USER_AGENT = "pathfinder (Android)"
 
 private fun kotlinx.serialization.json.JsonElement?.stringOrNull(): String? =
     (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content

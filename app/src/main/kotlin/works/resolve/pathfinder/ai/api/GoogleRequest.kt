@@ -5,6 +5,8 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.core.clampThinkingLevel
+import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -72,7 +74,7 @@ object GoogleRequest {
         request["contents"] = GoogleShared.convertMessages(model, context)
         if (!context.systemPrompt.isNullOrEmpty()) {
             request["systemInstruction"] = JsonPrimitive(
-                OpenAiCompletionsPayload.sanitizeSurrogates(context.systemPrompt),
+                sanitizeSurrogates(context.systemPrompt),
             )
         }
         if (context.tools.isNotEmpty()) {
@@ -241,9 +243,4 @@ object GoogleRequest {
         return defaults.getValue(level)
     }
 
-    /**
-     * User-Agent default pi sends via getPiUserAgent(); Pathfinder identifies
-     * itself (divergence: the Android client is not pi).
-     */
-    const val USER_AGENT = "pathfinder (Android)"
 }

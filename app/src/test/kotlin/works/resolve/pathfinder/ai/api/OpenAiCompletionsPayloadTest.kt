@@ -29,6 +29,8 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
+import works.resolve.pathfinder.ai.utils.shortHash
 
 class OpenAiCompletionsPayloadTest {
 
@@ -359,7 +361,7 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `unpaired surrogates are stripped but valid pairs kept`() {
         val lone = buildString { append("a"); append(0xD83D.toChar()); append(0xDC00.toChar()); append(0xD800.toChar()) }
-        val sanitized = OpenAiCompletionsPayload.sanitizeSurrogates(lone)
+        val sanitized = sanitizeSurrogates(lone)
         assertEquals("a\uD83D\uDC00", sanitized)
 
         val b = body(Context(systemPrompt = lone, messages = listOf(UserMessage.ofText(lone))))
@@ -747,7 +749,7 @@ class OpenAiCompletionsPayloadTest {
                 ),
             ),
         )
-        val hash = OpenAiResponsesShared.shortHash(id).take(8)
+        val hash = shortHash(id).take(8)
         val expected = "call_123_${hash}"
         assertTrue(expected.length <= 40, "combined id must respect the OpenAI 40-char limit")
         val assistant = b["messages"]!!.jsonArray[0].jsonObject

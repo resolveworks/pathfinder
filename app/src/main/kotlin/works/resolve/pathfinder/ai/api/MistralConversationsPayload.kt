@@ -10,6 +10,8 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.ToolChoice
+import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
+import works.resolve.pathfinder.ai.utils.shortHash
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -29,7 +31,6 @@ import kotlinx.serialization.json.put
  *   `onPayload` hook can add SDK-style fields. Kotlin has no onPayload hook
  *   (tests inspect the transport request instead), so the remap layer has no
  *   consumer.
- * - pi's `sanitizeSurrogates` is reused from [OpenAiCompletionsPayload].
  * - pi's `stripSymbolKeys` exists to strip TypeBox symbol metadata; Kotlin
  *   tool parameters are already plain JSON.
  * - pi's strict-sampling resolution (`resolveJsonSchemaStrictSampling`) always
@@ -296,25 +297,7 @@ object MistralConversationsPayload {
 
     private fun sanitize(content: TextContent): String = sanitizeText(content.text)
 
-    private fun sanitizeText(text: String): String = OpenAiCompletionsPayload.sanitizeSurrogates(text)
-}
-
-/**
- * Deterministic short hash, ported from pi's `shortHash` (utils/hash.ts).
- * Used to compress arbitrary strings into 9-character Mistral tool call IDs.
- */
-internal fun mistralShortHash(str: String): String {
-    var h1 = 0xdeadbeefL.toInt()
-    var h2 = 0x41c6ce57L.toInt()
-    for (ch in str) {
-        h1 = (h1 xor ch.code) * 2654435761L.toInt()
-        h2 = (h2 xor ch.code) * 1597334677
-    }
-    h1 = (h1 xor (h1 ushr 16)) * 2246822507L.toInt() xor
-        ((h2 xor (h2 ushr 13)) * 3266489909L.toInt())
-    h2 = (h2 xor (h2 ushr 16)) * 2246822507L.toInt() xor
-        ((h1 xor (h1 ushr 13)) * 3266489909L.toInt())
-    return h2.toUInt().toString(36) + h1.toUInt().toString(36)
+    private fun sanitizeText(text: String): String = sanitizeSurrogates(text)
 }
 
 /**
@@ -351,7 +334,7 @@ internal fun deriveMistralToolCallId(id: String, attempt: Int): String {
     }
     val seedBase = normalized.ifEmpty { id }
     val seed = if (attempt == 0) seedBase else "$seedBase:$attempt"
-    return mistralShortHash(seed)
+    return shortHash(seed)
         .replace(Regex("[^a-zA-Z0-9]"), "")
         .take(MistralConversationsPayload.MISTRAL_TOOL_CALL_ID_LENGTH)
 }

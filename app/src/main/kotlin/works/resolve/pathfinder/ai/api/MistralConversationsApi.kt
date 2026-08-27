@@ -26,6 +26,8 @@ import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
+import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -385,8 +387,8 @@ class MistralConversationsApi(
      * headers (null removes), then x-affinity from the session id when prompt
      * caching is active and not explicitly overridden.
      *
-     * Divergence: pi sets a `pi (...)` User-Agent; the platform HTTP stack
-     * supplies its own, so none is set here.
+     * The User-Agent is pi's getPiUserAgent() (ai/utils/PiUserAgent.kt);
+     * only its platform-string details diverge.
      */
     private fun buildMistralHeaders(
         model: Model,
@@ -394,6 +396,7 @@ class MistralConversationsApi(
         options: MistralOptions,
     ): Pair<String?, Map<String, String>> {
         val headers = LinkedHashMap<String, String?>()
+        headers["User-Agent"] = getPiUserAgent()
         headers["accept"] = "text/event-stream"
         applyOverrides(headers, model.headers)
         applyOverrides(headers, options.headers)
@@ -452,7 +455,7 @@ class MistralConversationsApi(
 internal fun buildMistralSystemMessage(systemPrompt: String): JsonObject =
     kotlinx.serialization.json.buildJsonObject {
         put("role", "system")
-        put("content", OpenAiCompletionsPayload.sanitizeSurrogates(systemPrompt))
+        put("content", sanitizeSurrogates(systemPrompt))
     }
 
 private fun kotlinx.serialization.json.JsonElement?.stringOrNull(): String? =
