@@ -14,6 +14,7 @@ import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
 import works.resolve.pathfinder.ai.core.ThinkingFormat
 import works.resolve.pathfinder.ai.core.ThinkingLevelMap
 import works.resolve.pathfinder.ai.core.Tool
+import works.resolve.pathfinder.ai.core.ToolChoice
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -72,9 +73,31 @@ object OpenAiCompletionsPayload {
             body["tools"] = JsonArray(emptyList())
         }
 
+        // pi's buildParams: `if (options?.toolChoice) params.tool_choice = options.toolChoice`
+        // (openai-completions.ts:850-851), where toolChoice is the wire form
+        // ChatCompletionToolChoiceOption: "auto"/"none"/"required" or
+        // {type:"function", function:{name}}.
+        mapToolChoice(options.toolChoice)?.let { body["tool_choice"] = it }
+
         applyThinking(model, options, compat)?.let { body.putAll(it) }
 
         return JsonObject(body)
+    }
+
+    /**
+     * Serializes the core ToolChoice to the Chat Completions `tool_choice`
+     * wire form (pi's ChatCompletionToolChoiceOption pass-through,
+     * openai-completions.ts:850-851). Null means the field is omitted.
+     */
+    private fun mapToolChoice(choice: ToolChoice?): JsonElement? = when (choice) {
+        null -> null
+        ToolChoice.Auto -> JsonPrimitive("auto")
+        ToolChoice.None -> JsonPrimitive("none")
+        ToolChoice.Any, ToolChoice.Required -> JsonPrimitive("required")
+        is ToolChoice.Function -> buildJsonObject {
+            put("type", "function")
+            put("function", buildJsonObject { put("name", choice.name) })
+        }
     }
 
     /** Returns the extra thinking-related params to merge into the request body. */

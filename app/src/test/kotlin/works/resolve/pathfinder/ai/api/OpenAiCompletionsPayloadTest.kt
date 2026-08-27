@@ -8,6 +8,7 @@ import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
 import works.resolve.pathfinder.ai.core.Tool
+import works.resolve.pathfinder.ai.core.ToolChoice
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.UserMessage
@@ -67,6 +68,43 @@ class OpenAiCompletionsPayloadTest {
             OpenAiCompletionsOptions(apiKey = "k", temperature = 0.2),
         )
         assertEquals(0.2, b["temperature"]!!.jsonPrimitive.content.toDouble())
+    }
+
+    @Test
+    fun `tool choice serialized to chat completions wire form`() {
+        // pi openai-completions.ts buildParams passes ChatCompletionToolChoiceOption
+        // through as tool_choice (test/openai-completions-tool-choice.test.ts).
+        val cases = mapOf(
+            ToolChoice.Auto to JsonPrimitive("auto"),
+            ToolChoice.None to JsonPrimitive("none"),
+            ToolChoice.Any to JsonPrimitive("required"),
+            ToolChoice.Required to JsonPrimitive("required"),
+            ToolChoice.Function("ping") to Json.parseToJsonElement(
+                """{"type":"function","function":{"name":"ping"}}""",
+            ),
+        )
+        for ((choice, expected) in cases) {
+            val b = body(
+                Context(messages = listOf(UserMessage.ofText("hi"))),
+                OpenAiCompletionsOptions(apiKey = "k", toolChoice = choice),
+            )
+            assertEquals(expected, b["tool_choice"])
+        }
+    }
+
+    @Test
+    fun `tool choice included without tools and omitted when absent`() {
+        // pi includes tool_choice even when no tools are sent, and omits the
+        // field when toolChoice is unset (openai-completions.ts:850).
+        val withChoice = body(
+            Context(messages = listOf(UserMessage.ofText("hi"))),
+            OpenAiCompletionsOptions(apiKey = "k", toolChoice = ToolChoice.None),
+        )
+        assertEquals("none", withChoice["tool_choice"]!!.jsonPrimitive.content)
+        assertFalse(withChoice.containsKey("tools"))
+
+        val without = body(Context(messages = listOf(UserMessage.ofText("hi"))))
+        assertFalse(without.containsKey("tool_choice"))
     }
 
     @Test
