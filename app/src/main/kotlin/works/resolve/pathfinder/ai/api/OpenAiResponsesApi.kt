@@ -436,7 +436,10 @@ internal fun resolveAzureConfig(model: Model, options: AzureOpenAiResponsesOptio
     return AzureConfig(normalizeAzureBaseUrlFor(resolvedBaseUrl), apiVersion)
 }
 
-/** Pi's normalizeAzureBaseUrl, implemented over parsed URL parts. */
+/** Pi's normalizeAzureBaseUrl, implemented over parsed URL parts. Like pi's
+ * URL.toString(), the query string (and fragment) is preserved for non-Azure
+ * hosts; only the Azure-host branch strips the query when normalizing the
+ * path to /openai/v1. */
 internal fun normalizeAzureBaseUrlFor(raw: String): String {
     val trimmed = raw.trim().trimEnd('/')
     val url = try {
@@ -448,14 +451,15 @@ internal fun normalizeAzureBaseUrlFor(raw: String): String {
     val isAzureHost = host.endsWith(".openai.azure.com") ||
         host.endsWith(".cognitiveservices.azure.com") ||
         host.endsWith(".ai.azure.com")
-    val path = (url.path ?: "").trimEnd('/')
-
-    var effectivePath = path
+    var effectivePath = (url.path ?: "").trimEnd('/')
     if (isAzureHost && (effectivePath.isEmpty() || effectivePath == "/openai" || effectivePath == "/openai/v1/responses")) {
         effectivePath = "/openai/v1"
     }
     val port = if (url.port != -1) ":${url.port}" else ""
-    return "${url.scheme}://$host$port$effectivePath"
+    val userInfo = url.userInfo?.takeIf { it.isNotEmpty() }?.let { "$it@" } ?: ""
+    val query = if (isAzureHost) "" else url.rawQuery?.takeIf { it.isNotEmpty() }?.let { "?$it" } ?: ""
+    val fragment = url.rawFragment?.takeIf { it.isNotEmpty() }?.let { "#$it" } ?: ""
+    return "${url.scheme}://$userInfo$host$port$effectivePath$query$fragment"
 }
 
 /**
@@ -527,8 +531,10 @@ class AzureOpenAiResponsesApi(
 
             val params = buildAzureParams(model, context, options, deploymentName, messages)
             val headers = LinkedHashMap<String, String?>()
-            headers.putAll(model.headers)
-            headers["User-Agent"] = PI_USER_AGENT
+            // pi's azure createClient merges { "User-Agent": ua, ...model.headers }
+            // then Object.assign(options.headers): model headers can override the
+            // default UA, and options headers win last.
+            headers.putAll(mergeHeaders(mapOf("User-Agent" to PI_USER_AGENT), model.headers))
             headers.putAll(options.headers)
             headers["api-key"] = apiKey
             headers["Accept"] = "text/event-stream"

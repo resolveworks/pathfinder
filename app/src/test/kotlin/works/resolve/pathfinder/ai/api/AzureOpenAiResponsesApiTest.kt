@@ -1,19 +1,26 @@
 package works.resolve.pathfinder.ai.api
 
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelCost
 import works.resolve.pathfinder.ai.core.OpenAiResponsesCompat
+import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
@@ -194,6 +201,90 @@ class AzureOpenAiResponsesApiTest {
         val events = api(transport).stream(model, context, AzureOpenAiResponsesOptions(apiKey = "k")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals("Azure OpenAI API error (401): bad key", error.error.errorMessage)
+    }
+
+    @Test
+    fun `model headers override the default user agent`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completed().toTypedArray()))
+        api(transport).stream(
+            model.copy(headers = mapOf("User-Agent" to "provider-agent")),
+            context,
+            AzureOpenAiResponsesOptions(apiKey = "k"),
+        ).toList()
+        assertEquals("provider-agent", transport.requests.single().headers["User-Agent"])
+    }
+
+    @Test
+    fun `custom gateway base urls keep their query string`() {
+        // pi preserves the query on non-Azure hosts (URL.toString()); only
+        // the Azure-host normalization branch strips it.
+        assertEquals(
+            "https://my-proxy.example.com/v1?custom=true",
+            normalizeAzureBaseUrlFor("https://my-proxy.example.com/v1?custom=true"),
+        )
+        assertEquals(
+            "https://my-resource.openai.azure.com/openai/v1",
+            normalizeAzureBaseUrlFor("https://my-resource.openai.azure.com/openai?api-version=2024-12-01"),
+        )
+    }
+
+    @Test
+    fun `custom gateway requests keep the base url query string`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completed().toTypedArray()))
+        api(transport).stream(
+            model,
+            context,
+            AzureOpenAiResponsesOptions(
+                apiKey = "k",
+                azureBaseUrl = "https://my-proxy.example.com/v1?custom=true",
+            ),
+        ).toList()
+        assertEquals(
+            "https://my-proxy.example.com/v1?custom=true/responses?api-version=v1",
+            transport.requests.single().url,
+        )
+    }
+
+    @Test
+    fun `tools and tool choice land in the payload`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completed().toTypedArray()))
+        val tool = Tool("get_weather", "Get weather", buildJsonObject { put("type", "object") })
+        api(transport).stream(
+            model,
+            context.copy(tools = listOf(tool)),
+            AzureOpenAiResponsesOptions(apiKey = "k", toolChoice = "required"),
+        ).toList()
+        val body = bodyOf(transport)
+        assertEquals(
+            "get_weather",
+            body["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content,
+        )
+        assertEquals("required", body["tool_choice"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `cancellation mid-stream rethrows and never emits an error event`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueHangingResponse(
+            """{"type":"response.output_item.added","output_index":0,
+                "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
+            """{"type":"response.output_text.delta","output_index":0,"delta":"partial"}""",
+        )
+        val collected = mutableListOf<AssistantMessageEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) {
+            api(transport)
+                .stream(model, context, AzureOpenAiResponsesOptions(apiKey = "k"))
+                .toList(collected)
+        }
+        assertTrue(collected.any { it is AssistantMessageEvent.Start })
+        job.cancelAndJoin()
+        // Abort maps to coroutine cancellation and rethrows CancellationException
+        // instead of emitting an Error event (adapter KDoc divergence).
+        assertTrue(collected.none { it is AssistantMessageEvent.Error })
+        assertTrue(transport.cancelled.value)
     }
 
     @Test

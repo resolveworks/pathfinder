@@ -811,6 +811,64 @@ class OpenAiResponsesSharedTest {
     }
 
     @Test
+    fun `function namespace received only on output_item_done replays`() {
+        // openai-responses-namespace.test.ts: a namespace seen only on the
+        // done item round-trips back on replay for the same model.
+        val s = state()
+        s.onEvent(
+            event(
+                """{"type":"response.output_item.added","output_index":0,
+                    "item":{"type":"function_call","id":"fc_test","call_id":"call_test",
+                        "name":"lookup","arguments":""}}""",
+            ),
+        )
+        s.onEvent(
+            event(
+                """{"type":"response.output_item.done","output_index":0,
+                    "item":{"type":"function_call","id":"fc_test","call_id":"call_test",
+                        "name":"lookup","arguments":"{\"value\":\"hello\"}",
+                        "namespace":"dynamic_tools"}}""",
+            ),
+        )
+        s.onEvent(event("""{"type":"response.completed","response":{"id":"resp_test","status":"completed"}}"""))
+        val output = s.partialSnapshot()
+        val toolCall = assertIs<ToolCall>(output.content.single())
+        assertEquals("call_test|fc_test", toolCall.id)
+        assertEquals("lookup", toolCall.name)
+        assertEquals("""{"value":"hello"}""", toolCall.arguments)
+        assertEquals("dynamic_tools", toolCall.namespace)
+
+        val replayed = OpenAiResponsesShared.convertResponsesMessages(
+            model(),
+            Context(messages = listOf(output)),
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+        ).single { it["type"]!!.jsonPrimitive.content == "function_call" }
+        assertEquals("fc_test", replayed["id"]!!.jsonPrimitive.content)
+        assertEquals("call_test", replayed["call_id"]!!.jsonPrimitive.content)
+        assertEquals("dynamic_tools", replayed["namespace"]!!.jsonPrimitive.content)
+
+        // A different target model drops the namespace (and the fc_ item id).
+        val replayedOther = OpenAiResponsesShared.convertResponsesMessages(
+            model(id = "gpt-5.2"),
+            Context(messages = listOf(output)),
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+        ).single { it["type"]!!.jsonPrimitive.content == "function_call" }
+        assertNull(replayedOther["namespace"])
+        assertNull(replayedOther["id"])
+    }
+
+    @Test
+    fun `text signature omits a null id like json stringify drops undefined`() {
+        // Pi's JSON.stringify drops an undefined id, so a malformed done item
+        // without an id encodes {"v":1}, not {"v":1,"id":""}.
+        assertEquals("""{"v":1}""", OpenAiResponsesShared.encodeTextSignatureV1(null, null))
+        assertEquals(
+            """{"v":1,"id":"msg_1","phase":"final_answer"}""",
+            OpenAiResponsesShared.encodeTextSignatureV1("msg_1", "final_answer"),
+        )
+    }
+
+    @Test
     fun `refusal deltas accumulate as text`() {
         val s = state()
         s.onEvent(

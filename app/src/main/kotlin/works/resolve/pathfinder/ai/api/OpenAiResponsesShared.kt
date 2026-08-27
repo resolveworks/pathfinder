@@ -126,10 +126,11 @@ object OpenAiResponsesShared {
         return String(chars, 0, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH)
     }
 
-    /** Pi's TextSignatureV1 encoding: `{"v":1,"id":...,"phase":...?}`. */
-    fun encodeTextSignatureV1(id: String, phase: String?): String = buildJsonObject {
+    /** Pi's TextSignatureV1 encoding: `{"v":1,"id":...,"phase":...?}`. JSON.stringify
+     * drops an undefined id (malformed events), so a null id is omitted. */
+    fun encodeTextSignatureV1(id: String?, phase: String?): String = buildJsonObject {
         put("v", 1)
-        put("id", id)
+        if (id != null) put("id", id)
         if (phase != null) put("phase", phase)
     }.toString()
 
@@ -838,7 +839,7 @@ object OpenAiResponsesShared {
                         }
                         ?.joinToString("").orEmpty()
                     slot.textSignature = encodeTextSignatureV1(
-                        item["id"].textOrNull() ?: "",
+                        item["id"].textOrNull(),
                         item["phase"].textOrNull(),
                     )
                     slots.remove(outputIndex)

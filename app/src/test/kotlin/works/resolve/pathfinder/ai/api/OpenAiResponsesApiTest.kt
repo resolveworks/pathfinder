@@ -10,7 +10,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Context
@@ -291,6 +294,28 @@ class OpenAiResponsesApiTest {
         val events = api(transport).stream(model, context, OpenAiResponsesOptions(apiKey = "k")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals("OpenAI API error (500): server_error: boom", error.error.errorMessage)
+    }
+
+    @Test
+    fun `cancellation mid-stream rethrows and never emits an error event`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueHangingResponse(
+            """{"type":"response.output_item.added","output_index":0,
+                "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
+            """{"type":"response.output_text.delta","output_index":0,"delta":"partial"}""",
+        )
+        val collected = mutableListOf<AssistantMessageEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) {
+            api(transport)
+                .stream(model, context, OpenAiResponsesOptions(apiKey = "k"))
+                .toList(collected)
+        }
+        assertTrue(collected.any { it is AssistantMessageEvent.Start })
+        job.cancelAndJoin()
+        // Documented divergence: AbortSignal-style aborts map to coroutine
+        // cancellation and rethrow CancellationException (no Error event).
+        assertTrue(collected.none { it is AssistantMessageEvent.Error })
+        assertTrue(transport.cancelled.value)
     }
 
     @Test

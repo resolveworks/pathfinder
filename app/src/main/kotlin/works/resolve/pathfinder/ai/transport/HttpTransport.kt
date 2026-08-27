@@ -72,6 +72,8 @@ class ProviderHttpException(
     val status: Int,
     val headers: Map<String, List<String>>,
     val body: String,
+    /** Status line reason phrase (fetch's Response.statusText); empty on HTTP/2. */
+    val statusText: String? = null,
 ) : java.io.IOException("Provider returned HTTP $status") {
     fun header(name: String): String? = headers[name.lowercase()]?.firstOrNull { it.isNotBlank() }
 }
