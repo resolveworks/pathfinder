@@ -70,6 +70,7 @@ class NativeAgentFactory(
 
         return Agent(
             model = effectiveModel,
+            retrySettings = settings.retry,
             streamOptions = SimpleStreamOptions(
                 sessionId = sessionId,
                 timeoutMs = REQUEST_TIMEOUT_MS,

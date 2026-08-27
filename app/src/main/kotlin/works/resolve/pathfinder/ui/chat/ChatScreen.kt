@@ -327,17 +327,26 @@ fun ChatScreen(
             },
             bottomBar = {
                 if (showConversation && !onTreePage) {
-                    Composer(
-                        draft = uiState.draft,
-                        onDraftChange = onDraftChange,
-                        onSend = onSend,
-                        onStop = onStop,
-                        canSend = uiState.canSend,
-                        isStreaming = uiState.isStreaming,
+                    Column(
                         modifier = Modifier
                             .navigationBarsPadding()
                             .imePadding(),
-                    )
+                    ) {
+                        uiState.retryStatus?.let { retry ->
+                            RetryStatusRow(
+                                attempt = retry.attempt,
+                                maxAttempts = retry.maxAttempts,
+                            )
+                        }
+                        Composer(
+                            draft = uiState.draft,
+                            onDraftChange = onDraftChange,
+                            onSend = onSend,
+                            onStop = onStop,
+                            canSend = uiState.canSend,
+                            isStreaming = uiState.isStreaming,
+                        )
+                    }
                 }
             },
             snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -1427,6 +1436,19 @@ private fun ThinkingBlock(
             )
         }
     }
+}
+
+/** Compact status line while the agent backs off before an auto-retry (nothing on success). */
+@Composable
+private fun RetryStatusRow(attempt: Int, maxAttempts: Int, modifier: Modifier = Modifier) {
+    Text(
+        text = stringResource(R.string.chat_retrying, attempt, maxAttempts),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp),
+    )
 }
 
 @Composable

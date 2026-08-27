@@ -55,7 +55,13 @@ data object ProvidersNavKey : NavKey
 @Serializable
 data class ProviderAuthNavKey(val providerId: String) : NavKey
 
-/** Outcome of initial load of settings, credentials, and sessions. */
+/** Transient auto-retry status while the agent backs off before a retry (pi's auto_retry_start/end window). */
+data class AutoRetryStatus(
+    val attempt: Int,
+    val maxAttempts: Int,
+)
+
+ /** Outcome of initial load of settings, credentials, and sessions. */
 enum class ChatStatus {
     /** Initial load in progress. */
     Loading,
@@ -228,6 +234,8 @@ data class ChatUiState(
     val streamingMessage: ChatMessage? = null,
     val draft: String = "",
     val isStreaming: Boolean = false,
+    /** Transient auto-retry backoff status; null when not retrying. */
+    val retryStatus: AutoRetryStatus? = null,
     val canSend: Boolean = false,
     /** Display-only flag: whether to show the model's reasoning (never affects the agent). */
     val showThinking: Boolean = false,

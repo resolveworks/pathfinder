@@ -56,6 +56,31 @@ sealed class AgentEvent {
     ) : AgentEvent()
 
     data class MessageEnd(val message: Message) : AgentEvent()
+
+    /**
+     * A retryable run is being retried after an exponential-backoff delay.
+     * Ported from pi's agent-session `auto_retry_start` event
+     * (agent-session.ts:167-168); pi emits it from agent-session, not the
+     * loop, so here it originates in the [Agent] facade and never appears in
+     * [runAgentLoop] output.
+     */
+    data class AutoRetryStart(
+        val attempt: Int,
+        val maxAttempts: Int,
+        val delayMs: Long,
+        val errorMessage: String,
+    ) : AgentEvent()
+
+    /**
+     * The retry sequence ended: a retried run succeeded, the budget was
+     * exhausted, or the backoff was cancelled. Ported from pi's
+     * `auto_retry_end` (agent-session.ts:169).
+     */
+    data class AutoRetryEnd(
+        val success: Boolean,
+        val attempt: Int,
+        val finalError: String? = null,
+    ) : AgentEvent()
 }
 
 /**

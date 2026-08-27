@@ -8,6 +8,7 @@ import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.data.settings.RetrySettings
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -69,11 +70,15 @@ class AgentTest {
 
     private fun agent(
         streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
+        // Retry is disabled by default so these tests exercise one run per
+        // prompt; auto-retry has its own suite (AgentAutoRetryTest).
+        retrySettings: RetrySettings = RetrySettings(enabled = false),
         streamFn: StreamFn,
     ) = Agent(
         model = model,
         systemPrompt = "be brief",
         streamOptions = streamOptions,
+        retrySettings = retrySettings,
         streamFn = streamFn,
     )
 

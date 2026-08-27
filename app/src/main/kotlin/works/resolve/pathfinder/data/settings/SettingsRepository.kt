@@ -4,6 +4,8 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -19,6 +21,9 @@ class SettingsRepository(
         val MODEL_ID = stringPreferencesKey("model_id")
         val ACTIVE_SESSION_ID = stringPreferencesKey("active_session_id")
         val SHOW_THINKING = booleanPreferencesKey("show_thinking")
+        val RETRY_ENABLED = booleanPreferencesKey("retry_enabled")
+        val RETRY_MAX_RETRIES = intPreferencesKey("retry_max_retries")
+        val RETRY_BASE_DELAY_MS = longPreferencesKey("retry_base_delay_ms")
     }
 
     val settings: Flow<ModelSettings> = dataStore.data.map { prefs ->
@@ -27,7 +32,20 @@ class SettingsRepository(
             modelId = prefs[Keys.MODEL_ID] ?: "",
             activeSessionId = prefs[Keys.ACTIVE_SESSION_ID]?.takeIf { it.isNotBlank() },
             showThinking = prefs[Keys.SHOW_THINKING] ?: false,
+            retry = RetrySettings(
+                enabled = prefs[Keys.RETRY_ENABLED] ?: true,
+                maxRetries = prefs[Keys.RETRY_MAX_RETRIES] ?: 3,
+                baseDelayMs = prefs[Keys.RETRY_BASE_DELAY_MS] ?: 2000,
+            ),
         )
+    }
+
+    override suspend fun setRetrySettings(settings: RetrySettings) {
+        dataStore.edit { prefs ->
+            prefs[Keys.RETRY_ENABLED] = settings.enabled
+            prefs[Keys.RETRY_MAX_RETRIES] = settings.maxRetries
+            prefs[Keys.RETRY_BASE_DELAY_MS] = settings.baseDelayMs
+        }
     }
 
     override suspend fun setProviderId(providerId: String) {

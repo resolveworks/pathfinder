@@ -548,6 +548,45 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun autoRetry_removesErrorFromAgentTranscript_butKeepsItInSession() =
+        runTest(mainDispatcherRule.scheduler) {
+            val h = Harness()
+            val vm = h.newViewModel()
+            vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+            vm.configure(apiKey = "k")
+            vm.uiState.first { it.status == ChatStatus.Ready }
+
+            // Transient error, then a successful retry (pi's auto-retry).
+            h.scriptedStreams.add(h.errorStream(h.assistant("", StopReason.ERROR, "terminated")))
+            h.scriptedStreams.add(h.gatedStream("recovered", CompletableDeferred<Unit>().apply { complete(Unit) }))
+            vm.onDraftChange("Hello")
+            vm.send()
+
+            vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+            val state = vm.uiState.value
+            // Agent transcript dropped the error message; the retry's answer
+            // replaced it in the chat surface, and no retry status remains.
+            assertNull(state.retryStatus)
+            assertEquals(ChatRole.Assistant, state.messages[1].role)
+            assertNull(state.messages[1].error)
+
+            val sessionId = state.activeSessionId!!
+            vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 3 }
+
+            // The session tree keeps the error message in history (pi keeps
+            // it in the session while removing it from agent state).
+            val session = h.sessionStore.load(sessionId)!!
+            assertEquals(3, session.messages.size)
+            val failed = session.messages[1] as works.resolve.pathfinder.ai.core.AssistantMessage
+            assertEquals(StopReason.ERROR, failed.stopReason)
+            assertEquals("terminated", failed.errorMessage)
+            val recovered = session.messages[2] as works.resolve.pathfinder.ai.core.AssistantMessage
+            assertEquals(StopReason.STOP, recovered.stopReason)
+
+            vm.closeForTest()
+        }
+
+    @Test
     fun streamError_surfacesError_andPersists() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()
