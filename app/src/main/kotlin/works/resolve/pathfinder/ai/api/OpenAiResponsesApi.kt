@@ -20,6 +20,8 @@ import works.resolve.pathfinder.ai.core.ToolChoice
 import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.mergeHeaders
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
+import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
@@ -685,36 +687,27 @@ internal fun processSseEvent(
 }
 
 /**
- * Pi's formatProviderError: plain non-HTTP errors keep their message (no
- * prefix); HTTP errors surface status plus the parsed body with the provider
- * prefix.
+ * Port of pi's `formatOpenAIResponsesError` / `formatAzureOpenAIError`
+ * (openai-responses.ts:89, azure-openai-responses.ts:53): the shared
+ * `formatProviderError` with the provider prefix. No JSON field extraction
+ * and no per-adapter cap — pi formats the whole (already capped) body.
+ *
+ * Narrow divergence: on a blank body pi composes
+ * `"prefix (status): <SDK message>"`, but the SDK message does not exist
+ * here ([ProviderHttpException.message] is just "Provider returned HTTP N"),
+ * so a blank body emits only `"prefix (status)"`.
  */
 internal fun formatResponsesProviderError(error: Exception, prefix: String): String = when (error) {
     is ProviderHttpException -> {
-        val body = formatErrorBody(error.body)
-        if (body != null) "$prefix (${error.status}): $body" else "$prefix (${error.status})"
+        val norm = normalizeProviderError(error)
+        if (norm.body != null) {
+            formatProviderError(norm, prefix)
+        } else {
+            "$prefix (${error.status})"
+        }
     }
+    // Non-HTTP exceptions keep the port's `message ?: simpleName` handling;
+    // pi's safeJsonStringify fallback for non-Error throws is moot in Kotlin.
     is ProviderStreamException -> error.message ?: "Provider stream error"
     else -> error.message ?: error::class.simpleName ?: "Unknown error"
 }
-
-internal fun formatErrorBody(body: String): String? {
-    if (body.isBlank()) return null
-    return try {
-        val parsed = responsesJson.parseToJsonElement(body)
-        val obj = parsed as? JsonObject ?: return body.take(500)
-        val error = obj["error"] as? JsonObject
-        if (error != null) {
-            val message = error["message"].stringOrBlank()
-            val code = error["code"].stringOrBlank()
-            listOfNotNull(code, message).joinToString(": ").ifEmpty { body.take(500) }
-        } else {
-            body.take(500)
-        }
-    } catch (_: Exception) {
-        body.take(500)
-    }
-}
-
-private fun kotlinx.serialization.json.JsonElement?.stringOrBlank(): String? =
-    (this as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }

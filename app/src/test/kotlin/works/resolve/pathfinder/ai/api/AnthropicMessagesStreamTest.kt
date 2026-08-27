@@ -464,14 +464,16 @@ class AnthropicMessagesStreamTest {
     }
 
     @Test
-    fun `non-2xx response produces error event with parsed body`() = runTest {
+    fun `non-2xx response produces error event with whole body`() = runTest {
         val transport = FakeTransport()
         transport.enqueueError(401, """{"type":"error","error":{"type":"auth_error","message":"Invalid API key"}}""")
         val last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         val error = assertIs<AssistantMessageEvent.Error>(last)
         assertEquals(StopReason.ERROR, error.reason)
-        assertTrue("Provider returned HTTP 401" in (error.error.errorMessage ?: ""))
-        assertTrue("Invalid API key" in (error.error.errorMessage ?: ""))
+        assertEquals(
+            """401: {"type":"error","error":{"type":"auth_error","message":"Invalid API key"}}""",
+            error.error.errorMessage,
+        )
     }
 
     @Test

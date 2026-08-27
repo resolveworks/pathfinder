@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.transport
 
+import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
@@ -80,11 +81,15 @@ class OkHttpTransport(
                         // huge error body is never fully buffered just to be
                         // truncated.
                         val readLimit = MAX_PROVIDER_ERROR_BODY_CHARS.toLong() * 4
+                        // pi's extractBody trims before truncating; trim
+                        // here so the captured body matches (the shared
+                        // normalizer in utils/ErrorBody.kt caps it).
                         val errorBody = try {
                             val source = response.body.source()
                             source.request(readLimit)
                             val buffered = source.buffer
                             buffered.readUtf8(minOf(buffered.size, readLimit))
+                                .trim()
                                 .take(MAX_PROVIDER_ERROR_BODY_CHARS)
                         } catch (_: IOException) {
                             ""

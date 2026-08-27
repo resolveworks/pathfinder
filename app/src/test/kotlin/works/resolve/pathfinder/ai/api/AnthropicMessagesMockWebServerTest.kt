@@ -148,7 +148,9 @@ class AnthropicMessagesMockWebServerTest {
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals(StopReason.ERROR, error.reason)
         val message = error.error.errorMessage ?: ""
-        assertTrue("Provider returned HTTP 429" in message, message)
-        assertTrue("Rate limited" in message, message)
+        assertEquals(
+            """429: {"type":"error","error":{"type":"rate_limit_error","message":"Rate limited"}}""",
+            message,
+        )
     }
 }

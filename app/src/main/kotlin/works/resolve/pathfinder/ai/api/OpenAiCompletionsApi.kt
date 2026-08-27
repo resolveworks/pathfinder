@@ -23,6 +23,8 @@ import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.resolveCloudflareBaseUrl
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -311,30 +313,26 @@ class OpenAiCompletionsApi(
         else -> StopReason.ERROR to "Provider finish_reason: $reason"
     }
 
+    /**
+     * Port of pi's openai-completions.ts catch block (~700): the shared
+     * `formatProviderError` with NO prefix. The OpenRouter raw-metadata append
+     * below mirrors openai-completions.ts:704-712.
+     */
     private fun formatProviderError(error: Exception): String = when (error) {
         is ProviderHttpException -> buildString {
-            append("Provider returned HTTP ${error.status}")
-            formatErrorBody(error.body)?.let { append(": ").append(it) }
-            // pi openai-completions.ts:705-712: some providers via OpenRouter
-            // give additional information in error.error.metadata.raw; append
-            // the raw metadata only when the formatted body has not already
+            append(formatProviderError(normalizeProviderError(error)))
+            // pi openai-completions.ts:709: some providers via OpenRouter give
+            // additional information in `error.error.metadata.raw`; append the
+            // raw metadata only when the formatted body has not already
             // surfaced it, to avoid double-printing.
             openRouterRawMetadata(error.body)?.let { raw ->
                 if (!contains(raw)) append("\n").append(raw)
             }
         }
+        // Non-HTTP exceptions keep the port's `message ?: simpleName` handling;
+        // pi's safeJsonStringify fallback for non-Error throws is moot in Kotlin.
         is ProviderStreamException -> error.message ?: "Provider stream error"
         else -> error.message ?: error::class.simpleName ?: "Unknown error"
-    }
-
-    private fun formatErrorBody(body: String): String? {
-        if (body.isBlank()) return null
-        return try {
-            formatJsonError(json.parseToJsonElement(body).let { it as? JsonObject }
-                ?: return body.take(500))
-        } catch (_: Exception) {
-            body.take(500)
-        }
     }
 
     private fun formatJsonError(error: JsonObject): String {

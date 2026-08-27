@@ -18,6 +18,8 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
+import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 
@@ -587,10 +589,16 @@ class OpenAICodexResponsesApi(
     }
 }
 
+/**
+ * Port of pi's codex catch block (openai-codex-responses.ts:483): the shared
+ * `formatProviderError` with NO prefix — upstream codex composes the bare
+ * `"<status>: <body>"` (or the message when no body). The separate
+ * [parseCodexErrorResponse] usage-limit path elsewhere in this file is a
+ * faithful port and unchanged.
+ */
 internal fun formatCodexError(error: Exception): String = when (error) {
     is CodexApiException -> error.message ?: "Codex error"
-    is ProviderHttpException ->
-        formatResponsesProviderError(error, "Codex API error")
+    is ProviderHttpException -> formatProviderError(normalizeProviderError(error))
     is ProviderStreamException -> error.message ?: "Codex stream error"
     else -> error.message ?: error::class.simpleName ?: "Unknown error"
 }

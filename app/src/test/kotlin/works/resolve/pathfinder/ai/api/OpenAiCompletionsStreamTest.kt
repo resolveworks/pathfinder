@@ -505,7 +505,7 @@ class OpenAiCompletionsStreamTest {
     }
 
     @Test
-    fun `non-2xx response produces error event with parsed body`() = runTest {
+    fun `non-2xx response produces error event with whole body`() = runTest {
         val transport = FakeTransport()
         transport.enqueueError(
             401,
@@ -514,8 +514,10 @@ class OpenAiCompletionsStreamTest {
         val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals(StopReason.ERROR, error.reason)
-        assertTrue("Provider returned HTTP 401" in (error.error.errorMessage ?: ""))
-        assertTrue("Invalid API key" in (error.error.errorMessage ?: ""))
+        assertEquals(
+            """401: {"error":{"message":"Invalid API key","type":"auth_error"}}""",
+            error.error.errorMessage,
+        )
     }
 
     @Test
@@ -1076,9 +1078,9 @@ class OpenAiCompletionsStreamTest {
 
     @Test
     fun `openrouter metadata raw is appended when missing from the error message`() = runTest {
-        // Long error body: the formatted body is truncated before the raw
+        // Long error body: the body is truncated at pi's cap before the raw
         // metadata, so the manual append surfaces it exactly once.
-        val padding = "x".repeat(600)
+        val padding = "x".repeat(5000)
         val transport = FakeTransport()
         transport.enqueueError(
             403,

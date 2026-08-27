@@ -64,9 +64,6 @@ data class TransportResponse(
     fun header(name: String): String? = headers[name.lowercase()]?.firstOrNull { it.isNotBlank() }
 }
 
-/** Pi's cap on captured provider error bodies (MAX_PROVIDER_ERROR_BODY_CHARS). */
-const val MAX_PROVIDER_ERROR_BODY_CHARS = 4000
-
 /** HTTP error response; carries retry classification inputs. */
 class ProviderHttpException(
     val status: Int,
