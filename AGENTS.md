@@ -49,6 +49,22 @@ not silently “improve” or reinterpret pi while porting it.
 Follow current official Android documentation for platform APIs and UI
 patterns. Prefer documented current APIs over remembered ones.
 
+## Naming and style
+
+Follow pi's naming for ported code; follow modern Kotlin and Android
+defaults for everything pi does not dictate.
+
+- A ported pi module keeps its name, and exported symbols keep their upstream
+  names: `utils/error-body.ts` ports to `ai/utils/ErrorBody.kt` with
+  `normalizeProviderError`; `overflow.ts` would port to `Overflow.kt` with
+  `isContextOverflow`. Do not rename ported behavior to Kotlin-idiomatic
+  alternatives; obvious provenance beats local style preference. Non-exported
+  upstream symbols become `internal`/`private` per their module scope.
+- Where pi does not dictate, use current idiomatic Kotlin and platform
+  defaults: data classes, expression bodies, nullability, nullable function
+  types instead of optional-method interfaces, kotlinx.coroutines patterns,
+  and the standard library over hand-rolled equivalents.
+
 ## Architecture
 
 - The native runtime owns models, providers, streaming, agent state, and
