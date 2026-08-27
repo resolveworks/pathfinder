@@ -628,6 +628,25 @@ internal fun mapThinkingLevelToEffort(
     }
 }
 
+/**
+ * Maps core ToolChoice to pi's AnthropicOptions.toolChoice wire shape
+ * (anthropic-messages.ts:265). Divergence: pi's unified ToolChoice is only
+ * "auto" | "none", so pi's streamSimple pass-through can never carry the
+ * other shapes. The broader core enum here maps Required to Any because the
+ * Anthropic protocol has no "required" (a tool must be called), matching the
+ * Any/Required collapse in the other adapters.
+ */
+internal fun mapToolChoice(choice: works.resolve.pathfinder.ai.core.ToolChoice?): AnthropicToolChoice? =
+    when (choice) {
+        works.resolve.pathfinder.ai.core.ToolChoice.Auto -> AnthropicToolChoice.Auto
+        works.resolve.pathfinder.ai.core.ToolChoice.None -> AnthropicToolChoice.None
+        works.resolve.pathfinder.ai.core.ToolChoice.Any,
+        works.resolve.pathfinder.ai.core.ToolChoice.Required,
+        -> AnthropicToolChoice.Any
+        is works.resolve.pathfinder.ai.core.ToolChoice.Function -> AnthropicToolChoice.Tool(choice.name)
+        null -> null
+    }
+
 /** pi's buildBaseOptions (reduced): common clamped defaults for streamSimple. */
 internal fun buildBaseOptions(
     model: Model,
@@ -639,6 +658,7 @@ internal fun buildBaseOptions(
         sessionId = options.sessionId,
         temperature = options.temperature,
         maxTokens = clampMaxTokensToContext(model, context, options.maxTokens ?: model.maxTokens),
+        cacheRetention = options.cacheRetention,
         timeoutMs = options.timeoutMs,
         maxRetries = options.maxRetries,
         maxRetryDelayMs = options.maxRetryDelayMs,

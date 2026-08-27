@@ -153,7 +153,10 @@ class AnthropicMessagesApi(
             return@flow
         }
 
-        val base = buildBaseOptions(model, context, options)
+        val base = buildBaseOptions(model, context, options).copy(
+            // pi's streamSimple: toolChoice: options?.toolChoice (anthropic-messages.ts:834)
+            toolChoice = mapToolChoice(options.toolChoice),
+        )
         val reasoning = options.reasoning
         val resolved: AnthropicMessagesOptions = if (reasoning == null) {
             base.copy(thinkingEnabled = false)
