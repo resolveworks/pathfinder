@@ -1171,7 +1171,7 @@ class ChatViewModelTest {
         // All catalog providers listed (name-sorted), all unconfigured, so the
         // model picker is empty: pi's "only configured providers" rule.
         assertEquals(
-            listOf("Cloudflare AI Gateway", "GitHub Copilot", "OAuth Only", "Z.AI"),
+            listOf("Cloudflare AI Gateway", "GitHub Copilot", "OAuth Only", "OpenAI", "Z.AI"),
             state.providerOptions.map { it.name },
         )
         assertTrue(state.providerOptions.none { it.configured })

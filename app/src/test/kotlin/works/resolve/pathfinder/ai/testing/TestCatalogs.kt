@@ -169,6 +169,27 @@ object TestCatalogs {
               ]
             },
             {
+              "id": "openai",
+              "name": "OpenAI",
+              "baseUrl": "https://api.openai.com/v1",
+              "auth": {
+                "label": "OpenAI API key",
+                "prompts": [
+                  {"envKey": "OPENAI_API_KEY", "message": "Enter OpenAI API key", "secret": true}
+                ]
+              },
+              "models": [
+                {
+                  "id": "gpt-4o", "name": "GPT-4o",
+                  "api": "openai-completions", "provider": "openai",
+                  "input": ["text", "image"],
+                  "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                  "compat": {"supportsStore": true, "supportsDeveloperRole": true},
+                  "contextWindow": 128000, "maxTokens": 16384
+                }
+              ]
+            },
+            {
               "id": "oauth-only",
               "name": "OAuth Only",
               "baseUrl": "https://oauth.test/v1",
@@ -199,6 +220,11 @@ object TestCatalogs {
     /** GitHub Copilot fixture mirroring the generated catalog entry's shape
      * (API-key prompt + subscription OAuth, three static models). */
     val GITHUB_COPILOT: CatalogProvider = CATALOG.getProvider("github-copilot")!!
+
+    /** OpenAI fixture (vision-capable, provider "openai" for tool-call id truncation). */
+    val OPENAI: CatalogProvider = CATALOG.getProvider("openai")!!
+
+    val GPT_4O: Model = OPENAI.model("gpt-4o")!!
 
     val MODELS: List<Model> = ZAI.models
 
