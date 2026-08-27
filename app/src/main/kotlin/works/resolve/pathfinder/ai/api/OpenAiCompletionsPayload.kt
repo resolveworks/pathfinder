@@ -309,7 +309,7 @@ object OpenAiCompletionsPayload {
             )
         }
 
-        val messages = transformMessages(context.messages, model) { normalizeToolCallId(it, model.provider) }
+        val messages = transformMessages(context.messages, model) { id, _ -> normalizeToolCallId(id, model.provider) }
         var i = 0
         while (i < messages.size) {
             val msg = messages[i]

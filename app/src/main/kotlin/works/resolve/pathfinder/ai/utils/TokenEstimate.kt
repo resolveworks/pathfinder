@@ -123,17 +123,31 @@ private fun estimateMessages(messages: List<Message>): ContextUsageEstimate {
     return ContextUsageEstimate(tokens, 0, tokens, null)
 }
 
-private fun estimateToolsTokens(context: Context): Int =
-    if (context.tools.isEmpty()) 0 else estimateTextTokens(context.tools.toString())
+private fun estimateToolsTokens(context: Context): Int = estimateToolsTokens(context.tools)
+
+private fun estimateToolsTokens(tools: List<works.resolve.pathfinder.ai.core.Tool>): Int =
+    if (tools.isEmpty()) 0 else estimateTextTokens(tools.toString())
 
 fun estimateContextTokens(context: Context): ContextUsageEstimate {
     val estimate = estimateMessages(context.messages)
 
-    // When usage applies, the system prompt and tools are part of the
-    // reported prefix. pi also re-adds tools introduced after that point via
-    // ToolResultMessage.addedToolNames; that re-add is not reflected here,
-    // though trailing tool results' content is still estimated.
-    if (estimate.lastUsageIndex != null) return estimate
+    if (estimate.lastUsageIndex != null) {
+        // When usage applies, it already covers the system prompt and tools.
+        // pi re-adds tools introduced after the usage point via trailing
+        // ToolResultMessage.addedToolNames (estimate.ts estimateContextTokens).
+        val addedNames = context.messages
+            .drop(estimate.lastUsageIndex + 1)
+            .filterIsInstance<works.resolve.pathfinder.ai.core.ToolResultMessage>()
+            .flatMap { it.addedToolNames }
+            .toSet()
+        val addedToolTokens = estimateToolsTokens(context.tools.filter { it.name in addedNames })
+        return ContextUsageEstimate(
+            tokens = estimate.tokens + addedToolTokens,
+            usageTokens = estimate.usageTokens,
+            trailingTokens = estimate.trailingTokens + addedToolTokens,
+            lastUsageIndex = estimate.lastUsageIndex,
+        )
+    }
 
     val prefixTokens = (context.systemPrompt?.let { estimateTextTokens(it) } ?: 0) + estimateToolsTokens(context)
     return ContextUsageEstimate(

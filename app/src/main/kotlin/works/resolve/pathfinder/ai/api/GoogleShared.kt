@@ -1,11 +1,9 @@
 package works.resolve.pathfinder.ai.api
 
 import works.resolve.pathfinder.ai.core.AssistantMessage
-import works.resolve.pathfinder.ai.core.Content
 import works.resolve.pathfinder.ai.core.ContentType
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.InputModality
-import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.MessageRole
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
@@ -44,8 +42,9 @@ import kotlinx.serialization.json.put
  *   `VALIDATED` function-calling mode never engages and `convertTools` never
  *   wraps/rewrites schemas for strictness (google-shared.ts /
  *   constrained-sampling.ts).
- * - [ThinkingContent] has no `redacted` flag, so the redacted-thinking branch
- *   of transform-messages.ts is omitted.
+ * - The replay pre-pass is pi's shared transformMessages (TransformMessages.kt),
+ *   including the `ThinkingContent.redacted` branch; `convertMessages` then
+ *   applies Google-specific thought-signature validation.
  * - `ToolCall.arguments` is a raw JSON string in the Kotlin core, not an
  *   object; parsing belongs to tool execution.
  */
@@ -157,12 +156,13 @@ object GoogleShared {
 
     /**
      * Convert internal messages to Gemini Content[] wire JSON. Port of
-     * google-shared.ts `convertMessages` (including the `transformMessages`
-     * pre-pass with pi's tool-call-id normalization).
+     * google-shared.ts `convertMessages`, which runs pi's shared
+     * `transformMessages` pre-pass (TransformMessages.kt) with Google's
+     * tool-call-id normalization.
      */
     fun convertMessages(model: Model, context: Context): JsonArray {
         val contents = mutableListOf<JsonObject>()
-        val normalizeToolCallId = { id: String ->
+        val normalizeToolCallId = { id: String, _: AssistantMessage ->
             if (!requiresToolCallId(model.id)) id
             else id.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(64)
         }
@@ -480,171 +480,6 @@ object GoogleShared {
         else -> StopReason.ERROR
     }
 
-    // ------------------------------------------------------------------------
-    // transform-messages.ts port
-    // ------------------------------------------------------------------------
-
-    private const val NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)"
-    private const val NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)"
-
-    /**
-     * Normalize messages for replay. Port of transform-messages.ts
-     * `transformMessages`: image downgrade for non-vision models, thinking
-     * block conversion for cross-model replay, tool-call ID normalization,
-     * dropping errored/aborted assistant turns, and synthetic tool results for
-     * orphaned tool calls.
-     *
-     * Divergence: pi's ThinkingContent `redacted` flag has no Kotlin
-     * counterpart, so the redacted-thinking branch is omitted.
-     */
-    fun transformMessages(
-        messages: List<Message>,
-        model: Model,
-        normalizeToolCallId: ((id: String) -> String)? = null,
-    ): List<Message> {
-        val toolCallIdMap = mutableMapOf<String, String>()
-        val supportsImages = model.input.contains(InputModality.IMAGE)
-
-        val transformed = messages.map { msg ->
-            when (msg.role) {
-                MessageRole.USER -> {
-                    if (supportsImages) return@map msg
-                    msg as UserMessage
-                    msg.copy(content = replaceImagesWithPlaceholders(msg.content, NON_VISION_USER_IMAGE_PLACEHOLDER))
-                }
-
-                MessageRole.TOOL_RESULT -> {
-                    val tool = msg as ToolResultMessage
-                    val normalizedId = toolCallIdMap[tool.toolCallId]
-                    val content = if (supportsImages) {
-                        tool.content
-                    } else {
-                        replaceImagesWithPlaceholders(tool.content, NON_VISION_TOOL_IMAGE_PLACEHOLDER)
-                    }
-                    if (normalizedId != null && normalizedId != tool.toolCallId) {
-                        tool.copy(toolCallId = normalizedId, content = content)
-                    } else {
-                        tool.copy(content = content)
-                    }
-                }
-
-                MessageRole.ASSISTANT -> {
-                    val assistant = msg as AssistantMessage
-                    val isSameModel =
-                        assistant.provider == model.provider &&
-                            assistant.api == model.api &&
-                            assistant.model == model.id
-
-                    val newContent = assistant.content.flatMap { block ->
-                        when (block.type) {
-                            ContentType.THINKING -> {
-                                block as ThinkingContent
-                                // For the same model, keep thinking blocks with
-                                // signatures (needed for replay) even if empty.
-                                if (isSameModel && block.thinkingSignature != null) return@flatMap listOf(block)
-                                if (block.thinking.isBlank()) return@flatMap emptyList()
-                                if (isSameModel) return@flatMap listOf(block)
-                                listOf(TextContent(block.thinking))
-                            }
-
-                            ContentType.TEXT ->
-                                listOf(block as TextContent)
-
-                            ContentType.TOOL_CALL -> {
-                                var call = block as ToolCall
-                                if (!isSameModel && call.thoughtSignature != null) {
-                                    call = call.copy(thoughtSignature = null)
-                                }
-                                if (!isSameModel && normalizeToolCallId != null) {
-                                    val normalizedId = normalizeToolCallId(call.id)
-                                    if (normalizedId != call.id) {
-                                        toolCallIdMap[call.id] = normalizedId
-                                        call = call.copy(id = normalizedId)
-                                    }
-                                }
-                                listOf(call)
-                            }
-
-                            else -> listOf(block)
-                        }
-                    }
-                    assistant.copy(content = newContent)
-                }
-            }
-        }
-
-        // Second pass: synthesize tool results for orphaned tool calls and drop
-        // errored/aborted assistant turns.
-        val result = mutableListOf<Message>()
-        var pendingToolCalls = mutableListOf<ToolCall>()
-        var existingToolResultIds = mutableSetOf<String>()
-
-        fun insertSyntheticToolResults() {
-            for (tc in pendingToolCalls) {
-                if (tc.id !in existingToolResultIds) {
-                    result.add(
-                        ToolResultMessage(
-                            toolCallId = tc.id,
-                            toolName = tc.name,
-                            content = listOf(TextContent("No result provided")),
-                            isError = true,
-                        ),
-                    )
-                }
-            }
-            if (pendingToolCalls.isNotEmpty()) {
-                pendingToolCalls = mutableListOf()
-                existingToolResultIds = mutableSetOf()
-            }
-        }
-
-        for (msg in transformed) {
-            when (msg.role) {
-                MessageRole.ASSISTANT -> {
-                    insertSyntheticToolResults()
-                    val assistant = msg as AssistantMessage
-                    // Skip errored/aborted assistant messages entirely; replaying
-                    // incomplete turns can cause API errors.
-                    if (assistant.stopReason == StopReason.ERROR || assistant.stopReason == StopReason.ABORTED) {
-                        continue
-                    }
-                    val toolCalls = assistant.content.filterIsInstance<ToolCall>()
-                    if (toolCalls.isNotEmpty()) {
-                        pendingToolCalls = toolCalls.toMutableList()
-                        existingToolResultIds = mutableSetOf()
-                    }
-                    result.add(msg)
-                }
-
-                MessageRole.TOOL_RESULT -> {
-                    existingToolResultIds.add((msg as ToolResultMessage).toolCallId)
-                    result.add(msg)
-                }
-
-                MessageRole.USER -> {
-                    insertSyntheticToolResults()
-                    result.add(msg)
-                }
-            }
-        }
-        insertSyntheticToolResults()
-        return result
-    }
-
-    private fun replaceImagesWithPlaceholders(content: List<Content>, placeholder: String): List<Content> {
-        val result = mutableListOf<Content>()
-        var previousWasPlaceholder = false
-        for (block in content) {
-            if (block.type == ContentType.IMAGE) {
-                if (!previousWasPlaceholder) result.add(TextContent(placeholder))
-                previousWasPlaceholder = true
-                continue
-            }
-            result.add(block)
-            previousWasPlaceholder = block is TextContent && block.text == placeholder
-        }
-        return result
-    }
 }
 
 private typealias Json = kotlinx.serialization.json.Json

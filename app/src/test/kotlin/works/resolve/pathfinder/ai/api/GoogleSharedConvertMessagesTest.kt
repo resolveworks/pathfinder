@@ -292,9 +292,32 @@ class GoogleSharedConvertMessagesTest {
     // ------------------------------------------------------------------
 
     @Test
+    fun `empty-string thinking signature falls through to the blank-drop path`() {
+        // pi's transform-messages.ts truthiness check `if (block.thinkingSignature)`:
+        // an empty-string signature is falsy, so same-model blank thinking is
+        // dropped rather than kept for replay.
+        val model = model()
+        val transformed = transformMessages(
+            listOf(
+                AssistantMessage(
+                    content = listOf(
+                        ThinkingContent("", thinkingSignature = ""),
+                        ThinkingContent("real", thinkingSignature = "sig"),
+                    ),
+                    api = model.api, provider = model.provider, model = model.id,
+                    stopReason = StopReason.STOP,
+                ),
+            ),
+            model,
+        )
+        val content = (transformed.single() as AssistantMessage).content
+        assertEquals(listOf<ThinkingContent>(ThinkingContent("real", thinkingSignature = "sig")), content)
+    }
+
+    @Test
     fun `orphaned tool calls get synthetic error results`() {
         val model = model()
-        val transformed = GoogleShared.transformMessages(
+        val transformed = transformMessages(
             listOf(
                 UserMessage.ofText("go"),
                 AssistantMessage(
@@ -315,7 +338,7 @@ class GoogleSharedConvertMessagesTest {
     @Test
     fun `errored assistant turns are dropped from replay`() {
         val model = model()
-        val transformed = GoogleShared.transformMessages(
+        val transformed = transformMessages(
             listOf(
                 UserMessage.ofText("go"),
                 AssistantMessage(
@@ -335,7 +358,7 @@ class GoogleSharedConvertMessagesTest {
     @Test
     fun `images downgrade to placeholders for non-vision models`() {
         val model = model(id = "gemini-2.5-flash", input = listOf(InputModality.TEXT))
-        val transformed = GoogleShared.transformMessages(
+        val transformed = transformMessages(
             listOf(
                 UserMessage(
                     listOf(TextContent("look"), ImageContent("aa", "image/png"), ImageContent("bb", "image/png")),

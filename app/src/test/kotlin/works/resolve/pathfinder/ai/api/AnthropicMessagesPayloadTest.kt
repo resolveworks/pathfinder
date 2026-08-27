@@ -354,7 +354,7 @@ class AnthropicMessagesPayloadTest {
             stopReason = StopReason.TOOL_USE,
         )
 
-        val transformed = transformMessages(listOf(foreign), claude) { "normalized-id" }
+        val transformed = transformMessages(listOf(foreign), claude) { _, _ -> "normalized-id" }
         val call = (transformed.first() as AssistantMessage).content.single() as ToolCall
         assertEquals("normalized-id", call.id)
         assertNull(call.thoughtSignature)
