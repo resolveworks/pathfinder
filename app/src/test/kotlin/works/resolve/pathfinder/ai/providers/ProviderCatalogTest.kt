@@ -184,6 +184,7 @@ class ProviderCatalogTest {
         assertTrue(compat.requiresThinkingAsText)
         assertEquals(ThinkingFormat.QWEN, compat.thinkingFormat)
         assertTrue(compat.zaiToolStream)
+        assertTrue(compat.supportsStrictMode)
         assertEquals(
             ChatTemplateKwargValue.Ref(varName = "thinking.enabled", omitWhenOff = true),
             compat.chatTemplateArgs["enable_thinking"],
@@ -192,6 +193,27 @@ class ProviderCatalogTest {
             ChatTemplateKwargValue.Scalar(JsonPrimitive(0.7)),
             compat.chatTemplateArgs["temperature"],
         )
+    }
+
+    @Test
+    fun `completions supportsStrictMode defaults true and parses false from the catalog`() {
+        // pi openai-completions getCompat (:1653,:1699): detected default true;
+        // the catalog marks moonshotai/together/nvidia/cloudflare-ai-gateway false.
+        val catalog = ProviderCatalog.parse(
+            """
+            {
+              "providers": [{
+                "id": "p", "name": "P", "baseUrl": "https://p.test/v1",
+                "models": [
+                  {"id": "a", "name": "A"},
+                  {"id": "b", "name": "B", "compat": {"supportsStrictMode": false}}
+                ]
+              }]
+            }
+            """,
+        )
+        assertTrue(catalog.getModel("p", "a")!!.compat.supportsStrictMode)
+        assertFalse(catalog.getModel("p", "b")!!.compat.supportsStrictMode)
     }
 
     @Test
