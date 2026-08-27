@@ -17,6 +17,7 @@ import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.StopReason
+import works.resolve.pathfinder.ai.core.toToolChoice
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
@@ -30,7 +31,9 @@ import works.resolve.pathfinder.ai.transport.TransportResponse
  * - No WebSocket transport: pi's `auto`/`websocket` modes, connection caching,
  *   `previous_response_id` continuation, and WebSocket-specific retries are
  *   omitted; every request is a full-context SSE POST (`store: false`), which
- *   is exactly pi's SSE fallback path.
+ *   is exactly pi's SSE fallback path. Also excluded with it: pi's
+ *   session-resources.ts, whose only pi consumer is Codex WebSocket session
+ *   cleanup.
  * - No zstd request-body compression (Content-Encoding: zstd): the platform
  *   has no zstd encoder; the uncompressed JSON body is sent, matching pi's
  *   browser-build behavior where compressRequestBodyZstd returns null.
@@ -410,7 +413,9 @@ class OpenAICodexResponsesApi(
                     options.maxTokens ?: model.maxTokens,
                 ),
                 reasoningEffort = reasoningEffort,
-                toolChoice = options.toolChoice?.let(::mapResponsesToolChoice),
+                // Narrow simple-API choice widened to the Responses wire union
+                // (types.ts:82), pi's streamSimple pass-through.
+                toolChoice = options.toolChoice?.toToolChoice()?.let(::mapResponsesToolChoice),
                 cacheRetention = options.cacheRetention,
                 timeoutMs = options.timeoutMs,
                 maxRetries = options.maxRetries,

@@ -93,7 +93,13 @@ data class SimpleStreamOptions(
     val temperature: Double? = null,
     val maxTokens: Int? = null,
     val reasoning: ThinkingLevel? = null,
-    val toolChoice: ToolChoice? = null,
+    /**
+     * Narrow tool choice, pi's SimpleStreamOptions.toolChoice (types.ts:316)
+     * typed as pi's `ToolChoice = "auto" | "none"` (types.ts:82). The full
+     * union lives only on completions-level options. Reduction: pi's
+     * `deferred` flag is excluded per ai/AGENTS.md adapter-capability scope.
+     */
+    val toolChoice: SimpleToolChoice? = null,
     val timeoutMs: Long? = null,
     val maxRetries: Int = 0,
     val maxRetryDelayMs: Long = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
@@ -120,7 +126,7 @@ data class SimpleStreamOptions(
             temperature = temperature,
             maxTokens = maxTokens,
             reasoningEffort = reasoningEffort,
-            toolChoice = toolChoice,
+            toolChoice = toolChoice?.toToolChoice(),
             cacheRetention = cacheRetention,
             timeoutMs = timeoutMs,
             maxRetries = maxRetries,

@@ -122,6 +122,11 @@ data class Cost(
     val total: Double = 0.0,
 )
 
+/**
+ * StopReason, pi's stop reasons (types.ts StopReason). Divergence: pi's
+ * "deferred" value and DeferredHandle are excluded per the adapter-capability
+ * scope in ai/AGENTS.md (no deferred-response support).
+ */
 enum class StopReason { PENDING, STOP, LENGTH, TOOL_USE, ERROR, ABORTED }
 
 sealed class Message {
@@ -132,6 +137,9 @@ sealed class Message {
 enum class MessageRole { USER, ASSISTANT, TOOL_RESULT }
 
 data class UserMessage(
+    // Reduction: pi's UserMessage.content is `string | (TextContent | ImageContent)[]`
+    // (types.ts:426); the port accepts only the structured array form — use
+    // [ofText] for the plain-string shape.
     val content: List<Content>,
     override val timestamp: Long = 0L,
 ) : Message() {
@@ -145,6 +153,8 @@ data class UserMessage(
 
 data class AssistantMessage(
     val content: List<Content>,
+    // Reduction: pi's AssistantMessage.diagnostics (types.ts:435,
+    // AssistantMessageDiagnostic) is not ported; no adapter in scope emits it.
     /** API implementation identifier, e.g. "openai-completions". */
     val api: String,
     val provider: String,
@@ -169,6 +179,9 @@ data class ToolResultMessage(
     val isError: Boolean = false,
     /** Tool names this result made available (pi's addedToolNames, deferred tool loading). */
     val addedToolNames: List<String> = emptyList(),
+    // Reductions vs pi's ToolResultMessage (types.ts:484-491): `details`
+    // (TDetails, thinking-block replay data) and per-result `usage` are not
+    // ported; no adapter in scope consumes them.
     override val timestamp: Long = 0L,
 ) : Message() {
     override val role: MessageRole get() = MessageRole.TOOL_RESULT
@@ -181,7 +194,31 @@ data class Tool(
     val parameters: JsonElement,
 )
 
-/** Tool selection mode, mirroring pi's toolChoice option. */
+/**
+ * Narrow tool-selection union for pi's simple API: pi's `type ToolChoice =
+ * "auto" | "none"` (types.ts:82), used by StreamOptions/SimpleStreamOptions
+ * (types.ts:316). The full SDK-level union lives only on the
+ * OpenAI-completions options (api/openai-completions.ts:164).
+ */
+sealed interface SimpleToolChoice {
+    data object Auto : SimpleToolChoice
+    data object None : SimpleToolChoice
+}
+
+/** Maps the narrow simple-API choice onto the full completions-level union. */
+fun SimpleToolChoice.toToolChoice(): ToolChoice = when (this) {
+    SimpleToolChoice.Auto -> ToolChoice.Auto
+    SimpleToolChoice.None -> ToolChoice.None
+}
+
+/**
+ * Full tool-selection union, pi's OpenAICompletionsOptions.toolChoice
+ * (api/openai-completions.ts:164, OpenAI's ChatCompletionToolChoiceOption:
+ * "auto" | "none" | "required" | {type:"function"...}). Also carried by the
+ * port's provider-specific options types whose pi counterparts define their
+ * own broader unions. The simple API must not accept these values; it uses
+ * [SimpleToolChoice] (types.ts:82).
+ */
 sealed interface ToolChoice {
     data object Auto : ToolChoice
     data object None : ToolChoice

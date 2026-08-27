@@ -12,7 +12,7 @@ import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
 import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.core.Tool
-import works.resolve.pathfinder.ai.core.ToolChoice
+import works.resolve.pathfinder.ai.core.SimpleToolChoice
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeTransport
@@ -771,18 +771,19 @@ class AnthropicMessagesStreamTest {
 
     /**
      * pi's streamSimple passes toolChoice through to the payload's
-     * tool_choice mapping (anthropic-messages.ts:834, 1099-1103).
+     * tool_choice mapping (anthropic-messages.ts:834, 1099-1103). The simple
+     * API carries only pi's narrow ToolChoice (types.ts:82), so only
+     * auto/none can reach the wire via streamSimple; the broader shapes are
+     * exercised through AnthropicMessagesOptions (stream) below and in
+     * AnthropicMessagesPayloadTest.
      */
     @Test
     fun `streamSimple forwards each toolChoice shape to the wire`() = runTest {
         val tool = Tool(name = "edit", description = "Edit a file.", parameters = Json.parseToJsonElement("""{"type":"object"}"""))
         val tooledContext = context.copy(tools = listOf(tool))
         val cases = mapOf(
-            ToolChoice.Auto to "auto",
-            ToolChoice.None to "none",
-            ToolChoice.Any to "any",
-            // Anthropic has no "required"; Required collapses to Any.
-            ToolChoice.Required to "any",
+            SimpleToolChoice.Auto to "auto",
+            SimpleToolChoice.None to "none",
         )
         for ((choice, expected) in cases) {
             val transport = FakeTransport()
@@ -793,13 +794,15 @@ class AnthropicMessagesStreamTest {
             val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
             assertEquals(expected, body["tool_choice"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         }
+        // Provider-level options still carry the full Anthropic union
+        // (anthropic-messages.ts:265).
         val forced = FakeTransport()
         forced.enqueueNamedResponse(textStream("ok"))
         api(forced)
-            .streamSimple(
+            .stream(
                 claude,
                 tooledContext,
-                SimpleStreamOptions(apiKey = "k", toolChoice = ToolChoice.Function("edit")),
+                AnthropicMessagesOptions(apiKey = "k", toolChoice = AnthropicToolChoice.Tool("edit")),
             )
             .toList()
         val forcedChoice =

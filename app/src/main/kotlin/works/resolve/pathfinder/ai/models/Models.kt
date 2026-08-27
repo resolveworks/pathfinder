@@ -12,6 +12,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
+// Exclusion: pi's models-store.ts (dynamic catalog persistence and refresh)
+// is not ported; Pathfinder uses the bundled static catalog per the policy in
+// ai/AGENTS.md.
+
 /**
  * A resolved provider credential (pi's auth resolve result): the API key (or,
  * for header-auth providers, resolved auth headers), plus provider env values

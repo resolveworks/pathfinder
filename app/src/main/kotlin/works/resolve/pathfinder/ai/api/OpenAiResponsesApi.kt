@@ -14,11 +14,13 @@ import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
+import works.resolve.pathfinder.ai.core.SimpleToolChoice
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.core.ToolChoice
 import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.mergeHeaders
+import works.resolve.pathfinder.ai.core.toToolChoice
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
@@ -143,7 +145,9 @@ class OpenAiResponsesApi(
                     options.maxTokens ?: model.maxTokens,
                 ),
                 reasoningEffort = reasoningEffort,
-                toolChoice = options.toolChoice?.let(::mapResponsesToolChoice),
+                // Narrow simple-API choice widened to the Responses wire union,
+                // pi's streamSimple pass-through (types.ts:82 → responses options).
+                toolChoice = options.toolChoice?.toToolChoice()?.let(::mapResponsesToolChoice),
                 cacheRetention = options.cacheRetention,
                 timeoutMs = options.timeoutMs,
                 maxRetries = options.maxRetries,
@@ -502,7 +506,7 @@ class AzureOpenAiResponsesApi(
                     options.maxTokens ?: model.maxTokens,
                 ),
                 reasoningEffort = reasoningEffort,
-                toolChoice = options.toolChoice?.let(::mapResponsesToolChoice),
+                toolChoice = options.toolChoice?.toToolChoice()?.let(::mapResponsesToolChoice),
                 timeoutMs = options.timeoutMs,
                 maxRetries = options.maxRetries,
                 maxRetryDelayMs = options.maxRetryDelayMs,
