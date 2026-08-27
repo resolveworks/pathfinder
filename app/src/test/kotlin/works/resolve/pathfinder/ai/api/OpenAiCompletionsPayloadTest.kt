@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ai.api
 
 import works.resolve.pathfinder.ai.core.AssistantMessage
+import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ImageContent
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
@@ -32,6 +33,7 @@ import kotlinx.serialization.json.longOrNull
 class OpenAiCompletionsPayloadTest {
 
     private val model = TestCatalogs.GLM_5_2
+    private val openaiModel = TestCatalogs.GPT_4O
     private val schema = Json.parseToJsonElement(
         """{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}""",
     )
@@ -666,5 +668,94 @@ class OpenAiCompletionsPayloadTest {
         val assistant = b["messages"]!!.jsonArray[0].jsonObject
         assertEquals("let me thinkanswer", assistant["content"]!!.jsonPrimitive.content)
         assertFalse(assistant.containsKey("reasoning_content"))
+    }
+
+    // Prompt cache params, ported from pi's
+    // test/openai-completions-prompt-cache.test.ts (buildParams,
+    // openai-completions.ts:804-810).
+
+    @Test
+    fun `prompt cache key sent for direct openai requests when caching enabled`() {
+        val b = body(
+            Context(messages = listOf(UserMessage.ofText("hi"))),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-123"),
+            openaiModel,
+        )
+        assertEquals("session-123", b["prompt_cache_key"]!!.jsonPrimitive.content)
+        assertFalse(b.containsKey("prompt_cache_retention"))
+    }
+
+    @Test
+    fun `prompt cache retention 24h for long cache retention on direct openai`() {
+        val b = body(
+            Context(messages = listOf(UserMessage.ofText("hi"))),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-456", cacheRetention = CacheRetention.LONG),
+            openaiModel,
+        )
+        assertEquals("session-456", b["prompt_cache_key"]!!.jsonPrimitive.content)
+        assertEquals("24h", b["prompt_cache_retention"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `prompt cache key clamped to 64 code points`() {
+        val b = body(
+            Context(messages = listOf(UserMessage.ofText("hi"))),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "x".repeat(67)),
+            openaiModel,
+        )
+        assertEquals("x".repeat(64), b["prompt_cache_key"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `prompt cache fields omitted when cache retention none`() {
+        val b = body(
+            Context(messages = listOf(UserMessage.ofText("hi"))),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-789", cacheRetention = CacheRetention.NONE),
+            openaiModel,
+        )
+        assertFalse(b.containsKey("prompt_cache_key"))
+        assertFalse(b.containsKey("prompt_cache_retention"))
+    }
+
+    @Test
+    fun `prompt cache fields omitted for proxy without long retention support`() {
+        val proxy = openaiModel.copy(
+            baseUrl = "https://proxy.example.com/v1",
+            compat = openaiModel.compat.copy(supportsLongCacheRetention = false),
+        )
+        val b = body(
+            Context(messages = listOf(UserMessage.ofText("hi"))),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-proxy", cacheRetention = CacheRetention.LONG),
+            proxy,
+        )
+        assertFalse(b.containsKey("prompt_cache_key"))
+        assertFalse(b.containsKey("prompt_cache_retention"))
+    }
+
+    @Test
+    fun `pi cache retention env resolves long for direct openai`() {
+        val b = body(
+            Context(messages = listOf(UserMessage.ofText("hi"))),
+            OpenAiCompletionsOptions(
+                apiKey = "k",
+                sessionId = "session-env",
+                env = mapOf("PI_CACHE_RETENTION" to "long"),
+            ),
+            openaiModel,
+        )
+        assertEquals("session-env", b["prompt_cache_key"]!!.jsonPrimitive.content)
+        assertEquals("24h", b["prompt_cache_retention"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `prompt cache retention sent for proxy that supports long retention`() {
+        val proxy = openaiModel.copy(baseUrl = "https://proxy.example.com/v1")
+        val b = body(
+            Context(messages = listOf(UserMessage.ofText("hi"))),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-proxy", cacheRetention = CacheRetention.LONG),
+            proxy,
+        )
+        assertEquals("session-proxy", b["prompt_cache_key"]!!.jsonPrimitive.content)
+        assertEquals("24h", b["prompt_cache_retention"]!!.jsonPrimitive.content)
     }
 }

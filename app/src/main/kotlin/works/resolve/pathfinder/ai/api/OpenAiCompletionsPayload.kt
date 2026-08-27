@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.api
 
+import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ChatTemplateKwargValue
 import works.resolve.pathfinder.ai.core.ContentType
@@ -42,11 +43,31 @@ object OpenAiCompletionsPayload {
         context: Context,
         options: OpenAiCompletionsOptions,
         compat: OpenAiCompletionsCompat = model.compat,
+        cacheRetention: CacheRetention = OpenAiResponsesShared.resolveCacheRetention(
+            options.cacheRetention,
+            options.env,
+        ),
     ): JsonObject {
         val body = mutableMapOf<String, JsonElement>()
         body["model"] = JsonPrimitive(model.id)
         body["messages"] = JsonArray(convertMessages(model, context, compat))
         body["stream"] = JsonPrimitive(true)
+
+        // pi buildParams (openai-completions.ts:804-810): prompt_cache_key is
+        // gated on direct OpenAI base URLs with caching enabled, or on long
+        // retention where the provider supports it; the key is clamped to
+        // OpenAI's 64-code-point limit (shared openai-prompt-cache.ts).
+        val sendPromptCacheKey =
+            (model.baseUrl.contains("api.openai.com") && cacheRetention != CacheRetention.NONE) ||
+                (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention)
+        if (sendPromptCacheKey) {
+            OpenAiResponsesShared.clampOpenAIPromptCacheKey(options.sessionId)?.let {
+                body["prompt_cache_key"] = JsonPrimitive(it)
+            }
+        }
+        if (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention) {
+            body["prompt_cache_retention"] = JsonPrimitive("24h")
+        }
 
         if (compat.supportsUsageInStreaming) {
             body["stream_options"] = buildJsonObject { put("include_usage", true) }

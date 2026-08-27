@@ -38,7 +38,6 @@ data class ModelCost(
     val cacheWrite: Double = 0.0,
 )
 
-/** Session affinity header format for OpenAI Responses providers, pi's compat flag. */
 /** Pi's SessionAffinityFormat: "openai" | "openai-nosession" | "openrouter". */
 enum class SessionAffinityFormat { OPENAI, OPENAI_NOSESSION, OPENROUTER }
 
@@ -80,6 +79,12 @@ data class OpenAiCompletionsCompat(
     val zaiToolStream: Boolean = false,
     /** Baseten chat_template_args: template kwargs before $var resolution. */
     val chatTemplateArgs: Map<String, ChatTemplateKwargValue> = emptyMap(),
+    /** Whether to send session-affinity data from `options.sessionId`; pi's detected default is false. */
+    val sendSessionAffinityHeaders: Boolean = false,
+    /** null means auto-detect (openrouter vs openai), pi's detectCompat. */
+    val sessionAffinityFormat: SessionAffinityFormat? = null,
+    /** Whether `prompt_cache_retention: "24h"` is supported; pi's detected default is true. */
+    val supportsLongCacheRetention: Boolean = true,
 )
 
 /**

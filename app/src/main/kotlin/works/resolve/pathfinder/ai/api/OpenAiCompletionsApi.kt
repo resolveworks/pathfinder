@@ -3,10 +3,12 @@ package works.resolve.pathfinder.ai.api
 import works.resolve.pathfinder.ai.api.OpenAiCompletionsPayload.REASONING_FIELDS
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
+import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
+import works.resolve.pathfinder.ai.core.SessionAffinityFormat
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
@@ -101,13 +103,23 @@ class OpenAiCompletionsApi(
             // cloudflare-stream wrapper. Headers merge like pi's
             // openai-completions createClient: model headers first, then the
             // Copilot dynamic headers (github-copilot only; they override
-            // model headers), then the merged request/auth headers (explicit
-            // requests win), then the
-            // always-sent Accept header, which can never be overridden
+            // model headers), then session-affinity headers (only when a
+            // cache session id survives the cacheRetention none gate), then
+            // the merged request/auth headers (explicit requests win), then
+            // the always-sent Accept header, which can never be overridden
             // (a null request value cannot remove it).
+            val cacheRetention = OpenAiResponsesShared.resolveCacheRetention(
+                options.cacheRetention,
+                options.env,
+            )
+            val cacheSessionId =
+                if (cacheRetention == CacheRetention.NONE) null else options.sessionId
             val mergedHeaders = mergeHeaders(
                 mergeHeaders(
-                    mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
+                    mergeHeaders(
+                        mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
+                        sessionAffinityHeaders(model, cacheSessionId),
+                    ),
                     options.headers,
                 ),
                 mapOf("Accept" to "text/event-stream"),
@@ -315,6 +327,28 @@ class OpenAiCompletionsApi(
 
 private fun kotlinx.serialization.json.JsonElement?.stringOrNull(): String? =
     (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
+
+/**
+ * Session-affinity headers, pi's openai-completions createClient
+ * (openai-completions.ts:760-770): "openrouter" sends `x-session-id`; every
+ * other format sends `x-client-request-id` and `x-session-affinity`, with
+ * "openai" additionally sending `session_id`. The format resolves as
+ * `model.compat.sessionAffinityFormat ?? detected`, where detection is the
+ * same OpenRouter provider/baseUrl check as the Responses family.
+ */
+private fun sessionAffinityHeaders(model: Model, cacheSessionId: String?): Map<String, String> {
+    if (cacheSessionId == null || !model.compat.sendSessionAffinityHeaders) return emptyMap()
+    val format = model.compat.sessionAffinityFormat
+        ?: OpenAiResponsesShared.detectSessionAffinityFormat(model)
+    return when (format) {
+        SessionAffinityFormat.OPENROUTER -> mapOf("x-session-id" to cacheSessionId)
+        SessionAffinityFormat.OPENAI, SessionAffinityFormat.OPENAI_NOSESSION -> buildMap {
+            if (format == SessionAffinityFormat.OPENAI) put("session_id", cacheSessionId)
+            put("x-client-request-id", cacheSessionId)
+            put("x-session-affinity", cacheSessionId)
+        }
+    }
+}
 
 private fun JsonObject.intOrZero(key: String): Int =
     intOrNull(key) ?: 0

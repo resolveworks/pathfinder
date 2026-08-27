@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ai.api
 
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
+import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
@@ -714,5 +715,162 @@ class OpenAiCompletionsStreamTest {
         val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
         assertEquals("enabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertTrue(!body.containsKey("reasoning_effort"))
+    }
+
+    // Session-affinity headers, ported from pi's
+    // test/openai-completions-prompt-cache.test.ts (createClient,
+    // openai-completions.ts:760-770).
+
+    private fun affinityModel(
+        format: works.resolve.pathfinder.ai.core.SessionAffinityFormat? = null,
+        provider: String = "openai",
+        baseUrl: String = "https://api.openai.com/v1",
+    ): works.resolve.pathfinder.ai.core.Model = TestCatalogs.GPT_4O.copy(
+        provider = provider,
+        baseUrl = baseUrl,
+        compat = TestCatalogs.GPT_4O.compat.copy(
+            sendSessionAffinityHeaders = true,
+            sessionAffinityFormat = format,
+        ),
+    )
+
+    private suspend fun headersFor(
+        model: works.resolve.pathfinder.ai.core.Model = TestCatalogs.GPT_4O,
+        options: OpenAiCompletionsOptions = OpenAiCompletionsOptions(apiKey = "k"),
+    ): Map<String, String> {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
+                "[DONE]",
+            ),
+        )
+        api(transport).stream(model, context, options).toList()
+        return transport.requests.single().headers
+    }
+
+    @Test
+    fun `openai affinity format sends session id client request id and session affinity headers`() = runTest {
+        val headers = headersFor(
+            affinityModel(baseUrl = "https://proxy.example.com/v1"),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-affinity"),
+        )
+        assertEquals("session-affinity", headers["session_id"])
+        assertEquals("session-affinity", headers["x-client-request-id"])
+        assertEquals("session-affinity", headers["x-session-affinity"])
+        assertNull(headers["x-session-id"])
+    }
+
+    @Test
+    fun `openrouter affinity format sends only x-session-id`() = runTest {
+        val headers = headersFor(
+            affinityModel(
+                format = works.resolve.pathfinder.ai.core.SessionAffinityFormat.OPENROUTER,
+                baseUrl = "https://proxy.example.com/v1",
+            ),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-proxy"),
+        )
+        assertEquals("session-proxy", headers["x-session-id"])
+        assertNull(headers["session_id"])
+        assertNull(headers["x-client-request-id"])
+        assertNull(headers["x-session-affinity"])
+    }
+
+    @Test
+    fun `openrouter format auto-detected from provider and base url`() = runTest {
+        val headers = headersFor(
+            affinityModel(provider = "openrouter", baseUrl = "https://openrouter.ai/api/v1"),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-openrouter"),
+        )
+        assertEquals("session-openrouter", headers["x-session-id"])
+        assertNull(headers["session_id"])
+        assertNull(headers["x-client-request-id"])
+        assertNull(headers["x-session-affinity"])
+    }
+
+    @Test
+    fun `openai-nosession format omits session id header`() = runTest {
+        val model = affinityModel(
+            format = works.resolve.pathfinder.ai.core.SessionAffinityFormat.OPENAI_NOSESSION,
+        )
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
+                "[DONE]",
+            ),
+        )
+        api(transport)
+            .stream(model, context, OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-nosession"))
+            .toList()
+        val headers = transport.requests.single().headers
+        assertNull(headers["session_id"])
+        assertNull(headers["x-session-id"])
+        assertEquals("session-nosession", headers["x-client-request-id"])
+        assertEquals("session-nosession", headers["x-session-affinity"])
+        // prompt_cache_key is governed by cache retention, not the affinity format.
+        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertEquals("session-nosession", body["prompt_cache_key"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `no affinity headers without a session id`() = runTest {
+        val headers = headersFor(
+            affinityModel(baseUrl = "https://proxy.example.com/v1"),
+            OpenAiCompletionsOptions(apiKey = "k"),
+        )
+        assertNull(headers["session_id"])
+        assertNull(headers["x-client-request-id"])
+        assertNull(headers["x-session-affinity"])
+        assertNull(headers["x-session-id"])
+    }
+
+    @Test
+    fun `no affinity headers when sendSessionAffinityHeaders is false`() = runTest {
+        val headers = headersFor(
+            TestCatalogs.GPT_4O.copy(
+                provider = "openrouter",
+                baseUrl = "https://openrouter.ai/api/v1",
+            ),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-openrouter"),
+        )
+        assertNull(headers["x-session-id"])
+        assertNull(headers["session_id"])
+        assertNull(headers["x-client-request-id"])
+        assertNull(headers["x-session-affinity"])
+    }
+
+    @Test
+    fun `affinity headers omitted when cache retention is none`() = runTest {
+        val headers = headersFor(
+            affinityModel(baseUrl = "https://proxy.example.com/v1"),
+            OpenAiCompletionsOptions(
+                apiKey = "k",
+                sessionId = "session-affinity",
+                cacheRetention = CacheRetention.NONE,
+            ),
+        )
+        assertNull(headers["session_id"])
+        assertNull(headers["x-client-request-id"])
+        assertNull(headers["x-session-affinity"])
+    }
+
+    @Test
+    fun `explicit request headers override generated affinity headers`() = runTest {
+        val headers = headersFor(
+            affinityModel(baseUrl = "https://proxy.example.com/v1"),
+            OpenAiCompletionsOptions(
+                apiKey = "k",
+                sessionId = "session-affinity",
+                headers = mapOf(
+                    "session_id" to "override-session",
+                    "x-client-request-id" to "override-request",
+                    "x-session-affinity" to "override-affinity",
+                ),
+            ),
+        )
+        assertEquals("override-session", headers["session_id"])
+        assertEquals("override-request", headers["x-client-request-id"])
+        assertEquals("override-affinity", headers["x-session-affinity"])
     }
 }
