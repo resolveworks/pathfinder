@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ai.api
 
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
+import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.InputModality
 import works.resolve.pathfinder.ai.core.Model
@@ -11,6 +12,7 @@ import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
 import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.core.Tool
+import works.resolve.pathfinder.ai.core.ToolChoice
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeTransport
@@ -765,6 +767,86 @@ class AnthropicMessagesStreamTest {
         val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
         assertEquals("adaptive", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("low", body["output_config"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
+    }
+
+    /**
+     * pi's streamSimple passes toolChoice through to the payload's
+     * tool_choice mapping (anthropic-messages.ts:834, 1099-1103).
+     */
+    @Test
+    fun `streamSimple forwards each toolChoice shape to the wire`() = runTest {
+        val tool = Tool(name = "edit", description = "Edit a file.", parameters = Json.parseToJsonElement("""{"type":"object"}"""))
+        val tooledContext = context.copy(tools = listOf(tool))
+        val cases = mapOf(
+            ToolChoice.Auto to "auto",
+            ToolChoice.None to "none",
+            ToolChoice.Any to "any",
+            // Anthropic has no "required"; Required collapses to Any.
+            ToolChoice.Required to "any",
+        )
+        for ((choice, expected) in cases) {
+            val transport = FakeTransport()
+            transport.enqueueNamedResponse(textStream("ok"))
+            api(transport)
+                .streamSimple(claude, tooledContext, SimpleStreamOptions(apiKey = "k", toolChoice = choice))
+                .toList()
+            val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+            assertEquals(expected, body["tool_choice"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        }
+        val forced = FakeTransport()
+        forced.enqueueNamedResponse(textStream("ok"))
+        api(forced)
+            .streamSimple(
+                claude,
+                tooledContext,
+                SimpleStreamOptions(apiKey = "k", toolChoice = ToolChoice.Function("edit")),
+            )
+            .toList()
+        val forcedChoice =
+            Json.parseToJsonElement(forced.requests.single().body.decodeToString()).jsonObject["tool_choice"]!!.jsonObject
+        assertEquals("tool", forcedChoice["type"]!!.jsonPrimitive.content)
+        assertEquals("edit", forcedChoice["name"]!!.jsonPrimitive.content)
+    }
+
+    /** pi's buildBaseOptions forwards cacheRetention (simple-options.ts:40). */
+    @Test
+    fun `streamSimple cacheRetention long uses the 1h ttl`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(textStream("ok"))
+        api(transport)
+            .streamSimple(
+                claude,
+                Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi"))),
+                SimpleStreamOptions(apiKey = "k", cacheRetention = CacheRetention.LONG),
+            )
+            .toList()
+        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertEquals(
+            "1h",
+            body["system"]!!.jsonArray.single().jsonObject["cache_control"]!!
+                .jsonObject["ttl"]!!.jsonPrimitive.content,
+        )
+    }
+
+    /** Retention none suppresses cache_control and the x-session-affinity header. */
+    @Test
+    fun `streamSimple cacheRetention none suppresses caching and session affinity`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(textStream("ok"))
+        val affinity = claude.copy(
+            anthropicCompat = claude.anthropicCompat.copy(sendSessionAffinityHeaders = true),
+        )
+        api(transport)
+            .streamSimple(
+                affinity,
+                Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi"))),
+                SimpleStreamOptions(apiKey = "k", sessionId = "sess-1", cacheRetention = CacheRetention.NONE),
+            )
+            .toList()
+        val request = transport.requests.single()
+        assertNull(request.headers["x-session-affinity"])
+        val body = Json.parseToJsonElement(request.body.decodeToString()).jsonObject
+        assertNull(body["system"]!!.jsonArray.single().jsonObject["cache_control"])
     }
 
     @Test
