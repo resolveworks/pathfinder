@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -224,6 +225,138 @@ class OpenAiCompletionsStreamTest {
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         val thinking = assertIs<ThinkingContent>(done.message.content.single())
         assertEquals("a", thinking.thinking)
+    }
+
+    @Test
+    fun `reasoning_details accumulate into the thinking signature and replay on the next request`() = runTest {
+        // pi test/openai-completions-reasoning-details.test.ts "preserves
+        // reasoning_details in the thinking signature": encrypted details open a
+        // thinking block with no visible delta and serialize into the signature.
+        val detail = """{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}"""
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"reasoning_details":[$detail]}}]}""",
+                """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{\"path\":\"README.md\"}"}}]}}]}""",
+                """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
+                "[DONE]",
+            ),
+        )
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
+                "[DONE]",
+            ),
+        )
+        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        // reasoning_details deltas open the thinking block but never emit deltas.
+        assertEquals(0, events.filterIsInstance<AssistantMessageEvent.ThinkingDelta>().size)
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        val thinking = assertIs<ThinkingContent>(done.message.content[0])
+        assertEquals("", thinking.thinking)
+        assertEquals(Json.parseToJsonElement("[$detail]"), Json.parseToJsonElement(thinking.thinkingSignature!!))
+        val toolCall = assertIs<ToolCall>(done.message.content[1])
+        assertEquals("call_1", toolCall.id)
+        assertEquals("read", toolCall.name)
+        assertEquals("""{"path":"README.md"}""", toolCall.arguments)
+
+        // Replay the stored assistant message: the serialized details come
+        // back as assistant reasoning_details.
+        api(transport)
+            .stream(
+                model,
+                Context(messages = listOf(UserMessage.ofText("hi"), done.message)),
+                OpenAiCompletionsOptions(apiKey = "test-key"),
+            )
+            .toList()
+        val replayBody = Json.parseToJsonElement(transport.requests[1].body.decodeToString()).jsonObject
+        val assistant = replayBody["messages"]!!.jsonArray
+            .first { it.jsonObject["role"]!!.jsonPrimitive.content == "assistant" }.jsonObject
+        assertEquals(Json.parseToJsonElement("[$detail]"), assistant["reasoning_details"])
+    }
+
+    @Test
+    fun `consecutive text and summary reasoning_details deltas merge before replay`() = runTest {
+        // pi test/openai-completions-reasoning-details.test.ts "merges
+        // consecutive text and summary reasoning_details deltas before replay".
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"The","index":0}]}}]}""",
+                """{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":" user wants the time.","signature":"sha256:text-signature","format":"openai-responses-v1","index":0}]}}]}""",
+                """{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"Looked","index":0}]}}]}""",
+                """{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":" up time.","format":"openai-responses-v1","index":0}]}}]}""",
+                """{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}]}}]}""",
+                """{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"After encrypted block.","format":"openai-responses-v1","index":0}]}}]}""",
+                """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}]}}]}""",
+                """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
+                "[DONE]",
+            ),
+        )
+        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        val thinking = assertIs<ThinkingContent>(done.message.content[0])
+        assertEquals("", thinking.thinking)
+        val expected = """
+            [
+              {"type":"reasoning.text","text":"The user wants the time.","index":0,"signature":"sha256:text-signature","format":"openai-responses-v1"},
+              {"type":"reasoning.summary","summary":"Looked up time.","index":0,"format":"openai-responses-v1"},
+              {"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"},
+              {"type":"reasoning.summary","summary":"After encrypted block.","format":"openai-responses-v1","index":0}
+            ]
+        """.trimIndent()
+        assertEquals(Json.parseToJsonElement(expected), Json.parseToJsonElement(thinking.thinkingSignature!!))
+    }
+
+    @Test
+    fun `reasoning field plus reasoning_details keep visible thinking and structured signature`() = runTest {
+        // pi test/openai-completions-reasoning-details.test.ts "preserves
+        // signed text and summary reasoning_details in their original sequence".
+        val signedText =
+            """{"type":"reasoning.text","text":"I should call the read tool.","signature":"sha256:signed-text","id":"reasoning-text-1","format":"anthropic-claude-v1","index":0}"""
+        val encrypted = """{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}"""
+        val summary =
+            """{"type":"reasoning.summary","summary":"Decided to inspect the requested file.","id":"reasoning-summary-1","format":"anthropic-claude-v1","index":1}"""
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"reasoning":"I should call the read tool.","reasoning_details":[$signedText]}}]}""",
+                """{"choices":[{"delta":{"reasoning_details":[$encrypted,$summary]}}]}""",
+                """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}]}}]}""",
+                """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
+                "[DONE]",
+            ),
+        )
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
+                "[DONE]",
+            ),
+        )
+        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        val thinking = assertIs<ThinkingContent>(done.message.content[0])
+        assertEquals("I should call the read tool.", thinking.thinking)
+        assertEquals(
+            Json.parseToJsonElement("[$signedText,$encrypted,$summary]"),
+            Json.parseToJsonElement(thinking.thinkingSignature!!),
+        )
+
+        // Replay: the structured details replace the raw reasoning field.
+        api(transport)
+            .stream(
+                model,
+                Context(messages = listOf(UserMessage.ofText("hi"), done.message)),
+                OpenAiCompletionsOptions(apiKey = "test-key"),
+            )
+            .toList()
+        val replayBody = Json.parseToJsonElement(transport.requests[1].body.decodeToString()).jsonObject
+        val assistant = replayBody["messages"]!!.jsonArray
+            .first { it.jsonObject["role"]!!.jsonPrimitive.content == "assistant" }.jsonObject
+        assertEquals(Json.parseToJsonElement("[$signedText,$encrypted,$summary]"), assistant["reasoning_details"])
+        assertNull(assistant["reasoning"])
+        assertNull(assistant["reasoning_content"])
+        assertNull(assistant["reasoning_text"])
     }
 
     @Test

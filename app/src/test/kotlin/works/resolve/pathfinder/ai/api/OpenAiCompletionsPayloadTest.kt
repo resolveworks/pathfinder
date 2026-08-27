@@ -388,6 +388,114 @@ class OpenAiCompletionsPayloadTest {
     }
 
     @Test
+    fun `serialized reasoning_details replay as assistant reasoning_details and suppress the raw field`() {
+        // pi openai-completions.ts:1270-1285,1300-1313,1344-1346: when a
+        // thinking signature parses as reasoning details, the details are
+        // replayed as reasoning_details and the raw reasoning field is not sent.
+        val details =
+            """[{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}]"""
+        val b = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent("let me think", thinkingSignature = details),
+                            TextContent("answer"),
+                        ),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2",
+                    ),
+                ),
+            ),
+        )
+        val assistant = b["messages"]!!.jsonArray[0].jsonObject
+        assertEquals(Json.parseToJsonElement(details), assistant["reasoning_details"])
+        assertFalse(assistant.containsKey("reasoning"))
+        assertFalse(assistant.containsKey("reasoning_content"))
+        assertFalse(assistant.containsKey("reasoning_text"))
+    }
+
+    @Test
+    fun `legacy encrypted tool-call thoughtSignature replays as reasoning_details`() {
+        // pi test/openai-completions-reasoning-details.test.ts "falls back to
+        // encrypted tool-call signatures for older stored assistant messages":
+        // openai-completions.ts:1277-1283 parseLegacyEncryptedReasoningDetail.
+        val detail =
+            """{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}"""
+        val b = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ToolCall(
+                                id = "call_1",
+                                name = "read",
+                                arguments = "{}",
+                                thoughtSignature = detail,
+                            ),
+                        ),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2",
+                    ),
+                ),
+            ),
+        )
+        val assistant = b["messages"]!!.jsonArray[0].jsonObject
+        assertEquals(Json.parseToJsonElement("[$detail]"), assistant["reasoning_details"])
+    }
+
+    @Test
+    fun `signed reasoning_details take precedence over legacy tool-call signatures`() {
+        val signed =
+            """[{"type":"reasoning.encrypted","id":"thinking","data":"signed"}]"""
+        val legacy =
+            """{"type":"reasoning.encrypted","id":"call_1","data":"legacy"}"""
+        val b = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent("thinking", thinkingSignature = signed),
+                            ToolCall(id = "call_1", name = "read", arguments = "{}", thoughtSignature = legacy),
+                        ),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2",
+                    ),
+                ),
+            ),
+        )
+        val assistant = b["messages"]!!.jsonArray[0].jsonObject
+        assertEquals(Json.parseToJsonElement(signed), assistant["reasoning_details"])
+    }
+
+    @Test
+    fun `invalid reasoning_details signature falls back to plain replay`() {
+        // Non-detail signatures keep the plain reasoning-field replay path.
+        val b = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent("let me think", thinkingSignature = "not json at all"),
+                            TextContent("answer"),
+                        ),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2",
+                    ),
+                ),
+            ),
+        )
+        val assistant = b["messages"]!!.jsonArray[0].jsonObject
+        assertFalse(assistant.containsKey("reasoning_details"))
+        // The invalid signature names no reasoning field, so nothing is sent.
+        assertFalse(assistant.containsKey("reasoning_content"))
+    }
+
+    @Test
     fun `empty assistant messages are skipped`() {
         val b = body(
             Context(

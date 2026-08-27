@@ -448,6 +448,21 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
         val thinkingBlocks = msg.content.filter { it.type == ContentType.THINKING }
             .map { it as works.resolve.pathfinder.ai.core.ThinkingContent }
         val nonEmptyThinking = thinkingBlocks.filter { it.thinking.isNotBlank() }
+        val toolCalls = msg.content.filter { it.type == ContentType.TOOL_CALL }
+            .map { it as works.resolve.pathfinder.ai.core.ToolCall }
+
+        // pi openai-completions.ts:1274-1285: prefer the serialized
+        // reasoning_details from a thinking signature, then fall back to the
+        // legacy encrypted thoughtSignature carried on tool calls.
+        val signedReasoningDetails = thinkingBlocks.firstNotNullOfOrNull {
+            parseOpenAIReasoningDetails(it.thinkingSignature)
+        }
+        val legacyReasoningDetails = toolCalls.mapNotNull {
+            parseLegacyEncryptedReasoningDetail(it.thoughtSignature)
+        }
+        val preservedReasoningDetails: JsonElement? =
+            signedReasoningDetails
+                ?: legacyReasoningDetails.takeIf { it.isNotEmpty() }?.let { JsonArray(it) }
 
         if (compat.requiresThinkingAsText && nonEmptyThinking.isNotEmpty()) {
             val thinkingText = sanitizeSurrogates(nonEmptyThinking.joinToString("\n\n") { it.thinking })
@@ -466,7 +481,11 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
         }
 
         // Replay reasoning when the provider stored a wire-field signature.
-        if (!compat.requiresThinkingAsText && nonEmptyThinking.isNotEmpty()) {
+        // pi openai-completions.ts:1300-1313: the raw reasoning field is only
+        // sent when no structured reasoning_details were preserved.
+        if (preservedReasoningDetails == null &&
+            !compat.requiresThinkingAsText && nonEmptyThinking.isNotEmpty()
+        ) {
             val signature = nonEmptyThinking.first().thinkingSignature
             if (signature != null && signature in REASONING_FIELDS) {
                 // Exact pi parity: the raw reasoning field is replayed unsanitized
@@ -475,11 +494,9 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
             }
         }
 
-        val toolCalls = msg.content.filter { it.type == ContentType.TOOL_CALL }
         if (toolCalls.isNotEmpty()) {
             assistant["tool_calls"] = JsonArray(
                 toolCalls.map { call ->
-                    call as works.resolve.pathfinder.ai.core.ToolCall
                     buildJsonObject {
                         put("id", call.id)
                         put("type", "function")
@@ -494,6 +511,11 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
                 },
             )
         }
+
+        // pi openai-completions.ts:1344-1346: reasoning_details is the
+        // structured alternative to a raw reasoning field, sent whenever
+        // details were preserved (even alongside requiresThinkingAsText).
+        preservedReasoningDetails?.let { assistant["reasoning_details"] = it }
 
         val hasContent = (assistant["content"] as? JsonPrimitive)?.content?.isNotEmpty() == true ||
             assistant["content"] is JsonArray
