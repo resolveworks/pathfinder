@@ -4,8 +4,8 @@ import java.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -450,26 +450,38 @@ class OpenAICodexResponsesApi(
             emit(AssistantMessageEvent.Start(state.partialSnapshot()))
 
             var finished = false
-            for (event in response.events.toList()) {
-                if (event.data.trim() == "[DONE]") continue
-                val parsed = try {
-                    responsesJson.parseToJsonElement(event.data)
-                } catch (error: Exception) {
-                    throw ProviderStreamException(
-                        "Invalid Codex SSE JSON: ${error.message ?: error::class.simpleName}",
-                    )
+            // Pi maps Codex SSE events incrementally and stops at the terminal
+            // event (response.done/completed/incomplete) even while the SSE
+            // body stays open (openai-codex-responses.ts mapCodexEvents returns
+            // after yielding the normalized terminal event). Mirror that by
+            // collecting the events flow incrementally and abandoning collection
+            // once the terminal event has been processed; the transport cancels
+            // the HTTP call when collection is abandoned (onCompletion {
+            // eventSource.cancel() }).
+            try {
+                response.events.collect { event ->
+                    if (event.data.trim() == "[DONE]") return@collect
+                    val parsed = try {
+                        responsesJson.parseToJsonElement(event.data)
+                    } catch (error: Exception) {
+                        throw ProviderStreamException(
+                            "Invalid Codex SSE JSON: ${error.message ?: error::class.simpleName}",
+                        )
+                    }
+                    val obj = parsed as? JsonObject
+                        ?: throw ProviderStreamException("Invalid Codex SSE JSON: expected an object")
+                    val mapped = mapCodexEvent(obj) { endTurn = it } ?: return@collect
+                    processSseEvent(
+                        works.resolve.pathfinder.ai.transport.SseEvent(mapped.first.toString()),
+                        state,
+                    )?.forEach { emit(it) }
+                    if (mapped.second) {
+                        finished = true
+                        throw TerminalEventReached
+                    }
                 }
-                val obj = parsed as? JsonObject
-                    ?: throw ProviderStreamException("Invalid Codex SSE JSON: expected an object")
-                val mapped = mapCodexEvent(obj) { endTurn = it } ?: continue
-                processSseEvent(
-                    works.resolve.pathfinder.ai.transport.SseEvent(mapped.first.toString()),
-                    state,
-                )?.forEach { emit(it) }
-                if (mapped.second) {
-                    finished = true
-                    break
-                }
+            } catch (_: TerminalEventReached) {
+                // Terminal event processed; stop consuming the SSE body.
             }
             if (!finished) {
                 // parseSSE consumed the whole body without a terminal event; the
@@ -576,3 +588,6 @@ internal fun formatCodexError(error: Exception): String = when (error) {
     is ProviderStreamException -> error.message ?: "Codex stream error"
     else -> error.message ?: error::class.simpleName ?: "Unknown error"
 }
+
+/** Control-flow sentinel: the terminal Codex event was processed, so the SSE body is abandoned. */
+private object TerminalEventReached : RuntimeException()
