@@ -11,6 +11,7 @@ import works.resolve.pathfinder.ai.core.mergeHeaders
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.last
 
 // Exclusion: pi's models-store.ts (dynamic catalog persistence and refresh)
 // is not ported; Pathfinder uses the bundled static catalog per the policy in
@@ -180,6 +181,39 @@ class Models(
                 headers = mergeHeaders(authHeaders, options.headers),
             )
             api.streamSimple(requestModel, context, merged).collect { emit(it) }
+        }
+    }
+
+    /**
+     * Port of pi's models.ts `completeSimple` (packages/ai/src/models.ts,
+     * `completeSimple` = `streamSimple(model, context, options).result()`):
+     * collects the event stream to its terminal AssistantMessage. A terminal
+     * `Error` event is returned as the ERROR/ABORTED AssistantMessage per the
+     * stream contract (callers inspect `stopReason`, like pi's `result()`);
+     * a malformed stream that ends without a terminal event throws, like
+     * pi's result() rejecting on a stream without a message.
+     *
+     * Divergence: pi's `streamSimple` is a separate models entry point that
+     * applies auth over provider.streamSimple; pathfinder's [stream] already
+     * is that exact simple-API path (the port reduced Models to one streaming
+     * method), so `completeSimple` collects [stream] directly instead of
+     * duplicating a streamSimple alias.
+     */
+    suspend fun completeSimple(
+        model: Model,
+        context: Context,
+        options: SimpleStreamOptions = SimpleStreamOptions(),
+    ): AssistantMessage {
+        var terminal: AssistantMessage? = null
+        stream(model, context, options).collect { event ->
+            when (event) {
+                is AssistantMessageEvent.Done -> terminal = event.message
+                is AssistantMessageEvent.Error -> terminal = event.error
+                else -> {}
+            }
+        }
+        return checkNotNull(terminal) {
+            "Stream for model '${model.id}' ended without a terminal Done/Error event"
         }
     }
 

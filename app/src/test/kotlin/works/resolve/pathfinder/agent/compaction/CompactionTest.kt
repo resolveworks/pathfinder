@@ -123,6 +123,21 @@ class CompactionTest {
     }
 
     @Test
+    fun `never cuts immediately after a compaction entry`() {
+        val user = createMessageEntry(createUserMessage("user"))
+        val compaction = works.resolve.pathfinder.data.sessions.CompactionEntry(
+            id = createId(),
+            parentId = user.id,
+            timestamp = nextId.toLong(),
+            summary = "summary",
+            retainedTail = emptyList(),
+            tokensBefore = 1234,
+        )
+        val assistant = createMessageEntry(createAssistantMessage("assistant"), compaction.id)
+        assertEquals(2, findCutPoint(listOf<SessionEntry>(user, compaction, assistant), 0, 3, 1).firstKeptEntryIndex)
+    }
+
+    @Test
     fun `estimates tokens and context usage across supported message roles`() {
         val usage = createMockUsage(10, 5, 3, 2)
         val assistant = createAssistantMessage("assistant", usage)
