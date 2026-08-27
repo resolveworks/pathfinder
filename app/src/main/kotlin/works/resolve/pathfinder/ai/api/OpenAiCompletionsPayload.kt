@@ -26,9 +26,10 @@ import kotlinx.serialization.json.put
 
 /**
  * Request construction for OpenAI Chat Completions, ported from pi's
- * openai-completions.ts and reduced to the ZAI-relevant behavior: message
- * replay (system/user/assistant/tool-result), tool JSON Schema conversion,
- * ZAI thinking format, max_tokens field, tool_stream, and
+ * openai-completions.ts and reduced to the ZAI-relevant behavior: the
+ * transformMessages normalization pass, message replay
+ * (system/user/assistant/tool-result), tool JSON Schema conversion, ZAI
+ * thinking format, max_tokens field, tool_stream, and
  * stream_options.include_usage.
  */
 object OpenAiCompletionsPayload {
@@ -287,7 +288,7 @@ object OpenAiCompletionsPayload {
             )
         }
 
-        val messages = context.messages
+        val messages = transformMessages(context.messages, model) { normalizeToolCallId(it, model.provider) }
         var i = 0
         while (i < messages.size) {
             val msg = messages[i]
@@ -353,7 +354,31 @@ object OpenAiCompletionsPayload {
         return params
     }
 
-    private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage): JsonObject? {
+    /**
+ * pi's openai-completions.ts `normalizeToolCallId`: splits pipe-separated
+ * ids coming from Responses-style providers (`{call_id}|{item_id}`), where
+ * item ids can be 400+ chars of special chars, and recombines them as
+ * `{callId}_{itemId}` so multiple tool calls sharing a call_id stay unique.
+ * Results longer than 40 chars (the OpenAI limit) are truncated with a hash
+ * suffix. Plain ids are truncated to 40 chars only for provider "openai".
+ */
+private fun normalizeToolCallId(id: String, provider: String): String {
+    if ("|" in id) {
+        val separatorIndex = id.indexOf("|")
+        val callId = id.substring(0, separatorIndex).replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        val itemId = id.substring(separatorIndex + 1).replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        val combinedId = if (itemId.isNotEmpty()) "${callId}_${itemId}" else callId
+        if (combinedId.length <= 40) return combinedId
+        val hash = OpenAiResponsesShared.shortHash(id).take(8)
+        val prefix = callId.take(maxOf(1, 40 - hash.length - 1))
+        return "${prefix}_${hash}"
+    }
+
+    if (provider == "openai") return if (id.length > 40) id.take(40) else id
+    return id
+}
+
+private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage): JsonObject? {
         if (msg.content.isEmpty()) return null
         return buildJsonObject {
             put("role", "user")

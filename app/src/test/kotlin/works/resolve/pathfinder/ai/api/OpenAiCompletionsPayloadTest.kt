@@ -5,6 +5,7 @@ import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ImageContent
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
+import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
 import works.resolve.pathfinder.ai.core.Tool
@@ -354,6 +355,7 @@ class OpenAiCompletionsPayloadTest {
                     ),
                 ),
             ),
+            model = TestCatalogs.GPT_4O,
         )
         val content = b["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
         assertEquals("text", content[0].jsonObject["type"]!!.jsonPrimitive.content)
@@ -439,6 +441,230 @@ class OpenAiCompletionsPayloadTest {
         )
         val messages = b["messages"]!!.jsonArray
         assertEquals(1, messages.size, "no follow-up user image message for text-only model")
-        assertEquals("(see attached image)", messages[0].jsonObject["content"]!!.jsonPrimitive.content)
+        // transformMessages already replaced the image with pi's non-vision tool
+        // image placeholder (transform-messages.ts NON_VISION_TOOL_IMAGE_PLACEHOLDER),
+        // so the tool message carries that text.
+        assertEquals(
+            "(tool image omitted: model does not support images)",
+            messages[0].jsonObject["content"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `user image downgraded to placeholder for non-vision model and deduped`() {
+        // pi transform-messages.ts: images in user messages become a single
+        // deduplicated "(image omitted: ...)" placeholder for non-vision models.
+        val b = body(
+            Context(
+                messages = listOf(
+                    UserMessage(
+                        listOf(
+                            TextContent("what is this?"),
+                            ImageContent("aGVsbG8=", "image/png"),
+                            ImageContent("aGVsbG8=", "image/png"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val messages = b["messages"]!!.jsonArray
+        assertEquals(1, messages.size)
+        assertEquals(
+            "what is this?(image omitted: model does not support images)",
+            messages[0].jsonObject["content"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `aborted assistant turn with partial content is skipped`() {
+        // pi transform-messages.ts drops error/aborted assistant turns entirely.
+        val b = body(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("hi"),
+                    AssistantMessage(
+                        content = listOf(TextContent("partial answ")),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2",
+                        stopReason = StopReason.ABORTED,
+                    ),
+                    UserMessage.ofText("again"),
+                ),
+            ),
+        )
+        val messages = b["messages"]!!.jsonArray
+        assertEquals(2, messages.size)
+        assertEquals(
+            "user",
+            messages.map { it.jsonObject["role"]!!.jsonPrimitive.content }.distinct().single(),
+        )
+    }
+
+    @Test
+    fun `orphaned tool call gets synthetic tool result`() {
+        // pi transform-messages.ts inserts "No result provided" error tool
+        // results for tool calls left unanswered at the next user turn.
+        val b = body(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("read the file"),
+                    AssistantMessage(
+                        content = listOf(ToolCall("call_1", "read", "{}")),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2",
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                    UserMessage.ofText("any luck?"),
+                ),
+            ),
+        )
+        val messages = b["messages"]!!.jsonArray
+        assertEquals(4, messages.size)
+        assertEquals("user", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals("assistant", messages[1].jsonObject["role"]!!.jsonPrimitive.content)
+        val tool = messages[2].jsonObject
+        assertEquals("tool", tool["role"]!!.jsonPrimitive.content)
+        assertEquals("call_1", tool["tool_call_id"]!!.jsonPrimitive.content)
+        assertEquals("No result provided", tool["content"]!!.jsonPrimitive.content)
+        assertEquals("user", messages[3].jsonObject["role"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `foreign pipe tool call ids are split and applied to tool calls and results`() {
+        // pi openai-completions.ts normalizeToolCallId: Responses-style
+        // "{call_id}|{item_id}" ids from foreign models recombine to
+        // "{callId}_{itemId}"; the matching tool result id is rewritten too.
+        val b = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(ToolCall("call_123|fc_123", "read", "{}")),
+                        api = "openai-responses",
+                        provider = "github-copilot",
+                        model = "gpt-5",
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                    ToolResultMessage("call_123|fc_123", "read", listOf(TextContent("done"))),
+                ),
+            ),
+        )
+        val messages = b["messages"]!!.jsonArray
+        assertEquals(
+            "call_123_fc_123",
+            messages[0].jsonObject["tool_calls"]!!.jsonArray[0].jsonObject["id"]!!.jsonPrimitive.content,
+        )
+        assertEquals(
+            "call_123_fc_123",
+            messages[1].jsonObject["tool_call_id"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `overlong combined pipe id is truncated with hash suffix`() {
+        val itemId = "fc_" + "x".repeat(60)
+        val id = "call_123|$itemId"
+        val b = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(ToolCall(id, "read", "{}")),
+                        api = "openai-responses",
+                        provider = "github-copilot",
+                        model = "gpt-5",
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                ),
+            ),
+        )
+        val hash = OpenAiResponsesShared.shortHash(id).take(8)
+        val expected = "call_123_${hash}"
+        assertTrue(expected.length <= 40, "combined id must respect the OpenAI 40-char limit")
+        val assistant = b["messages"]!!.jsonArray[0].jsonObject
+        assertEquals(
+            expected,
+            assistant["tool_calls"]!!.jsonArray[0].jsonObject["id"]!!.jsonPrimitive.content,
+        )
+        // The synthetic orphan tool result uses the normalized id as well.
+        val tool = b["messages"]!!.jsonArray[1].jsonObject
+        assertEquals(expected, tool["tool_call_id"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `plain foreign id truncated to 40 chars only for openai provider`() {
+        val longId = "call_" + "a".repeat(40) // 45 chars
+        fun idFor(model: works.resolve.pathfinder.ai.core.Model): String = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(ToolCall(longId, "read", "{}")),
+                        api = "openai-completions",
+                        provider = "other",
+                        model = "other-model",
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                    ToolResultMessage(longId, "read", listOf(TextContent("done"))),
+                ),
+            ),
+            model = model,
+        )["messages"]!!.jsonArray[0].jsonObject["tool_calls"]!!.jsonArray[0]
+            .jsonObject["id"]!!.jsonPrimitive.content
+
+        assertEquals(longId.take(40), idFor(TestCatalogs.GPT_4O))
+        // Non-openai providers pass foreign ids through untouched.
+        assertEquals(longId, idFor(model))
+    }
+
+    @Test
+    fun `same-model tool call ids are not normalized`() {
+        // pi transform-messages.ts only normalizes ids of foreign models.
+        val id = "call_123|fc_123"
+        val b = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(ToolCall(id, "read", "{}")),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2",
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                    ToolResultMessage(id, "read", listOf(TextContent("done"))),
+                ),
+            ),
+        )
+        val messages = b["messages"]!!.jsonArray
+        assertEquals(
+            id,
+            messages[0].jsonObject["tool_calls"]!!.jsonArray[0].jsonObject["id"]!!.jsonPrimitive.content,
+        )
+        assertEquals(id, messages[1].jsonObject["tool_call_id"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `cross-model thinking replayed as plain text`() {
+        // pi transform-messages.ts converts foreign thinking blocks to text
+        // in place, so the completions adapter replays them concatenated with
+        // the assistant text and no reasoning wire field.
+        val b = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent("let me think", thinkingSignature = "reasoning_content"),
+                            TextContent("answer"),
+                        ),
+                        api = "openai-completions",
+                        provider = "github-copilot",
+                        model = "gpt-4o",
+                        stopReason = StopReason.STOP,
+                    ),
+                ),
+            ),
+        )
+        val assistant = b["messages"]!!.jsonArray[0].jsonObject
+        assertEquals("let me thinkanswer", assistant["content"]!!.jsonPrimitive.content)
+        assertFalse(assistant.containsKey("reasoning_content"))
     }
 }
