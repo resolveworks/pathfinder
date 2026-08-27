@@ -97,6 +97,7 @@ class OkHttpTransport(
                                 status = response.code,
                                 headers = headers2,
                                 body = errorBody,
+                                statusText = response.message,
                             ),
                         )
                     } else {

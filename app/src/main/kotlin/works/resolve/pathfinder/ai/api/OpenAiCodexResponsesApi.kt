@@ -103,11 +103,15 @@ internal fun getRetryAfterDelayMs(
     }
     if (retryAfter == null) return null
     retryAfter.toDoubleOrNull()?.let { seconds -> return maxOf(0.0, seconds * 1000).toLong() }
-    val date = try {
-        java.time.Instant.parse(retryAfter).toEpochMilli()
-    } catch (_: Exception) {
-        return null
-    }
+    // Pi's Date.parse accepts HTTP dates ("Wed, 21 Oct 2015 07:28:00 GMT" —
+    // the retry-after spec format) and ISO-8601. Try both (RFC 1123 first,
+    // as Instant.parse only accepts ISO-8601-with-Z).
+    val date = works.resolve.pathfinder.ai.utils.parseHttpDateMsOrNull(retryAfter)
+        ?: try {
+            java.time.Instant.parse(retryAfter).toEpochMilli()
+        } catch (_: Exception) {
+            return null
+        }
     return maxOf(0L, date - nowMs())
 }
 
@@ -232,9 +236,11 @@ internal fun mapCodexEvent(
     return event to false
 }
 
-/** Pi's parseErrorResponse friendly usage-limit message. */
-internal fun parseCodexErrorResponse(status: Int, body: String): Pair<String, String?> {
-    var message = body.ifEmpty { "Request failed" }
+/** Pi's parseErrorResponse friendly usage-limit message. `raw || statusText || "Request failed"`
+ * (openai-codex-responses.ts parseErrorResponse); the status line reason
+ * phrase surfaces when the body is empty, as fetch's Response.statusText does. */
+internal fun parseCodexErrorResponse(status: Int, body: String, statusText: String? = null): Pair<String, String?> {
+    var message = body.ifEmpty { statusText?.takeIf { it.isNotEmpty() } ?: "Request failed" }
     var friendly: String? = null
     try {
         val parsed = responsesJson.parseToJsonElement(body) as? JsonObject
@@ -544,7 +550,7 @@ class OpenAICodexResponsesApi(
                 // never retry.
                 val terminal: Exception = when (error) {
                     is ProviderHttpException -> {
-                        val (message, friendly) = parseCodexErrorResponse(error.status, error.body)
+                        val (message, friendly) = parseCodexErrorResponse(error.status, error.body, error.statusText)
                         if (friendly != null) {
                             throw ProviderStreamException(friendly)
                         }

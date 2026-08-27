@@ -8,8 +8,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.TimeoutCancellationException
@@ -429,6 +432,89 @@ class OpenAiCodexResponsesApiTest {
         val events = api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals("nope", error.error.errorMessage)
+    }
+
+    @Test
+    fun `retry-after http dates parse to the server-requested delay`() {
+        // "Wed, 21 Oct 2015 07:28:00 GMT" is 1445412480000 ms; pi's Date.parse
+        // accepts HTTP dates (the retry-after spec format), not just ISO-8601.
+        assertEquals(
+            5000L,
+            getRetryAfterDelayMs(null, "Wed, 21 Oct 2015 07:28:00 GMT") { 1_445_412_475_000L },
+        )
+        // ISO-8601 with Z still parses (Date.parse accepts both).
+        assertEquals(
+            5000L,
+            getRetryAfterDelayMs(null, "2015-10-21T07:28:00Z") { 1_445_412_475_000L },
+        )
+        // Dates already past clamp to zero.
+        assertEquals(
+            0L,
+            getRetryAfterDelayMs(null, "Wed, 21 Oct 2015 07:28:00 GMT") { 1_445_412_490_000L },
+        )
+        assertNull(getRetryAfterDelayMs(null, "not a date") { 0L })
+    }
+
+    @Test
+    fun `retry-after http dates drive the retry sleep`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueError(
+            429,
+            "rate limit",
+            headers = mapOf("retry-after" to listOf("Wed, 21 Oct 2015 07:28:00 GMT")),
+        )
+        transport.enqueueResponse(sse(*doneEvents().toTypedArray()))
+        val delays = mutableListOf<Long>()
+        val events = OpenAICodexResponsesApi(
+            transport,
+            nowMs = { 1_445_412_475_000L },
+            sleep = { delays.add(it) },
+        ).stream(
+            model,
+            context,
+            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 1),
+        ).toList()
+        assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(listOf(5000L), delays)
+    }
+
+    @Test
+    fun `empty error bodies fall back to the status line text`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueError(503, "", statusText = "Service Unavailable")
+        val events = api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.last())
+        assertEquals("Service Unavailable", error.error.errorMessage)
+
+        // Without a status line either, pi's final fallback applies.
+        val transport2 = FakeTransport()
+        transport2.enqueueError(503, "")
+        val events2 = api(transport2).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val error2 = assertIs<AssistantMessageEvent.Error>(events2.last())
+        assertEquals("Request failed", error2.error.errorMessage)
+    }
+
+    @Test
+    fun `cancellation mid-stream rethrows and never emits an error event`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueHangingResponse(
+            """{"type":"response.output_item.added","output_index":0,
+                "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
+            """{"type":"response.output_text.delta","output_index":0,"delta":"partial"}""",
+        )
+        val collected = mutableListOf<AssistantMessageEvent>()
+        val job = launch(start = CoroutineStart.UNDISPATCHED) {
+            api(transport)
+                .stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey))
+                .toList(collected)
+        }
+        // The undispatched coroutine ran until the hanging stream suspended.
+        assertTrue(collected.any { it is AssistantMessageEvent.Start })
+        job.cancelAndJoin()
+        // KDoc-documented divergence: abort maps to coroutine cancellation and
+        // rethrows CancellationException instead of emitting an Error event.
+        assertTrue(collected.none { it is AssistantMessageEvent.Error })
+        assertTrue(transport.cancelled.value)
     }
 
     // -----------------------------------------------------------------------

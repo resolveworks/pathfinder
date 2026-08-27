@@ -86,8 +86,13 @@ internal class FakeTransport : HttpStreamingTransport {
         }
     }
 
-    fun enqueueError(status: Int, body: String, headers: Map<String, List<String>> = emptyMap()) {
-        outcomes.add { throw ProviderHttpException(status, headers, body) }
+    fun enqueueError(
+        status: Int,
+        body: String,
+        headers: Map<String, List<String>> = emptyMap(),
+        statusText: String? = null,
+    ) {
+        outcomes.add { throw ProviderHttpException(status, headers, body, statusText) }
     }
 }
 

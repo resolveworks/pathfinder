@@ -101,11 +101,16 @@ class ProviderRetry(
         return null
     }
 
-    private fun parseHttpDateMs(value: String): Long = try {
-        java.time.ZonedDateTime
-            .parse(value, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
-            .toInstant().toEpochMilli()
-    } catch (_: Exception) {
-        0L
-    }
+    private fun parseHttpDateMs(value: String): Long = parseHttpDateMsOrNull(value) ?: 0L
+}
+
+/** Parses an RFC 1123 HTTP date ("Wed, 21 Oct 2015 07:28:00 GMT"), or null.
+ * Shared by [ProviderRetry] and the Codex retry-after handling (pi's Date.parse
+ * accepts HTTP dates). */
+internal fun parseHttpDateMsOrNull(value: String): Long? = try {
+    java.time.ZonedDateTime
+        .parse(value, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
+        .toInstant().toEpochMilli()
+} catch (_: Exception) {
+    null
 }
