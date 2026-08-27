@@ -34,6 +34,74 @@ class SessionCodecTest {
     }
 
     @Test
+    fun compactionEntryRoundTripsWithTailDetailsAndUsage() {
+        val entry = works.resolve.pathfinder.data.sessions.CompactionEntry(
+            id = "c1",
+            parentId = "m1",
+            timestamp = 5L,
+            summary = "Summary of 1,a,2,b",
+            retainedTail = listOf(
+                UserMessage.ofText("retained user", 4L),
+                assistant("retained assistant", 4L),
+            ),
+            tokensBefore = 1234,
+            details = works.resolve.pathfinder.agent.compaction.CompactionDetails(
+                readFiles = listOf("a.ts", "b.ts"),
+                modifiedFiles = listOf("c.ts"),
+            ),
+            usage = Usage(input = 10, output = 20, totalTokens = 30, cost = Cost(1.0, 2.0, 0.0, 0.0, 3.0)),
+        )
+        val session = Session("sess-2", "t", 1, 2, listOf(entry), "c1")
+
+        val decoded = SessionCodec.decode(SessionCodec.encode(session))
+        assertEquals(entry, decoded.entries.single())
+
+        // Details and usage stay optional; a minimal entry round-trips too.
+        val minimal = entry.copy(details = null, usage = null)
+        val decodedMinimal = SessionCodec.decode(
+            SessionCodec.encode(session.copy(entries = listOf(minimal))),
+        )
+        assertEquals(minimal, decodedMinimal.entries.single())
+    }
+
+    @Test
+    fun compactionEntryRejectsMalformedPayloads() {
+        fun payload(entries: String) = """{"format":2,"id":"sess-3","title":"t","createdAt":1,"updatedAt":2,"entries":[$entries],"leafId":"c1"}"""
+
+        // Missing required summary is rejected, nothing silently defaulted.
+        assertFailsWith<SessionDataException> {
+            SessionCodec.decode(
+                payload(
+                    "{" +
+                        "\"type\":\"compaction\"," +
+                        "\"id\":\"c1\"," +
+                        "\"timestamp\":5," +
+                        "\"tokensBefore\":1234," +
+                        "\"retainedTail\":[]" +
+                        "}",
+                ),
+            )
+        }
+
+        // Malformed details (non-array readFiles) are rejected.
+        assertFailsWith<SessionDataException> {
+            SessionCodec.decode(
+                payload(
+                    "{" +
+                        "\"type\":\"compaction\"," +
+                        "\"id\":\"c1\"," +
+                        "\"timestamp\":5," +
+                        "\"summary\":\"s\"," +
+                        "\"tokensBefore\":1234," +
+                        "\"retainedTail\":[]," +
+                        "\"details\":{\"readFiles\":\"a.ts\",\"modifiedFiles\":[]}" +
+                        "}",
+                ),
+            )
+        }
+    }
+
+    @Test
     fun responsesReplayFieldsRoundTripAndStayOptional() {
         val message = assistant("hi", 2L).copy(
             responseId = "resp_1",

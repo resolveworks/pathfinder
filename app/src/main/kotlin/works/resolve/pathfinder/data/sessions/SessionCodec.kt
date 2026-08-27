@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.data.sessions
 
+import works.resolve.pathfinder.agent.compaction.CompactionDetails
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.Content
 import works.resolve.pathfinder.ai.core.ContentType
@@ -90,6 +91,29 @@ internal object SessionCodec {
             put("timestamp", entry.timestamp)
             put("message", encodeMessage(entry.message))
         }
+
+        // pi harness CompactionEntry (session/types.ts): summary + retained
+        // tail + compaction metadata. Added to format 2 as a strict superset
+        // (existing v2 files contain no compaction entries, so they remain
+        // decodable; files containing compaction entries are rejected by
+        // older readers via the unknown-entry-type rule — no migration path,
+        // per repo policy).
+        is CompactionEntry -> buildJsonObject {
+            put("type", "compaction")
+            put("id", entry.id)
+            entry.parentId?.let { put("parentId", it) }
+            put("timestamp", entry.timestamp)
+            put("summary", entry.summary)
+            put("tokensBefore", entry.tokensBefore)
+            put("retainedTail", JsonArray(entry.retainedTail.map(::encodeMessage)))
+            entry.details?.let {
+                putJsonObject("details") {
+                    put("readFiles", JsonArray(it.readFiles.map(::JsonPrimitive)))
+                    put("modifiedFiles", JsonArray(it.modifiedFiles.map(::JsonPrimitive)))
+                }
+            }
+            entry.usage?.let { put("usage", buildJsonObject { putUsage(it) }) }
+        }
     }
 
     private fun decodeEntry(element: JsonElement): SessionEntry {
@@ -107,6 +131,25 @@ internal object SessionCodec {
                 ),
             )
 
+            "compaction" -> CompactionEntry(
+                id = id,
+                parentId = obj.string("parentId"),
+                timestamp = obj.long("timestamp")
+                    ?: throw SessionDataException("Malformed session data: entry missing timestamp"),
+                summary = obj.string("summary")
+                    ?: throw SessionDataException("Malformed session data: compaction entry missing summary"),
+                retainedTail = (obj["retainedTail"] as? JsonArray ?: emptyList()).map(::decodeMessage),
+                tokensBefore = obj.int("tokensBefore")
+                    ?: throw SessionDataException("Malformed session data: compaction entry missing tokensBefore"),
+                details = (obj["details"] as? JsonObject)?.let { d ->
+                    CompactionDetails(
+                        readFiles = d.stringList("readFiles"),
+                        modifiedFiles = d.stringList("modifiedFiles"),
+                    )
+                },
+                usage = obj["usage"]?.let(::decodeUsage),
+            )
+
             else -> throw SessionDataException("Unknown entry type: $type")
         }
     }
@@ -116,6 +159,23 @@ internal object SessionCodec {
         long(key) ?: throw SessionDataException("Malformed session data: missing $what")
 
     // ---- Messages ----
+
+    private fun kotlinx.serialization.json.JsonObjectBuilder.putUsage(usage: Usage) {
+        put("input", usage.input)
+        put("output", usage.output)
+        put("cacheRead", usage.cacheRead)
+        put("cacheWrite", usage.cacheWrite)
+        if (usage.cacheWrite1h > 0) put("cacheWrite1h", usage.cacheWrite1h)
+        put("reasoning", usage.reasoning)
+        put("totalTokens", usage.totalTokens)
+        putJsonObject("cost") {
+            put("input", usage.cost.input)
+            put("output", usage.cost.output)
+            put("cacheRead", usage.cost.cacheRead)
+            put("cacheWrite", usage.cost.cacheWrite)
+            put("total", usage.cost.total)
+        }
+    }
 
     private fun encodeMessage(message: Message): JsonObject = when (message) {
         is UserMessage -> buildJsonObject {
@@ -131,22 +191,7 @@ internal object SessionCodec {
             put("api", message.api)
             put("provider", message.provider)
             put("model", message.model)
-            putJsonObject("usage") {
-                put("input", message.usage.input)
-                put("output", message.usage.output)
-                put("cacheRead", message.usage.cacheRead)
-                put("cacheWrite", message.usage.cacheWrite)
-                if (message.usage.cacheWrite1h > 0) put("cacheWrite1h", message.usage.cacheWrite1h)
-                put("reasoning", message.usage.reasoning)
-                put("totalTokens", message.usage.totalTokens)
-                putJsonObject("cost") {
-                    put("input", message.usage.cost.input)
-                    put("output", message.usage.cost.output)
-                    put("cacheRead", message.usage.cost.cacheRead)
-                    put("cacheWrite", message.usage.cost.cacheWrite)
-                    put("total", message.usage.cost.total)
-                }
-            }
+            putJsonObject("usage") { putUsage(message.usage) }
             put("stopReason", message.stopReason.name)
             message.errorMessage?.let { put("errorMessage", it) }
             message.rawStopReason?.let { put("rawStopReason", it) }
@@ -245,6 +290,16 @@ internal object SessionCodec {
     private fun decodeContentList(element: JsonElement?): List<Content> {
         val array = element as? JsonArray ?: throw SessionDataException("Malformed session data: missing content")
         return array.map(::decodeContent)
+    }
+
+    /** Strict string array; absence is an empty list, malformed values are rejected. */
+    private fun JsonObject.stringList(key: String): List<String> {
+        val array = this[key] as? JsonArray
+            ?: throw SessionDataException("Malformed session data: $key must be an array")
+        return array.map { value ->
+            (value as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw SessionDataException("Malformed session data: $key must contain strings")
+        }
     }
 
     /** Optional string array; absence uses the current model default. */
