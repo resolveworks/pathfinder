@@ -13,6 +13,7 @@ import works.resolve.pathfinder.ai.core.InputModality
 import works.resolve.pathfinder.ai.core.MaxTokensField
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelCost
+import works.resolve.pathfinder.ai.core.ModelCostTier
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.OpenAiCompletionsCompat
 import works.resolve.pathfinder.ai.core.OpenAiResponsesCompat
@@ -297,8 +298,22 @@ private data class CostDto(
     val output: Double = 0.0,
     val cacheRead: Double = 0.0,
     val cacheWrite: Double = 0.0,
+    /** pi's ModelCost.tiers pass-through; pi's generated data currently ships none. */
+    val tiers: List<CostTierDto> = emptyList(),
 ) {
-    fun toDomain() = ModelCost(input, output, cacheRead, cacheWrite)
+    fun toDomain() = ModelCost(input, output, cacheRead, cacheWrite, tiers.map { it.toDomain() })
+}
+
+/** pi's ModelCostTier. */
+@Serializable
+private data class CostTierDto(
+    val input: Double,
+    val output: Double,
+    val cacheRead: Double,
+    val cacheWrite: Double,
+    val inputTokensAbove: Int,
+) {
+    fun toDomain() = ModelCostTier(input, output, cacheRead, cacheWrite, inputTokensAbove)
 }
 
 @Serializable

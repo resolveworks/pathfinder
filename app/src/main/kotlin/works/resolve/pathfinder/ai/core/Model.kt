@@ -30,13 +30,36 @@ data class Model(
     val headers: Map<String, String> = emptyMap(),
 )
 
-/** Per-million-token reference rates. */
+/**
+ * Per-million-token reference rates (pi's ModelCostRates, types.ts:810-815).
+ */
+interface ModelCostRates {
+    val input: Double
+    val output: Double
+    val cacheRead: Double
+    val cacheWrite: Double
+}
+
 data class ModelCost(
-    val input: Double = 0.0,
-    val output: Double = 0.0,
-    val cacheRead: Double = 0.0,
-    val cacheWrite: Double = 0.0,
-)
+    override val input: Double = 0.0,
+    override val output: Double = 0.0,
+    override val cacheRead: Double = 0.0,
+    override val cacheWrite: Double = 0.0,
+    /** Request-wide pricing tiers (pi's ModelCost.tiers); currently none ship in pi's data. */
+    val tiers: List<ModelCostTier> = emptyList(),
+) : ModelCostRates
+
+/**
+ * pi's ModelCostTier (types.ts:816-819): a rate set applied to the full request
+ * when total input usage exceeds [inputTokensAbove].
+ */
+data class ModelCostTier(
+    override val input: Double,
+    override val output: Double,
+    override val cacheRead: Double,
+    override val cacheWrite: Double,
+    val inputTokensAbove: Int,
+) : ModelCostRates
 
 /** Pi's SessionAffinityFormat: "openai" | "openai-nosession" | "openrouter". */
 enum class SessionAffinityFormat { OPENAI, OPENAI_NOSESSION, OPENROUTER }
@@ -110,14 +133,32 @@ sealed interface ChatTemplateKwargValue {
 
 /**
  * Computes reference cost in USD from token usage and the model's per-million
- * rates. Mirrors pi's calculateCost (tiers and 1h cache writes omitted).
+ * rates. Mirrors pi's calculateCost (packages/ai/src/models.ts:879-899): tier
+ * selection applies the highest `inputTokensAbove` threshold the request's
+ * total input usage strictly exceeds to the full request, and Anthropic's 1h
+ * cache writes are priced at 2x base input while the remainder uses the
+ * cacheWrite rate. With no tiers and no 1h split the math reduces to the
+ * plain per-component products.
  */
 fun calculateCost(model: Model, usage: Usage): Cost {
+    val inputTokens = usage.input + usage.cacheRead + usage.cacheWrite
+    var rates: ModelCostRates = model.cost
+    var matchedThreshold = -1
+    for (tier in model.cost.tiers) {
+        if (inputTokens > tier.inputTokensAbove && tier.inputTokensAbove > matchedThreshold) {
+            rates = tier
+            matchedThreshold = tier.inputTokensAbove
+        }
+    }
+
+    // Anthropic charges 2x base input for 1h cache writes.
+    val longWrite = usage.cacheWrite1h
+    val shortWrite = usage.cacheWrite - longWrite
     val cost = Cost(
-        input = (model.cost.input / 1_000_000.0) * usage.input,
-        output = (model.cost.output / 1_000_000.0) * usage.output,
-        cacheRead = (model.cost.cacheRead / 1_000_000.0) * usage.cacheRead,
-        cacheWrite = (model.cost.cacheWrite / 1_000_000.0) * usage.cacheWrite,
+        input = (rates.input / 1_000_000.0) * usage.input,
+        output = (rates.output / 1_000_000.0) * usage.output,
+        cacheRead = (rates.cacheRead / 1_000_000.0) * usage.cacheRead,
+        cacheWrite = (rates.cacheWrite * shortWrite + rates.input * 2 * longWrite) / 1_000_000.0,
     )
     return cost.copy(total = cost.input + cost.output + cost.cacheRead + cost.cacheWrite)
 }

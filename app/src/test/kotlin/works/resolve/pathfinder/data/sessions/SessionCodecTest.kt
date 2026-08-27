@@ -21,7 +21,7 @@ class SessionCodecTest {
         api = "openai-completions",
         provider = "zai",
         model = "glm-4.6",
-        usage = Usage(1, 2, 0, 0, 0, 3, Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
+        usage = Usage(input = 1, output = 2, totalTokens = 3, cost = Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
         stopReason = StopReason.STOP,
         timestamp = ts,
     )
@@ -218,7 +218,7 @@ class SessionCodecTest {
             api = "api",
             provider = "p",
             model = "m",
-            usage = Usage(1, 2, 0, 0, 0, 3, Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
+            usage = Usage(input = 1, output = 2, totalTokens = 3, cost = Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
             stopReason = StopReason.STOP,
             timestamp = 1L,
         )
@@ -259,7 +259,7 @@ class SessionCodecTest {
             api = "api",
             provider = "p",
             model = "m",
-            usage = Usage(1, 2, 0, 0, 0, 3, Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
+            usage = Usage(input = 1, output = 2, totalTokens = 3, cost = Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
             stopReason = StopReason.STOP,
             timestamp = 1L,
         )
