@@ -5,6 +5,7 @@ import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
+import works.resolve.pathfinder.ai.core.ToolChoice
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
@@ -594,6 +595,17 @@ class OpenAiCompletionsStreamTest {
         api(transport).streamSimple(model, context, SimpleStreamOptions(apiKey = "k")).toList()
         val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
         assertEquals(model.maxTokens.toLong(), body["max_tokens"]!!.jsonPrimitive.longOrNull)
+    }
+
+    @Test
+    fun `streamSimple forwards toolChoice to the payload`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        api(transport)
+            .streamSimple(model, context, SimpleStreamOptions(apiKey = "k", toolChoice = ToolChoice.Required))
+            .toList()
+        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertEquals("required", body["tool_choice"]!!.jsonPrimitive.content)
     }
 
     @Test
