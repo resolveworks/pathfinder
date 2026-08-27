@@ -136,6 +136,7 @@ internal object SessionCodec {
                 put("output", message.usage.output)
                 put("cacheRead", message.usage.cacheRead)
                 put("cacheWrite", message.usage.cacheWrite)
+                if (message.usage.cacheWrite1h > 0) put("cacheWrite1h", message.usage.cacheWrite1h)
                 put("reasoning", message.usage.reasoning)
                 put("totalTokens", message.usage.totalTokens)
                 putJsonObject("cost") {
@@ -229,6 +230,7 @@ internal object SessionCodec {
             output = requireInt("output"),
             cacheRead = requireInt("cacheRead"),
             cacheWrite = requireInt("cacheWrite"),
+            cacheWrite1h = obj.int("cacheWrite1h") ?: 0,
             reasoning = requireInt("reasoning"),
             totalTokens = requireInt("totalTokens"),
             cost = cost,

@@ -55,9 +55,6 @@ import kotlinx.serialization.json.longOrNull
  *   a protocol error and tool arguments are accumulated as the raw JSON
  *   string, matching the ported ToolCall model; a blank buffer finalizes as
  *   `{}`.
- * - pi additionally tracks `cacheWrite1h` (cache_creation.ephemeral_1h_input_
- *   tokens); Usage has no such component, so only the aggregate cacheWrite is
- *   recorded (totalTokens sums the shared components, like pi).
  * - pi's SDK client sends a pi User-Agent; the OkHttp transport's own default
  *   user agent stands.
  * - github-copilot dynamic headers are ported
@@ -448,6 +445,9 @@ internal class AnthropicStreamState(
                 output = messageUsage.intOrZero("output_tokens"),
                 cacheRead = messageUsage.intOrZero("cache_read_input_tokens"),
                 cacheWrite = messageUsage.intOrZero("cache_creation_input_tokens"),
+                // pi anthropic-messages.ts:606 — cache_creation.ephemeral_1h_input_tokens || 0.
+                cacheWrite1h = (messageUsage["cache_creation"] as? JsonObject)
+                    ?.intOrZero("ephemeral_1h_input_tokens") ?: 0,
             )
             usage = withTotal(usage, model)
         }

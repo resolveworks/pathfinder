@@ -103,6 +103,12 @@ data class Usage(
     val output: Int = 0,
     val cacheRead: Int = 0,
     val cacheWrite: Int = 0,
+    /**
+     * Subset of `cacheWrite` written with 1h retention; only Anthropic
+     * reports this split (pi types.ts Usage.cacheWrite1h). Non-Anthropic
+     * adapters leave it at 0, matching pi's undefined.
+     */
+    val cacheWrite1h: Int = 0,
     val reasoning: Int = 0,
     val totalTokens: Int = 0,
     val cost: Cost = Cost(),

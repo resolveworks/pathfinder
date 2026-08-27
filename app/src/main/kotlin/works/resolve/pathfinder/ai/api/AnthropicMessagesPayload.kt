@@ -40,8 +40,7 @@ import kotlinx.serialization.json.put
  * - `strict` tool JSON-schema sampling is not ported; pi's default is
  *   `supportsStrictTools: false`, so wire output is identical for defaults.
  * - pi's `metadata.user_id` option is not ported (no metadata option here).
- * - Thinking content stays a raw text/signature pair; pi additionally tracks
- *   a separate `cacheWrite1h` usage component (see AnthropicMessagesApi).
+ * - Thinking content stays a raw text/signature pair.
  */
 
 
