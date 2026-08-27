@@ -24,6 +24,9 @@ class SettingsRepository(
         val RETRY_ENABLED = booleanPreferencesKey("retry_enabled")
         val RETRY_MAX_RETRIES = intPreferencesKey("retry_max_retries")
         val RETRY_BASE_DELAY_MS = longPreferencesKey("retry_base_delay_ms")
+        val COMPACTION_ENABLED = booleanPreferencesKey("compaction_enabled")
+        val COMPACTION_RESERVE_TOKENS = intPreferencesKey("compaction_reserve_tokens")
+        val COMPACTION_KEEP_RECENT_TOKENS = intPreferencesKey("compaction_keep_recent_tokens")
     }
 
     val settings: Flow<ModelSettings> = dataStore.data.map { prefs ->
@@ -37,6 +40,11 @@ class SettingsRepository(
                 maxRetries = prefs[Keys.RETRY_MAX_RETRIES] ?: 3,
                 baseDelayMs = prefs[Keys.RETRY_BASE_DELAY_MS] ?: 2000,
             ),
+            compaction = works.resolve.pathfinder.agent.compaction.CompactionSettings(
+                enabled = prefs[Keys.COMPACTION_ENABLED] ?: true,
+                reserveTokens = prefs[Keys.COMPACTION_RESERVE_TOKENS] ?: 16384,
+                keepRecentTokens = prefs[Keys.COMPACTION_KEEP_RECENT_TOKENS] ?: 20000,
+            ),
         )
     }
 
@@ -45,6 +53,14 @@ class SettingsRepository(
             prefs[Keys.RETRY_ENABLED] = settings.enabled
             prefs[Keys.RETRY_MAX_RETRIES] = settings.maxRetries
             prefs[Keys.RETRY_BASE_DELAY_MS] = settings.baseDelayMs
+        }
+    }
+
+    override suspend fun setCompactionSettings(settings: works.resolve.pathfinder.agent.compaction.CompactionSettings) {
+        dataStore.edit { prefs ->
+            prefs[Keys.COMPACTION_ENABLED] = settings.enabled
+            prefs[Keys.COMPACTION_RESERVE_TOKENS] = settings.reserveTokens
+            prefs[Keys.COMPACTION_KEEP_RECENT_TOKENS] = settings.keepRecentTokens
         }
     }
 

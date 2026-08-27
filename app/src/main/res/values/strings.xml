@@ -5,6 +5,8 @@
     <string name="chat_title">Chat</string>
     <string name="chat_empty">Start the conversation below</string>
     <string name="chat_retrying">Retrying… attempt %1$d of %2$d</string>
+    <string name="chat_compacting">Compacting…</string>
+    <string name="chat_compacted">Compacted</string>
     <string name="composer_hint">Message</string>
     <string name="tree_title">Session tree</string>
     <string name="tree_open">Show session tree</string>

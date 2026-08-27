@@ -1,6 +1,8 @@
 package works.resolve.pathfinder.data.sessions
 
+import works.resolve.pathfinder.agent.compaction.CompactionDetails
 import works.resolve.pathfinder.ai.core.Message
+import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.utils.uuidv7
 
 /** Node of the conversation tree; children are sorted oldest-first. */
@@ -34,6 +36,34 @@ class Conversation(
             parentId = leafId,
             timestamp = now(),
             message = message,
+        )
+        return Conversation(entries + entry, entry.id, nextId, now)
+    }
+
+    /**
+     * Appends a compaction cut as a child of the current leaf and advances
+     * the leaf to it (pi's sessionManager.appendCompaction, session-manager.ts
+     * ~1098). Divergences: upstream stores `firstKeptEntryId`/`fromHook` on
+     * the entry — pathfinder's [CompactionEntry] keeps the retained tail
+     * directly (harness entry shape) and has no extension producers, so both
+     * parameters are absent.
+     */
+    fun appendCompaction(
+        summary: String,
+        retainedTail: List<Message>,
+        tokensBefore: Int,
+        details: CompactionDetails? = null,
+        usage: Usage? = null,
+    ): Conversation {
+        val entry = CompactionEntry(
+            id = nextId(),
+            parentId = leafId,
+            timestamp = now(),
+            summary = summary,
+            retainedTail = retainedTail,
+            tokensBefore = tokensBefore,
+            details = details,
+            usage = usage,
         )
         return Conversation(entries + entry, entry.id, nextId, now)
     }

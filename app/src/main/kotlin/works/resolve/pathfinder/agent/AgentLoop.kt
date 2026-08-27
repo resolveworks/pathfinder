@@ -8,6 +8,7 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.ToolCall
+import works.resolve.pathfinder.ai.core.Usage
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -81,6 +82,82 @@ sealed class AgentEvent {
         val attempt: Int,
         val finalError: String? = null,
     ) : AgentEvent()
+
+    /**
+     * Trigger of a compaction run, pi's compaction event reason union
+     * (agent-session.ts:156/161). [CompactionReason.MANUAL] is carried for
+     * event-shape fidelity only: pi's manual `/compact` entry point
+     * (`AgentSession.compact`, agent-session.ts ~1919) has no command
+     * surface in pathfinder, so this port never emits it.
+     */
+    enum class CompactionReason { MANUAL, THRESHOLD, OVERFLOW }
+
+    /**
+     * Payload of [AgentEvent.CompactionEnd], pi's `CompactionResult`
+     * (coding-agent core/compaction/compaction.ts) reduced to the fields of
+     * the landed harness `CompactResult` plus `estimatedTokensAfter`:
+     * `firstKeptEntryId` is not ported because pathfinder's
+     * [works.resolve.pathfinder.data.sessions.CompactionEntry] stores the
+     * retained tail directly (harness entry shape) instead of a kept-entry
+     * pointer.
+     */
+    data class CompactionResult(
+        /** Summary text that replaces the compacted history. */
+        val summary: String,
+        /** Estimated context tokens before compaction. */
+        val tokensBefore: Int,
+        /** Estimated context tokens of the rebuilt transcript. */
+        val estimatedTokensAfter: Int,
+        /** Usage of the summary LLM call(s), when reported. */
+        val usage: Usage?,
+        /** File-operation details stored on the compaction entry. */
+        val details: works.resolve.pathfinder.agent.compaction.CompactionDetails?,
+    )
+
+    /**
+     * Automatic compaction started, pi's `compaction_start`
+     * (agent-session.ts:156). Emitted by [AgentSession] between agent runs.
+     */
+    data class CompactionStart(
+        val reason: CompactionReason,
+    ) : AgentEvent()
+
+    /**
+     * Compaction ended — succeeded, was aborted, or failed. Pi's
+     * `compaction_end` (agent-session.ts:161); `result`/`errorMessage`
+     * correspond to upstream's optional fields.
+     */
+    data class CompactionEnd(
+        val reason: CompactionReason,
+        val result: CompactionResult? = null,
+        val aborted: Boolean,
+        val willRetry: Boolean,
+        val errorMessage: String? = null,
+    ) : AgentEvent()
+
+    /**
+     * A summarization retry is scheduled (summary LLM call backed off),
+     * pi's `summarization_retry_scheduled` (agent-session.ts:171).
+     */
+    data class SummarizationRetryScheduled(
+        val attempt: Int,
+        val maxAttempts: Int,
+        val delayMs: Long,
+        val errorMessage: String,
+    ) : AgentEvent()
+
+    /**
+     * A summarization retry attempt starts, pi's
+     * `summarization_retry_attempt_start` (agent-session.ts:177) reduced to
+     * the compaction source: the `branchSummary` source has no counterpart
+     * in pathfinder (branch summarization is not ported).
+     */
+    data class SummarizationRetryAttemptStart(
+        val reason: CompactionReason,
+    ) : AgentEvent()
+
+    /** A summarization retry sequence finished, pi's `summarization_retry_finished` (agent-session.ts:183). */
+    object SummarizationRetryFinished : AgentEvent()
 }
 
 /**

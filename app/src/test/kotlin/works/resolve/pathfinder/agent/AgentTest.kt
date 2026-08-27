@@ -8,7 +8,6 @@ import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.UserMessage
-import works.resolve.pathfinder.data.settings.RetrySettings
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -70,15 +69,11 @@ class AgentTest {
 
     private fun agent(
         streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
-        // Retry is disabled by default so these tests exercise one run per
-        // prompt; auto-retry has its own suite (AgentAutoRetryTest).
-        retrySettings: RetrySettings = RetrySettings(enabled = false),
         streamFn: StreamFn,
     ) = Agent(
         model = model,
         systemPrompt = "be brief",
         streamOptions = streamOptions,
-        retrySettings = retrySettings,
         streamFn = streamFn,
     )
 
@@ -95,7 +90,7 @@ class AgentTest {
         val collector = launch { agent.events.toList(events) }
         yield() // let the collector subscribe before the run starts
 
-        agent.prompt("hi")
+        agent.prompt(listOf(UserMessage.ofText("hi")))
         collector.cancelAndJoin()
 
         val types = events.map { it::class.simpleName }
@@ -126,7 +121,7 @@ class AgentTest {
             is AssistantMessage -> (msg.content.single() as TextContent).text
             else -> "tool-result"
         }
-        agent.prompt("again")
+        agent.prompt(listOf(UserMessage.ofText("again")))
         val texts = contexts.map { ctx -> ctx.map(::textOf) }
         assertEquals(listOf(listOf("hi"), listOf("hi", "hello", "again")), texts)
     }
@@ -144,7 +139,7 @@ class AgentTest {
         }
         yield() // subscribe before the run starts
 
-        agent.prompt("hi")
+        agent.prompt(listOf(UserMessage.ofText("hi")))
         val observed = sawAssistantEnd.await()
         // The assistant message is committed and streaming cleared before the
         // event reaches observers; the run itself is still streaming.
@@ -174,7 +169,7 @@ class AgentTest {
         assertNull(agent.state.value.errorMessage)
 
         // Mutation while active is rejected.
-        val job = launch { agent.prompt("hi") }
+        val job = launch { agent.prompt(listOf(UserMessage.ofText("hi"))) }
         agent.state.first { it.isStreaming }
         try {
             agent.replaceTranscript(emptyList())
@@ -206,12 +201,12 @@ class AgentTest {
             providerStarted.complete(Unit)
             hangingStream()
         }
-        val job = launch { agent.prompt("first") }
+        val job = launch { agent.prompt(listOf(UserMessage.ofText("first"))) }
         providerStarted.await()
         agent.state.first { it.isStreaming }
 
         try {
-            agent.prompt("second")
+            agent.prompt(listOf(UserMessage.ofText("second")))
             fail("expected IllegalStateException")
         } catch (e: IllegalStateException) {
             assertTrue(e.message!!.contains("already processing"))
@@ -233,7 +228,7 @@ class AgentTest {
         val collector = launch { agent.events.toList(events) }
         yield() // subscribe before the run starts
 
-        val deferred = async { agent.prompt("hi") }
+        val deferred = async { agent.prompt(listOf(UserMessage.ofText("hi"))) }
         providerStarted.await()
 
         agent.abort()
@@ -266,7 +261,7 @@ class AgentTest {
             providerStarted.complete(Unit)
             hangingStream()
         }
-        val job = launch { agent.prompt("hi") }
+        val job = launch { agent.prompt(listOf(UserMessage.ofText("hi"))) }
         providerStarted.await()
 
         job.cancelAndJoin()
@@ -292,7 +287,7 @@ class AgentTest {
         yield() // subscribe before the run starts
 
         // Ordinary failures resolve normally rather than throwing.
-        agent.prompt("hi")
+        agent.prompt(listOf(UserMessage.ofText("hi")))
         collector.cancelAndJoin()
 
         // Full lifecycle, mirroring pi: agent_start/turn_start, user prompt pair,
@@ -326,10 +321,10 @@ class AgentTest {
             if (call == 1) flowOf(AssistantMessageEvent.Error(StopReason.ERROR, error)) else okStream()
         })
 
-        agent.prompt("hi")
+        agent.prompt(listOf(UserMessage.ofText("hi")))
         assertEquals("500 upstream", agent.state.value.errorMessage)
 
-        agent.prompt("again")
+        agent.prompt(listOf(UserMessage.ofText("again")))
         assertNull(agent.state.value.errorMessage)
         assertEquals(4, agent.state.value.messages.size)
     }

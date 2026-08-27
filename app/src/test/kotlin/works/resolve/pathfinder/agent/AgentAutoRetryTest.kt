@@ -26,12 +26,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Auto-retry wiring of [Agent], porting pi's agent-session auto-retry tests'
- * scenarios (agent-session.ts `_handlePostAgentRun` / `_prepareRetry` /
+ * Auto-retry wiring of [AgentSession], porting pi's agent-session auto-retry
+ * tests' scenarios (agent-session.ts `_handlePostAgentRun` / `_prepareRetry` /
  * success-reset at ~684): transient errors are retried as continuations with
  * exponential backoff, non-retryable and overflow errors are not, the budget
  * is capped, abort cancels the backoff, and the error message leaves agent
- * state while the session layer keeps it (asserted in ChatViewModelTest).
+ * state while the session tree keeps it (asserted in ChatViewModelTest).
  */
 class AgentAutoRetryTest {
 
@@ -74,20 +74,22 @@ class AgentAutoRetryTest {
         }
     }
 
-    private fun agent(
+    private fun session(
         streams: ScriptedStreams,
         retrySettings: RetrySettings = RetrySettings(),
         sleep: suspend (Long) -> Unit = { },
-    ) = Agent(
-        model = model,
-        systemPrompt = "be brief",
-        streamOptions = SimpleStreamOptions(),
+    ) = AgentSession(
+        agent = Agent(
+            model = model,
+            systemPrompt = "be brief",
+            streamOptions = SimpleStreamOptions(),
+            streamFn = streams.streamFn,
+        ),
         retrySettings = retrySettings,
         sleep = sleep,
-        streamFn = streams.streamFn,
     )
 
-    private suspend fun collectEvents(agent: Agent): MutableList<AgentEvent> = coroutineScope {
+    private suspend fun collectEvents(agent: AgentSession): MutableList<AgentEvent> = coroutineScope {
         val events = mutableListOf<AgentEvent>()
         val collector = launch { agent.events.toList(events) }
         yield()
@@ -103,7 +105,7 @@ class AgentAutoRetryTest {
             streams.add(okStream("recovered"))
         }
         val delays = mutableListOf<Long>()
-        val agent = agent(streams, sleep = { delays.add(it) })
+        val agent = session(streams, sleep = { delays.add(it) })
 
         val events = collectEvents(agent)
 
@@ -134,7 +136,7 @@ class AgentAutoRetryTest {
         val streams = ScriptedStreams().apply {
             streams.add(errorStream("insufficient_quota: billing"))
         }
-        val agent = agent(streams)
+        val agent = session(streams)
         val events = collectEvents(agent)
 
         assertTrue(events.filterIsInstance<AgentEvent.AutoRetryStart>().isEmpty())
@@ -148,7 +150,7 @@ class AgentAutoRetryTest {
         val streams = ScriptedStreams().apply {
             streams.add(errorStream("prompt is too long: 300000 tokens > 200000 maximum"))
         }
-        val agent = agent(streams)
+        val agent = session(streams)
         val events = collectEvents(agent)
 
         assertTrue(events.filterIsInstance<AgentEvent.AutoRetryStart>().isEmpty())
@@ -161,7 +163,7 @@ class AgentAutoRetryTest {
         val streams = ScriptedStreams().apply {
             streams.add(errorStream("terminated"))
         }
-        val agent = agent(streams, retrySettings = RetrySettings(enabled = false))
+        val agent = session(streams, retrySettings = RetrySettings(enabled = false))
         val events = collectEvents(agent)
 
         assertTrue(events.filterIsInstance<AgentEvent.AutoRetryStart>().isEmpty())
@@ -175,7 +177,7 @@ class AgentAutoRetryTest {
             repeat(4) { streams.add(errorStream("terminated")) }
         }
         val delays = mutableListOf<Long>()
-        val agent = agent(streams, sleep = { delays.add(it) })
+        val agent = session(streams, sleep = { delays.add(it) })
 
         val events = collectEvents(agent)
 
@@ -193,13 +195,37 @@ class AgentAutoRetryTest {
     }
 
     @Test
+    fun `prompt creates the user message and the session tree keeps retried errors`() = runTest {
+        val streams = ScriptedStreams().apply {
+            streams.add(errorStream("terminated"))
+            streams.add(okStream("recovered"))
+        }
+        val agent = session(streams, sleep = { })
+        agent.prompt("hi")
+
+        // The prompt text becomes the user message (pi's AgentSession.prompt)
+        // and every message_end lands in the session tree, including the
+        // error removed from agent state by the retry.
+        val entries = agent.conversation.activeEntries()
+        assertEquals(3, entries.size)
+        val user = entries[0] as works.resolve.pathfinder.data.sessions.MessageEntry
+        val text = ((user.message as works.resolve.pathfinder.ai.core.UserMessage).content.single() as TextContent).text
+        assertEquals("hi", text)
+        val failed = (entries[1] as works.resolve.pathfinder.data.sessions.MessageEntry).message as AssistantMessage
+        assertEquals(StopReason.ERROR, failed.stopReason)
+        assertEquals(StopReason.STOP, (entries[2] as works.resolve.pathfinder.data.sessions.MessageEntry).message.let { (it as AssistantMessage).stopReason })
+        // Agent state keeps only the live transcript (user + recovered).
+        assertEquals(2, agent.state.value.messages.size)
+    }
+
+    @Test
     fun `abort during backoff cancels the retry and reports it`() = runTest {
         val streams = ScriptedStreams().apply {
             streams.add(errorStream("terminated"))
             streams.add(okStream("never reached"))
         }
         val started = CompletableDeferred<Unit>()
-        val agent = agent(streams, sleep = {
+        val agent = session(streams, sleep = {
             started.complete(Unit)
             awaitCancellation()
         })

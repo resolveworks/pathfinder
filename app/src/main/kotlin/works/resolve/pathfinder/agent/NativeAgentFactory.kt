@@ -1,7 +1,6 @@
 package works.resolve.pathfinder.agent
 
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
-import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.models.Models
 import works.resolve.pathfinder.ai.models.ResolvedAuth
@@ -17,6 +16,7 @@ import works.resolve.pathfinder.ai.auth.CatalogAuthProviderRef
 import works.resolve.pathfinder.ai.auth.CredentialStore
 import works.resolve.pathfinder.ai.auth.NoopAuthContext
 import works.resolve.pathfinder.ai.auth.resolveProviderAuth
+import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.settings.ModelSettings
 
 /**
@@ -45,7 +45,11 @@ class NativeAgentFactory(
     private val authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
 ) : AgentFactory {
 
-    override fun create(settings: ModelSettings, sessionId: String, initialTranscript: List<Message>): Agent {
+    override fun create(
+        settings: ModelSettings,
+        sessionId: String,
+        conversation: Conversation,
+    ): AgentSession {
         val entry = catalog.getProvider(settings.providerId)
             ?: throw IllegalArgumentException("Unsupported provider: ${settings.providerId}")
         val model = entry.model(settings.modelId)
@@ -68,20 +72,25 @@ class NativeAgentFactory(
         )
         val models = Models(listOf(provider))
 
-        return Agent(
-            model = effectiveModel,
-            retrySettings = settings.retry,
-            streamOptions = SimpleStreamOptions(
-                sessionId = sessionId,
-                timeoutMs = REQUEST_TIMEOUT_MS,
-                maxRetries = MAX_RETRIES,
+        // Session facade over the single-run agent (pi's AgentSession over
+        // Agent): retry budget from settings, tree ownership included.
+        return AgentSession(
+            agent = Agent(
+                model = effectiveModel,
+                streamOptions = SimpleStreamOptions(
+                    sessionId = sessionId,
+                    timeoutMs = REQUEST_TIMEOUT_MS,
+                    maxRetries = MAX_RETRIES,
+                ),
+                streamFn = StreamFn { requestedModel, context, options ->
+                    models.stream(requestedModel, context, options)
+                },
             ),
-            streamFn = StreamFn { requestedModel, context, options ->
-                models.stream(requestedModel, context, options)
-            },
-        ).apply {
-            if (initialTranscript.isNotEmpty()) replaceTranscript(initialTranscript)
-        }
+            conversation = conversation,
+            retrySettings = settings.retry,
+            compactionSettings = settings.compaction,
+            models = models,
+        )
     }
 }
 
