@@ -37,6 +37,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import works.resolve.pathfinder.ai.utils.getPiUserAgent
 
 class OpenAiCompletionsStreamTest {
 
@@ -1010,7 +1011,7 @@ class OpenAiCompletionsStreamTest {
     @Test
     fun `default user agent is sent and explicit request headers override it`() = runTest {
         val default = headersFor()
-        assertEquals(OPENAI_COMPLETIONS_USER_AGENT, default["User-Agent"])
+        assertEquals(getPiUserAgent(), default["User-Agent"])
 
         val overridden = headersFor(
             options = OpenAiCompletionsOptions(

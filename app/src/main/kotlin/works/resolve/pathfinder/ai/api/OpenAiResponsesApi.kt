@@ -23,6 +23,7 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 
 /**
@@ -101,9 +102,6 @@ fun splitDeferredTools(context: Context, enabled: Boolean): DeferredToolPlacemen
     }
     return DeferredToolPlacement(immediate, deferred)
 }
-
-/** pi's getPiUserAgent shape, adapted for Pathfinder's Android runtime. */
-const val PI_USER_AGENT = "pi (android)"
 
 /**
  * OpenAI Responses streaming adapter (openai-responses.ts). POSTs
@@ -186,7 +184,7 @@ class OpenAiResponsesApi(
                 // mergeHeaders keeps each layer case-insensitive like the
                 // SDK's eventual HTTP behavior.
                 mergeHeaders(
-                    mapOf("User-Agent" to PI_USER_AGENT),
+                    mapOf("User-Agent" to getPiUserAgent()),
                     mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
                 ).filterValues { it != null }.mapValues { it.value!! },
                 cacheSessionId,
@@ -534,7 +532,7 @@ class AzureOpenAiResponsesApi(
             // pi's azure createClient merges { "User-Agent": ua, ...model.headers }
             // then Object.assign(options.headers): model headers can override the
             // default UA, and options headers win last.
-            headers.putAll(mergeHeaders(mapOf("User-Agent" to PI_USER_AGENT), model.headers))
+            headers.putAll(mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), model.headers))
             headers.putAll(options.headers)
             headers["api-key"] = apiKey
             headers["Accept"] = "text/event-stream"

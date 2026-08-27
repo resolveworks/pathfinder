@@ -33,12 +33,15 @@ import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.core.calculateCost
 import works.resolve.pathfinder.ai.core.hasHeader
 import works.resolve.pathfinder.ai.core.mergeHeaders
+import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
+import works.resolve.pathfinder.ai.utils.shortHash
 
 /**
  * Shared OpenAI Responses API machinery, ported from pi's
  * openai-responses-shared.ts (message/tool conversion, stream processing) and
- * the small utils it depends on (shortHash, sanitizeSurrogates,
- * openai-prompt-cache, transform-messages, deferred-tools).
+ * the small utils it depends on (shortHash, sanitizeSurrogates — both in
+ * ai/utils mirroring pi's src/utils — openai-prompt-cache, transform-messages,
+ * deferred-tools).
  *
  * Divergences from pi (narrowest-boundary adaptations, documented per symbol):
  * - No external SDKs or new dependencies: the `openai` SDK's wire behavior
@@ -71,52 +74,9 @@ object OpenAiResponsesShared {
     private val json = Json { ignoreUnknownKeys = true }
 
     // =========================================================================
-    // Utilities
+    // Utilities (sanitizeSurrogates / shortHash live in ai/utils, mirroring pi's
+    // packages/ai/src/utils/)
     // =========================================================================
-
-    /** Fast deterministic hash to shorten long strings; faithful port of pi's shortHash (utils/hash.ts). */
-    fun shortHash(str: String): String {
-        var h1 = 0xdeadbeef.toInt()
-        var h2 = 0x41c6ce57.toInt()
-        for (ch in str) {
-            val c = ch.code
-            // Math.imul-equivalent constants: 2654435761=0x9E3779B1,
-            // 1597334677=0x5F356495, 2246822507=0x85EBCA6B, 3266489909=0xC2B2AE35.
-            h1 = ((h1 xor c) * 0x9E3779B1.toInt()).toInt()
-            h2 = ((h2 xor c) * 0x5F356495.toInt()).toInt()
-        }
-        h1 = (h1 xor (h1 ushr 16)) * 0x85EBCA6B.toInt() xor ((h2 xor (h2 ushr 13)) * 0xC2B2AE35.toInt())
-        h2 = (h2 xor (h2 ushr 16)) * 0x85EBCA6B.toInt() xor ((h1 xor (h1 ushr 13)) * 0xC2B2AE35.toInt())
-        return (h2.toLong() and 0xFFFFFFFFL).toString(36) +
-            (h1.toLong() and 0xFFFFFFFFL).toString(36)
-    }
-
-    /** Removes unpaired UTF-16 surrogates, pi's sanitizeSurrogates. */
-    fun sanitizeSurrogates(text: String): String {
-        val sb = StringBuilder(text.length)
-        var i = 0
-        while (i < text.length) {
-            val c = text[i].code
-            when {
-                c in 0xD800..0xDBFF -> {
-                    val next = if (i + 1 < text.length) text[i + 1].code else -1
-                    if (next in 0xDC00..0xDFFF) {
-                        sb.append(text[i]).append(text[i + 1])
-                        i++
-                    } // else: drop unpaired high surrogate
-                }
-                c in 0xDC00..0xDFFF -> {
-                    // Low surrogate kept only when the previous unit was a high
-                    // surrogate (already appended with its pair).
-                    val prev = if (i > 0) text[i - 1].code else -1
-                    if (prev in 0xD800..0xDBFF) sb.append(text[i])
-                }
-                else -> sb.append(text[i])
-            }
-            i++
-        }
-        return sb.toString()
-    }
 
     /** Pi's clampOpenAIPromptCacheKey: truncate to 64 Unicode code points. */
     fun clampOpenAIPromptCacheKey(key: String?): String? {
