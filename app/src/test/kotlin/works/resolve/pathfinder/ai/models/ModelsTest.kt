@@ -418,4 +418,18 @@ class ModelsTest {
             api.lastHeaders,
         )
     }
+
+    @Test
+    fun `modelsAreEqual compares id and provider, null never equal`() {
+        // pi's models.ts modelsAreEqual: same id+provider only; null on
+        // either side is never equal.
+        val m = model()
+        assertTrue(Models.modelsAreEqual(m, m))
+        assertTrue(Models.modelsAreEqual(m, m.copy(name = "renamed")))
+        assertTrue(!Models.modelsAreEqual(m, m.copy(id = "m2")))
+        assertTrue(!Models.modelsAreEqual(m, m.copy(provider = "other")))
+        assertTrue(!Models.modelsAreEqual(m, null))
+        assertTrue(!Models.modelsAreEqual(null, m))
+        assertTrue(!Models.modelsAreEqual(null, null))
+    }
 }

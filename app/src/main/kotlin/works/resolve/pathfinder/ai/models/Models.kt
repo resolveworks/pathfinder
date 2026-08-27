@@ -89,6 +89,22 @@ class Models(
     fun getModel(providerId: String, modelId: String): Model? =
         getProvider(providerId)?.models?.firstOrNull { it.id == modelId }
 
+    companion object {
+        /**
+         * Port of pi's models.ts `modelsAreEqual` (packages/ai/src/models.ts,
+         * `modelsAreEqual`): two models are equal when both their id and
+         * provider match; null (or absent) on either side is never equal.
+         *
+         * Omitted from the port: pi's `hasApi` (models.ts) is a TypeScript
+         * type guard narrowing `Model<Api>` to `Model<TApi>` for dynamically
+         * looked-up models. Kotlin's `Model.api` is a plain string and the
+         * type system has no equivalent narrowing, so there is no runtime
+         * counterpart to port.
+         */
+        fun modelsAreEqual(a: Model?, b: Model?): Boolean =
+            a != null && b != null && a.id == b.id && a.provider == b.provider
+    }
+
     private fun requireProvider(model: Model): Provider =
         byId[model.provider]
             ?: throw IllegalArgumentException("Unknown provider: ${model.provider}")

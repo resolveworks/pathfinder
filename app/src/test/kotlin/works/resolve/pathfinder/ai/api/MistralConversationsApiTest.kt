@@ -48,7 +48,6 @@ class MistralConversationsApiTest {
 
     private fun api(transport: FakeTransport) = MistralConversationsApi(
         transport,
-        ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),
         nowMs = { 1_770_000_000_000L },
     )
 
@@ -342,6 +341,54 @@ class MistralConversationsApiTest {
         val errorEvent = assertIs<AssistantMessageEvent.Error>(error)
         assertEquals(StopReason.ERROR, errorEvent.error.stopReason)
         assertContains(errorEvent.error.errorMessage ?: "", "timeout")
+    }
+
+    @Test
+    fun `default request timeout is 60s when timeoutMs is unset`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(terminalEvent()))
+        api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+        // pi: AbortSignal.timeout(options?.timeoutMs ?? 60_000)
+        assertEquals(60_000L, transport.requests.single().timeoutMs)
+    }
+
+    @Test
+    fun `retryable failures are not retried even with maxRetries greater than zero`() = runTest {
+        val transport = FakeTransport()
+        transport.outcomes.add {
+            throw NetworkException(java.io.IOException("connection reset"))
+        }
+        val error = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test", maxRetries = 3))
+            .toList()
+            .last()
+        // pi's requestMistralStream uses a raw fetch with no retry wrapper:
+        // a retryable transport error surfaces immediately, exactly once.
+        assertIs<AssistantMessageEvent.Error>(error)
+        assertEquals(1, transport.requests.size)
+    }
+
+    @Test
+    fun `empty text chunk opens a text block with an empty delta`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"index":0,"delta":{"content":[{"type":"text","text":""}]}}]}""",
+                terminalEvent(),
+            ),
+        )
+        val events = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+        // pi appends the empty delta: text_start then a text_delta with "".
+        val start = events.filterIsInstance<AssistantMessageEvent.TextStart>().single()
+        val delta = events.filterIsInstance<AssistantMessageEvent.TextDelta>().single()
+        assertEquals(start.contentIndex, delta.contentIndex)
+        assertEquals("", delta.delta)
+        assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(listOf(TextContent("")), (events.last() as AssistantMessageEvent.Done).message.content)
     }
 
     @Test

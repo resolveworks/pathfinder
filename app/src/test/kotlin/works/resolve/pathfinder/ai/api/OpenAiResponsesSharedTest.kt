@@ -171,7 +171,7 @@ class OpenAiResponsesSharedTest {
 
     @Test
     fun `images downgrade to a placeholder for non-vision models`() {
-        val messages = OpenAiResponsesShared.transformMessages(
+        val messages = transformMessages(
             listOf(UserMessage(listOf(TextContent("a"), ImageContent("AAAA", "image/png"), ImageContent("BBBB", "image/png"), TextContent("b")))),
             model(),
         )
@@ -480,7 +480,7 @@ class OpenAiResponsesSharedTest {
             model = "gpt-5-mini",
             stopReason = StopReason.TOOL_USE,
         )
-        val transformed = OpenAiResponsesShared.transformMessages(
+        val transformed = transformMessages(
             listOf(assistant, UserMessage.ofText("next")),
             model(),
         )
@@ -503,7 +503,7 @@ class OpenAiResponsesSharedTest {
             model = "gemini",
             stopReason = StopReason.TOOL_USE,
         )
-        val transformed = OpenAiResponsesShared.transformMessages(
+        val transformed = transformMessages(
             listOf(assistant),
             model(),
         ) { _, _ -> "normalized" }
@@ -524,7 +524,7 @@ class OpenAiResponsesSharedTest {
             stopReason = StopReason.ERROR,
             errorMessage = "boom",
         )
-        val transformed = OpenAiResponsesShared.transformMessages(
+        val transformed = transformMessages(
             listOf(UserMessage.ofText("q"), errored, UserMessage.ofText("next")),
             model(),
         )

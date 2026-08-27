@@ -13,6 +13,7 @@ import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.testing.TestCatalogs
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.test.assertNull
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -150,6 +151,43 @@ class TokenEstimateTest {
         assertNull(estimate.lastUsageIndex)
         // tools stringified contributes ceil(len/4)
         assertEquals(1 + 2 + estimateTextTokens(context.tools.toString()), estimate.tokens)
+    }
+
+    @Test
+    fun `tools introduced after the usage point are re-added via addedToolNames`() {
+        // pi's estimate.ts estimateContextTokens: when usage applies, tools
+        // added by trailing tool results (addedToolNames) are re-added on top
+        // of the reported prefix.
+        val assistant = AssistantMessage(
+            content = emptyList(),
+            api = "openai-completions",
+            provider = "zai",
+            model = "glm",
+            usage = Usage(totalTokens = 100),
+            stopReason = StopReason.STOP,
+            timestamp = 1L,
+        )
+        val addedTool = Tool("late_tool", "d", JsonPrimitive("x"))
+        val context = Context(
+            messages = listOf(
+                UserMessage.ofText("hi", 0L),
+                assistant,
+                ToolResultMessage(
+                    toolCallId = "c1",
+                    toolName = "t",
+                    content = listOf(TextContent("ok")),
+                    addedToolNames = listOf("late_tool"),
+                    timestamp = 2L,
+                ),
+            ),
+            tools = listOf(Tool("t", "d", JsonPrimitive("x")), addedTool),
+        )
+        val estimate = estimateContextTokens(context)
+        val expectedAdded = estimateTextTokens(listOf(addedTool).toString())
+        assertTrue("expected a positive re-add, was $expectedAdded") { expectedAdded > 0 }
+        assertEquals(1, estimate.trailingTokens - expectedAdded) // ceil(2/4)
+        assertEquals(100 + 1 + expectedAdded, estimate.tokens)
+        assertEquals(1, estimate.lastUsageIndex)
     }
 
     @Test

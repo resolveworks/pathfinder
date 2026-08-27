@@ -466,7 +466,7 @@ internal fun buildRequestBody(
 ): JsonObject {
     val cacheControl = getCacheControl(model, options)
     val compat = anthropicCompatOf(model)
-    val transformed = transformMessages(context.messages, model, ::normalizeToolCallId)
+    val transformed = transformMessages(context.messages, model) { id, _ -> normalizeToolCallId(id) }
 
     val body = mutableMapOf<String, JsonElement>()
     body["model"] = JsonPrimitive(model.id)

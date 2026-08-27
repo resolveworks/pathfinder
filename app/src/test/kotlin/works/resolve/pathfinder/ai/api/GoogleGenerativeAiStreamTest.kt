@@ -18,6 +18,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -354,5 +355,142 @@ class GoogleGenerativeAiStreamTest {
         val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
         assertEquals("HIGH", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
         assertNull(thinkingConfig["thinkingBudget"])
+    }
+
+    @Test
+    fun `gemini3 pro maps low and minimal to LOW`() = runTest {
+        for (level in listOf(ThinkingLevel.LOW, ThinkingLevel.MINIMAL)) {
+            val transport = FakeTransport()
+            transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
+            api(transport).streamSimple(
+                geminiModel(id = "gemini-3-pro-preview"),
+                context,
+                SimpleStreamOptions(apiKey = "k", reasoning = level),
+            ).toList()
+            val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+            val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
+            // pi's getThinkingLevel: Gemini 3 Pro has no MINIMAL/LOW support below LOW.
+            assertEquals("LOW", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
+        }
+    }
+
+    @Test
+    fun `gemini3 flash maps minimal and low levels and disables to MINIMAL`() = runTest {
+        // Enabled levels resolve through the flash mapping (minimal stays MINIMAL).
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
+        api(transport).streamSimple(
+            geminiModel(id = "gemini-3-flash-preview"),
+            context,
+            SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.MINIMAL),
+        ).toList()
+        var body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertEquals(
+            "MINIMAL",
+            body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject["thinkingLevel"]!!
+                .jsonPrimitive.content,
+        )
+
+        // Thinking-off: pi's getDisabledThinkingConfig uses the lowest
+        // supported level without includeThoughts for Gemini 3 Flash.
+        val disableTransport = FakeTransport()
+        disableTransport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
+        api(disableTransport).streamSimple(
+            geminiModel(id = "gemini-3-flash-preview"),
+            context,
+            SimpleStreamOptions(apiKey = "k"),
+        ).toList()
+        body = Json.parseToJsonElement(disableTransport.requests.single().body.decodeToString()).jsonObject
+        val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
+        assertEquals("MINIMAL", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
+        assertNull(thinkingConfig["includeThoughts"])
+        assertNull(thinkingConfig["thinkingBudget"])
+    }
+
+    @Test
+    fun `gemini3 pro thinking-off cannot fully disable and falls back to LOW`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
+        api(transport).streamSimple(
+            geminiModel(id = "gemini-3.1-pro-preview"),
+            context,
+            SimpleStreamOptions(apiKey = "k"),
+        ).toList()
+        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
+        assertEquals("LOW", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
+        assertNull(thinkingConfig["includeThoughts"])
+    }
+
+    @Test
+    fun `gemma4 maps low to MINIMAL and high to HIGH`() = runTest {
+        for ((level, expected) in listOf(ThinkingLevel.LOW to "MINIMAL", ThinkingLevel.HIGH to "HIGH")) {
+            val transport = FakeTransport()
+            transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
+            api(transport).streamSimple(
+                geminiModel(id = "gemma-4-xel"),
+                context,
+                SimpleStreamOptions(apiKey = "k", reasoning = level),
+            ).toList()
+            val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+            assertEquals(
+                expected,
+                body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject["thinkingLevel"]!!
+                    .jsonPrimitive.content,
+            )
+        }
+    }
+
+    @Test
+    fun `gemma4 thinking-off uses MINIMAL level without includeThoughts`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
+        api(transport).streamSimple(
+            geminiModel(id = "gemma-4-xel"),
+            context,
+            SimpleStreamOptions(apiKey = "k"),
+        ).toList()
+        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
+        assertEquals("MINIMAL", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
+        assertNull(thinkingConfig["includeThoughts"])
+        assertNull(thinkingConfig["thinkingBudget"])
+    }
+
+    @Test
+    fun `explicit request headers override the default User-Agent`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
+        api(transport).stream(
+            model,
+            context,
+            GoogleGenerativeAiApi.GoogleOptions(
+                apiKey = "k",
+                headers = mapOf("User-Agent" to "custom-agent"),
+            ),
+        ).toList()
+        // pi's google-raw-stop-reason.test.ts:191 — explicit headers win over
+        // the default User-Agent.
+        assertEquals("custom-agent", transport.requests.single().headers["User-Agent"])
+    }
+
+    @Test
+    fun `cancellation mid-stream never emits an error event`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"candidates":[{"content":{"parts":[{"text":"a"}]}}]}""",
+                """{"candidates":[{"content":{"parts":[{"text":"b"}]}}]}""",
+                """{"candidates":[{"content":{"parts":[{"text":"c"}]},"finishReason":"STOP"}]}""",
+            ),
+        )
+        val events = api(transport)
+            .stream(model, context, GoogleGenerativeAiApi.GoogleOptions(apiKey = "k"))
+            .take(3) // Start, TextStart, first TextDelta
+            .toList()
+        // KDoc'd abort divergence (GoogleStreamEngine): coroutine
+        // cancellation propagates and no Error event is emitted.
+        assertTrue(events.none { it is AssistantMessageEvent.Error }, "cancellation must not emit Error")
+        assertTrue(transport.cancelled.value, "transport must observe cancellation")
     }
 }

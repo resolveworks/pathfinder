@@ -38,7 +38,7 @@ object ChatApiRegistry {
             OPENAI_COMPLETIONS -> OpenAiCompletionsApi(transport, retry)
             ANTHROPIC_MESSAGES -> AnthropicMessagesApi(transport, retry)
             GOOGLE_GENERATIVE_AI -> GoogleGenerativeAiApi(transport, retry)
-            MISTRAL_CONVERSATIONS -> MistralConversationsApi(transport, retry)
+            MISTRAL_CONVERSATIONS -> MistralConversationsApi(transport) // pi: no retry wrapper for Mistral
             OPENAI_RESPONSES -> OpenAiResponsesApi(transport, retry)
             OPENAI_CODEX_RESPONSES -> OpenAICodexResponsesApi(transport)
             AZURE_OPENAI_RESPONSES -> AzureOpenAiResponsesApi(transport, retry)

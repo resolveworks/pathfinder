@@ -21,7 +21,9 @@ import works.resolve.pathfinder.ai.core.ToolResultMessage
  *   (pi's cross-provider handoff: `<thinking>` tagging belongs to callers that
  *   want it; pi's anthropic adapter sends the bare text).
  * - Strips provider-specific tool thought signatures cross-provider and
- *   normalizes tool call IDs via [normalizeToolCallId].
+ *   normalizes tool call IDs via [normalizeToolCallId] (pi's callback shape
+ *   is `(id, model, source)`; the model is already a parameter here, so the
+ *   callback receives the source assistant message).
  * - Skips errored/aborted assistant messages entirely.
  * - Inserts synthetic error tool results for orphaned tool calls.
  */
@@ -65,11 +67,17 @@ private fun downgradeUnsupportedImages(messages: List<Message>, model: Model): L
         }
     }
 
-/** pi's transformMessages; see the file KDoc for the preserved behavior. */
+/** pi's transformMessages; see the file KDoc for the preserved behavior. * thinkingSignature truthiness: an empty-string signature falls through to
+ * the blank-drop path, exactly like pi's `if (block.thinkingSignature)`.
+ *
+ * This is the single port of pi's transformMessages; every adapter
+ * (Anthropic, Google, Mistral, OpenAI Completions, OpenAI Responses)
+ * runs this pass with its provider-specific [normalizeToolCallId].
+ */
 internal fun transformMessages(
     messages: List<Message>,
     model: Model,
-    normalizeToolCallId: ((id: String) -> String)? = null,
+    normalizeToolCallId: ((id: String, source: AssistantMessage) -> String)? = null,
 ): List<Message> {
     val toolCallIdMap = mutableMapOf<String, String>()
     val imageAwareMessages = downgradeUnsupportedImages(messages, model)
@@ -119,7 +127,7 @@ internal fun transformMessages(
                                 block
                             }
                             if (!isSameModel && normalizeToolCallId != null) {
-                                val normalizedId = normalizeToolCallId(block.id)
+                                val normalizedId = normalizeToolCallId(block.id, assistantMsg)
                                 if (normalizedId != block.id) {
                                     toolCallIdMap[block.id] = normalizedId
                                     normalized = normalized.copy(id = normalizedId)

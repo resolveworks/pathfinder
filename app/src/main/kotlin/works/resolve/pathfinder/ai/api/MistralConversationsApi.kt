@@ -25,7 +25,6 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
-import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -87,12 +86,17 @@ data class MistralOptions(
  *   stopReason "aborted"; here coroutine cancellation propagates normally and
  *   produces no error event, per this codebase's stream contract.
  * - onPayload/onResponse hooks are omitted; tests observe the transport.
- * - The request timeout is applied by the transport (per-call), not via
- *   AbortSignal.timeout here.
+ * - pi applies `AbortSignal.timeout(options?.timeoutMs ?? 60_000)` here; this
+ *   port forwards the same 60s default to the transport as the per-call
+ *   timeout when `timeoutMs` is unset.
+ *
+ * Retry divergence: pi's `requestMistralStream` uses a raw `fetch` with no
+ * retry wrapper — Mistral effectively ignores `maxRetries`. This port is
+ * aligned: `transport.post` is called directly, so retryable transport
+ * errors surface immediately even when `maxRetries > 0`.
  */
 class MistralConversationsApi(
     private val transport: HttpStreamingTransport,
-    private val retry: ProviderRetry = ProviderRetry(),
     private val nowMs: () -> Long = System::currentTimeMillis,
 ) : ChatApi {
 
@@ -147,7 +151,7 @@ class MistralConversationsApi(
                 ?: throw IllegalStateException("No API key for provider: ${model.provider}")
 
             val normalizer = MistralToolCallIdNormalizer()
-            val transformedMessages = transformMessages(context.messages, model) { normalizer.normalize(it) }
+            val transformedMessages = transformMessages(context.messages, model) { id, _ -> normalizer.normalize(id) }
             var wireMessages = MistralConversationsPayload.toChatMessages(
                 transformedMessages,
                 model.input.contains(InputModality.IMAGE),
@@ -166,12 +170,11 @@ class MistralConversationsApi(
                 bearerToken = bearerToken,
                 headers = headers,
                 body = payload.toString().toByteArray(Charsets.UTF_8),
-                timeoutMs = options.timeoutMs,
+                // pi: AbortSignal.timeout(options?.timeoutMs ?? 60_000)
+                timeoutMs = options.timeoutMs ?: DEFAULT_TIMEOUT_MS,
             )
 
-            val response = retry.retryProviderRequest<TransportResponse>(options.maxRetries, options.maxRetryDelayMs) {
-                transport.post(request)
-            }
+            val response = transport.post(request)
 
             emit(AssistantMessageEvent.Start(state.snapshot()))
 
@@ -304,9 +307,7 @@ class MistralConversationsApi(
                                 ?: ""
                             if (deltaText.isNotEmpty()) events += state.appendThinking(deltaText)
                         }
-                        "text" -> obj["text"].stringOrNull()
-                            ?.takeIf { it.isNotEmpty() }
-                            ?.let { events += state.appendText(it) }
+                        "text" -> events += state.appendText(obj["text"].stringOrNull() ?: "")
                     }
                 }
                 else -> Unit
@@ -442,6 +443,8 @@ class MistralConversationsApi(
     private companion object {
         const val DONE = "[DONE]"
         const val MAX_MISTRAL_ERROR_BODY_CHARS = 4000
+        /** pi's AbortSignal.timeout default (mistral-conversations.ts). */
+        const val DEFAULT_TIMEOUT_MS = 60_000L
         val json = Json { ignoreUnknownKeys = true }
     }
 }
