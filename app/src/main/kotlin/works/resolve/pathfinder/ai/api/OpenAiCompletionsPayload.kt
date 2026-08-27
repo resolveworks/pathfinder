@@ -86,7 +86,7 @@ object OpenAiCompletionsPayload {
         options.temperature?.let { body["temperature"] = JsonPrimitive(it) }
 
         if (context.tools.isNotEmpty()) {
-            body["tools"] = JsonArray(context.tools.map { convertTool(it) })
+            body["tools"] = JsonArray(context.tools.map { convertTool(it, compat) })
             if (compat.zaiToolStream) {
                 body["tool_stream"] = JsonPrimitive(true)
             }
@@ -318,8 +318,9 @@ object OpenAiCompletionsPayload {
                     convertUserMessage(msg as works.resolve.pathfinder.ai.core.UserMessage)
                         ?.let { params.add(it) }
 
-                MessageRole.ASSISTANT -> convertAssistantMessage(msg as works.resolve.pathfinder.ai.core.AssistantMessage, compat)
-                    ?.let { params.add(it) }
+                MessageRole.ASSISTANT ->
+                    convertAssistantMessage(model, msg as works.resolve.pathfinder.ai.core.AssistantMessage, compat)
+                        ?.let { params.add(it) }
 
                 MessageRole.TOOL_RESULT -> {
                     var j = i
@@ -432,6 +433,7 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
 
     /** Returns null for assistant messages with no content and no tool calls. */
     private fun convertAssistantMessage(
+        model: Model,
         msg: works.resolve.pathfinder.ai.core.AssistantMessage,
         compat: OpenAiCompletionsCompat,
     ): JsonObject? {
@@ -481,12 +483,18 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
         }
 
         // Replay reasoning when the provider stored a wire-field signature.
-        // pi openai-completions.ts:1300-1313: the raw reasoning field is only
+        // pi openai-completions.ts:1302-1313: the raw reasoning field is only
         // sent when no structured reasoning_details were preserved.
         if (preservedReasoningDetails == null &&
             !compat.requiresThinkingAsText && nonEmptyThinking.isNotEmpty()
         ) {
-            val signature = nonEmptyThinking.first().thinkingSignature
+            // pi openai-completions.ts:1304-1306: the opencode-go provider remaps
+            // a stored "reasoning" signature back to "reasoning_content" — the
+            // field it actually accepts.
+            var signature = nonEmptyThinking.first().thinkingSignature
+            if (model.provider == "opencode-go" && signature == "reasoning") {
+                signature = "reasoning_content"
+            }
             if (signature != null && signature in REASONING_FIELDS) {
                 // Exact pi parity: the raw reasoning field is replayed unsanitized
                 // (only requiresThinkingAsText output is sanitized).
@@ -525,7 +533,7 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
         return JsonObject(mapOf("role" to JsonPrimitive("assistant")) + assistant)
     }
 
-    private fun convertTool(tool: Tool): JsonObject =
+    private fun convertTool(tool: Tool, compat: OpenAiCompletionsCompat): JsonObject =
         buildJsonObject {
             put("type", "function")
             put(
@@ -534,9 +542,13 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
                     put("name", tool.name)
                     put("description", tool.description)
                     put("parameters", tool.parameters)
-                    // Explicit strict:false for plain tools on strict-capable
-                    // providers (ZAI is strict-capable).
-                    put("strict", false)
+                    // pi convertTools (openai-completions.ts:1484-1493):
+                    // `strict` is only included when
+                    // `compat.supportsStrictMode !== false`; some providers reject
+                    // unknown fields. Pathfinder's Tool carries no
+                    // constrainedSampling config, so the resolved strict value is
+                    // pi's `strict ?? false` = false.
+                    if (compat.supportsStrictMode) put("strict", false)
                 },
             )
         }

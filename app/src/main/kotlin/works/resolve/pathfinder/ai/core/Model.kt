@@ -108,6 +108,14 @@ data class OpenAiCompletionsCompat(
     val sessionAffinityFormat: SessionAffinityFormat? = null,
     /** Whether `prompt_cache_retention: "24h"` is supported; pi's detected default is true. */
     val supportsLongCacheRetention: Boolean = true,
+    /**
+     * pi's supportsStrictMode (openai-completions.ts:1653 detected via
+     * `!isMoonshot && !isTogether && !isCloudflareAiGateway && !isNvidia`, and
+     * :1699 `model.compat.supportsStrictMode ?? detected.supportsStrictMode`):
+     * the detected default is true; the catalog marks it false for moonshotai,
+     * together, nvidia, and cloudflare-ai-gateway.
+     */
+    val supportsStrictMode: Boolean = true,
 )
 
 /**

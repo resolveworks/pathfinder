@@ -1006,4 +1006,101 @@ class OpenAiCompletionsStreamTest {
         assertEquals("override-request", headers["x-client-request-id"])
         assertEquals("override-affinity", headers["x-session-affinity"])
     }
+
+    @Test
+    fun `default user agent is sent and explicit request headers override it`() = runTest {
+        val default = headersFor()
+        assertEquals(OPENAI_COMPLETIONS_USER_AGENT, default["User-Agent"])
+
+        val overridden = headersFor(
+            options = OpenAiCompletionsOptions(
+                apiKey = "k",
+                headers = mapOf("User-Agent" to "custom-agent/1"),
+            ),
+        )
+        assertEquals("custom-agent/1", overridden["User-Agent"])
+    }
+
+    @Test
+    fun `model headers override the default user agent`() = runTest {
+        val headers = headersFor(
+            model = TestCatalogs.GPT_4O.copy(headers = mapOf("User-Agent" to "model-agent")),
+        )
+        assertEquals("model-agent", headers["User-Agent"])
+    }
+
+    @Test
+    fun `opencode-go reasoning delta is stored under the reasoning_content signature`() = runTest {
+        val goModel = model.copy(provider = "opencode-go")
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"reasoning":"hmm","content":"answer"},"finish_reason":"stop"}]}""",
+                "[DONE]",
+            ),
+        )
+        val events = api(transport).stream(goModel, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        val thinking = assertIs<ThinkingContent>(done.message.content.first { it is ThinkingContent })
+        assertEquals("hmm", thinking.thinking)
+        assertEquals("reasoning_content", thinking.thinkingSignature)
+
+        // Replay: the stored signature round-trips as the literal wire field
+        // for opencode-go (pi openai-completions.ts:1304-1306).
+        val replay = OpenAiCompletionsPayload.convertMessages(
+            goModel,
+            Context(messages = listOf(context.messages.single(), done.message)),
+        )
+        val assistant = replay.last()
+        assertEquals(
+            "hmm",
+            assistant["reasoning_content"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content },
+        )
+        assertTrue("reasoning" !in assistant)
+    }
+
+    @Test
+    fun `non opencode-go reasoning delta keeps the literal reasoning signature`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"reasoning":"hmm"},"finish_reason":"stop"}]}""",
+                "[DONE]",
+            ),
+        )
+        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        val thinking = assertIs<ThinkingContent>(done.message.content.single())
+        assertEquals("reasoning", thinking.thinkingSignature)
+    }
+
+    @Test
+    fun `openrouter metadata raw is appended when missing from the error message`() = runTest {
+        // Long error body: the formatted body is truncated before the raw
+        // metadata, so the manual append surfaces it exactly once.
+        val padding = "x".repeat(600)
+        val transport = FakeTransport()
+        transport.enqueueError(
+            403,
+            """{"error":{"message":"$padding","code":403,"metadata":{"raw":"upstream WAF blocked policy XYZ"}}}""",
+        )
+        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.last())
+        val message = error.error.errorMessage!!
+        assertEquals(1, Regex("upstream WAF blocked policy XYZ").findAll(message).count())
+        assertTrue(message.endsWith("upstream WAF blocked policy XYZ"))
+    }
+
+    @Test
+    fun `openrouter metadata raw is not double-printed`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueError(
+            403,
+            """{"error":{"message":"Provider returned error","code":403,"metadata":{"raw":"upstream WAF blocked policy XYZ"}}}""",
+        )
+        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.last())
+        val message = error.error.errorMessage!!
+        assertEquals(1, Regex("upstream WAF blocked policy XYZ").findAll(message).count())
+    }
 }

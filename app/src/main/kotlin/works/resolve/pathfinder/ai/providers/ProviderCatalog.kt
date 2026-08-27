@@ -340,7 +340,8 @@ private data class CompatDto(
     val supportsStrictTools: Boolean? = null,
     val forceAdaptiveThinking: Boolean? = null,
     // OpenAI Responses-family compat (pi's OpenAIResponsesCompat), consumed
-    // via Model.responsesCompat.
+    // via Model.responsesCompat; also the completions strict-mode flag (pi's
+    // OpenAICompletionsCompat.supportsStrictMode) via Model.compat.
     val supportsStrictMode: Boolean? = null,
     val sessionAffinityFormat: String? = null,
     val supportsAdditionalTools: Boolean? = null,
@@ -370,6 +371,7 @@ private data class CompatDto(
         sendSessionAffinityHeaders = sendSessionAffinityHeaders ?: false,
         sessionAffinityFormat = sessionAffinityFormat?.let { parseSessionAffinityFormat(it, where) },
         supportsLongCacheRetention = supportsLongCacheRetention ?: true,
+        supportsStrictMode = supportsStrictMode ?: true,
     )
 
     /** pi's getCompat (openai-responses) defaults apply per field when absent. */

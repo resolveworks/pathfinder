@@ -240,6 +240,65 @@ class OpenAiCompletionsPayloadTest {
     }
 
     @Test
+    fun `strict is omitted when compat disables strict mode`() {
+        // pi convertTools (openai-completions.ts:1491-1492): strict is only
+        // included when compat.supportsStrictMode !== false; some providers
+        // reject unknown fields.
+        val tool = Tool(name = "read_file", description = "Reads a file", parameters = schema)
+        val strictless = model.copy(compat = model.compat.copy(supportsStrictMode = false))
+        val b = body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool)), model = strictless)
+        val function = b["tools"]!!.jsonArray.single().jsonObject["function"]!!.jsonObject
+        assertFalse(function.containsKey("strict"))
+    }
+
+    @Test
+    fun `opencode-go replay remaps a reasoning signature to reasoning_content`() {
+        val goModel = model.copy(provider = "opencode-go")
+        val b = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent("let me think", thinkingSignature = "reasoning"),
+                            TextContent("answer"),
+                        ),
+                        api = "openai-completions",
+                        provider = "opencode-go",
+                        model = "glm-5.2",
+                    ),
+                ),
+            ),
+            model = goModel,
+        )
+        val assistant = b["messages"]!!.jsonArray.single().jsonObject
+        assertEquals("let me think", assistant["reasoning_content"]!!.jsonPrimitive.content)
+        assertFalse(assistant.containsKey("reasoning"))
+    }
+
+    @Test
+    fun `non opencode-go replay keeps the literal reasoning field`() {
+        val b = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent("let me think", thinkingSignature = "reasoning"),
+                            TextContent("answer"),
+                        ),
+                        api = "openai-completions",
+                        provider = "chutes",
+                        model = "glm-5.2",
+                    ),
+                ),
+            ),
+            model = model.copy(provider = "chutes"),
+        )
+        val assistant = b["messages"]!!.jsonArray.single().jsonObject
+        assertEquals("let me think", assistant["reasoning"]!!.jsonPrimitive.content)
+        assertFalse(assistant.containsKey("reasoning_content"))
+    }
+
+    @Test
     fun `whitespace-only assistant text blocks are dropped`() {
         val b = body(
             Context(

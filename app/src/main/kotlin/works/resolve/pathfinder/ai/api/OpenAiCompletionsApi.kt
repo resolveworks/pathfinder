@@ -102,7 +102,8 @@ class OpenAiCompletionsApi(
             // Base URL placeholders (Cloudflare account/gateway ids) are
             // substituted from the request-time env, mirroring pi's
             // cloudflare-stream wrapper. Headers merge like pi's
-            // openai-completions createClient: model headers first, then the
+            // openai-completions createClient: the default User-Agent first
+            // (openai-completions.ts:751), then model headers, then the
             // Copilot dynamic headers (github-copilot only; they override
             // model headers), then session-affinity headers (only when a
             // cache session id survives the cacheRetention none gate), then
@@ -118,7 +119,10 @@ class OpenAiCompletionsApi(
             val mergedHeaders = mergeHeaders(
                 mergeHeaders(
                     mergeHeaders(
-                        mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
+                        mergeHeaders(
+                            mergeHeaders(mapOf("User-Agent" to OPENAI_COMPLETIONS_USER_AGENT), model.headers),
+                            copilotDynamicHeadersFor(model, context),
+                        ),
                         sessionAffinityHeaders(model, cacheSessionId),
                     ),
                     options.headers,
@@ -244,10 +248,15 @@ class OpenAiCompletionsApi(
 
         // Reasoning arrives in reasoning_content (llama.cpp-style), reasoning,
         // or reasoning_text; use the first non-empty field to avoid duplication.
+        // pi openai-completions.ts:610-613: opencode-go stores the delta field
+        // "reasoning" under the signature "reasoning_content" — the field it
+        // accepts on replay.
         for (field in REASONING_FIELDS) {
             val value = delta[field].stringOrNull()
             if (!value.isNullOrEmpty()) {
-                events += state.appendThinking(value, field)
+                val thinkingSignature =
+                    if (model.provider == "opencode-go" && field == "reasoning") "reasoning_content" else field
+                events += state.appendThinking(value, thinkingSignature)
                 break
             }
         }
@@ -306,6 +315,13 @@ class OpenAiCompletionsApi(
         is ProviderHttpException -> buildString {
             append("Provider returned HTTP ${error.status}")
             formatErrorBody(error.body)?.let { append(": ").append(it) }
+            // pi openai-completions.ts:705-712: some providers via OpenRouter
+            // give additional information in error.error.metadata.raw; append
+            // the raw metadata only when the formatted body has not already
+            // surfaced it, to avoid double-printing.
+            openRouterRawMetadata(error.body)?.let { raw ->
+                if (!contains(raw)) append("\n").append(raw)
+            }
         }
         is ProviderStreamException -> error.message ?: "Provider stream error"
         else -> error.message ?: error::class.simpleName ?: "Unknown error"
@@ -332,11 +348,29 @@ class OpenAiCompletionsApi(
         ).joinToString(" — ")
     }
 
+    /** pi openai-completions.ts:709: `error.error.metadata.raw` on the SDK error. */
+    private fun openRouterRawMetadata(body: String): String? {
+        val parsed = try {
+            json.parseToJsonElement(body)
+        } catch (_: Exception) {
+            return null
+        }
+        return (parsed as? JsonObject)?.obj("error")?.obj("metadata")?.get("raw").stringOrNull()
+    }
+
     private companion object {
         const val DONE = "[DONE]"
         val json = Json { ignoreUnknownKeys = true }
     }
 }
+
+/**
+ * Default User-Agent for OpenAI Chat Completions requests. pi sends
+ * `getPiUserAgent()` (`pi (platform release; arch)`,
+ * openai-completions.ts:751); Pathfinder identifies itself
+ * (divergence: the Android client is not pi).
+ */
+const val OPENAI_COMPLETIONS_USER_AGENT = "pathfinder (Android)"
 
 private fun kotlinx.serialization.json.JsonElement?.stringOrNull(): String? =
     (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
