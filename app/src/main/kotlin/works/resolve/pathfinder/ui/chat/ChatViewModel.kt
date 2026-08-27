@@ -3,6 +3,7 @@ package works.resolve.pathfinder.ui.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import works.resolve.pathfinder.agent.Agent
+import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.AgentState
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.Content
@@ -114,6 +115,7 @@ class ChatViewModel(
 
     private var agent: Agent? = null
     private var agentStateJob: Job? = null
+    private var agentEventsJob: Job? = null
     private var activeSession: Session? = null
 
     /**
@@ -125,6 +127,16 @@ class ChatViewModel(
 
     /** Count of active-path messages already persisted for [activeSession]. */
     private var persistedMessageCount: Int = 0
+
+    /**
+     * Active-path conversation entries no longer present in the agent
+     * transcript. Non-zero only while an agent auto-retry has removed the
+     * trailing error assistant message from agent state (pi keeps that
+     * message in the session/history, and so does the append-only tree);
+     * tree re-navigation and session switches rebuild both sides together
+     * and reset it to zero.
+     */
+    private var conversationOffset = 0
 
     /** Latest unsaved conversation snapshot for its owning session. */
     private var pendingPersist: Pair<Session, Conversation>? = null
@@ -284,6 +296,7 @@ class ChatViewModel(
                 ?.filterIsInstance<TextContent>()
                 ?.joinToString("") { part -> part.text }
             agent?.replaceTranscript(activeConversation.activeMessages())
+            conversationOffset = 0
             updateState {
                 it.copy(
                     // pi's navigateTree loads the re-edit text into the
@@ -460,6 +473,7 @@ class ChatViewModel(
         activeSession = session
         activeConversation = Conversation(session.entries, session.leafId)
         persistedMessageCount = session.messages.size
+        conversationOffset = 0
         bindAgent(agent)
         val summaries = sessionStore.summaries()
         updateState {
@@ -506,9 +520,25 @@ class ChatViewModel(
 
     private fun bindAgent(newAgent: Agent) {
         agentStateJob?.cancel()
+        agentEventsJob?.cancel()
         agent = newAgent
         lastAgentError = null
         agentStateJob = viewModelScope.launch { newAgent.state.collect { state -> onAgentState(state) } }
+        // Retry status is event-driven (pi's auto_retry_start/end reach the
+        // UI as agent-session events); zero-replay flow, so the subscriber
+        // must be bound before any prompt starts.
+        agentEventsJob = viewModelScope.launch { newAgent.events.collect { event -> onAgentEvent(event) } }
+    }
+
+    /** Projects auto-retry lifecycle events into the transient retry status surface. */
+    private fun onAgentEvent(event: AgentEvent) {
+        when (event) {
+            is AgentEvent.AutoRetryStart -> updateState {
+                it.copy(retryStatus = AutoRetryStatus(event.attempt, event.maxAttempts))
+            }
+            is AgentEvent.AutoRetryEnd -> updateState { it.copy(retryStatus = null) }
+            else -> Unit
+        }
     }
 
     private fun onAgentState(state: AgentState) {
@@ -525,25 +555,40 @@ class ChatViewModel(
         }
         lastAgentError = agentError
 
-        if (state.messages.size > persistedMessageCount) {
+        // Persist on conversation growth, not agent-transcript growth: an
+        // auto-retry removes the error message from the agent transcript while
+        // the conversation tree keeps it, so the conversation is the unit that
+        // must cross the persisted count.
+        if (activeConversation.activeMessages().size > persistedMessageCount) {
             enqueuePersist()
         }
     }
 
     /**
      * Folds the agent's committed transcript into the conversation tree.
-     * The agent's transcript always equals the conversation's active path
+     * The agent's transcript normally equals the conversation's active path
      * (they are seeded together and only the agent appends), so growth is a
      * strictly appended suffix that becomes children of the current leaf.
+     * Auto-retry is the one divergence (pi's _prepareRetry removes the
+     * trailing error assistant message from agent state but keeps it in the
+     * session/history): a shrink records the removed suffix in
+     * [conversationOffset] — the append-only tree never retracts it — and
+     * later growth appends only the messages beyond the retained prefix, so
+     * the error entry stays a permanent branch sibling in history while the
+     * retried response lands after it.
      */
     private fun syncConversation(messages: List<Message>) {
         val activeCount = activeConversation.activeMessages().size
-        if (messages.size > activeCount) {
+        val agentBase = activeCount - conversationOffset
+        if (messages.size < agentBase) {
+            conversationOffset = activeCount - messages.size
+        } else if (messages.size > agentBase) {
             var updated = activeConversation
-            for (message in messages.drop(activeCount)) {
+            for (message in messages.drop(agentBase)) {
                 updated = updated.append(message)
             }
             activeConversation = updated
+            conversationOffset = 0
         }
     }
 
@@ -621,17 +666,19 @@ class ChatViewModel(
     private suspend fun awaitPersistence(): Boolean {
         retryUnsavedSnapshot()
         persistJob?.join()
-        val agentMessages = agent?.state?.value?.messages
+        agent?.state?.value?.let { syncConversation(it.messages) }
         return pendingPersist == null &&
-            (agentMessages == null || agentMessages.size <= persistedMessageCount)
+            activeConversation.activeMessages().size <= persistedMessageCount
     }
 
     /** Explicitly re-enqueues the latest agent transcript when it is unsaved. */
     private fun retryUnsavedSnapshot() {
         val snapshot = agent?.state?.value ?: return
-        if (activeSession != null && snapshot.messages.size > persistedMessageCount) {
+        if (activeSession != null) {
             syncConversation(snapshot.messages)
-            enqueuePersist()
+            if (activeConversation.activeMessages().size > persistedMessageCount) {
+                enqueuePersist()
+            }
         }
     }
 

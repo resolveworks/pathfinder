@@ -15,4 +15,7 @@ interface SettingsStore {
     suspend fun setActiveSessionId(sessionId: String?)
 
     suspend fun setShowThinking(showThinking: Boolean)
+
+    /** Persists the agent auto-retry settings wholesale (pi's settings.retry). */
+    suspend fun setRetrySettings(settings: RetrySettings)
 }

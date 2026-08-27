@@ -13,4 +13,6 @@ data class ModelSettings(
      * The agent layer ignores this for now; nothing renders thinking yet.
      */
     val showThinking: Boolean = false,
+    /** Auto-retry of failed agent runs (pi's settings.retry; see [RetrySettings]). */
+    val retry: RetrySettings = RetrySettings(),
 )
