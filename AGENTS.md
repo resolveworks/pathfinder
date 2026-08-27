@@ -67,6 +67,10 @@ patterns. Prefer documented current APIs over remembered ones.
   justifies its maintenance cost.
 
 The model catalog asset is generated from pi and must never be hand-edited.
+Provider and native-runtime scope decisions, including deliberate exclusions,
+are recorded in `app/src/main/kotlin/works/resolve/pathfinder/ai/AGENTS.md`;
+read it before changing provider coverage, authentication, runtime dependencies,
+or catalog generation.
 
 ## Security
 

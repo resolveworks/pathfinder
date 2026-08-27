@@ -5,9 +5,9 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 
 /**
- * Model metadata and OpenAI Chat Completions compatibility flags, ported from
- * pi's Model type and OpenAICompletionsCompat. Only the flags the ZAI/OpenAI
- * Completions path consumes are modeled; more can be added as providers grow.
+ * Model metadata and adapter compatibility flags ported from pi's Model type.
+ * Compatibility is grouped by protocol family so each retained provider uses
+ * the same generated model shape as its upstream adapter.
  */
 data class Model(
     val id: String,

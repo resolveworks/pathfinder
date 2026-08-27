@@ -14,7 +14,7 @@ import works.resolve.pathfinder.ai.auth.oauth.XaiOAuthAuth
  * flows directly inside its provider definitions; Pathfinder composes them
  * here because the flows are injected ports with an HTTP boundary).
  *
- * Currently registered: `anthropic` → [AnthropicOAuthAuth], `openrouter` →
+ * Registers `anthropic` → [AnthropicOAuthAuth], `openrouter` →
  * [OpenRouterOAuthAuth], `kimi-coding` → [KimiCodingOAuthAuth], `xai` →
  * [XaiOAuthAuth], `openai-codex` → [OpenAiCodexOAuthAuth], and
  * `github-copilot` → [GitHubCopilotOAuthAuth] (its static model-id set — pi's

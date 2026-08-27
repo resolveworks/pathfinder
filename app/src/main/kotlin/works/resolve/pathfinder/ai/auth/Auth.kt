@@ -2,9 +2,8 @@ package works.resolve.pathfinder.ai.auth
 
 /**
  * Provider-neutral auth contracts ported from pi
- * `packages/ai/src/auth/types.ts`. No provider OAuth flow implementations
- * live here; orchestration (a later port of pi's `Models` auth layer) uses
- * these types.
+ * `packages/ai/src/auth/types.ts`. Provider flow implementations and
+ * orchestration use these contracts without adding provider knowledge here.
  *
  * Cancellation: pi's `AbortSignal` parameters map to Kotlin structured
  * concurrency — every suspend function is cancellation-friendly, and flow

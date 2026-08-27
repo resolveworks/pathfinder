@@ -97,7 +97,7 @@ interface CatalogAuthRegistry {
     }
 }
 
-/** Registry backed by an explicit provider-id map (tests, later app wiring). */
+/** Registry backed by an explicit provider-id map. */
 class MapCatalogAuthRegistry(private val oauthById: Map<String, OAuthAuth>) : CatalogAuthRegistry {
     override fun oauthAuth(provider: CatalogProvider): OAuthAuth? = oauthById[provider.id]
 }

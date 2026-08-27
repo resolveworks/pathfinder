@@ -9,10 +9,10 @@
 // from hand-written provider files (src/providers/*.ts).
 //
 // Dynamic providers (radius), llama.cpp, Amazon Bedrock, Google Vertex AI,
-// and image-generation providers are deliberately excluded. OAuth flows are
-// out of scope, but OAuth capability metadata is emitted declaratively for
-// OAuth-capable providers (see OAUTH_METADATA) so a later account-vs-API-key
-// selector has what it needs.
+// and image-generation providers are deliberately excluded. The product and
+// maintenance rationale is recorded in the AI package's AGENTS.md.
+// OAuth capability metadata is emitted declaratively for retained providers;
+// their native flows are composed separately in ProductionCatalogAuthRegistry.
 //
 // Usage:
 //   node tools/generate-model-catalog.mjs          # PI_REPO_DIR or ~/Projects/pi
@@ -54,18 +54,18 @@ const CLOUDFLARE_GATEWAY = {
  * `envKey` its environment variable, `promptMessage` overrides the default
  * "Enter <label>" prompt text, `extraPrompts` adds non-key env prompts.
  * OAuth-only providers (openai-codex) have no identity entry; their
- * capability lives in OAUTH_METADATA. OAuth *flow implementations* are out
- * of scope for this foundation commit; the declarative metadata emitted
- * here is what the upcoming OAuth foundation consumes.
+ * capability lives in OAUTH_METADATA. Flow implementations remain outside
+ * this generated data and are wired by the native auth registry.
  */
 
 /**
  * OAuth capability metadata for the retained providers that offer OAuth
  * login (pi's lazyOAuth({...}) blocks in providers/*.ts): display name,
  * login-button label (defaults to the name), and whether the login is a
- * paid subscription. Purely declarative - no flow implementation ships.
- * `oauthOnly: true` marks providers whose ONLY auth is OAuth
- * (openai-codex): they carry no API-key prompts and no placeholder env key.
+ * paid subscription. This stays purely declarative; native flow wiring lives
+ * in ProductionCatalogAuthRegistry. `oauthOnly: true` marks providers whose
+ * ONLY auth is OAuth (openai-codex): they carry no API-key prompts and no
+ * placeholder env key.
  */
 const OAUTH_METADATA = {
 	anthropic: { name: "Anthropic (Claude Pro/Max)", isSubscription: true },

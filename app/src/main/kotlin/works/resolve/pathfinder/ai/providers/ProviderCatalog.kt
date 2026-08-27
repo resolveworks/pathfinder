@@ -36,8 +36,9 @@ data class AuthPrompt(
     val secret: Boolean = true,
 )
 
-/** OAuth capability metadata (pi's lazyOAuth blocks): declarative only —
- * no flow implementation ships. [loginLabel] defaults to the name in pi. */
+/** OAuth capability metadata from pi's lazyOAuth blocks. Flow wiring stays
+ * in [works.resolve.pathfinder.ai.auth.CatalogAuthRegistry]; [loginLabel]
+ * defaults to the name in pi. */
 data class ProviderOAuth(
     val name: String,
     val loginLabel: String? = null,
@@ -127,10 +128,9 @@ class CatalogProvider(
     /**
      * Builds the runtime provider for this catalog entry, wiring an API
      * implementation per model API id (pi's `Record<ApiId, Api>` provider
-     * shape) and the auth resolver. APIs without a Kotlin implementation
-     * are simply absent from the map, so catalog parsing and provider
-     * listing work and streaming one of those models fails with a clear
-     * unsupported-API error from Models.stream. Base-URL overrides are not
+     * shape) and the auth resolver. Catalog generation is required to emit
+     * only [ChatApiRegistry] APIs; an unknown id remains absent so the models
+     * layer reports a clear unsupported-API error. Base-URL overrides are not
      * stamped here: callers create their effective model once via
      * `Model.copy(baseUrl = ...)` and stream that model (pi's requestModel).
      */
@@ -152,10 +152,10 @@ class CatalogProvider(
 }
 
 /**
- * The parsed models-catalog asset: every static provider pi knows about,
- * with all of each provider's model APIs (only some of which have runtime
- * implementations; see ChatApiRegistry). Parsing is lenient about unknown
- * object fields and ignores compat fields the runtime does not model yet,
+ * The parsed models-catalog asset: Pathfinder's retained static pi providers,
+ * with all supported model APIs for each provider (see [ChatApiRegistry]).
+ * Parsing is lenient about unknown object fields and ignores compat fields the
+ * runtime does not model yet,
  * but fails fast on unknown enum values — the asset ships inside the APK,
  * so a mismatch is a build bug, not a runtime condition to paper over.
  */
@@ -179,10 +179,7 @@ class ProviderCatalog(val providers: List<CatalogProvider>) {
     }
 }
 
-/**
- * Normalizes a base URL: trimmed, with all trailing slashes dropped.
- * Reuses the logic previously owned by ZaiProvider.
- */
+/** Normalizes a base URL: trimmed, with all trailing slashes dropped. */
 internal fun normalizeBaseUrl(url: String): String {
     val effective = url.trim().trimEnd('/')
     if (effective.isEmpty()) {
@@ -334,14 +331,11 @@ private data class CompatDto(
     val supportsAdditionalTools: Boolean? = null,
     val supportsToolSearch: Boolean? = null,
     val supportsExplicitPromptCacheMode: Boolean? = null,
-    // Not yet modeled by the runtime: supportsStrictMode,
-    // requiresReasoningContentOnAssistantMessages, deferredToolsMode,
-    // cacheControlFormat — ignored via ignoreUnknownKeys.
-    //
-    // Deliberate narrow omission: allowedFallbackModels (server-side
-    // `fallbacks` models) is present in the asset but not ported in this
-    // chunk; callers must continue to omit the `fallbacks` request field.
-    // supportsToolReferences is likewise not yet modeled.
+    // Deliberately not modeled because the native core has no corresponding
+    // data shape: requiresReasoningContentOnAssistantMessages,
+    // deferredToolsMode, cacheControlFormat, allowedFallbackModels, and
+    // supportsToolReferences. Unknown catalog fields are ignored; adapters
+    // must omit the corresponding request features.
 ) {
     fun toDomain(where: String) = OpenAiCompletionsCompat(
         supportsStore = supportsStore ?: true,
