@@ -1,4 +1,4 @@
-# pathfinder
+# Pathfinder
 
 Pathfinder is a minimal native Android interface for [pi](https://pi.dev). It
 ports pi's relevant agent and model runtime to pure Kotlin, then surrounds it
