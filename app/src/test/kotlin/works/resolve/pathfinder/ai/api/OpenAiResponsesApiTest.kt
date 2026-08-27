@@ -288,12 +288,15 @@ class OpenAiResponsesApiTest {
     }
 
     @Test
-    fun `http errors format status and body`() = runTest {
+    fun `http errors format status and whole body`() = runTest {
         val transport = FakeTransport()
         transport.enqueueError(500, """{"error":{"code":"server_error","message":"boom"}}""")
         val events = api(transport).stream(model, context, OpenAiResponsesOptions(apiKey = "k")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
-        assertEquals("OpenAI API error (500): server_error: boom", error.error.errorMessage)
+        assertEquals(
+            """OpenAI API error (500): {"error":{"code":"server_error","message":"boom"}}""",
+            error.error.errorMessage,
+        )
     }
 
     @Test

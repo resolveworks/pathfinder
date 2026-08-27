@@ -200,7 +200,7 @@ class GoogleGenerativeAiStreamTest {
     }
 
     @Test
-    fun `http error body is formatted from the google error envelope`() = runTest {
+    fun `http error surfaces status and whole body`() = runTest {
         val transport = FakeTransport()
         transport.enqueueError(
             400,
@@ -208,8 +208,10 @@ class GoogleGenerativeAiStreamTest {
         )
         val events = events(transport)
         val error = assertIs<AssistantMessageEvent.Error>(events.single())
-        assertTrue("Provider returned HTTP 400" in error.error.errorMessage!!)
-        assertTrue("API key not valid" in error.error.errorMessage!!)
+        assertEquals(
+            """400: {"error":{"code":400,"message":"API key not valid","status":"INVALID_ARGUMENT"}}""",
+            error.error.errorMessage,
+        )
     }
 
     @Test

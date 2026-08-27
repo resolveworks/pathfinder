@@ -200,7 +200,7 @@ class AzureOpenAiResponsesApiTest {
         transport.enqueueError(401, """{"error":{"message":"bad key"}}""")
         val events = api(transport).stream(model, context, AzureOpenAiResponsesOptions(apiKey = "k")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
-        assertEquals("Azure OpenAI API error (401): bad key", error.error.errorMessage)
+        assertEquals("""Azure OpenAI API error (401): {"error":{"message":"bad key"}}""", error.error.errorMessage)
     }
 
     @Test

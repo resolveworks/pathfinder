@@ -22,6 +22,8 @@ import works.resolve.pathfinder.ai.core.clampThinkingLevel
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.NetworkException
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
+import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
+import works.resolve.pathfinder.ai.utils.truncateErrorText
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
@@ -362,12 +364,19 @@ class MistralConversationsApi(
         else -> StopReason.ERROR to "Provider stopped with: $reason"
     }
 
-    /** pi's formatMistralError. */
+    /**
+     * pi's formatMistralError (mistral-conversations.ts:261-272): a Mistral-specific
+     * formatter, kept as such upstream too — pi composes the body/message itself
+     * instead of going through formatProviderError. Upstream also duplicates
+     * `truncateErrorText` and `MAX_PROVIDER_ERROR_BODY_CHARS` inline
+     * (mistral-conversations.ts:274-278, 257); the port consolidates them into the
+     * shared utils/ErrorBody.kt.
+     */
     internal fun formatMistralError(error: Exception): String = when (error) {
         is ProviderHttpException -> {
             val bodyText = error.body.trim()
             if (bodyText.isNotEmpty()) {
-                "Mistral API error (${error.status}): ${truncateErrorText(bodyText, MAX_MISTRAL_ERROR_BODY_CHARS)}"
+                "Mistral API error (${error.status}): ${truncateErrorText(bodyText, MAX_PROVIDER_ERROR_BODY_CHARS)}"
             } else {
                 "Mistral API error (${error.status}): ${error.message}"
             }
@@ -378,8 +387,6 @@ class MistralConversationsApi(
         else -> error.message ?: error::class.simpleName ?: "Unknown error"
     }
 
-    private fun truncateErrorText(text: String, maxChars: Int): String =
-        if (text.length <= maxChars) text else text.take(maxChars) + "... [truncated ${text.length - maxChars} chars]"
 
     /**
      * pi's buildMistralHeaders: Accept + Authorization (via the transport's
@@ -445,7 +452,6 @@ class MistralConversationsApi(
 
     private companion object {
         const val DONE = "[DONE]"
-        const val MAX_MISTRAL_ERROR_BODY_CHARS = 4000
         /** pi's AbortSignal.timeout default (mistral-conversations.ts). */
         const val DEFAULT_TIMEOUT_MS = 60_000L
         val json = Json { ignoreUnknownKeys = true }

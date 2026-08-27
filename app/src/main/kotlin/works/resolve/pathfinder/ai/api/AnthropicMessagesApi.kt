@@ -21,6 +21,8 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -243,32 +245,19 @@ class AnthropicMessagesApi(
         return AssistantMessageEvent.Error(message.stopReason, message)
     }
 
+    /**
+     * Port of pi's anthropic-messages.ts catch block (~791). Upstream composes
+     * the shared formatter over the SDK-folded `error.message` (which already
+     * carries the body, so the message survives unchanged); the raw transport
+     * body is the port's stand-in, so the output is the composed
+     * `"<status>: <body>"` (no prefix upstream).
+     */
     private fun formatProviderError(error: Exception): String = when (error) {
-        is ProviderHttpException -> buildString {
-            append("Provider returned HTTP ${error.status}")
-            formatErrorBody(error.body)?.let { append(": ").append(it) }
-        }
+        is ProviderHttpException -> formatProviderError(normalizeProviderError(error))
+        // Non-HTTP exceptions keep the port's `message ?: simpleName` handling;
+        // pi's safeJsonStringify fallback for non-Error throws is moot in Kotlin.
         is ProviderStreamException -> error.message ?: "Provider stream error"
         else -> error.message ?: error::class.simpleName ?: "Unknown error"
-    }
-
-    private fun formatErrorBody(body: String): String? {
-        if (body.isBlank()) return null
-        return try {
-            val parsed = json.parseToJsonElement(body)
-            formatJsonError(parsed as? JsonObject ?: return body.take(500))
-        } catch (_: Exception) {
-            body.take(500)
-        }
-    }
-
-    private fun formatJsonError(error: JsonObject): String {
-        val message = error["message"].stringOrNull()
-        val type = error["type"].stringOrNull()
-        return listOfNotNull(
-            type,
-            message ?: error.toString().take(500).ifEmpty { null },
-        ).joinToString(" — ")
     }
 
     private companion object {
