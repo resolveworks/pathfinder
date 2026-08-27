@@ -352,6 +352,9 @@ private data class CompatDto(
         chatTemplateArgs = chatTemplateArgs
             ?.mapValues { (_, value) -> parseChatTemplateKwarg(value, "${where}.chatTemplateArgs") }
             ?: emptyMap(),
+        sendSessionAffinityHeaders = sendSessionAffinityHeaders ?: false,
+        sessionAffinityFormat = sessionAffinityFormat?.let { parseSessionAffinityFormat(it, where) },
+        supportsLongCacheRetention = supportsLongCacheRetention ?: true,
     )
 
     /** pi's getCompat (openai-responses) defaults apply per field when absent. */

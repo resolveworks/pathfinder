@@ -469,6 +469,21 @@ class ProviderCatalogTest {
         assertNull(claude.responsesCompat)
     }
 
+    @Test
+    fun `completions compat parses affinity and cache retention flags`() {
+        val catalog = realAsset()
+        // cloudflare-ai-gateway workers-ai model: affinity on, long retention off.
+        val cf = catalog.getModel("cloudflare-ai-gateway", "workers-ai/@cf/google/gemma-4-26b-a4b-it")!!
+        assertEquals(true, cf.compat.sendSessionAffinityHeaders)
+        assertEquals(false, cf.compat.supportsLongCacheRetention)
+        assertNull(cf.compat.sessionAffinityFormat, "format auto-detects at request time")
+        // openrouter models keep pi defaults: affinity off, format auto-detect, retention supported.
+        val or = catalog.getModel("openrouter", "aion-labs/aion-2.0")!!
+        assertEquals(false, or.compat.sendSessionAffinityHeaders)
+        assertEquals(true, or.compat.supportsLongCacheRetention)
+        assertNull(or.compat.sessionAffinityFormat)
+    }
+
     // ---- the real bundled asset ----
 
     private var realCatalog: ProviderCatalog? = null

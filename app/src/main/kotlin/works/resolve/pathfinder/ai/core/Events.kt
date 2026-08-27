@@ -121,6 +121,7 @@ data class SimpleStreamOptions(
             maxTokens = maxTokens,
             reasoningEffort = reasoningEffort,
             toolChoice = toolChoice,
+            cacheRetention = cacheRetention,
             timeoutMs = timeoutMs,
             maxRetries = maxRetries,
             maxRetryDelayMs = maxRetryDelayMs,
@@ -145,6 +146,8 @@ data class OpenAiCompletionsOptions(
      * buildParams (openai-completions.ts:850-851).
      */
     val toolChoice: ToolChoice? = null,
+    /** Prompt-cache retention preference (pi's CacheRetention); null resolves from env/default. */
+    val cacheRetention: CacheRetention? = null,
     val timeoutMs: Long? = null,
     val maxRetries: Int = 0,
     val maxRetryDelayMs: Long = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
@@ -158,7 +161,8 @@ data class OpenAiCompletionsOptions(
     override fun toString(): String =
         "OpenAiCompletionsOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
             ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
-            ", reasoningEffort=$reasoningEffort, toolChoice=$toolChoice, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
+            ", reasoningEffort=$reasoningEffort, toolChoice=$toolChoice, cacheRetention=$cacheRetention" +
+            ", timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
             ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys})"
 }
 
