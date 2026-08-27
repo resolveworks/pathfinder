@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A single drop representing clarity distilled from many sources. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="54"
+        android:pivotY="54"
+        android:translateY="-2"
+        android:scaleX="0.76"
+        android:scaleY="0.76">
+        <path
+            android:fillColor="#000000"
+            android:pathData="M54,27c0,0 -21,24 -21,37c0,12 9,21 21,21s21,-9 21,-21c0,-13 -21,-37 -21,-37z" />
+    </group>
+</vector>
