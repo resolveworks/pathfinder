@@ -1,7 +1,7 @@
 package works.resolve.pathfinder.data.sessions
 
-import java.util.UUID
 import works.resolve.pathfinder.ai.core.Message
+import works.resolve.pathfinder.ai.utils.uuidv7
 
 /** Node of the conversation tree; children are sorted oldest-first. */
 data class SessionTreeNode(
@@ -13,12 +13,14 @@ data class SessionTreeNode(
  * Immutable conversation tree porting pi's SessionManager semantics.
  * Operations return new instances (UDF-friendly). The invariant shared by all
  * append methods: a new entry's parentId is the current [leafId]; appending
- * advances the leaf to the new entry.
+ * advances the leaf to the new entry. Entry ids default to time-ordered
+ * UUIDv7, pi's Session idGenerator default `{ next: () => uuidv7() }`
+ * (agent/src/harness/session/session.ts).
  */
 class Conversation(
     val entries: List<SessionEntry>,
     val leafId: String?,
-    idGenerator: () -> String = { UUID.randomUUID().toString() },
+    idGenerator: () -> String = ::uuidv7,
     clock: () -> Long = { System.currentTimeMillis() },
 ) {
     private val nextId: () -> String = idGenerator
@@ -120,9 +122,8 @@ class Conversation(
         fun fromMessages(messages: List<Message>): Conversation {
             var conversation = Conversation(emptyList(), null)
             for (message in messages) {
-                val id = UUID.randomUUID().toString()
                 val entry = MessageEntry(
-                    id = id,
+                    id = uuidv7(),
                     parentId = conversation.leafId,
                     timestamp = message.timestamp,
                     message = message,

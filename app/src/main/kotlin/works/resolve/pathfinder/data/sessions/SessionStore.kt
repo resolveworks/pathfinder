@@ -2,10 +2,10 @@ package works.resolve.pathfinder.data.sessions
 
 import java.io.File
 import java.io.IOException
+import works.resolve.pathfinder.ai.utils.uuidv7
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
-import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +30,8 @@ import kotlinx.coroutines.withContext
 class SessionStore(
     private val root: File,
     private val clock: () -> Long = { System.currentTimeMillis() },
-    private val idFactory: () -> String = { UUID.randomUUID().toString() },
+    /** Session ids default to pi's `options.id ?? uuidv7()` (agent jsonl repo). */
+    private val idFactory: () -> String = ::uuidv7,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     maxFileBytes: Long = MAX_FILE_BYTES,
 ) : SessionRepository {
