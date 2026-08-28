@@ -8,11 +8,13 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.ToolCall
+import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.Usage
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
 
 /**
  * Stream function used by the agent loop, mirroring pi's StreamFn contract:
@@ -27,13 +29,22 @@ fun interface StreamFn {
 }
 
 /**
- * Minimal agent loop configuration. Tools, steering, follow-up queues, and
- * context transforms are out of scope for the MVP and deliberately absent.
+ * Agent loop configuration. The tool-execution contract surface is ported
+ * from pi's AgentLoopConfig (packages/agent/src/types.ts); steering,
+ * follow-up queues, hooks, and context transforms are out of scope for this
+ * port and deliberately absent.
  */
 data class AgentLoopConfig(
     val model: Model,
     val options: SimpleStreamOptions = SimpleStreamOptions(),
     val streamFn: StreamFn,
+    /**
+     * Tool execution mode (pi's AgentLoopConfig.toolExecution). Default is
+     * [ToolExecutionMode.PARALLEL], matching pi's `"parallel"` default.
+     * Execution itself is not implemented by this build; the mode is part of
+     * the frozen contract for the later execution change.
+     */
+    val toolExecution: ToolExecutionMode = ToolExecutionMode.PARALLEL,
 )
 
 /** Lifecycle events emitted by the agent loop, reduced from pi's AgentEvent. */
@@ -45,8 +56,8 @@ sealed class AgentEvent {
 
     object TurnStart : AgentEvent()
 
-    /** Final assistant message of the turn. Tool results are not part of the MVP. */
-    data class TurnEnd(val message: AssistantMessage) : AgentEvent()
+    /** Final assistant message of the turn. Pi's `turn_end` always carries `toolResults`; the default of empty keeps no-tools runs and existing construction sites compiling until execution lands. */
+    data class TurnEnd(val message: AssistantMessage, val toolResults: List<ToolResultMessage> = emptyList()) : AgentEvent()
 
     data class MessageStart(val message: Message) : AgentEvent()
 
@@ -57,6 +68,36 @@ sealed class AgentEvent {
     ) : AgentEvent()
 
     data class MessageEnd(val message: Message) : AgentEvent()
+
+    /**
+     * Tool execution lifecycle, pi's AgentEvent tool events
+     * (packages/agent/src/types.ts). [arguments] is the raw parsed JSON of
+     * the assistant call (pi's `args: any`); Pathfinder stores
+     * [ToolCall.arguments] as the provider's raw JSON string and the loop
+     * parses it. Tool-result messages use validated/normalized arguments
+     * only for execution. Not emitted by this build — execution is not
+     * implemented yet; the shapes are the frozen contract for the later
+     * execution change.
+     */
+    data class ToolExecutionStart(
+        val toolCallId: String,
+        val toolName: String,
+        val arguments: JsonObject,
+    ) : AgentEvent()
+
+    data class ToolExecutionUpdate(
+        val toolCallId: String,
+        val toolName: String,
+        val arguments: JsonObject,
+        val partialResult: AgentToolResult,
+    ) : AgentEvent()
+
+    data class ToolExecutionEnd(
+        val toolCallId: String,
+        val toolName: String,
+        val result: AgentToolResult,
+        val isError: Boolean,
+    ) : AgentEvent()
 
     /**
      * A retryable run is being retried after an exponential-backoff delay.
@@ -161,22 +202,25 @@ sealed class AgentEvent {
 }
 
 /**
- * Runs the minimal no-tools agent loop: prompts are appended to the context,
- * one assistant response is streamed, and the run's new messages (prompts plus
- * the assistant message) are returned in source order.
+ * Runs the agent loop in its current no-tools form: prompts are appended to
+ * the context, one assistant response is streamed, and the run's new messages
+ * (prompts plus the assistant message) are returned in source order. The
+ * agent-level tool contract ([AgentTool], [AgentToolResult], the tool
+ * lifecycle events) is frozen here, but tool execution itself is not
+ * implemented yet — a non-empty tool list is rejected up front.
  *
  * Event order mirrors pi's no-tools path: agent_start, turn_start, one
  * message_start/message_end pair per prompt, assistant message_start /
  * message_update* / message_end, turn_end, agent_end.
  *
- * [context] is treated as an immutable snapshot; it is never mutated. A
- * non-empty tool list is rejected up front because tool execution is out of
- * scope. Coroutine cancellation propagates as [CancellationException] without
- * emitting a synthetic error or agent_end.
+ * [context] is treated as an immutable snapshot; it is never mutated. It is
+ * projected to an [works.resolve.pathfinder.ai.core.Context] (tool
+ * definitions only) at the stream call. Coroutine cancellation propagates as
+ * [CancellationException] without emitting a synthetic error or agent_end.
  */
 suspend fun runAgentLoop(
     prompts: List<Message>,
-    context: Context,
+    context: AgentContext,
     config: AgentLoopConfig,
     emit: suspend (AgentEvent) -> Unit,
 ): List<Message> {
@@ -198,7 +242,11 @@ suspend fun runAgentLoop(
     }
 
     val message = streamAssistantResponse(
-        llmContext = Context(systemPrompt = context.systemPrompt, messages = llmMessages),
+        llmContext = Context(
+            systemPrompt = context.systemPrompt,
+            messages = llmMessages,
+            tools = context.tools.map { it.definition },
+        ),
         config = config,
         emit = emit,
     )

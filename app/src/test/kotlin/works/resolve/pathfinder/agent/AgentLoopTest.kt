@@ -64,7 +64,7 @@ class AgentLoopTest {
             )
         }
         val prompt = UserMessage.ofText("q")
-        val context = Context(systemPrompt = "sys", messages = listOf(UserMessage.ofText("earlier")))
+        val context = AgentContext(systemPrompt = "sys", messages = listOf(UserMessage.ofText("earlier")))
 
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(listOf(prompt), context, AgentLoopConfig(model, streamFn = streamFn)) {
@@ -117,7 +117,7 @@ class AgentLoopTest {
         val p2 = UserMessage.ofText("b")
 
         val events = mutableListOf<AgentEvent>()
-        val result = runAgentLoop(listOf(p1, p2), Context(messages = emptyList()), AgentLoopConfig(model, streamFn = streamFn)) {
+        val result = runAgentLoop(listOf(p1, p2), AgentContext(messages = emptyList()), AgentLoopConfig(model, streamFn = streamFn)) {
             events.add(it)
         }
 
@@ -143,7 +143,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            Context(messages = emptyList()),
+            AgentContext(messages = emptyList()),
             AgentLoopConfig(model, streamFn = streamFn),
         ) { events.add(it) }
 
@@ -176,7 +176,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            Context(messages = emptyList()),
+            AgentContext(messages = emptyList()),
             AgentLoopConfig(model, streamFn = streamFn),
         ) { events.add(it) }
 
@@ -207,7 +207,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            Context(messages = emptyList()),
+            AgentContext(messages = emptyList()),
             AgentLoopConfig(model, streamFn = streamFn),
         ) { events.add(it) }
 
@@ -244,7 +244,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            Context(messages = emptyList()),
+            AgentContext(messages = emptyList()),
             AgentLoopConfig(model, streamFn = streamFn),
         ) { events.add(it) }
 
@@ -281,7 +281,7 @@ class AgentLoopTest {
         val events = mutableListOf<AgentEvent>()
         val result = runAgentLoop(
             listOf(UserMessage.ofText("q")),
-            Context(messages = emptyList()),
+            AgentContext(messages = emptyList()),
             AgentLoopConfig(model, streamFn = streamFn),
         ) { events.add(it) }
 
@@ -299,12 +299,21 @@ class AgentLoopTest {
     fun `non-empty tool list in context is rejected up front`() = runTest {
         val streamFn = StreamFn { _, _, _ -> throw IllegalStateException("stream must not be called") }
         val tools = listOf(
-            Tool("t", "d", kotlinx.serialization.json.Json.parseToJsonElement("{}")),
+            object : AgentTool {
+                override val definition = Tool("t", "d", kotlinx.serialization.json.Json.parseToJsonElement("{}"))
+                override val label = "t"
+                override fun validateArguments(arguments: kotlinx.serialization.json.JsonObject) = arguments
+                override suspend fun execute(
+                    toolCallId: String,
+                    arguments: kotlinx.serialization.json.JsonObject,
+                    onUpdate: AgentToolUpdateCallback,
+                ): AgentToolResult = error("must not execute")
+            },
         )
         try {
             runAgentLoop(
                 listOf(UserMessage.ofText("q")),
-                Context(messages = emptyList(), tools = tools),
+                AgentContext(messages = emptyList(), tools = tools),
                 AgentLoopConfig(model, streamFn = streamFn),
             ) { error("emit must not be called") }
             error("expected IllegalArgumentException")
@@ -334,7 +343,7 @@ class AgentLoopTest {
         val job = backgroundScope.launch {
             runAgentLoop(
                 listOf(UserMessage.ofText("q")),
-                Context(messages = emptyList()),
+                AgentContext(messages = emptyList()),
                 AgentLoopConfig(model, streamFn = streamFn),
             ) { events.add(it) }
         }

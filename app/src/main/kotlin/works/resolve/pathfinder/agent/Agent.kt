@@ -1,7 +1,6 @@
 package works.resolve.pathfinder.agent
 
 import works.resolve.pathfinder.ai.core.AssistantMessage
-import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
@@ -122,7 +121,7 @@ class Agent(
         sawAgentEnd = false
 
         try {
-            val contextSnapshot = Context(
+            val contextSnapshot = AgentContext(
                 systemPrompt = systemPrompt,
                 messages = _state.value.messages.toList(),
             )
@@ -247,6 +246,9 @@ class Agent(
             is AgentEvent.SummarizationRetryScheduled,
             is AgentEvent.SummarizationRetryAttemptStart,
             AgentEvent.SummarizationRetryFinished,
+            is AgentEvent.ToolExecutionStart,
+            is AgentEvent.ToolExecutionUpdate,
+            is AgentEvent.ToolExecutionEnd,
             -> Unit
 
             is AgentEvent.MessageStart -> reduce { it.copy(streamingMessage = event.message as? AssistantMessage) }
