@@ -7,13 +7,18 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
+import works.resolve.pathfinder.ai.core.Tool
+import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.UserMessage
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -69,11 +74,13 @@ class AgentTest {
 
     private fun agent(
         streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
+        tools: List<AgentTool> = emptyList(),
         streamFn: StreamFn,
     ) = Agent(
         model = model,
         systemPrompt = "be brief",
         streamOptions = streamOptions,
+        tools = tools,
         streamFn = streamFn,
     )
 
@@ -334,5 +341,130 @@ class AgentTest {
         val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
         agent.abort() // must not throw
         assertTrue(agent.state.value.messages.isEmpty())
+    }
+
+    // ---- tool-aware state (pi agent.ts AgentState/processEvents/finishRun) ----
+
+    /** Minimal fake tool (pi agent.test.ts uses similar object literals). */
+    private fun fakeTool(name: String): AgentTool = object : AgentTool {
+        override val definition = Tool(name, "fake $name", JsonPrimitive("object"))
+        override val label = name
+        override fun validateArguments(arguments: JsonObject) = arguments
+        override suspend fun execute(toolCallId: String, arguments: JsonObject, onUpdate: AgentToolUpdateCallback) =
+            AgentToolResult(content = listOf(TextContent("done")))
+    }
+
+    private fun toolResult(id: String) = ToolResultMessage(
+        toolCallId = id,
+        toolName = "get_weather",
+        content = listOf(TextContent("sunny")),
+        timestamp = 43L,
+    )
+
+    @Test
+    fun `state holds configured tools as a copied snapshot`() {
+        val tools = mutableListOf(fakeTool("a"))
+        val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() }, tools = tools)
+        assertEquals(1, agent.state.value.tools.size)
+        // Pi's copying accessor (createMutableAgentState, agent.ts:76-82):
+        // later caller mutation never reaches agent state.
+        tools.add(fakeTool("b"))
+        assertEquals(1, agent.state.value.tools.size)
+    }
+
+    @Test
+    fun `pendingToolCalls populate before start observers and clear before end observers`() = runTest {
+        val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
+        val observed = CompletableDeferred<String>()
+        val collector = launch {
+            agent.events.collect { event ->
+                when (event) {
+                    is AgentEvent.ToolExecutionStart ->
+                        observed.complete(agent.state.value.pendingToolCalls.single())
+                    is AgentEvent.ToolExecutionEnd -> {
+                        assertTrue(event.toolCallId !in agent.state.value.pendingToolCalls)
+                    }
+                    else -> Unit
+                }
+            }
+        }
+        yield() // subscribe before driving the reduction
+
+        agent.processEvent(AgentEvent.ToolExecutionStart("call-1", "get_weather", JsonObject(emptyMap())))
+        assertEquals("call-1", observed.await())
+        agent.processEvent(
+            AgentEvent.ToolExecutionEnd(
+                "call-1",
+                "get_weather",
+                AgentToolResult(content = listOf(TextContent("sunny"))),
+                isError = false,
+            ),
+        )
+        assertTrue(agent.state.value.pendingToolCalls.isEmpty())
+        collector.cancelAndJoin()
+    }
+
+    @Test
+    fun `parallel tool completion cannot lose pending ids`() = runTest {
+        val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
+        coroutineScope {
+            repeat(50) { i ->
+                launch { agent.processEvent(AgentEvent.ToolExecutionStart("id-$i", "t", JsonObject(emptyMap()))) }
+            }
+        }
+        assertEquals(50, agent.state.value.pendingToolCalls.size)
+        coroutineScope {
+            repeat(50) { i ->
+                launch {
+                    agent.processEvent(
+                        AgentEvent.ToolExecutionEnd("id-$i", "t", AgentToolResult(content = emptyList()), isError = false),
+                    )
+                }
+            }
+        }
+        assertTrue(agent.state.value.pendingToolCalls.isEmpty())
+    }
+
+    @Test
+    fun `tool result message_end commits exactly once and clears streaming`() = runTest {
+        val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
+        val result = toolResult("call-1")
+        agent.processEvent(AgentEvent.MessageStart(result))
+        assertEquals(result, agent.state.value.streamingMessage)
+        agent.processEvent(AgentEvent.MessageEnd(result))
+        val messages = agent.state.value.messages
+        assertEquals(1, messages.size)
+        assertEquals(result, messages.single())
+        assertNull(agent.state.value.streamingMessage)
+    }
+
+    @Test
+    fun `run end clears pending tool calls and streaming message on abort`() = runTest {
+        val providerStarted = CompletableDeferred<Unit>()
+        val agent = Agent(model, null, SimpleStreamOptions()) { _, _, _ ->
+            providerStarted.complete(Unit)
+            hangingStream()
+        }
+        val job = launch { agent.prompt(listOf(UserMessage.ofText("hi"))) }
+        providerStarted.await()
+        // Seed runtime-owned state mid-run, as parallel tool events would.
+        agent.processEvent(AgentEvent.ToolExecutionStart("call-1", "t", JsonObject(emptyMap())))
+        agent.abort()
+        job.join()
+        // Pi's finishRun (agent.ts:529-534) clears pendingToolCalls and
+        // streamingMessage on every exit path.
+        val final = agent.state.value
+        assertTrue(final.pendingToolCalls.isEmpty())
+        assertNull(final.streamingMessage)
+        assertFalse(final.isStreaming)
+    }
+
+    @Test
+    fun `successful run end clears seeded pending tool calls`() = runTest {
+        val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
+        agent.processEvent(AgentEvent.ToolExecutionStart("call-1", "t", JsonObject(emptyMap())))
+        agent.prompt(listOf(UserMessage.ofText("hi")))
+        assertTrue(agent.state.value.pendingToolCalls.isEmpty())
+        assertNull(agent.state.value.streamingMessage)
     }
 }

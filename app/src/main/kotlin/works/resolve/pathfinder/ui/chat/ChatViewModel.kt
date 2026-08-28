@@ -586,7 +586,7 @@ class ChatViewModel(
         updateState {
             it.copy(
                 messages = projectCommitted(state.messages, activeConversation),
-                streamingMessage = state.streamingMessage?.let(::projectStreaming),
+                streamingMessage = (state.streamingMessage as? AssistantMessage)?.let(::projectStreaming),
                 isStreaming = state.isStreaming,
                 error = agentError ?: it.error?.takeIf { e -> e != lastAgentError },
             )
@@ -1244,7 +1244,10 @@ private fun projectCommitted(liveMessages: List<Message>, conversation: Conversa
     return projected
 }
 
-/** UI projection of the in-flight partial; distinct key namespace from committed messages. */
+/** UI projection of the in-flight partial; distinct key namespace from committed messages.
+ * Pi's `streamingMessage` is role-generic (user/tool-result message_starts
+ * transiently occupy it); the chat's streaming contract stays assistant-only,
+ * so non-assistant partials project to nothing at the call site. */
 private fun projectStreaming(message: AssistantMessage): ChatMessage =
     ChatMessage(
         id = "streaming-${message.timestamp}",

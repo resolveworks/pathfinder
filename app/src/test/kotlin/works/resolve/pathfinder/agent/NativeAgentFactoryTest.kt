@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -136,6 +137,31 @@ class NativeAgentFactoryTest {
         // Copied defensively: later mutation of the source list is invisible.
         transcript.clear()
         assertEquals(2, agent.state.value.messages.size)
+    }
+
+    @Test
+    fun `passes configured tools to created agents and defaults to none`() {
+        val tool = object : AgentTool {
+            override val definition = works.resolve.pathfinder.ai.core.Tool("t", "test", JsonPrimitive("object"))
+            override val label = "t"
+            override fun validateArguments(arguments: kotlinx.serialization.json.JsonObject) = arguments
+            override suspend fun execute(
+                toolCallId: String,
+                arguments: kotlinx.serialization.json.JsonObject,
+                onUpdate: AgentToolUpdateCallback,
+            ) = AgentToolResult(content = listOf(TextContent("done")))
+        }
+        val withTools = NativeAgentFactory(
+            credentials = FakeCredentialStore(ApiKeyCredential("k")),
+            catalog = catalog,
+            transport = RecordingTransport(),
+            tools = mutableListOf(tool),
+        ).create(settings(), "s1", emptyConversation())
+        assertEquals(1, withTools.state.value.tools.size)
+
+        val default = factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
+            .create(settings(), "s1", emptyConversation())
+        assertTrue(default.state.value.tools.isEmpty())
     }
 
     // ---- wiring through the native stack ----

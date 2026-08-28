@@ -17,19 +17,28 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Immutable public state of an [Agent], exposed as a [StateFlow].
- *
- * [messages] is the committed transcript; [streamingMessage] is the partial
- * assistant message currently being streamed, if any.
+ * Immutable public state of an [Agent], exposed as a [StateFlow]. Ported from
+ * pi's AgentState (packages/agent/src/types.ts) reduced to pathfinder's
+ * surface: [messages] is the committed transcript, [tools] the copied tool
+ * snapshot (pi's copying accessor in `createMutableAgentState`, agent.ts:68),
+ * [streamingMessage] the partial message currently being streamed — of any
+ * role, since user and tool-result `message_start`s transiently occupy it
+ * too (pi types it `AgentMessage | undefined`) — and [pendingToolCalls] the
+ * ids of tool calls whose execution has started but not ended.
  */
 data class AgentState(
     val model: Model,
     val messages: List<Message> = emptyList(),
-    val streamingMessage: AssistantMessage? = null,
+    val tools: List<AgentTool> = emptyList(),
+    val streamingMessage: Message? = null,
+    val pendingToolCalls: Set<String> = emptySet(),
     val isStreaming: Boolean = false,
     val errorMessage: String? = null,
 )
@@ -54,6 +63,10 @@ class Agent(
     val model: Model,
     val systemPrompt: String? = null,
     val streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
+    /** Tools available to every run (pi's AgentOptions.initialState.tools). Copied into state. */
+    tools: List<AgentTool> = emptyList(),
+    /** Tool execution mode (pi's AgentOptions.toolExecution, default "parallel"). */
+    private val toolExecution: ToolExecutionMode = ToolExecutionMode.PARALLEL,
     private val streamFn: StreamFn,
 ) {
     /** Guards [active] and transcript mutations; all critical sections are brief and non-suspending. */
@@ -79,8 +92,18 @@ class Agent(
      */
     internal var eventSink: suspend (AgentEvent) -> Unit = {}
 
-    private val _state = MutableStateFlow(AgentState(model = model))
+    private val _state = MutableStateFlow(AgentState(model = model, tools = tools.toList()))
     val state: StateFlow<AgentState> = _state.asStateFlow()
+
+    /**
+     * Serializes [processEvent] critical sections. Pi's processEvents is
+     * effectively single-threaded (JS); under parallel tool execution,
+     * tool-execution events can arrive concurrently with message events, so
+     * reduction + emission + sink run under this mutex to keep the
+     * already-reduced-state contract and prevent lost pending-call updates
+     * (copy-on-write sets alone cannot fix a read-modify-write race).
+     */
+    private val eventMutex = Mutex()
 
     /**
      * Lifecycle events in source order. Internal state is reduced before an
@@ -124,8 +147,14 @@ class Agent(
             val contextSnapshot = AgentContext(
                 systemPrompt = systemPrompt,
                 messages = _state.value.messages.toList(),
+                tools = _state.value.tools.toList(),
             )
-            val config = AgentLoopConfig(model = model, options = streamOptions, streamFn = streamFn)
+            val config = AgentLoopConfig(
+                model = model,
+                options = streamOptions,
+                streamFn = streamFn,
+                toolExecution = toolExecution,
+            )
 
             coroutineScope {
                 // Lazily started so that activeJob is published before the
@@ -135,7 +164,10 @@ class Agent(
                     runAgentLoop(messages, contextSnapshot, config) { event -> processEvent(event) }
                 }
                 activeJob = job
-                reduce { it.copy(isStreaming = true, errorMessage = null) }
+                // Pi's runWithLifecycle clears streamingMessage and
+                // errorMessage when a run starts (agent.ts:496-498);
+                // pendingToolCalls is only cleared by finishRun at run end.
+                reduce { it.copy(isStreaming = true, streamingMessage = null, errorMessage = null) }
                 job.start()
 
                 job.join()
@@ -153,7 +185,9 @@ class Agent(
             withContext(NonCancellable) { handleRunFailure(aborted = false, cause = e) }
         } finally {
             activeJob = null
-            reduce { it.copy(isStreaming = false, streamingMessage = null) }
+            // Pi's finishRun (agent.ts:529-534): runtime-owned state is
+            // cleared on every exit path, aborts included.
+            reduce { it.copy(isStreaming = false, streamingMessage = null, pendingToolCalls = emptySet()) }
             synchronized(lock) { active = false }
         }
     }
@@ -233,9 +267,14 @@ class Agent(
 
     /**
      * Reduce internal state for a loop event, then emit the event to
-     * observers, mirroring pi's processEvents (no-tools subset).
+     * observers, mirroring pi's processEvents (agent.ts:544-591).
+     *
+     * Divergence: upstream `processEvents` is private; this port marks it
+     * `internal` so reduction semantics (pending tool calls, generic
+     * streamingMessage) stay testable at the facade before tool execution
+     * lands in the loop — the frozen events contract is public.
      */
-    private suspend fun processEvent(event: AgentEvent) {
+    internal suspend fun processEvent(event: AgentEvent) = eventMutex.withLock {
         when (event) {
             is AgentEvent.AgentStart,
             is AgentEvent.TurnStart,
@@ -246,12 +285,10 @@ class Agent(
             is AgentEvent.SummarizationRetryScheduled,
             is AgentEvent.SummarizationRetryAttemptStart,
             AgentEvent.SummarizationRetryFinished,
-            is AgentEvent.ToolExecutionStart,
             is AgentEvent.ToolExecutionUpdate,
-            is AgentEvent.ToolExecutionEnd,
             -> Unit
 
-            is AgentEvent.MessageStart -> reduce { it.copy(streamingMessage = event.message as? AssistantMessage) }
+            is AgentEvent.MessageStart -> reduce { it.copy(streamingMessage = event.message) }
 
             is AgentEvent.MessageUpdate -> reduce { it.copy(streamingMessage = event.message) }
 
@@ -259,7 +296,20 @@ class Agent(
                 reduce { it.copy(messages = it.messages + event.message, streamingMessage = null) }
             }
 
+            is AgentEvent.ToolExecutionStart -> {
+                // Copy-on-write set, exactly pi's tool_execution_start case
+                // (agent.ts:559-564).
+                reduce { it.copy(pendingToolCalls = it.pendingToolCalls + event.toolCallId) }
+            }
+
+            is AgentEvent.ToolExecutionEnd -> {
+                reduce { it.copy(pendingToolCalls = it.pendingToolCalls - event.toolCallId) }
+            }
+
             is AgentEvent.TurnEnd -> {
+                // Pi guards `event.message.role === "assistant" && errorMessage`
+                // (agent.ts:569-572); TurnEnd always carries an assistant
+                // message in this contract, so only the null check remains.
                 val message = event.message.errorMessage
                 if (message != null) reduce { it.copy(errorMessage = message) }
             }
@@ -274,7 +324,7 @@ class Agent(
     }
 
     private fun reduce(reducer: (AgentState) -> AgentState) {
-        _state.value = reducer(_state.value)
+        _state.update(reducer)
     }
 
     private companion object {

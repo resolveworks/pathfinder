@@ -43,6 +43,8 @@ class NativeAgentFactory(
     private val authContext: AuthContext = NoopAuthContext,
     /** Maps catalog OAuth-capable providers to concrete flows (empty for now). */
     private val authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
+    /** Tools made available to every created agent (pi's agent tool registry). Copied per agent. */
+    private val tools: List<AgentTool> = emptyList(),
 ) : AgentFactory {
 
     override fun create(
@@ -77,6 +79,7 @@ class NativeAgentFactory(
         return AgentSession(
             agent = Agent(
                 model = effectiveModel,
+                tools = tools.toList(),
                 streamOptions = SimpleStreamOptions(
                     sessionId = sessionId,
                     timeoutMs = REQUEST_TIMEOUT_MS,
