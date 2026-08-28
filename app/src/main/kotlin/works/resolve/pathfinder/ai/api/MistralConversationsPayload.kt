@@ -28,9 +28,9 @@ import kotlinx.serialization.json.put
  * Divergences from pi, all at narrow boundaries:
  * - The wire payload is built directly in snake_case; pi builds an internal
  *   camelCase payload and remaps it in `toMistralWirePayload` so an
- *   `onPayload` hook can add SDK-style fields. Kotlin has no onPayload hook
- *   (tests inspect the transport request instead), so the remap layer has no
- *   consumer.
+ *   `onPayload` hook can add SDK-style fields. This port builds the wire
+ *   payload directly, so the ported onPayload hook (see [MistralOptions])
+ *   sees and returns the snake_case wire object.
  * - pi's `stripSymbolKeys` exists to strip TypeBox symbol metadata; Kotlin
  *   tool parameters are already plain JSON.
  */

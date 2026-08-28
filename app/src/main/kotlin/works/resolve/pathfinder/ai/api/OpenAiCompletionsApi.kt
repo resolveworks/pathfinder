@@ -8,6 +8,7 @@ import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
+import works.resolve.pathfinder.ai.core.ProviderResponse
 import works.resolve.pathfinder.ai.core.SessionAffinityFormat
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
@@ -17,7 +18,9 @@ import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.calculateCost
 import works.resolve.pathfinder.ai.core.hasHeader
+import works.resolve.pathfinder.ai.core.headersToRecord
 import works.resolve.pathfinder.ai.core.mergeHeaders
+import works.resolve.pathfinder.ai.core.mergeSamplingParams
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
@@ -74,7 +77,14 @@ class OpenAiCompletionsApi(
             context,
             options.maxTokens ?: model.maxTokens,
         )
-        return stream(model, context, options.toStreamOptions(effort).copy(maxTokens = maxTokens))
+        return stream(
+            model,
+            context,
+            // pi's buildBaseOptions (simple-options.ts:20-56) merges
+            // model.samplingParams under per-request keys here.
+            options.toStreamOptions(effort)
+                .copy(maxTokens = maxTokens, samplingParams = mergeSamplingParams(model, options)),
+        )
     }
 
     /** Internal control-flow signal: stop consuming the body after `[DONE]`. */
@@ -98,7 +108,11 @@ class OpenAiCompletionsApi(
                     "No API key for provider: ${model.provider}",
                 )
 
-            val body = OpenAiCompletionsPayload.buildRequestBody(model, context, options)
+            // pi openai-completions.ts:352: onPayload inspects/replaces the
+            // params object before serialization; null keeps the payload.
+            var params = OpenAiCompletionsPayload.buildRequestBody(model, context, options)
+            options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
+            val body = params
                 .toString()
                 .toByteArray(Charsets.UTF_8)
 
@@ -147,6 +161,11 @@ class OpenAiCompletionsApi(
             val response = retry.retryProviderRequest<TransportResponse>(options.maxRetries, options.maxRetryDelayMs) {
                 transport.post(request)
             }
+
+            // pi openai-completions.ts:369: onResponse fires after response
+            // headers arrive; like the SDK path it only runs for 2xx (the
+            // transport throws ProviderHttpException before this on non-2xx).
+            options.onResponse?.invoke(ProviderResponse(response.status, headersToRecord(response.headers)), model)
 
             emitAll(state.start())
 

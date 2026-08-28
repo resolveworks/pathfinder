@@ -8,7 +8,9 @@ import works.resolve.pathfinder.ai.core.InputModality
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
+import works.resolve.pathfinder.ai.core.ProviderResponse
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
+import works.resolve.pathfinder.ai.core.headersToRecord
 import works.resolve.pathfinder.ai.core.toToolChoice
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
@@ -70,13 +72,32 @@ data class MistralOptions(
     val promptMode: MistralPromptMode? = null,
     val reasoningEffort: MistralReasoningEffort? = null,
     val cacheRetention: CacheRetention? = null,
+    /**
+     * pi's onPayload request hook (ProviderRequestOptions, types.ts:145-149;
+     * mistral-conversations.ts:142): replaces the payload object before
+     * serialization when it returns non-null. Divergence: upstream's hook sees
+     * the internal camelCase payload before `toMistralWirePayload` remaps it;
+     * this port builds the snake_case wire payload directly, so the hook
+     * sees the wire object. Receives full message content; installers must
+     * not log it. Never included in toString().
+     */
+    val onPayload: (suspend (payload: JsonObject, model: Model) -> JsonObject?)? = null,
+    /**
+     * pi's onResponse request hook (types.ts:184; mistral-conversations.ts:306):
+     * invoked after response headers arrive — including non-2xx, since
+     * upstream fires it before the `response.ok` check (the transport here
+     * throws for non-2xx, so the error path invokes it from the exception's
+     * status/headers). Never included in toString().
+     */
+    val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
 ) {
     override fun toString(): String =
         "MistralOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
             ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
             ", toolChoice=$toolChoice, promptMode=$promptMode, reasoningEffort=<set>" +
             ", cacheRetention=$cacheRetention, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
-            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys})"
+            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys}" +
+            ", onPayload=${onPayload != null}, onResponse=${onResponse != null})"
 }
 
 /**
@@ -90,7 +111,6 @@ data class MistralOptions(
  * - Abort: pi maps an aborted `signal` to a terminal error event with
  *   stopReason "aborted"; here coroutine cancellation propagates normally and
  *   produces no error event, per this codebase's stream contract.
- * - onPayload/onResponse hooks are omitted; tests observe the transport.
  * - pi applies `AbortSignal.timeout(options?.timeoutMs ?? 60_000)` here; this
  *   port forwards the same 60s default to the transport as the per-call
  *   timeout when `timeoutMs` is unset.
@@ -166,7 +186,10 @@ class MistralConversationsApi(
                     works.resolve.pathfinder.ai.api.buildMistralSystemMessage(context.systemPrompt),
                 ) + wireMessages
             }
-            val payload = MistralConversationsPayload.buildRequestBody(model, context, wireMessages, options)
+            // pi mistral-conversations.ts:142: onPayload inspects/replaces the
+            // payload object before serialization; null keeps the payload.
+            var payload = MistralConversationsPayload.buildRequestBody(model, context, wireMessages, options)
+            options.onPayload?.let { hook -> hook(payload, model)?.let { payload = it } }
 
             val url = model.baseUrl.trimEnd('/') + "/v1/chat/completions"
             val (bearerToken, headers) = buildMistralHeaders(model, apiKey, options)
@@ -179,7 +202,16 @@ class MistralConversationsApi(
                 timeoutMs = options.timeoutMs ?: DEFAULT_TIMEOUT_MS,
             )
 
-            val response = transport.post(request)
+            // pi mistral-conversations.ts:306: onResponse fires right after
+            // response headers arrive, before the !ok check — so it also runs
+            // for non-2xx (surfaced from ProviderHttpException here).
+            val response = try {
+                transport.post(request)
+            } catch (error: ProviderHttpException) {
+                options.onResponse?.invoke(ProviderResponse(error.status, headersToRecord(error.headers)), model)
+                throw error
+            }
+            options.onResponse?.invoke(ProviderResponse(response.status, headersToRecord(response.headers)), model)
 
             emit(AssistantMessageEvent.Start(state.snapshot()))
 
@@ -247,6 +279,8 @@ class MistralConversationsApi(
                 headers = options.headers,
                 toolChoice = options.toolChoice?.toToolChoice(),
                 cacheRetention = options.cacheRetention,
+                onPayload = options.onPayload,
+                onResponse = options.onResponse,
                 promptMode = if (useReasoning && usesPromptModeReasoning(model)) MistralPromptMode.REASONING else null,
                 reasoningEffort = if (useReasoning && usesReasoningEffort(model)) {
                     mapReasoningEffort(model, reasoning!!)

@@ -127,6 +127,10 @@ object OpenAiCompletionsPayload {
 
         applyThinking(model, options, compat)?.let { body.putAll(it) }
 
+        // pi buildParams (openai-completions.ts:981-982): merged last so
+        // custom keys override the named request fields.
+        options.samplingParams?.let { body.putAll(it) }
+
         return JsonObject(body)
     }
 
