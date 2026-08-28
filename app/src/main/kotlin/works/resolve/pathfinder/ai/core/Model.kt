@@ -72,9 +72,11 @@ enum class SessionAffinityFormat { OPENAI, OPENAI_NOSESSION, OPENROUTER }
  * OpenAI Responses API-family compatibility flags, ported from pi's
  * OpenAIResponsesCompat. Defaults mirror pi's getCompat() resolution.
  *
- * Divergence from pi: supportsOpenAIGrammarTools is not ported — Pathfinder has
- * no grammar constrained-sampling support (Tool carries no constrainedSampling
- * config), so grammar ("custom") tools are never emitted or replayed.
+ * Divergence from pi: supportsOpenAIGrammarTools is not yet ported — Tool
+ * carries no constrainedSampling config, so grammar ("custom") tools are
+ * never emitted or replayed. Unfinished parity, not a descope: port with
+ * Tool.constrainedSampling and pi's constrained-sampling.ts when agent tool
+ * support lands.
  */
 data class OpenAiResponsesCompat(
     val supportsDeveloperRole: Boolean = true,

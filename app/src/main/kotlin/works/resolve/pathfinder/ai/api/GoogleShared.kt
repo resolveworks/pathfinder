@@ -42,7 +42,9 @@ import kotlinx.serialization.json.put
  *   `resolveJsonSchemaStrictSampling` is always undefined here: the
  *   `VALIDATED` function-calling mode never engages and `convertTools` never
  *   wraps/rewrites schemas for strictness (google-shared.ts /
- *   constrained-sampling.ts).
+ *   constrained-sampling.ts). Unfinished parity, not a descope: port with
+ *   Tool.constrainedSampling and pi's constrained-sampling.ts when agent
+ *   tool support lands.
  * - The replay pre-pass is pi's shared transformMessages (TransformMessages.kt),
  *   including the `ThinkingContent.redacted` branch; `convertMessages` then
  *   applies Google-specific thought-signature validation.
@@ -413,7 +415,9 @@ object GoogleShared {
      * Divergence: pi's `resolveJsonSchemaStrictSampling` (constrained-sampling.ts)
      * has no equivalent here because [Tool] has no `constrainedSampling`, so
      * strict schema wrapping is never applied and the caller's
-     * `supportsStrictMode` only affects mode resolution.
+     * `supportsStrictMode` only affects mode resolution. Unfinished parity,
+     * not a descope: port with Tool.constrainedSampling when agent tool
+     * support lands.
      */
     fun convertTools(
         tools: List<Tool>,

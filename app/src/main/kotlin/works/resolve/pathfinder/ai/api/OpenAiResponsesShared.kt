@@ -49,11 +49,13 @@ import works.resolve.pathfinder.ai.utils.shortHash
  * - [ToolCall.arguments] stays Pathfinder's raw JSON string rather than a parsed
  *   object; replay passes the string through and streaming accumulates raw
  *   deltas, so pi's parseStreamingJson partial parser is not needed here.
- * - Grammar constrained sampling (custom tools) is not ported: Pathfinder's
- *   [Tool] has no constrainedSampling config, so grammar tool paths
- *   (custom_tool_call items, grammar input buffers, and the catalog's
- *   supportsOpenAIGrammarTools flag) are omitted; grammar tools replay as
- *   plain function calls.
+ * - Grammar constrained sampling (custom tools) is not yet ported: [Tool] has
+ *   no constrainedSampling config, so grammar tool paths (custom_tool_call
+ *   items, grammar input buffers, and the catalog's
+ *   supportsOpenAIGrammarTools flag) are omitted and grammar tools replay as
+ *   plain function calls. Unfinished parity, not a descope: port with
+ *   Tool.constrainedSampling and pi's constrained-sampling.ts when agent
+ *   tool support lands.
  * - samplingParams / onPayload / onResponse request hooks are not ported.
  * - GitHub Copilot dynamic headers are ported (GithubCopilotHeaders.kt);
  *   beyond them only static model headers and the affinity headers are sent.

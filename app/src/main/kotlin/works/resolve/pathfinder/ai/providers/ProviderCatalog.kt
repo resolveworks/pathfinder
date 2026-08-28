@@ -352,11 +352,15 @@ private data class CompatDto(
     val supportsAdditionalTools: Boolean? = null,
     val supportsToolSearch: Boolean? = null,
     val supportsExplicitPromptCacheMode: Boolean? = null,
-    // Deliberately not modeled because the native core has no corresponding
-    // data shape: requiresReasoningContentOnAssistantMessages,
-    // deferredToolsMode, cacheControlFormat, allowedFallbackModels, and
-    // supportsToolReferences. Unknown catalog fields are ignored; adapters
-    // must omit the corresponding request features.
+    // Not modeled because the native core has no corresponding data shape
+    // yet: requiresReasoningContentOnAssistantMessages, deferredToolsMode,
+    // cacheControlFormat, allowedFallbackModels, and supportsToolReferences.
+    // Unknown catalog fields are ignored; adapters must omit the corresponding
+    // request features. deferredToolsMode, allowedFallbackModels, and
+    // supportsToolReferences are deferred until agent tool support lands;
+    // cacheControlFormat is deferred with the Completions adapter's
+    // Anthropic-style cache_control emission — unfinished parity, not
+    // descopes.
 ) {
     fun toDomain(where: String) = OpenAiCompletionsCompat(
         supportsStore = supportsStore ?: true,

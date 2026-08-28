@@ -34,6 +34,15 @@ import kotlinx.serialization.json.put
  * (system/user/assistant/tool-result), tool JSON Schema conversion, ZAI
  * thinking format, max_tokens field, tool_stream, and
  * stream_options.include_usage.
+ *
+ * Divergence: pi's Anthropic-style prompt caching for anthropic-format
+ * compat models (getCompatCacheControl / applyAnthropicCacheControl, which
+ * add cache_control {type: ephemeral} to the first instruction, the last
+ * tool, and the last conversation text) is not ported because
+ * cacheControlFormat is unmodeled (see ProviderCatalog). Wire-observable on
+ * openrouter anthropic-family models: requests succeed but carry no cache
+ * hints, so prompt caching is weaker and cost/latency higher. Unfinished
+ * parity, not a descope.
  */
 object OpenAiCompletionsPayload {
 

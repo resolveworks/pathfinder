@@ -35,7 +35,9 @@ import kotlinx.serialization.json.put
  *   tool parameters are already plain JSON.
  * - pi's strict-sampling resolution (`resolveJsonSchemaStrictSampling`) always
  *   resolves to undefined here because Kotlin [Tool] carries no
- *   `constrainedSampling` config, so `strict` is always false.
+ *   `constrainedSampling` config, so `strict` is always false. Unfinished
+ *   parity, not a descope: port with Tool.constrainedSampling when agent
+ *   tool support lands.
  */
 object MistralConversationsPayload {
 

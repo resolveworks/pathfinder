@@ -38,8 +38,10 @@ import kotlinx.serialization.json.put
  *   `defer_loading`, and server-side fallbacks) is not ported: Pathfinder's core
  *   ToolResultMessage has no `addedToolNames` and Model has no
  *   `allowedFallbackModels`.
- * - `strict` tool JSON-schema sampling is not ported; pi's default is
+ * - `strict` tool JSON-schema sampling is not yet ported; pi's default is
  *   `supportsStrictTools: false`, so wire output is identical for defaults.
+ *   Unfinished parity, not a descope: port with Tool.constrainedSampling and
+ *   pi's constrained-sampling.ts when agent tool support lands.
  * - pi's `metadata.user_id` option is not ported (no metadata option here).
  * - Thinking content stays a raw text/signature pair.
  */
