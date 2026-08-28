@@ -26,6 +26,7 @@ import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.models.Provider
 import works.resolve.pathfinder.ai.models.ResolvedAuth
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
+import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 
 /**
@@ -141,6 +142,7 @@ class CatalogProvider(
         transport: HttpStreamingTransport,
         retry: ProviderRetry = ProviderRetry(),
         authResolver: (suspend (apiKey: String?, env: Map<String, String>) -> ResolvedAuth?)? = null,
+        webSocketTransport: WebSocketStreamingTransport? = null,
     ): Provider =
         Provider(
             id = id,
@@ -149,7 +151,7 @@ class CatalogProvider(
             authResolver = authResolver,
             models = models,
             apis = apis.mapNotNull { apiId ->
-                ChatApiRegistry.create(apiId, transport, retry)?.let { apiId to it }
+                ChatApiRegistry.create(apiId, transport, retry, webSocketTransport)?.let { apiId to it }
             }.toMap(),
         )
 }

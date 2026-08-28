@@ -74,18 +74,18 @@ The following exclusions are deliberate:
   has no identity source on a single-user device. Server-side fallbacks, by
   contrast, are ported (`allowedFallbackModels` → `fallbacks` + the
   `server-side-fallback-2026-07-01` beta + fallback cost attribution).
-- **Codex WebSocket transport, cached context, `previous_response_id`
-  continuation, and zstd request compression** are excluded; the Codex
-  adapter is pinned to SSE. Pi's default Codex transport is `"auto"` —
-  WebSocket-first with per-session SSE fallback
-  (openai-codex-responses.ts) — and server-side cached context
-  (`previous_response_id` continuation state) is scoped to that WebSocket
-  connection family, so porting it means a second transport with its
-  fallback/retry state machine for one provider. zstd request bodies use
-  Node's built-in zlib (no JVM/Android equivalent without a native-codec
-  dependency). SSE is pi's explicit fallback transport and remains fully
-  functional; revisit if Codex latency/bandwidth matters enough to justify
-  the transport surface.
+- **Codex WebSocket transport and cached context are ported** (owner
+  decision reversing an earlier exclusion): the WebSocket transport family,
+  `auto` transport selection with per-session SSE fallback, connection
+  pooling with cached context (`previous_response_id` input deltas), the
+  retry/fallback state machine, debug stats, and the close/reset API mirror
+  pi's openai-codex-responses.ts, and zstd SSE request compression is
+  ported. Remaining divergences are the documented ones at the adapter and
+  transport boundaries (see OpenAiCodexResponsesApi.kt and
+  OpenAICodexWebSocketSessions.kt): no AssistantMessage diagnostics for
+  transport failures, no session-resources.ts lifecycle hook (the public
+  close API plus idle TTL/max age own cleanup), and abort as coroutine
+  cancellation.
 - **Image-generation providers** are outside the selected conversational AI
   provider surface. They require a separate media-generation product surface
   rather than another chat protocol adapter.

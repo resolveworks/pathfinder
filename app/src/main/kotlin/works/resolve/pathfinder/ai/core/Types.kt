@@ -17,6 +17,14 @@ enum class ThinkingLevel { MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX }
 /** Prompt-cache retention preference, pi's CacheRetention. */
 enum class CacheRetention { SHORT, LONG, NONE }
 
+/**
+ * pi's `Transport` union (packages/ai/src/types.ts:110):
+ * `"sse" | "websocket" | "websocket-cached" | "auto"`. Only the Codex
+ * adapter consumes it (pi types.ts:200-202: other APIs ignore it);
+ * `AUTO` is WebSocket-first with per-session SSE fallback.
+ */
+enum class Transport { SSE, WEBSOCKET, WEBSOCKET_CACHED, AUTO }
+
 /** Thinking level including the "off" state. */
 enum class ModelThinkingLevel { OFF, MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX }
 
