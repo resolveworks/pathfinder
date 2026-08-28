@@ -33,6 +33,7 @@ import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.ThinkingLevelMap
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.utils.compressRequestBodyZstd
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.NetworkException
@@ -63,15 +64,27 @@ class OpenAiCodexResponsesApiTest {
 
     private val apiKey = jwt("acc-123")
 
-    private fun api(transport: FakeTransport, calls: MutableList<Long> = mutableListOf()) =
-        OpenAICodexResponsesApi(
-            transport,
-            nowMs = { 0L },
-            sleep = { calls.add(it) },
-        )
+    private fun api(
+        transport: FakeTransport,
+        calls: MutableList<Long> = mutableListOf(),
+        compressRequestBody: (String) -> ByteArray? = ::compressRequestBodyZstd,
+    ) = OpenAICodexResponsesApi(
+        transport,
+        nowMs = { 0L },
+        sleep = { calls.add(it) },
+        compressRequestBody = compressRequestBody,
+    )
+
+    /** Decodes a recorded request body, transparently zstd-decompressing when the
+     * request carried Content-Encoding: zstd (pi compresses SSE request bodies). */
+    private fun requestBodyText(transport: FakeTransport, index: Int = 0): String {
+        val request = transport.requests[index]
+        if (request.headers["content-encoding"] != "zstd") return request.body.decodeToString()
+        return com.github.luben.zstd.ZstdInputStream(request.body.inputStream()).readBytes().decodeToString()
+    }
 
     private fun bodyOf(transport: FakeTransport, index: Int = 0) =
-        responsesJson.parseToJsonElement(transport.requests[index].body.decodeToString()).jsonObject
+        responsesJson.parseToJsonElement(requestBodyText(transport, index)).jsonObject
 
     // -----------------------------------------------------------------------
     // URL / auth helpers
@@ -153,6 +166,72 @@ class OpenAiCodexResponsesApiTest {
         assertEquals("auto", body["tool_choice"]!!.jsonPrimitive.content)
         assertEquals(true, body["parallel_tool_calls"]!!.jsonPrimitive.content.toBoolean())
         assertEquals("session-1", body["prompt_cache_key"]!!.jsonPrimitive.content)
+    }
+
+    // -----------------------------------------------------------------------
+    // zstd request-body compression (SSE path)
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `sse requests compress the body with content-encoding zstd`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*doneEvents().toTypedArray()))
+        val events = api(transport).stream(
+            model,
+            context,
+            OpenAICodexResponsesOptions(apiKey = apiKey, sessionId = "session-1"),
+        ).toList()
+        assertIs<AssistantMessageEvent.Done>(events.last())
+        val request = transport.requests.single()
+        assertEquals("zstd", request.headers["content-encoding"])
+        // Round-trip: recompressing the decoded text at level 3 is byte-identical.
+        assertTrue(
+            request.body.contentEquals(
+                com.github.luben.zstd.Zstd.compress(requestBodyText(transport).toByteArray(Charsets.UTF_8), 3),
+            ),
+        )
+        assertEquals("gpt-5.1-codex", bodyOf(transport)["model"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `compression failure falls back to the uncompressed utf-8 body`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*doneEvents().toTypedArray()))
+        val events = api(transport, compressRequestBody = { null }).stream(
+            model,
+            context,
+            OpenAICodexResponsesOptions(apiKey = apiKey),
+        ).toList()
+        assertIs<AssistantMessageEvent.Done>(events.last())
+        val request = transport.requests.single()
+        assertNull(request.headers["content-encoding"])
+        assertEquals(
+            responsesJson.parseToJsonElement(request.body.decodeToString()).jsonObject,
+            bodyOf(transport),
+        )
+        assertEquals("gpt-5.1-codex", bodyOf(transport)["model"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `onPayload replacement is what gets compressed`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*doneEvents().toTypedArray()))
+        val events = api(transport).stream(
+            model,
+            context,
+            OpenAICodexResponsesOptions(
+                apiKey = apiKey,
+                onPayload = { payload, _ ->
+                    buildJsonObject {
+                        payload.forEach { (k, v) -> put(k, v) }
+                        put("model", kotlinx.serialization.json.JsonPrimitive("replaced-model"))
+                    }
+                },
+            ),
+        ).toList()
+        assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals("zstd", transport.requests.single().headers["content-encoding"])
+        assertEquals("replaced-model", bodyOf(transport)["model"]!!.jsonPrimitive.content)
     }
 
     @Test

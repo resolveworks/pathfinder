@@ -43,8 +43,15 @@ class RequestHooksTest {
 
     private val retry = ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 })
 
-    private fun bodyOf(transport: FakeTransport, index: Int = 0): JsonObject =
-        Json.parseToJsonElement(transport.requests[index].body.decodeToString()).jsonObject
+    private fun bodyOf(transport: FakeTransport, index: Int = 0): JsonObject {
+        val request = transport.requests[index]
+        val text = if (request.headers["content-encoding"] == "zstd") {
+            com.github.luben.zstd.ZstdInputStream(request.body.inputStream()).readBytes().decodeToString()
+        } else {
+            request.body.decodeToString()
+        }
+        return Json.parseToJsonElement(text).jsonObject
+    }
 
     private fun enqueueMultiHeaderResponse(transport: FakeTransport, chunks: List<String>) {
         transport.outcomes.add {
