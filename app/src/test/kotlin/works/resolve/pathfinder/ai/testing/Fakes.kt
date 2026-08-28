@@ -5,6 +5,8 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.ai.transport.WebSocketConnection
+import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
@@ -97,3 +99,16 @@ internal class FakeTransport : HttpStreamingTransport {
 }
 
 internal fun sse(vararg payloads: String): List<String> = payloads.toList()
+
+/**
+ * A runtime whose WebSocket connects never succeed: transport-level connect
+ * failures, so AUTO-transport Codex requests fall back to SSE — the same
+ * externally observable path as any real WebSocket connect failure.
+ */
+internal object NoWebSocketTransport : WebSocketStreamingTransport {
+    override suspend fun connect(
+        url: String,
+        headers: Map<String, String>,
+        connectTimeoutMs: Long,
+    ): WebSocketConnection = throw java.io.IOException("no websocket transport in this test")
+}

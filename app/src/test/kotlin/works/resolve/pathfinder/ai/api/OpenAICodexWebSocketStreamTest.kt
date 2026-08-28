@@ -151,7 +151,7 @@ class OpenAICodexWebSocketStreamTest {
 
     private fun api(
         http: FakeTransport,
-        ws: FakeWebSocketTransport?,
+        ws: WebSocketStreamingTransport,
     ) = OpenAICodexResponsesApi(http, webSocketTransport = ws)
 
     // ------------------------------------------------------------------
@@ -729,22 +729,6 @@ class OpenAICodexWebSocketStreamTest {
         // Closed before anything started: transport failure -> SSE fallback.
         assertEquals(1, http.requests.size)
         assertTrue(events.last() is AssistantMessageEvent.Done)
-    }
-
-    @Test
-    fun `null webSocketTransport throws a transport error and falls back to sse`() = runTest {
-        cleanSlate()
-        val http = FakeTransport()
-        http.enqueueResponse(sse(*sseChunks().toTypedArray()))
-        val api = OpenAICodexResponsesApi(http, webSocketTransport = null)
-        val events = api.stream(
-            model,
-            Context(systemPrompt = "You are a helpful assistant.", messages = listOf(UserMessage.ofText("Say hello"))),
-            OpenAICodexResponsesOptions(apiKey = jwt("acc_test"), sessionId = "no-ws"),
-        ).toList()
-        assertTrue(events.last() is AssistantMessageEvent.Done)
-        val stats = getOpenAICodexWebSocketDebugStats("no-ws")!!
-        assertEquals("WebSocket transport is not available in this runtime", stats.lastWebSocketError)
     }
 
     @Test

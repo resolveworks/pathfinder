@@ -45,11 +45,13 @@ import works.resolve.pathfinder.ai.utils.getPiUserAgent
  *
  * Transport divergences from pi, by design (documented narrow Android/runtime
  * adaptations over Pathfinder's HTTP/SSE and WebSocket transports):
- * - A null [webSocketTransport] mirrors pi's no-WebSocket runtimes (browsers):
- *   attempting the WebSocket path throws
- *   `IOException("WebSocket transport is not available in this runtime")`
- *   (pi ~:1046-1048), classified as a transport error, so requests fall back
- *   to the full-context SSE POST exactly like pi's browser path.
+ * - pi supports runtimes without a WebSocket constructor (browsers, old
+ *   Node): the WebSocket path throws "WebSocket transport is not available in
+ *   this runtime" and the request falls back to the full-context SSE POST
+ *   (openai-codex-responses.ts ~:1046-1048). That branch is deliberately not
+ *   ported (owner decision): Android always provides an OkHttp WebSocket
+ *   transport, so [webSocketTransport] is required. Real WebSocket
+ *   connect/transport failures still fall back to SSE exactly like pi.
  * - pi's AssistantMessage diagnostics (`appendAssistantMessageDiagnostic` with
  *   `provider_transport_failure`) are not ported (AssistantMessage has no
  *   diagnostics field); the failure/retry behavior is preserved without the
@@ -506,14 +508,10 @@ class OpenAICodexResponsesApi(
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     // Narrow seam over pi's compressRequestBodyZstd for tests (injects the
-    // compression-unavailable fallback).
+    // compression-failure fallback).
     private val compressRequestBody: (String) -> ByteArray? = ::compressRequestBodyZstd,
-    /**
-     * WebSocket seam (pi's WebSocket constructor). Null mirrors pi's
-     * no-WebSocket runtimes: the WS path throws a transport error and the
-     * request falls back to SSE (see the class KDoc).
-     */
-    private val webSocketTransport: WebSocketStreamingTransport? = null,
+    /** WebSocket seam (pi's WebSocket constructor); required on Android. */
+    private val webSocketTransport: WebSocketStreamingTransport,
 ) : ChatApi {
 
     /**

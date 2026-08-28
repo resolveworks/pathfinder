@@ -21,6 +21,7 @@ import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
+import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.models.Models
 import works.resolve.pathfinder.ai.models.ResolvedAuth
@@ -108,6 +109,7 @@ class OpenAiCodexOAuthRuntimeTest {
             val runtimeProvider = provider.toRuntimeProvider(
                 transport = OkHttpTransport(),
                 authResolver = { _, _ -> ResolvedAuth(resolved.auth.apiKey, resolved.env) },
+                webSocketTransport = NoWebSocketTransport,
             )
             val models = Models(listOf(runtimeProvider))
 

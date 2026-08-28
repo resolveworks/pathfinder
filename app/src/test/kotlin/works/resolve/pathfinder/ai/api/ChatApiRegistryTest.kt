@@ -7,6 +7,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import works.resolve.pathfinder.ai.testing.FakeTransport
+import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 
 /** The registry resolves exactly the APIs with a Kotlin port. */
@@ -46,7 +47,9 @@ class ChatApiRegistryTest {
         assertIs<GoogleGenerativeAiApi>(ChatApiRegistry.create("google-generative-ai", transport, retry))
         assertIs<MistralConversationsApi>(ChatApiRegistry.create("mistral-conversations", transport, retry))
         assertIs<OpenAiResponsesApi>(ChatApiRegistry.create("openai-responses", transport, retry))
-        assertIs<OpenAICodexResponsesApi>(ChatApiRegistry.create("openai-codex-responses", transport, retry))
+        assertIs<OpenAICodexResponsesApi>(
+            ChatApiRegistry.create("openai-codex-responses", transport, retry, webSocketTransport = NoWebSocketTransport),
+        )
         assertIs<AzureOpenAiResponsesApi>(ChatApiRegistry.create("azure-openai-responses", transport, retry))
         assertNull(ChatApiRegistry.create("google-vertex", transport, retry))
     }

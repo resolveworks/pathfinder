@@ -299,6 +299,12 @@ internal const val ANTHROPIC_VERSION = "2023-06-01"
  * API-key auth sends `x-api-key` (pi's SDK default header) plus
  * `anthropic-version`; OAuth tokens (sk-ant-oat) become a Bearer token with
  * Claude Code identity headers and betas.
+ *
+ * Divergence (owner decision): pi sends
+ * `anthropic-dangerous-direct-browser-access: true` unconditionally in all
+ * three createClient branches — a CORS-relaxation header for browser clients
+ * (anthropic-messages.ts:907-965). Pathfinder's OkHttp transport is not a
+ * browser client, so the header is deliberately not sent.
  */
 private fun buildHeaders(
     model: Model,
@@ -327,7 +333,6 @@ private fun buildHeaders(
     if (model.provider == "github-copilot") {
         val base = buildMap<String, String?> {
             put("accept", "application/json")
-            put("anthropic-dangerous-direct-browser-access", "true")
             put("anthropic-version", ANTHROPIC_VERSION)
             if (betaFeatures.isNotEmpty()) put("anthropic-beta", betaFeatures.joinToString(","))
         }
@@ -350,7 +355,6 @@ private fun buildHeaders(
         val headers = mergeHeaders(
             mapOf(
                 "accept" to "application/json",
-                "anthropic-dangerous-direct-browser-access" to "true",
                 "anthropic-version" to ANTHROPIC_VERSION,
                 "anthropic-beta" to (listOf("claude-code-20250219", "oauth-2025-04-20") + betaFeatures)
                     .joinToString(","),
@@ -378,7 +382,6 @@ private fun buildHeaders(
     val base = mergeHeaders(
         buildMap<String, String?> {
             put("accept", "application/json")
-            put("anthropic-dangerous-direct-browser-access", "true")
             put("anthropic-version", ANTHROPIC_VERSION)
             options.apiKey?.let { put("x-api-key", it) }
             if (betaFeatures.isNotEmpty()) put("anthropic-beta", betaFeatures.joinToString(","))

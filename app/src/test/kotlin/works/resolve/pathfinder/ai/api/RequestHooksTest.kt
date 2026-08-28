@@ -10,6 +10,7 @@ import works.resolve.pathfinder.ai.core.ProviderResponse
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeTransport
+import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
@@ -483,7 +484,7 @@ class RequestHooksTest {
         )
         val seen = mutableListOf<JsonObject>()
         val responses = mutableListOf<ProviderResponse>()
-        val events = OpenAICodexResponsesApi(transport, nowMs = { 0L }).streamSimple(
+        val events = OpenAICodexResponsesApi(transport, nowMs = { 0L }, webSocketTransport = NoWebSocketTransport).streamSimple(
             model,
             Context(systemPrompt = "You are Codex.", messages = listOf(UserMessage.ofText("hi"))),
             SimpleStreamOptions(

@@ -77,6 +77,12 @@ The following exclusions are deliberate:
 - **Image-generation providers** are outside the selected conversational AI
   provider surface. They require a separate media-generation product surface
   rather than another chat protocol adapter.
+- **pi's `anthropic-dangerous-direct-browser-access` header** is deliberately
+  not sent (owner decision). pi includes it unconditionally in all three
+  anthropic-messages createClient branches to relax CORS for browser clients
+  (anthropic-messages.ts:907-965); Pathfinder's OkHttp transport is not a
+  browser client, so the header is meaningless here and the rest of the wire
+  shape follows pi.
 - **Anthropic ambient auth-token paths** are deliberately reduced: pi maps
   ANTHROPIC_AUTH_TOKEN to `Authorization: Bearer` header auth and
   ANTHROPIC_OAUTH_TOKEN to an apiKey source (providers/anthropic.ts:24-36),
@@ -96,6 +102,11 @@ upstream or Android changes make a faithful implementation proportionate.
 > at those boundaries: no AssistantMessage transport-failure diagnostics, no
 > session-resources.ts lifecycle hook (the public close API plus idle TTL and
 > max connection age own cleanup), and abort as coroutine cancellation.
+> Pi's no-WebSocket-runtime branch (browsers and old Node falling back to SSE
+> when no WebSocket constructor exists) is likewise not ported, by owner
+> decision: the OkHttp WebSocket transport is required wiring, so the
+> SSE fallback for a missing WebSocket runtime does not exist (real WebSocket
+> failures still fall back to SSE exactly like pi).
 
 ## Adapter capability scope
 

@@ -518,7 +518,8 @@ class AnthropicMessagesStreamTest {
         assertEquals("test-key", request.headers["x-api-key"])
         assertEquals("2023-06-01", request.headers["anthropic-version"])
         assertEquals("application/json", request.headers["accept"])
-        assertEquals("true", request.headers["anthropic-dangerous-direct-browser-access"])
+        // Divergence (owner decision): pi's browser-CORS header is not sent.
+        assertNull(request.headers["anthropic-dangerous-direct-browser-access"])
         // No tools + interleaved thinking default: only the interleaved beta.
         assertEquals("interleaved-thinking-2025-05-14", request.headers["anthropic-beta"])
         val body = Json.parseToJsonElement(request.body.decodeToString()).jsonObject
@@ -713,7 +714,8 @@ class AnthropicMessagesStreamTest {
         assertEquals("conversation-edits", request.headers["Openai-Intent"])
         assertEquals("2023-06-01", request.headers["anthropic-version"])
         assertEquals("application/json", request.headers["accept"])
-        assertEquals("true", request.headers["anthropic-dangerous-direct-browser-access"])
+        // Divergence (owner decision): pi's browser-CORS header is not sent.
+        assertNull(request.headers["anthropic-dangerous-direct-browser-access"])
         // Copilot does not support eager tool input streaming; the adaptive
         // thinking model skips the interleaved beta, so no anthropic-beta.
         assertNull(request.headers["anthropic-beta"])

@@ -12,13 +12,14 @@ internal const val REQUEST_COMPRESSION_ZSTD_LEVEL = 3
 /**
  * Pi's compressRequestBodyZstd (openai-codex-responses.ts:208-223): compress
  * the serialized request body at [REQUEST_COMPRESSION_ZSTD_LEVEL] and return
- * the compressed bytes, or null when compression is unavailable or fails —
- * callers fall back to sending the uncompressed JSON. Never throws.
+ * the compressed bytes, or null when compression fails — callers fall back to
+ * sending the uncompressed JSON, exactly as pi falls back when
+ * `zlib.zstdCompressSync` throws. Never throws; never logs the body.
  *
- * Upstream uses Node's `zlib.zstdCompressSync` and returns null in
- * browser/Vite builds where the module is missing; on the JVM the equivalent
- * unavailability is the zstd-jni native library failing to load, so failures
- * (including linkage errors) are caught here. Never logs the body.
+ * Divergence: pi's other null case — Node's zlib being absent entirely
+ * (browser/Vite builds) — is not modeled. zstd-jni is an ordinary runtime
+ * dependency on Android; a native-library failure is simply a compression
+ * failure that falls back to the uncompressed request.
  */
 fun compressRequestBodyZstd(
     bodyJson: String,

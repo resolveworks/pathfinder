@@ -35,6 +35,7 @@ import works.resolve.pathfinder.ai.core.ThinkingLevelMap
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.utils.compressRequestBodyZstd
 import works.resolve.pathfinder.ai.testing.FakeTransport
+import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.NetworkException
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
@@ -73,6 +74,7 @@ class OpenAiCodexResponsesApiTest {
         nowMs = { 0L },
         sleep = { calls.add(it) },
         compressRequestBody = compressRequestBody,
+        webSocketTransport = NoWebSocketTransport,
     )
 
     /** Decodes a recorded request body, transparently zstd-decompressing when the
@@ -598,6 +600,7 @@ class OpenAiCodexResponsesApiTest {
             transport,
             nowMs = { 1_445_412_475_000L },
             sleep = { delays.add(it) },
+            webSocketTransport = NoWebSocketTransport,
         ).stream(
             model,
             context,

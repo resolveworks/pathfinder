@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.ai.api
 
-import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -147,7 +146,7 @@ internal object OpenAICodexWebSocketSessions {
      * post-await map insert (last writer wins per session/account).
      */
     suspend fun acquire(
-        transport: WebSocketStreamingTransport?,
+        transport: WebSocketStreamingTransport,
         url: String,
         headers: Map<String, String>,
         sessionId: String?,
@@ -155,12 +154,7 @@ internal object OpenAICodexWebSocketSessions {
         connectTimeoutMs: Long?,
     ): Acquired {
         val connect: suspend () -> WebSocketConnection = {
-            // pi connectWebSocket (~:1046-1048): a runtime without a WebSocket
-            // constructor throws; here a null transport mirrors that runtime,
-            // classified downstream as a transport error (SSE fallback).
-            val ws = transport
-                ?: throw IOException("WebSocket transport is not available in this runtime")
-            ws.connect(url, headers, connectTimeoutMs ?: WebSocketStreamingTransport.DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS)
+            transport.connect(url, headers, connectTimeoutMs ?: WebSocketStreamingTransport.DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS)
         }
 
         if (sessionId == null) {

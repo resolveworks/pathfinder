@@ -46,7 +46,13 @@ object ChatApiRegistry {
             GOOGLE_GENERATIVE_AI -> GoogleGenerativeAiApi(transport, retry)
             MISTRAL_CONVERSATIONS -> MistralConversationsApi(transport) // pi: no retry wrapper for Mistral
             OPENAI_RESPONSES -> OpenAiResponsesApi(transport, retry)
-            OPENAI_CODEX_RESPONSES -> OpenAICodexResponsesApi(transport, webSocketTransport = webSocketTransport)
+            // Android always wires a WebSocket transport (pi's no-WebSocket
+            // browser runtimes do not exist here); fail fast on missing wiring.
+            OPENAI_CODEX_RESPONSES -> OpenAICodexResponsesApi(
+                transport,
+                webSocketTransport = webSocketTransport
+                    ?: error("openai-codex-responses requires a WebSocket streaming transport"),
+            )
             AZURE_OPENAI_RESPONSES -> AzureOpenAiResponsesApi(transport, retry)
             else -> null
         }
