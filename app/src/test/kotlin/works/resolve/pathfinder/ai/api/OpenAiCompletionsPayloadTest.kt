@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ai.api
 
 import works.resolve.pathfinder.ai.core.AssistantMessage
+import works.resolve.pathfinder.ai.core.CacheControlFormat
 import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ImageContent
@@ -22,13 +23,16 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
 
@@ -926,5 +930,160 @@ class OpenAiCompletionsPayloadTest {
         )
         assertEquals("session-proxy", b["prompt_cache_key"]!!.jsonPrimitive.content)
         assertEquals("24h", b["prompt_cache_retention"]!!.jsonPrimitive.content)
+    }
+
+    // ---- Anthropic-style cache_control (pi openai-completions.ts:1057-1160,
+    // test/openai-completions-cache-control-format.test.ts) ----
+
+    private val openrouterAnthropic = works.resolve.pathfinder.ai.core.Model(
+        id = "anthropic/claude-sonnet-4",
+        name = "Claude Sonnet 4",
+        api = "openai-completions",
+        provider = "openrouter",
+        baseUrl = "https://example.com/v1",
+        reasoning = true,
+        compat = works.resolve.pathfinder.ai.core.OpenAiCompletionsCompat(
+            cacheControlFormat = CacheControlFormat.ANTHROPIC,
+        ),
+    )
+
+    private val cacheTool = Tool(name = "read", description = "Read a file", parameters = schema)
+
+    private fun cacheControlOf(element: JsonElement): JsonObject? = (element as? JsonObject)?.get("cache_control") as? JsonObject
+
+    private fun assertAnthropicCacheMarkers(b: JsonObject, expectedTtl: String?) {
+        val expected = buildJsonObject {
+            put("type", "ephemeral")
+            expectedTtl?.let { put("ttl", it) }
+        }
+
+        val messages = b["messages"]!!.jsonArray
+        val instruction = messages.first { (it as? JsonObject)?.get("role")?.jsonPrimitive?.content in listOf("system", "developer") }.jsonObject
+        val instructionContent = instruction["content"]!!.jsonArray
+        assertEquals("text", instructionContent[0].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("System prompt", instructionContent[0].jsonObject["text"]!!.jsonPrimitive.content)
+        assertEquals(expected, cacheControlOf(instructionContent[0]))
+
+        val tools = b["tools"]!!.jsonArray
+        assertEquals(1, tools.size)
+        assertEquals(expected, cacheControlOf(tools[0]))
+
+        val last = messages.last().jsonObject
+        assertEquals("user", last["role"]!!.jsonPrimitive.content)
+        assertEquals(expected, cacheControlOf(last["content"]!!.jsonArray[0]))
+    }
+
+    @Test
+    fun `anthropic cache markers applied when compat enables them`() {
+        val b = body(
+            Context(
+                systemPrompt = "System prompt",
+                messages = listOf(UserMessage.ofText("Hello")),
+                tools = listOf(cacheTool),
+            ),
+            model = openrouterAnthropic,
+        )
+        // Default retention is short: ephemeral marker without a ttl.
+        assertAnthropicCacheMarkers(b, expectedTtl = null)
+    }
+
+    @Test
+    fun `anthropic cache markers carry ttl 1h for long retention when supported`() {
+        val b = body(
+            Context(
+                systemPrompt = "System prompt",
+                messages = listOf(UserMessage.ofText("Hello")),
+                tools = listOf(cacheTool),
+            ),
+            OpenAiCompletionsOptions(apiKey = "k", cacheRetention = CacheRetention.LONG),
+            openrouterAnthropic,
+        )
+        assertAnthropicCacheMarkers(b, expectedTtl = "1h")
+    }
+
+    @Test
+    fun `anthropic cache markers omit ttl for long retention without long retention support`() {
+        val model = openrouterAnthropic.copy(
+            compat = openrouterAnthropic.compat.copy(supportsLongCacheRetention = false),
+        )
+        val b = body(
+            Context(
+                systemPrompt = "System prompt",
+                messages = listOf(UserMessage.ofText("Hello")),
+                tools = listOf(cacheTool),
+            ),
+            OpenAiCompletionsOptions(apiKey = "k", cacheRetention = CacheRetention.LONG),
+            model,
+        )
+        assertAnthropicCacheMarkers(b, expectedTtl = null)
+    }
+
+    @Test
+    fun `conversation cache marker moves to a tool result`() {
+        val b = body(
+            Context(
+                systemPrompt = "System prompt",
+                messages = listOf(
+                    UserMessage.ofText("Read the file"),
+                    AssistantMessage(
+                        content = listOf(ToolCall("call_1", "read", """{"path":"README.md"}""")),
+                        api = "openai-completions",
+                        provider = "openrouter",
+                        model = openrouterAnthropic.id,
+                    ),
+                    ToolResultMessage(
+                        toolCallId = "call_1",
+                        toolName = "read",
+                        content = listOf(TextContent("file contents")),
+                    ),
+                ),
+                tools = listOf(cacheTool),
+            ),
+            model = openrouterAnthropic,
+        )
+        val messages = b["messages"]!!.jsonArray
+        // The user message keeps plain string content; the marker lands on
+        // the trailing tool result instead.
+        assertEquals("Read the file", messages[1].jsonObject["content"]!!.jsonPrimitive.content)
+        val toolMessage = messages.last().jsonObject
+        assertEquals("tool", toolMessage["role"]!!.jsonPrimitive.content)
+        assertEquals(
+            buildJsonObject { put("type", "ephemeral") },
+            cacheControlOf(toolMessage["content"]!!.jsonArray[0]),
+        )
+    }
+
+    @Test
+    fun `anthropic cache markers omitted when cache retention is none`() {
+        val b = body(
+            Context(
+                systemPrompt = "System prompt",
+                messages = listOf(UserMessage.ofText("Hello")),
+                tools = listOf(cacheTool),
+            ),
+            OpenAiCompletionsOptions(apiKey = "k", cacheRetention = CacheRetention.NONE),
+            openrouterAnthropic,
+        )
+        val messages = b["messages"]!!.jsonArray
+        assertEquals("System prompt", messages[0].jsonObject["content"]!!.jsonPrimitive.content)
+        assertEquals("Hello", messages.last().jsonObject["content"]!!.jsonPrimitive.content)
+        assertNull(cacheControlOf(b["tools"]!!.jsonArray[0]))
+    }
+
+    @Test
+    fun `anthropic cache markers omitted for models without anthropic format`() {
+        val b = body(
+            Context(
+                systemPrompt = "System prompt",
+                messages = listOf(UserMessage.ofText("Hello")),
+                tools = listOf(cacheTool),
+            ),
+            OpenAiCompletionsOptions(apiKey = "k", cacheRetention = CacheRetention.LONG),
+            openaiModel,
+        )
+        val messages = b["messages"]!!.jsonArray
+        assertEquals("System prompt", messages[0].jsonObject["content"]!!.jsonPrimitive.content)
+        assertEquals("Hello", messages.last().jsonObject["content"]!!.jsonPrimitive.content)
+        assertNull(cacheControlOf(b["tools"]!!.jsonArray[0]))
     }
 }

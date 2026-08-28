@@ -4,6 +4,7 @@ import works.resolve.pathfinder.ai.models.Models
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.TestCatalogs
 import works.resolve.pathfinder.ai.core.Context
+import works.resolve.pathfinder.ai.core.CacheControlFormat
 import works.resolve.pathfinder.ai.core.ChatTemplateKwargValue
 import works.resolve.pathfinder.ai.core.InputModality
 import works.resolve.pathfinder.ai.core.MaxTokensField
@@ -185,6 +186,7 @@ class ProviderCatalogTest {
         assertEquals(ThinkingFormat.QWEN, compat.thinkingFormat)
         assertTrue(compat.zaiToolStream)
         assertTrue(compat.supportsStrictMode)
+        assertEquals(CacheControlFormat.ANTHROPIC, compat.cacheControlFormat)
         assertEquals(
             ChatTemplateKwargValue.Ref(varName = "thinking.enabled", omitWhenOff = true),
             compat.chatTemplateArgs["enable_thinking"],
@@ -193,6 +195,58 @@ class ProviderCatalogTest {
             ChatTemplateKwargValue.Scalar(JsonPrimitive(0.7)),
             compat.chatTemplateArgs["temperature"],
         )
+    }
+
+    @Test
+    fun `completions cacheControlFormat parses and openrouter anthropic detection applies`() {
+        // pi detectCompat (openai-completions.ts:1621,1633): "anthropic" when
+        // the provider is openrouter and the model id starts with "anthropic/";
+        // getCompat merges an explicit model.compat override on top (:1701).
+        val catalog = ProviderCatalog.parse(
+            """
+            {
+              "providers": [
+                {
+                  "id": "openrouter", "name": "OR", "baseUrl": "https://openrouter.ai/api/v1",
+                  "models": [
+                    {"id": "anthropic/claude-sonnet-4", "name": "A"},
+                    {"id": "openai/gpt-4o", "name": "B"},
+                    {
+                      "id": "qwen/qwen3", "name": "C",
+                      "compat": {"cacheControlFormat": "anthropic"}
+                    }
+                  ]
+                },
+                {
+                  "id": "other", "name": "O", "baseUrl": "https://other.test/v1",
+                  "models": [{"id": "anthropic/claude-sonnet-4", "name": "D"}]
+                }
+              ]
+            }
+            """,
+        )
+        assertEquals(CacheControlFormat.ANTHROPIC, catalog.getModel("openrouter", "anthropic/claude-sonnet-4")!!.compat.cacheControlFormat, "openrouter anthropic/* detected")
+        assertNull(catalog.getModel("openrouter", "openai/gpt-4o")!!.compat.cacheControlFormat)
+        assertEquals(CacheControlFormat.ANTHROPIC, catalog.getModel("openrouter", "qwen/qwen3")!!.compat.cacheControlFormat, "explicit compat overrides detection")
+        assertNull(catalog.getModel("other", "anthropic/claude-sonnet-4")!!.compat.cacheControlFormat, "non-openrouter anthropic model unaffected")
+    }
+
+    @Test
+    fun `openrouter anthropic models keep anthropic cache control format from the real asset`() {
+        // pi openrouter-cache-control-models.test.ts: the ~anthropic/*-latest
+        // aliases (explicit catalog compat) and the anthropic/* models both
+        // resolve cacheControlFormat "anthropic".
+        val catalog = realAsset()
+        for (id in listOf(
+            "~anthropic/claude-fable-latest",
+            "~anthropic/claude-haiku-latest",
+            "~anthropic/claude-opus-latest",
+            "~anthropic/claude-sonnet-latest",
+        )) {
+            assertEquals(CacheControlFormat.ANTHROPIC, catalog.getModel("openrouter", id)!!.compat.cacheControlFormat)
+        }
+        assertEquals(CacheControlFormat.ANTHROPIC, catalog.getModel("openrouter", "anthropic/claude-sonnet-4")!!.compat.cacheControlFormat)
+        assertNull(catalog.getModel("openrouter", "aion-labs/aion-2.0")!!.compat.cacheControlFormat)
     }
 
     @Test

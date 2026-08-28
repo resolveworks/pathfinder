@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.api
 
+import works.resolve.pathfinder.ai.core.CacheControlFormat
 import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ChatTemplateKwargValue
@@ -25,6 +26,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
 /**
@@ -35,14 +37,13 @@ import kotlinx.serialization.json.put
  * thinking format, max_tokens field, tool_stream, and
  * stream_options.include_usage.
  *
- * Divergence: pi's Anthropic-style prompt caching for anthropic-format
- * compat models (getCompatCacheControl / applyAnthropicCacheControl, which
- * add cache_control {type: ephemeral} to the first instruction, the last
- * tool, and the last conversation text) is not ported because
- * cacheControlFormat is unmodeled (see ProviderCatalog). Wire-observable on
- * openrouter anthropic-family models: requests succeed but carry no cache
- * hints, so prompt caching is weaker and cost/latency higher. Unfinished
- * parity, not a descope.
+ * Anthropic-style prompt caching for anthropic-format compat models, ported
+ * from pi's getCompatCacheControl / applyAnthropicCacheControl
+ * (openai-completions.ts:1057-1160): when cacheControlFormat is "anthropic"
+ * and cacheRetention is not "none", cache_control {type: "ephemeral", ttl?
+ * "1h"} is attached to the first instruction message, the last tool, and the
+ * last conversation text (user/assistant/tool), where the ttl is sent only
+ * for long retention on models that support it.
  */
 object OpenAiCompletionsPayload {
 
@@ -61,7 +62,11 @@ object OpenAiCompletionsPayload {
     ): JsonObject {
         val body = mutableMapOf<String, JsonElement>()
         body["model"] = JsonPrimitive(model.id)
-        body["messages"] = JsonArray(convertMessages(model, context, compat))
+        // pi buildParams (openai-completions.ts:795-844): the converted
+        // messages and tools are finalized first so anthropic-style
+        // cache_control markers can be applied to them (:843-845).
+        val messages = convertMessages(model, context, compat).toMutableList()
+        val cacheControl = getCompatCacheControl(compat, cacheRetention)
         body["stream"] = JsonPrimitive(true)
 
         // pi buildParams (openai-completions.ts:804-810): prompt_cache_key is
@@ -96,15 +101,23 @@ object OpenAiCompletionsPayload {
         }
         options.temperature?.let { body["temperature"] = JsonPrimitive(it) }
 
-        if (context.tools.isNotEmpty()) {
-            body["tools"] = JsonArray(context.tools.map { convertTool(it, compat) })
-            if (compat.zaiToolStream) {
-                body["tool_stream"] = JsonPrimitive(true)
+        val tools: MutableList<JsonObject>? = if (context.tools.isNotEmpty()) {
+            context.tools.map { convertTool(it, compat) }.toMutableList().also {
+                if (compat.zaiToolStream) {
+                    body["tool_stream"] = JsonPrimitive(true)
+                }
             }
         } else if (hasToolHistory(context.messages)) {
             // Some proxies require the tools param when history has tool calls.
-            body["tools"] = JsonArray(emptyList())
+            mutableListOf()
+        } else {
+            null
         }
+        if (cacheControl != null) {
+            applyAnthropicCacheControl(messages, tools, cacheControl)
+        }
+        body["messages"] = JsonArray(messages.toList())
+        tools?.let { body["tools"] = JsonArray(it.toList()) }
 
         // pi's buildParams: `if (options?.toolChoice) params.tool_choice = options.toolChoice`
         // (openai-completions.ts:850-851), where toolChoice is the wire form
@@ -301,6 +314,151 @@ object OpenAiCompletionsPayload {
             resolve(v)?.let { k to it }
         }
         return resolved.toMap().takeIf { it.isNotEmpty() }?.let { JsonObject(it) }
+    }
+
+    // =====================================================================
+    // Anthropic-style cache_control (openai-completions.ts:1057-1160)
+    // =====================================================================
+
+    /**
+     * pi's OpenAICompatCacheControl wire shape (openai-completions.ts:174-177):
+     * `{type: "ephemeral", ttl?: "1h"}`.
+     */
+    internal data class OpenAiCompatCacheControl(val type: String, val ttl: String?) {
+        fun toJson(): JsonObject = buildJsonObject {
+            put("type", type)
+            ttl?.let { put("ttl", it) }
+        }
+    }
+
+    /**
+     * pi's getCompatCacheControl (openai-completions.ts:1057-1066): undefined
+     * unless cacheControlFormat is "anthropic", and suppressed entirely when
+     * cacheRetention is "none"; the "1h" ttl is only sent for long retention
+     * where the model supports long cache retention.
+     */
+    internal fun getCompatCacheControl(
+        compat: OpenAiCompletionsCompat,
+        cacheRetention: CacheRetention,
+    ): OpenAiCompatCacheControl? {
+        if (compat.cacheControlFormat != CacheControlFormat.ANTHROPIC || cacheRetention == CacheRetention.NONE) {
+            return null
+        }
+        val ttl = if (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention) "1h" else null
+        return OpenAiCompatCacheControl(type = "ephemeral", ttl = ttl)
+    }
+
+    /**
+     * pi's applyAnthropicCacheControl (openai-completions.ts:1068-1076): marks
+     * the first instruction message, the last tool, and the last conversation
+     * message with the given cache_control. pi mutates the converted payload
+     * objects in place; the immutable JSON values are rebuilt here instead.
+     */
+    internal fun applyAnthropicCacheControl(
+        messages: MutableList<JsonObject>,
+        tools: MutableList<JsonObject>?,
+        cacheControl: OpenAiCompatCacheControl,
+    ) {
+        addCacheControlToSystemPrompt(messages, cacheControl)
+        addCacheControlToLastTool(tools, cacheControl)
+        addCacheControlToLastConversationMessage(messages, cacheControl)
+    }
+
+    /**
+     * pi's addCacheControlToSystemPrompt (openai-completions.ts:1078-1087):
+     * only the first system/developer message is marked, regardless of
+     * whether it had markable text content.
+     */
+    private fun addCacheControlToSystemPrompt(
+        messages: MutableList<JsonObject>,
+        cacheControl: OpenAiCompatCacheControl,
+    ) {
+        val index = messages.indexOfFirst { message ->
+            (message["role"] as? JsonPrimitive)?.contentOrNull == "system" ||
+                (message["role"] as? JsonPrimitive)?.contentOrNull == "developer"
+        }
+        if (index >= 0) {
+            addCacheControlToTextContent(messages, index, cacheControl)
+        }
+    }
+
+    /**
+     * pi's addCacheControlToLastConversationMessage
+     * (openai-completions.ts:1089-1099): walks back to the last
+     * user/assistant/tool message with markable text content; earlier
+     * messages are tried when one has none.
+     */
+    private fun addCacheControlToLastConversationMessage(
+        messages: MutableList<JsonObject>,
+        cacheControl: OpenAiCompatCacheControl,
+    ) {
+        for (i in messages.indices.reversed()) {
+            val role = (messages[i]["role"] as? JsonPrimitive)?.contentOrNull
+            if (role == "user" || role == "assistant" || role == "tool") {
+                if (addCacheControlToTextContent(messages, i, cacheControl)) {
+                    return
+                }
+            }
+        }
+    }
+
+    /**
+     * pi's addCacheControlToLastTool (openai-completions.ts:1101-1109): the
+     * cache_control goes directly on the last tool object.
+     */
+    private fun addCacheControlToLastTool(tools: MutableList<JsonObject>?, cacheControl: OpenAiCompatCacheControl) {
+        if (tools.isNullOrEmpty()) return
+        tools[tools.size - 1] = JsonObject(tools.last() + ("cache_control" to cacheControl.toJson()))
+    }
+
+    /**
+     * pi's addCacheControlToTextContent (openai-completions.ts:1127-1160):
+     * string content is replaced by a single text part carrying cache_control
+     * (empty strings are not markable); array content gets cache_control on
+     * its last text part; other shapes (absent/null content) are not markable.
+     */
+    private fun addCacheControlToTextContent(
+        messages: MutableList<JsonObject>,
+        index: Int,
+        cacheControl: OpenAiCompatCacheControl,
+    ): Boolean {
+        val message = messages[index]
+        return when (val content = message["content"] ?: return false) {
+            is JsonPrimitive -> {
+                val text = content.contentOrNull
+                if (text == null || text.isEmpty()) return false
+                messages[index] = JsonObject(
+                    message + (
+                        "content" to JsonArray(
+                            listOf(
+                                buildJsonObject {
+                                    put("type", "text")
+                                    put("text", text)
+                                    put("cache_control", cacheControl.toJson())
+                                },
+                            ),
+                        )
+                        ),
+                )
+                true
+            }
+
+            is JsonArray -> {
+                for (j in content.indices.reversed()) {
+                    val part = content[j]
+                    if (part is JsonObject && (part["type"] as? JsonPrimitive)?.contentOrNull == "text") {
+                        val newContent = content.toMutableList().also {
+                            it[j] = JsonObject(part + ("cache_control" to cacheControl.toJson()))
+                        }
+                        messages[index] = JsonObject(message + ("content" to JsonArray(newContent)))
+                        return true
+                    }
+                }
+                false
+            }
+
+            else -> false
+        }
     }
 
     fun convertMessages(
