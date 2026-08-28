@@ -207,6 +207,8 @@ internal object SessionCodec {
             put("toolName", message.toolName)
             put("content", encodeContentList(message.content))
             put("isError", message.isError)
+            message.details?.let { put("details", it) }
+            message.usage?.let { put("usage", buildJsonObject { putUsage(it) }) }
             if (message.addedToolNames.isNotEmpty()) {
                 put("addedToolNames", JsonArray(message.addedToolNames.map(::JsonPrimitive)))
             }
@@ -241,6 +243,8 @@ internal object SessionCodec {
                 toolCallId = obj.string("toolCallId") ?: throw SessionDataException("Malformed session data: tool result missing toolCallId"),
                 toolName = obj.string("toolName") ?: throw SessionDataException("Malformed session data: tool result missing toolName"),
                 content = decodeContentList(obj["content"]),
+                details = obj["details"],
+                usage = obj["usage"]?.let(::decodeUsage),
                 addedToolNames = decodeStringList(obj["addedToolNames"]),
                 isError = obj.boolean("isError")
                     ?: throw SessionDataException("Malformed session data: tool result missing isError"),

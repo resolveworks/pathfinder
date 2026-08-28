@@ -9,6 +9,7 @@ import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.UserMessage
+import kotlinx.serialization.json.Json
 import kotlin.test.assertFailsWith
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -193,6 +194,57 @@ class SessionCodecTest {
         )
         val encoded = SessionCodec.encode(session)
         assertEquals(false, encoded.contains("addedToolNames"))
+    }
+
+    @Test
+    fun toolResultDetailsAndUsageRoundTrip() {
+        val details =
+            """{"nested":{"a":[1,"two",true,null],"b":{"c":1.5}},"list":[{"k":"v"}]}""".let(Json::parseToJsonElement)
+        val usage = Usage(
+            input = 5, output = 6, cacheRead = 1, cacheWrite = 2, cacheWrite1h = 3,
+            reasoning = 4, totalTokens = 11, cost = Cost(0.1, 0.2, 0.0, 0.0, 0.3),
+        )
+        val result = ToolResultMessage(
+            toolCallId = "call|fc_1",
+            toolName = "edit",
+            content = listOf(TextContent("ok")),
+            details = details,
+            usage = usage,
+            isError = true,
+        )
+        val session = branchedSession().copy(
+            entries = listOf(MessageEntry("m1", null, 2L, result)),
+            leafId = "m1",
+        )
+        val decoded = SessionCodec.decode(SessionCodec.encode(session))
+        assertEquals(result, (decoded.entries.single() as MessageEntry).message)
+        // Structured details JSON is preserved exactly, not normalized.
+        assertEquals(details, (decoded.entries.single() as MessageEntry).message.let { it as ToolResultMessage }.details)
+        // cacheWrite1h optional encode path is exercised and survives.
+        assertEquals(3, (decoded.entries.single() as MessageEntry).message.let { it as ToolResultMessage }.usage?.cacheWrite1h)
+    }
+
+    @Test
+    fun toolResultDetailsAndUsageAbsentInOlderV2DecodeAsNull() {
+        val legacy = SessionCodec.decode(
+            """{
+              "format": 2, "id": "sess-old", "title": "t",
+              "createdAt": 1, "updatedAt": 2,
+              "entries": [{
+                "type": "message", "id": "m1", "timestamp": 3,
+                "message": {
+                  "role": "toolResult", "timestamp": 3,
+                  "toolCallId": "call|fc_1", "toolName": "edit",
+                  "content": [{"type": "text", "text": "ok"}],
+                  "isError": false
+                }
+              }],
+              "leafId": "m1"
+            }""",
+        )
+        val result = (legacy.entries.single() as MessageEntry).message as ToolResultMessage
+        assertNull(result.details)
+        assertNull(result.usage)
     }
 
     @Test
