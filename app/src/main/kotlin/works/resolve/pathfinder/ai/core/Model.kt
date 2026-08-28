@@ -273,7 +273,27 @@ data class AnthropicMessagesCompat(
     val supportsStrictTools: Boolean = false,
     /** pi's compat.forceAdaptiveThinking: null = unset, true/false explicit. */
     val forceAdaptiveThinking: Boolean? = null,
+    /**
+     * pi's compat.allowedFallbackModels (types.ts:695-702): models Anthropic
+     * accepts in `fallbacks` for server-side refusal fallback, with local
+     * pricing metadata for returned fallback responses. When absent or empty,
+     * callers must omit `fallbacks`; Anthropic rejects the field for models
+     * with no permitted fallback targets.
+     */
+    val allowedFallbackModels: List<AnthropicAllowedFallbackModel> = emptyList(),
 )
 
 /** Resolved Anthropic compat flags with pi's defaults, pi's getAnthropicCompat. */
 fun anthropicCompatOf(model: Model): AnthropicMessagesCompat = model.anthropicCompat
+
+/**
+ * pi's AnthropicAllowedFallbackModel (packages/ai/src/types.ts:307-311): one
+ * server-side fallback target. Only [model] goes on the wire in `fallbacks`;
+ * [provider] and [cost] are local metadata for usage attribution when the
+ * server serves the fallback model.
+ */
+data class AnthropicAllowedFallbackModel(
+    val provider: String,
+    val model: String,
+    val cost: ModelCost,
+)

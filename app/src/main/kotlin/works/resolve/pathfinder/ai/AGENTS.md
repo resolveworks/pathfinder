@@ -80,11 +80,14 @@ upstream or Android changes make a faithful implementation proportionate.
 
 ## Adapter capability scope
 
-Provider options such as grammar-constrained custom tools, deferred server
-tools and fallbacks should be added only after the native core models the
+Provider options such as grammar-constrained custom tools and deferred server
+tools should be added only after the native core models the
 corresponding pi concepts and data shapes. (Request hooks — onPayload /
 onResponse — and samplingParams are now ported; see [SimpleStreamOptions]
-and the per-adapter wiring sites for their pi provenance.) Do not add
+and the per-adapter wiring sites for their pi provenance. Anthropic
+server-side fallbacks — `allowedFallbackModels`, the `fallbacks` request
+field, the `server-side-fallback-2026-07-01` beta, and fallback cost
+attribution — are now ported at the anthropic-messages boundary.) Do not add
 isolated wire fields that the runtime cannot represent correctly.
 
 When a narrow option is omitted, document it at the adapter or model boundary

@@ -36,9 +36,9 @@ import kotlinx.serialization.json.put
  *
  * Documented divergences from pi (kept narrow, per project rules):
  * - Deferred tool loading (`splitDeferredTools`, `tool_reference` blocks,
- *   `defer_loading`, and server-side fallbacks) is not ported: Pathfinder's core
- *   ToolResultMessage has no `addedToolNames` and Model has no
- *   `allowedFallbackModels`.
+ *   `defer_loading`, and pi's `supportsToolReferences`/`deferredToolsMode`)
+ *   is not ported: Pathfinder's core ToolResultMessage has no
+ *   `addedToolNames`.
  * - pi's `metadata.user_id` option is not ported (no metadata option here).
  * - Thinking content stays a raw text/signature pair.
  */
@@ -534,6 +534,16 @@ internal fun buildRequestBody(
             put("name", choice.name)
         }
         null -> {}
+    }
+
+    // pi anthropic-messages.ts:1107-1110: fallbacks carry model ids only;
+    // provider/cost are local metadata. Omitted when empty (Anthropic rejects
+    // the field for models with no permitted fallback targets).
+    val allowedFallbackModels = compat.allowedFallbackModels
+    if (allowedFallbackModels.isNotEmpty()) {
+        body["fallbacks"] = JsonArray(
+            allowedFallbackModels.map { buildJsonObject { put("model", it.model) } },
+        )
     }
 
     return JsonObject(body)

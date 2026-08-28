@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.api
 
+import works.resolve.pathfinder.ai.core.AnthropicAllowedFallbackModel
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
@@ -556,6 +557,106 @@ class AnthropicMessagesStreamTest {
         )
         api(transport).stream(adaptive, context, AnthropicMessagesOptions(apiKey = "k")).toList()
         assertNull(transport.requests.single().headers["anthropic-beta"])
+    }
+
+    @Test
+    fun `allowedFallbackModels add the server-side fallback beta after the interleaved beta`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(textStream("ok"))
+        val fable = claude.copy(
+            anthropicCompat = claude.anthropicCompat.copy(
+                allowedFallbackModels = listOf(
+                    AnthropicAllowedFallbackModel(
+                        provider = "anthropic",
+                        model = "claude-opus-4-8",
+                        cost = ModelCost(input = 5.0, output = 25.0, cacheRead = 0.5, cacheWrite = 6.25),
+                    ),
+                ),
+            ),
+        )
+        api(transport).stream(fable, context, AnthropicMessagesOptions(apiKey = "k")).toList()
+        assertEquals(
+            "interleaved-thinking-2025-05-14,server-side-fallback-2026-07-01",
+            transport.requests.single().headers["anthropic-beta"],
+        )
+    }
+
+    /** pi anthropic-messages.ts:592-599: fallback usage attribution. */
+    private val fableWithFallbacks = claude.copy(
+        anthropicCompat = claude.anthropicCompat.copy(
+            allowedFallbackModels = listOf(
+                AnthropicAllowedFallbackModel(
+                    provider = "anthropic",
+                    model = "claude-opus-4-8",
+                    cost = ModelCost(input = 5.0, output = 25.0, cacheRead = 0.5, cacheWrite = 6.25),
+                ),
+                AnthropicAllowedFallbackModel(
+                    provider = "openrouter",
+                    model = "claude-opus-5",
+                    cost = ModelCost(input = 99.0, output = 99.0),
+                ),
+            ),
+        ),
+    )
+
+    @Test
+    fun `served fallback model attributes usage cost from the fallback entry`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            messageStart(input = 100, model = "claude-opus-4-8"),
+            messageDelta(output = 7),
+            messageStop,
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport)
+                .stream(fableWithFallbacks, context, AnthropicMessagesOptions(apiKey = "k"))
+                .toList()
+                .last(),
+        )
+        // responseModel follows the observed model; cost uses the fallback rates.
+        assertEquals("claude-opus-4-8", done.message.responseModel)
+        assertEquals("claude-opus-4-8", done.message.model)
+        assertEquals(100 * 5.0 / 1_000_000, done.message.usage.cost.input, 1e-12)
+        assertEquals(7 * 25.0 / 1_000_000, done.message.usage.cost.output, 1e-12)
+    }
+
+    @Test
+    fun `same-model response keeps the requested model cost`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            messageStart(input = 100, model = "claude-sonnet-4-5"),
+            messageDelta(output = 7),
+            messageStop,
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport)
+                .stream(fableWithFallbacks, context, AnthropicMessagesOptions(apiKey = "k"))
+                .toList()
+                .last(),
+        )
+        assertEquals(100 * 3.0 / 1_000_000, done.message.usage.cost.input, 1e-12)
+        assertEquals(7 * 15.0 / 1_000_000, done.message.usage.cost.output, 1e-12)
+    }
+
+    @Test
+    fun `unknown different model keeps the requested model cost`() = runTest {
+        // Same model id but a different provider entry: no fallback match,
+        // exactly like pi's provider + model check.
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            messageStart(input = 100, model = "claude-opus-5"),
+            messageDelta(output = 7),
+            messageStop,
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport)
+                .stream(fableWithFallbacks, context, AnthropicMessagesOptions(apiKey = "k"))
+                .toList()
+                .last(),
+        )
+        assertEquals("claude-opus-5", done.message.responseModel)
+        assertEquals(100 * 3.0 / 1_000_000, done.message.usage.cost.input, 1e-12)
+        assertEquals(7 * 15.0 / 1_000_000, done.message.usage.cost.output, 1e-12)
     }
 
     @Test

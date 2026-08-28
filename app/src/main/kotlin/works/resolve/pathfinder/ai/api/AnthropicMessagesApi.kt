@@ -318,6 +318,10 @@ private fun buildHeaders(
     if (needsInterleavedBeta) {
         betaFeatures.add("interleaved-thinking-2025-05-14")
     }
+    // pi's shouldUseServerSideFallbackBeta (anthropic-messages.ts:180).
+    if (compat.allowedFallbackModels.isNotEmpty()) {
+        betaFeatures.add("server-side-fallback-2026-07-01")
+    }
 
     // Copilot: Bearer auth, selective betas (pi checks this branch before OAuth).
     if (model.provider == "github-copilot") {
@@ -442,6 +446,14 @@ internal class AnthropicStreamState(
     var responseModel: String? = null
         private set
 
+    /**
+     * Model used for usage cost accounting (pi's usageModel,
+     * anthropic-messages.ts:592-599): the requested model, or a copy carrying
+     * the served fallback model's id and cost when message_start reports a
+     * permitted fallback model.
+     */
+    private var usageModel: Model = model
+
     var sawMessageStart = false
         private set
     var sawMessageStop = false
@@ -452,6 +464,16 @@ internal class AnthropicStreamState(
         val message = event["message"] as? JsonObject ?: return emptyList()
         responseId = (message["id"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content ?: responseId
         responseModel = (message["model"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
+        // pi anthropic-messages.ts:592-599: when the server serves a fallback
+        // model, cost accounting uses the fallback entry's cost; the observed
+        // id wins only when it differs and matches a permitted fallback.
+        if (responseModel != null && responseModel != model.id) {
+            val fallbackCost = model.anthropicCompat.allowedFallbackModels
+                .find { it.provider == model.provider && it.model == responseModel }?.cost
+            if (fallbackCost != null) {
+                usageModel = model.copy(id = responseModel!!, cost = fallbackCost)
+            }
+        }
         // Capture initial token usage so an early abort still has input counts.
         val messageUsage = message["usage"] as? JsonObject
         if (messageUsage != null) {
@@ -464,7 +486,7 @@ internal class AnthropicStreamState(
                 cacheWrite1h = (messageUsage["cache_creation"] as? JsonObject)
                     ?.intOrZero("ephemeral_1h_input_tokens") ?: 0,
             )
-            usage = withTotal(usage, model)
+            usage = withTotal(usage)
         }
         return emptyList()
     }
@@ -581,7 +603,7 @@ internal class AnthropicStreamState(
                 reasoning = (eventUsage["output_tokens_details"] as? JsonObject)
                     ?.intOrNullField("thinking_tokens") ?: usage.reasoning,
             )
-            usage = withTotal(usage, model)
+            usage = withTotal(usage)
         }
         return emptyList()
     }
@@ -615,10 +637,10 @@ internal class AnthropicStreamState(
     )
 
     /** Anthropic doesn't provide total_tokens; compute from components, like pi. */
-    private fun withTotal(usage: Usage, model: Model): Usage {
+    private fun withTotal(usage: Usage): Usage {
         val total = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
         val withTotal = usage.copy(totalTokens = total)
-        return withTotal.copy(cost = calculateCost(model, withTotal))
+        return withTotal.copy(cost = calculateCost(usageModel, withTotal))
     }
 
     fun snapshot(): AssistantMessage = AssistantMessage(

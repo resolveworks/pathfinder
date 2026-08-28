@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.api
 
+import works.resolve.pathfinder.ai.core.AnthropicAllowedFallbackModel
 import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig
@@ -668,5 +669,38 @@ class AnthropicMessagesPayloadTest {
             "Tool \"edit\" requires JSON-schema constrained sampling, but strict tools are unsupported.",
             failure.message,
         )
+    }
+
+    // pi anthropic-messages.ts:1107-1110: fallbacks carry model ids only and
+    // are omitted when the catalog list is empty (Anthropic rejects the field
+    // for models with no permitted fallback targets).
+    @Test
+    fun `fallbacks carry model ids only when the catalog list is non-empty`() {
+        val context = Context(messages = listOf(UserMessage.ofText("hi")))
+        val fable = claude.copy(
+            anthropicCompat = claude.anthropicCompat.copy(
+                allowedFallbackModels = listOf(
+                    AnthropicAllowedFallbackModel(
+                        provider = "anthropic",
+                        model = "claude-opus-4-8",
+                        cost = ModelCost(input = 5.0, output = 25.0, cacheRead = 0.5, cacheWrite = 6.25),
+                    ),
+                    AnthropicAllowedFallbackModel(
+                        provider = "anthropic",
+                        model = "claude-opus-5",
+                        cost = ModelCost(input = 5.0, output = 25.0, cacheRead = 0.5, cacheWrite = 6.25),
+                    ),
+                ),
+            ),
+        )
+        val json = body(context, model = fable)
+        val fallbacks = json["fallbacks"]!!.jsonArray
+        assertEquals("claude-opus-4-8", fallbacks[0].jsonObject["model"]!!.jsonPrimitive.content)
+        assertEquals("claude-opus-5", fallbacks[1].jsonObject["model"]!!.jsonPrimitive.content)
+        // Only the model key goes on the wire; provider/cost stay local.
+        assertEquals(setOf("model"), fallbacks[0].jsonObject.keys)
+        assertEquals(setOf("model"), fallbacks[1].jsonObject.keys)
+        // Absent for models with no fallback targets.
+        assertNull(body(context)["fallbacks"])
     }
 }
