@@ -8,6 +8,7 @@ import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.Tool
+import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.UserMessage
 import java.util.concurrent.CopyOnWriteArrayList
@@ -466,5 +467,70 @@ class AgentTest {
         agent.prompt(listOf(UserMessage.ofText("hi")))
         assertTrue(agent.state.value.pendingToolCalls.isEmpty())
         assertNull(agent.state.value.streamingMessage)
+    }
+
+    @Test
+    fun `full tool run persists user toolCall toolResult and follow-up assistant in source order`() = runTest {
+        // End-to-end against the real loop, mirroring pi's multi-turn
+        // message lifecycle (agent-loop.ts runLoop): one prompt whose first
+        // response is TOOL_USE, tool execution, then a follow-up assistant
+        // turn; AgentState.messages must hold the run's messages in source
+        // order (pi's processEvents appends on every message_end).
+        val tool = fakeTool("get_weather")
+        val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
+            content = listOf(ToolCall("call-1", "get_weather", "{}")),
+        )
+        var call = 0
+        val agent = agent(
+            tools = listOf(tool),
+            streamFn = StreamFn { _, _, _ ->
+                call++
+                if (call == 1) {
+                    flowOf(AssistantMessageEvent.Done(StopReason.TOOL_USE, toolUse))
+                } else {
+                    flowOf(
+                        AssistantMessageEvent.Start(assistant(text = "")),
+                        AssistantMessageEvent.Done(StopReason.STOP, assistant(text = "It is sunny")),
+                    )
+                }
+            },
+        )
+
+        val pendingAtAgentEnd = CompletableDeferred<Set<String>>()
+        val events = mutableListOf<AgentEvent>()
+        val collector = launch {
+            agent.events.collect { event ->
+                events.add(event)
+                if (event is AgentEvent.AgentEnd) {
+                    pendingAtAgentEnd.complete(agent.state.value.pendingToolCalls)
+                }
+            }
+        }
+        yield() // subscribe before the run starts
+
+        agent.prompt(listOf(UserMessage.ofText("weather?")))
+        collector.cancelAndJoin()
+
+        val final = agent.state.value
+        assertEquals(4, final.messages.size)
+        assertTrue(final.messages[0] is UserMessage)
+        val toolCallMessage = final.messages[1] as AssistantMessage
+        assertEquals(StopReason.TOOL_USE, toolCallMessage.stopReason)
+        assertEquals("call-1", (toolCallMessage.content.single() as ToolCall).id)
+        val toolResult = final.messages[2] as ToolResultMessage
+        assertEquals("call-1", toolResult.toolCallId)
+        assertEquals("get_weather", toolResult.toolName)
+        val followUp = final.messages[3] as AssistantMessage
+        assertEquals("It is sunny", (followUp.content.single() as TextContent).text)
+        assertNull(final.streamingMessage)
+        assertFalse(final.isStreaming)
+
+        // Tool lifecycle flowed through the public events flow with state
+        // already reduced: pendingToolCalls is empty again at AgentEnd.
+        assertTrue(pendingAtAgentEnd.await().isEmpty())
+        val toolStarts = events.filterIsInstance<AgentEvent.ToolExecutionStart>()
+        val toolEnds = events.filterIsInstance<AgentEvent.ToolExecutionEnd>()
+        assertEquals(listOf("call-1"), toolStarts.map { it.toolCallId })
+        assertEquals(listOf("call-1"), toolEnds.map { it.toolCallId })
     }
 }
