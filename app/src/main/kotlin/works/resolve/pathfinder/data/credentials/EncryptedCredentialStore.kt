@@ -50,7 +50,7 @@ class EncryptedCredentialStore(
         String(decrypt(file.readBytes()), Charsets.UTF_8)
     }
 
-    private suspend fun writeRaw(providerId: String, encoded: String): Unit = withContext(Dispatchers.IO) {
+    private suspend fun writeRaw(providerId: String, encoded: String) = withContext(Dispatchers.IO) {
         val file = fileFor(providerId)
         file.parentFile?.mkdirs()
         val tmp = File(file.parentFile, "${file.name}.tmp")
@@ -104,7 +104,6 @@ class EncryptedCredentialStore(
 
     override suspend fun delete(providerId: String): Unit = lockFor(providerId).withLock {
         withContext(Dispatchers.IO) { fileFor(providerId).delete() }
-        Unit
     }
 
     private companion object {
