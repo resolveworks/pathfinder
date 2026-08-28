@@ -8,6 +8,7 @@ import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.providers.normalizeBaseUrl
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
+import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.auth.AuthContext
 import works.resolve.pathfinder.ai.auth.AuthResolutionOverrides
@@ -39,6 +40,11 @@ class NativeAgentFactory(
     private val catalog: ProviderCatalog,
     private val transport: HttpStreamingTransport,
     private val retry: ProviderRetry = ProviderRetry(),
+    /**
+     * WebSocket transport for the Codex adapter (pi's WebSocket constructor).
+     * Null disables the WebSocket path (SSE fallback only).
+     */
+    private val webSocketTransport: WebSocketStreamingTransport? = null,
     /** Android has no ambient env; tests inject real [AuthContext]s. */
     private val authContext: AuthContext = NoopAuthContext,
     /** Maps catalog OAuth-capable providers to concrete flows (empty for now). */
@@ -71,6 +77,7 @@ class NativeAgentFactory(
             transport = transport,
             retry = retry,
             authResolver = catalogAuthResolver(entry, credentials, authContext, authRegistry),
+            webSocketTransport = webSocketTransport,
         )
         val models = Models(listOf(provider))
 

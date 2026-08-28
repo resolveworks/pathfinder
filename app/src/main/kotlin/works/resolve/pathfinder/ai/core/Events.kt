@@ -165,6 +165,18 @@ data class SimpleStreamOptions(
      * JSON payload model. Only keys (never values) may appear in toString().
      */
     val samplingParams: Map<String, JsonElement>? = null,
+    /**
+     * pi's SimpleStreamOptions.transport (types.ts:110, :200-202): transport
+     * selection for providers that support more than SSE. Only the Codex
+     * adapter consumes it; other APIs ignore it. Null defaults to the
+     * adapter's effective default (Codex: [Transport.AUTO]).
+     */
+    val transport: Transport? = null,
+    /**
+     * pi's websocketConnectTimeoutMs (types.ts:216): WebSocket handshake
+     * timeout. Only the Codex adapter consumes it; other APIs ignore it.
+     */
+    val websocketConnectTimeoutMs: Long? = null,
 ) {
     override fun toString(): String =
         "SimpleStreamOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
@@ -173,7 +185,8 @@ data class SimpleStreamOptions(
             ", timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
             ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys}" +
             ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
-            ", samplingParams=${samplingParams?.keys})"
+            ", samplingParams=${samplingParams?.keys}, transport=$transport" +
+            ", websocketConnectTimeoutMs=$websocketConnectTimeoutMs)"
 
     fun toStreamOptions(reasoningEffort: ModelThinkingLevel?): OpenAiCompletionsOptions =
         OpenAiCompletionsOptions(

@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ai.api
 
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
+import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 
 /**
@@ -33,14 +34,19 @@ object ChatApiRegistry {
     fun isSupported(apiId: String): Boolean = apiId in SUPPORTED_API_IDS
 
     /** Builds the registered API implementation for [apiId], or null for an unknown id. */
-    fun create(apiId: String, transport: HttpStreamingTransport, retry: ProviderRetry): ChatApi? =
+    fun create(
+        apiId: String,
+        transport: HttpStreamingTransport,
+        retry: ProviderRetry,
+        webSocketTransport: WebSocketStreamingTransport? = null,
+    ): ChatApi? =
         when (apiId) {
             OPENAI_COMPLETIONS -> OpenAiCompletionsApi(transport, retry)
             ANTHROPIC_MESSAGES -> AnthropicMessagesApi(transport, retry)
             GOOGLE_GENERATIVE_AI -> GoogleGenerativeAiApi(transport, retry)
             MISTRAL_CONVERSATIONS -> MistralConversationsApi(transport) // pi: no retry wrapper for Mistral
             OPENAI_RESPONSES -> OpenAiResponsesApi(transport, retry)
-            OPENAI_CODEX_RESPONSES -> OpenAICodexResponsesApi(transport)
+            OPENAI_CODEX_RESPONSES -> OpenAICodexResponsesApi(transport, webSocketTransport = webSocketTransport)
             AZURE_OPENAI_RESPONSES -> AzureOpenAiResponsesApi(transport, retry)
             else -> null
         }

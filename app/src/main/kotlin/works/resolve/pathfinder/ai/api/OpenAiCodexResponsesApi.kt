@@ -1,11 +1,15 @@
 package works.resolve.pathfinder.ai.api
 
+import java.io.IOException
 import java.util.Base64
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -18,11 +22,18 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.ProviderResponse
 import works.resolve.pathfinder.ai.core.StopReason
+import works.resolve.pathfinder.ai.core.Transport
 import works.resolve.pathfinder.ai.core.headersToRecord
 import works.resolve.pathfinder.ai.core.toToolChoice
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
+import works.resolve.pathfinder.ai.transport.WebSocketCloseException
+import works.resolve.pathfinder.ai.transport.WebSocketConnection
+import works.resolve.pathfinder.ai.transport.WebSocketEvent
+import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
+import works.resolve.pathfinder.ai.utils.uuidv7
+import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.compressRequestBodyZstd
@@ -30,16 +41,23 @@ import works.resolve.pathfinder.ai.utils.getPiUserAgent
 
 /**
  * OpenAI Codex Responses streaming adapter, ported from pi's
- * openai-codex-responses.ts (SSE transport).
+ * openai-codex-responses.ts (SSE and WebSocket transports).
  *
  * Transport divergences from pi, by design (documented narrow Android/runtime
- * adaptations over Pathfinder's HTTP/SSE transport):
- * - No WebSocket transport: pi's `auto`/`websocket` modes, connection caching,
- *   `previous_response_id` continuation, and WebSocket-specific retries are
- *   omitted; every request is a full-context SSE POST (`store: false`), which
- *   is exactly pi's SSE fallback path. Also excluded with it: pi's
- *   session-resources.ts, whose only pi consumer is Codex WebSocket session
- *   cleanup.
+ * adaptations over Pathfinder's HTTP/SSE and WebSocket transports):
+ * - A null [webSocketTransport] mirrors pi's no-WebSocket runtimes (browsers):
+ *   attempting the WebSocket path throws
+ *   `IOException("WebSocket transport is not available in this runtime")`
+ *   (pi ~:1046-1048), classified as a transport error, so requests fall back
+ *   to the full-context SSE POST exactly like pi's browser path.
+ * - pi's AssistantMessage diagnostics (`appendAssistantMessageDiagnostic` with
+ *   `provider_transport_failure`) are not ported (AssistantMessage has no
+ *   diagnostics field); the failure/retry behavior is preserved without the
+ *   attached diagnostic.
+ * - pi's `registerSessionResourceCleanup` (session-resources.ts, a Node
+ *   session-lifecycle hook) has no counterpart; the public close/reset API
+ *   ([closeOpenAICodexWebSocketSessions]) plus the pool's idle TTL and max
+ *   connection age own cleanup.
  * - AbortSignal aborts map to coroutine cancellation (no ABORTED error event).
  */
 
@@ -75,6 +93,13 @@ data class OpenAICodexResponsesOptions(
      * (and once per retry attempt). Never included in toString().
      */
     val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
+    /**
+     * pi's transport (types.ts:110; stream() ~:286): effective default
+     * [Transport.AUTO] — WebSocket-first with per-session SSE fallback.
+     */
+    val transport: Transport? = null,
+    /** pi's websocketConnectTimeoutMs (types.ts:216): WS handshake timeout. */
+    val websocketConnectTimeoutMs: Long? = null,
 ) {
     override fun toString(): String =
         "OpenAICodexResponsesOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
@@ -83,7 +108,8 @@ data class OpenAICodexResponsesOptions(
             ", serviceTier=$serviceTier, textVerbosity=$textVerbosity, toolChoice=$toolChoice" +
             ", cacheRetention=$cacheRetention, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
             ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys}" +
-            ", onPayload=${onPayload != null}, onResponse=${onResponse != null})"
+            ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
+            ", transport=$transport, websocketConnectTimeoutMs=$websocketConnectTimeoutMs)"
 }
 
 internal const val DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
@@ -96,6 +122,25 @@ internal class CodexApiException(
     message: String,
     val code: String? = null,
 ) : Exception(message)
+
+/**
+ * Pi's CodexProtocolError: a protocol/parse failure (non-transport), e.g.
+ * invalid WebSocket JSON. Pi attaches the offending payload; that field is
+ * not consumed by the port's error formatting, so it is omitted here.
+ */
+internal class CodexProtocolException(message: String) : Exception(message)
+
+/** Pi's isCodexNonTransportError (~:692). */
+internal fun isCodexNonTransportError(error: Throwable): Boolean =
+    error is CodexApiException || error is CodexProtocolException
+
+/** Pi's isWebSocketConnectionLimitReachedError (~:696). */
+internal fun isWebSocketConnectionLimitReachedError(error: Throwable): Boolean =
+    error is CodexApiException && error.code == "websocket_connection_limit_reached"
+
+/** Pi's isPreviousResponseNotFoundError (~:699). */
+internal fun isPreviousResponseNotFoundError(error: Throwable): Boolean =
+    error is CodexApiException && error.code == "previous_response_not_found"
 
 /** Pi's isTerminalRateLimitError. */
 internal fun isTerminalRateLimitError(errorText: String): Boolean =
@@ -181,6 +226,16 @@ internal fun resolveCodexUrl(baseUrl: String?): String {
     if (normalized.endsWith("/codex/responses")) return normalized
     if (normalized.endsWith("/codex")) return "$normalized/responses"
     return "$normalized/codex/responses"
+}
+
+/** Pi's resolveCodexWebSocketUrl (~:641-647): https→wss, http→ws over the resolved Codex URL. */
+internal fun resolveCodexWebSocketUrl(baseUrl: String?): String {
+    val url = resolveCodexUrl(baseUrl)
+    return when {
+        url.startsWith("https://") -> "wss://" + url.removePrefix("https://")
+        url.startsWith("http://") -> "ws://" + url.removePrefix("http://")
+        else -> url
+    }
 }
 
 /** Pi's resolveCodexServiceTier. */
@@ -287,7 +342,24 @@ internal fun parseCodexErrorResponse(status: Int, body: String, statusText: Stri
     return message to friendly
 }
 
-/** Pi's buildSSEHeaders (SSE transport only). */
+/** Pi's buildBaseCodexHeaders (~:1631): model + additional headers, auth, originator, User-Agent. */
+internal fun buildBaseCodexHeaders(
+    modelHeaders: Map<String, String>,
+    optionsHeaders: Map<String, String?>,
+    accountId: String,
+    token: String,
+): MutableMap<String, String?> {
+    val headers = LinkedHashMap<String, String?>()
+    headers.putAll(modelHeaders)
+    headers.putAll(optionsHeaders) // null values delete (pi's Headers.delete)
+    headers["Authorization"] = "Bearer $token"
+    headers["chatgpt-account-id"] = accountId
+    headers["originator"] = "pi"
+    headers["User-Agent"] = getPiUserAgent()
+    return headers
+}
+
+/** Pi's buildSSEHeaders (SSE transport). */
 internal fun buildCodexSSEHeaders(
     modelHeaders: Map<String, String>,
     optionsHeaders: Map<String, String?>,
@@ -295,13 +367,7 @@ internal fun buildCodexSSEHeaders(
     token: String,
     sessionId: String?,
 ): Map<String, String> {
-    val headers = LinkedHashMap<String, String?>()
-    headers.putAll(modelHeaders)
-    headers.putAll(optionsHeaders)
-    headers["Authorization"] = "Bearer $token"
-    headers["chatgpt-account-id"] = accountId
-    headers["originator"] = "pi"
-    headers["User-Agent"] = getPiUserAgent()
+    val headers = buildBaseCodexHeaders(modelHeaders, optionsHeaders, accountId, token)
     headers["OpenAI-Beta"] = "responses=experimental"
     headers["accept"] = "text/event-stream"
     headers["content-type"] = "application/json"
@@ -309,6 +375,36 @@ internal fun buildCodexSSEHeaders(
         headers["session-id"] = sessionId
         headers["x-client-request-id"] = sessionId
     }
+    return headers.filterValues { it != null }.mapValues { it.value!! }
+}
+
+/**
+ * Pi's buildWebSocketHeaders (~:1637-1650): base codex headers minus
+ * accept/content-type and any prior OpenAI-Beta (both spellings), plus the
+ * responses-websockets beta and the request/session id headers.
+ *
+ * Verified upstream quirk, ported as behavior: pi's `connectWebSocket`
+ * "deletes" `OpenAI-Beta` from the handshake headers, but its
+ * `headersToRecord` (utils/headers.ts) iterates fetch Headers entries whose
+ * names are lowercase (WHATWG fetch spec), so the mixed-case delete is a
+ * no-op and the beta header DOES reach the handshake. This port therefore
+ * does not delete it — the headers built here are passed through verbatim to
+ * [works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport.connect].
+ */
+internal fun buildCodexWebSocketHeaders(
+    modelHeaders: Map<String, String>,
+    optionsHeaders: Map<String, String?>,
+    accountId: String,
+    token: String,
+    requestId: String,
+): Map<String, String> {
+    val headers = buildBaseCodexHeaders(modelHeaders, optionsHeaders, accountId, token)
+    headers.remove("accept")
+    headers.remove("content-type")
+    headers.keys.filter { it.lowercase() == "openai-beta" }.forEach { headers.remove(it) }
+    headers["OpenAI-Beta"] = OpenAICodexWebSocketSessions.OPENAI_BETA_RESPONSES_WEBSOCKETS
+    headers["x-client-request-id"] = requestId
+    headers["session-id"] = requestId
     return headers.filterValues { it != null }.mapValues { it.value!! }
 }
 
@@ -412,6 +508,12 @@ class OpenAICodexResponsesApi(
     // Narrow seam over pi's compressRequestBodyZstd for tests (injects the
     // compression-unavailable fallback).
     private val compressRequestBody: (String) -> ByteArray? = ::compressRequestBodyZstd,
+    /**
+     * WebSocket seam (pi's WebSocket constructor). Null mirrors pi's
+     * no-WebSocket runtimes: the WS path throws a transport error and the
+     * request falls back to SSE (see the class KDoc).
+     */
+    private val webSocketTransport: WebSocketStreamingTransport? = null,
 ) : ChatApi {
 
     /**
@@ -453,6 +555,8 @@ class OpenAICodexResponsesApi(
                 headers = options.headers,
                 onPayload = options.onPayload,
                 onResponse = options.onResponse,
+                transport = options.transport,
+                websocketConnectTimeoutMs = options.websocketConnectTimeoutMs,
             ),
         )
     }
@@ -479,6 +583,24 @@ class OpenAICodexResponsesApi(
             ),
         )
         var endTurn: Boolean? = null
+
+        /** pi's assertSuccessfulOutput + Done emission, shared by both transports. */
+        suspend fun finishStream() {
+            state.assertTerminalEvent()
+            if (state.stopReason == StopReason.PENDING) {
+                throw ProviderStreamException("Codex stream ended without a stop reason")
+            }
+            if (state.stopReason == StopReason.ERROR || state.stopReason == StopReason.ABORTED) {
+                throw ProviderStreamException(state.errorMessage ?: "An unknown error occurred")
+            }
+            val final = state.partialSnapshot()
+            emit(
+                AssistantMessageEvent.Done(
+                    state.stopReason,
+                    if (endTurn != null) final.copy(endTurn = endTurn) else final,
+                ),
+            )
+        }
         try {
             val apiKey = options.apiKey
                 ?: throw IllegalStateException("No API key for provider: ${model.provider}")
@@ -494,8 +616,86 @@ class OpenAICodexResponsesApi(
             var bodyObj = buildCodexRequestBody(model, context, options, codexSessionId, grammarToolInputProperties)
             options.onPayload?.let { hook -> hook(bodyObj, model)?.let { bodyObj = it } }
             val bodyJson = bodyObj.toString()
+            // pi stream() (~:274-286): both header sets are built up front so
+            // an SSE fallback after a WebSocket transport failure reuses them.
+            val websocketRequestId = codexSessionId ?: uuidv7()
             val headers = buildCodexSSEHeaders(model.headers, options.headers, accountId, apiKey, codexSessionId)
                 .toMutableMap()
+            val websocketHeaders = buildCodexWebSocketHeaders(
+                model.headers,
+                options.headers,
+                accountId,
+                apiKey,
+                websocketRequestId,
+            )
+            val transportOption = options.transport ?: Transport.AUTO
+            val websocketDisabledForSession = transportOption != Transport.SSE &&
+                OpenAICodexWebSocketSessions.isSseFallbackActive(cacheSessionId)
+            if (websocketDisabledForSession) {
+                OpenAICodexWebSocketSessions.recordSseFallback(cacheSessionId)
+            }
+
+            if (transportOption != Transport.SSE && !websocketDisabledForSession) {
+                var startEmitted = false
+                var retriedWebSocketConnectionLimit = false
+                var retriedMissingWebSocketContinuation = false
+                while (true) {
+                    var websocketStarted = false
+                    try {
+                        processWebSocketStream(
+                            resolveCodexWebSocketUrl(model.baseUrl),
+                            bodyObj,
+                            websocketHeaders,
+                            state,
+                            model,
+                            onEndTurn = { endTurn = it },
+                            emit = { event -> emit(event) },
+                            onStart = {
+                                websocketStarted = true
+                                if (!startEmitted) {
+                                    startEmitted = true
+                                    emit(AssistantMessageEvent.Start(state.partialSnapshot()))
+                                }
+                            },
+                            idleTimeoutMs = options.timeoutMs,
+                            websocketConnectTimeoutMs = options.websocketConnectTimeoutMs,
+                            cacheSessionId = cacheSessionId,
+                            accountId = accountId,
+                            grammarToolInputProperties = grammarToolInputProperties,
+                            options = options,
+                        )
+                        finishStream()
+                        return@flow
+                    } catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        val connectionLimitBeforeStart =
+                            !websocketStarted && isWebSocketConnectionLimitReachedError(error)
+                        val previousResponseNotFound = isPreviousResponseNotFoundError(error)
+                        if (previousResponseNotFound && !retriedMissingWebSocketContinuation) {
+                            // The server-side continuation was invalidated;
+                            // retry once with a full body (the cached
+                            // continuation is cleared by the failure path).
+                            retriedMissingWebSocketContinuation = true
+                            continue
+                        }
+                        if (connectionLimitBeforeStart && !retriedWebSocketConnectionLimit) {
+                            retriedWebSocketConnectionLimit = true
+                            continue
+                        }
+                        if (isCodexNonTransportError(error) && !connectionLimitBeforeStart) throw error
+                        // pi also appends a provider_transport_failure
+                        // AssistantMessage diagnostic here; diagnostics are not
+                        // ported (see the class KDoc divergence note).
+                        OpenAICodexWebSocketSessions.recordWebSocketFailure(cacheSessionId, error)
+                        if (websocketStarted) throw error
+                        // SSE becomes sticky for this session; fall through to
+                        // the SSE path with the already-built headers/body.
+                        OpenAICodexWebSocketSessions.recordSseFallback(cacheSessionId)
+                        break
+                    }
+                }
+            }
+
             // Compress the request body once for the SSE path
             // (openai-codex-responses.ts:368-375): the Codex backend decodes
             // Content-Encoding: zstd; the uncompressed JSON is sent unchanged
@@ -512,7 +712,6 @@ class OpenAICodexResponsesApi(
             val response = requestWithRetries(model, options, headers, body)
             emit(AssistantMessageEvent.Start(state.partialSnapshot()))
 
-            var finished = false
             // Pi maps Codex SSE events incrementally and stops at the terminal
             // event (response.done/completed/incomplete) even while the SSE
             // body stays open (openai-codex-responses.ts mapCodexEvents returns
@@ -539,31 +738,15 @@ class OpenAICodexResponsesApi(
                         state,
                     )?.forEach { emit(it) }
                     if (mapped.second) {
-                        finished = true
                         throw TerminalEventReached
                     }
                 }
             } catch (_: TerminalEventReached) {
                 // Terminal event processed; stop consuming the SSE body.
             }
-            if (!finished) {
-                // parseSSE consumed the whole body without a terminal event; the
-                // shared state machine reports the missing terminal event.
-            }
-            state.assertTerminalEvent()
-            if (state.stopReason == StopReason.PENDING) {
-                throw ProviderStreamException("Codex stream ended without a stop reason")
-            }
-            if (state.stopReason == StopReason.ERROR || state.stopReason == StopReason.ABORTED) {
-                throw ProviderStreamException(state.errorMessage ?: "An unknown error occurred")
-            }
-            val final = state.partialSnapshot()
-            emit(
-                AssistantMessageEvent.Done(
-                    state.stopReason,
-                    if (endTurn != null) final.copy(endTurn = endTurn) else final,
-                ),
-            )
+            // If parseSSE consumed the whole body without a terminal event, the
+            // shared state machine reports it via assertTerminalEvent below.
+            finishStream()
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             emit(
@@ -576,6 +759,180 @@ class OpenAICodexResponsesApi(
                     ),
                 ),
             )
+        }
+    }
+
+    /**
+     * pi's parseWebSocket (~:1273-1378) adapted to the transport's events
+     * channel: pulls one parsed frame at a time. A terminal
+     * response.completed/done/incomplete frame is flagged; invalid JSON throws
+     * [CodexProtocolException] (pi's CodexProtocolError message; the payload
+     * attachment and AssistantMessage diagnostics are not ported); a
+     * close/failure before completion throws the transport-layer close/error
+     * message (pi's extract shapes); close after completion ends the stream
+     * cleanly; a channel that ends without a terminal frame throws
+     * "WebSocket stream closed before response.completed"; and while waiting
+     * for a frame, no event for [idleTimeoutMs] closes 1000/"idle_timeout"
+     * and throws (pi arms the idle timer only while waiting and resets it on
+     * every event).
+     */
+    private class WebSocketFrameReader(
+        private val connection: WebSocketConnection,
+        private val idleTimeoutMs: Long?,
+    ) {
+        var sawCompletion = false
+            private set
+
+        /** Next parsed frame, or null when the stream completed and closed. */
+        suspend fun next(): JsonObject? {
+            val event = if (idleTimeoutMs != null && idleTimeoutMs > 0) {
+                withTimeoutOrNull(idleTimeoutMs) { connection.events.receive() } ?: run {
+                    connection.close(1000, "idle_timeout")
+                    throw IOException("WebSocket idle timeout after ${idleTimeoutMs}ms")
+                }
+            } else {
+                connection.events.receive()
+            }
+            return when (event) {
+                is WebSocketEvent.Message -> {
+                    val text = event.text
+                    val parsed = try {
+                        responsesJson.parseToJsonElement(text)
+                    } catch (error: Exception) {
+                        throw CodexProtocolException(
+                            "Invalid Codex WebSocket JSON: ${error.message ?: error::class.simpleName}",
+                        )
+                    }
+                    val obj = parsed as? JsonObject
+                        ?: throw CodexProtocolException("Invalid Codex WebSocket JSON: expected an object")
+                    when (obj["type"].textOrNull()) {
+                        "response.completed", "response.done", "response.incomplete" -> sawCompletion = true
+                    }
+                    obj
+                }
+                is WebSocketEvent.Failure -> throw IOException(event.message)
+                is WebSocketEvent.Closed -> if (sawCompletion) {
+                    null
+                } else {
+                    throw WebSocketCloseException(event.message, event.code, event.reason, event.wasClean)
+                }
+                null -> throw IOException("WebSocket stream closed before response.completed")
+            }
+        }
+    }
+
+    /**
+     * pi's processWebSocketStream (~:1455-1543): acquire a (pooled) socket,
+     * send `{type:"response.create", ...requestBody}` (type first), run the
+     * frames through the SAME shared responses event machine as SSE
+     * (mapCodexEvent/processSseEvent), then on success store the cached-context
+     * continuation; on any failure (including cancellation-as-abort) clear it
+     * and drop the connection.
+     */
+    private suspend fun processWebSocketStream(
+        url: String,
+        fullBody: JsonObject,
+        headers: Map<String, String>,
+        state: OpenAiResponsesShared.ResponsesStreamState,
+        model: Model,
+        onEndTurn: (Boolean) -> Unit,
+        emit: suspend (AssistantMessageEvent) -> Unit,
+        onStart: suspend () -> Unit,
+        idleTimeoutMs: Long?,
+        websocketConnectTimeoutMs: Long?,
+        cacheSessionId: String?,
+        accountId: String,
+        grammarToolInputProperties: Map<String, String>,
+        options: OpenAICodexResponsesOptions,
+    ) {
+        val acquired = OpenAICodexWebSocketSessions.acquire(
+            webSocketTransport,
+            url,
+            headers,
+            cacheSessionId,
+            accountId,
+            websocketConnectTimeoutMs,
+        )
+        val connection = acquired.connection
+        val entry = acquired.entry
+        var keepConnection = true
+        val useCachedContext =
+            options.transport == Transport.WEBSOCKET_CACHED || options.transport == Transport.AUTO
+        // ChatGPT Codex Responses rejects `store: true` ("Store must be set to
+        // false"). WebSocket continuation still works via connection-scoped
+        // previous_response_id state.
+        val requestBody = if (useCachedContext && entry != null) {
+            buildCachedWebSocketRequestBody(entry, fullBody)
+        } else {
+            fullBody
+        }
+        val stats = cacheSessionId?.let { OpenAICodexWebSocketSessions.getOrCreateStats(it) }
+        if (stats != null) {
+            stats.requests++
+            if (acquired.reused) stats.connectionsReused++ else stats.connectionsCreated++
+            if (useCachedContext) stats.cachedContextRequests++
+            if (requestBody["store"] as? JsonPrimitive == JsonPrimitive(true)) stats.storeTrueRequests++
+            val inputItems = (requestBody["input"] as? JsonArray)?.size ?: 0
+            stats.lastInputItems = inputItems
+            val previousResponseId = requestBody["previous_response_id"].textOrNull()
+            if (previousResponseId != null) {
+                stats.deltaRequests++
+                stats.lastDeltaInputItems = inputItems
+                stats.lastPreviousResponseId = previousResponseId
+            } else {
+                stats.fullContextRequests++
+                stats.lastDeltaInputItems = null
+                stats.lastPreviousResponseId = null
+            }
+        }
+        try {
+            connection.send(
+                buildJsonObject {
+                    put("type", "response.create")
+                    requestBody.forEach { (key, value) -> put(key, value) }
+                }.toString(),
+            )
+            // pi's startWebSocketOutputOnFirstEvent: onStart fires exactly
+            // once, before the first mapped event is processed.
+            var startedOutput = false
+            val reader = WebSocketFrameReader(connection, idleTimeoutMs)
+            while (true) {
+                val frame = reader.next() ?: break // completed, then closed
+                val mapped = mapCodexEvent(frame, onEndTurn) ?: continue
+                if (!startedOutput) {
+                    startedOutput = true
+                    onStart()
+                }
+                processSseEvent(SseEvent(mapped.first.toString()), state)?.forEach { emit(it) }
+                if (mapped.second) break
+            }
+            if (useCachedContext && entry != null) {
+                val responseId = state.responseId
+                if (responseId != null) {
+                val responseItems =
+                    OpenAiResponsesShared.convertResponsesMessages(
+                        model,
+                        Context(messages = listOf(state.partialSnapshot())),
+                        OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+                        OpenAiResponsesShared.ConvertResponsesMessagesOptions(
+                            includeSystemPrompt = false,
+                            grammarToolInputProperties = grammarToolInputProperties,
+                        ),
+                    ).filter { it["type"].textOrNull() != "function_call_output" &&
+                        it["type"].textOrNull() != "custom_tool_call_output" }
+                entry.continuation = OpenAICodexWebSocketSessions.CachedWebSocketContinuation(
+                    lastRequestBody = fullBody,
+                    lastResponseId = responseId,
+                    lastResponseItems = responseItems,
+                )
+                }
+            }
+        } catch (error: Throwable) {
+            entry?.continuation = null
+            keepConnection = false
+            throw error
+        } finally {
+            withContext(NonCancellable) { acquired.release(keepConnection) }
         }
     }
 

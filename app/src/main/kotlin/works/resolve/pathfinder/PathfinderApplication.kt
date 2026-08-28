@@ -8,6 +8,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import works.resolve.pathfinder.agent.NativeAgentFactory
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
+import works.resolve.pathfinder.ai.transport.OkHttpWebSocketTransport
 import works.resolve.pathfinder.ai.auth.CatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.CredentialStore
 import works.resolve.pathfinder.ai.auth.ProductionCatalogAuthRegistry
@@ -32,7 +33,9 @@ import okhttp3.OkHttpClient
  *
  * The graph is deliberately flat and conventional:
  *
- * - one shared [OkHttpClient]/[OkHttpTransport] for all provider requests;
+ * - one shared [OkHttpClient]/[OkHttpTransport] for all provider requests,
+ *   plus an [OkHttpWebSocketTransport] on the same client for the Codex
+ *   WebSocket transport family;
  * - [CredentialStore] (pi's credential contract) on the Android-Keystore-backed
  *   [KeystoreAeadCipher];
  * - [SettingsRepository] on a single Preferences DataStore file;
@@ -44,12 +47,24 @@ class PathfinderApplication : Application() {
 
     val logger: AppLogger = LogcatLogger()
 
+    private val okHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .build()
+    }
+
     val transport: OkHttpTransport by lazy {
-        OkHttpTransport(
-            client = OkHttpClient.Builder()
-                .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                .build(),
-        )
+        OkHttpTransport(client = okHttpClient)
+    }
+
+    /**
+     * WebSocket seam for the Codex adapter, sharing the HTTP client's
+     * connection pool and timeouts. Wired here, Codex requests default to
+     * pi's `"auto"` transport: WebSocket-first with per-session SSE fallback
+     * and cached context over the pooled connection.
+     */
+    val webSocketTransport: OkHttpWebSocketTransport by lazy {
+        OkHttpWebSocketTransport(client = okHttpClient)
     }
 
     val credentials: CredentialStore by lazy {
@@ -83,6 +98,7 @@ class PathfinderApplication : Application() {
             credentials = credentials,
             catalog = modelCatalog,
             transport = transport,
+            webSocketTransport = webSocketTransport,
             authRegistry = authRegistry,
             // Production tool registry is intentionally empty for now; pi's
             // tool surface lands with the tool-execution change.
