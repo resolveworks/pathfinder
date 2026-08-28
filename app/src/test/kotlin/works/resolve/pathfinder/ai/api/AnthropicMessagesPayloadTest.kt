@@ -2,7 +2,9 @@ package works.resolve.pathfinder.ai.api
 
 import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.AssistantMessage
+import works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig
 import works.resolve.pathfinder.ai.core.Context
+import works.resolve.pathfinder.ai.core.StrictJsonSchemaMode
 import works.resolve.pathfinder.ai.core.ImageContent
 import works.resolve.pathfinder.ai.core.InputModality
 import works.resolve.pathfinder.ai.core.Model
@@ -24,6 +26,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
@@ -569,5 +572,101 @@ class AnthropicMessagesPayloadTest {
             AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true, thinkingBudgetTokens = 0),
         )["thinking"]!!.jsonObject
         assertEquals(1024, budget["budget_tokens"]!!.jsonPrimitive.content.toInt())
+    }
+
+    /**
+     * Port of pi's "only sends the full input schema for strict JSON-schema
+     * tools" (test/anthropic-eager-tool-input-compat.test.ts): with
+     * supportsStrictTools, only tools whose constrainedSampling resolves
+     * strict get the rewritten full schema and the `strict: true` wire field;
+     * everything else keeps the legacy input_schema shape.
+     */
+    @Test
+    fun `only sends the full input schema for strict json-schema tools`() {
+        val strictModel = claude.copy(
+            anthropicCompat = claude.anthropicCompat.copy(supportsStrictTools = true),
+        )
+        val schemaCompatibilityTool = tool.copy(
+            parameters = Json.parseToJsonElement(
+                """{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false,"title":"EditInput"}""",
+            ),
+        )
+        val strictTool = tool.copy(
+            parameters = Json.parseToJsonElement(
+                """{"type":"object","properties":{"value":{"type":"string"},"optional":{"type":"number"}},"required":["value"],"title":"StrictLookupInput"}""",
+            ),
+            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER),
+        )
+
+        fun firstTool(json: JsonObject): JsonObject = json["tools"]!!.jsonArray[0].jsonObject
+
+        // Enabled compat, no constrained sampling: exactly the legacy shape,
+        // even when the tool schema carries additionalProperties/title.
+        val legacy = body(
+            Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(schemaCompatibilityTool)),
+            model = strictModel,
+        )
+        assertEquals(
+            Json.parseToJsonElement(
+                """{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}""",
+            ),
+            firstTool(legacy)["input_schema"],
+        )
+        assertNull(firstTool(legacy)["strict"])
+
+        // Enabled compat, strict config: strict field plus rewritten full schema.
+        val strict = body(
+            Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(strictTool)),
+            model = strictModel,
+        )
+        val strictToolJson = firstTool(strict)
+        assertEquals(true, strictToolJson["strict"]!!.jsonPrimitive.content.toBoolean())
+        val inputSchema = strictToolJson["input_schema"]!!.jsonObject
+        assertEquals(
+            false,
+            inputSchema["additionalProperties"]!!.jsonPrimitive.content.toBoolean(),
+        )
+        assertEquals(
+            listOf("value", "optional"),
+            inputSchema["required"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+        assertEquals(
+            """[{"type":"number"},{"type":"null"}]""",
+            inputSchema["properties"]!!.jsonObject["optional"]!!.jsonObject["anyOf"].toString(),
+        )
+        assertEquals("StrictLookupInput", inputSchema["title"]!!.jsonPrimitive.content)
+        assertEquals("object", inputSchema["type"]!!.jsonPrimitive.content)
+
+        // Default compat (supportsStrictTools false): prefer downgrades to the
+        // legacy shape with no strict field.
+        val downgraded = body(
+            Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(strictTool)),
+        )
+        assertNull(firstTool(downgraded)["strict"])
+        assertEquals(
+            Json.parseToJsonElement(
+                """{"type":"object","properties":{"value":{"type":"string"},"optional":{"type":"number"}},"required":["value"]}""",
+            ),
+            firstTool(downgraded)["input_schema"],
+        )
+    }
+
+    /**
+     * pi anthropic-messages.ts convertTools → resolveJsonSchemaStrictSampling:
+     * `require` rejects with pi's exact error when the model has no strict
+     * tool support.
+     */
+    @Test
+    fun `require strict tools reject when compat is false`() {
+        val requireTool = tool.copy(
+            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
+        )
+        val failure = assertFailsWith<Error> {
+            body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(requireTool)))
+        }
+        assertEquals(
+            "Tool \"edit\" requires JSON-schema constrained sampling, but strict tools are unsupported.",
+            failure.message,
+        )
     }
 }

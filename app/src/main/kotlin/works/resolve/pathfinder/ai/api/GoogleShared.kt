@@ -35,16 +35,11 @@ import kotlinx.serialization.json.put
  * - `contents` entries `{role: "user"|"model", parts: [...]}`,
  * - parts `{text}`, `{thought: true, text}`, `{inlineData}`, `{functionCall}`,
  *   `{functionResponse}`, each optionally carrying `thoughtSignature`,
- * - `tools: [{functionDeclarations: [...]}]` with `parametersJsonSchema`.
+ * - `tools: [{functionDeclarations: [...]}]` with `parametersJsonSchema`
+ *   (or legacy OpenAPI `parameters`), strict JSON-schema sampling via
+ *   ConstrainedSampling.kt (pi's constrained-sampling.ts).
  *
  * Divergences from upstream (each narrow, see the citing KDoc):
- * - [Tool] has no `constrainedSampling`, so pi's
- *   `resolveJsonSchemaStrictSampling` is always undefined here: the
- *   `VALIDATED` function-calling mode never engages and `convertTools` never
- *   wraps/rewrites schemas for strictness (google-shared.ts /
- *   constrained-sampling.ts). Unfinished parity, not a descope: port with
- *   Tool.constrainedSampling and pi's constrained-sampling.ts when agent
- *   tool support lands.
  * - The replay pre-pass is pi's shared transformMessages (TransformMessages.kt),
  *   including the `ThinkingContent.redacted` branch; `convertMessages` then
  *   applies Google-specific thought-signature validation.
@@ -408,21 +403,17 @@ object GoogleShared {
 
     /**
      * Convert tools to Gemini function declarations format. Port of
-     * google-shared.ts `convertTools`. By default uses `parametersJsonSchema`
-     * (full JSON Schema); `useParameters` selects the legacy OpenAPI
-     * `parameters` field (needed for Cloud Code Assist with Claude).
-     *
-     * Divergence: pi's `resolveJsonSchemaStrictSampling` (constrained-sampling.ts)
-     * has no equivalent here because [Tool] has no `constrainedSampling`, so
-     * strict schema wrapping is never applied and the caller's
-     * `supportsStrictMode` only affects mode resolution. Unfinished parity,
-     * not a descope: port with Tool.constrainedSampling when agent tool
-     * support lands.
+     * google-shared.ts `convertTools` (including the strict JSON-schema
+     * sampling from constrained-sampling.ts). By default uses
+     * `parametersJsonSchema` (full JSON Schema); `useParameters` selects the
+     * legacy OpenAPI `parameters` field (needed for Cloud Code Assist with
+     * Claude), with the strict-wrapped schema run through
+     * [sanitizeForOpenApi] exactly like pi.
      */
     fun convertTools(
         tools: List<Tool>,
         useParameters: Boolean = false,
-        @Suppress("UNUSED_PARAMETER") supportsStrictMode: Boolean = true,
+        supportsStrictMode: Boolean = true,
     ): JsonArray? {
         if (tools.isEmpty()) return null
         return JsonArray(
@@ -432,13 +423,15 @@ object GoogleShared {
                         "functionDeclarations",
                         JsonArray(
                             tools.map { tool ->
+                                val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictMode)
+                                val parameters = getJsonSchemaToolParameters(tool, strict)
                                 buildJsonObject {
                                     put("name", tool.name)
                                     put("description", tool.description)
                                     if (useParameters) {
-                                        put("parameters", sanitizeForOpenApi(tool.parameters))
+                                        put("parameters", sanitizeForOpenApi(parameters))
                                     } else {
-                                        put("parametersJsonSchema", tool.parameters)
+                                        put("parametersJsonSchema", parameters)
                                     }
                                 }
                             },
@@ -459,19 +452,24 @@ object GoogleShared {
 
     /**
      * Resolve the function calling mode. Port of google-shared.ts
-     * `resolveGoogleFunctionCallingMode`, minus the strict-sampling branch:
-     * VALIDATED is only reachable for tools that opt into constrained JSON
-     * schema sampling, which the Kotlin core does not model, so it is never
-     * returned here.
+     * `resolveGoogleFunctionCallingMode` (google-shared.ts:364-371): explicit
+     * `none`/`any` choices win, otherwise VALIDATED engages when any tool
+     * resolves strict JSON-schema sampling, and any other explicit choice
+     * maps through [mapToolChoice].
      */
     fun resolveGoogleFunctionCallingMode(
         tools: List<Tool>,
         toolChoice: String?,
-        @Suppress("UNUSED_PARAMETER") supportsStrictMode: Boolean,
-    ): String? = when (toolChoice) {
-        "none" -> FUNCTION_CALLING_MODE_NONE
-        "any" -> FUNCTION_CALLING_MODE_ANY
-        else -> toolChoice?.let { mapToolChoice(it) }
+        supportsStrictMode: Boolean,
+    ): String? {
+        val useStrictMode = tools.any { resolveJsonSchemaStrictSampling(it, supportsStrictMode) == true }
+        if (toolChoice == "none" || toolChoice == "any") {
+            return mapToolChoice(toolChoice)
+        }
+        if (useStrictMode) {
+            return FUNCTION_CALLING_MODE_VALIDATED
+        }
+        return toolChoice?.let { mapToolChoice(it) }
     }
 
     /**
