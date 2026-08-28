@@ -415,8 +415,7 @@ class GoogleSharedConvertToolsTest {
 
     @Test
     fun `mode resolution ports resolveGoogleFunctionCallingMode`() {
-        // No toolChoice and no constrained sampling (not modeled in the Kotlin
-        // core): no toolConfig is emitted, and VALIDATED is never returned.
+        // No toolChoice and no constrained sampling: no toolConfig is emitted.
         assertNull(GoogleShared.resolveGoogleFunctionCallingMode(listOf(tool), null, true))
         assertEquals("NONE", GoogleShared.resolveGoogleFunctionCallingMode(listOf(tool), "none", true))
         assertEquals("ANY", GoogleShared.resolveGoogleFunctionCallingMode(listOf(tool), "any", true))
@@ -430,6 +429,72 @@ class GoogleSharedConvertToolsTest {
         assertTrue(GoogleShared.supportsGoogleStrictToolSampling("gemini-live-3.0"))
         assertTrue(!GoogleShared.supportsGoogleStrictToolSampling("gemini-2.5-flash"))
         assertTrue(!GoogleShared.supportsGoogleStrictToolSampling("gpt-oss-120b"))
+    }
+
+    /** Port of "uses validated function calling for strict tools on Gemini 3". */
+    @Test
+    fun `uses validated function calling for strict tools on gemini3`() {
+        val strictTool = tool.copy(
+            constrainedSampling = works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig.JsonSchema(
+                works.resolve.pathfinder.ai.core.StrictJsonSchemaMode.REQUIRE,
+            ),
+        )
+
+        assertTrue(GoogleShared.supportsGoogleStrictToolSampling("gemini-3.1-pro-preview"))
+        assertTrue(!GoogleShared.supportsGoogleStrictToolSampling("gemini-2.5-pro"))
+        assertEquals("VALIDATED", GoogleShared.resolveGoogleFunctionCallingMode(listOf(strictTool), null, true))
+        val failure = assertFailsWith<Error> {
+            GoogleShared.resolveGoogleFunctionCallingMode(listOf(strictTool), null, false)
+        }
+        assertTrue(
+            failure.message!!.startsWith("Tool \"bash\" requires JSON-schema constrained sampling"),
+        )
+    }
+
+    /** Strict schema wrap mirrors pi's convertTools + constrained-sampling.ts. */
+    @Test
+    fun `convertTools wraps parametersJsonSchema strict for strict tools`() {
+        val strictTool = tool.copy(
+            constrainedSampling = works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig.JsonSchema(
+                works.resolve.pathfinder.ai.core.StrictJsonSchemaMode.PREFER,
+            ),
+        )
+
+        // Without a config the schema is passed through untouched.
+        val plain = GoogleShared.convertTools(listOf(tool))!!
+            .let { it[0].jsonObject["functionDeclarations"]!!.jsonArray[0].jsonObject }
+        assertEquals(
+            tool.parameters,
+            plain["parametersJsonSchema"],
+        )
+
+        // With a config and strict support the schema is wrapped strict.
+        val strict = GoogleShared.convertTools(listOf(strictTool), useParameters = false, supportsStrictMode = true)!!
+            .let { it[0].jsonObject["functionDeclarations"]!!.jsonArray[0].jsonObject }
+        val parameters = strict["parametersJsonSchema"]!!.jsonObject
+        assertEquals(false, parameters["additionalProperties"]!!.jsonPrimitive.content.toBoolean())
+        assertEquals("cmd", parameters["required"]!!.jsonArray[0].jsonPrimitive.content)
+
+        // Without strict support the prefer config downgrades silently.
+        val downgraded = GoogleShared.convertTools(listOf(strictTool), useParameters = false, supportsStrictMode = false)!!
+            .let { it[0].jsonObject["functionDeclarations"]!!.jsonArray[0].jsonObject }
+        assertEquals(tool.parameters, downgraded["parametersJsonSchema"])
+    }
+
+    @Test
+    fun `convertTools propagates require rejection for unsupported strict mode`() {
+        val strictTool = tool.copy(
+            constrainedSampling = works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig.JsonSchema(
+                works.resolve.pathfinder.ai.core.StrictJsonSchemaMode.REQUIRE,
+            ),
+        )
+        val failure = assertFailsWith<Error> {
+            GoogleShared.convertTools(listOf(strictTool), supportsStrictMode = false)
+        }
+        assertEquals(
+            "Tool \"bash\" requires JSON-schema constrained sampling, but strict tools are unsupported.",
+            failure.message,
+        )
     }
 
     @Test

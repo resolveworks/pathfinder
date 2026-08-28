@@ -38,10 +38,6 @@ import kotlinx.serialization.json.put
  *   `defer_loading`, and server-side fallbacks) is not ported: Pathfinder's core
  *   ToolResultMessage has no `addedToolNames` and Model has no
  *   `allowedFallbackModels`.
- * - `strict` tool JSON-schema sampling is not yet ported; pi's default is
- *   `supportsStrictTools: false`, so wire output is identical for defaults.
- *   Unfinished parity, not a descope: port with Tool.constrainedSampling and
- *   pi's constrained-sampling.ts when agent tool support lands.
  * - pi's `metadata.user_id` option is not ported (no metadata option here).
  * - Thinking content stays a raw text/signature pair.
  */
@@ -401,29 +397,40 @@ private fun parseOrEmptyObject(arguments: String): JsonObject {
 }
 
 /**
- * pi's convertTools (without strict sampling and deferred loading): legacy
- * input_schema shape, optional eager_input_streaming, and cache_control on
- * the last immediate tool.
+ * pi's convertTools (anthropic-messages.ts:1326-1363, without deferred
+ * loading): legacy input_schema shape, strict JSON-schema sampling via
+ * constrained-sampling.ts, optional eager_input_streaming, and cache_control
+ * on the last tool.
  */
 internal fun convertTools(
     tools: List<Tool>,
     isOAuthToken: Boolean,
     supportsEagerToolInputStreaming: Boolean,
+    supportsStrictTools: Boolean,
     cacheControl: JsonObject?,
 ): List<JsonObject> = tools.mapIndexed { index, tool ->
-    val parameters = tool.parameters as? JsonObject ?: JsonObject(emptyMap())
+    val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictTools)
+    val parameters = getJsonSchemaToolParameters(tool, strict)
+    val schema = parameters as? JsonObject ?: JsonObject(emptyMap())
+    val legacyInputSchema = buildJsonObject {
+        put("type", "object")
+        put("properties", schema["properties"] ?: JsonObject(emptyMap()))
+        put("required", schema["required"] ?: JsonArray(emptyList()))
+    }
+    // `{ ...parameters, ...legacyInputSchema }`: legacy keys override.
+    val inputSchema = if (strict == true) {
+        val merged = LinkedHashMap(schema)
+        merged.putAll(legacyInputSchema)
+        JsonObject(merged)
+    } else {
+        legacyInputSchema
+    }
     buildJsonObject {
         put("name", if (isOAuthToken) toClaudeCodeName(tool.name) else tool.name)
         put("description", tool.description)
         if (supportsEagerToolInputStreaming) put("eager_input_streaming", true)
-        put(
-            "input_schema",
-            buildJsonObject {
-                put("type", "object")
-                put("properties", parameters["properties"] ?: JsonObject(emptyMap()))
-                put("required", parameters["required"] ?: JsonArray(emptyList()))
-            },
-        )
+        if (strict == true) put("strict", true)
+        put("input_schema", inputSchema)
         if (cacheControl != null && index == tools.size - 1) put("cache_control", cacheControl)
     }
 }
@@ -472,6 +479,7 @@ internal fun buildRequestBody(
                 context.tools,
                 isOAuthToken,
                 compat.supportsEagerToolInputStreaming,
+                compat.supportsStrictTools,
                 if (compat.supportsCacheControlOnTools) cacheControl else null,
             ),
         )
