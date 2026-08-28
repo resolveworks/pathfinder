@@ -3,6 +3,9 @@ package works.resolve.pathfinder.ai.api
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.CacheControlFormat
 import works.resolve.pathfinder.ai.core.CacheRetention
+import works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig
+import works.resolve.pathfinder.ai.core.StrictJsonSchemaMode
+import kotlin.test.assertFailsWith
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ImageContent
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
@@ -26,6 +29,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -255,6 +259,91 @@ class OpenAiCompletionsPayloadTest {
         val b = body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool)), model = strictless)
         val function = b["tools"]!!.jsonArray.single().jsonObject["function"]!!.jsonObject
         assertFalse(function.containsKey("strict"))
+    }
+
+    @Test
+    fun `strict tool schema is rewritten with strict true`() {
+        // pi convertTools resolves strict sampling and sends the rewritten
+        // schema (constrained-sampling.test.ts "derives strict provider
+        // schemas without changing tool definitions").
+        val parameters = Json.parseToJsonElement(
+            """{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"number"}},"required":["path"]}""",
+        )
+        val tool = Tool(
+            name = "read_file",
+            description = "Reads a file",
+            parameters = parameters,
+            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
+        )
+        val b = body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool)))
+        val function = b["tools"]!!.jsonArray.single().jsonObject["function"]!!.jsonObject
+        assertEquals(true, function["strict"]!!.jsonPrimitive.content.toBoolean())
+        val sent = function["parameters"]!!.jsonObject
+        assertEquals(false, sent["additionalProperties"]!!.jsonPrimitive.boolean)
+        assertEquals(
+            listOf("path", "offset"),
+            sent["required"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+        assertEquals(
+            """{"anyOf":[{"type":"number"},{"type":"null"}]}""",
+            sent["properties"]!!.jsonObject["offset"].toString(),
+        )
+        // The tool definition itself is unchanged.
+        assertTrue(!parameters.jsonObject.containsKey("additionalProperties"))
+    }
+
+    @Test
+    fun `prefer mode downgrades unsupported schema to non-strict original parameters`() {
+        val parameters = Json.parseToJsonElement(
+            """{"type":"object","allOf":[{"type":"object","properties":{"a":{"type":"string"}}}]}""",
+        )
+        val tool = Tool(
+            name = "read_file",
+            description = "Reads a file",
+            parameters = parameters,
+            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER),
+        )
+        val b = body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool)))
+        val function = b["tools"]!!.jsonArray.single().jsonObject["function"]!!.jsonObject
+        assertEquals(false, function["strict"]!!.jsonPrimitive.content.toBoolean())
+        assertEquals(parameters, function["parameters"])
+    }
+
+    @Test
+    fun `require mode rejection surfaces from buildRequestBody`() {
+        val tool = Tool(
+            name = "read_file",
+            description = "Reads a file",
+            parameters = Json.parseToJsonElement(
+                """{"type":"object","allOf":[{"type":"object","properties":{"a":{"type":"string"}}}]}""",
+            ),
+            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
+        )
+        val error = assertFailsWith<Error> {
+            body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool)))
+        }
+        assertEquals(
+            "Tool \"read_file\" requires JSON-schema constrained sampling, but allOf schemas are unsupported.",
+            error.message,
+        )
+    }
+
+    @Test
+    fun `require mode rejects when compat disables strict mode`() {
+        val tool = Tool(
+            name = "read_file",
+            description = "Reads a file",
+            parameters = schema,
+            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
+        )
+        val strictless = model.copy(compat = model.compat.copy(supportsStrictMode = false))
+        val error = assertFailsWith<Error> {
+            body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool)), model = strictless)
+        }
+        assertEquals(
+            "Tool \"read_file\" requires JSON-schema constrained sampling, but strict tools are unsupported.",
+            error.message,
+        )
     }
 
     @Test

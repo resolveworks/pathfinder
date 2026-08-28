@@ -33,11 +33,6 @@ import kotlinx.serialization.json.put
  *   consumer.
  * - pi's `stripSymbolKeys` exists to strip TypeBox symbol metadata; Kotlin
  *   tool parameters are already plain JSON.
- * - pi's strict-sampling resolution (`resolveJsonSchemaStrictSampling`) always
- *   resolves to undefined here because Kotlin [Tool] carries no
- *   `constrainedSampling` config, so `strict` is always false. Unfinished
- *   parity, not a descope: port with Tool.constrainedSampling when agent
- *   tool support lands.
  */
 object MistralConversationsPayload {
 
@@ -86,18 +81,27 @@ object MistralConversationsPayload {
         }
     }
 
-    /** pi's toFunctionTools with strict always false (no constrained sampling config). */
-    private fun toFunctionTool(tool: Tool): JsonObject = buildJsonObject {
-        put("type", "function")
-        put(
-            "function",
-            buildJsonObject {
-                put("name", tool.name)
-                put("description", tool.description)
-                put("parameters", tool.parameters)
-                put("strict", false)
-            },
-        )
+    /**
+     * pi's toFunctionTools (mistral-conversations.ts:747-762): Mistral always
+     * supports strict mode (`resolveJsonSchemaStrictSampling(tool, true)`), so
+     * the rewritten schema is used when strict applies and `strict` is always
+     * sent as `strict ?: false`. pi's `stripSymbolKeys` has no Kotlin
+     * counterpart because parameters are plain JSON.
+     */
+    private fun toFunctionTool(tool: Tool): JsonObject {
+        val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictMode = true)
+        return buildJsonObject {
+            put("type", "function")
+            put(
+                "function",
+                buildJsonObject {
+                    put("name", tool.name)
+                    put("description", tool.description)
+                    put("parameters", getJsonSchemaToolParameters(tool, strict))
+                    put("strict", strict ?: false)
+                },
+            )
+        }
     }
 
     /**
