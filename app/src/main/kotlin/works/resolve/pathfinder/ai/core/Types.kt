@@ -187,11 +187,49 @@ data class ToolResultMessage(
     override val role: MessageRole get() = MessageRole.TOOL_RESULT
 }
 
+/**
+ * OpenAI grammar variants for constrained sampling (types.ts:494).
+ */
+enum class GrammarFormat { OPENAI_LARK, OPENAI_REGEX }
+
+/** pi's `GrammarVariants = Partial<Record<GrammarFormat, string>>` (types.ts:496). */
+typealias GrammarVariants = Map<GrammarFormat, String>
+
+/** pi's `strict: "prefer" | "require"` union (types.ts:505). */
+enum class StrictJsonSchemaMode { PREFER, REQUIRE }
+
+/**
+ * Optional provider-side constrained sampling configs for a tool
+ * (types.ts:499-512).
+ *
+ * The `json_schema` value roughly maps to the concept of `strict` in APIs
+ * which is implemented as json-schema constrained sampling by APIs. Grammar
+ * variants let callers provide provider-specific encodings of the same
+ * intended language.
+ *
+ * Divergence from pi: upstream `Tool.constrainedSampling?: false |
+ * ConstrainedSamplingConfig` models three states (unset, explicit `false`,
+ * config) in one union; Kotlin models unset as `null` on
+ * [Tool.constrainedSampling] and pi's `false` as [Disabled], with the config
+ * variants as the remaining subclasses.
+ */
+sealed interface ConstrainedSamplingConfig {
+    /** pi's explicit `constrainedSampling: false` disable value. */
+    data object Disabled : ConstrainedSamplingConfig
+
+    /** pi's `{type: "json_schema", strict: "prefer" | "require"}`. */
+    data class JsonSchema(val strict: StrictJsonSchemaMode) : ConstrainedSamplingConfig
+
+    /** pi's `{type: "grammar", variants}` with [GrammarVariants]. */
+    data class Grammar(val variants: Map<GrammarFormat, String>) : ConstrainedSamplingConfig
+}
+
 /** Tool definition; parameters is a JSON Schema object. */
 data class Tool(
     val name: String,
     val description: String,
     val parameters: JsonElement,
+    val constrainedSampling: ConstrainedSamplingConfig? = null,
 )
 
 /**
