@@ -99,7 +99,15 @@ data class OpenAiResponsesCompat(
 /** How the provider expects the max output token limit to be spelled. */
 enum class MaxTokensField { MAX_COMPLETION_TOKENS, MAX_TOKENS }
 
+/** Pi's ThinkingFormat. */
 enum class ThinkingFormat { OPENAI, ZAI, QWEN, DEEPSEEK, BASETEN, OPENROUTER, ANT_LING, TOGETHER }
+
+/**
+ * Pi's OpenAICompletionsCompat.cacheControlFormat union ("anthropic" |
+ * undefined, openai-completions.ts). Only "anthropic" exists upstream; the
+ * single-member enum keeps pi's value domain without widening it.
+ */
+enum class CacheControlFormat { ANTHROPIC }
 
 data class OpenAiCompletionsCompat(
     val supportsStore: Boolean = true,
@@ -136,6 +144,13 @@ data class OpenAiCompletionsCompat(
      * enables it for capable models.
      */
     val supportsOpenAIGrammarTools: Boolean = false,
+    /**
+     * Pi's cacheControlFormat (openai-completions.ts:1633 detectCompat,
+     * :1700 getCompat): "anthropic" when provider is openrouter and the model
+     * id starts with "anthropic/", overridable per model; null (undefined)
+     * disables Anthropic-style cache_control emission.
+     */
+    val cacheControlFormat: CacheControlFormat? = null,
 )
 
 /**

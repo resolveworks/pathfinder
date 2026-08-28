@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.core.AnthropicMessagesCompat
+import works.resolve.pathfinder.ai.core.CacheControlFormat
 import works.resolve.pathfinder.ai.core.ChatTemplateKwargValue
 import works.resolve.pathfinder.ai.core.InputModality
 import works.resolve.pathfinder.ai.core.MaxTokensField
@@ -269,23 +270,35 @@ private data class ModelDto(
     val compat: CompatDto = CompatDto(),
     val headers: Map<String, String> = emptyMap(),
 ) {
-    fun toDomain(owner: ProviderDto): Model = Model(
-        id = id,
-        name = name,
-        api = api,
-        provider = provider.ifEmpty { owner.id },
-        baseUrl = baseUrl.ifEmpty { owner.baseUrl },
-        reasoning = reasoning,
-        thinkingLevelMap = thinkingLevelMap?.let { parseThinkingLevelMap(it, "${owner.id}/$id") },
-        input = input.map { parseInputModality(it, "${owner.id}/$id") },
-        cost = cost.toDomain(),
-        contextWindow = contextWindow,
-        maxTokens = maxTokens,
-        compat = compat.toDomain("${owner.id}/$id"),
-        anthropicCompat = compat.toAnthropicDomain(),
-        responsesCompat = if (api in RESPONSES_FAMILY_APIS) compat.toResponsesDomain("${owner.id}/$id") else null,
-        headers = headers,
-    )
+    fun toDomain(owner: ProviderDto): Model {
+        val resolvedProvider = provider.ifEmpty { owner.id }
+        // pi detectCompat (openai-completions.ts:1633): cacheControlFormat is
+        // "anthropic" only for openrouter anthropic/* models; getCompat merges
+        // an explicit model.compat override on top (:1700).
+        val detectedCacheControlFormat =
+            if (resolvedProvider == "openrouter" && id.startsWith("anthropic/")) {
+                CacheControlFormat.ANTHROPIC
+            } else {
+                null
+            }
+        return Model(
+            id = id,
+            name = name,
+            api = api,
+            provider = resolvedProvider,
+            baseUrl = baseUrl.ifEmpty { owner.baseUrl },
+            reasoning = reasoning,
+            thinkingLevelMap = thinkingLevelMap?.let { parseThinkingLevelMap(it, "${owner.id}/$id") },
+            input = input.map { parseInputModality(it, "${owner.id}/$id") },
+            cost = cost.toDomain(),
+            contextWindow = contextWindow,
+            maxTokens = maxTokens,
+            compat = compat.toDomain("${owner.id}/$id", detectedCacheControlFormat),
+            anthropicCompat = compat.toAnthropicDomain(),
+            responsesCompat = if (api in RESPONSES_FAMILY_APIS) compat.toResponsesDomain("${owner.id}/$id") else null,
+            headers = headers,
+        )
+    }
 
     private companion object {
         /** pi models carry OpenAIResponsesCompat only for the Responses family. */
@@ -349,21 +362,19 @@ private data class CompatDto(
     // OpenAICompletionsCompat.supportsStrictMode) via Model.compat.
     val supportsStrictMode: Boolean? = null,
     val supportsOpenAIGrammarTools: Boolean? = null,
+    val cacheControlFormat: String? = null,
     val sessionAffinityFormat: String? = null,
     val supportsAdditionalTools: Boolean? = null,
     val supportsToolSearch: Boolean? = null,
     val supportsExplicitPromptCacheMode: Boolean? = null,
     // Not modeled because the native core has no corresponding data shape
     // yet: requiresReasoningContentOnAssistantMessages, deferredToolsMode,
-    // cacheControlFormat, allowedFallbackModels, and supportsToolReferences.
+    // allowedFallbackModels, and supportsToolReferences.
     // Unknown catalog fields are ignored; adapters must omit the corresponding
     // request features. deferredToolsMode, allowedFallbackModels, and
-    // supportsToolReferences are deferred until agent tool support lands;
-    // cacheControlFormat is deferred with the Completions adapter's
-    // Anthropic-style cache_control emission — unfinished parity, not
-    // descopes.
+    // supportsToolReferences are deferred until agent tool support lands.
 ) {
-    fun toDomain(where: String) = OpenAiCompletionsCompat(
+    fun toDomain(where: String, detectedCacheControlFormat: CacheControlFormat?) = OpenAiCompletionsCompat(
         supportsStore = supportsStore ?: true,
         supportsDeveloperRole = supportsDeveloperRole ?: true,
         supportsReasoningEffort = supportsReasoningEffort ?: true,
@@ -383,6 +394,11 @@ private data class CompatDto(
         supportsLongCacheRetention = supportsLongCacheRetention ?: true,
         supportsStrictMode = supportsStrictMode ?: true,
         supportsOpenAIGrammarTools = supportsOpenAIGrammarTools ?: false,
+        // pi getCompat (openai-completions.ts:1700):
+        // `model.compat.cacheControlFormat ?? detected.cacheControlFormat`.
+        cacheControlFormat = cacheControlFormat
+            ?.let { parseCacheControlFormat(it, where) }
+            ?: detectedCacheControlFormat,
     )
 
     /** pi's getCompat (openai-responses) defaults apply per field when absent. */
@@ -408,6 +424,11 @@ private data class CompatDto(
         supportsStrictTools = supportsStrictTools ?: false,
         forceAdaptiveThinking = forceAdaptiveThinking,
     )
+}
+
+private fun parseCacheControlFormat(value: String, where: String): CacheControlFormat = when (value) {
+    "anthropic" -> CacheControlFormat.ANTHROPIC
+    else -> throw IllegalArgumentException("Unknown cache control format '$value' for $where")
 }
 
 private fun parseSessionAffinityFormat(value: String, where: String): SessionAffinityFormat = when (value) {
