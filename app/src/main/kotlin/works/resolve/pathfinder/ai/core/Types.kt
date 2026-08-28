@@ -176,12 +176,21 @@ data class ToolResultMessage(
     val toolCallId: String,
     val toolName: String,
     val content: List<Content>,
+    /**
+     * pi's `details?: TDetails` (types.ts:452): arbitrary structured runtime/UI
+     * metadata attached to the result. Preserved verbatim; no provider adapter
+     * reads it (runtime/UI data, not a wire field).
+     */
+    val details: JsonElement? = null,
+    /**
+     * pi's `usage?: Usage` (types.ts:454): usage from the tool execution
+     * itself, if available. Not part of main LLM context accounting.
+     * No provider adapter reads it.
+     */
+    val usage: Usage? = null,
     val isError: Boolean = false,
     /** Tool names this result made available (pi's addedToolNames, deferred tool loading). */
     val addedToolNames: List<String> = emptyList(),
-    // Reductions vs pi's ToolResultMessage (types.ts:484-491): `details`
-    // (TDetails, thinking-block replay data) and per-result `usage` are not
-    // ported; no adapter in scope consumes them.
     override val timestamp: Long = 0L,
 ) : Message() {
     override val role: MessageRole get() = MessageRole.TOOL_RESULT
