@@ -702,25 +702,31 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
         return JsonObject(mapOf("role" to JsonPrimitive("assistant")) + assistant)
     }
 
-    private fun convertTool(tool: Tool, compat: OpenAiCompletionsCompat): JsonObject =
-        buildJsonObject {
+    /**
+     * pi's convertTools (openai-completions.ts:1478-1495): resolves JSON-schema
+     * strict sampling and rewrites the tool schema when strict applies. pi
+     * passes `compat.supportsStrictMode !== false` (undefined means supported);
+     * [OpenAiCompletionsCompat.supportsStrictMode] is a non-null Boolean that
+     * defaults to true, so it is passed directly.
+     */
+    private fun convertTool(tool: Tool, compat: OpenAiCompletionsCompat): JsonObject {
+        val strict = resolveJsonSchemaStrictSampling(tool, compat.supportsStrictMode)
+        return buildJsonObject {
             put("type", "function")
             put(
                 "function",
                 buildJsonObject {
                     put("name", tool.name)
                     put("description", tool.description)
-                    put("parameters", tool.parameters)
-                    // pi convertTools (openai-completions.ts:1484-1493):
-                    // `strict` is only included when
-                    // `compat.supportsStrictMode !== false`; some providers reject
-                    // unknown fields. Pathfinder's Tool carries no
-                    // constrainedSampling config, so the resolved strict value is
-                    // pi's `strict ?? false` = false.
-                    if (compat.supportsStrictMode) put("strict", false)
+                    put("parameters", getJsonSchemaToolParameters(tool, strict))
+                    // pi convertTools (openai-completions.ts:1490-1492): only
+                    // include strict when the provider supports it; some
+                    // providers reject unknown fields.
+                    if (compat.supportsStrictMode) put("strict", strict ?: false)
                 },
             )
         }
+    }
 
     private fun hasToolHistory(messages: List<Message>): Boolean = messages.any { msg ->
         msg.role == MessageRole.TOOL_RESULT ||

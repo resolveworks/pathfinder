@@ -1,9 +1,18 @@
 package works.resolve.pathfinder.ai.api
 
+import works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig
+import works.resolve.pathfinder.ai.core.Context
+import works.resolve.pathfinder.ai.core.StrictJsonSchemaMode
+import works.resolve.pathfinder.ai.core.Tool
+import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.utils.shortHash
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Unit tests for the Mistral payload helpers, pinning parity with pi's
@@ -52,6 +61,73 @@ class MistralConversationsPayloadTest {
         assertTrue(c.length <= 9)
         // Distinct inputs never collapse onto the same normalized id.
         assertTrue(a != c || "long-openai-style-id-with-pipes|1234567890" == "another-long-openai-style-id|0987654321")
+    }
+
+    @Test
+    fun `strict tool schema is rewritten and serialized as plain json`() {
+        // Port of pi packages/ai/test/mistral-tool-schema.test.ts: a tool with
+        // json_schema constrained sampling resolves strict:true, its schema is
+        // rewritten (required=all properties, additionalProperties:false) and
+        // serialized as plain JSON. pi's symbol-key assertions cover TypeBox
+        // metadata that Kotlin JsonElement cannot carry; the payload assertions
+        // (strict and rewritten parameters) are the ported part.
+        val model = mistralModel(id = "devstral-medium-latest")
+        val parameters = Json.parseToJsonElement(
+            """{"type":"object","properties":{"nested":{"type":"object","properties":{"value":{"type":"string"}}}},"required":["nested"]}""",
+        )
+        val tool = Tool(
+            name = "inspect_schema",
+            description = "Inspect the schema",
+            parameters = parameters,
+            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
+        )
+        val context = Context(
+            messages = listOf(UserMessage.ofText("Hi")),
+            tools = listOf(tool),
+        )
+
+        val body = MistralConversationsPayload.buildRequestBody(
+            model,
+            context,
+            MistralConversationsPayload.toChatMessages(context.messages, supportsImages = false),
+            MistralOptions(apiKey = "fake-key"),
+        )
+
+        val function = body["tools"]!!.jsonArray.single().jsonObject["function"]!!.jsonObject
+        assertEquals("inspect_schema", function["name"]!!.jsonPrimitive.content)
+        assertEquals(true, function["strict"]!!.jsonPrimitive.content.toBoolean())
+        val sent = function["parameters"]!!.jsonObject
+        assertEquals(false, sent["additionalProperties"]!!.jsonPrimitive.content.toBoolean())
+        val nested = sent["properties"]!!.jsonObject["nested"]!!.jsonObject
+        assertEquals(
+            listOf("value"),
+            nested["required"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+        assertEquals(false, nested["additionalProperties"]!!.jsonPrimitive.content.toBoolean())
+        // Round-trips as plain JSON (pi strips TypeBox symbols before sending).
+        assertEquals(sent, Json.parseToJsonElement(sent.toString()))
+    }
+
+    @Test
+    fun `tools without constrained sampling keep strict false`() {
+        val model = mistralModel()
+        val tool = Tool(
+            name = "inspect_schema",
+            description = "Inspect the schema",
+            parameters = Json.parseToJsonElement(
+                """{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}""",
+            ),
+        )
+        val context = Context(messages = listOf(UserMessage.ofText("Hi")), tools = listOf(tool))
+        val body = MistralConversationsPayload.buildRequestBody(
+            model,
+            context,
+            MistralConversationsPayload.toChatMessages(context.messages, supportsImages = false),
+            MistralOptions(apiKey = "fake-key"),
+        )
+        val function = body["tools"]!!.jsonArray.single().jsonObject["function"]!!.jsonObject
+        assertEquals(false, function["strict"]!!.jsonPrimitive.content.toBoolean())
+        assertEquals(tool.parameters, function["parameters"])
     }
 
     @Test
