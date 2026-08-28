@@ -74,18 +74,6 @@ The following exclusions are deliberate:
   has no identity source on a single-user device. Server-side fallbacks, by
   contrast, are ported (`allowedFallbackModels` → `fallbacks` + the
   `server-side-fallback-2026-07-01` beta + fallback cost attribution).
-- **Codex WebSocket transport and cached context are ported** (owner
-  decision reversing an earlier exclusion): the WebSocket transport family,
-  `auto` transport selection with per-session SSE fallback, connection
-  pooling with cached context (`previous_response_id` input deltas), the
-  retry/fallback state machine, debug stats, and the close/reset API mirror
-  pi's openai-codex-responses.ts, and zstd SSE request compression is
-  ported. Remaining divergences are the documented ones at the adapter and
-  transport boundaries (see OpenAiCodexResponsesApi.kt and
-  OpenAICodexWebSocketSessions.kt): no AssistantMessage diagnostics for
-  transport failures, no session-resources.ts lifecycle hook (the public
-  close API plus idle TTL/max age own cleanup), and abort as coroutine
-  cancellation.
 - **Image-generation providers** are outside the selected conversational AI
   provider surface. They require a separate media-generation product surface
   rather than another chat protocol adapter.
@@ -99,6 +87,15 @@ The following exclusions are deliberate:
 Do not silently reintroduce an excluded provider through the catalog, a partial
 auth path, or a third-party SDK. An exclusion can be revisited explicitly if
 upstream or Android changes make a faithful implementation proportionate.
+
+> Note: the Codex WebSocket transport, cached context, and zstd bullets above
+> were reversed by an explicit owner decision and are now ported
+> (OpenAiCodexResponsesApi.kt, OpenAICodexWebSocketSessions.kt,
+> ai/transport/WebSocketTransport.kt, ai/utils/ZstdCompression.kt, plus the
+> approved `zstd-jni` dependency). Their remaining divergences are documented
+> at those boundaries: no AssistantMessage transport-failure diagnostics, no
+> session-resources.ts lifecycle hook (the public close API plus idle TTL and
+> max connection age own cleanup), and abort as coroutine cancellation.
 
 ## Adapter capability scope
 
@@ -116,6 +113,12 @@ When a narrow option is omitted, document it at the adapter or model boundary
 with the upstream symbol and the reason. Distinguish an intentional omission
 from unfinished parity, and do not advertise the omitted capability through
 the catalog or UI.
+
+When concrete agent tools are eventually ported, mirror pi's coding-agent
+`constrainedSampling` usage (read/write/edit/bash behind experimental strict
+mode) so the ported constrained/strict tool sampling gets end-to-end
+prefer/require coverage; the production tool registry is intentionally empty
+until then.
 
 ## Reconsidering scope
 

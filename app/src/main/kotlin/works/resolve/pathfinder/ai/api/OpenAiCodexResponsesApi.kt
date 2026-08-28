@@ -909,22 +909,24 @@ class OpenAICodexResponsesApi(
             if (useCachedContext && entry != null) {
                 val responseId = state.responseId
                 if (responseId != null) {
-                val responseItems =
-                    OpenAiResponsesShared.convertResponsesMessages(
-                        model,
-                        Context(messages = listOf(state.partialSnapshot())),
-                        OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
-                        OpenAiResponsesShared.ConvertResponsesMessagesOptions(
-                            includeSystemPrompt = false,
-                            grammarToolInputProperties = grammarToolInputProperties,
-                        ),
-                    ).filter { it["type"].textOrNull() != "function_call_output" &&
-                        it["type"].textOrNull() != "custom_tool_call_output" }
-                entry.continuation = OpenAICodexWebSocketSessions.CachedWebSocketContinuation(
-                    lastRequestBody = fullBody,
-                    lastResponseId = responseId,
-                    lastResponseItems = responseItems,
-                )
+                    val responseItems =
+                        OpenAiResponsesShared.convertResponsesMessages(
+                            model,
+                            Context(messages = listOf(state.partialSnapshot())),
+                            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+                            OpenAiResponsesShared.ConvertResponsesMessagesOptions(
+                                includeSystemPrompt = false,
+                                grammarToolInputProperties = grammarToolInputProperties,
+                            ),
+                        ).filter {
+                            it["type"].textOrNull() != "function_call_output" &&
+                                it["type"].textOrNull() != "custom_tool_call_output"
+                        }
+                    entry.continuation = OpenAICodexWebSocketSessions.CachedWebSocketContinuation(
+                        lastRequestBody = fullBody,
+                        lastResponseId = responseId,
+                        lastResponseItems = responseItems,
+                    )
                 }
             }
         } catch (error: Throwable) {
