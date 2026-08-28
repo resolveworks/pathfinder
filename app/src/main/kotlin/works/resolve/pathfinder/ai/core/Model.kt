@@ -28,11 +28,15 @@ data class Model(
     val responsesCompat: OpenAiResponsesCompat? = null,
     /** Per-model HTTP headers (e.g. github-copilot, nvidia). */
     val headers: Map<String, String> = emptyMap(),
-) {
-    // Reduction: pi's Model.samplingParams (types.ts:837, default sampling
-    // parameters merged under StreamOptions.samplingParams) is not ported; no
-    // adapter in scope applies per-model sampling defaults.
-}
+    /**
+     * pi's Model.samplingParams (packages/ai/src/types.ts:837): default
+     * sampling parameters for this model, merged under per-request
+     * [SimpleStreamOptions.samplingParams] keys by [mergeSamplingParams] and
+     * applied only by OpenAI-compatible adapters. The generated model catalog
+     * does not carry this field, so it stays null for catalog models.
+     */
+    val samplingParams: Map<String, JsonElement>? = null,
+)
 
 /**
  * Per-million-token reference rates (pi's ModelCostRates, types.ts:810-815).

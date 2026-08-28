@@ -1,5 +1,8 @@
 package works.resolve.pathfinder.ai.core
 
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+
 /**
  * Stream event protocol ported from pi's AssistantMessageEvent. A successful
  * stream emits `Start` first, then block events carrying immutable partial
@@ -61,6 +64,28 @@ sealed class AssistantMessageEvent {
 }
 
 /**
+ * pi's ProviderResponse (packages/ai/src/types.ts:118-121): the HTTP status
+ * and response headers passed to request hooks after response headers are
+ * received.
+ */
+data class ProviderResponse(
+    val status: Int,
+    /** Flattened single-value response headers (pi's `Record<string, string>`). */
+    val headers: Map<String, String>,
+)
+
+/**
+ * pi's headersToRecord (packages/ai/src/utils/headers.ts): flattens
+ * multi-valued HTTP response headers into the single-value record passed to
+ * `onResponse` hooks. Fetch's `Headers` iteration joins repeated values with
+ * `", "` (WHATWG fetch spec header-value combining), which this mirrors over
+ * the transport's multi-map. Header names arrive already lower-cased from the
+ * transport.
+ */
+fun headersToRecord(headers: Map<String, List<String>>): Map<String, String> =
+    headers.mapValues { (_, values) -> values.joinToString(", ") }
+
+/**
  * Options shared by all provider requests, reduced from pi's StreamOptions.
  * Timing and retry behavior matches pi's provider-retry defaults.
  */
@@ -111,13 +136,44 @@ data class SimpleStreamOptions(
     val headers: Map<String, String?> = emptyMap(),
     /** Per-level thinking token budgets (pi's ThinkingBudgets); consumed by budget-based adapters. */
     val thinkingBudgets: Map<ThinkingLevel, Int> = emptyMap(),
+    /**
+     * pi's ProviderRequestOptions.onPayload (packages/ai/src/types.ts:145-149):
+     * inspects or replaces the provider request payload object before it is
+     * serialized and sent; returning null keeps the payload unchanged (pi
+     * returns undefined). The hook receives the full payload including
+     * message content — installers must not log payload content. Never
+     * included in toString().
+     */
+    val onPayload: (suspend (payload: JsonObject, model: Model) -> JsonObject?)? = null,
+    /**
+     * pi's StreamOptions.onResponse (types.ts:184): invoked after HTTP
+     * response headers are received and before the body stream is consumed,
+     * with status and flattened headers. Whether it fires for non-2xx
+     * responses is per adapter, mirroring pi exactly (see each adapter's
+     * wiring). Never included in toString().
+     */
+    val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
+    /**
+     * pi's StreamOptions.samplingParams (types.ts:184-193): arbitrary
+     * sampling parameters merged into the request body as-is, after the
+     * named request fields, so keys here override them. Lets custom
+     * OpenAI-compatible servers (llama.cpp, vLLM, SGLang, ...) receive
+     * parameters pi does not model. Merged over [Model.samplingParams] per
+     * key; only applied by OpenAI-compatible adapters (completions,
+     * responses, Azure responses); other APIs ignore it. `Map<String,
+     * JsonElement>` mirrors pi's `Record<string, unknown>` over this port's
+     * JSON payload model. Only keys (never values) may appear in toString().
+     */
+    val samplingParams: Map<String, JsonElement>? = null,
 ) {
     override fun toString(): String =
         "SimpleStreamOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
             ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
             ", reasoning=$reasoning, toolChoice=$toolChoice, cacheRetention=$cacheRetention" +
             ", timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
-            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys})"
+            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys}" +
+            ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
+            ", samplingParams=${samplingParams?.keys})"
 
     fun toStreamOptions(reasoningEffort: ModelThinkingLevel?): OpenAiCompletionsOptions =
         OpenAiCompletionsOptions(
@@ -134,8 +190,25 @@ data class SimpleStreamOptions(
             env = env,
             headers = headers,
             thinkingBudgets = thinkingBudgets,
+            onPayload = onPayload,
+            onResponse = onResponse,
+            samplingParams = samplingParams,
         )
 }
+
+/**
+ * pi's buildBaseOptions samplingParams merge (packages/ai/src/api/simple-options.ts:20-56):
+ * request-level keys override [Model.samplingParams] defaults per key, and
+ * the merged value is null when both are absent. Called at each
+ * OpenAI-compatible adapter's streamSimple boundary, where pi calls
+ * buildBaseOptions before delegating to its per-API stream.
+ */
+fun mergeSamplingParams(model: Model, options: SimpleStreamOptions): Map<String, JsonElement>? =
+    if (model.samplingParams.isNullOrEmpty() && options.samplingParams == null) {
+        null
+    } else {
+        (model.samplingParams ?: emptyMap()) + (options.samplingParams ?: emptyMap())
+    }
 
 /** Options understood by the OpenAI Chat Completions adapter. */
 data class OpenAiCompletionsOptions(
@@ -163,13 +236,36 @@ data class OpenAiCompletionsOptions(
     val headers: Map<String, String?> = emptyMap(),
     /** Per-level thinking token budgets (pi's ThinkingBudgets); consumed by budget-based adapters. */
     val thinkingBudgets: Map<ThinkingLevel, Int> = emptyMap(),
+    /**
+     * pi's onPayload request hook (ProviderRequestOptions, types.ts:145-149):
+     * replaces this adapter's params object before serialization when it
+     * returns non-null (openai-completions.ts:352). Receives full message
+     * content; installers must not log it. Never included in toString().
+     */
+    val onPayload: (suspend (payload: JsonObject, model: Model) -> JsonObject?)? = null,
+    /**
+     * pi's onResponse request hook (types.ts:184; openai-completions.ts:369):
+     * invoked after response headers arrive (2xx only — the SDK path throws
+     * before the hook on non-2xx). Never included in toString().
+     */
+    val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
+    /**
+     * pi's samplingParams (types.ts:184-193; openai-completions.ts:981-982):
+     * merged into the params object last so custom keys override the named
+     * request fields. Already merged over [Model.samplingParams] by
+     * [mergeSamplingParams] on the streamSimple path. Only keys appear in
+     * toString().
+     */
+    val samplingParams: Map<String, JsonElement>? = null,
 ) {
     override fun toString(): String =
         "OpenAiCompletionsOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
             ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
             ", reasoningEffort=$reasoningEffort, toolChoice=$toolChoice, cacheRetention=$cacheRetention" +
             ", timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
-            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys})"
+            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys}" +
+            ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
+            ", samplingParams=${samplingParams?.keys})"
 }
 
 /**

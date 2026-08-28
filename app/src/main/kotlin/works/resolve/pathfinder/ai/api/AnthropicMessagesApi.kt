@@ -6,6 +6,8 @@ import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
+import works.resolve.pathfinder.ai.core.ProviderResponse
+import works.resolve.pathfinder.ai.core.headersToRecord
 import works.resolve.pathfinder.ai.core.toToolChoice
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
@@ -94,7 +96,11 @@ class AnthropicMessagesApi(
             val cacheSessionId = if (retention == CacheRetention.NONE) null else options.sessionId
 
             val (headers, bearerToken) = buildHeaders(model, isOAuth, options, context, cacheSessionId)
-            val body = buildRequestBody(model, context, isOAuth, options)
+            // pi anthropic-messages.ts:566: onPayload inspects/replaces the
+            // params object before serialization; null keeps the payload.
+            var params = buildRequestBody(model, context, isOAuth, options)
+            options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
+            val body = params
                 .toString()
                 .toByteArray(Charsets.UTF_8)
 
@@ -110,6 +116,11 @@ class AnthropicMessagesApi(
             val response = retry.retryProviderRequest<TransportResponse>(options.maxRetries, options.maxRetryDelayMs) {
                 transport.post(request)
             }
+
+            // pi anthropic-messages.ts:583: onResponse fires after response
+            // headers arrive; like the SDK path it only runs for 2xx (the
+            // transport throws ProviderHttpException before this on non-2xx).
+            options.onResponse?.invoke(ProviderResponse(response.status, headersToRecord(response.headers)), model)
 
             emit(AssistantMessageEvent.Start(state.snapshot()))
 

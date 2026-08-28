@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -15,6 +16,9 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.SimpleToolChoice
+import works.resolve.pathfinder.ai.core.ProviderResponse
+import works.resolve.pathfinder.ai.core.headersToRecord
+import works.resolve.pathfinder.ai.core.mergeSamplingParams
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.core.ToolChoice
@@ -63,6 +67,26 @@ data class OpenAiResponsesOptions(
     val maxRetryDelayMs: Long = works.resolve.pathfinder.ai.core.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
+    /**
+     * pi's onPayload request hook (ProviderRequestOptions, types.ts:145-149;
+     * openai-responses.ts:142): replaces the params object before
+     * serialization when it returns non-null. Receives full message content;
+     * installers must not log it. Never included in toString().
+     */
+    val onPayload: (suspend (payload: JsonObject, model: Model) -> JsonObject?)? = null,
+    /**
+     * pi's onResponse request hook (types.ts:184; openai-responses.ts:159):
+     * invoked after 2xx response headers arrive. Never included in toString().
+     */
+    val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
+    /**
+     * pi's samplingParams (types.ts:184-193; openai-responses.ts:342-343):
+     * merged into the params object last so custom keys override the named
+     * request fields. Already merged over [Model.samplingParams] by
+     * [mergeSamplingParams] on the streamSimple path. Only keys appear in
+     * toString().
+     */
+    val samplingParams: Map<String, JsonElement>? = null,
 ) {
     override fun toString(): String =
         "OpenAiResponsesOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
@@ -70,7 +94,9 @@ data class OpenAiResponsesOptions(
             ", reasoningEffort=$reasoningEffort, reasoningSummary=$reasoningSummary" +
             ", serviceTier=$serviceTier, toolChoice=$toolChoice, cacheRetention=$cacheRetention" +
             ", timeoutMs=$timeoutMs, maxRetries=$maxRetries, maxRetryDelayMs=$maxRetryDelayMs" +
-            ", env=${env.keys}, headers=${headers.keys})"
+            ", env=${env.keys}, headers=${headers.keys}" +
+            ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
+            ", samplingParams=${samplingParams?.keys})"
 }
 
 /**
@@ -154,6 +180,9 @@ class OpenAiResponsesApi(
                 maxRetryDelayMs = options.maxRetryDelayMs,
                 env = options.env,
                 headers = options.headers,
+                onPayload = options.onPayload,
+                onResponse = options.onResponse,
+                samplingParams = mergeSamplingParams(model, options),
             ),
         )
     }
@@ -203,7 +232,11 @@ class OpenAiResponsesApi(
                 compat,
                 options.headers,
             ) + mapOf("Accept" to "text/event-stream")
-            val body = buildParams(model, context, options, compat, cacheRetention)
+            // pi openai-responses.ts:142: onPayload inspects/replaces the
+            // params object before serialization; null keeps the payload.
+            var params = buildParams(model, context, options, compat, cacheRetention)
+            options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
+            val body = params
                 .toString().toByteArray(Charsets.UTF_8)
             val url = model.baseUrl.trimEnd('/') + "/responses"
             val request = TransportRequest(
@@ -218,6 +251,11 @@ class OpenAiResponsesApi(
                 options.maxRetries,
                 options.maxRetryDelayMs,
             ) { transport.post(request) }
+
+            // pi openai-responses.ts:159: onResponse fires after response
+            // headers arrive; like the SDK path it only runs for 2xx (the
+            // transport throws ProviderHttpException before this on non-2xx).
+            options.onResponse?.invoke(ProviderResponse(response.status, headersToRecord(response.headers)), model)
 
             emit(AssistantMessageEvent.Start(state.partialSnapshot()))
             for (event in response.events.toList()) {
@@ -284,7 +322,7 @@ internal fun buildParams(
 
     val disableImplicitPromptCache =
         cacheRetention == CacheRetention.NONE && compat.supportsExplicitPromptCacheMode
-    val params = buildJsonObject {
+    var params = buildJsonObject {
         put("model", model.id)
         put("input", kotlinx.serialization.json.JsonArray(messages))
         put("stream", true)
@@ -361,6 +399,9 @@ internal fun buildParams(
             }
         }
     }
+    // pi openai-responses.ts:342-343: merged last so custom keys override
+    // the named request fields.
+    options?.samplingParams?.let { params = JsonObject(params.toMap() + it) }
     return params
 }
 
@@ -386,6 +427,26 @@ data class AzureOpenAiResponsesOptions(
     val maxRetryDelayMs: Long = works.resolve.pathfinder.ai.core.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
+    /**
+     * pi's onPayload request hook (ProviderRequestOptions, types.ts:145-149;
+     * azure-openai-responses.ts:111): replaces the params object before
+     * serialization when it returns non-null. Receives full message content;
+     * installers must not log it. Never included in toString().
+     */
+    val onPayload: (suspend (payload: JsonObject, model: Model) -> JsonObject?)? = null,
+    /**
+     * pi's onResponse request hook (types.ts:184; azure-openai-responses.ts:128):
+     * invoked after 2xx response headers arrive. Never included in toString().
+     */
+    val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
+    /**
+     * pi's samplingParams (types.ts:184-193; azure-openai-responses.ts:333-334):
+     * merged into the params object last so custom keys override the named
+     * request fields. Already merged over [Model.samplingParams] by
+     * [mergeSamplingParams] on the streamSimple path. Only keys appear in
+     * toString().
+     */
+    val samplingParams: Map<String, JsonElement>? = null,
 ) {
     override fun toString(): String =
         "AzureOpenAiResponsesOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
@@ -395,7 +456,9 @@ data class AzureOpenAiResponsesOptions(
             ", azureResourceName=$azureResourceName, azureBaseUrl=$azureBaseUrl" +
             ", azureDeploymentName=$azureDeploymentName, timeoutMs=$timeoutMs" +
             ", maxRetries=$maxRetries, maxRetryDelayMs=$maxRetryDelayMs" +
-            ", env=${env.keys}, headers=${headers.keys})"
+            ", env=${env.keys}, headers=${headers.keys}" +
+            ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
+            ", samplingParams=${samplingParams?.keys})"
 }
 
 private const val DEFAULT_AZURE_API_VERSION = "v1"
@@ -525,6 +588,9 @@ class AzureOpenAiResponsesApi(
                 maxRetryDelayMs = options.maxRetryDelayMs,
                 env = options.env,
                 headers = options.headers,
+                onPayload = options.onPayload,
+                onResponse = options.onResponse,
+                samplingParams = mergeSamplingParams(model, options),
             ),
         )
     }
@@ -559,7 +625,10 @@ class AzureOpenAiResponsesApi(
                 ),
             )
 
-            val params = buildAzureParams(model, context, options, deploymentName, messages)
+            // pi azure-openai-responses.ts:111: onPayload inspects/replaces
+            // the params object before serialization; null keeps the payload.
+            var params = buildAzureParams(model, context, options, deploymentName, messages)
+            options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
             val headers = LinkedHashMap<String, String?>()
             // pi's azure createClient merges { "User-Agent": ua, ...model.headers }
             // then Object.assign(options.headers): model headers can override the
@@ -580,6 +649,10 @@ class AzureOpenAiResponsesApi(
                 options.maxRetries,
                 options.maxRetryDelayMs,
             ) { transport.post(request) }
+
+            // pi azure-openai-responses.ts:128: onResponse fires after response
+            // headers arrive; like the SDK path it only runs for 2xx.
+            options.onResponse?.invoke(ProviderResponse(response.status, headersToRecord(response.headers)), model)
 
             emit(AssistantMessageEvent.Start(state.partialSnapshot()))
             for (event in response.events.toList()) {
@@ -614,7 +687,8 @@ internal fun buildAzureParams(
     options: AzureOpenAiResponsesOptions?,
     deploymentName: String,
     messages: List<JsonObject>,
-): JsonObject = buildJsonObject {
+): JsonObject {
+    var params = buildJsonObject {
     put("model", deploymentName)
     put("input", kotlinx.serialization.json.JsonArray(messages))
     put("stream", true)
@@ -673,6 +747,11 @@ internal fun buildAzureParams(
             put("reasoning", buildJsonObject { put("effort", off) })
         }
     }
+    }
+    // pi azure-openai-responses.ts:333-334: merged last so custom keys
+    // override the named request fields.
+    options?.samplingParams?.let { params = JsonObject(params.toMap() + it) }
+    return params
 }
 
 // ---------------------------------------------------------------------------

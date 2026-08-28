@@ -4,6 +4,7 @@ import works.resolve.pathfinder.ai.api.GoogleRequest.CommonOptions
 import works.resolve.pathfinder.ai.api.GoogleRequest.GoogleThinking
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Model
+import works.resolve.pathfinder.ai.core.ProviderResponse
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.SimpleToolChoice
 import works.resolve.pathfinder.ai.core.mergeHeaders
@@ -11,6 +12,8 @@ import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.serialization.json.JsonObject
 
 /**
  * Google Generative AI (Gemini API) streaming adapter, ported from pi's
@@ -24,8 +27,8 @@ import kotlinx.coroutines.flow.Flow
  * `apiVersion: ""` so the SDK does not append one).
  *
  * Divergences (also see [GoogleShared] and [GoogleStreamEngine] KDoc):
- * - `options.fetch`/`onPayload` have no Kotlin counterpart; payload shaping
- *   is testable through the injected [HttpStreamingTransport].
+ * - `options.fetch` has no Kotlin counterpart; payload shaping is testable
+ *   through the injected [HttpStreamingTransport].
  * - pi's synchronous `throw` for a missing API key (in `stream`/`streamSimple`)
  *   is encoded as a terminal Error event, per the ChatApi contract here.
  * - pi's User-Agent is `getPiUserAgent()` (ai/utils/PiUserAgent.kt); the
@@ -51,11 +54,29 @@ class GoogleGenerativeAiApi(
         /** "auto" | "none" | "any". */
         val toolChoice: String? = null,
         val thinking: GoogleThinking? = null,
+        /**
+         * pi's onPayload request hook (ProviderRequestOptions, types.ts:145-149;
+         * google-generative-ai.ts:89): replaces the request object before
+         * serialization when it returns non-null. Divergence: upstream's hook
+         * receives the `@google/genai` SDK's GenerateContentParameters; here it
+         * receives the wire-format JSON payload this port builds. Receives full
+         * message content; installers must not log it. Never included in
+         * toString().
+         */
+        val onPayload: (suspend (payload: JsonObject, model: Model) -> JsonObject?)? = null,
+        /**
+         * pi's GoogleOptions inherits StreamOptions.onResponse (types.ts:184)
+         * but the Google adapter never invokes it (google-generative-ai.ts has
+         * no onResponse call site); carried for shape fidelity and likewise
+         * never invoked here. Never included in toString().
+         */
+        val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
     ) {
         override fun toString(): String = CommonOptions(
             apiKey, sessionId, temperature, maxTokens, timeoutMs, maxRetries, maxRetryDelayMs,
             env, headers, toolChoice, thinking,
-        ).toString()
+        ).toString().dropLast(1) +
+            ", onPayload=${onPayload != null}, onResponse=${onResponse != null})"
 
         internal fun toCommon() = CommonOptions(
             apiKey, sessionId, temperature, maxTokens, timeoutMs, maxRetries, maxRetryDelayMs,
@@ -98,6 +119,8 @@ class GoogleGenerativeAiApi(
                 maxRetryDelayMs = options.maxRetryDelayMs,
                 env = options.env,
                 headers = options.headers,
+                onPayload = options.onPayload,
+                onResponse = options.onResponse,
                 // pi's google-generative-ai streamSimple forwards the narrow
                 // simple-API toolChoice ("auto" | "none", types.ts:82).
                 toolChoice = when (options.toolChoice) {
@@ -133,20 +156,28 @@ class GoogleGenerativeAiApi(
         ).filterValues { it != null }
             .mapValues { it.value!! } + mapOf("x-goog-api-key" to apiKey)
 
-        return GoogleStreamEngine.stream(
-            transport,
-            retry,
-            nowMs,
-            model,
-            GoogleStreamEngine.Plan(
-                url = url,
-                headers = headers,
-                body = body.toString().toByteArray(Charsets.UTF_8),
-                timeoutMs = options.timeoutMs,
-                maxRetries = options.maxRetries,
-                maxRetryDelayMs = options.maxRetryDelayMs,
-            ),
-        )
+        // pi google-generative-ai.ts:89: onPayload inspects/replaces the
+        // request object before serialization; null keeps it. The hook is
+        // suspend, so the Plan is built inside a flow scope.
+        return kotlinx.coroutines.flow.flow {
+            emitAll(
+                GoogleStreamEngine.stream(
+                    transport,
+                    retry,
+                    nowMs,
+                    model,
+                    GoogleStreamEngine.Plan(
+                        url = url,
+                        headers = headers,
+                        body = (options.onPayload?.let { it(body, model) } ?: body)
+                            .toString().toByteArray(Charsets.UTF_8),
+                        timeoutMs = options.timeoutMs,
+                        maxRetries = options.maxRetries,
+                        maxRetryDelayMs = options.maxRetryDelayMs,
+                    ),
+                ),
+            )
+        }
     }
 
     private companion object {

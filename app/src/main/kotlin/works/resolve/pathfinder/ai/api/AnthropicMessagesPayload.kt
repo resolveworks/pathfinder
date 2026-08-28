@@ -8,6 +8,7 @@ import works.resolve.pathfinder.ai.core.ImageContent
 import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
+import works.resolve.pathfinder.ai.core.ProviderResponse
 import works.resolve.pathfinder.ai.core.StreamOptions
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
@@ -84,6 +85,18 @@ data class AnthropicMessagesOptions(
     val maxRetryDelayMs: Long = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
+    /**
+     * pi's onPayload request hook (ProviderRequestOptions, types.ts:145-149;
+     * anthropic-messages.ts:566): replaces the params object before
+     * serialization when it returns non-null. Receives full message content;
+     * installers must not log it. Never included in toString().
+     */
+    val onPayload: (suspend (payload: JsonObject, model: Model) -> JsonObject?)? = null,
+    /**
+     * pi's onResponse request hook (types.ts:184; anthropic-messages.ts:583):
+     * invoked after 2xx response headers arrive. Never included in toString().
+     */
+    val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
 ) {
     override fun toString(): String =
         "AnthropicMessagesOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
@@ -92,7 +105,8 @@ data class AnthropicMessagesOptions(
             ", effort=$effort, thinkingDisplay=$thinkingDisplay" +
             ", interleavedThinking=$interleavedThinking, toolChoice=$toolChoice" +
             ", cacheRetention=$cacheRetention, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
-            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys})"
+            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys}" +
+            ", onPayload=${onPayload != null}, onResponse=${onResponse != null})"
 }
 
 /** pi's resolveCacheRetention: explicit value, then PI_CACHE_RETENTION=long, else short. */
@@ -644,4 +658,6 @@ internal fun buildBaseOptions(
         maxRetryDelayMs = options.maxRetryDelayMs,
         env = options.env,
         headers = options.headers,
+        onPayload = options.onPayload,
+        onResponse = options.onResponse,
     )

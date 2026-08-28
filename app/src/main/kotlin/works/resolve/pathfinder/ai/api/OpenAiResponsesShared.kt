@@ -56,7 +56,6 @@ import works.resolve.pathfinder.ai.utils.shortHash
  *   [GrammarToolInputJsonBuffer] input deltas. See [convertResponsesTools],
  *   [createGrammarToolInputProperties], and the stream's custom-tool-call
  *   slots for the ported wire shapes.
- * - samplingParams / onPayload / onResponse request hooks are not ported.
  * - GitHub Copilot dynamic headers are ported (GithubCopilotHeaders.kt);
  *   beyond them only static model headers and the affinity headers are sent.
  */

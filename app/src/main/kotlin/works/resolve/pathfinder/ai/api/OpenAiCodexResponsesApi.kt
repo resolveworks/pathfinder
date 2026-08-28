@@ -16,7 +16,9 @@ import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
+import works.resolve.pathfinder.ai.core.ProviderResponse
 import works.resolve.pathfinder.ai.core.StopReason
+import works.resolve.pathfinder.ai.core.headersToRecord
 import works.resolve.pathfinder.ai.core.toToolChoice
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.utils.formatProviderError
@@ -61,6 +63,20 @@ data class OpenAICodexResponsesOptions(
     val maxRetryDelayMs: Long = works.resolve.pathfinder.ai.core.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
+    /**
+     * pi's onPayload request hook (ProviderRequestOptions, types.ts:145-149;
+     * openai-codex-responses.ts:270): replaces the request body object before
+     * serialization when it returns non-null. Receives full message content;
+     * installers must not log it. Never included in toString().
+     */
+    val onPayload: (suspend (payload: JsonObject, model: Model) -> JsonObject?)? = null,
+    /**
+     * pi's onResponse request hook (types.ts:184;
+     * openai-codex-responses.ts:406): invoked after each SSE attempt's
+     * response headers arrive — before the ok check, so also for non-2xx
+     * (and once per retry attempt). Never included in toString().
+     */
+    val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
 ) {
     override fun toString(): String =
         "OpenAICodexResponsesOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
@@ -68,7 +84,8 @@ data class OpenAICodexResponsesOptions(
             ", reasoningEffort=$reasoningEffort, reasoningSummary=$reasoningSummary" +
             ", serviceTier=$serviceTier, textVerbosity=$textVerbosity, toolChoice=$toolChoice" +
             ", cacheRetention=$cacheRetention, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
-            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys})"
+            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys}" +
+            ", onPayload=${onPayload != null}, onResponse=${onResponse != null})"
 }
 
 internal const val DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
@@ -433,6 +450,8 @@ class OpenAICodexResponsesApi(
                 maxRetryDelayMs = options.maxRetryDelayMs,
                 env = options.env,
                 headers = options.headers,
+                onPayload = options.onPayload,
+                onResponse = options.onResponse,
             ),
         )
     }
@@ -469,7 +488,11 @@ class OpenAICodexResponsesApi(
             )
             val cacheSessionId = if (cacheRetention == CacheRetention.NONE) null else options.sessionId
             val codexSessionId = OpenAiResponsesShared.clampOpenAIPromptCacheKey(cacheSessionId)
-            val body = buildCodexRequestBody(model, context, options, codexSessionId, grammarToolInputProperties)
+            // pi openai-codex-responses.ts:270: onPayload inspects/replaces
+            // the body object before serialization; null keeps the payload.
+            var bodyObj = buildCodexRequestBody(model, context, options, codexSessionId, grammarToolInputProperties)
+            options.onPayload?.let { hook -> hook(bodyObj, model)?.let { bodyObj = it } }
+            val body = bodyObj
                 .toString().toByteArray(Charsets.UTF_8)
             val headers = buildCodexSSEHeaders(model.headers, options.headers, accountId, apiKey, codexSessionId)
 
@@ -555,7 +578,7 @@ class OpenAICodexResponsesApi(
         val url = resolveCodexUrl(model.baseUrl)
         for (attempt in 0..maxRetries) {
             try {
-                return transport.post(
+                val response = transport.post(
                     TransportRequest(
                         url = url,
                         bearerToken = null,
@@ -564,8 +587,23 @@ class OpenAICodexResponsesApi(
                         timeoutMs = options.timeoutMs,
                     ),
                 )
+                // pi openai-codex-responses.ts:406: onResponse fires after each
+                // attempt's response headers arrive, before the ok check.
+                options.onResponse?.invoke(
+                    ProviderResponse(response.status, headersToRecord(response.headers)),
+                    model,
+                )
+                return response
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
+                if (error is ProviderHttpException) {
+                    // Non-2xx headers arrived: pi's onResponse still fired
+                    // before the ok check, so mirror it from the exception.
+                    options.onResponse?.invoke(
+                        ProviderResponse(error.status, headersToRecord(error.headers)),
+                        model,
+                    )
+                }
                 // Terminal usage limits (pi's friendly "You have hit your
                 // ChatGPT usage limit" path) must surface their message and
                 // never retry.

@@ -81,9 +81,11 @@ upstream or Android changes make a faithful implementation proportionate.
 ## Adapter capability scope
 
 Provider options such as grammar-constrained custom tools, deferred server
-tools and fallbacks, and request hooks should be added only after the native
-core models the corresponding pi concepts and data shapes. Do not add isolated
-wire fields that the runtime cannot represent correctly.
+tools and fallbacks should be added only after the native core models the
+corresponding pi concepts and data shapes. (Request hooks — onPayload /
+onResponse — and samplingParams are now ported; see [SimpleStreamOptions]
+and the per-adapter wiring sites for their pi provenance.) Do not add
+isolated wire fields that the runtime cannot represent correctly.
 
 When a narrow option is omitted, document it at the adapter or model boundary
 with the upstream symbol and the reason. Distinguish an intentional omission
