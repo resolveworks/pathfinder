@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
+import works.resolve.pathfinder.ai.core.AnthropicAllowedFallbackModel
 import works.resolve.pathfinder.ai.core.AnthropicMessagesCompat
 import works.resolve.pathfinder.ai.core.CacheControlFormat
 import works.resolve.pathfinder.ai.core.ChatTemplateKwargValue
@@ -310,6 +311,16 @@ private data class ModelDto(
     }
 }
 
+/** pi's AnthropicAllowedFallbackModel (types.ts:307-311). */
+@Serializable
+private data class AllowedFallbackModelDto(
+    val provider: String,
+    val model: String,
+    val cost: CostDto = CostDto(),
+) {
+    fun toDomain() = AnthropicAllowedFallbackModel(provider, model, cost.toDomain())
+}
+
 @Serializable
 private data class CostDto(
     val input: Double = 0.0,
@@ -357,6 +368,7 @@ private data class CompatDto(
     val allowEmptySignature: Boolean? = null,
     val supportsStrictTools: Boolean? = null,
     val forceAdaptiveThinking: Boolean? = null,
+    val allowedFallbackModels: List<AllowedFallbackModelDto>? = null,
     // OpenAI Responses-family compat (pi's OpenAIResponsesCompat), consumed
     // via Model.responsesCompat; also the completions strict-mode flag (pi's
     // OpenAICompletionsCompat.supportsStrictMode) via Model.compat.
@@ -369,10 +381,10 @@ private data class CompatDto(
     val supportsExplicitPromptCacheMode: Boolean? = null,
     // Not modeled because the native core has no corresponding data shape
     // yet: requiresReasoningContentOnAssistantMessages, deferredToolsMode,
-    // allowedFallbackModels, and supportsToolReferences.
+    // and supportsToolReferences.
     // Unknown catalog fields are ignored; adapters must omit the corresponding
-    // request features. deferredToolsMode, allowedFallbackModels, and
-    // supportsToolReferences are deferred until agent tool support lands.
+    // request features. deferredToolsMode and supportsToolReferences are
+    // deferred until agent tool support lands.
 ) {
     fun toDomain(where: String, detectedCacheControlFormat: CacheControlFormat?) = OpenAiCompletionsCompat(
         supportsStore = supportsStore ?: true,
@@ -423,6 +435,7 @@ private data class CompatDto(
         allowEmptySignature = allowEmptySignature ?: false,
         supportsStrictTools = supportsStrictTools ?: false,
         forceAdaptiveThinking = forceAdaptiveThinking,
+        allowedFallbackModels = allowedFallbackModels?.map { it.toDomain() } ?: emptyList(),
     )
 }
 

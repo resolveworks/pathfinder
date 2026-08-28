@@ -316,6 +316,42 @@ class ProviderCatalogTest {
     }
 
     @Test
+    fun `anthropic allowedFallbackModels decode with costs and default to empty`() {
+        // pi types.ts:307-311,695-702: AnthropicAllowedFallbackModel list with
+        // local pricing metadata; absent means callers must omit `fallbacks`.
+        val catalog = ProviderCatalog.parse(
+            """
+            {"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
+              {"id":"a","name":"A","api":"anthropic-messages",
+               "compat":{"allowedFallbackModels":[{"provider":"p","model":"b","cost":{"input":5,"output":25,"cacheRead":0.5,"cacheWrite":6.25}}]}},
+              {"id":"b","name":"B","api":"anthropic-messages"}
+            ]}]}
+            """,
+        )
+        val fallbacks = catalog.getModel("p", "a")!!.anthropicCompat.allowedFallbackModels
+        assertEquals(1, fallbacks.size)
+        assertEquals("p", fallbacks[0].provider)
+        assertEquals("b", fallbacks[0].model)
+        assertEquals(5.0, fallbacks[0].cost.input)
+        assertEquals(6.25, fallbacks[0].cost.cacheWrite)
+        assertEquals(0, catalog.getModel("p", "b")!!.anthropicCompat.allowedFallbackModels.size)
+        // Real asset round-trip: pi's data carries the list on claude-fable-5
+        // and claude-opus-5 only.
+        val fable = realAsset().getModel("anthropic", "claude-fable-5")!!
+        assertTrue(fable.anthropicCompat.allowedFallbackModels.size > 0)
+        assertEquals(
+            listOf("claude-opus-4-8", "claude-opus-5"),
+            fable.anthropicCompat.allowedFallbackModels.map { it.model },
+        )
+        assertTrue(
+            realAsset().getModel("anthropic", "claude-opus-5")!!.anthropicCompat.allowedFallbackModels.size > 0,
+        )
+        assertTrue(
+            realAsset().getModel("anthropic", "claude-sonnet-5")!!.anthropicCompat.allowedFallbackModels.isEmpty(),
+        )
+    }
+
+    @Test
     fun `chatTemplateArgs ref defaults omitWhenOff to false`() {
         val model = ProviderCatalog.parse(
             """
