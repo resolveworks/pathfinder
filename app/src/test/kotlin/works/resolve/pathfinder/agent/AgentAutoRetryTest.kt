@@ -6,7 +6,11 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
+import works.resolve.pathfinder.ai.core.Tool
+import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.data.settings.RetrySettings
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
@@ -192,6 +196,79 @@ class AgentAutoRetryTest {
         )
         // The final error assistant message stays in agent state.
         assertEquals("terminated", (agent.state.value.messages.last() as AssistantMessage).errorMessage)
+    }
+
+    @Test
+    fun `retry after tool results continues from the toolResult without replaying the partial tool turn`() = runTest {
+        // Multi-turn compatibility of the auto-retry path (plan step 7):
+        // an assistant ERROR mid-run (after tool results) retries from the
+        // trailing toolResult. Pi's _prepareRetry (agent-session.ts ~2866)
+        // drops only the trailing assistant error from agent state, and
+        // agent.continue() resumes from the trailing tool result — the
+        // partial tool turn is neither replayed nor duplicated, and the
+        // session tree keeps everything (append-only).
+        val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
+            content = listOf(ToolCall("call-1", "get_weather", "{}")),
+        )
+        val fakeTool = object : AgentTool {
+            override val definition = Tool("get_weather", "fake weather", JsonPrimitive("object"))
+            override val label = "get_weather"
+            override fun validateArguments(arguments: JsonObject) = arguments
+            override suspend fun execute(
+                toolCallId: String,
+                arguments: JsonObject,
+                onUpdate: AgentToolUpdateCallback,
+            ) = AgentToolResult(content = listOf(TextContent("sunny")))
+        }
+        val streams = ScriptedStreams().apply {
+            streams.add(flowOf(AssistantMessageEvent.Done(StopReason.TOOL_USE, toolUse)))
+            streams.add(errorStream("terminated"))
+            streams.add(okStream("recovered"))
+        }
+        val agent = AgentSession(
+            agent = Agent(
+                model = model,
+                systemPrompt = "be brief",
+                streamOptions = SimpleStreamOptions(),
+                tools = listOf(fakeTool),
+                streamFn = streams.streamFn,
+            ),
+            retrySettings = RetrySettings(),
+            sleep = { },
+        )
+
+        val events = collectEvents(agent)
+
+        assertEquals(
+            listOf(
+                AgentEvent.AutoRetryStart(attempt = 1, maxAttempts = 3, delayMs = 2000, errorMessage = "terminated"),
+                AgentEvent.AutoRetryEnd(success = true, attempt = 1),
+            ),
+            events.filterIsInstance<AgentEvent.AutoRetryStart>() + events.filterIsInstance<AgentEvent.AutoRetryEnd>(),
+        )
+
+        // The retried run continues from the trailing toolResult exactly:
+        // same tool-turn prefix as the errored turn, error assistant
+        // dropped, nothing replayed (second and third contexts identical).
+        assertEquals(3, streams.seenContexts.size)
+        assertEquals(streams.seenContexts[1], streams.seenContexts[2])
+        assertTrue(streams.seenContexts[1].last() is works.resolve.pathfinder.ai.core.ToolResultMessage)
+
+        // Agent state: user, tool-call assistant, tool result, recovered
+        // assistant — the error assistant is gone.
+        val state = agent.state.value.messages
+        assertEquals(4, state.size)
+        assertTrue(state[1] is AssistantMessage)
+        assertTrue(state[2] is works.resolve.pathfinder.ai.core.ToolResultMessage)
+        val recovered = state[3] as AssistantMessage
+        assertEquals("recovered", (recovered.content.single() as TextContent).text)
+        assertNull(agent.state.value.errorMessage)
+
+        // Session tree stays append-only and keeps the error assistant.
+        val tree = agent.conversation.activeMessages()
+        assertEquals(5, tree.size)
+        val errored = tree[3] as AssistantMessage
+        assertEquals(StopReason.ERROR, errored.stopReason)
     }
 
     @Test
