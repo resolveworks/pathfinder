@@ -16,14 +16,21 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
+import works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig
 import works.resolve.pathfinder.ai.core.Context
+import works.resolve.pathfinder.ai.core.GrammarFormat
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelCost
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.OpenAiResponsesCompat
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
+import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.ThinkingLevelMap
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeTransport
@@ -146,6 +153,49 @@ class OpenAiCodexResponsesApiTest {
         assertEquals("auto", body["tool_choice"]!!.jsonPrimitive.content)
         assertEquals(true, body["parallel_tool_calls"]!!.jsonPrimitive.content.toBoolean())
         assertEquals("session-1", body["prompt_cache_key"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `grammar tools convert to custom tools when compat enables them`() = runTest {
+        val grammarTool = Tool(
+            name = "sample_tool",
+            description = "Sample tool",
+            parameters = buildJsonObject {
+                put("type", "object")
+                put(
+                    "properties",
+                    buildJsonObject { put("payload", buildJsonObject { put("type", "string") }) },
+                )
+                put("required", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("payload")) })
+                put("additionalProperties", false)
+            },
+            constrainedSampling = ConstrainedSamplingConfig.Grammar(
+                mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/"),
+            ),
+        )
+        val grammarModel = model.copy(
+            responsesCompat = OpenAiResponsesCompat(supportsStrictMode = true, supportsOpenAIGrammarTools = true),
+        )
+        val toolContext = context.copy(tools = listOf(grammarTool))
+
+        val enabled = FakeTransport()
+        enabled.enqueueResponse(sse(*doneEvents().toTypedArray()))
+        api(enabled).stream(grammarModel, toolContext, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val custom = bodyOf(enabled)["tools"]!!.jsonArray.single().jsonObject
+        assertEquals("custom", custom["type"]!!.jsonPrimitive.content)
+        val format = custom["format"]!!.jsonObject
+        assertEquals("grammar", format["type"]!!.jsonPrimitive.content)
+        assertEquals("lark", format["syntax"]!!.jsonPrimitive.content)
+        assertEquals("start: /[a-z]+/", format["definition"]!!.jsonPrimitive.content)
+
+        // Default compat (supportsOpenAIGrammarTools ?? false) falls back to a
+        // function tool, and Codex's strict: null leaves the strict field unset.
+        val fallback = FakeTransport()
+        fallback.enqueueResponse(sse(*doneEvents().toTypedArray()))
+        api(fallback).stream(model, toolContext, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val function = bodyOf(fallback)["tools"]!!.jsonArray.single().jsonObject
+        assertEquals("function", function["type"]!!.jsonPrimitive.content)
+        assertNull(function["strict"])
     }
 
     @Test
