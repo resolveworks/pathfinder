@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ui.chat
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.viewModelScope
+import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.AgentSession
 import works.resolve.pathfinder.ai.api.ChatApi
 import works.resolve.pathfinder.ai.core.Context
@@ -19,6 +20,7 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
+import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
@@ -775,6 +777,41 @@ class ChatViewModelTest {
         vm.switchSession(firstId)
         val restored = vm.uiState.first { it.activeSessionId == firstId && it.messages.size == 2 }
         assertEquals("Hello", restored.messages[0].singleText())
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun toolResultMessages_neverRenderAsChatMessages() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        val gate = CompletableDeferred<Unit>().apply { complete(Unit) }
+        h.scriptedStreams.add(h.gatedStream("world", gate))
+        vm.onDraftChange("Hello")
+        vm.send()
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+
+        // Regression for the generic streamingMessage: a tool-result
+        // message committed through the agent must not render as a blank
+        // chat message (projectCommitted's else -> null).
+        val session = h.createdAgents.single()
+        val result = ToolResultMessage(
+            toolCallId = "call-1",
+            toolName = "get_weather",
+            content = listOf(TextContent("sunny")),
+            timestamp = System.nanoTime(),
+        )
+        session.agent.processEvent(AgentEvent.MessageStart(result))
+        session.agent.processEvent(AgentEvent.MessageEnd(result))
+
+        vm.uiState.first { it.messages.size == 2 && it.streamingMessage == null }
+        val state = vm.uiState.value
+        assertEquals(2, state.messages.size)
+        assertNull(state.streamingMessage)
 
         vm.closeForTest()
     }

@@ -84,6 +84,9 @@ class PathfinderApplication : Application() {
             catalog = modelCatalog,
             transport = transport,
             authRegistry = authRegistry,
+            // Production tool registry is intentionally empty for now; pi's
+            // tool surface lands with the tool-execution change.
+            tools = emptyList(),
         )
     }
 
