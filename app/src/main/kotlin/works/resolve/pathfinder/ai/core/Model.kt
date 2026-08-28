@@ -70,13 +70,14 @@ enum class SessionAffinityFormat { OPENAI, OPENAI_NOSESSION, OPENROUTER }
 
 /**
  * OpenAI Responses API-family compatibility flags, ported from pi's
- * OpenAIResponsesCompat. Defaults mirror pi's getCompat() resolution.
+ * OpenAIResponsesCompat. Defaults mirror pi's getCompat()
+ * (openai-responses.ts:68-77).
  *
- * Divergence from pi: supportsOpenAIGrammarTools is not yet ported — Tool
- * carries no constrainedSampling config, so grammar ("custom") tools are
- * never emitted or replayed. Unfinished parity, not a descope: port with
- * Tool.constrainedSampling and pi's constrained-sampling.ts when agent tool
- * support lands.
+ * supportsOpenAIGrammarTools is plumbed only: adapters do not yet consume it,
+ * because Tool carries no constrainedSampling config, so grammar ("custom")
+ * tools are never emitted or replayed. Unfinished parity, not a descope:
+ * consume it alongside Tool.constrainedSampling and pi's
+ * constrained-sampling.ts when agent tool support lands.
  */
 data class OpenAiResponsesCompat(
     val supportsDeveloperRole: Boolean = true,
@@ -84,6 +85,12 @@ data class OpenAiResponsesCompat(
     val sessionAffinityFormat: SessionAffinityFormat? = null,
     val supportsLongCacheRetention: Boolean = true,
     val supportsStrictMode: Boolean = false,
+    /**
+     * pi's supportsOpenAIGrammarTools (types.ts:638; openai-responses.ts:74
+     * `model.compat?.supportsOpenAIGrammarTools ?? false`): default false; the
+     * generated model catalog enables it for capable models.
+     */
+    val supportsOpenAIGrammarTools: Boolean = false,
     val supportsAdditionalTools: Boolean = false,
     val supportsToolSearch: Boolean = false,
     val supportsExplicitPromptCacheMode: Boolean = false,
@@ -122,6 +129,13 @@ data class OpenAiCompletionsCompat(
      * together, nvidia, and cloudflare-ai-gateway.
      */
     val supportsStrictMode: Boolean = true,
+    /**
+     * pi's supportsOpenAIGrammarTools (types.ts:612; openai-completions.ts:1654
+     * detected default false, :1700 `model.compat.supportsOpenAIGrammarTools ??
+     * detected.supportsOpenAIGrammarTools`): the generated model catalog
+     * enables it for capable models.
+     */
+    val supportsOpenAIGrammarTools: Boolean = false,
 )
 
 /**

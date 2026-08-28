@@ -217,6 +217,51 @@ class ProviderCatalogTest {
     }
 
     @Test
+    fun `supportsOpenAIGrammarTools defaults false and parses true for responses and completions`() {
+        // pi: responses getCompat (openai-responses.ts:74) and completions
+        // detectCompat (openai-completions.ts:1654, :1700) both default false;
+        // the generated catalog enables it for capable models.
+        val catalog = ProviderCatalog.parse(
+            """
+            {
+              "providers": [{
+                "id": "p", "name": "P", "baseUrl": "https://p.test/v1",
+                "models": [
+                  {"id": "a", "name": "A", "api": "openai-responses",
+                   "compat": {"supportsOpenAIGrammarTools": true}},
+                  {"id": "b", "name": "B", "api": "openai-responses"},
+                  {"id": "c", "name": "C",
+                   "compat": {"supportsOpenAIGrammarTools": true}},
+                  {"id": "d", "name": "D"}
+                ]
+              }]
+            }
+            """,
+        )
+        assertEquals(true, catalog.getModel("p", "a")!!.responsesCompat?.supportsOpenAIGrammarTools)
+        assertEquals(false, catalog.getModel("p", "b")!!.responsesCompat?.supportsOpenAIGrammarTools)
+        assertEquals(true, catalog.getModel("p", "c")!!.compat.supportsOpenAIGrammarTools)
+        assertEquals(false, catalog.getModel("p", "d")!!.compat.supportsOpenAIGrammarTools)
+    }
+
+    @Test
+    fun `anthropic supportsStrictTools defaults false and parses true from the catalog`() {
+        // pi getAnthropicCompat (anthropic-messages.ts:193):
+        // `model.compat?.supportsStrictTools ?? false`.
+        val catalog = ProviderCatalog.parse(
+            """
+            {"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
+              {"id":"a","name":"A","api":"anthropic-messages",
+               "compat":{"supportsStrictTools": true}},
+              {"id":"b","name":"B","api":"anthropic-messages"}
+            ]}]}
+            """,
+        )
+        assertEquals(true, catalog.getModel("p", "a")!!.anthropicCompat.supportsStrictTools)
+        assertEquals(false, catalog.getModel("p", "b")!!.anthropicCompat.supportsStrictTools)
+    }
+
+    @Test
     fun `chatTemplateArgs ref defaults omitWhenOff to false`() {
         val model = ProviderCatalog.parse(
             """

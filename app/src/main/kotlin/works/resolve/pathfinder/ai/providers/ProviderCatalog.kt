@@ -348,6 +348,7 @@ private data class CompatDto(
     // via Model.responsesCompat; also the completions strict-mode flag (pi's
     // OpenAICompletionsCompat.supportsStrictMode) via Model.compat.
     val supportsStrictMode: Boolean? = null,
+    val supportsOpenAIGrammarTools: Boolean? = null,
     val sessionAffinityFormat: String? = null,
     val supportsAdditionalTools: Boolean? = null,
     val supportsToolSearch: Boolean? = null,
@@ -381,6 +382,7 @@ private data class CompatDto(
         sessionAffinityFormat = sessionAffinityFormat?.let { parseSessionAffinityFormat(it, where) },
         supportsLongCacheRetention = supportsLongCacheRetention ?: true,
         supportsStrictMode = supportsStrictMode ?: true,
+        supportsOpenAIGrammarTools = supportsOpenAIGrammarTools ?: false,
     )
 
     /** pi's getCompat (openai-responses) defaults apply per field when absent. */
@@ -389,6 +391,7 @@ private data class CompatDto(
         sessionAffinityFormat = sessionAffinityFormat?.let { parseSessionAffinityFormat(it, where) },
         supportsLongCacheRetention = supportsLongCacheRetention ?: true,
         supportsStrictMode = supportsStrictMode ?: false,
+        supportsOpenAIGrammarTools = supportsOpenAIGrammarTools ?: false,
         supportsAdditionalTools = supportsAdditionalTools ?: false,
         supportsToolSearch = supportsToolSearch ?: false,
         supportsExplicitPromptCacheMode = supportsExplicitPromptCacheMode ?: false,
