@@ -18,6 +18,9 @@ import kotlin.test.assertTrue
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.CacheRetention
+import works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig
+import works.resolve.pathfinder.ai.core.GrammarFormat
+import works.resolve.pathfinder.ai.core.StrictJsonSchemaMode
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ImageContent
 import works.resolve.pathfinder.ai.core.InputModality
@@ -1001,5 +1004,290 @@ class OpenAiResponsesSharedTest {
         )
         assertEquals(mapOf("x-session-id" to "s1"), openrouter)
         assertTrue(OpenAiResponsesShared.sessionAffinityHeaders(null, OpenAiResponsesShared.getCompat(model())).isEmpty())
+    }
+
+    // -----------------------------------------------------------------------
+    // Constrained sampling (pi constrained-sampling.test.ts adapter cases)
+    // -----------------------------------------------------------------------
+
+    private fun sampleTool(
+        constrainedSampling: works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig? = null,
+    ): Tool = Tool(
+        name = "sample_tool",
+        description = "Sample tool",
+        parameters = buildJsonObject {
+            put("type", "object")
+            put(
+                "properties",
+                buildJsonObject {
+                    put("payload", buildJsonObject { put("type", "string") })
+                },
+            )
+            put("required", JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("payload"))))
+            put("additionalProperties", false)
+        },
+        constrainedSampling = constrainedSampling,
+    )
+
+    @Test
+    fun `grammar tools convert to custom tools with the grammar format object`() {
+        val lark = OpenAiResponsesShared.convertResponsesTools(
+            listOf(
+                sampleTool(
+                    ConstrainedSamplingConfig.Grammar(
+                        mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/"),
+                    ),
+                ),
+            ),
+            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsOpenAIGrammarTools = true),
+        ).single()
+        assertEquals("custom", lark["type"]!!.jsonPrimitive.content)
+        assertEquals("sample_tool", lark["name"]!!.jsonPrimitive.content)
+        assertEquals("Sample tool", lark["description"]!!.jsonPrimitive.content)
+        val format = lark["format"]!!.jsonObject
+        assertEquals("grammar", format["type"]!!.jsonPrimitive.content)
+        assertEquals("lark", format["syntax"]!!.jsonPrimitive.content)
+        assertEquals("start: /[a-z]+/", format["definition"]!!.jsonPrimitive.content)
+
+        // lark wins when both variants are provided; regex is used otherwise.
+        val both = OpenAiResponsesShared.convertResponsesTools(
+            listOf(
+                sampleTool(
+                    ConstrainedSamplingConfig.Grammar(
+                        mapOf(
+                            GrammarFormat.OPENAI_LARK to "start: /[a-z]+/",
+                            GrammarFormat.OPENAI_REGEX to "[a-z]+",
+                        ),
+                    ),
+                ),
+            ),
+            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsOpenAIGrammarTools = true),
+        ).single()
+        assertEquals("lark", both["format"]!!.jsonObject["syntax"]!!.jsonPrimitive.content)
+
+        val regex = OpenAiResponsesShared.convertResponsesTools(
+            listOf(
+                sampleTool(
+                    ConstrainedSamplingConfig.Grammar(mapOf(GrammarFormat.OPENAI_REGEX to "[a-z]+")),
+                ),
+            ),
+            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsOpenAIGrammarTools = true),
+        ).single()
+        assertEquals("regex", regex["format"]!!.jsonObject["syntax"]!!.jsonPrimitive.content)
+        assertEquals("[a-z]+", regex["format"]!!.jsonObject["definition"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `grammar tools fall back to function tools when unsupported`() {
+        val fallback = OpenAiResponsesShared.convertResponsesTools(
+            listOf(
+                sampleTool(
+                    ConstrainedSamplingConfig.Grammar(
+                        mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/"),
+                    ),
+                ),
+            ),
+            OpenAiResponsesShared.ConvertResponsesToolsOptions(
+                supportsOpenAIGrammarTools = false,
+                supportsStrictMode = false,
+            ),
+        ).single()
+        assertEquals("function", fallback["type"]!!.jsonPrimitive.content)
+        assertEquals("sample_tool", fallback["name"]!!.jsonPrimitive.content)
+        assertNull(fallback["strict"])
+    }
+
+    @Test
+    fun `grammar tools without a supported variant are rejected`() {
+        val failure = assertFailsWith<Error> {
+            OpenAiResponsesShared.convertResponsesTools(
+                listOf(sampleTool(ConstrainedSamplingConfig.Grammar(emptyMap()))),
+                OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsOpenAIGrammarTools = true),
+            )
+        }
+        assertEquals(
+            "Tool \"sample_tool\" cannot use grammar constrained sampling: " +
+                "no supported grammar variant was provided.",
+            failure.message,
+        )
+    }
+
+    @Test
+    fun `json schema constrained tools emit strict rewritten parameters`() {
+        val converted = OpenAiResponsesShared.convertResponsesTools(
+            listOf(sampleTool(ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER))),
+        ).single()
+        assertEquals("function", converted["type"]!!.jsonPrimitive.content)
+        assertEquals(true, converted["strict"]!!.jsonPrimitive.content.toBoolean())
+        // The strict rewrite clones: the tool's own schema keeps required=[payload].
+        val parameters = converted["parameters"]!!.jsonObject
+        assertEquals(false, parameters["additionalProperties"]!!.jsonPrimitive.content.toBoolean())
+
+        val original = sampleTool(ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER))
+        val strict = makeStrictJsonSchema(original.parameters)
+        assertEquals(strict, converted["parameters"])
+    }
+
+    @Test
+    fun `strict require rejects when strict mode is unsupported`() {
+        val failure = assertFailsWith<Error> {
+            OpenAiResponsesShared.convertResponsesTools(
+                listOf(sampleTool(ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE))),
+                OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsStrictMode = false),
+            )
+        }
+        assertEquals(
+            "Tool \"sample_tool\" requires JSON-schema constrained sampling, " +
+                "but strict tools are unsupported.",
+            failure.message,
+        )
+    }
+
+    @Test
+    fun `strict prefer falls back when the schema cannot be converted`() {
+        val tool = Tool(
+            name = "sample_tool",
+            description = "Sample tool",
+            parameters = buildJsonObject {
+                put("type", "object")
+                put(
+                    "properties",
+                    buildJsonObject {
+                        put("child", buildJsonObject { put("\$ref", "https://example.com/child.json") })
+                    },
+                )
+                put("required", JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("child"))))
+            },
+            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER),
+        )
+        val converted = OpenAiResponsesShared.convertResponsesTools(
+            listOf(tool),
+            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsStrictMode = true),
+        ).single()
+        assertEquals(false, converted["strict"]!!.jsonPrimitive.content.toBoolean())
+        assertEquals(tool.parameters, converted["parameters"])
+
+        val strictFailure = assertFailsWith<UnsupportedStrictJsonSchemaError> {
+            makeStrictJsonSchema(tool.parameters)
+        }
+        assertEquals("\$ref schemas are unsupported", strictFailure.message)
+
+        val requiring = tool.copy(
+            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
+        )
+        val resolveFailure = assertFailsWith<Error> { resolveJsonSchemaStrictSampling(requiring, true) }
+        assertContains(resolveFailure.message!!, "\$ref schemas are unsupported")
+    }
+
+    @Test
+    fun `replays grammar calls as custom tool call items`() {
+        fun grammarContext(arguments: String): Context {
+            val assistant = AssistantMessage(
+                content = listOf(ToolCall(id = "call_1|ctc_1", name = "sample_tool", arguments = arguments)),
+                api = "openai-responses",
+                provider = "openai",
+                model = "gpt-test",
+                stopReason = StopReason.TOOL_USE,
+            )
+            val result = ToolResultMessage(
+                toolCallId = "call_1|ctc_1",
+                toolName = "sample_tool",
+                content = listOf(TextContent("done")),
+            )
+            return Context(messages = listOf(assistant, result))
+        }
+        val options = OpenAiResponsesShared.ConvertResponsesMessagesOptions(
+            grammarToolInputProperties = mapOf("sample_tool" to "payload"),
+        )
+        for (invalidArguments in listOf("{}", """{"payload":42}""")) {
+            val failure = assertFailsWith<Error> {
+                OpenAiResponsesShared.convertResponsesMessages(
+                    model(id = "gpt-test"),
+                    grammarContext(invalidArguments),
+                    setOf("openai"),
+                    options,
+                )
+            }
+            assertEquals(
+                "Grammar tool call \"sample_tool\" requires argument \"payload\" to be a string.",
+                failure.message,
+            )
+        }
+
+        val messages = OpenAiResponsesShared.convertResponsesMessages(
+            model(id = "gpt-test"),
+            grammarContext("""{"payload":"abc"}"""),
+            setOf("openai"),
+            options,
+        )
+        val call = messages.first()
+        assertEquals("custom_tool_call", call["type"]!!.jsonPrimitive.content)
+        // Custom-tool ctc_* item ids survive replay (only function_call needs fc_*).
+        assertEquals("ctc_1", call["id"]!!.jsonPrimitive.content)
+        assertEquals("call_1", call["call_id"]!!.jsonPrimitive.content)
+        assertEquals("sample_tool", call["name"]!!.jsonPrimitive.content)
+        assertEquals("abc", call["input"]!!.jsonPrimitive.content)
+        val output = messages[1]
+        assertEquals("custom_tool_call_output", output["type"]!!.jsonPrimitive.content)
+        assertEquals("call_1", output["call_id"]!!.jsonPrimitive.content)
+        assertEquals("done", output["output"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `streams custom tool calls as string arguments`() {
+        val s = state(
+            options = OpenAiResponsesShared.StreamProcessingOptions(
+                grammarToolInputProperties = mapOf("sample_tool" to "payload"),
+            ),
+        )
+        val allEvents = mutableListOf<AssistantMessageEvent>()
+        fun feed(jsonText: String) {
+            allEvents += s.onEvent(event(jsonText))
+        }
+        feed(
+            """{"type":"response.output_item.added","output_index":0,
+                "item":{"type":"custom_tool_call","call_id":"call_1","id":"ctc_1",
+                    "name":"sample_tool","input":""}}""",
+        )
+        feed("""{"type":"response.custom_tool_call_input.delta","output_index":0,"delta":"ab"}""")
+        feed("""{"type":"response.custom_tool_call_input.done","output_index":0,"input":"abc"}""")
+        feed(
+            """{"type":"response.output_item.done","output_index":0,
+                "item":{"type":"custom_tool_call","call_id":"call_1","id":"ctc_1",
+                    "name":"sample_tool","input":"abc"}}""",
+        )
+        feed(
+            """{"type":"response.completed","response":{"status":"completed",
+                "usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}""",
+        )
+
+        assertEquals(StopReason.TOOL_USE, s.stopReason)
+        val toolCall = s.partialSnapshot().content.single() as ToolCall
+        assertEquals("call_1|ctc_1", toolCall.id)
+        assertEquals("sample_tool", toolCall.name)
+        assertEquals("{\"payload\":\"abc\"}", toolCall.arguments)
+        val deltas = allEvents.filterIsInstance<AssistantMessageEvent.ToolCallDelta>().joinToString("") { it.delta }
+        assertEquals("{\"payload\":\"abc\"}", deltas)
+        assertIs<AssistantMessageEvent.ToolCallEnd>(allEvents.filterIsInstance<AssistantMessageEvent.ToolCallEnd>().single())
+    }
+
+    @Test
+    fun `custom tool call item done alone finalizes input and namespace`() {
+        val s = state(
+            options = OpenAiResponsesShared.StreamProcessingOptions(
+                grammarToolInputProperties = mapOf("query" to "input"),
+            ),
+        )
+        val events = s.onEvent(
+            event(
+                """{"type":"response.output_item.done","output_index":0,
+                    "item":{"type":"custom_tool_call","id":"ctc_test","call_id":"call_test",
+                        "name":"query","input":"hello","namespace":"dynamic_tools"}}""",
+            ),
+        )
+        val end = assertIs<AssistantMessageEvent.ToolCallEnd>(events.last())
+        assertEquals("call_test|ctc_test", end.toolCall.id)
+        assertEquals("dynamic_tools", end.toolCall.namespace)
+        assertEquals("{\"input\":\"hello\"}", end.toolCall.arguments)
     }
 }

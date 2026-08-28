@@ -163,11 +163,17 @@ class OpenAiResponsesApi(
         options: OpenAiResponsesOptions = OpenAiResponsesOptions(),
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = nowMs()
+        val compatForGrammar = OpenAiResponsesShared.getCompat(model)
+        val grammarToolInputProperties = createGrammarToolInputProperties(
+            context.tools,
+            compatForGrammar.supportsOpenAIGrammarTools,
+        )
         val state = OpenAiResponsesShared.ResponsesStreamState(
             model,
             startedAtMs,
             OpenAiResponsesShared.StreamProcessingOptions(
                 serviceTier = options.serviceTier,
+                grammarToolInputProperties = grammarToolInputProperties,
                 applyServiceTierPricing = { usage, tier ->
                     OpenAiResponsesShared.applyServiceTierPricing(usage, tier, model.id)
                 },
@@ -250,6 +256,10 @@ internal fun buildParams(
     options: OpenAiResponsesOptions?,
     compat: OpenAiResponsesShared.ResolvedResponsesCompat,
     cacheRetention: CacheRetention,
+    grammarToolInputProperties: Map<String, String> = createGrammarToolInputProperties(
+        context.tools,
+        compat.supportsOpenAIGrammarTools,
+    ),
 ): JsonObject {
     val deferredToolsMode = when {
         compat.supportsAdditionalTools -> OpenAiResponsesShared.DeferredToolsMode.ADDITIONAL_TOOLS
@@ -262,10 +272,12 @@ internal fun buildParams(
         context,
         OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
         OpenAiResponsesShared.ConvertResponsesMessagesOptions(
+            grammarToolInputProperties = grammarToolInputProperties,
             deferredTools = toolPlacement.deferred,
             deferredToolsMode = deferredToolsMode,
             toolOptions = OpenAiResponsesShared.ConvertResponsesToolsOptions(
                 supportsStrictMode = compat.supportsStrictMode,
+                supportsOpenAIGrammarTools = compat.supportsOpenAIGrammarTools,
             ),
         ),
     )
@@ -305,6 +317,7 @@ internal fun buildParams(
                         toolPlacement.immediate,
                         OpenAiResponsesShared.ConvertResponsesToolsOptions(
                             supportsStrictMode = compat.supportsStrictMode,
+                            supportsOpenAIGrammarTools = compat.supportsOpenAIGrammarTools,
                         ),
                     ),
                 ),
@@ -522,7 +535,17 @@ class AzureOpenAiResponsesApi(
     ): Flow<AssistantMessageEvent> = flow {
         val deploymentName = resolveDeploymentName(model, options)
         val startedAtMs = nowMs()
-        val state = OpenAiResponsesShared.ResponsesStreamState(model, startedAtMs)
+        val grammarToolInputProperties = createGrammarToolInputProperties(
+            context.tools,
+            model.responsesCompat?.supportsOpenAIGrammarTools ?: false,
+        )
+        val state = OpenAiResponsesShared.ResponsesStreamState(
+            model,
+            startedAtMs,
+            OpenAiResponsesShared.StreamProcessingOptions(
+                grammarToolInputProperties = grammarToolInputProperties,
+            ),
+        )
         try {
             val apiKey = options.apiKey
                 ?: throw IllegalStateException("No API key for provider: ${model.provider}")
@@ -531,6 +554,9 @@ class AzureOpenAiResponsesApi(
                 model,
                 context,
                 OpenAiResponsesShared.AZURE_TOOL_CALL_PROVIDERS,
+                OpenAiResponsesShared.ConvertResponsesMessagesOptions(
+                    grammarToolInputProperties = grammarToolInputProperties,
+                ),
             )
 
             val params = buildAzureParams(model, context, options, deploymentName, messages)
@@ -612,6 +638,8 @@ internal fun buildAzureParams(
                     context.tools,
                     OpenAiResponsesShared.ConvertResponsesToolsOptions(
                         supportsStrictMode = supportsStrictMode,
+                        supportsOpenAIGrammarTools = model.responsesCompat?.supportsOpenAIGrammarTools
+                            ?: false,
                     ),
                 ),
             ),

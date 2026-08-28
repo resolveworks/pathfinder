@@ -49,13 +49,13 @@ import works.resolve.pathfinder.ai.utils.shortHash
  * - [ToolCall.arguments] stays Pathfinder's raw JSON string rather than a parsed
  *   object; replay passes the string through and streaming accumulates raw
  *   deltas, so pi's parseStreamingJson partial parser is not needed here.
- * - Grammar constrained sampling (custom tools) is not yet ported: [Tool] has
- *   no constrainedSampling config, so grammar tool paths (custom_tool_call
- *   items, grammar input buffers, and the catalog's
- *   supportsOpenAIGrammarTools flag) are omitted and grammar tools replay as
- *   plain function calls. Unfinished parity, not a descope: port with
- *   Tool.constrainedSampling and pi's constrained-sampling.ts when agent
- *   tool support lands.
+ * - Grammar constrained sampling is ported from pi's constrained-sampling.ts
+ *   (ConstrainedSampling.kt): grammar tools convert to OpenAI `custom` tools
+ *   (`format: {type:"grammar", syntax, definition}`), replay as
+ *   `custom_tool_call` items, and stream through
+ *   [GrammarToolInputJsonBuffer] input deltas. See [convertResponsesTools],
+ *   [createGrammarToolInputProperties], and the stream's custom-tool-call
+ *   slots for the ported wire shapes.
  * - samplingParams / onPayload / onResponse request hooks are not ported.
  * - GitHub Copilot dynamic headers are ported (GithubCopilotHeaders.kt);
  *   beyond them only static model headers and the affinity headers are sent.
@@ -127,6 +127,7 @@ object OpenAiResponsesShared {
         /** pi's strict option; null mirrors pi's `strict: null` (omit the field decision to the default). */
         val strict: Boolean? = false,
         val supportsStrictMode: Boolean = true,
+        val supportsOpenAIGrammarTools: Boolean = false,
         val deferLoading: Boolean = false,
     )
 
@@ -134,6 +135,7 @@ object OpenAiResponsesShared {
 
     data class ConvertResponsesMessagesOptions(
         val includeSystemPrompt: Boolean = true,
+        val grammarToolInputProperties: Map<String, String> = emptyMap(),
         val deferredTools: Map<String, Tool> = emptyMap(),
         val deferredToolsMode: DeferredToolsMode? = null,
         val toolOptions: ConvertResponsesToolsOptions = ConvertResponsesToolsOptions(),
@@ -268,30 +270,67 @@ object OpenAiResponsesShared {
                                 val callId = block.id.substringBefore("|")
                                 val itemIdRaw = block.id.substringAfter("|", "")
                                 var itemId: String? = itemIdRaw.takeIf { block.id.contains("|") }
+                                val customInputProperty = options.grammarToolInputProperties[block.name]
                                 // For different-model messages drop fc_ ids to avoid
-                                // pairing validation; non-fc_* ids (e.g. custom-tool
-                                // ctc_*) are dropped because function_call ids must
-                                // be fc_*.
+                                // pairing validation. When replaying a custom-tool call
+                                // its ctc_* id is kept; only function_call replay needs
+                                // fc_* item ids (pi: customInputProperty === undefined
+                                // && !itemId?.startsWith("fc_")).
                                 if ((isDifferentModel && itemId?.startsWith("fc_") == true) ||
-                                    itemId?.startsWith("fc_") != true
+                                    (customInputProperty == null && itemId?.startsWith("fc_") != true)
                                 ) {
                                     itemId = null
                                 }
                                 val canReplayNamespace =
                                     isSameModel || options.deferredTools[block.name] != null
-                                output.add(
-                                    buildJsonObject {
-                                        put("type", "function_call")
-                                        itemId?.let { put("id", it) }
-                                        put("call_id", callId)
-                                        put("name", block.name)
-                                        // Pathfinder stores arguments as the raw JSON string.
-                                        put("arguments", block.arguments)
-                                        if (canReplayNamespace && block.namespace != null) {
-                                            put("namespace", block.namespace)
-                                        }
-                                    },
-                                )
+                                if (customInputProperty != null) {
+                                    // Divergence (documented in the class header): pi keeps
+                                    // parsed argument objects; Pathfinder stores the raw
+                                    // JSON string, so parse it to reach pi's
+                                    // getGrammarToolInput lookup. A non-object body behaves
+                                    // like pi's `{}`/`{payload: 42}` cases: the grammar
+                                    // input error below fires.
+                                    val arguments = try {
+                                        json.parseToJsonElement(block.arguments) as? JsonObject
+                                    } catch (_: Exception) {
+                                        null
+                                    } ?: JsonObject(emptyMap())
+                                    output.add(
+                                        buildJsonObject {
+                                            put("type", "custom_tool_call")
+                                            itemId?.let { put("id", it) }
+                                            put("call_id", callId)
+                                            put("name", block.name)
+                                            put(
+                                                "input",
+                                                sanitizeSurrogates(
+                                                    getGrammarToolInput(
+                                                        block.name,
+                                                        arguments,
+                                                        customInputProperty,
+                                                    ),
+                                                ),
+                                            )
+                                            if (canReplayNamespace && block.namespace != null) {
+                                                put("namespace", block.namespace)
+                                            }
+                                        },
+                                    )
+                                } else {
+                                    output.add(
+                                        buildJsonObject {
+                                            put("type", "function_call")
+                                            itemId?.let { put("id", it) }
+                                            put("call_id", callId)
+                                            put("name", block.name)
+                                            // Pathfinder stores arguments as the raw JSON string.
+                                            put("arguments", block.arguments)
+                                            if (canReplayNamespace && block.namespace != null) {
+                                                put("namespace", block.namespace)
+                                            }
+                                        },
+                                    )
+                                }
                             }
                             else -> {}
                         }
@@ -303,7 +342,14 @@ object OpenAiResponsesShared {
                     val converted = convertToolResultOutput(model, msg.content)
                     messages.add(
                         buildJsonObject {
-                            put("type", "function_call_output")
+                            put(
+                                "type",
+                                if (options.grammarToolInputProperties.containsKey(msg.toolName)) {
+                                    "custom_tool_call_output"
+                                } else {
+                                    "function_call_output"
+                                },
+                            )
                             put("call_id", callId)
                             put("output", converted)
                         },
@@ -412,21 +458,45 @@ object OpenAiResponsesShared {
     // =========================================================================
 
     /**
-     * Pi's convertResponsesTools, reduced: no grammar (custom) tools and no
-     * strict-schema transformation (Pathfinder tools carry no
-     * constrainedSampling config, so strict schemas are never forced).
+     * Pi's convertResponsesTools (openai-responses-shared.ts:356-388): grammar
+     * tools become OpenAI `custom` tools carrying
+     * `format: {type: "grammar", syntax: "lark"|"regex", definition}`; other
+     * tools become `function` tools with strict-mode schema rewriting via
+     * [resolveJsonSchemaStrictSampling]/[getJsonSchemaToolParameters], and
+     * the `strict` field is emitted only when [ConvertResponsesToolsOptions.supportsStrictMode]
+     * (an unset/null strict value is omitted, as the SDK drops `undefined`).
      */
     fun convertResponsesTools(
         tools: List<Tool>,
         options: ConvertResponsesToolsOptions = ConvertResponsesToolsOptions(),
     ): List<JsonObject> = tools.map { tool ->
-        buildJsonObject {
-            put("type", "function")
-            put("name", tool.name)
-            put("description", tool.description)
-            put("parameters", tool.parameters)
-            if (options.deferLoading) put("defer_loading", true)
-            if (options.supportsStrictMode) put("strict", options.strict ?: false)
+        val grammar = resolveGrammarConstrainedSampling(tool, options.supportsOpenAIGrammarTools)
+        if (grammar != null) {
+            buildJsonObject {
+                put("type", "custom")
+                put("name", tool.name)
+                put("description", tool.description)
+                put(
+                    "format",
+                    buildJsonObject {
+                        put("type", "grammar")
+                        put("syntax", if (grammar.format == GrammarConstrainedFormat.LARK) "lark" else "regex")
+                        put("definition", grammar.definition)
+                    },
+                )
+                if (options.deferLoading) put("defer_loading", true)
+            }
+        } else {
+            val constrainedStrict = resolveJsonSchemaStrictSampling(tool, options.supportsStrictMode)
+            val strict = constrainedStrict ?: options.strict
+            buildJsonObject {
+                put("type", "function")
+                put("name", tool.name)
+                put("description", tool.description)
+                put("parameters", getJsonSchemaToolParameters(tool, strict == true))
+                if (options.deferLoading) put("defer_loading", true)
+                if (options.supportsStrictMode) strict?.let { put("strict", it) }
+            }
         }
     }
 
@@ -437,6 +507,7 @@ object OpenAiResponsesShared {
     /** Options threading pi's OpenAIResponsesStreamOptions + codex tier resolution. */
     data class StreamProcessingOptions(
         val serviceTier: String? = null,
+        val grammarToolInputProperties: Map<String, String> = emptyMap(),
         val resolveServiceTier: ((responseTier: String?, requestTier: String?) -> String?)? = null,
         val applyServiceTierPricing: ((usage: Usage, serviceTier: String?) -> Usage)? = null,
     )
@@ -464,7 +535,34 @@ object OpenAiResponsesShared {
             var name: String = ""
             var arguments: StringBuilder = StringBuilder()
             var namespace: String? = null
+
+            /**
+             * pi's StreamingToolCall.customInput: the grammar input property and
+             * JSON buffer for `custom_tool_call` items. [currentInput] mirrors
+             * pi's `block.arguments[property]` string (Pathfinder keeps raw
+             * argument JSON instead of a parsed object).
+             */
+            var customInput: CustomToolInput? = null
         }
+    }
+
+    /** pi's StreamingToolCall.customInput: the grammar input property and JSON
+     * buffer for `custom_tool_call` items. [currentInput] mirrors pi's
+     * `block.arguments[property]` string (Pathfinder keeps raw argument JSON
+     * instead of a parsed object). */
+    private class CustomToolInput(
+        val property: String,
+        val jsonBuffer: GrammarToolInputJsonBuffer = GrammarToolInputJsonBuffer(),
+        var currentInput: String = "",
+    )
+
+    /** pi's appendCustomToolCallInput: append the grammar input delta to the JSON buffer. */
+    private fun appendCustomToolCallInput(slot: Block.Tool, nextInput: String, close: Boolean): String? {
+        val customInput = slot.customInput ?: return null
+        val delta = appendGrammarToolInputJsonDelta(customInput.jsonBuffer, customInput.property, nextInput, close)
+        customInput.currentInput = nextInput
+        if (delta != null) slot.arguments.append(delta)
+        return delta
     }
 
     /**
@@ -570,6 +668,21 @@ object OpenAiResponsesShared {
                 if (delta.isEmpty()) return emptyList()
                 listOf(AssistantMessageEvent.ToolCallDelta(slot.index, delta, partial()))
             }
+            "response.custom_tool_call_input.delta" -> {
+                val slot = getSlot<Block.Tool>(event) ?: return emptyList()
+                if (slot.customInput == null) return emptyList()
+                val delta = event["delta"].textOrNull() ?: return emptyList()
+                val out = appendCustomToolCallInput(slot, slot.customInput!!.currentInput + delta, false)
+                    ?: return emptyList()
+                listOf(AssistantMessageEvent.ToolCallDelta(slot.index, out, partial()))
+            }
+            "response.custom_tool_call_input.done" -> {
+                val slot = getSlot<Block.Tool>(event) ?: return emptyList()
+                if (slot.customInput == null) return emptyList()
+                val input = event["input"].textOrNull() ?: return emptyList()
+                val out = appendCustomToolCallInput(slot, input, true) ?: return emptyList()
+                listOf(AssistantMessageEvent.ToolCallDelta(slot.index, out, partial()))
+            }
             "response.output_item.done" -> onOutputItemDone(event)
             "response.completed", "response.incomplete" -> {
                 finalizeResponse(event.respObj("response"))
@@ -612,7 +725,19 @@ object OpenAiResponsesShared {
                     item["arguments"].textOrNull()?.let { tool.arguments.append(it) }
                     tool.namespace = item["namespace"].textOrNull()
                 }
-                // custom_tool_call omitted: grammar tools are not ported.
+                "custom_tool_call" -> {
+                    // pi: inputProperty comes from grammarToolInputProperties,
+                    // defaulting to "input".
+                    val name = item["name"].textOrNull() ?: ""
+                    val inputProperty = options.grammarToolInputProperties[name] ?: "input"
+                    val input = item["input"].textOrNull() ?: ""
+                    Block.Tool(blocks.size).also { tool ->
+                        tool.id = "${item["call_id"].textOrNull()}|${item["id"].textOrNull()}"
+                        tool.name = name
+                        tool.namespace = item["namespace"].textOrNull()
+                        tool.customInput = CustomToolInput(inputProperty).also { it.currentInput = input }
+                    }
+                }
                 else -> return emptyList()
             }
             blocks.add(block)
@@ -670,12 +795,28 @@ object OpenAiResponsesShared {
                     slots.remove(outputIndex)
                     return events + AssistantMessageEvent.TextEnd(slot.index, slot.text, partial())
                 }
-                item["type"].textOrNull() == "function_call" && slot is Block.Tool -> {
+                item["type"].textOrNull() == "function_call" && slot is Block.Tool &&
+                    slot.customInput == null -> {
                     // Finalize with the item's complete arguments; the streamed
                     // buffer is only a scratch replay of partial parsing.
                     val arguments = item["arguments"].textOrNull()
                     if (!arguments.isNullOrBlank()) slot.arguments = StringBuilder(arguments)
                     item["namespace"].textOrNull()?.let { slot.namespace = it }
+                    slots.remove(outputIndex)
+                    return events + listOf(
+                        AssistantMessageEvent.ToolCallEnd(slot.index, render(slot) as ToolCall, partial()),
+                    )
+                }
+                item["type"].textOrNull() == "custom_tool_call" && slot is Block.Tool &&
+                    slot.customInput != null -> {
+                    // pi: close the buffer with the done item's input (falling back
+                    // to the accumulated input), then finalize in-place.
+                    val input = item["input"].textOrNull() ?: slot.customInput!!.currentInput
+                    appendCustomToolCallInput(slot, input, true)?.let {
+                        events += AssistantMessageEvent.ToolCallDelta(slot.index, it, partial())
+                    }
+                    item["namespace"].textOrNull()?.let { slot.namespace = it }
+                    slot.customInput = null
                     slots.remove(outputIndex)
                     return events + listOf(
                         AssistantMessageEvent.ToolCallEnd(slot.index, render(slot) as ToolCall, partial()),
@@ -823,6 +964,7 @@ object OpenAiResponsesShared {
             sessionAffinityFormat = compat?.sessionAffinityFormat ?: detectSessionAffinityFormat(model),
             supportsLongCacheRetention = compat?.supportsLongCacheRetention ?: true,
             supportsStrictMode = compat?.supportsStrictMode ?: false,
+            supportsOpenAIGrammarTools = compat?.supportsOpenAIGrammarTools ?: false,
             supportsAdditionalTools = compat?.supportsAdditionalTools ?: false,
             supportsToolSearch = compat?.supportsToolSearch ?: false,
             supportsExplicitPromptCacheMode = compat?.supportsExplicitPromptCacheMode ?: false,
@@ -834,6 +976,7 @@ object OpenAiResponsesShared {
         val sessionAffinityFormat: SessionAffinityFormat,
         val supportsLongCacheRetention: Boolean,
         val supportsStrictMode: Boolean,
+        val supportsOpenAIGrammarTools: Boolean,
         val supportsAdditionalTools: Boolean,
         val supportsToolSearch: Boolean,
         val supportsExplicitPromptCacheMode: Boolean,

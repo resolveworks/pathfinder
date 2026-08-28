@@ -303,8 +303,13 @@ internal fun buildCodexRequestBody(
     context: Context,
     options: OpenAICodexResponsesOptions?,
     codexSessionId: String?,
+    grammarToolInputProperties: Map<String, String> = createGrammarToolInputProperties(
+        context.tools,
+        model.responsesCompat?.supportsOpenAIGrammarTools ?: false,
+    ),
 ): JsonObject {
     val supportsStrictMode = model.responsesCompat?.supportsStrictMode ?: true
+    val supportsOpenAIGrammarTools = model.responsesCompat?.supportsOpenAIGrammarTools ?: false
     val deferredToolsMode = when {
         model.responsesCompat?.supportsAdditionalTools == true ->
             OpenAiResponsesShared.DeferredToolsMode.ADDITIONAL_TOOLS
@@ -318,11 +323,13 @@ internal fun buildCodexRequestBody(
         OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
         OpenAiResponsesShared.ConvertResponsesMessagesOptions(
             includeSystemPrompt = false,
+            grammarToolInputProperties = grammarToolInputProperties,
             deferredTools = toolPlacement.deferred,
             deferredToolsMode = deferredToolsMode,
             toolOptions = OpenAiResponsesShared.ConvertResponsesToolsOptions(
                 strict = null,
                 supportsStrictMode = supportsStrictMode,
+                supportsOpenAIGrammarTools = supportsOpenAIGrammarTools,
             ),
         ),
     )
@@ -350,6 +357,7 @@ internal fun buildCodexRequestBody(
                         OpenAiResponsesShared.ConvertResponsesToolsOptions(
                             strict = null,
                             supportsStrictMode = supportsStrictMode,
+                            supportsOpenAIGrammarTools = supportsOpenAIGrammarTools,
                         ),
                     ),
                 ),
@@ -434,11 +442,16 @@ class OpenAICodexResponsesApi(
         options: OpenAICodexResponsesOptions = OpenAICodexResponsesOptions(),
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = nowMs()
+        val grammarToolInputProperties = createGrammarToolInputProperties(
+            context.tools,
+            model.responsesCompat?.supportsOpenAIGrammarTools ?: false,
+        )
         val state = OpenAiResponsesShared.ResponsesStreamState(
             model,
             startedAtMs,
             OpenAiResponsesShared.StreamProcessingOptions(
                 serviceTier = options.serviceTier,
+                grammarToolInputProperties = grammarToolInputProperties,
                 resolveServiceTier = ::resolveCodexServiceTier,
                 applyServiceTierPricing = { usage, tier ->
                     OpenAiResponsesShared.applyServiceTierPricing(usage, tier, model.id)
@@ -456,7 +469,7 @@ class OpenAICodexResponsesApi(
             )
             val cacheSessionId = if (cacheRetention == CacheRetention.NONE) null else options.sessionId
             val codexSessionId = OpenAiResponsesShared.clampOpenAIPromptCacheKey(cacheSessionId)
-            val body = buildCodexRequestBody(model, context, options, codexSessionId)
+            val body = buildCodexRequestBody(model, context, options, codexSessionId, grammarToolInputProperties)
                 .toString().toByteArray(Charsets.UTF_8)
             val headers = buildCodexSSEHeaders(model.headers, options.headers, accountId, apiKey, codexSessionId)
 
