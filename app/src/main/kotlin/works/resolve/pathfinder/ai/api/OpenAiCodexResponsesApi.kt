@@ -25,6 +25,7 @@ import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.ai.utils.compressRequestBodyZstd
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
 
 /**
@@ -39,9 +40,6 @@ import works.resolve.pathfinder.ai.utils.getPiUserAgent
  *   is exactly pi's SSE fallback path. Also excluded with it: pi's
  *   session-resources.ts, whose only pi consumer is Codex WebSocket session
  *   cleanup.
- * - No zstd request-body compression (Content-Encoding: zstd): the platform
- *   has no zstd encoder; the uncompressed JSON body is sent, matching pi's
- *   browser-build behavior where compressRequestBodyZstd returns null.
  * - AbortSignal aborts map to coroutine cancellation (no ABORTED error event).
  */
 
@@ -411,6 +409,9 @@ class OpenAICodexResponsesApi(
     private val transport: works.resolve.pathfinder.ai.transport.HttpStreamingTransport,
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
+    // Narrow seam over pi's compressRequestBodyZstd for tests (injects the
+    // compression-unavailable fallback).
+    private val compressRequestBody: (String) -> ByteArray? = ::compressRequestBodyZstd,
 ) : ChatApi {
 
     /**
@@ -492,9 +493,21 @@ class OpenAICodexResponsesApi(
             // the body object before serialization; null keeps the payload.
             var bodyObj = buildCodexRequestBody(model, context, options, codexSessionId, grammarToolInputProperties)
             options.onPayload?.let { hook -> hook(bodyObj, model)?.let { bodyObj = it } }
-            val body = bodyObj
-                .toString().toByteArray(Charsets.UTF_8)
+            val bodyJson = bodyObj.toString()
             val headers = buildCodexSSEHeaders(model.headers, options.headers, accountId, apiKey, codexSessionId)
+                .toMutableMap()
+            // Compress the request body once for the SSE path
+            // (openai-codex-responses.ts:368-375): the Codex backend decodes
+            // Content-Encoding: zstd; the uncompressed JSON is sent unchanged
+            // when compression is unavailable.
+            val compressedBody = compressRequestBody(bodyJson)
+            val body: ByteArray
+            if (compressedBody != null) {
+                headers["content-encoding"] = "zstd"
+                body = compressedBody
+            } else {
+                body = bodyJson.toByteArray(Charsets.UTF_8)
+            }
 
             val response = requestWithRetries(model, options, headers, body)
             emit(AssistantMessageEvent.Start(state.partialSnapshot()))

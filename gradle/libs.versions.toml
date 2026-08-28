@@ -12,6 +12,8 @@ okhttp = "5.5.0"
 okhttpSse = "5.5.0"
 commonmark = "0.30.0"
 serializationJson = "1.11.0"
+# zstd request-body compression for the Codex SSE path (see ai/utils/ZstdCompression.kt)
+zstd = "1.5.7-15"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
@@ -36,6 +38,7 @@ commonmark-ext-gfm-tables = { module = "org.commonmark:commonmark-ext-gfm-tables
 commonmark-ext-gfm-strikethrough = { module = "org.commonmark:commonmark-ext-gfm-strikethrough", version.ref = "commonmark" }
 commonmark-ext-task-list-items = { module = "org.commonmark:commonmark-ext-task-list-items", version.ref = "commonmark" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serializationJson" }
+zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstd" }
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 

@@ -68,6 +68,13 @@ dependencies {
     implementation(libs.okhttp.sse)
     implementation(libs.kotlinx.serialization.json)
 
+    // zstd request-body compression for the Codex SSE path, mirroring pi's
+    // openai-codex-responses.ts:51-54/208-223. Approved runtime dependency per
+    // the ai/AGENTS.md scope boundary. The AAR packages Android natives; the
+    // plain jar (testImplementation) carries desktop natives for unit tests.
+    implementation(libs.zstd.jni) { artifact { type = "aar" } }
+    testImplementation(libs.zstd.jni)
+
     // Markdown parsing for message rendering (CommonMark + GFM extensions)
     implementation(libs.commonmark)
     implementation(libs.commonmark.ext.gfm.tables)
