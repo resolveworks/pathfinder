@@ -37,8 +37,10 @@ import kotlinx.serialization.json.put
  * Documented divergences from pi (kept narrow, per project rules):
  * - Deferred tool loading (`splitDeferredTools`, `tool_reference` blocks,
  *   `defer_loading`, and pi's `supportsToolReferences`/`deferredToolsMode`)
- *   is not ported: Pathfinder's core ToolResultMessage has no
- *   `addedToolNames`.
+ *   is not ported: `StopReason.DEFERRED`/`DeferredHandle` are excluded at the
+ *   Types.kt scope boundary (see its KDoc), and this adapter neither emits
+ *   `defer_loading`/`tool_reference` nor consumes
+ *   `ToolResultMessage.addedToolNames` as a deferred-load point.
  * - pi's `metadata.user_id` option is not ported (no metadata option here).
  * - Thinking content stays a raw text/signature pair.
  */
