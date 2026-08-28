@@ -64,6 +64,28 @@ The following exclusions are deliberate:
   API-key path would again expose a narrower provider than pi. Pathfinder keeps
   the ordinary Gemini API and omits Vertex to avoid that cloud credential
   subsystem.
+- **Anthropic deferred tool loading and request metadata** are deliberate
+  reductions at the anthropic-messages boundary (see the divergence KDoc in
+  AnthropicMessagesPayload.kt): deferred tool loading (`splitDeferredTools`,
+  `tool_reference`, `defer_loading`, `supportsToolReferences`) exists upstream
+  for tool sets large enough to need on-demand loading, which a phone client
+  with a focused tool set does not have, and it is entangled with the already
+  excluded `StopReason "deferred"`/`DeferredHandle` shapes. `metadata.user_id`
+  has no identity source on a single-user device. Server-side fallbacks, by
+  contrast, are ported (`allowedFallbackModels` → `fallbacks` + the
+  `server-side-fallback-2026-07-01` beta + fallback cost attribution).
+- **Codex WebSocket transport, cached context, `previous_response_id`
+  continuation, and zstd request compression** are excluded; the Codex
+  adapter is pinned to SSE. Pi's default Codex transport is `"auto"` —
+  WebSocket-first with per-session SSE fallback
+  (openai-codex-responses.ts) — and server-side cached context
+  (`previous_response_id` continuation state) is scoped to that WebSocket
+  connection family, so porting it means a second transport with its
+  fallback/retry state machine for one provider. zstd request bodies use
+  Node's built-in zlib (no JVM/Android equivalent without a native-codec
+  dependency). SSE is pi's explicit fallback transport and remains fully
+  functional; revisit if Codex latency/bandwidth matters enough to justify
+  the transport surface.
 - **Image-generation providers** are outside the selected conversational AI
   provider surface. They require a separate media-generation product surface
   rather than another chat protocol adapter.
