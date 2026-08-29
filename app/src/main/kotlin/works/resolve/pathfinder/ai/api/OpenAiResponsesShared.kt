@@ -36,6 +36,7 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
+import works.resolve.pathfinder.ai.utils.strictInt
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
 
@@ -105,9 +106,8 @@ object OpenAiResponsesShared {
                 val parsed = lenientJson.parseToJsonElement(signature) as? JsonObject
                 if (parsed != null) {
                     // pi requires the numeric JSON `v: 1` (parsed.v === 1).
-                    val v = parsed["v"] as? JsonPrimitive
                     val id = parsed.string("id")
-                    if (v != null && !v.isString && v.content.toIntOrNull() == 1 && id != null) {
+                    if (parsed.strictInt("v") == 1 && id != null) {
                         val phase = parsed.string("phase")
                             ?.takeIf { it == "commentary" || it == "final_answer" }
                         return id to phase
