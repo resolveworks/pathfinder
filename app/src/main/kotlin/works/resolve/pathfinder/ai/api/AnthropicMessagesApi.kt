@@ -38,8 +38,7 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.longOrNull
+import kotlin.time.Clock
 
 /**
  * Anthropic Messages streaming adapter, ported from pi's
@@ -79,7 +78,7 @@ import kotlinx.serialization.json.longOrNull
 class AnthropicMessagesApi(
     private val transport: HttpStreamingTransport,
     private val retry: ProviderRetry = ProviderRetry(),
-    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val clock: Clock = Clock.System,
 ) : ChatApi {
 
     /** pi's stream(model, context, options) for anthropic-messages. */
@@ -88,7 +87,7 @@ class AnthropicMessagesApi(
         context: Context,
         options: AnthropicMessagesOptions = AnthropicMessagesOptions(),
     ): Flow<AssistantMessageEvent> = flow {
-        val startedAtMs = nowMs()
+        val startedAtMs = clock.now().toEpochMilliseconds()
         // pi computes isOAuth from createClient; the Copilot branch (checked
         // first) always yields a non-OAuth, Bearer-auth client.
         val isOAuth = model.provider != "github-copilot" && options.apiKey?.let { isOAuthToken(it) } == true
@@ -260,7 +259,7 @@ class AnthropicMessagesApi(
             model = model.id,
             stopReason = StopReason.ERROR,
             errorMessage = error.message ?: "Unknown error",
-            timestamp = nowMs(),
+            timestamp = clock.now().toEpochMilliseconds(),
         )
         return AssistantMessageEvent.Error(message.stopReason, message)
     }
@@ -498,9 +497,9 @@ internal class AnthropicStreamState(
         event: JsonObject,
         context: Context,
     ): List<AssistantMessageEvent> {
-        val index = (event["index"] as? JsonPrimitive)?.longOrNull?.toInt() ?: return emptyList()
+        val index = event.int("index") ?: return emptyList()
         val contentBlock = event.obj("content_block") ?: return emptyList()
-        val type = (contentBlock["type"] as? JsonPrimitive)?.content
+        val type = contentBlock.str("type")
         val block: Block = when (type) {
             "text" -> Text(index).apply {
                 contentBlock["text"].strOrNull()?.let { text.append(it) }
@@ -535,10 +534,10 @@ internal class AnthropicStreamState(
     }
 
     fun onContentBlockDelta(event: JsonObject): List<AssistantMessageEvent> {
-        val index = (event["index"] as? JsonPrimitive)?.longOrNull?.toInt() ?: return emptyList()
+        val index = event.int("index") ?: return emptyList()
         val delta = event.obj("delta") ?: return emptyList()
         val blockIndex = byStreamIndex[index] ?: return emptyList()
-        return when (val deltaType = (delta["type"] as? JsonPrimitive)?.content) {
+        return when (val deltaType = delta.str("type")) {
             "text_delta" -> {
                 val text = (blocks[blockIndex] as? Text) ?: return emptyList()
                 val value = delta["text"].strOrNull() ?: ""
@@ -567,7 +566,7 @@ internal class AnthropicStreamState(
     }
 
     fun onContentBlockStop(event: JsonObject): List<AssistantMessageEvent> {
-        val index = (event["index"] as? JsonPrimitive)?.longOrNull?.toInt() ?: return emptyList()
+        val index = event.int("index") ?: return emptyList()
         val blockIndex = byStreamIndex[index] ?: return emptyList()
         return when (val block = blocks[blockIndex]) {
             is Text -> listOf(AssistantMessageEvent.TextEnd(blockIndex, block.text.toString(), snapshot()))

@@ -7,6 +7,7 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelCost
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.core.Usage
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import kotlinx.coroutines.flow.toList
@@ -60,7 +61,7 @@ class AnthropicCacheWrite1hCostTest {
             AnthropicMessagesApi(
                 transport,
                 ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),
-                nowMs = { 1_770_000_000_000L },
+                clock = FakeClock(1_770_000_000_000L),
             ).stream(opus, context, AnthropicMessagesOptions(apiKey = "test-key")).toList().last(),
         )
         return done.message.usage

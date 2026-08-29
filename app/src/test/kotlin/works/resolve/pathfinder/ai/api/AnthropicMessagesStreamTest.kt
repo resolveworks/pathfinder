@@ -16,6 +16,7 @@ import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.SimpleToolChoice
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.utils.ProviderRetry
@@ -58,7 +59,7 @@ class AnthropicMessagesStreamTest {
     private fun api(transport: FakeTransport) = AnthropicMessagesApi(
         transport,
         ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),
-        nowMs = { 1_770_000_000_000L },
+        clock = FakeClock(1_770_000_000_000L),
     )
 
     private fun messageStart(

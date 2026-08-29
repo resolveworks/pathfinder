@@ -21,6 +21,7 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
+import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.core.toModelThinkingLevel
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -217,7 +218,7 @@ internal fun convertContentBlocks(content: List<Content>): Any {
         }
     }.filterNotNull().toMutableList()
 
-    if (blocks.none { (it["type"] as? JsonPrimitive)?.content == "text" }) {
+    if (blocks.none { it.str("type") == "text" }) {
         blocks.add(
             0,
             buildJsonObject {
@@ -388,12 +389,12 @@ internal fun convertMessages(
     // Add cache_control to the last user message to cache conversation history.
     if (cacheControl != null && params.isNotEmpty()) {
         val lastMessage = params.last()
-        if ((lastMessage["role"] as? JsonPrimitive)?.content == "user") {
+        if (lastMessage.str("role") == "user") {
             val content = lastMessage["content"]
             val contentValue = when {
                 content is JsonArray && content.isNotEmpty() -> {
                     val lastBlock = content.last() as? JsonObject
-                    val type = (lastBlock?.get("type") as? JsonPrimitive)?.content
+                    val type = lastBlock.str("type")
                     if (lastBlock != null && (type == "text" || type == "image" || type == "tool_result")) {
                         JsonArray(content.dropLast(1) + lastBlock.toMutableMap().apply {
                             put("cache_control", cacheControl)
