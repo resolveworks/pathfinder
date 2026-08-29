@@ -1,15 +1,15 @@
 package works.resolve.pathfinder.agent.compaction
 
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.Content
 import works.resolve.pathfinder.ai.core.ContentType
 import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ToolCall
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.string
 
 /**
  * Compaction support utilities, ported from pi's
@@ -37,7 +37,8 @@ data class FileOperations(
 fun createFileOps(): FileOperations = FileOperations(mutableSetOf(), mutableSetOf(), mutableSetOf())
 
 private fun parseToolCallArguments(toolCall: ToolCall): JsonObject? =
-    runCatching { Json.parseToJsonElement(toolCall.arguments) }.getOrNull() as? JsonObject
+    // runCatching is policy-compliant here: non-suspending, expected-failure parse.
+    runCatching { lenientJson.parseToJsonElement(toolCall.arguments) }.getOrNull() as? JsonObject
 
 /** Add file operations from assistant tool calls to an accumulator (utils.ts `extractFileOpsFromMessage`). */
 fun extractFileOpsFromMessage(message: Message, fileOps: FileOperations) {
@@ -47,7 +48,7 @@ fun extractFileOpsFromMessage(message: Message, fileOps: FileOperations) {
         if (block !is ToolCall) continue
         val args = parseToolCallArguments(block) ?: continue
 
-        val path = (args["path"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: continue
+        val path = args.string("path") ?: continue
 
         when (block.name) {
             "read" -> fileOps.read.add(path)

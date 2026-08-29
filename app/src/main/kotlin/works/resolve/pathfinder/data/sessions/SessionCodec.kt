@@ -15,20 +15,26 @@ import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.UserMessage
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import works.resolve.pathfinder.ai.utils.arr
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.requireDouble
+import works.resolve.pathfinder.ai.utils.requireInt
+import works.resolve.pathfinder.ai.utils.requireLong
+import works.resolve.pathfinder.ai.utils.strictBoolean
+import works.resolve.pathfinder.ai.utils.strictDouble
+import works.resolve.pathfinder.ai.utils.strictInt
+import works.resolve.pathfinder.ai.utils.strictLong
+import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.ai.utils.stringOrNull
 
 /**
  * Manual JSON-DOM codec for [Session] files. Format: one file per session
@@ -39,11 +45,6 @@ import kotlinx.serialization.json.buildJsonObject
 internal object SessionCodec {
 
     private const val FORMAT_VERSION = 2
-
-    private val json = Json {
-        prettyPrint = true
-        ignoreUnknownKeys = true
-    }
 
     fun encode(session: Session): String = buildJsonObject {
         put("format", FORMAT_VERSION)
@@ -57,25 +58,25 @@ internal object SessionCodec {
 
     fun decode(text: String): Session {
         val element = try {
-            json.parseToJsonElement(text)
+            lenientJson.parseToJsonElement(text)
         } catch (e: Exception) {
             throw SessionDataException("Malformed session data", e)
         }
         val obj = element as? JsonObject
             ?: throw SessionDataException("Malformed session data: expected object")
-        val version = obj.int("format") ?: throw SessionDataException("Unsupported session format")
+        val version = obj.strictInt("format") ?: throw SessionDataException("Unsupported session format")
         if (version != FORMAT_VERSION) throw SessionDataException("Unsupported session format: $version")
         return decodeV2(obj)
     }
 
     private fun decodeV2(obj: JsonObject): Session {
-        val entries = (obj["entries"] as? JsonArray)
+        val entries = obj.arr("entries")
             ?: throw SessionDataException("Malformed session data: missing entries")
         return Session(
             id = requireId(obj.string("id") ?: throw SessionDataException("Malformed session data: missing id")),
             title = obj.string("title") ?: throw SessionDataException("Malformed session data: missing title"),
-            createdAt = obj.long("createdAt") ?: throw SessionDataException("Malformed session data: missing createdAt"),
-            updatedAt = obj.long("updatedAt") ?: throw SessionDataException("Malformed session data: missing updatedAt"),
+            createdAt = obj.strictLong("createdAt") ?: throw SessionDataException("Malformed session data: missing createdAt"),
+            updatedAt = obj.strictLong("updatedAt") ?: throw SessionDataException("Malformed session data: missing updatedAt"),
             entries = entries.map(::decodeEntry),
             leafId = obj.string("leafId"),
         )
@@ -124,8 +125,9 @@ internal object SessionCodec {
             "message" -> MessageEntry(
                 id = id,
                 parentId = obj.string("parentId"),
-                timestamp = obj.long("timestamp")
-                    ?: throw SessionDataException("Malformed session data: entry missing timestamp"),
+                timestamp = obj.requireLong("timestamp") {
+                    SessionDataException("Malformed session data: missing message timestamp")
+                },
                 message = decodeMessage(
                     obj["message"] ?: throw SessionDataException("Malformed session data: entry missing message"),
                 ),
@@ -134,14 +136,15 @@ internal object SessionCodec {
             "compaction" -> CompactionEntry(
                 id = id,
                 parentId = obj.string("parentId"),
-                timestamp = obj.long("timestamp")
-                    ?: throw SessionDataException("Malformed session data: entry missing timestamp"),
+                timestamp = obj.requireLong("timestamp") {
+                    SessionDataException("Malformed session data: entry missing timestamp")
+                },
                 summary = obj.string("summary")
                     ?: throw SessionDataException("Malformed session data: compaction entry missing summary"),
-                retainedTail = (obj["retainedTail"] as? JsonArray ?: emptyList()).map(::decodeMessage),
-                tokensBefore = obj.int("tokensBefore")
+                retainedTail = (obj.arr("retainedTail") ?: emptyList()).map(::decodeMessage),
+                tokensBefore = obj.strictInt("tokensBefore")
                     ?: throw SessionDataException("Malformed session data: compaction entry missing tokensBefore"),
-                details = (obj["details"] as? JsonObject)?.let { d ->
+                details = obj.obj("details")?.let { d ->
                     CompactionDetails(
                         readFiles = d.stringList("readFiles"),
                         modifiedFiles = d.stringList("modifiedFiles"),
@@ -153,10 +156,6 @@ internal object SessionCodec {
             else -> throw SessionDataException("Unknown entry type: $type")
         }
     }
-
-    /** Strictly-required long (present, correct type). */
-    private fun JsonObject.requireLong(key: String, what: String): Long =
-        long(key) ?: throw SessionDataException("Malformed session data: missing $what")
 
     // ---- Messages ----
 
@@ -221,7 +220,9 @@ internal object SessionCodec {
         return when (val role = obj.string("role")) {
             "user" -> UserMessage(
                 content = decodeContentList(obj["content"]),
-                timestamp = obj.requireLong("timestamp", "message timestamp"),
+                timestamp = obj.requireLong("timestamp") {
+                    SessionDataException("Malformed session data: missing message timestamp")
+                },
             )
 
             "assistant" -> AssistantMessage(
@@ -235,8 +236,10 @@ internal object SessionCodec {
                 rawStopReason = obj.string("rawStopReason"),
                 responseId = obj.string("responseId"),
                 responseModel = obj.string("responseModel"),
-                endTurn = obj.boolean("endTurn"),
-                timestamp = obj.requireLong("timestamp", "message timestamp"),
+                endTurn = obj.strictBoolean("endTurn"),
+                timestamp = obj.requireLong("timestamp") {
+                    SessionDataException("Malformed session data: missing message timestamp")
+                },
             )
 
             "toolResult" -> ToolResultMessage(
@@ -246,9 +249,11 @@ internal object SessionCodec {
                 details = obj["details"],
                 usage = obj["usage"]?.let(::decodeUsage),
                 addedToolNames = decodeStringList(obj["addedToolNames"]),
-                isError = obj.boolean("isError")
+                isError = obj.strictBoolean("isError")
                     ?: throw SessionDataException("Malformed session data: tool result missing isError"),
-                timestamp = obj.requireLong("timestamp", "message timestamp"),
+                timestamp = obj.requireLong("timestamp") {
+                    SessionDataException("Malformed session data: missing message timestamp")
+                },
             )
 
             else -> throw SessionDataException("Unknown message role: $role")
@@ -261,27 +266,23 @@ internal object SessionCodec {
 
     private fun decodeUsage(element: JsonElement?): Usage {
         val obj = element as? JsonObject ?: throw SessionDataException("Malformed session data: missing usage")
-        fun requireInt(key: String): Int =
-            obj.int(key) ?: throw SessionDataException("Malformed session data: usage missing $key")
-        val cost = (obj["cost"] as? JsonObject)?.let { c ->
-            fun requireDouble(key: String): Double =
-                c.double(key) ?: throw SessionDataException("Malformed session data: cost missing $key")
+        val cost = obj.obj("cost")?.let { c ->
             Cost(
-                input = requireDouble("input"),
-                output = requireDouble("output"),
-                cacheRead = requireDouble("cacheRead"),
-                cacheWrite = requireDouble("cacheWrite"),
-                total = requireDouble("total"),
+                input = c.requireDouble("input") { key -> SessionDataException("Malformed session data: cost missing $key") },
+                output = c.requireDouble("output") { key -> SessionDataException("Malformed session data: cost missing $key") },
+                cacheRead = c.requireDouble("cacheRead") { key -> SessionDataException("Malformed session data: cost missing $key") },
+                cacheWrite = c.requireDouble("cacheWrite") { key -> SessionDataException("Malformed session data: cost missing $key") },
+                total = c.requireDouble("total") { key -> SessionDataException("Malformed session data: cost missing $key") },
             )
         } ?: throw SessionDataException("Malformed session data: usage missing cost")
         return Usage(
-            input = requireInt("input"),
-            output = requireInt("output"),
-            cacheRead = requireInt("cacheRead"),
-            cacheWrite = requireInt("cacheWrite"),
-            cacheWrite1h = obj.int("cacheWrite1h") ?: 0,
-            reasoning = requireInt("reasoning"),
-            totalTokens = requireInt("totalTokens"),
+            input = obj.requireInt("input") { key -> SessionDataException("Malformed session data: usage missing $key") },
+            output = obj.requireInt("output") { key -> SessionDataException("Malformed session data: usage missing $key") },
+            cacheRead = obj.requireInt("cacheRead") { key -> SessionDataException("Malformed session data: usage missing $key") },
+            cacheWrite = obj.requireInt("cacheWrite") { key -> SessionDataException("Malformed session data: usage missing $key") },
+            cacheWrite1h = obj.strictInt("cacheWrite1h") ?: 0,
+            reasoning = obj.requireInt("reasoning") { key -> SessionDataException("Malformed session data: usage missing $key") },
+            totalTokens = obj.requireInt("totalTokens") { key -> SessionDataException("Malformed session data: usage missing $key") },
             cost = cost,
         )
     }
@@ -298,10 +299,10 @@ internal object SessionCodec {
 
     /** Strict string array; absence is an empty list, malformed values are rejected. */
     private fun JsonObject.stringList(key: String): List<String> {
-        val array = this[key] as? JsonArray
+        val array = this.arr(key)
             ?: throw SessionDataException("Malformed session data: $key must be an array")
         return array.map { value ->
-            (value as? JsonPrimitive)?.takeIf { it.isString }?.content
+            value.stringOrNull()
                 ?: throw SessionDataException("Malformed session data: $key must contain strings")
         }
     }
@@ -312,7 +313,7 @@ internal object SessionCodec {
         val array = element as? JsonArray
             ?: throw SessionDataException("Malformed session data: addedToolNames must be an array")
         return array.map { value ->
-            (value as? JsonPrimitive)?.takeIf { it.isString }?.content
+            value.stringOrNull()
                 ?: throw SessionDataException("Malformed session data: addedToolNames must contain strings")
         }
     }
@@ -359,7 +360,7 @@ internal object SessionCodec {
             "thinking" -> ThinkingContent(
                 thinking = obj.string("thinking") ?: throw SessionDataException("Malformed session data: thinking content missing thinking"),
                 thinkingSignature = obj.string("thinkingSignature"),
-                redacted = obj.boolean("redacted") ?: false,
+                redacted = obj.strictBoolean("redacted") ?: false,
             )
 
             "image" -> ImageContent(
@@ -379,20 +380,4 @@ internal object SessionCodec {
         }
     }
 
-    // ---- Json object helpers ----
-
-    private fun JsonObject.string(key: String): String? =
-        (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
-
-    private fun JsonObject.boolean(key: String): Boolean? =
-        (this[key] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
-
-    private fun JsonObject.int(key: String): Int? =
-        (this[key] as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull
-
-    private fun JsonObject.long(key: String): Long? =
-        (this[key] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull
-
-    private fun JsonObject.double(key: String): Double? =
-        (this[key] as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull
 }

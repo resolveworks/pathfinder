@@ -16,6 +16,7 @@ import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.core.toThinkingLevelOrNull
 import works.resolve.pathfinder.ai.models.Models
 import works.resolve.pathfinder.ai.utils.ContextUsageEstimate
 import works.resolve.pathfinder.ai.utils.Retry
@@ -551,13 +552,14 @@ private fun completionOptions(
     maxTokens: Int,
     thinkingLevel: ModelThinkingLevel?,
 ): SimpleStreamOptions =
+    // The OFF guard above makes the shared OFF→null mapper total here: OFF
+    // never reaches toThinkingLevelOrNull, matching pi, which only sets
+    // reasoning when the level is present and not "off".
     if (model.reasoning && thinkingLevel != null && thinkingLevel != ModelThinkingLevel.OFF) {
-        SimpleStreamOptions(maxTokens = maxTokens, reasoning = thinkingLevel.toThinkingLevel())
+        SimpleStreamOptions(maxTokens = maxTokens, reasoning = thinkingLevel.toThinkingLevelOrNull())
     } else {
         SimpleStreamOptions(maxTokens = maxTokens)
     }
-
-private fun ModelThinkingLevel.toThinkingLevel(): ThinkingLevel = ThinkingLevel.valueOf(name)
 
 /**
  * Generate or update a conversation summary for compaction (compaction.ts

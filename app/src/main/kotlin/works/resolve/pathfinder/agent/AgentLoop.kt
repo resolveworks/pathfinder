@@ -11,6 +11,7 @@ import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.Usage
+import works.resolve.pathfinder.ai.utils.lenientJson
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
@@ -22,7 +23,6 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -643,8 +643,8 @@ private suspend fun ensureActiveBetweenCalls() {
  */
 private fun shouldTerminateToolBatch(finalizedCalls: List<FinalizedToolCallOutcome>): Boolean = false
 
-/** JSON instance used to parse raw tool-call argument strings; pi has no counterpart (arguments arrive parsed). */
-private val toolArgumentsJson = Json
+/** Shared lenient Json instance for parsing raw tool-call argument strings; pi has no counterpart (arguments arrive parsed). */
+private val toolArgumentsJson = lenientJson
 
 /**
  * Parses the provider's raw JSON arguments string into a [JsonObject], or
