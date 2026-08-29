@@ -4,6 +4,7 @@ import kotlin.test.Test
 import works.resolve.pathfinder.ai.api.formatCodexError
 import works.resolve.pathfinder.ai.api.formatResponsesProviderError
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import kotlin.test.assertEquals
 
@@ -116,7 +117,7 @@ class ErrorBodyTest {
 
     @Test
     fun `mistral golden format keeps its provider-specific composition`() {
-        val api = works.resolve.pathfinder.ai.api.MistralConversationsApi(FakeTransport(), nowMs = { 0L })
+        val api = works.resolve.pathfinder.ai.api.MistralConversationsApi(FakeTransport(), clock = FakeClock(0L))
         assertEquals(
             """Mistral API error (403): {"message":"blocked by gateway"}""",
             api.formatMistralError(httpError(403, """{"message":"blocked by gateway"}""")),
