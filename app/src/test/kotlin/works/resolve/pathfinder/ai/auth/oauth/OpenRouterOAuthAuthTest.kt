@@ -229,6 +229,24 @@ class OpenRouterOAuthAuthTest {
     }
 
     @Test
+    fun `empty error param is not a denial and the callback proceeds`() = runBlocking {
+        val http = FakeHttpClient()
+        val auth = OpenRouterOAuthAuth(http, fixedPkce())
+        val interaction = HangingInteraction()
+
+        val login = async { auth.login(interaction) }
+        val callbackUrl = callbackUrlFrom(interaction.authUrl.await().url)
+        // pi's `if (oauthError)` is a JS truthy check: `?error=` (empty) is
+        // ignored and the callback is treated like any other.
+        val (status, body) = httpGet("$callbackUrl?error=&code=or-v1-xyz")
+
+        assertEquals(200, status)
+        assertTrue("Signed in to OpenRouter." in body, body)
+        assertEquals("sk-or-key", login.await().access)
+        assertEquals(1, http.requests.size)
+    }
+
+    @Test
     fun `concurrent second callback is rejected with 409`() = runBlocking {
         val (auth, http) = flow()
         val interaction = HangingInteraction()

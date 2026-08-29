@@ -209,7 +209,9 @@ class OpenRouterOAuthAuth(
         }
 
         val oauthError = request.query["error"]
-        if (oauthError != null) {
+        // pi `if (oauthError)` — an empty string is falsy in JS, so an empty
+        // `error=` param is not a denial.
+        if (!oauthError.isNullOrEmpty()) {
             val description = request.query["error_description"] ?: oauthError
             settle(CallbackResult.Failure(IllegalStateException("OpenRouter authorization failed: $description")))
             return LoopbackCallbackResponse(400, oauthErrorHtml("OpenRouter authorization was denied.", description))

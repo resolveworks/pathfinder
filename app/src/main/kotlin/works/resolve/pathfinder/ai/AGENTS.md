@@ -43,7 +43,16 @@ provider definition becomes stale.
 
 Retain static providers that can be ported faithfully using ordinary HTTPS
 JSON/SSE transport and standard API-key, PKCE, manual-code, or device-code
-authentication over narrow Android/JDK boundaries.
+authentication over narrow Android/JDK boundaries. PKCE browser flows use
+pi's loopback-callback pattern ported to a JDK `ServerSocket`
+(`auth/oauth/LoopbackOAuthServer.kt`): Android apps share the device network
+namespace, so a socket bound on 127.0.0.1 is reachable from the on-device
+browser and the login completes without pasting codes. The manual-code
+prompt stays as the raced fallback (remote browsers, squatted ports), and
+the browser opens in a Chrome Custom Tab (`ui/CustomTab.kt`). Do not replace
+this with embedded WebViews, app-owned OAuth client registrations, or a
+universal OAuth framework; provider semantics live in each flow exactly as
+pi structures them.
 
 The following exclusions are deliberate:
 
