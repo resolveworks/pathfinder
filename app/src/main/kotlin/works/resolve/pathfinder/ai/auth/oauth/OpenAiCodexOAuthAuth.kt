@@ -1,5 +1,8 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -28,15 +31,31 @@ import works.resolve.pathfinder.ai.auth.PkceGenerator
  * `isSubscription: true`, no `loginLabel`.
  *
  * Divergences from pi (documented per AGENTS.md, each as narrow as possible):
- * - **No loopback server.** Pi's `startLocalOAuthServer` binds a Node
- *   `http.Server` on `127.0.0.1:1455` and races its callback against a manual
- *   code prompt. Android cannot own a loopback port in the browser login UX,
- *   so the browser flow notifies [AuthEvent.AuthUrl] and then asks for the
- *   authorization code / redirect URL through a single
- *   [AuthPrompt.ManualCode]; `parseAuthorizationInput` accepts pi's input
- *   shapes: a bare code, `code#state`, a `code=`-style query, or a
- *   full redirect URL, and state is validated exactly like pi's manual path
- *   (`parsed.state != null && parsed.state != state` → "State mismatch").
+ * - **Loopback callback race (ported).** Pi's `startLocalOAuthServer` binds
+ *   a Node `http.Server` on `127.0.0.1:1455`; this port runs the same race on
+ *   [LoopbackOAuthServer] (fixed port [CALLBACK_PORT] on [CALLBACK_HOST]; pi's
+ *   `getCallbackHost()` env override does not exist on Android, so the host is
+ *   a constant). The browser flow notifies [AuthEvent.AuthUrl], then races
+ *   the server's callback ([LoopbackCallbackHandle.waitForResult]) against a
+ *   manual [AuthPrompt.ManualCode] with pi's message and placeholder: the
+ *   manual prompt's completion (answer or failure) calls `cancelWait()`, a
+ *   server result with a code wins outright, and manual input goes through
+ *   [parseAuthorizationInput] + state check + exchange exactly like pi's
+ *   manual path. When the server wins, the manual-prompt child coroutine is
+ *   cancelled — pi simply abandons the pending promise; here the prompt
+ *   coroutine's cancellation is what clears the UI sheet
+ *   (`UiAuthInteraction.prompt` clears pending state in `finally`). Bind
+ *   failure (port taken) degrades to exactly today's manual-only flow (pi's
+ *   `server.on("error")` path resolves a handle whose wait is already null).
+ *   Caveat: if Android kills the app process while the browser is
+ *   foregrounded, the login dies; retryable — same risk class as pi's
+ *   abortable login.
+ * - **originator default.** pi's `createAuthorizationFlow` defaults
+ *   `originator` to `"pi"`; the authorize request presents as whatever the
+ *   originator says (`codex_cli_rs` for the codex CLI, `opencode` for
+ *   OpenCode), so this port defaults to [ORIGINATOR] = `"pathfinder"` to
+ *   avoid misattributing Pathfinder's traffic to pi. Deliberate,
+ *   owner-approved divergence; the parameter is kept as in pi.
  * - **HTTP boundary.** Pi `fetch`es with an `AbortSignal`; all HTTP goes
  *   through the injected [OAuthHttpClient] with a bounded request timeout,
  *   and cancellation travels as coroutine cancellation (pi's
@@ -73,12 +92,23 @@ class OpenAiCodexOAuthAuth(
     private val now: () -> Long = { System.currentTimeMillis() },
     private val createState: () -> String = { defaultCreateState() },
     private val pkce: PkceGenerator = PkceGenerator(),
+    /** pi hardcodes port 1455; injectable so tests never race the fixed port. */
+    private val callbackPort: Int = CALLBACK_PORT,
 ) : OAuthAuth {
 
     override val name: String = "OpenAI (ChatGPT Plus/Pro)"
 
     /** pi `isSubscription: true`. */
     override val isSubscription: Boolean = true
+
+    /**
+     * The port the loopback callback server actually bound (pi's listen
+     * callback), or null after a bind failure. Test seam for driving the
+     * callback against an ephemeral port; production always binds
+     * [CALLBACK_PORT].
+     */
+    internal var lastCallbackPort: Int? = null
+        private set
 
     /** Pi's provider definition passes no `loginLabel`, so the default null stands. */
     override val loginLabel: String? = null
@@ -147,37 +177,131 @@ class OpenAiCodexOAuthAuth(
     }
 
     /**
-     * Port of pi `loginOpenAICodex` (browser branch), adapted for Android as
-     * documented on the class: instead of pi's Node loopback callback server,
-     * the user pastes the authorization code or the full redirect URL into a
-     * single [AuthPrompt.ManualCode] with pi's message and placeholder.
-     * State validation matches pi's manual-code path exactly.
+     * Port of pi `loginOpenAICodex` (browser branch): start the loopback
+     * callback server ([startLocalOAuthServer]), notify [AuthEvent.AuthUrl],
+     * and race the server's result against a manual [AuthPrompt.ManualCode].
+     * The manual prompt's completion calls `cancelWait()`; a server code wins
+     * outright; manual input goes through [parseAuthorizationInput] with pi's
+     * state check; the server closes in `finally` and the manual-prompt
+     * coroutine is cancelled when the server wins (see class KDoc).
      */
     private suspend fun loginOpenAICodex(interaction: AuthInteraction): OAuthCredential {
         val flow = createAuthorizationFlow()
-        interaction.notify(
-            AuthEvent.AuthUrl(
-                url = flow.url,
-                instructions = "A browser window should open. Complete login to finish.",
-            ),
-        )
-        val manualCode = interaction.prompt(
-            AuthPrompt.ManualCode(
-                message = "Complete login in your browser, or paste the authorization code / redirect URL here:",
-                placeholder = REDIRECT_URI,
-            ),
-        )
-        val parsed = parseAuthorizationInput(manualCode)
-        // pi uses `if (parsed.state && parsed.state !== state)`: an empty
-        // state is absent for this check, while any non-empty state must match.
-        if (!parsed.state.isNullOrEmpty() && parsed.state != flow.state) {
-            throw IllegalStateException("State mismatch")
+        val handle = startLocalOAuthServer(flow.state)
+        try {
+            interaction.notify(
+                AuthEvent.AuthUrl(
+                    url = flow.url,
+                    instructions = "A browser window should open. Complete login to finish.",
+                ),
+            )
+            return coroutineScope {
+                // Pi captures `manualCode`/`manualError` in the prompt
+                // promise's callbacks; here the child coroutine's completions.
+                var manualCode: String? = null
+                var manualError: Throwable? = null
+                val manualJob = launch {
+                    try {
+                        manualCode = interaction.prompt(
+                            AuthPrompt.ManualCode(
+                                message = "Complete login in your browser, or paste the authorization code / redirect URL here:",
+                                placeholder = REDIRECT_URI,
+                            ),
+                        )
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        manualError = error
+                    }
+                    // pi's manual promise calls cancelWait in both then/catch.
+                    handle?.cancelWait()
+                }
+                try {
+                    // A bind failure makes this null immediately (pi's error
+                    // handle resolves waitForCode to null), leaving the manual
+                    // path as the only one — exactly the manual-only flow.
+                    val result = handle?.waitForResult()
+                    manualError?.let { throw it }
+                    var code = result?.code
+                        ?: manualCode?.let { manual ->
+                            val parsed = parseAuthorizationInput(manual)
+                            // pi: `if (parsed.state && parsed.state !== state)`
+                            // — an empty state is absent for this check, while
+                            // any non-empty state must match.
+                            if (!parsed.state.isNullOrEmpty() && parsed.state != flow.state) {
+                                throw IllegalStateException("State mismatch")
+                            }
+                            // pi's `if (!code)` treats an empty string as absent.
+                            parsed.code?.takeIf { it.isNotEmpty() }
+                        }
+                    if (code == null) {
+                        // pi: `await manualPromise` before giving up — the
+                        // prompt may not have produced its answer yet.
+                        manualJob.join()
+                        manualError?.let { throw it }
+                        code = manualCode?.let { manual ->
+                            val parsed = parseAuthorizationInput(manual)
+                            if (!parsed.state.isNullOrEmpty() && parsed.state != flow.state) {
+                                throw IllegalStateException("State mismatch")
+                            }
+                            parsed.code?.takeIf { it.isNotEmpty() }
+                        }
+                    }
+                    // pi: `if (!code) throw` — rejects a missing or empty code.
+                    code ?: throw IllegalStateException("Missing authorization code")
+                    exchangeAuthorizationCodeForCredentials(code, flow.verifier, REDIRECT_URI)
+                } finally {
+                    // pi aborts the manual prompt in its `finally`; when the
+                    // server wins this cancellation clears the UI sheet.
+                    manualJob.cancel()
+                }
+            }
+        } finally {
+            handle?.close()
         }
-        // pi: `if (!code) throw` — rejects both a missing and an empty code
-        // (e.g. `?code=&state=...` or a bare empty `code=` value).
-        val code = parsed.code
-        if (code.isNullOrEmpty()) throw IllegalStateException("Missing authorization code")
-        return exchangeAuthorizationCodeForCredentials(code, flow.verifier, REDIRECT_URI)
+    }
+
+    /**
+     * Port of pi `startLocalOAuthServer`: fixed [CALLBACK_PORT] on
+     * [CALLBACK_HOST] (pi `listen(1455, getCallbackHost())`; the env override
+     * does not exist on Android, so the host is the constant `127.0.0.1`).
+     * Handler mirrors pi's request handler exactly: `/auth/callback` or 404,
+     * state first then code, pi's HTML pages. Pi's in-handler `catch` 500 is
+     * covered by the shared server's uniform 500 (same HTML text); this
+     * handler cannot realistically throw since the transport pre-parses the
+     * URL. Bind failure returns null (pi's `server.on("error")` handle).
+     */
+    private suspend fun startLocalOAuthServer(state: String): LoopbackCallbackHandle<CallbackCode>? {
+        val server = LoopbackOAuthServer(
+            port = callbackPort,
+            host = CALLBACK_HOST,
+            handler = { request, settle ->
+                if (request.path != CALLBACK_PATH) {
+                    LoopbackCallbackResponse(404, oauthErrorHtml("Callback route not found."))
+                } else if (request.query["state"] != state) {
+                    LoopbackCallbackResponse(400, oauthErrorHtml("State mismatch."))
+                } else {
+                    val code = request.query["code"]
+                    if (code.isNullOrEmpty()) {
+                        LoopbackCallbackResponse(400, oauthErrorHtml("Missing authorization code."))
+                    } else {
+                        settle(CallbackCode(code))
+                        LoopbackCallbackResponse(
+                            200,
+                            oauthSuccessHtml("OpenAI authentication completed. You can close this window."),
+                        )
+                    }
+                }
+            },
+        )
+        val handle = server.start()
+        lastCallbackPort = handle?.port
+        return handle
+    }
+
+    /** pi `waitForCode`'s `{ code: string }`; the code is redacted in `toString`. */
+    internal data class CallbackCode(val code: String) {
+        override fun toString(): String = "CallbackCode(code=<redacted>)"
     }
 
     /**
@@ -731,8 +855,17 @@ class OpenAiCodexOAuthAuth(
         /** pi `JWT_CLAIM_PATH`. */
         const val JWT_CLAIM_PATH: String = "https://api.openai.com/auth"
 
-        /** pi `originator: "pi"` default in `createAuthorizationFlow`. */
-        const val ORIGINATOR: String = "pi"
+        /** pi `originator: "pi"` default; deliberately `"pathfinder"` here (see class KDoc). */
+        const val ORIGINATOR: String = "pathfinder"
+
+        /** pi's fixed loopback listen port (`listen(1455, ...)`). */
+        const val CALLBACK_PORT: Int = 1455
+
+        /** pi `getCallbackHost()` default; no env override exists on Android. */
+        const val CALLBACK_HOST: String = "127.0.0.1"
+
+        /** pi's callback route check (`url.pathname !== "/auth/callback"`). */
+        const val CALLBACK_PATH: String = "/auth/callback"
 
         /** Bounded connect+read timeout for every OAuth exchange (pi relies on fetch; Pathfinder bounds it). */
         const val REQUEST_TIMEOUT_MS: Int = 30_000
