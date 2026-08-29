@@ -323,8 +323,8 @@ class XaiOAuthAuth(
         /** pi `XAI_TOKEN_URL`. */
         const val TOKEN_URL: String = "https://auth.x.ai/oauth2/token"
 
-        /** pi `referrer: "pi"` in the device-code request. */
-        const val REFERRER: String = "pi"
+        /** pi `referrer: "pi"` in the device-code request; `pathfinder` here (owner decision, like the User-Agent product token). */
+        const val REFERRER: String = "pathfinder"
 
         /** pi device grant type (RFC 8628 section 3.4). */
         const val DEVICE_GRANT_TYPE: String = "urn:ietf:params:oauth:grant-type:device_code"

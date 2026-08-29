@@ -104,7 +104,7 @@ class XaiOAuthAuthTest {
         assertEquals(
             "client_id=b1a00492-073a-47ea-816f-4c329264a828" +
                 "&scope=openid+profile+email+offline_access+grok-cli%3Aaccess+api%3Aaccess" +
-                "&referrer=pi",
+                "&referrer=pathfinder",
             requestBody(request),
         )
         assertTrue(request.timeoutMs > 0)
