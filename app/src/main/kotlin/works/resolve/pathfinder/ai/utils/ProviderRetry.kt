@@ -3,7 +3,6 @@ package works.resolve.pathfinder.ai.utils
 
 import works.resolve.pathfinder.ai.transport.NetworkException
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
-import kotlin.math.ceil
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.random.Random
@@ -81,15 +80,14 @@ class ProviderRetry(
         return (exponential * (1 - random() * 0.25)).toLong()
     }
 
-    private fun validateServerDelayMs(delayMs: Long, maxRetryDelayMs: Long, error: Exception): Long {
-        if (maxRetryDelayMs > 0 && delayMs > maxRetryDelayMs) {
-            throw IllegalStateException(
-                "Server requested ${ceil(delayMs / 1000.0).toInt()}s retry delay " +
-                    "(max: ${ceil(maxRetryDelayMs / 1000.0).toInt()}s). ${error.message}",
-            )
-        }
-        return delayMs
-    }
+    private fun validateServerDelayMs(delayMs: Long, maxRetryDelayMs: Long, error: Exception): Long =
+        // Divergence from pi: provider-retry.ts:38-46 throws a plain Error for
+        // this cap failure; we throw the shared [RetryDelayExceededError] so
+        // the two retry policies carry one delay-exceeded sentinel (pi's
+        // codex adapter names this failure RetryDelayExceededError). The
+        // message keeps pi's provider-retry shape including the provider
+        // error text.
+        validateRetryDelayMs(delayMs, maxRetryDelayMs, messageSuffix = error.message)
 
     /** Longest numeric prefix (so "1200ms" parses as 1200), or null when none.
      * NaN parses in Kotlin but is not a valid delay, so it falls through. */
@@ -114,4 +112,39 @@ internal fun parseHttpDateMsOrNull(value: String): Long? = try {
         .toInstant().toEpochMilli()
 } catch (_: Exception) {
     null
+}
+
+/**
+ * Pi's RetryDelayExceededError (openai-codex-responses.ts:159): the server
+ * requested a retry delay above the cap, so the request fails immediately
+ * and is never retried. Unified sentinel for both retry policies:
+ * pi's provider-retry throws a plain Error for the same condition
+ * (provider-retry.ts:38-46), and pathfinder folds that failure into this
+ * named type rather than keeping a codex-only duplicate.
+ */
+internal class RetryDelayExceededError(message: String) : Exception(message)
+
+/**
+ * Shared delay-cap validation: pi's validateServerRetryDelayMs
+ * (provider-retry.ts:31-42) and validateRetryDelayMs
+ * (openai-codex-responses.ts:161-170) implement the identical check — a
+ * positive [maxRetryDelayMs] rejects delays above it (zero disables the
+ * limit) — with messages rounded up to whole seconds. [messageSuffix]
+ * carries provider-retry's appended provider error text; the codex variant
+ * passes none, exactly as upstream.
+ */
+internal fun validateRetryDelayMs(
+    delayMs: Long,
+    maxRetryDelayMs: Long,
+    messageSuffix: String? = null,
+): Long {
+    if (maxRetryDelayMs > 0 && delayMs > maxRetryDelayMs) {
+        val seconds = (delayMs + 999) / 1000
+        val maxSeconds = (maxRetryDelayMs + 999) / 1000
+        val suffix = if (messageSuffix != null) ". $messageSuffix" else ""
+        throw RetryDelayExceededError(
+            "Server requested ${seconds}s retry delay (max: ${maxSeconds}s)$suffix",
+        )
+    }
+    return delayMs
 }

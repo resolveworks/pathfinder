@@ -20,6 +20,14 @@ internal const val REQUEST_COMPRESSION_ZSTD_LEVEL = 3
  * (browser/Vite builds) — is not modeled. zstd-jni is an ordinary runtime
  * dependency on Android; a native-library failure is simply a compression
  * failure that falls back to the uncompressed request.
+ *
+ * zstd-jni's [Zstd.compress] is a blocking JNI call. It stays synchronous
+ * (not `suspend`) because the null-on-failure contract makes it trivially
+ * wrappable; callers run it under an injected IO dispatcher instead —
+ * OpenAiCodexResponsesApi wraps the call site in
+ * `withContext(ioDispatcher)` per the repo's blocking-IO convention. Making
+ * this function itself suspend would force a real-dispatch hop into virtual-
+ * time-ordered stream tests without changing the fallback semantics.
  */
 fun compressRequestBodyZstd(
     bodyJson: String,
