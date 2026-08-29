@@ -496,4 +496,26 @@ class GoogleGenerativeAiStreamTest {
         assertTrue(events.none { it is AssistantMessageEvent.Error }, "cancellation must not emit Error")
         assertTrue(transport.cancelled.value, "transport must observe cancellation")
     }
+
+    @Test
+    fun `usage counts use shared lenient int semantics`() = runTest {
+        // kotlinx numeric semantics via JsonDom (standard for the cluster):
+        // quoted numerals parse; a float yields null (-> 0) rather than
+        // truncating; missing fields are 0. Google sends proper JSON numbers
+        // here, so the float rejection is tightening, not a regression.
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],
+                    "usageMetadata":{"promptTokenCount":"10","candidatesTokenCount":2.5,
+                    "totalTokenCount":12}}""",
+            ),
+        )
+        val events = events(transport)
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(10, done.message.usage.input)
+        assertEquals(0, done.message.usage.output)
+        assertEquals(0, done.message.usage.reasoning)
+        assertEquals(12, done.message.usage.totalTokens)
+    }
 }
