@@ -61,6 +61,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
 
     // Settings persistence
+    implementation(libs.androidx.browser)
     implementation(libs.androidx.datastore.preferences)
 
     // HTTP + JSON for the native provider layer (works.resolve.pathfinder.ai)

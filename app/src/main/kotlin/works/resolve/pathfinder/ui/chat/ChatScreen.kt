@@ -75,7 +75,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -94,6 +94,7 @@ import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.data.sessions.SessionSummary
+import works.resolve.pathfinder.ui.openInCustomTab
 import works.resolve.pathfinder.ui.chat.markdown.MarkdownText
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 import kotlinx.coroutines.launch
@@ -1031,7 +1032,7 @@ private fun AuthMethodSelectorContent(
  * Interactive login flow (pi's login dialog): ordered progress/info events
  * and the pending prompt, when one is suspended. Links, auth URLs, and the
  * device verification URI open only through explicit user-triggered
- * buttons ([LocalUriHandler.openUri]) — nothing auto-launches. Text/Secret/
+ * buttons — nothing auto-launches. Text/Secret/
  * ManualCode answers live in ephemeral `remember` state only (never
  * `rememberSaveable`) and cross straight back into the suspended prompt.
  */
@@ -1041,7 +1042,7 @@ private fun AuthFlowContent(
     onSubmit: (answer: String) -> Unit,
     onCancel: () -> Unit,
 ) {
-    val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1067,7 +1068,7 @@ private fun AuthFlowContent(
             }
         }
         flow.events.forEach { event ->
-            AuthEventItem(event = event, onOpenUri = { url -> uriHandler.openUri(url) })
+            AuthEventItem(event = event, onOpenUri = context::openInCustomTab)
         }
         flow.pendingPrompt?.let { prompt ->
             AuthPromptItem(prompt = prompt, onSubmit = onSubmit, onCancel = onCancel)
