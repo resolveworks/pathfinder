@@ -51,7 +51,7 @@ class GoogleGenerativeAiStreamTest {
     private fun api(transport: FakeTransport) = GoogleGenerativeAiApi(
         transport,
         works.resolve.pathfinder.ai.utils.ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
-        nowMs = { 1_770_000_000_000L },
+        clock = FakeClock(startEpochMs = 1_770_000_000_000L),
     )
 
     private suspend fun events(transport: FakeTransport) = api(transport)

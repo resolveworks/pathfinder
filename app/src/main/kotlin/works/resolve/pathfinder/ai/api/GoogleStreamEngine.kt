@@ -18,16 +18,18 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strOrNull
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -68,11 +70,11 @@ internal object GoogleStreamEngine {
     fun stream(
         transport: HttpStreamingTransport,
         retry: ProviderRetry,
-        nowMs: () -> Long,
+        clock: Clock = Clock.System,
         model: Model,
         plan: Plan,
     ): Flow<AssistantMessageEvent> = flow {
-        val state = State(model, nowMs())
+        val state = State(model, clock.now().toEpochMilliseconds())
         try {
             // Retries only cover failures before SSE content begins, pi's
             // retryGoogleRequest around generateContentStream.
@@ -210,13 +212,13 @@ internal object GoogleStreamEngine {
                 responseId = chunk["responseId"].strOrNull()?.takeIf { it.isNotEmpty() }
             }
 
-            val candidate = (chunk["candidates"] as? JsonArray)?.firstOrNull() as? JsonObject
-            for (part in ((candidate?.get("content") as? JsonObject)?.get("parts") as? JsonArray)
-                ?.filterIsInstance<JsonObject>() ?: emptyList()) {
+            val candidate = chunk.arr("candidates")?.filterIsInstance<JsonObject>()?.firstOrNull()
+            for (part in candidate?.obj("content")?.arr("parts")
+                ?.filterIsInstance<JsonObject>() ?: emptyList<JsonObject>()) {
                 events += processPart(part)
             }
 
-            candidate?.get("finishReason").strOrNull()?.let { reason ->
+            candidate.str("finishReason")?.let { reason ->
                 rawStopReason = reason
                 stopReason = GoogleShared.mapStopReason(reason)
                 if (content.any { it is ToolCall } && stopReason == StopReason.STOP) {
@@ -283,11 +285,11 @@ internal object GoogleStreamEngine {
                 }
             }
 
-            val functionCall = part["functionCall"] as? JsonObject
+            val functionCall = part.obj("functionCall")
             if (functionCall != null) {
                 closeOpenBlock()?.let { events.add(it) }
 
-                val args = functionCall["args"] as? JsonObject ?: JsonObject(emptyMap())
+                val args = functionCall.obj("args") ?: JsonObject(emptyMap())
                 val name = functionCall["name"].strOrNull() ?: ""
                 val providedId = functionCall["id"].strOrNull()
                 val needsNewId = providedId.isNullOrEmpty() ||
