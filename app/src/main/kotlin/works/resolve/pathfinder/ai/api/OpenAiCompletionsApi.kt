@@ -27,10 +27,14 @@ import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.long
 import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strOrNull
+import works.resolve.pathfinder.ai.utils.stringOrNull
 import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.resolveCloudflareBaseUrl
@@ -41,8 +45,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.longOrNull
+import kotlin.time.Clock
 
 /**
  * OpenAI Chat Completions streaming adapter, ported from pi's
@@ -60,7 +63,7 @@ import kotlinx.serialization.json.longOrNull
 class OpenAiCompletionsApi(
     private val transport: works.resolve.pathfinder.ai.transport.HttpStreamingTransport,
     private val retry: ProviderRetry = ProviderRetry(),
-    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val clock: Clock = Clock.System,
 ) : ChatApi {
 
     /** pi's streamSimple for openai-completions: clamps the thinking level
@@ -96,7 +99,7 @@ class OpenAiCompletionsApi(
         options: OpenAiCompletionsOptions,
     ): Flow<AssistantMessageEvent> = flow {
         // One request-start timestamp shared by every partial/final snapshot.
-        val startedAtMs = nowMs()
+        val startedAtMs = clock.now().toEpochMilliseconds()
         val state = StreamingState(model, startedAtMs)
         try {
             // Header-based auth (e.g. Cloudflare's cf-aig-authorization) needs
@@ -234,28 +237,29 @@ class OpenAiCompletionsApi(
         }
 
         // Some providers deliver errors as JSON events mid-stream.
-        (chunk["error"] as? JsonObject)?.let { error ->
+        chunk.obj("error")?.let { error ->
             throw ProviderStreamException(formatJsonError(error))
         }
 
-        (chunk["id"] as? JsonPrimitive)?.strOrNull()
+        chunk.str("id")
             ?.takeIf { it.isNotEmpty() && state.responseId == null }
             ?.let { state.responseId = it }
-        (chunk["model"] as? JsonPrimitive)?.strOrNull()
+        // pi guards this read with `typeof chunk.model === "string"` — strict.
+        chunk["model"].stringOrNull()
             ?.takeIf { it.isNotEmpty() && it != model.id && state.responseModel == null }
             ?.let { state.responseModel = it }
 
-        (chunk["usage"] as? JsonObject)?.let { state.usage = parseChunkUsage(it, model) }
+        chunk.obj("usage")?.let { state.usage = parseChunkUsage(it, model) }
 
-        val choice = (chunk["choices"] as? JsonArray)?.firstOrNull() as? JsonObject
+        val choice = chunk.arr("choices")?.firstOrNull() as? JsonObject
             ?: return emptyList()
 
         // Fallback: some providers return usage in choice.usage.
         if (chunk["usage"] == null) {
-            (choice["usage"] as? JsonObject)?.let { state.usage = parseChunkUsage(it, model) }
+            choice.obj("usage")?.let { state.usage = parseChunkUsage(it, model) }
         }
 
-        (choice["finish_reason"] as? JsonPrimitive)?.strOrNull()?.let { raw ->
+        choice.str("finish_reason")?.let { raw ->
             state.rawStopReason = raw
             val (stopReason, errorMessage) = mapStopReason(raw)
             state.stopReason = stopReason
@@ -263,7 +267,7 @@ class OpenAiCompletionsApi(
             state.hasFinishReason = true
         }
 
-        val delta = choice["delta"] as? JsonObject ?: return emptyList()
+        val delta = choice.obj("delta") ?: return emptyList()
 
         val events = mutableListOf<AssistantMessageEvent>()
         delta["content"].strOrNull()?.takeIf { it.isNotEmpty() }?.let { events += state.appendText(it) }
@@ -283,14 +287,14 @@ class OpenAiCompletionsApi(
             }
         }
 
-        (delta["tool_calls"] as? JsonArray)?.forEach { element ->
+        delta.arr("tool_calls")?.forEach { element ->
             (element as? JsonObject)?.let { events += state.appendToolCallDelta(it) }
         }
 
         // pi openai-completions.ts:655-665: reasoning_details deltas keep the
         // provider replay data in the thinking signature slot; they are not
         // user-visible stream deltas, so no thinking_delta is emitted.
-        (delta["reasoning_details"] as? JsonArray)?.forEach { element ->
+        delta.arr("reasoning_details")?.forEach { element ->
             if (element is JsonObject && isOpenAiReasoningDetail(element)) {
                 state.appendReasoningDetail(LinkedHashMap(element))
             }
@@ -520,9 +524,9 @@ internal class StreamingState(private val model: Model, private val timestampMs:
 
     fun appendToolCallDelta(delta: JsonObject): List<AssistantMessageEvent> {
         val events = mutableListOf<AssistantMessageEvent>()
-        val streamIndex = (delta["index"] as? JsonPrimitive)?.longOrNull?.toInt()
-        val id = delta["id"].strOrNull()
-        val function = delta["function"] as? JsonObject
+        val streamIndex = delta.long("index")?.toInt()
+        val id = delta.str("id")
+        val function = delta.obj("function")
         val name = function?.get("name").strOrNull()
 
         var blockIndex = streamIndex?.let { toolByIndex[it] }

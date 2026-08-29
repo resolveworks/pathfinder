@@ -19,6 +19,8 @@ import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.ToolChoice
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
+import works.resolve.pathfinder.ai.utils.str
+import works.resolve.pathfinder.ai.utils.strOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -378,8 +380,7 @@ object OpenAiCompletionsPayload {
         cacheControl: OpenAiCompatCacheControl,
     ) {
         val index = messages.indexOfFirst { message ->
-            (message["role"] as? JsonPrimitive)?.contentOrNull == "system" ||
-                (message["role"] as? JsonPrimitive)?.contentOrNull == "developer"
+            message.str("role") == "system" || message.str("role") == "developer"
         }
         if (index >= 0) {
             addCacheControlToTextContent(messages, index, cacheControl)
@@ -397,7 +398,7 @@ object OpenAiCompletionsPayload {
         cacheControl: OpenAiCompatCacheControl,
     ) {
         for (i in messages.indices.reversed()) {
-            val role = (messages[i]["role"] as? JsonPrimitive)?.contentOrNull
+            val role = messages[i].str("role")
             if (role == "user" || role == "assistant" || role == "tool") {
                 if (addCacheControlToTextContent(messages, i, cacheControl)) {
                     return
@@ -450,7 +451,7 @@ object OpenAiCompletionsPayload {
             is JsonArray -> {
                 for (j in content.indices.reversed()) {
                     val part = content[j]
-                    if (part is JsonObject && (part["type"] as? JsonPrimitive)?.contentOrNull == "text") {
+                    if (part is JsonObject && part.str("type") == "text") {
                         val newContent = content.toMutableList().also {
                             it[j] = JsonObject(part + ("cache_control" to cacheControl.toJson()))
                         }
@@ -698,7 +699,9 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
         // details were preserved (even alongside requiresThinkingAsText).
         preservedReasoningDetails?.let { assistant["reasoning_details"] = it }
 
-        val hasContent = (assistant["content"] as? JsonPrimitive)?.content?.isNotEmpty() == true ||
+        // Content here is always either a primitive string we set above or a
+        // block array, never JSON null, so the lenient read is equivalent.
+        val hasContent = assistant["content"].strOrNull()?.isNotEmpty() == true ||
             assistant["content"] is JsonArray
         if (!hasContent && !assistant.containsKey("tool_calls")) {
             return null
