@@ -12,6 +12,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlin.time.Clock
+import works.resolve.pathfinder.ai.testing.FakeClock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -88,11 +90,11 @@ class AnthropicOAuthAuthTest {
     private fun pkce(): Pkce = fixedPkce().generate()
 
     private fun flow(
-        now: () -> Long = { 1_000_000L },
+        clock: Clock = FakeClock(1_000_000L),
         port: Int = 0,
     ): Pair<AnthropicOAuthAuth, FakeHttpClient> {
         val http = FakeHttpClient()
-        return AnthropicOAuthAuth(http, fixedPkce(), now, callbackPort = port) to http
+        return AnthropicOAuthAuth(http, fixedPkce(), clock, callbackPort = port) to http
     }
 
     /** A currently-free loopback port (racy in principle; fine within one JVM). */
@@ -222,7 +224,7 @@ class AnthropicOAuthAuthTest {
 
     @Test
     fun `exchange posts pi's payload and applies the five minute expiry skew`() = runBlocking {
-        val (auth, http) = flow(now = { 1_000_000L })
+        val (auth, http) = flow(clock = FakeClock(1_000_000L))
         val pair = pkce()
         val interaction = RecordingInteraction("the-code")
 
@@ -256,7 +258,7 @@ class AnthropicOAuthAuthTest {
 
     @Test
     fun `refresh posts pi's payload without scope and rotates both tokens`() = runBlocking {
-        val (auth, http) = flow(now = { 2_000_000L })
+        val (auth, http) = flow(clock = FakeClock(2_000_000L))
         http.respond = { jsonResponse(200, anthropicTokenBody("new-access", "new-refresh")) }
 
         val credential = auth.refresh(OAuthCredential(access = "old-access", refresh = "refresh", expires = 0))

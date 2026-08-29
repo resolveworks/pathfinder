@@ -18,6 +18,7 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
+import kotlin.time.Clock
 import works.resolve.pathfinder.ai.utils.strictDouble
 
 /**
@@ -82,7 +83,7 @@ import works.resolve.pathfinder.ai.utils.strictDouble
  * - **JWT base64 tolerance.** Pi decodes with `atob` (standard base64); this
  *   port also accepts unpadded base64url, since real ChatGPT access tokens
  *   are RFC 7515 base64url JWTs — strictly more permissive, never less.
- * - **Seams.** `Date.now()` reads through [now], state generation through
+ * - **Seams.** `Date.now()` reads through [clock], state generation through
  *   [createState] (pi `createState`: 16 random bytes, hex), and PKCE through
  *   [pkce] — all for deterministic tests; production uses defaults.
  *
@@ -93,7 +94,7 @@ import works.resolve.pathfinder.ai.utils.strictDouble
  */
 class OpenAiCodexOAuthAuth(
     private val http: OAuthHttpClient,
-    private val now: () -> Long = { System.currentTimeMillis() },
+    private val clock: Clock = Clock.System,
     private val createState: () -> String = { defaultCreateState() },
     private val pkce: PkceGenerator = PkceGenerator(),
     /** pi hardcodes port 1455; injectable so tests never race the fixed port. */
@@ -570,7 +571,7 @@ class OpenAiCodexOAuthAuth(
                     }
                 },
             ),
-            now = now,
+            clock = clock,
         )
 
     /** Pi's inline error-code extraction: `error` as string or `{code}` object. */
@@ -677,7 +678,7 @@ class OpenAiCodexOAuthAuth(
         return OAuthToken(
             access = access,
             refresh = refresh,
-            expires = now() + (expiresIn * 1000).toLong(),
+            expires = clock.now().toEpochMilliseconds() + (expiresIn * 1000).toLong(),
         )
     }
 

@@ -17,6 +17,7 @@ import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.string
+import kotlin.time.Clock
 import works.resolve.pathfinder.ai.utils.strictDouble
 /**
  * Kimi Code (subscription) OAuth flow, ported from pi
@@ -30,7 +31,7 @@ import works.resolve.pathfinder.ai.utils.strictDouble
  * from `KIMI_CODE_OAUTH_HOST`/`KIMI_OAUTH_HOST` provider env overrides; the
  * Android process has no ambient provider env at this layer, so this port
  * always uses pi's default host [OAUTH_HOST] (the upstream default
- * when neither override is set). The [now] clock supplier is injectable for
+ * when neither override is set). The [clock] is injectable for
  * deterministic tests only; production callers use the system-clock default.
  *
  * HTTP goes through the injected [OAuthHttpClient]; no network happens in
@@ -39,7 +40,7 @@ import works.resolve.pathfinder.ai.utils.strictDouble
  */
 class KimiCodingOAuthAuth(
     private val http: OAuthHttpClient,
-    private val now: () -> Long = { System.currentTimeMillis() },
+    private val clock: Clock = Clock.System,
 ) : OAuthAuth {
 
     override val name: String = "Kimi Code (subscription)"
@@ -154,7 +155,7 @@ class KimiCodingOAuthAuth(
         return TokenResponse(
             access = accessToken,
             refresh = refreshToken,
-            expires = now() + (expiresIn * 1000).toLong(),
+            expires = clock.now().toEpochMilliseconds() + (expiresIn * 1000).toLong(),
         )
     }
 
@@ -167,7 +168,7 @@ class KimiCodingOAuthAuth(
                 waitBeforeFirstPoll = true,
                 poll = { pollTokenRequest(device) },
             ),
-            now = now,
+            clock = clock,
         )
 
     /**

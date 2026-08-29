@@ -6,6 +6,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import works.resolve.pathfinder.ai.testing.FakeClock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.ai.auth.AuthEvent
@@ -129,7 +130,7 @@ class XaiOAuthAuthTest {
     @Test
     fun `device_code event fields mirror the response`() = runTest {
         val http = FakeHttpClient()
-        val auth = XaiOAuthAuth(http, now = { 1_000L })
+        val auth = XaiOAuthAuth(http, clock = FakeClock(1_000L))
         val interaction = RecordingInteraction()
         http.respond = { json(200, deviceCodeBody()) }
         // Login will poll after the event; complete on the token request.
@@ -202,7 +203,7 @@ class XaiOAuthAuthTest {
 
     @Test
     fun `expiry uses lifetime minus 5-minute skew`() {
-        val auth = XaiOAuthAuth(FakeHttpClient(), now = { 100_000L })
+        val auth = XaiOAuthAuth(FakeHttpClient(), clock = FakeClock(100_000L))
         val credential = auth.credentialsFromTokenResponse(
             Json.parseToJsonElement(tokenBody()) as JsonObject,
         )
@@ -213,7 +214,7 @@ class XaiOAuthAuthTest {
 
     @Test
     fun `missing expires_in defaults to one hour`() {
-        val auth = XaiOAuthAuth(FakeHttpClient(), now = { 0L })
+        val auth = XaiOAuthAuth(FakeHttpClient(), clock = FakeClock(0L))
         val credential = auth.credentialsFromTokenResponse(
             Json.parseToJsonElement("""{"access_token":"a","refresh_token":"r"}""") as JsonObject,
         )
@@ -222,7 +223,7 @@ class XaiOAuthAuthTest {
 
     @Test
     fun `omitted refresh_token on refresh retains the previous one`() {
-        val auth = XaiOAuthAuth(FakeHttpClient(), now = { 0L })
+        val auth = XaiOAuthAuth(FakeHttpClient(), clock = FakeClock(0L))
         val credential = auth.credentialsFromTokenResponse(
             Json.parseToJsonElement("""{"access_token":"a2"}""") as JsonObject,
             previousRefreshToken = "kept-refresh",
@@ -232,7 +233,7 @@ class XaiOAuthAuthTest {
 
     @Test
     fun `omitted refresh_token with empty previous refresh fails validation (pi truthiness)`() {
-        val auth = XaiOAuthAuth(FakeHttpClient(), now = { 0L })
+        val auth = XaiOAuthAuth(FakeHttpClient(), clock = FakeClock(0L))
         // pi retains previousRefreshToken only when truthy — an empty string is
         // falsy, so the omitted field falls through to requiredString.
         val error = assertFailsWith<IllegalStateException> {
@@ -249,7 +250,7 @@ class XaiOAuthAuthTest {
     @Test
     fun `pending then complete succeeds and posts the device grant`() = runTest {
         val http = FakeHttpClient()
-        val auth = XaiOAuthAuth(http, now = { 0L })
+        val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         var polls = 0
         http.respond = { request ->
             if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
@@ -275,7 +276,7 @@ class XaiOAuthAuthTest {
     @Test
     fun `slow_down passes the reported interval to the poller`() = runTest {
         val http = FakeHttpClient()
-        val auth = XaiOAuthAuth(http, now = { 0L })
+        val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         var polls = 0
         http.respond = { request ->
             if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
@@ -292,7 +293,7 @@ class XaiOAuthAuthTest {
     @Test
     fun `access_denied fails with pi message`() = runTest {
         val http = FakeHttpClient()
-        val auth = XaiOAuthAuth(http, now = { 0L })
+        val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         http.respond = { request ->
             if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
             else json(400, """{"error":"access_denied"}""")
@@ -304,7 +305,7 @@ class XaiOAuthAuthTest {
     @Test
     fun `authorization_denied also fails with pi message`() = runTest {
         val http = FakeHttpClient()
-        val auth = XaiOAuthAuth(http, now = { 0L })
+        val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         http.respond = { request ->
             if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
             else json(400, """{"error":"authorization_denied"}""")
@@ -316,7 +317,7 @@ class XaiOAuthAuthTest {
     @Test
     fun `expired_token fails with pi message`() = runTest {
         val http = FakeHttpClient()
-        val auth = XaiOAuthAuth(http, now = { 0L })
+        val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         http.respond = { request ->
             if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
             else json(400, """{"error":"expired_token"}""")
@@ -328,7 +329,7 @@ class XaiOAuthAuthTest {
     @Test
     fun `unknown poll error uses requestFailure message`() = runTest {
         val http = FakeHttpClient()
-        val auth = XaiOAuthAuth(http, now = { 0L })
+        val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         http.respond = { request ->
             if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
             else json(500, """{"error":"server_error","error_description":"boom"}""")
@@ -345,7 +346,7 @@ class XaiOAuthAuthTest {
     @Test
     fun `invalid JSON throws pi message with status`() = runTest {
         val http = FakeHttpClient()
-        val auth = XaiOAuthAuth(http, now = { 0L })
+        val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         http.respond = { json(200, "not json") }
         val error = assertFailsWith<IllegalStateException> { auth.login(RecordingInteraction()) }
         assertEquals("xAI OAuth returned invalid JSON (HTTP 200)", error.message)
@@ -356,7 +357,7 @@ class XaiOAuthAuthTest {
     @Test
     fun `refresh posts the refresh grant and keeps the previous token when omitted`() = runTest {
         val http = FakeHttpClient()
-        val auth = XaiOAuthAuth(http, now = { 0L })
+        val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         http.respond = { json(200, """{"access_token":"acc-2"}""") }
 
         val refreshed = auth.refresh(OAuthCredential(access = "acc-1", refresh = "ref-1", expires = 1))
@@ -374,7 +375,7 @@ class XaiOAuthAuthTest {
     @Test
     fun `refresh failure carries status and detail`() = runTest {
         val http = FakeHttpClient()
-        val auth = XaiOAuthAuth(http, now = { 0L })
+        val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         http.respond = { json(401, """{"error":"invalid_grant"}""") }
         val error = assertFailsWith<IllegalStateException> {
             auth.refresh(OAuthCredential(access = "a", refresh = "r", expires = 1))

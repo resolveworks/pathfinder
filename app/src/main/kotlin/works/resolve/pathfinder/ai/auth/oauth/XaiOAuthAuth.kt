@@ -9,6 +9,7 @@ import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.string
+import kotlin.time.Clock
 import works.resolve.pathfinder.ai.utils.strictDouble
 
 /**
@@ -27,7 +28,7 @@ import works.resolve.pathfinder.ai.utils.strictDouble
  * `AbortSignal`; here all HTTP goes through the injected [OAuthHttpClient]
  * with a bounded request timeout, and cancellation travels as coroutine
  * cancellation. `Date.now()` in `credentialsFromTokenResponse` is read
- * through the internal [now] seam (system clock by default) for deterministic
+ * through the internal [clock] seam (system clock by default) for deterministic
  * expiry tests. [AuthEvent.DeviceCode] carries `Int` interval/expiry fields,
  * so the server's (possibly fractional) interval is floored when emitted —
  * the poller itself floors the same value anyway.
@@ -37,7 +38,7 @@ import works.resolve.pathfinder.ai.utils.strictDouble
  */
 class XaiOAuthAuth(
     private val http: OAuthHttpClient,
-    private val now: () -> Long = { System.currentTimeMillis() },
+    private val clock: Clock = Clock.System,
 ) : OAuthAuth {
 
     override val name: String = "xAI (Grok/X subscription)"
@@ -154,7 +155,7 @@ class XaiOAuthAuth(
                     }
                 },
             ),
-            now = now,
+            clock = clock,
         )
 
     private suspend fun refreshXaiToken(refreshToken: String): OAuthCredential {
@@ -190,7 +191,7 @@ class XaiOAuthAuth(
         return OAuthCredential(
             access = access,
             refresh = refresh,
-            expires = now() + expiresInSeconds * 1000 - REFRESH_SKEW_MS,
+            expires = clock.now().toEpochMilliseconds() + expiresInSeconds * 1000 - REFRESH_SKEW_MS,
         )
     }
 
