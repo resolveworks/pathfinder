@@ -10,7 +10,6 @@ import works.resolve.pathfinder.ai.core.OpenAiResponsesCompat
 import works.resolve.pathfinder.ai.core.ProviderResponse
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.UserMessage
-import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
 import works.resolve.pathfinder.ai.testing.sse
