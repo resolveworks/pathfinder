@@ -550,7 +550,7 @@ class MistralConversationsApiTest {
         val transport2 = FakeTransport()
         // pi throws synchronously before opening the stream; nothing is
         // requested and no events are produced.
-        val thrown = kotlin.test.assertFailsWith<IllegalStateException> {
+        val thrown = kotlin.test.assertFailsWith<ProviderAuthException> {
             api(transport2).streamSimple(model, context, SimpleStreamOptions())
         }
         assertEquals("No API key for provider: mistral", thrown.message)

@@ -58,7 +58,7 @@ object MistralConversationsPayload {
         options.temperature?.let { put("temperature", it) }
         options.maxTokens?.let { put("max_tokens", it) }
         options.toolChoice?.let { put("tool_choice", mapToolChoice(it)) }
-        options.promptMode?.let { put("prompt_mode", it.wireName) }
+        options.promptMode?.let { put("prompt_mode", it.wire) }
         options.reasoningEffort?.let { put("reasoning_effort", it) }
         if (shouldUsePromptCaching(options)) {
             requireNotNull(options.sessionId) // guarded by shouldUsePromptCaching
