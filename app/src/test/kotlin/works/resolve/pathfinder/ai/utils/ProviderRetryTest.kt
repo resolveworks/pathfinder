@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ai.utils
 
 import works.resolve.pathfinder.ai.core.StreamOptions
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.transport.NetworkException
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import kotlin.test.Test
@@ -17,7 +18,7 @@ class ProviderRetryTest {
     ) {
         val retry = ProviderRetry(
             sleep = { sleeps.add(it) },
-            nowMs = { 1_000_000L },
+            clock = FakeClock(1_000_000L),
             random = { randomValue },
         )
     }
@@ -172,7 +173,7 @@ class ProviderRetryTest {
         var calls = 0
         val retry = ProviderRetry(
             sleep = { throw kotlinx.coroutines.CancellationException("aborted") },
-            nowMs = { 0L },
+            clock = FakeClock(0L),
         )
         assertFailsWith<kotlinx.coroutines.CancellationException> {
             retry.retryProviderRequest(maxRetries = 2, maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS) {
@@ -194,7 +195,7 @@ class ProviderRetryTest {
     @Test
     fun `parses HTTP-date retry-after relative to injectable clock`() = runTest {
         val h = Harness()
-        // nowMs is 1_000_000; the date is 1s in the future.
+        // Clock is at 1_000_000 ms; the date is 1s in the future.
         val future = java.time.Instant.ofEpochMilli(1_000_000L + 1000)
             .atZone(java.time.ZoneOffset.UTC)
             .format(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)

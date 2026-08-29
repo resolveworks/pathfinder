@@ -7,6 +7,7 @@ import kotlin.math.ceil
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.random.Random
+import kotlin.time.Clock
 
 /**
  * Retry behavior ported from pi's provider-retry (which mirrors the pinned
@@ -25,7 +26,7 @@ import kotlin.random.Random
  */
 class ProviderRetry(
     private val sleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
-    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val clock: Clock = Clock.System,
     private val random: () -> Double = Random.Default::nextDouble,
 ) {
     suspend fun <T> retryProviderRequest(
@@ -72,7 +73,7 @@ class ProviderRetry(
             }
             error.header("retry-after")?.let { header ->
                 val delayMs = parseFloatPrefix(header)?.let { it * 1000 }
-                    ?: (parseHttpDateMs(header) - nowMs())
+                    ?: (parseHttpDateMs(header) - clock.now().toEpochMilliseconds())
                 return validateServerDelayMs(delayMs.toLong(), maxRetryDelayMs, error)
             }
         }

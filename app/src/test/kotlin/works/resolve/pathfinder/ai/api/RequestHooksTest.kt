@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.api
 
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.InputModality
@@ -42,7 +43,7 @@ import kotlinx.serialization.json.doubleOrNull
  */
 class RequestHooksTest {
 
-    private val retry = ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 })
+    private val retry = ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 })
 
     private fun bodyOf(transport: FakeTransport, index: Int = 0): JsonObject {
         val request = transport.requests[index]

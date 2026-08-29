@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.api
 
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
@@ -46,7 +47,7 @@ class OpenAiCompletionsStreamTest {
 
     private fun api(transport: FakeTransport) = OpenAiCompletionsApi(
         transport,
-        works.resolve.pathfinder.ai.utils.ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),
+        works.resolve.pathfinder.ai.utils.ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
         nowMs = { 1_770_000_000_000L },
     )
 
