@@ -4,6 +4,8 @@ import java.net.SocketTimeoutException
 import java.net.URI
 import java.net.URLDecoder
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -31,16 +33,34 @@ import works.resolve.pathfinder.ai.auth.PkceGenerator
  * in both the exchange and the refresh path; the refresh response's rotated
  * `refresh_token` replaces the stored one verbatim.
  *
- * Divergence from pi (documented per AGENTS.md): pi races a loopback HTTP
- * callback server (`node:http` on 127.0.0.1:53692, `PI_OAUTH_CALLBACK_HOST`
- * override) against the manual-code prompt; Android has neither a reachable
- * loopback browser context nor a trusted deep-link callback, so this port
- * keeps only the `AuthEvent.AuthUrl` + `AuthPrompt.ManualCode` leg of the
- * race. Everything else is preserved: the authorize URL still carries the
- * localhost `redirect_uri` and `state = verifier` (so a redirect URL pasted
- * back from a desktop browser validates exactly like pi), and the token
- * exchange still sends that same `redirect_uri`. Browsers are never opened
- * automatically — following [AuthEvent.AuthUrl] is an explicit user action.
+ * Loopback callback race, ported from pi `startCallbackServer` +
+ * `loginAnthropic`: a loopback HTTP server on 127.0.0.1:53692 races the
+ * `AuthPrompt.ManualCode` prompt. The handler validates in pi's order —
+ * non-`/callback` path → 404, `error` param → 400, missing `code`/`state` →
+ * 400, state mismatch → 400, success → the success page plus settle
+ * `{code, state}` — where the expected state is the PKCE verifier (`state =
+ * verifier` in the authorize URL). A server result wins outright and cancels
+ * the pending manual prompt; otherwise the manual answer goes through
+ * `parseAuthorizationInput` and the same state checks. Divergences from pi
+ * (documented per AGENTS.md):
+ * - pi's in-handler catch renders a text/plain 500; this handler cannot
+ *   realistically throw (the shared transport pre-parses the request), and
+ *   [LoopbackOAuthServer]'s uniform HTML 500 covers the impossible case.
+ * - Bind failure fails the login outright like pi's rejecting
+ *   `server.on("error")` (unlike the sibling Codex flow, which degrades to
+ *   manual login). pi surfaces Node's `EADDRINUSE` errno; this port has no
+ *   Node error metadata and throws a plain `IllegalStateException` naming
+ *   the failed loopback bind.
+ * - pi abandons the pending manual promise when the server wins; here the
+ *   prompt coroutine is cancelled, which is what clears the pending prompt
+ *   sheet (`UiAuthInteraction.prompt` clears its state in `finally`).
+ * - pi's `PI_OAUTH_CALLBACK_HOST` env override does not exist on Android;
+ *   the host is the `127.0.0.1` constant. Android apps share the device
+ *   network namespace, so the socket is reachable from the on-device browser
+ *   (Chrome/Vanadium allow cleartext `http://localhost`). Process-death
+ *   caveat: Android may kill the app process while the browser is
+ *   foregrounded; the login is simply retried — the same risk class as pi's
+ *   abortable login.
  *
  * Other documented divergences:
  * - All HTTP goes through the injected [OAuthHttpClient] with pi's 30s
@@ -70,6 +90,12 @@ class AnthropicOAuthAuth(
     private val http: OAuthHttpClient,
     private val pkce: PkceGenerator = PkceGenerator(),
     private val now: () -> Long = { System.currentTimeMillis() },
+    /**
+     * Bind port for the loopback callback server. pi's fixed 53692 in
+     * production ([CALLBACK_PORT]); tests inject 0 (ephemeral) or a free port
+     * so they never race the fixed port.
+     */
+    private val callbackPort: Int = CALLBACK_PORT,
 ) : OAuthAuth {
 
     /** pi `name: "Anthropic (Claude Pro/Max)"`. */
@@ -78,53 +104,140 @@ class AnthropicOAuthAuth(
     /** pi `isSubscription: true`. */
     override val isSubscription: Boolean = true
 
+    // --- loopback callback server (pi `startCallbackServer`) ---
+
+    /** pi's `{ code: string; state: string }` callback settle value. */
+    internal data class CallbackResult(
+        val code: String,
+        val state: String,
+    )
+
+    /**
+     * pi's request-handler decision table, in upstream order: route → error
+     * param → missing code/state → state mismatch → success. The expected
+     * state is the PKCE verifier (`state = verifier` in the authorize URL).
+     */
+    private fun callbackResponse(
+        request: LoopbackCallbackRequest,
+        settle: (CallbackResult?) -> Unit,
+        expectedState: String,
+    ): LoopbackCallbackResponse {
+        if (request.path != CALLBACK_PATH) {
+            return LoopbackCallbackResponse(404, oauthErrorHtml("Callback route not found."))
+        }
+
+        val code = request.query["code"]
+        val state = request.query["state"]
+        val error = request.query["error"]
+
+        // pi `if (error)` — an empty string is falsy in JS.
+        if (!error.isNullOrEmpty()) {
+            return LoopbackCallbackResponse(
+                400,
+                oauthErrorHtml("Anthropic authentication did not complete.", "Error: $error"),
+            )
+        }
+
+        // pi `if (!code || !state)` — empty strings are falsy.
+        if (code.isNullOrEmpty() || state.isNullOrEmpty()) {
+            return LoopbackCallbackResponse(400, oauthErrorHtml("Missing code or state parameter."))
+        }
+
+        if (state != expectedState) {
+            return LoopbackCallbackResponse(400, oauthErrorHtml("State mismatch."))
+        }
+
+        settle(CallbackResult(code, state))
+        return LoopbackCallbackResponse(
+            200,
+            oauthSuccessHtml("Anthropic authentication completed. You can close this window."),
+        )
+    }
+
     // --- login (pi `loginAnthropic`) ---
 
-    override suspend fun login(interaction: AuthInteraction): OAuthCredential {
+    override suspend fun login(interaction: AuthInteraction): OAuthCredential = coroutineScope {
         val challenge = pkce.generate()
         val verifier = challenge.verifier
 
-        // pi's URLSearchParams insertion order — see formEncode's encoding
-        // note.
-        val authParams = linkedMapOf(
-            "code" to "true",
-            "client_id" to CLIENT_ID,
-            "response_type" to "code",
-            "redirect_uri" to REDIRECT_URI,
-            "scope" to SCOPES,
-            "code_challenge" to challenge.challenge,
-            "code_challenge_method" to "S256",
-            "state" to verifier,
-        )
-        interaction.notify(
-            AuthEvent.AuthUrl(
-                url = AUTHORIZE_URL + "?" + formEncode(authParams),
-                instructions =
-                    "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.",
-            ),
-        )
+        // pi's `server.on("error")` rejects and the login fails outright.
+        val handle = LoopbackOAuthServer(port = callbackPort, host = CALLBACK_HOST) { request, settle ->
+            callbackResponse(request, settle, verifier)
+        }.start()
+            ?: throw IllegalStateException(
+                "Failed to bind the Anthropic OAuth callback server on $CALLBACK_HOST:$callbackPort; " +
+                    "another OAuth login may already be using the port",
+            )
 
-        val manualInput = interaction.prompt(
-            AuthPrompt.ManualCode(
-                message = "Complete login in your browser, or paste the authorization code / redirect URL here:",
-                placeholder = REDIRECT_URI,
-            ),
-        )
+        try {
+            // pi's URLSearchParams insertion order — see formEncode's encoding
+            // note.
+            val authParams = linkedMapOf(
+                "code" to "true",
+                "client_id" to CLIENT_ID,
+                "response_type" to "code",
+                "redirect_uri" to REDIRECT_URI,
+                "scope" to SCOPES,
+                "code_challenge" to challenge.challenge,
+                "code_challenge_method" to "S256",
+                "state" to verifier,
+            )
+            interaction.notify(
+                AuthEvent.AuthUrl(
+                    url = AUTHORIZE_URL + "?" + formEncode(authParams),
+                    instructions =
+                        "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.",
+                ),
+            )
 
-        val parsed = parseAuthorizationInput(manualInput)
-        // pi: `if (parsed.state && parsed.state !== verifier)` — only a non-empty state mismatches.
-        if (!parsed.state.isNullOrEmpty() && parsed.state != verifier) {
-            throw IllegalStateException("OAuth state mismatch")
+            val manualPrompt = async {
+                try {
+                    interaction.prompt(
+                        AuthPrompt.ManualCode(
+                            message = "Complete login in your browser, or paste the authorization code / redirect URL here:",
+                            placeholder = REDIRECT_URI,
+                        ),
+                    )
+                } finally {
+                    // pi cancels the server wait in both the answer and error
+                    // legs of the manual promise.
+                    handle.cancelWait()
+                }
+            }
+
+            val result = handle.waitForResult()
+            val code: String
+            val state: String
+            if (result != null) {
+                // Server leg won: pi abandons the pending manual promise until
+                // its `finally` aborts it; cancelling the prompt coroutine is
+                // what clears the pending prompt sheet in the UI.
+                manualPrompt.cancel()
+                code = result.code
+                state = result.state
+            } else {
+                // The manual leg completed and cancelled the wait.
+                val manualInput = manualPrompt.await()
+                val parsed = parseAuthorizationInput(manualInput)
+                // pi: `if (parsed.state && parsed.state !== verifier)` — only a non-empty state mismatches.
+                if (!parsed.state.isNullOrEmpty() && parsed.state != verifier) {
+                    throw IllegalStateException("OAuth state mismatch")
+                }
+                // pi: `if (!code)` — an empty code is missing, checked before the state.
+                code = parsed.code?.takeIf { it.isNotEmpty() } ?: throw IllegalStateException("Missing authorization code")
+                // pi: `state = parsed.state ?? verifier` (nullish — an empty state stays empty),
+                // then `if (!state)` throws. Unreachable in practice, kept for fidelity.
+                state = parsed.state ?: verifier
+                if (state.isEmpty()) throw IllegalStateException("Missing OAuth state")
+            }
+
+            interaction.notify(AuthEvent.Progress("Exchanging authorization code for tokens..."))
+            // The server path passes the query's state, which already passed
+            // validation; the manual path passes its parsed state.
+            exchangeAuthorizationCode(code, state, verifier, REDIRECT_URI)
+        } finally {
+            handle.close()
         }
-        // pi: `if (!code)` — an empty code is missing, checked before the state.
-        val code = parsed.code?.takeIf { it.isNotEmpty() } ?: throw IllegalStateException("Missing authorization code")
-        // pi: `state = parsed.state ?? verifier` (nullish — an empty state stays empty),
-        // then `if (!state)` throws. Unreachable in practice, kept for fidelity.
-        val state = parsed.state ?: verifier
-        if (state.isEmpty()) throw IllegalStateException("Missing OAuth state")
-
-        interaction.notify(AuthEvent.Progress("Exchanging authorization code for tokens..."))
-        return exchangeAuthorizationCode(code, state, verifier, REDIRECT_URI)
     }
 
     // --- authorization-input parsing (pi `parseAuthorizationInput`) ---
@@ -394,12 +507,19 @@ class AnthropicOAuthAuth(
         const val TOKEN_URL: String = "https://platform.claude.com/v1/oauth/token"
 
         /**
-         * pi `REDIRECT_URI` (`http://localhost:53692/callback`). The loopback
-         * callback server is the dropped desktop leg; the URI itself stays in
-         * the authorize URL and the token exchange so pasted redirect URLs
-         * validate and Anthropic's redirect contract is unchanged.
+         * pi `REDIRECT_URI` (`http://localhost:53692/callback`), pointing at
+         * the loopback callback server's fixed port and path.
          */
         const val REDIRECT_URI: String = "http://localhost:53692/callback"
+
+        /** pi `CALLBACK_HOST`. Not overridable on Android (no `PI_OAUTH_CALLBACK_HOST`). */
+        internal const val CALLBACK_HOST: String = "127.0.0.1"
+
+        /** pi `CALLBACK_PORT`. */
+        internal const val CALLBACK_PORT: Int = 53692
+
+        /** pi `CALLBACK_PATH`. */
+        internal const val CALLBACK_PATH: String = "/callback"
 
         /** pi `SCOPES`, verbatim. */
         const val SCOPES: String =

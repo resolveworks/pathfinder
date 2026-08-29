@@ -6,6 +6,11 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -16,7 +21,10 @@ import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.Pkce
 import works.resolve.pathfinder.ai.auth.PkceGenerator
+import java.net.HttpURLConnection
+import java.net.ServerSocket
 import java.net.SocketTimeoutException
+import java.net.URL
 
 /**
  * Ports the semantics of pi `packages/ai/src/auth/oauth/anthropic.ts` and its
@@ -42,6 +50,26 @@ class AnthropicOAuthAuthTest {
         }
     }
 
+    /**
+     * Interaction whose manual prompt suspends on a deferred, so tests decide
+     * when (and whether) the manual leg of the race answers.
+     */
+    private class PendingInteraction(
+        val answer: CompletableDeferred<String> = CompletableDeferred(),
+    ) : AuthInteraction {
+        val events = mutableListOf<AuthEvent>()
+        val prompts = mutableListOf<AuthPrompt>()
+
+        override suspend fun prompt(prompt: AuthPrompt): String {
+            prompts += prompt
+            return answer.await()
+        }
+
+        override suspend fun notify(event: AuthEvent) {
+            events += event
+        }
+    }
+
     private class FakeHttpClient(
         var respond: suspend (OAuthHttpRequest) -> OAuthHttpResponse = {
             OAuthHttpResponse(200, emptyMap(), anthropicTokenBody("access", "refresh").toByteArray())
@@ -59,10 +87,16 @@ class AnthropicOAuthAuthTest {
 
     private fun pkce(): Pkce = fixedPkce().generate()
 
-    private fun flow(now: () -> Long = { 1_000_000L }): Pair<AnthropicOAuthAuth, FakeHttpClient> {
+    private fun flow(
+        now: () -> Long = { 1_000_000L },
+        port: Int = 0,
+    ): Pair<AnthropicOAuthAuth, FakeHttpClient> {
         val http = FakeHttpClient()
-        return AnthropicOAuthAuth(http, fixedPkce(), now) to http
+        return AnthropicOAuthAuth(http, fixedPkce(), now, callbackPort = port) to http
     }
+
+    /** A currently-free loopback port (racy in principle; fine within one JVM). */
+    private fun freePort(): Int = ServerSocket(0).use { it.localPort }
 
     private fun jsonResponse(status: Int, body: String): OAuthHttpResponse =
         OAuthHttpResponse(status, emptyMap(), body.toByteArray())
@@ -264,7 +298,7 @@ class AnthropicOAuthAuthTest {
     @Test
     fun `invalid JSON on exchange fails with pi's invalid JSON message`() {
         val (auth, _) = flow()
-        val auth2 = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, "not json") }), fixedPkce())
+        val auth2 = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, "not json") }), fixedPkce(), callbackPort = 0)
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth2.login(RecordingInteraction("the-code")) }
         }
@@ -278,7 +312,7 @@ class AnthropicOAuthAuthTest {
 
     @Test
     fun `invalid JSON on refresh fails with pi's invalid JSON message`() {
-        val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, "{\"a\":1") }), fixedPkce())
+        val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, "{\"a\":1") }), fixedPkce(), callbackPort = 0)
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.refresh(OAuthCredential("a", "r", 0)) }
         }
@@ -302,7 +336,7 @@ class AnthropicOAuthAuthTest {
             """{"access_token":"a"}""",
         )
         for (body in bodies) {
-            val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, body) }), fixedPkce())
+            val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, body) }), fixedPkce(), callbackPort = 0)
             val error = assertFailsWith<IllegalStateException> {
                 runBlocking { auth.refresh(OAuthCredential("a", "r", 0)) }
             }
@@ -335,7 +369,7 @@ class AnthropicOAuthAuthTest {
 
     @Test
     fun `non-2xx refresh carries pi's shape and redacts an unparseable body`() {
-        val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(401, "unauthorized") }), fixedPkce())
+        val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(401, "unauthorized") }), fixedPkce(), callbackPort = 0)
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.refresh(OAuthCredential("a", "stale", 0)) }
         }
@@ -386,7 +420,7 @@ class AnthropicOAuthAuthTest {
 
     @Test
     fun `error messages and request tostring never carry secrets`() {
-        val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(403, """{"error":"denied"}""") }), fixedPkce())
+        val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(403, """{"error":"denied"}""") }), fixedPkce(), callbackPort = 0)
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.login(RecordingInteraction("secret-code")) }
         }
@@ -408,7 +442,7 @@ class AnthropicOAuthAuthTest {
             "[\"sk-ant-oat-distinctive-access\"]",
         )
         for (body in bodies) {
-            val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(500, body) }), fixedPkce())
+            val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(500, body) }), fixedPkce(), callbackPort = 0)
             val error = assertFailsWith<IllegalStateException> {
                 runBlocking { auth.login(RecordingInteraction("the-secret-code")) }
             }
@@ -428,7 +462,7 @@ class AnthropicOAuthAuthTest {
             """{"access_token":"sk-ant-oat-distinctive-access"""",
         )
         for (body in bodies) {
-            val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, body) }), fixedPkce())
+            val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, body) }), fixedPkce(), callbackPort = 0)
             val error = assertFailsWith<IllegalStateException> {
                 runBlocking { auth.login(RecordingInteraction("the-secret-code")) }
             }
@@ -445,7 +479,7 @@ class AnthropicOAuthAuthTest {
         val http = FakeHttpClient()
         runBlocking {
             try {
-                AnthropicOAuthAuth(http, fixedPkce()).login(RecordingInteraction("the-secret-code"))
+                AnthropicOAuthAuth(http, fixedPkce(), callbackPort = 0).login(RecordingInteraction("the-secret-code"))
             } catch (_: Exception) {
             }
         }
@@ -467,6 +501,140 @@ class AnthropicOAuthAuthTest {
     private fun assertNoSecrets(text: String?, secrets: List<String>, context: String) {
         for (secret in secrets) {
             assertTrue(!text.orEmpty().contains(secret), "secret leaked: $secret in $context")
+        }
+    }
+
+    // --- loopback callback server (pi `startCallbackServer` / `loginAnthropic`) ---
+
+    /** GET a callback URL against the loopback server; returns status + body. */
+    private fun httpGet(url: String): Pair<Int, String> {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 5_000
+        conn.readTimeout = 5_000
+        val status = conn.responseCode
+        val body = (if (status in 200..399) conn.inputStream else conn.errorStream)
+            ?.bufferedReader()?.use { it.readText() } ?: ""
+        conn.disconnect()
+        return status to body
+    }
+
+    /** Retry until the async login has bound its server (or fail after ~5s). */
+    private fun httpGetOnceUp(port: Int, pathAndQuery: String): Pair<Int, String> {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (true) {
+            try {
+                return httpGet("http://127.0.0.1:$port$pathAndQuery")
+            } catch (e: Exception) {
+                if (System.currentTimeMillis() > deadline) throw AssertionError("server never came up", e)
+                Thread.sleep(20)
+            }
+        }
+    }
+
+    @Test
+    fun `server callback wins the race and exchanges the query code and state`() = runBlocking {
+        val port = freePort()
+        val (auth, http) = flow(port = port)
+        val pair = pkce()
+        val interaction = PendingInteraction()
+
+        val loginJob = async { auth.login(interaction) }
+        // Let the login run on this runBlocking event loop until it parks at
+        // waitForResult with the server bound.
+        delay(100)
+
+        val (status, body) = httpGetOnceUp(port, "/callback?code=server-code&state=${pair.verifier}")
+        assertEquals(200, status)
+        assertTrue(body.contains("Anthropic authentication completed. You can close this window."), body)
+
+        val credential = loginJob.await()
+        assertEquals("access", credential.access)
+        val sent = Json.parseToJsonElement(http.requests.single().body.decodeToString()).jsonObject
+        assertEquals("server-code", sent["code"]!!.jsonPrimitive.content)
+        assertEquals(pair.verifier, sent["state"]!!.jsonPrimitive.content)
+        assertEquals(pair.verifier, sent["code_verifier"]!!.jsonPrimitive.content)
+        // The suspended manual prompt was cancelled with the server's win.
+        assertTrue(interaction.answer.isActive)
+        assertEquals(
+            "Exchanging authorization code for tokens...",
+            interaction.events.filterIsInstance<AuthEvent.Progress>().single().message,
+        )
+    }
+
+    @Test
+    fun `manual answer wins the race when no callback arrives`() = runBlocking {
+        val (auth, http) = flow()
+        val pair = pkce()
+        val interaction = PendingInteraction()
+
+        val loginJob = launch { auth.login(interaction) }
+        // Give the login time to reach the race, then answer manually.
+        delay(200)
+        interaction.answer.complete("manual-code#${pair.verifier}")
+        loginJob.join()
+
+        val sent = Json.parseToJsonElement(http.requests.single().body.decodeToString()).jsonObject
+        assertEquals("manual-code", sent["code"]!!.jsonPrimitive.content)
+    }
+
+    private suspend fun CoroutineScope.driveCallback(
+        port: Int,
+        pathAndQuery: String,
+    ): Pair<Int, String> {
+        val (auth, http) = flow(port = port)
+        val interaction = PendingInteraction()
+        val job = launch { auth.login(interaction) }
+        delay(100)
+        val response = httpGetOnceUp(port, pathAndQuery)
+        job.cancel()
+        job.join()
+        assertTrue(http.requests.isEmpty(), "no exchange may happen for a rejected callback")
+        return response
+    }
+
+    @Test
+    fun `wrong callback path gets a 404 route-not-found page`() = runBlocking {
+        val (status, body) = driveCallback(freePort(), "/other?code=server-code&state=x")
+        assertEquals(404, status)
+        assertTrue(body.contains("Callback route not found."), body)
+    }
+
+    @Test
+    fun `error query param gets a 400 page echoing the error`() = runBlocking {
+        val (status, body) = driveCallback(freePort(), "/callback?error=access_denied")
+        assertEquals(400, status)
+        assertTrue(body.contains("Anthropic authentication did not complete."), body)
+        assertTrue(body.contains("Error: access_denied"), body)
+    }
+
+    @Test
+    fun `missing code or state gets a 400 page`() = runBlocking {
+        val pair = pkce()
+        for (query in listOf("/callback?code=server-code", "/callback?state=${pair.verifier}")) {
+            val (status, body) = driveCallback(freePort(), query)
+            assertEquals(400, status, query)
+            assertTrue(body.contains("Missing code or state parameter."), query)
+        }
+    }
+
+    @Test
+    fun `state mismatch gets a 400 page and no settle`() = runBlocking {
+        val (status, body) = driveCallback(freePort(), "/callback?code=server-code&state=other")
+        assertEquals(400, status)
+        assertTrue(body.contains("State mismatch."), body)
+    }
+
+    @Test
+    fun `bind failure fails the login like pi's rejecting error handler`() {
+        ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { blocker ->
+            val port = blocker.localPort
+            val (auth, http) = flow(port = port)
+            val error = assertFailsWith<IllegalStateException> {
+                runBlocking { auth.login(RecordingInteraction("the-code")) }
+            }
+            assertTrue(error.message!!.contains("callback server"), error.message)
+            assertTrue(error.message!!.contains("127.0.0.1:$port"), error.message)
+            assertTrue(http.requests.isEmpty())
         }
     }
 }
