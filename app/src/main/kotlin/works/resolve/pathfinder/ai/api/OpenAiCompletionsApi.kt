@@ -14,6 +14,7 @@ import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
+import works.resolve.pathfinder.ai.core.toModelThinkingLevel
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.calculateCost
@@ -26,6 +27,10 @@ import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.int
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.resolveCloudflareBaseUrl
@@ -33,10 +38,8 @@ import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -69,7 +72,7 @@ class OpenAiCompletionsApi(
         options: SimpleStreamOptions,
     ): Flow<AssistantMessageEvent> {
         val clamped = options.reasoning?.let {
-            works.resolve.pathfinder.ai.core.clampThinkingLevel(model, ModelThinkingLevel.valueOf(it.name))
+            works.resolve.pathfinder.ai.core.clampThinkingLevel(model, it.toModelThinkingLevel())
         }
         val effort = if (clamped == ModelThinkingLevel.OFF) null else clamped
         val maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
@@ -87,9 +90,6 @@ class OpenAiCompletionsApi(
         )
     }
 
-    /** Internal control-flow signal: stop consuming the body after `[DONE]`. */
-    private class DoneSentinel : RuntimeException()
-
     fun stream(
         model: Model,
         context: Context,
@@ -104,7 +104,7 @@ class OpenAiCompletionsApi(
             val hasAuthHeader = hasHeader(options.headers, "authorization") ||
                 hasHeader(options.headers, "cf-aig-authorization")
             val apiKey = options.apiKey
-                ?: if (hasAuthHeader) null else throw IllegalStateException(
+                ?: if (hasAuthHeader) null else throw ProviderAuthException(
                     "No API key for provider: ${model.provider}",
                 )
 
@@ -223,7 +223,7 @@ class OpenAiCompletionsApi(
             return null
         }
         val chunk = try {
-            json.parseToJsonElement(event.data)
+            lenientJson.parseToJsonElement(event.data)
         } catch (error: Exception) {
             throw ProviderStreamException(
                 "Malformed SSE JSON payload: ${error.message ?: error::class.simpleName}",
@@ -238,10 +238,10 @@ class OpenAiCompletionsApi(
             throw ProviderStreamException(formatJsonError(error))
         }
 
-        (chunk["id"] as? JsonPrimitive)?.stringOrNull()
+        (chunk["id"] as? JsonPrimitive)?.strOrNull()
             ?.takeIf { it.isNotEmpty() && state.responseId == null }
             ?.let { state.responseId = it }
-        (chunk["model"] as? JsonPrimitive)?.stringOrNull()
+        (chunk["model"] as? JsonPrimitive)?.strOrNull()
             ?.takeIf { it.isNotEmpty() && it != model.id && state.responseModel == null }
             ?.let { state.responseModel = it }
 
@@ -255,7 +255,7 @@ class OpenAiCompletionsApi(
             (choice["usage"] as? JsonObject)?.let { state.usage = parseChunkUsage(it, model) }
         }
 
-        (choice["finish_reason"] as? JsonPrimitive)?.stringOrNull()?.let { raw ->
+        (choice["finish_reason"] as? JsonPrimitive)?.strOrNull()?.let { raw ->
             state.rawStopReason = raw
             val (stopReason, errorMessage) = mapStopReason(raw)
             state.stopReason = stopReason
@@ -266,7 +266,7 @@ class OpenAiCompletionsApi(
         val delta = choice["delta"] as? JsonObject ?: return emptyList()
 
         val events = mutableListOf<AssistantMessageEvent>()
-        delta["content"].stringOrNull()?.takeIf { it.isNotEmpty() }?.let { events += state.appendText(it) }
+        delta["content"].strOrNull()?.takeIf { it.isNotEmpty() }?.let { events += state.appendText(it) }
 
         // Reasoning arrives in reasoning_content (llama.cpp-style), reasoning,
         // or reasoning_text; use the first non-empty field to avoid duplication.
@@ -274,7 +274,7 @@ class OpenAiCompletionsApi(
         // "reasoning" under the signature "reasoning_content" — the field it
         // accepts on replay.
         for (field in REASONING_FIELDS) {
-            val value = delta[field].stringOrNull()
+            val value = delta[field].strOrNull()
             if (!value.isNullOrEmpty()) {
                 val thinkingSignature =
                     if (model.provider == "opencode-go" && field == "reasoning") "reasoning_content" else field
@@ -299,16 +299,16 @@ class OpenAiCompletionsApi(
     }
 
     private fun parseChunkUsage(raw: JsonObject, model: Model): Usage {
-        val promptTokens = raw.intOrZero("prompt_tokens")
+        val promptTokens = raw.int("prompt_tokens") ?: 0
         val details = raw.obj("prompt_tokens_details")
         // Nullish fallback: an explicit 0 stays 0; an absent field falls through.
-        val cacheReadTokens = details?.intOrNull("cached_tokens")
-            ?: raw.intOrNull("prompt_cache_hit_tokens")
-            ?: raw.intOrNull("cached_tokens")
+        val cacheReadTokens = details?.int("cached_tokens")
+            ?: raw.int("prompt_cache_hit_tokens")
+            ?: raw.int("cached_tokens")
             ?: 0
-        val cacheWriteTokens = details?.intOrNull("cache_write_tokens") ?: 0
-        val outputTokens = raw.intOrZero("completion_tokens")
-        val reasoningTokens = raw.obj("completion_tokens_details")?.intOrNull("reasoning_tokens") ?: 0
+        val cacheWriteTokens = details?.int("cache_write_tokens") ?: 0
+        val outputTokens = raw.int("completion_tokens") ?: 0
+        val reasoningTokens = raw.obj("completion_tokens_details")?.int("reasoning_tokens") ?: 0
 
         // Follow documented semantics: cached_tokens counts cache-read hits;
         // do not subtract writes from it.
@@ -356,9 +356,9 @@ class OpenAiCompletionsApi(
     }
 
     private fun formatJsonError(error: JsonObject): String {
-        val message = error["message"].stringOrNull()
-        val type = error["type"].stringOrNull()
-        val code = error["code"].stringOrNull()
+        val message = error["message"].strOrNull()
+        val type = error["type"].strOrNull()
+        val code = error["code"].strOrNull()
         return listOfNotNull(
             type,
             message ?: error.toString().take(500).ifEmpty { null },
@@ -369,21 +369,17 @@ class OpenAiCompletionsApi(
     /** pi openai-completions.ts:709: `error.error.metadata.raw` on the SDK error. */
     private fun openRouterRawMetadata(body: String): String? {
         val parsed = try {
-            json.parseToJsonElement(body)
+            lenientJson.parseToJsonElement(body)
         } catch (_: Exception) {
             return null
         }
-        return (parsed as? JsonObject)?.obj("error")?.obj("metadata")?.get("raw").stringOrNull()
+        return (parsed as? JsonObject)?.obj("error")?.obj("metadata")?.get("raw").strOrNull()
     }
 
     private companion object {
         const val DONE = "[DONE]"
-        val json = Json { ignoreUnknownKeys = true }
     }
 }
-
-private fun kotlinx.serialization.json.JsonElement?.stringOrNull(): String? =
-    (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
 
 /**
  * Session-affinity headers, pi's openai-completions createClient
@@ -406,14 +402,6 @@ private fun sessionAffinityHeaders(model: Model, cacheSessionId: String?): Map<S
         }
     }
 }
-
-private fun JsonObject.intOrZero(key: String): Int =
-    intOrNull(key) ?: 0
-
-private fun JsonObject.intOrNull(key: String): Int? =
-    (this[key] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.longOrNull?.toInt()
-
-private fun JsonObject.obj(key: String): JsonObject? = this[key] as? JsonObject
 
 private suspend fun kotlinx.coroutines.flow.FlowCollector<AssistantMessageEvent>.emitAll(
     events: List<AssistantMessageEvent>,
@@ -533,9 +521,9 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     fun appendToolCallDelta(delta: JsonObject): List<AssistantMessageEvent> {
         val events = mutableListOf<AssistantMessageEvent>()
         val streamIndex = (delta["index"] as? JsonPrimitive)?.longOrNull?.toInt()
-        val id = delta["id"].stringOrNull()
+        val id = delta["id"].strOrNull()
         val function = delta["function"] as? JsonObject
-        val name = function?.get("name").stringOrNull()
+        val name = function?.get("name").strOrNull()
 
         var blockIndex = streamIndex?.let { toolByIndex[it] }
         if (blockIndex == null && id != null && id.isNotEmpty()) blockIndex = toolById[id]
@@ -550,7 +538,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         val accumulator = (blocks[blockIndex] as Block.Tool).accumulator
         if (id != null && id.isNotEmpty() && accumulator.id.isEmpty()) accumulator.id = id
         if (!name.isNullOrEmpty() && accumulator.name.isEmpty()) accumulator.name = name
-        val argDelta = function?.get("arguments").stringOrNull() ?: ""
+        val argDelta = function?.get("arguments").strOrNull() ?: ""
         accumulator.arguments.append(argDelta)
 
         events.add(AssistantMessageEvent.ToolCallDelta(blockIndex, argDelta, snapshot()))
