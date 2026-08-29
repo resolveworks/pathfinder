@@ -986,7 +986,7 @@ class OpenAiResponsesSharedTest {
             "unused",
             OpenAiResponsesShared.getClientApiKey("p", null, mapOf("authorization" to "Bearer x")),
         )
-        assertFailsWith<IllegalStateException> {
+        assertFailsWith<ProviderAuthException> {
             OpenAiResponsesShared.getClientApiKey("p", null, emptyMap())
         }
     }
@@ -1099,7 +1099,7 @@ class OpenAiResponsesSharedTest {
 
     @Test
     fun `grammar tools without a supported variant are rejected`() {
-        val failure = assertFailsWith<Error> {
+        val failure = assertFailsWith<ConstrainedSamplingError> {
             OpenAiResponsesShared.convertResponsesTools(
                 listOf(sampleTool(ConstrainedSamplingConfig.Grammar(emptyMap()))),
                 OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsOpenAIGrammarTools = true),
@@ -1130,7 +1130,7 @@ class OpenAiResponsesSharedTest {
 
     @Test
     fun `strict require rejects when strict mode is unsupported`() {
-        val failure = assertFailsWith<Error> {
+        val failure = assertFailsWith<ConstrainedSamplingError> {
             OpenAiResponsesShared.convertResponsesTools(
                 listOf(sampleTool(ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE))),
                 OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsStrictMode = false),
@@ -1175,7 +1175,7 @@ class OpenAiResponsesSharedTest {
         val requiring = tool.copy(
             constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
         )
-        val resolveFailure = assertFailsWith<Error> { resolveJsonSchemaStrictSampling(requiring, true) }
+        val resolveFailure = assertFailsWith<ConstrainedSamplingError> { resolveJsonSchemaStrictSampling(requiring, true) }
         assertContains(resolveFailure.message!!, "\$ref schemas are unsupported")
     }
 
@@ -1200,7 +1200,7 @@ class OpenAiResponsesSharedTest {
             grammarToolInputProperties = mapOf("sample_tool" to "payload"),
         )
         for (invalidArguments in listOf("{}", """{"payload":42}""")) {
-            val failure = assertFailsWith<Error> {
+            val failure = assertFailsWith<ConstrainedSamplingError> {
                 OpenAiResponsesShared.convertResponsesMessages(
                     model(id = "gpt-test"),
                     grammarContext(invalidArguments),

@@ -32,7 +32,10 @@ import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.redactedSecret
 
 /**
  * Streaming adapters for the OpenAI Responses API family, ported from pi's
@@ -88,15 +91,26 @@ data class OpenAiResponsesOptions(
      */
     val samplingParams: Map<String, JsonElement>? = null,
 ) {
-    override fun toString(): String =
-        "OpenAiResponsesOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
-            ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
-            ", reasoningEffort=$reasoningEffort, reasoningSummary=$reasoningSummary" +
-            ", serviceTier=$serviceTier, toolChoice=$toolChoice, cacheRetention=$cacheRetention" +
-            ", timeoutMs=$timeoutMs, maxRetries=$maxRetries, maxRetryDelayMs=$maxRetryDelayMs" +
-            ", env=${env.keys}, headers=${headers.keys}" +
-            ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
-            ", samplingParams=${samplingParams?.keys})"
+    override fun toString(): String = optionsToString(
+        "OpenAiResponsesOptions",
+        "apiKey" to redactedSecret(apiKey),
+        "sessionId" to sessionId,
+        "temperature" to temperature,
+        "maxTokens" to maxTokens,
+        "reasoningEffort" to reasoningEffort,
+        "reasoningSummary" to reasoningSummary,
+        "serviceTier" to serviceTier,
+        "toolChoice" to toolChoice,
+        "cacheRetention" to cacheRetention,
+        "timeoutMs" to timeoutMs,
+        "maxRetries" to maxRetries,
+        "maxRetryDelayMs" to maxRetryDelayMs,
+        "env" to env.keys,
+        "headers" to headers.keys,
+        "onPayload" to (onPayload != null),
+        "onResponse" to (onResponse != null),
+        "samplingParams" to samplingParams?.keys,
+    )
 }
 
 /**
@@ -448,17 +462,28 @@ data class AzureOpenAiResponsesOptions(
      */
     val samplingParams: Map<String, JsonElement>? = null,
 ) {
-    override fun toString(): String =
-        "AzureOpenAiResponsesOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
-            ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
-            ", reasoningEffort=$reasoningEffort, reasoningSummary=$reasoningSummary" +
-            ", toolChoice=$toolChoice, azureApiVersion=$azureApiVersion" +
-            ", azureResourceName=$azureResourceName, azureBaseUrl=$azureBaseUrl" +
-            ", azureDeploymentName=$azureDeploymentName, timeoutMs=$timeoutMs" +
-            ", maxRetries=$maxRetries, maxRetryDelayMs=$maxRetryDelayMs" +
-            ", env=${env.keys}, headers=${headers.keys}" +
-            ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
-            ", samplingParams=${samplingParams?.keys})"
+    override fun toString(): String = optionsToString(
+        "AzureOpenAiResponsesOptions",
+        "apiKey" to redactedSecret(apiKey),
+        "sessionId" to sessionId,
+        "temperature" to temperature,
+        "maxTokens" to maxTokens,
+        "reasoningEffort" to reasoningEffort,
+        "reasoningSummary" to reasoningSummary,
+        "toolChoice" to toolChoice,
+        "azureApiVersion" to azureApiVersion,
+        "azureResourceName" to azureResourceName,
+        "azureBaseUrl" to azureBaseUrl,
+        "azureDeploymentName" to azureDeploymentName,
+        "timeoutMs" to timeoutMs,
+        "maxRetries" to maxRetries,
+        "maxRetryDelayMs" to maxRetryDelayMs,
+        "env" to env.keys,
+        "headers" to headers.keys,
+        "onPayload" to (onPayload != null),
+        "onResponse" to (onResponse != null),
+        "samplingParams" to samplingParams?.keys,
+    )
 }
 
 private const val DEFAULT_AZURE_API_VERSION = "v1"
@@ -564,7 +589,7 @@ class AzureOpenAiResponsesApi(
         options: SimpleStreamOptions,
     ): Flow<AssistantMessageEvent> {
         val apiKey = options.apiKey
-            ?: throw IllegalStateException("No API key for provider: ${model.provider}")
+            ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
         val clamped = options.reasoning?.let {
             works.resolve.pathfinder.ai.core.clampThinkingLevel(model, toModelThinkingLevel(it))
         }
@@ -614,7 +639,7 @@ class AzureOpenAiResponsesApi(
         )
         try {
             val apiKey = options.apiKey
-                ?: throw IllegalStateException("No API key for provider: ${model.provider}")
+                ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
             val config = resolveAzureConfig(model, options)
             val messages = OpenAiResponsesShared.convertResponsesMessages(
                 model,
@@ -770,7 +795,8 @@ internal fun mapResponsesToolChoice(choice: ToolChoice): String = when (choice) 
 internal fun toModelThinkingLevel(level: ThinkingLevel): ModelThinkingLevel =
     ModelThinkingLevel.valueOf(level.name)
 
-internal val responsesJson = Json { ignoreUnknownKeys = true }
+/** Canonical JSON instance for the Responses family: the shared [lenientJson]. */
+internal val responsesJson: Json = lenientJson
 
 /**
  * Parses one complete SSE data payload as a Responses stream event and feeds

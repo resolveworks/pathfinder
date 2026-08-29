@@ -443,7 +443,7 @@ class GoogleSharedConvertToolsTest {
         assertTrue(GoogleShared.supportsGoogleStrictToolSampling("gemini-3.1-pro-preview"))
         assertTrue(!GoogleShared.supportsGoogleStrictToolSampling("gemini-2.5-pro"))
         assertEquals("VALIDATED", GoogleShared.resolveGoogleFunctionCallingMode(listOf(strictTool), null, true))
-        val failure = assertFailsWith<Error> {
+        val failure = assertFailsWith<ConstrainedSamplingError> {
             GoogleShared.resolveGoogleFunctionCallingMode(listOf(strictTool), null, false)
         }
         assertTrue(
@@ -488,7 +488,7 @@ class GoogleSharedConvertToolsTest {
                 works.resolve.pathfinder.ai.core.StrictJsonSchemaMode.REQUIRE,
             ),
         )
-        val failure = assertFailsWith<Error> {
+        val failure = assertFailsWith<ConstrainedSamplingError> {
             GoogleShared.convertTools(listOf(strictTool), supportsStrictMode = false)
         }
         assertEquals(

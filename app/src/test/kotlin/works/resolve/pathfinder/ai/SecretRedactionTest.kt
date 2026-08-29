@@ -1,10 +1,15 @@
 package works.resolve.pathfinder.ai
 
+import works.resolve.pathfinder.ai.api.AzureOpenAiResponsesOptions
+import works.resolve.pathfinder.ai.api.OpenAiResponsesOptions
 import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StreamOptions
+import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.models.ResolvedAuth
 import works.resolve.pathfinder.ai.transport.TransportRequest
+import kotlinx.serialization.json.JsonPrimitive
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -30,6 +35,92 @@ class SecretRedactionTest {
         val none = StreamOptions(apiKey = null).toString()
         assertFalse(none.contains("redacted"))
         assertTrue(none.contains("apiKey=null"))
+    }
+
+    @Test
+    fun `options toString output is exactly the redacted field list`() {
+        // Byte-identical regression guards for the optionsToString-based
+        // implementations: null apiKey renders "null", secrets render
+        // "<redacted>", maps render as keys only, hooks as booleans.
+        assertEquals(
+            "StreamOptions(apiKey=<redacted>, sessionId=s1, temperature=0.5, maxTokens=null, " +
+                "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000)",
+            StreamOptions(apiKey = secret, sessionId = "s1", temperature = 0.5).toString(),
+        )
+        assertEquals(
+            "StreamOptions(apiKey=null, sessionId=null, temperature=null, maxTokens=null, " +
+                "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000)",
+            StreamOptions().toString(),
+        )
+
+        assertEquals(
+            "SimpleStreamOptions(apiKey=<redacted>, sessionId=s1, temperature=0.7, maxTokens=42, " +
+                "reasoning=MINIMAL, toolChoice=Auto, cacheRetention=null, timeoutMs=null, maxRetries=1, " +
+                "maxRetryDelayMs=60000, env=[PI_ENV_A], headers=[Authorization], " +
+                "onPayload=true, onResponse=false, samplingParams=[top_k], transport=null, " +
+                "websocketConnectTimeoutMs=null)",
+            SimpleStreamOptions(
+                apiKey = secret,
+                sessionId = "s1",
+                temperature = 0.7,
+                maxTokens = 42,
+                reasoning = ThinkingLevel.MINIMAL,
+                toolChoice = works.resolve.pathfinder.ai.core.SimpleToolChoice.Auto,
+                maxRetries = 1,
+                env = mapOf("PI_ENV_A" to secret),
+                headers = mapOf("Authorization" to "Bearer $secret"),
+                onPayload = { _, _ -> null },
+                samplingParams = mapOf("top_k" to JsonPrimitive(1)),
+            ).toString(),
+        )
+        assertEquals(
+            "SimpleStreamOptions(apiKey=null, sessionId=null, temperature=null, maxTokens=null, " +
+                "reasoning=null, toolChoice=null, cacheRetention=null, timeoutMs=null, maxRetries=0, " +
+                "maxRetryDelayMs=60000, env=[], headers=[], onPayload=false, onResponse=false, " +
+                "samplingParams=null, transport=null, websocketConnectTimeoutMs=null)",
+            SimpleStreamOptions().toString(),
+        )
+
+        assertEquals(
+            "OpenAiCompletionsOptions(apiKey=<redacted>, sessionId=null, temperature=null, " +
+                "maxTokens=null, reasoningEffort=null, toolChoice=null, cacheRetention=null, " +
+                "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, env=[PI_ENV_A], " +
+                "headers=[Authorization], onPayload=false, onResponse=true, samplingParams=[top_k])",
+            OpenAiCompletionsOptions(
+                apiKey = secret,
+                env = mapOf("PI_ENV_A" to secret),
+                headers = mapOf("Authorization" to "Bearer $secret"),
+                onResponse = { _, _ -> },
+                samplingParams = mapOf("top_k" to JsonPrimitive(1)),
+            ).toString(),
+        )
+
+        assertEquals(
+            "OpenAiResponsesOptions(apiKey=<redacted>, sessionId=null, temperature=null, " +
+                "maxTokens=null, reasoningEffort=null, reasoningSummary=null, serviceTier=null, " +
+                "toolChoice=null, cacheRetention=null, timeoutMs=null, maxRetries=0, " +
+                "maxRetryDelayMs=60000, env=[PI_ENV_A], headers=[Authorization], " +
+                "onPayload=false, onResponse=false, samplingParams=null)",
+            OpenAiResponsesOptions(
+                apiKey = secret,
+                env = mapOf("PI_ENV_A" to secret),
+                headers = mapOf("Authorization" to "Bearer $secret"),
+            ).toString(),
+        )
+
+        assertEquals(
+            "AzureOpenAiResponsesOptions(apiKey=null, sessionId=null, temperature=null, " +
+                "maxTokens=null, reasoningEffort=null, reasoningSummary=null, toolChoice=null, " +
+                "azureApiVersion=v1, azureResourceName=null, azureBaseUrl=null, " +
+                "azureDeploymentName=null, timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, " +
+                "env=[PI_ENV_A], headers=[Authorization], onPayload=false, onResponse=false, " +
+                "samplingParams=null)",
+            AzureOpenAiResponsesOptions(
+                azureApiVersion = "v1",
+                env = mapOf("PI_ENV_A" to secret),
+                headers = mapOf("Authorization" to "Bearer $secret"),
+            ).toString(),
+        )
     }
 
     @Test

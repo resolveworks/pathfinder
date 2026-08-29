@@ -319,7 +319,7 @@ class OpenAiCompletionsPayloadTest {
             ),
             constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
         )
-        val error = assertFailsWith<Error> {
+        val error = assertFailsWith<ConstrainedSamplingError> {
             body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool)))
         }
         assertEquals(
@@ -337,7 +337,7 @@ class OpenAiCompletionsPayloadTest {
             constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
         )
         val strictless = model.copy(compat = model.compat.copy(supportsStrictMode = false))
-        val error = assertFailsWith<Error> {
+        val error = assertFailsWith<ConstrainedSamplingError> {
             body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool)), model = strictless)
         }
         assertEquals(

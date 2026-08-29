@@ -1,9 +1,7 @@
 package works.resolve.pathfinder.ai.api
 
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -33,8 +31,13 @@ import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.core.calculateCost
 import works.resolve.pathfinder.ai.core.hasHeader
 import works.resolve.pathfinder.ai.core.mergeHeaders
+import works.resolve.pathfinder.ai.utils.int
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
+import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.ai.utils.stringOrNull
 
 /**
  * Shared OpenAI Responses API machinery, ported from pi's
@@ -72,7 +75,6 @@ object OpenAiResponsesShared {
     /** pi's AZURE_TOOL_CALL_PROVIDERS. */
     val AZURE_TOOL_CALL_PROVIDERS = BASE_TOOL_CALL_PROVIDERS + "azure-openai-responses"
 
-    private val json = Json { ignoreUnknownKeys = true }
 
     // =========================================================================
     // Utilities (sanitizeSurrogates / shortHash live in ai/utils, mirroring pi's
@@ -100,13 +102,13 @@ object OpenAiResponsesShared {
         if (signature == null) return null
         if (signature.startsWith("{")) {
             try {
-                val parsed = json.parseToJsonElement(signature) as? JsonObject
+                val parsed = lenientJson.parseToJsonElement(signature) as? JsonObject
                 if (parsed != null) {
                     // pi requires the numeric JSON `v: 1` (parsed.v === 1).
                     val v = parsed["v"] as? JsonPrimitive
-                    val id = parsed["id"]?.textOrNull()
+                    val id = parsed.string("id")
                     if (v != null && !v.isString && v.content.toIntOrNull() == 1 && id != null) {
-                        val phase = parsed["phase"]?.textOrNull()
+                        val phase = parsed.string("phase")
                             ?.takeIf { it == "commentary" || it == "final_answer" }
                         return id to phase
                     }
@@ -228,7 +230,7 @@ object OpenAiResponsesShared {
                         when (block) {
                             is ThinkingContent -> if (block.thinkingSignature != null) {
                                 // The signature is the serialized reasoning item.
-                                output.add(json.parseToJsonElement(block.thinkingSignature!!) as JsonObject)
+                                output.add(lenientJson.parseToJsonElement(block.thinkingSignature!!) as JsonObject)
                             }
                             is TextContent -> {
                                 val parsedSignature = parseTextSignature(block.textSignature)
@@ -290,7 +292,7 @@ object OpenAiResponsesShared {
                                     // like pi's `{}`/`{payload: 42}` cases: the grammar
                                     // input error below fires.
                                     val arguments = try {
-                                        json.parseToJsonElement(block.arguments) as? JsonObject
+                                        lenientJson.parseToJsonElement(block.arguments) as? JsonObject
                                     } catch (_: Exception) {
                                         null
                                     } ?: JsonObject(emptyMap())
@@ -621,19 +623,19 @@ object OpenAiResponsesShared {
         )
 
         /** Processes one complete stream event object; returns events to emit. */
-        fun onEvent(event: JsonObject): List<AssistantMessageEvent> = when (event["type"].textOrNull()) {
+        fun onEvent(event: JsonObject): List<AssistantMessageEvent> = when (event.string("type")) {
             "response.created" -> {
-                event.respObj("response")?.get("id").textOrNull()?.let { responseId = it }
+                event.obj("response").string("id")?.let { responseId = it }
                 emptyList()
             }
             "response.output_item.added" -> {
-                val outputIndex = event.respIntOrNull("output_index") ?: return emptyList()
-                val item = event.respObj("item") ?: return emptyList()
+                val outputIndex = event.int("output_index") ?: return emptyList()
+                val item = event.obj("item") ?: return emptyList()
                 createSlot(outputIndex, item)
             }
             "response.reasoning_summary_text.delta", "response.reasoning_text.delta" -> {
                 val slot = getSlot<Block.Thinking>(event) ?: return emptyList()
-                val delta = event["delta"].textOrNull() ?: return emptyList()
+                val delta = event.string("delta") ?: return emptyList()
                 slot.thinking += delta
                 listOf(AssistantMessageEvent.ThinkingDelta(slot.index, delta, partial()))
             }
@@ -644,13 +646,13 @@ object OpenAiResponsesShared {
             }
             "response.output_text.delta", "response.refusal.delta" -> {
                 val slot = getSlot<Block.Text>(event) ?: return emptyList()
-                val delta = event["delta"].textOrNull() ?: return emptyList()
+                val delta = event.string("delta") ?: return emptyList()
                 slot.text += delta
                 listOf(AssistantMessageEvent.TextDelta(slot.index, delta, partial()))
             }
             "response.function_call_arguments.delta" -> {
                 val slot = getSlot<Block.Tool>(event) ?: return emptyList()
-                val delta = event["delta"].textOrNull() ?: return emptyList()
+                val delta = event.string("delta") ?: return emptyList()
                 slot.arguments.append(delta)
                 listOf(AssistantMessageEvent.ToolCallDelta(slot.index, delta, partial()))
             }
@@ -659,7 +661,7 @@ object OpenAiResponsesShared {
                 // arguments replace the accumulated buffer and any tail beyond the
                 // streamed prefix is emitted as one final delta.
                 val slot = getSlot<Block.Tool>(event) ?: return emptyList()
-                val arguments = event["arguments"].textOrNull() ?: return emptyList()
+                val arguments = event.string("arguments") ?: return emptyList()
                 val previous = slot.arguments.toString()
                 slot.arguments = StringBuilder(arguments)
                 if (!arguments.startsWith(previous)) return emptyList()
@@ -670,7 +672,7 @@ object OpenAiResponsesShared {
             "response.custom_tool_call_input.delta" -> {
                 val slot = getSlot<Block.Tool>(event) ?: return emptyList()
                 if (slot.customInput == null) return emptyList()
-                val delta = event["delta"].textOrNull() ?: return emptyList()
+                val delta = event.string("delta") ?: return emptyList()
                 val out = appendCustomToolCallInput(slot, slot.customInput!!.currentInput + delta, false)
                     ?: return emptyList()
                 listOf(AssistantMessageEvent.ToolCallDelta(slot.index, out, partial()))
@@ -678,28 +680,28 @@ object OpenAiResponsesShared {
             "response.custom_tool_call_input.done" -> {
                 val slot = getSlot<Block.Tool>(event) ?: return emptyList()
                 if (slot.customInput == null) return emptyList()
-                val input = event["input"].textOrNull() ?: return emptyList()
+                val input = event.string("input") ?: return emptyList()
                 val out = appendCustomToolCallInput(slot, input, true) ?: return emptyList()
                 listOf(AssistantMessageEvent.ToolCallDelta(slot.index, out, partial()))
             }
             "response.output_item.done" -> onOutputItemDone(event)
             "response.completed", "response.incomplete" -> {
-                finalizeResponse(event.respObj("response"))
+                finalizeResponse(event.obj("response"))
                 emptyList()
             }
             "error" -> throw ProviderStreamException(
-                "Error Code ${event["code"].textOrNull()}: ${event["message"].textOrNull()}"
+                "Error Code ${event.string("code")}: ${event.string("message")}"
                     .ifBlank { "Unknown error" },
             )
             "response.failed" -> {
                 sawTerminalResponseEvent = true
-                rawStopReason = event.respObj("response")?.get("status").textOrNull()
-                val error = event.respObj("response")?.respObj("error")
-                val details = event.respObj("response")?.respObj("incomplete_details")
-                    ?.get("reason").textOrNull()
+                rawStopReason = event.obj("response").string("status")
+                val error = event.obj("response")?.obj("error")
+                val details = event.obj("response")?.obj("incomplete_details")
+                    .string("reason")
                 val message = when {
-                    error != null -> "${error["code"].textOrNull() ?: "unknown"}: " +
-                        (error["message"].textOrNull() ?: "no message")
+                    error != null -> "${error.string("code") ?: "unknown"}: " +
+                        (error.string("message") ?: "no message")
                     details != null -> "incomplete: $details"
                     else -> "Unknown error (no error details in response)"
                 }
@@ -709,31 +711,31 @@ object OpenAiResponsesShared {
         }
 
         private inline fun <reified T : Block> getSlot(event: JsonObject): T? =
-            slots[event.respIntOrNull("output_index") ?: return null] as? T
+            slots[event.int("output_index") ?: return null] as? T
 
         private fun createSlot(outputIndex: Int, item: JsonObject): List<AssistantMessageEvent> {
-            val block: Block = when (item["type"].textOrNull()) {
+            val block: Block = when (item.string("type")) {
                 "reasoning" -> Block.Thinking(blocks.size)
                 "message" -> {
                     applyMessagePhaseStopReason(item)
                     Block.Text(blocks.size)
                 }
                 "function_call" -> Block.Tool(blocks.size).also { tool ->
-                    tool.id = "${item["call_id"].textOrNull()}|${item["id"].textOrNull()}"
-                    tool.name = item["name"].textOrNull() ?: ""
-                    item["arguments"].textOrNull()?.let { tool.arguments.append(it) }
-                    tool.namespace = item["namespace"].textOrNull()
+                    tool.id = "${item.string("call_id")}|${item.string("id")}"
+                    tool.name = item.string("name") ?: ""
+                    item.string("arguments")?.let { tool.arguments.append(it) }
+                    tool.namespace = item.string("namespace")
                 }
                 "custom_tool_call" -> {
                     // pi: inputProperty comes from grammarToolInputProperties,
                     // defaulting to "input".
-                    val name = item["name"].textOrNull() ?: ""
+                    val name = item.string("name") ?: ""
                     val inputProperty = options.grammarToolInputProperties[name] ?: "input"
-                    val input = item["input"].textOrNull() ?: ""
+                    val input = item.string("input") ?: ""
                     Block.Tool(blocks.size).also { tool ->
-                        tool.id = "${item["call_id"].textOrNull()}|${item["id"].textOrNull()}"
+                        tool.id = "${item.string("call_id")}|${item.string("id")}"
                         tool.name = name
-                        tool.namespace = item["namespace"].textOrNull()
+                        tool.namespace = item.string("namespace")
                         tool.customInput = CustomToolInput(inputProperty).also { it.currentInput = input }
                     }
                 }
@@ -750,14 +752,14 @@ object OpenAiResponsesShared {
         }
 
         private fun applyMessagePhaseStopReason(item: JsonObject) {
-            if (item["type"].textOrNull() == "message" && item["phase"].textOrNull() == "final_answer") {
+            if (item.string("type") == "message" && item.string("phase") == "final_answer") {
                 stopReason = StopReason.STOP
             }
         }
 
         private fun onOutputItemDone(event: JsonObject): List<AssistantMessageEvent> {
-            val item = event.respObj("item") ?: return emptyList()
-            val outputIndex = event.respIntOrNull("output_index") ?: return emptyList()
+            val item = event.obj("item") ?: return emptyList()
+            val outputIndex = event.int("output_index") ?: return emptyList()
             applyMessagePhaseStopReason(item)
             // pi's getOrCreateSlot: Azure and others may send output_item.done
             // without a preceding output_item.added for the same output_index.
@@ -767,54 +769,54 @@ object OpenAiResponsesShared {
                 slots[outputIndex]
             } ?: return emptyList()
             return when {
-                item["type"].textOrNull() == "reasoning" && slot is Block.Thinking -> {
+                item.string("type") == "reasoning" && slot is Block.Thinking -> {
                     val summaryText = (item["summary"] as? JsonArray)
-                        ?.mapNotNull { (it as? JsonObject)?.get("text").textOrNull() }
+                        ?.mapNotNull { (it as? JsonObject).string("text") }
                         ?.joinToString("\n\n").orEmpty()
                     val contentText = (item["content"] as? JsonArray)
-                        ?.mapNotNull { c -> (c as? JsonObject)?.get("text").textOrNull() }
+                        ?.mapNotNull { c -> (c as? JsonObject).string("text") }
                         ?.joinToString("\n\n").orEmpty()
                     slot.thinking = summaryText.ifEmpty { contentText.ifEmpty { slot.thinking } }
                     slot.thinkingSignature = item.toString()
-                    item["id"].textOrNull()?.let { reasoningBlocksById[it] = slot }
+                    item.string("id")?.let { reasoningBlocksById[it] = slot }
                     slots.remove(outputIndex)
                     return events + AssistantMessageEvent.ThinkingEnd(slot.index, slot.thinking, partial())
                 }
-                item["type"].textOrNull() == "message" && slot is Block.Text -> {
+                item.string("type") == "message" && slot is Block.Text -> {
                     slot.text = (item["content"] as? JsonArray)
                         ?.mapNotNull { c ->
                             val obj = c as? JsonObject ?: return@mapNotNull null
-                            obj["text"].textOrNull() ?: obj["refusal"].textOrNull()
+                            obj.string("text") ?: obj.string("refusal")
                         }
                         ?.joinToString("").orEmpty()
                     slot.textSignature = encodeTextSignatureV1(
-                        item["id"].textOrNull(),
-                        item["phase"].textOrNull(),
+                        item.string("id"),
+                        item.string("phase"),
                     )
                     slots.remove(outputIndex)
                     return events + AssistantMessageEvent.TextEnd(slot.index, slot.text, partial())
                 }
-                item["type"].textOrNull() == "function_call" && slot is Block.Tool &&
+                item.string("type") == "function_call" && slot is Block.Tool &&
                     slot.customInput == null -> {
                     // Finalize with the item's complete arguments; the streamed
                     // buffer is only a scratch replay of partial parsing.
-                    val arguments = item["arguments"].textOrNull()
+                    val arguments = item.string("arguments")
                     if (!arguments.isNullOrBlank()) slot.arguments = StringBuilder(arguments)
-                    item["namespace"].textOrNull()?.let { slot.namespace = it }
+                    item.string("namespace")?.let { slot.namespace = it }
                     slots.remove(outputIndex)
                     return events + listOf(
                         AssistantMessageEvent.ToolCallEnd(slot.index, render(slot) as ToolCall, partial()),
                     )
                 }
-                item["type"].textOrNull() == "custom_tool_call" && slot is Block.Tool &&
+                item.string("type") == "custom_tool_call" && slot is Block.Tool &&
                     slot.customInput != null -> {
                     // pi: close the buffer with the done item's input (falling back
                     // to the accumulated input), then finalize in-place.
-                    val input = item["input"].textOrNull() ?: slot.customInput!!.currentInput
+                    val input = item.string("input") ?: slot.customInput!!.currentInput
                     appendCustomToolCallInput(slot, input, true)?.let {
                         events += AssistantMessageEvent.ToolCallDelta(slot.index, it, partial())
                     }
-                    item["namespace"].textOrNull()?.let { slot.namespace = it }
+                    item.string("namespace")?.let { slot.namespace = it }
                     slot.customInput = null
                     slots.remove(outputIndex)
                     return events + listOf(
@@ -834,12 +836,12 @@ object OpenAiResponsesShared {
         private fun backfillReasoningSignatures(responseOutput: JsonArray?) {
             for (element in responseOutput ?: return) {
                 val item = element as? JsonObject ?: continue
-                if (item["type"].textOrNull() != "reasoning") continue
-                val encrypted = item["encrypted_content"].textOrNull() ?: continue
-                val block = item["id"].textOrNull()?.let { reasoningBlocksById[it] } ?: continue
+                if (item.string("type") != "reasoning") continue
+                val encrypted = item.string("encrypted_content") ?: continue
+                val block = item.string("id")?.let { reasoningBlocksById[it] } ?: continue
                 val stored = block.thinkingSignature ?: continue
                 val storedItem = try {
-                    json.parseToJsonElement(stored) as? JsonObject
+                    lenientJson.parseToJsonElement(stored) as? JsonObject
                 } catch (_: Exception) {
                     null
                 } ?: continue
@@ -854,35 +856,35 @@ object OpenAiResponsesShared {
         private fun finalizeResponse(response: JsonObject?) {
             sawTerminalResponseEvent = true
             backfillReasoningSignatures(response?.get("output") as? JsonArray)
-            response?.get("id").textOrNull()?.let { responseId = it }
-            response?.respObj("usage")?.let { rawUsage ->
-                val inputDetails = rawUsage.respObj("input_tokens_details")
-                val cachedTokens = inputDetails?.respIntOrNull("cached_tokens") ?: 0
-                val cacheWriteTokens = inputDetails?.respIntOrNull("cache_write_tokens") ?: 0
-                val input = maxOf(0, (rawUsage.respIntOrNull("input_tokens") ?: 0) - cachedTokens - cacheWriteTokens)
+            response.string("id")?.let { responseId = it }
+            response?.obj("usage")?.let { rawUsage ->
+                val inputDetails = rawUsage.obj("input_tokens_details")
+                val cachedTokens = inputDetails?.int("cached_tokens") ?: 0
+                val cacheWriteTokens = inputDetails?.int("cache_write_tokens") ?: 0
+                val input = maxOf(0, (rawUsage.int("input_tokens") ?: 0) - cachedTokens - cacheWriteTokens)
                 // OpenAI includes cached and cache-write tokens in input_tokens.
                 var computed = Usage(
                     input = input,
-                    output = rawUsage.respIntOrNull("output_tokens") ?: 0,
+                    output = rawUsage.int("output_tokens") ?: 0,
                     cacheRead = cachedTokens,
                     cacheWrite = cacheWriteTokens,
-                    reasoning = rawUsage.respObj("output_tokens_details")?.respIntOrNull("reasoning_tokens") ?: 0,
-                    totalTokens = rawUsage.respIntOrNull("total_tokens") ?: 0,
+                    reasoning = rawUsage.obj("output_tokens_details")?.int("reasoning_tokens") ?: 0,
+                    totalTokens = rawUsage.int("total_tokens") ?: 0,
                 )
                 computed = computed.copy(cost = calculateCost(model, computed))
                 options.applyServiceTierPricing?.let { apply ->
                     val serviceTier = options.resolveServiceTier?.invoke(
-                        response["service_tier"].textOrNull(),
+                        response.string("service_tier"),
                         options.serviceTier,
-                    ) ?: (response["service_tier"].textOrNull() ?: options.serviceTier)
+                    ) ?: (response.string("service_tier") ?: options.serviceTier)
                     computed = apply(computed, serviceTier)
                 }
                 usage = computed
             }
             // Map status to stop reason; incomplete keeps the provider's specific
             // reason so truncation and content filtering stay distinct.
-            val status = response?.get("status").textOrNull()
-            val incompleteReason = (response?.get("incomplete_details") as? JsonObject)?.get("reason").textOrNull()
+            val status = response.string("status")
+            val incompleteReason = (response?.get("incomplete_details") as? JsonObject).string("reason")
             rawStopReason = if (incompleteReason != null) "$status.$incompleteReason" else status
             val mapped = mapStopReason(status, incompleteReason)
             stopReason = mapped.first
@@ -996,7 +998,7 @@ object OpenAiResponsesShared {
     fun getClientApiKey(provider: String, apiKey: String?, headers: Map<String, String?>): String {
         if (apiKey != null) return apiKey
         if (hasHeader(headers, "authorization") || hasHeader(headers, "cf-aig-authorization")) return "unused"
-        throw IllegalStateException("No API key for provider: $provider")
+        throw ProviderAuthException("No API key for provider: $provider")
     }
 
     /** Session-affinity headers, pi's openai-responses createClient. */
@@ -1040,12 +1042,21 @@ object OpenAiResponsesShared {
         } ?: defaultEffort
 }
 
-internal fun JsonElement?.textOrNull(): String? =
-    (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull()
+// --- Shims pending Codex call-site migration; delete after ---
+// OpenAiCodexResponsesApi.kt still calls these; each is a one-line delegation
+// to the shared JsonDom surface (ai/utils/JsonDom.kt). Within this file and
+// OpenAiResponsesApi.kt, call the shared accessors directly.
 
-internal fun JsonPrimitive?.contentOrNull(): String? = if (this != null && isString) content else null
+/** Strict string content of a provider stream field (JsonDom [stringOrNull]). */
+internal fun JsonElement?.textOrNull(): String? = this.stringOrNull()
 
-internal fun JsonObject.respObj(key: String): JsonObject? = this[key] as? JsonObject
+/** Nested object at [key] (JsonDom [obj]). */
+internal fun JsonObject.respObj(key: String): JsonObject? = this.obj(key)
 
-internal fun JsonObject.respIntOrNull(key: String): Int? =
-    (this[key] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content?.toDoubleOrNull()?.toInt()
+/**
+ * Int at [key] (JsonDom [int]). Tightening versus the pre-migration
+ * implementation, which used `toDoubleOrNull().toInt()`: standard kotlinx
+ * `intOrNull` semantics now apply — quoted numerals are still accepted, but
+ * float values (e.g. `3.0`, `3.7`) yield null instead of truncating.
+ */
+internal fun JsonObject.respIntOrNull(key: String): Int? = this.int(key)
