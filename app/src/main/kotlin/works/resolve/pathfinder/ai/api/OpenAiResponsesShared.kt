@@ -1041,22 +1041,3 @@ object OpenAiResponsesShared {
                 ?: level.name.lowercase()
         } ?: defaultEffort
 }
-
-// --- Shims pending Codex call-site migration; delete after ---
-// OpenAiCodexResponsesApi.kt still calls these; each is a one-line delegation
-// to the shared JsonDom surface (ai/utils/JsonDom.kt). Within this file and
-// OpenAiResponsesApi.kt, call the shared accessors directly.
-
-/** Strict string content of a provider stream field (JsonDom [stringOrNull]). */
-internal fun JsonElement?.textOrNull(): String? = this.stringOrNull()
-
-/** Nested object at [key] (JsonDom [obj]). */
-internal fun JsonObject.respObj(key: String): JsonObject? = this.obj(key)
-
-/**
- * Int at [key] (JsonDom [int]). Tightening versus the pre-migration
- * implementation, which used `toDoubleOrNull().toInt()`: standard kotlinx
- * `intOrNull` semantics now apply — quoted numerals are still accepted, but
- * float values (e.g. `3.0`, `3.7`) yield null instead of truncating.
- */
-internal fun JsonObject.respIntOrNull(key: String): Int? = this.int(key)
