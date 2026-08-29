@@ -41,7 +41,8 @@ private fun hasValidCommonReasoningDetailFields(detail: JsonObject): Boolean {
     if (format != null && format !is JsonNull && format.stringOrNull() == null) return false
     val index = detail["index"]
     if (index != null && index !is JsonNull &&
-        !((index as? JsonPrimitive)?.let { it.longOrNull != null || it.doubleOrNull != null } == true)
+        // pi guards with `typeof index === "number"`; numeric primitives only.
+        (index as? JsonPrimitive)?.let { it.longOrNull != null || it.doubleOrNull != null } != true
     ) {
         return false
     }

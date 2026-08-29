@@ -17,6 +17,7 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import kotlin.test.Test
@@ -47,7 +48,7 @@ class OpenAiCompletionsStreamTest {
     private fun api(transport: FakeTransport) = OpenAiCompletionsApi(
         transport,
         works.resolve.pathfinder.ai.utils.ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),
-        nowMs = { 1_770_000_000_000L },
+        clock = FakeClock(1_770_000_000_000L),
     )
 
     @Test
