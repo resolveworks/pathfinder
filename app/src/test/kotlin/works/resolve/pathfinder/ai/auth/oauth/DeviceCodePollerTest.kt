@@ -3,7 +3,10 @@ package works.resolve.pathfinder.ai.auth.oauth
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.currentTime
+import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,11 +18,16 @@ import kotlin.test.assertTrue
  * `packages/ai/src/auth/oauth/device-code.ts`.
  *
  * Time is deterministic: `runTest` virtualizes [kotlinx.coroutines.delay], and
- * the poller's `now` supplier is bound to the test scheduler's virtual clock,
+ * the poller's [Clock] is bound to the test scheduler's virtual clock,
  * mirroring how `Date.now()` advances as the upstream sleeps resolve.
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class DeviceCodePollerTest {
+
+    /** Clock bound to the scheduler's virtual time (pi: `Date.now()` as sleeps resolve). */
+    private fun TestScope.virtualClock(): Clock = object : Clock {
+        override fun now(): Instant = Instant.fromEpochMilliseconds(testScheduler.currentTime)
+    }
 
     // --- complete / pending / interval behavior ---
 
@@ -27,7 +35,8 @@ class DeviceCodePollerTest {
     fun `complete on first poll returns value`() = runTest {
         val value = pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(poll = { OAuthDeviceCodePollResult.Complete("token") }),
-        ) { currentTime }
+        clock = virtualClock(),
+        )
         assertEquals("token", value)
     }
 
@@ -44,7 +53,8 @@ class DeviceCodePollerTest {
                     if (calls == 3) OAuthDeviceCodePollResult.Complete("ok") else OAuthDeviceCodePollResult.Pending
                 },
             ),
-        ) { currentTime }
+        clock = virtualClock(),
+        )
         assertEquals(listOf(0L, 5000L, 10000L), times)
     }
 
@@ -62,7 +72,8 @@ class DeviceCodePollerTest {
                     if (calls == 2) OAuthDeviceCodePollResult.Complete("ok") else OAuthDeviceCodePollResult.Pending
                 },
             ),
-        ) { currentTime }
+        clock = virtualClock(),
+        )
         assertEquals(listOf(0L, 1000L), times)
     }
 
@@ -81,7 +92,8 @@ class DeviceCodePollerTest {
                     if (calls == 2) OAuthDeviceCodePollResult.Complete("ok") else OAuthDeviceCodePollResult.Pending
                 },
             ),
-        ) { currentTime }
+        clock = virtualClock(),
+        )
         assertEquals(listOf(2000L, 4000L), times)
     }
 
@@ -94,7 +106,8 @@ class DeviceCodePollerTest {
                 OAuthDeviceCodePollOptions(
                     poll = { OAuthDeviceCodePollResult.Failed("authorization_pending is bad") },
                 ),
-            ) { currentTime }
+                clock = virtualClock(),
+            )
         }
         assertEquals("authorization_pending is bad", error.message)
     }
@@ -107,7 +120,8 @@ class DeviceCodePollerTest {
                     expiresInSeconds = 12,
                     poll = { OAuthDeviceCodePollResult.Pending },
                 ),
-            ) { currentTime }
+                clock = virtualClock(),
+            )
         }
         assertEquals("Device flow timed out", error.message)
     }
@@ -124,7 +138,8 @@ class DeviceCodePollerTest {
                         if (calls == 1) OAuthDeviceCodePollResult.SlowDown() else OAuthDeviceCodePollResult.Pending
                     },
                 ),
-            ) { currentTime }
+                clock = virtualClock(),
+            )
         }
         assertEquals(
             "Device flow timed out after one or more slow_down responses. " +
@@ -154,7 +169,8 @@ class DeviceCodePollerTest {
                     }
                 },
             ),
-        ) { currentTime }
+        clock = virtualClock(),
+        )
         // t=0 slow_down; sleep 1s+5s; t=6000 pending; sleep 6s; t=12000 complete
         assertEquals(listOf(0L, 6000L, 12000L), times)
     }
@@ -177,7 +193,8 @@ class DeviceCodePollerTest {
                     }
                 },
             ),
-        ) { currentTime }
+        clock = virtualClock(),
+        )
         // t=0 slow_down(interval=10); t=10000 pending; t=20000 complete
         assertEquals(listOf(0L, 10000L, 20000L), times)
     }
@@ -201,7 +218,8 @@ class DeviceCodePollerTest {
                     }
                 },
             ),
-        ) { currentTime }
+        clock = virtualClock(),
+        )
         // t=0 slow_down(NaN) -> 2s+5s; t=7000 slow_down(-1) -> 7s+5s; t=19000 complete
         assertEquals(listOf(0L, 7000L, 19000L), times)
     }
@@ -223,7 +241,8 @@ class DeviceCodePollerTest {
                         OAuthDeviceCodePollResult.Pending
                     },
                 ),
-            ) { currentTime }
+                clock = virtualClock(),
+            )
         }
         // Only t=0 poll fits; after it the remaining 3s elapse and the loop exits.
         assertEquals(listOf(0L), times)
@@ -241,7 +260,8 @@ class DeviceCodePollerTest {
                     if (calls >= 3) OAuthDeviceCodePollResult.Complete("ok") else OAuthDeviceCodePollResult.Pending
                 },
             ),
-        ) { currentTime }
+        clock = virtualClock(),
+        )
         assertEquals("ok", value)
     }
 
@@ -260,7 +280,8 @@ class DeviceCodePollerTest {
                             OAuthDeviceCodePollResult.Pending
                         },
                     ),
-                ) { currentTime }
+                    clock = virtualClock(),
+            )
             } catch (e: CancellationException) {
                 assertEquals("Login cancelled", e.message)
                 throw e

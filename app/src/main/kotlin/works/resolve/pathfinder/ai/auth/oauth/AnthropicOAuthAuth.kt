@@ -19,6 +19,7 @@ import works.resolve.pathfinder.ai.auth.PkceGenerator
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.requireString
 import works.resolve.pathfinder.ai.utils.string
+import kotlin.time.Clock
 import works.resolve.pathfinder.ai.utils.strictDouble
 
 /**
@@ -74,7 +75,7 @@ import works.resolve.pathfinder.ai.utils.strictDouble
  * - pi type-casts the token JSON unchecked (missing fields yield
  *   `undefined`); this port validates the required string/number fields and
  *   fails with an explicit field name, like the sibling xAI port.
- * - `Date.now()` is read through the [now] seam for deterministic expiry
+ * - `Date.now()` is read through the [clock] seam for deterministic expiry
  *   tests.
  *
  * - Secret-safety divergence (deliberate, per Pathfinder's security rules): pi
@@ -91,7 +92,7 @@ import works.resolve.pathfinder.ai.utils.strictDouble
 class AnthropicOAuthAuth(
     private val http: OAuthHttpClient,
     private val pkce: PkceGenerator = PkceGenerator(),
-    private val now: () -> Long = { System.currentTimeMillis() },
+    private val clock: Clock = Clock.System,
     /**
      * Bind port for the loopback callback server. pi's fixed 53692 in
      * production ([CALLBACK_PORT]); tests inject 0 (ephemeral) or a free port
@@ -420,7 +421,7 @@ class AnthropicOAuthAuth(
         return OAuthCredential(
             access = access,
             refresh = refresh,
-            expires = now() + (expiresInSeconds * 1000).toLong() - REFRESH_SKEW_MS,
+            expires = clock.now().toEpochMilliseconds() + (expiresInSeconds * 1000).toLong() - REFRESH_SKEW_MS,
         )
     }
 

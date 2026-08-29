@@ -28,6 +28,7 @@ import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
+import kotlin.time.Clock
 
 /**
  * GitHub Copilot OAuth account flow, ported from pi
@@ -61,7 +62,7 @@ import works.resolve.pathfinder.ai.utils.stringOrNull
  *   ([knownModelIds]) from the generated `models-catalog.json` provider
  *   entry, so no parallel model list is maintained.
  * - `Date.now()` (retry deadlines, expiry math) is read through the
- *   internal [now] seam (system clock by default) for deterministic tests.
+ *   internal [clock] seam (system clock by default) for deterministic tests.
  *
  * Nothing secret is ever logged or placed in exception messages by this
  * class: errors carry HTTP statuses and server-provided response text only.
@@ -70,7 +71,7 @@ class GitHubCopilotOAuthAuth(
     private val http: OAuthHttpClient,
     /** pi `GITHUB_COPILOT_MODELS` ids (generated catalog entry's model ids). */
     private val knownModelIds: Set<String>,
-    private val now: () -> Long = { System.currentTimeMillis() },
+    private val clock: Clock = Clock.System,
 ) : OAuthAuth {
 
     override val name: String = "GitHub Copilot"
@@ -283,14 +284,14 @@ class GitHubCopilotOAuthAuth(
         retryPolicy: RetryPolicy,
     ): OAuthHttpResponse {
         val retryDeadline =
-            if (retryPolicy.maxRetries > 0 && retryPolicy.maxElapsedMs > 0) now() + retryPolicy.maxElapsedMs else null
+            if (retryPolicy.maxRetries > 0 && retryPolicy.maxElapsedMs > 0) clock.now().toEpochMilliseconds() + retryPolicy.maxElapsedMs else null
         var retry = 0
         while (true) {
             val attemptTimeoutMs =
                 if (retryDeadline == null) {
                     PER_ATTEMPT_TIMEOUT_MS.toLong()
                 } else {
-                    (retryDeadline - now()).coerceIn(1L, PER_ATTEMPT_TIMEOUT_MS.toLong())
+                    (retryDeadline - clock.now().toEpochMilliseconds()).coerceIn(1L, PER_ATTEMPT_TIMEOUT_MS.toLong())
                 }
             val response = http.execute(
                 OAuthHttpRequest(
@@ -311,12 +312,12 @@ class GitHubCopilotOAuthAuth(
                     if (seconds != null && seconds.isFinite()) {
                         seconds * 1000
                     } else {
-                        parseHttpDateMs(retryAfter)?.let { (it - now()).toDouble() } ?: Double.NaN
+                        parseHttpDateMs(retryAfter)?.let { (it - clock.now().toEpochMilliseconds()).toDouble() } ?: Double.NaN
                     }
                 if (delayMs.isNaN()) return response
             }
             delayMs = max(0.0, delayMs)
-            if (retryDeadline != null && delayMs >= (retryDeadline - now()).toDouble()) return response
+            if (retryDeadline != null && delayMs >= (retryDeadline - clock.now().toEpochMilliseconds()).toDouble()) return response
             delay(delayMs.toLong())
             retry++
         }
@@ -482,7 +483,7 @@ class GitHubCopilotOAuthAuth(
                     }
                 },
             ),
-            now = now,
+            clock = clock,
         )
     }
 

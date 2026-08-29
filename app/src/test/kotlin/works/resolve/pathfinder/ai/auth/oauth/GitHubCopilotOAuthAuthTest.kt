@@ -9,6 +9,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.TestScope
+import kotlin.time.Clock
+import kotlin.time.Instant
+import works.resolve.pathfinder.ai.testing.FakeClock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -30,7 +34,19 @@ import works.resolve.pathfinder.ai.auth.OAuthCredential
  * `toAuth` base URL. All HTTP is faked; time is virtual (`runTest` +
  * scheduler clock) so poll sleeps and retry backoffs are instant.
  */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class GitHubCopilotOAuthAuthTest {
+
+    /** Scheduler-backed clock: virtual time from `runTest`'s [TestScope]. */
+    private val TestScope.virtualClock: Clock
+        get() = object : Clock {
+            override fun now(): Instant = Instant.fromEpochMilliseconds(testScheduler.currentTime)
+        }
+
+    /** Clock reading a mutable local variable (script-driven time). */
+    private fun mutableClockOf(ms: () -> Long): Clock = object : Clock {
+        override fun now(): Instant = Instant.fromEpochMilliseconds(ms())
+    }
 
     private class FakeHttpClient : OAuthHttpClient {
         /** FIFO script; each entry maps a request to its response. */
@@ -95,8 +111,8 @@ class GitHubCopilotOAuthAuthTest {
     private fun auth(
         http: FakeHttpClient,
         known: Set<String> = setOf("gpt-4.1", "claude-sonnet-5", "grok-4.6"),
-        now: () -> Long = { 0L },
-    ) = GitHubCopilotOAuthAuth(http = http, knownModelIds = known, now = now)
+        clock: Clock = FakeClock(0L),
+    ) = GitHubCopilotOAuthAuth(http = http, knownModelIds = known, clock = clock)
 
     private fun FakeHttpClient.happyPath(
         tokenBody: String = copilotTokenJson(),
@@ -128,7 +144,7 @@ class GitHubCopilotOAuthAuthTest {
         http.happyPath(policyResponses = listOf(ok("""{"policy":{"state":"enabled"}}""")))
         val interaction = RecordingInteraction(textResponse = "  ")
 
-        val credential = auth(http, now = { testScheduler.currentTime }).login(interaction)
+        val credential = auth(http, clock = virtualClock).login(interaction)
 
         // Enterprise prompt mirrors pi's message and placeholder.
         val prompt = interaction.prompts.single() as AuthPrompt.Text
@@ -248,7 +264,7 @@ class GitHubCopilotOAuthAuthTest {
         http.script += { ok(copilotTokenJson()) }
         http.script += { ok(modelsJson(modelEntry("gpt-4.1"))) }
 
-        val credential = auth(http, now = { testScheduler.currentTime }).login(RecordingInteraction())
+        val credential = auth(http, clock = virtualClock).login(RecordingInteraction())
 
         // Three polls to the access-token endpoint, then the exchange.
         assertEquals(3, http.requests.count { it.url == "https://github.com/login/oauth/access_token" })
@@ -261,7 +277,7 @@ class GitHubCopilotOAuthAuthTest {
         http.script += { ok(deviceCodeJson(interval = 1)) }
         http.script += { ok("""{"error":"access_denied","error_description":"denied by user"}""") }
         val error = assertFailsWith<IllegalStateException> {
-            auth(http, now = { testScheduler.currentTime }).login(RecordingInteraction())
+            auth(http, clock = virtualClock).login(RecordingInteraction())
         }
         assertEquals("Device flow failed: access_denied: denied by user", error.message)
     }
@@ -272,7 +288,7 @@ class GitHubCopilotOAuthAuthTest {
         http.script += { ok(deviceCodeJson(interval = 1)) }
         http.script += { ok("""{"token_type":"bearer"}""") }
         val error = assertFailsWith<IllegalStateException> {
-            auth(http, now = { testScheduler.currentTime }).login(RecordingInteraction())
+            auth(http, clock = virtualClock).login(RecordingInteraction())
         }
         assertEquals("Invalid device token response", error.message)
     }
@@ -449,7 +465,7 @@ class GitHubCopilotOAuthAuthTest {
         // pi treats this as best-effort: the batch stops, login still succeeds.
         repeat(3) { http.script += { json(429, """{"error":"rate_limited"}""", mapOf("retry-after" to listOf("0"))) } }
 
-        val credential = auth(http, now = { testScheduler.currentTime }).login(RecordingInteraction())
+        val credential = auth(http, clock = virtualClock).login(RecordingInteraction())
 
         // The second model was never attempted (3 attempts = 1 + 2 retries).
         assertEquals(7, http.requests.size)
@@ -471,7 +487,7 @@ class GitHubCopilotOAuthAuthTest {
         http.script += { json(429, "x", mapOf("retry-after" to listOf("0"))) }
         http.script += { ok(modelsJson(modelEntry("gpt-4.1"))) }
 
-        auth(http, now = { testScheduler.currentTime }).login(RecordingInteraction())
+        auth(http, clock = virtualClock).login(RecordingInteraction())
 
         // Two 429 attempts retried (maxRetries=2), third succeeded.
         assertEquals(3, http.requests.count { it.url == "https://api.individual.githubcopilot.com/models" })
@@ -486,7 +502,7 @@ class GitHubCopilotOAuthAuthTest {
         http.script += { json(429, "x", mapOf("retry-after" to listOf("600"))) }
 
         val error = assertFailsWith<IllegalStateException> {
-            auth(http, now = { testScheduler.currentTime }).login(RecordingInteraction())
+            auth(http, clock = virtualClock).login(RecordingInteraction())
         }
         assertTrue(error.message!!.startsWith("429:"))
         // Only the initial attempt ran.
@@ -517,7 +533,7 @@ class GitHubCopilotOAuthAuthTest {
         http.script += { json(429, "x", mapOf("retry-after" to listOf("Wed, 21 Oct 2015 07:28:00 GMT"))) }
         http.script += { ok(modelsJson(modelEntry("gpt-4.1"))) }
 
-        auth(http, now = { 1_700_000_000_000L }).login(RecordingInteraction())
+        auth(http, clock = FakeClock(1_700_000_000_000L)).login(RecordingInteraction())
 
         assertEquals(5, http.requests.size)
 
@@ -747,7 +763,7 @@ class GitHubCopilotOAuthAuthTest {
             json(429, """{"error":"rate_limited"}""", mapOf("retry-after" to listOf("0")))
         }
         http.script += { ok(modelsJson(modelEntry("gpt-4.1"))) }
-        val flow = GitHubCopilotOAuthAuth(http = http, knownModelIds = setOf("gpt-4.1"), now = { clock })
+        val flow = GitHubCopilotOAuthAuth(http = http, knownModelIds = setOf("gpt-4.1"), clock = mutableClockOf { clock })
 
         val credential = flow.login(RecordingInteraction())
 
@@ -774,7 +790,7 @@ class GitHubCopilotOAuthAuthTest {
             clock += 4500
             json(429, """{"error":"rate_limited"}""", mapOf("retry-after" to listOf("1")))
         }
-        val flow = GitHubCopilotOAuthAuth(http = http, knownModelIds = setOf("gpt-4.1"), now = { clock })
+        val flow = GitHubCopilotOAuthAuth(http = http, knownModelIds = setOf("gpt-4.1"), clock = mutableClockOf { clock })
 
         val error = assertFailsWith<IllegalStateException> {
             flow.login(RecordingInteraction())

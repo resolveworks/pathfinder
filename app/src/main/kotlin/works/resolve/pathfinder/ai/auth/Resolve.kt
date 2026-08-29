@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ai.auth
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Clock
 
 /**
  * Ported from pi `packages/ai/src/auth/resolve.ts`: auth resolution shared by
@@ -59,6 +60,7 @@ suspend fun resolveProviderAuth(
     credentials: CredentialStore,
     authContext: AuthContext,
     overrides: AuthResolutionOverrides? = null,
+    clock: Clock = Clock.System,
 ): AuthResult? {
     val requestAuthContext =
         if (overrides?.env?.isNotEmpty() == true) overlayEnvAuthContext(authContext, overrides.env) else authContext
@@ -84,6 +86,7 @@ suspend fun resolveProviderAuth(
                 oauthAuth,
                 stored,
                 overrides?.minOAuthValidityMs,
+                clock,
             )
         }
         if (stored is ApiKeyCredential && apiKeyAuth != null) {
@@ -136,10 +139,11 @@ private suspend fun resolveStoredOAuth(
     oauth: OAuthAuth,
     stored: OAuthCredential,
     minOAuthValidityMs: Long?,
+    clock: Clock = Clock.System,
 ): AuthResult? {
     val minimumValidityMs = maxOf(DEFAULT_OAUTH_MINIMUM_VALIDITY_MS, minOAuthValidityMs ?: 0)
     fun expiresSoon(credential: OAuthCredential): Boolean =
-        System.currentTimeMillis() + minimumValidityMs >= credential.expires
+        clock.now().toEpochMilliseconds() + minimumValidityMs >= credential.expires
     var credential = stored
 
     if (expiresSoon(credential)) {

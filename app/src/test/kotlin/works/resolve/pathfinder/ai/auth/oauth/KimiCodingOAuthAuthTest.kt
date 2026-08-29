@@ -6,6 +6,8 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import kotlin.time.Clock
+import kotlin.time.Instant
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.OAuthCredential
@@ -63,7 +65,10 @@ class KimiCodingOAuthAuthTest {
         respond: suspend (OAuthHttpRequest) -> OAuthHttpResponse,
     ): Pair<KimiCodingOAuthAuth, FakeHttpClient> {
         val http = FakeHttpClient(testScheduler, respond)
-        val flow = KimiCodingOAuthAuth(http, now = { testScheduler.currentTime })
+        val flow = KimiCodingOAuthAuth(
+            http,
+            clock = object : Clock { override fun now() = Instant.fromEpochMilliseconds(testScheduler.currentTime) },
+        )
         return flow to http
     }
 

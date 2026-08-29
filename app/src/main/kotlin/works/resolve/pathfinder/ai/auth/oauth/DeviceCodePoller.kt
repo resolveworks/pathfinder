@@ -5,6 +5,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 import kotlin.math.max
+import kotlin.time.Clock
 
 /**
  * Shared RFC 8628 device-code poller, ported from pi
@@ -13,7 +14,7 @@ import kotlin.math.max
  * Divergence from pi (documented per AGENTS.md): pi uses an `AbortSignal` for
  * caller cancellation; the narrow Kotlin equivalent is coroutine cancellation,
  * which surfaces as a [CancellationException] carrying the upstream cancel
- * message. Time is read through an injectable `now` supplier (defaulting to the
+ * message. Time is read through an injectable [clock] (defaulting to the
  * system clock) so tests can run deterministically against a virtual scheduler;
  * sleeping uses [delay], which virtual time frameworks skip automatically.
  */
@@ -79,13 +80,14 @@ private suspend fun abortableSleep(ms: Long, cancelMessage: String) {
 /**
  * Port of pi `pollOAuthDeviceCodeFlow<T>`.
  *
- * [now] is internal for deterministic tests only; production callers use the
+ * [clock] is injectable for deterministic tests only; production callers use the
  * system-clock default.
  */
 internal suspend fun <T> pollOAuthDeviceCodeFlow(
     options: OAuthDeviceCodePollOptions<T>,
-    now: () -> Long = { System.currentTimeMillis() },
+    clock: Clock = Clock.System,
 ): T {
+    fun now() = clock.now().toEpochMilliseconds()
     val deadline =
         options.expiresInSeconds?.let { now() + it * 1000 } ?: Long.MAX_VALUE
     var intervalMs = max(

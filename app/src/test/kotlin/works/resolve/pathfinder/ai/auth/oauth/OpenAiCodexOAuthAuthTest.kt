@@ -11,6 +11,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import works.resolve.pathfinder.ai.testing.FakeClock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
@@ -84,7 +85,7 @@ class OpenAiCodexOAuthAuthTest {
         callbackPort: Int = 0,
     ) = OpenAiCodexOAuthAuth(
         http = http,
-        now = { nowMs },
+        clock = FakeClock(nowMs),
         createState = { state },
         pkce = fixedPkce(),
         callbackPort = callbackPort,
