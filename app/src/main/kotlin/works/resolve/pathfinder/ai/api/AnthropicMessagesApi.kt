@@ -25,14 +25,18 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.int
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.str
+import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonNull
+
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -212,7 +216,7 @@ class AnthropicMessagesApi(
         if (name !in ANTHROPIC_MESSAGE_EVENTS) return emptyList()
 
         val parsed = try {
-            json.parseToJsonElement(event.data)
+            lenientJson.parseToJsonElement(event.data)
         } catch (error: Exception) {
             throw ProviderStreamException(
                 "Could not parse Anthropic SSE event $name: ${error.message ?: error::class.simpleName}; data=${event.data}",
@@ -242,7 +246,7 @@ class AnthropicMessagesApi(
         ) {
             return
         }
-        throw IllegalStateException("No API key for provider: $provider")
+        throw ProviderAuthException("No API key for provider: $provider")
     }
 
     private fun missingAuthEvent(
@@ -285,7 +289,6 @@ class AnthropicMessagesApi(
             "content_block_delta",
             "content_block_stop",
         )
-        val json = Json { ignoreUnknownKeys = true }
     }
 }
 
@@ -400,9 +403,6 @@ private fun buildHeaders(
 private fun filterNonNull(headers: Map<String, String?>): Map<String, String> =
     headers.filterValues { it != null }.mapValues { it.value!! }
 
-private fun kotlinx.serialization.json.JsonElement?.stringOrNull(): String? =
-    (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
-
 /**
  * Accumulates the streamed Anthropic response, pi's output/blocks state.
  * Blocks are keyed by the upstream `index` field; events interleave freely.
@@ -464,9 +464,9 @@ internal class AnthropicStreamState(
 
     fun onMessageStart(event: JsonObject, model: Model): List<AssistantMessageEvent> {
         sawMessageStart = true
-        val message = event["message"] as? JsonObject ?: return emptyList()
-        responseId = (message["id"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content ?: responseId
-        responseModel = (message["model"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
+        val message = event.obj("message") ?: return emptyList()
+        responseId = message["id"].strOrNull() ?: responseId
+        responseModel = message["model"].strOrNull()
         // pi anthropic-messages.ts:592-599: when the server serves a fallback
         // model, cost accounting uses the fallback entry's cost; the observed
         // id wins only when it differs and matches a permitted fallback.
@@ -478,16 +478,16 @@ internal class AnthropicStreamState(
             }
         }
         // Capture initial token usage so an early abort still has input counts.
-        val messageUsage = message["usage"] as? JsonObject
+        val messageUsage = message.obj("usage")
         if (messageUsage != null) {
             usage = usage.copy(
-                input = messageUsage.intOrZero("input_tokens"),
-                output = messageUsage.intOrZero("output_tokens"),
-                cacheRead = messageUsage.intOrZero("cache_read_input_tokens"),
-                cacheWrite = messageUsage.intOrZero("cache_creation_input_tokens"),
+                input = messageUsage.int("input_tokens") ?: 0,
+                output = messageUsage.int("output_tokens") ?: 0,
+                cacheRead = messageUsage.int("cache_read_input_tokens") ?: 0,
+                cacheWrite = messageUsage.int("cache_creation_input_tokens") ?: 0,
                 // pi anthropic-messages.ts:606 — cache_creation.ephemeral_1h_input_tokens || 0.
-                cacheWrite1h = (messageUsage["cache_creation"] as? JsonObject)
-                    ?.intOrZero("ephemeral_1h_input_tokens") ?: 0,
+                cacheWrite1h = messageUsage.obj("cache_creation")
+                    ?.int("ephemeral_1h_input_tokens") ?: 0,
             )
             usage = withTotal(usage)
         }
@@ -499,26 +499,26 @@ internal class AnthropicStreamState(
         context: Context,
     ): List<AssistantMessageEvent> {
         val index = (event["index"] as? JsonPrimitive)?.longOrNull?.toInt() ?: return emptyList()
-        val contentBlock = event["content_block"] as? JsonObject ?: return emptyList()
+        val contentBlock = event.obj("content_block") ?: return emptyList()
         val type = (contentBlock["type"] as? JsonPrimitive)?.content
         val block: Block = when (type) {
             "text" -> Text(index).apply {
-                contentBlock["text"].stringOrNull()?.let { text.append(it) }
+                contentBlock["text"].strOrNull()?.let { text.append(it) }
             }
             "thinking" -> Thinking(index, redacted = false).apply {
-                contentBlock["thinking"].stringOrNull()?.let { thinking.append(it) }
-                contentBlock["signature"].stringOrNull()?.let { signature = it }
+                contentBlock["thinking"].strOrNull()?.let { thinking.append(it) }
+                contentBlock["signature"].strOrNull()?.let { signature = it }
             }
             "redacted_thinking" -> Thinking(index, redacted = true).apply {
                 thinking.append("[Reasoning redacted]")
-                signature = contentBlock["data"].stringOrNull() ?: ""
+                signature = contentBlock["data"].strOrNull() ?: ""
             }
             "tool_use" -> Tool(index).apply {
-                id = contentBlock["id"].stringOrNull() ?: ""
-                var blockName = contentBlock["name"].stringOrNull() ?: ""
+                id = contentBlock["id"].strOrNull() ?: ""
+                var blockName = contentBlock["name"].strOrNull() ?: ""
                 if (isOAuth) blockName = fromClaudeCodeName(blockName, context.tools)
                 name = blockName
-                (contentBlock["input"] as? JsonObject)?.let { seedJson = it.toString() }
+                (contentBlock.obj("input"))?.let { seedJson = it.toString() }
             }
             else -> return emptyList()
         }
@@ -536,30 +536,30 @@ internal class AnthropicStreamState(
 
     fun onContentBlockDelta(event: JsonObject): List<AssistantMessageEvent> {
         val index = (event["index"] as? JsonPrimitive)?.longOrNull?.toInt() ?: return emptyList()
-        val delta = event["delta"] as? JsonObject ?: return emptyList()
+        val delta = event.obj("delta") ?: return emptyList()
         val blockIndex = byStreamIndex[index] ?: return emptyList()
         return when (val deltaType = (delta["type"] as? JsonPrimitive)?.content) {
             "text_delta" -> {
                 val text = (blocks[blockIndex] as? Text) ?: return emptyList()
-                val value = delta["text"].stringOrNull() ?: ""
+                val value = delta["text"].strOrNull() ?: ""
                 text.text.append(value)
                 listOf(AssistantMessageEvent.TextDelta(blockIndex, value, snapshot()))
             }
             "thinking_delta" -> {
                 val thinking = (blocks[blockIndex] as? Thinking) ?: return emptyList()
-                val value = delta["thinking"].stringOrNull() ?: ""
+                val value = delta["thinking"].strOrNull() ?: ""
                 thinking.thinking.append(value)
                 listOf(AssistantMessageEvent.ThinkingDelta(blockIndex, value, snapshot()))
             }
             "input_json_delta" -> {
                 val tool = (blocks[blockIndex] as? Tool) ?: return emptyList()
-                val value = delta["partial_json"].stringOrNull() ?: ""
+                val value = delta["partial_json"].strOrNull() ?: ""
                 tool.partialJson.append(value)
                 listOf(AssistantMessageEvent.ToolCallDelta(blockIndex, value, snapshot()))
             }
             "signature_delta" -> {
                 val thinking = (blocks[blockIndex] as? Thinking) ?: return emptyList()
-                thinking.signature += delta["signature"].stringOrNull() ?: ""
+                thinking.signature += delta["signature"].strOrNull() ?: ""
                 emptyList()
             }
             else -> emptyList()
@@ -581,14 +581,14 @@ internal class AnthropicStreamState(
     }
 
     fun onMessageDelta(event: JsonObject, model: Model): List<AssistantMessageEvent> {
-        val delta = event["delta"] as? JsonObject
+        val delta = event.obj("delta")
         if (delta != null) {
-            val stopReason = (delta["stop_reason"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
+            val stopReason = delta.str("stop_reason")
             if (stopReason != null) {
                 rawStopReason = stopReason
                 val (mapped, error) = mapStopReason(
                     stopReason,
-                    (delta["stop_details"] as? JsonObject)?.get("explanation").stringOrNull(),
+                    delta.obj("stop_details")?.get("explanation").strOrNull(),
                 )
                 this.stopReason = mapped
                 errorMessage = error ?: errorMessage
@@ -596,15 +596,15 @@ internal class AnthropicStreamState(
         }
         // Only update usage fields when present; preserves message_start values
         // when proxies omit them in message_delta.
-        val eventUsage = event["usage"] as? JsonObject
+        val eventUsage = event.obj("usage")
         if (eventUsage != null) {
             usage = usage.copy(
-                input = eventUsage.intOrNullField("input_tokens") ?: usage.input,
-                output = eventUsage.intOrNullField("output_tokens") ?: usage.output,
-                cacheRead = eventUsage.intOrNullField("cache_read_input_tokens") ?: usage.cacheRead,
-                cacheWrite = eventUsage.intOrNullField("cache_creation_input_tokens") ?: usage.cacheWrite,
-                reasoning = (eventUsage["output_tokens_details"] as? JsonObject)
-                    ?.intOrNullField("thinking_tokens") ?: usage.reasoning,
+                input = eventUsage.int("input_tokens") ?: usage.input,
+                output = eventUsage.int("output_tokens") ?: usage.output,
+                cacheRead = eventUsage.int("cache_read_input_tokens") ?: usage.cacheRead,
+                cacheWrite = eventUsage.int("cache_creation_input_tokens") ?: usage.cacheWrite,
+                reasoning = eventUsage.obj("output_tokens_details")
+                    ?.int("thinking_tokens") ?: usage.reasoning,
             )
             usage = withTotal(usage)
         }
@@ -670,8 +670,3 @@ internal class AnthropicStreamState(
         timestamp = timestampMs,
     )
 }
-
-private fun JsonObject.intOrZero(key: String): Int = intOrNullField(key) ?: 0
-
-private fun JsonObject.intOrNullField(key: String): Int? =
-    (this[key] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.longOrNull?.toInt()

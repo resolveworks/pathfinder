@@ -17,7 +17,11 @@ import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.anthropicCompatOf
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.optionsToString
+import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
+import works.resolve.pathfinder.ai.core.toModelThinkingLevel
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -100,15 +104,27 @@ data class AnthropicMessagesOptions(
      */
     val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
 ) {
-    override fun toString(): String =
-        "AnthropicMessagesOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
-            ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
-            ", thinkingEnabled=$thinkingEnabled, thinkingBudgetTokens=$thinkingBudgetTokens" +
-            ", effort=$effort, thinkingDisplay=$thinkingDisplay" +
-            ", interleavedThinking=$interleavedThinking, toolChoice=$toolChoice" +
-            ", cacheRetention=$cacheRetention, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
-            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys}" +
-            ", onPayload=${onPayload != null}, onResponse=${onResponse != null})"
+    override fun toString(): String = optionsToString(
+        "AnthropicMessagesOptions",
+        "apiKey" to redactedSecret(apiKey),
+        "sessionId" to sessionId,
+        "temperature" to temperature,
+        "maxTokens" to maxTokens,
+        "thinkingEnabled" to thinkingEnabled,
+        "thinkingBudgetTokens" to thinkingBudgetTokens,
+        "effort" to effort,
+        "thinkingDisplay" to thinkingDisplay,
+        "interleavedThinking" to interleavedThinking,
+        "toolChoice" to toolChoice,
+        "cacheRetention" to cacheRetention,
+        "timeoutMs" to timeoutMs,
+        "maxRetries" to maxRetries,
+        "maxRetryDelayMs" to maxRetryDelayMs,
+        "env" to env.keys,
+        "headers" to headers.keys,
+        "onPayload" to (onPayload != null),
+        "onResponse" to (onResponse != null),
+    )
 }
 
 /** pi's resolveCacheRetention: explicit value, then PI_CACHE_RETENTION=long, else short. */
@@ -405,7 +421,7 @@ internal fun convertMessages(
 private fun parseOrEmptyObject(arguments: String): JsonObject {
     if (arguments.isBlank()) return JsonObject(emptyMap())
     return try {
-        val parsed = kotlinx.serialization.json.Json.parseToJsonElement(arguments)
+        val parsed = lenientJson.parseToJsonElement(arguments)
         parsed as? JsonObject ?: JsonObject(emptyMap())
     } catch (_: Exception) {
         JsonObject(emptyMap())
@@ -617,7 +633,10 @@ internal fun mapThinkingLevelToEffort(
     model: Model,
     level: works.resolve.pathfinder.ai.core.ThinkingLevel?,
 ): AnthropicEffort {
-    val mapped = level?.let { model.thinkingLevelMap?.forLevel(ModelThinkingLevel.valueOf(it.name)) }
+    // ThinkingLevel has no OFF case (pi's union splits it into
+    // ModelThinkingLevel.OFF), so toModelThinkingLevel is total here and
+    // replaces the previous ModelThinkingLevel.valueOf(name) reflection.
+    val mapped = level?.let { model.thinkingLevelMap?.forLevel(it.toModelThinkingLevel()) }
     if (mapped is String) {
         return try {
             AnthropicEffort.valueOf(mapped.uppercase())
