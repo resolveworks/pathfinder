@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.models
 
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.api.OpenAiCompletionsApi
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Context
@@ -35,7 +36,7 @@ class ModelsRegistryTest {
                     apiId = "openai-completions",
                         api = OpenAiCompletionsApi(
                         transport,
-                        ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),
+                        ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
                     ),
                 ),
             ),

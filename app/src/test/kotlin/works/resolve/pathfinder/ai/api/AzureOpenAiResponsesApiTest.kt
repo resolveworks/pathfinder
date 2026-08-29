@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.api
 
+import works.resolve.pathfinder.ai.testing.FakeClock
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -49,7 +50,7 @@ class AzureOpenAiResponsesApiTest {
 
     private fun api(transport: FakeTransport) = AzureOpenAiResponsesApi(
         transport,
-        ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),
+        ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
         nowMs = { 1_770_000_000_000L },
     )
 

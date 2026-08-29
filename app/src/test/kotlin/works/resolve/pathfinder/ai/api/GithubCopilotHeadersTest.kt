@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.api
 
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ImageContent
@@ -165,7 +166,7 @@ class GithubCopilotHeadersTest {
         messages = listOf(UserMessage(listOf(TextContent("look"), image))),
     )
 
-    private fun retry() = ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 })
+    private fun retry() = ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 })
 
     /**
      * Header lookups are case-insensitive at HTTP layer; assert the sent
