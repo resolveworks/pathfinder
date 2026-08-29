@@ -65,6 +65,12 @@ defaults for everything pi does not dictate.
   types instead of optional-method interfaces, kotlinx.coroutines patterns,
   and the standard library over hand-rolled equivalents.
 
+The TS→Kotlin translation conventions — the standard idioms for unions,
+JSON access, error encoding, async, and redaction in ported code — are
+recorded in the `AGENTS.md` at
+`app/src/main/kotlin/works/resolve/pathfinder/`; follow them in all code
+under that root.
+
 ## Architecture
 
 - The native runtime owns models, providers, streaming, agent state, and
