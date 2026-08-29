@@ -22,6 +22,7 @@ import works.resolve.pathfinder.ai.core.ModelCost
 import works.resolve.pathfinder.ai.core.OpenAiResponsesCompat
 import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
@@ -50,7 +51,7 @@ class AzureOpenAiResponsesApiTest {
     private fun api(transport: FakeTransport) = AzureOpenAiResponsesApi(
         transport,
         ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),
-        nowMs = { 1_770_000_000_000L },
+        clock = FakeClock(1_770_000_000_000L),
     )
 
     private fun completed() = listOf(

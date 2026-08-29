@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlin.time.Clock
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
@@ -62,7 +63,13 @@ data class OpenAiResponsesOptions(
     /** "auto" | "detailed" | "concise" | null; null means "auto" when effort is set. */
     val reasoningSummary: String? = null,
     val serviceTier: String? = null,
-    /** Raw `tool_choice` value passed through to the payload. */
+    /** Raw `tool_choice` wire passthrough. Divergence: sibling adapters model
+     * tool choice as sealed types, but pi types this field loosely as the SDK
+     * union `ResponseCreateParamsStreaming["tool_choice"]`
+     * (openai-responses.ts:97) and forwards it verbatim into
+     * `params.tool_choice` (openai-responses.ts:319-320), so it stays a raw
+     * String?. The sealed [ToolChoice] is mapped onto this wire value by
+     * [mapResponsesToolChoice] on the streamSimple path. */
     val toolChoice: String? = null,
     val cacheRetention: CacheRetention? = null,
     val timeoutMs: Long? = null,
@@ -155,7 +162,7 @@ fun splitDeferredTools(context: Context, enabled: Boolean): DeferredToolPlacemen
 class OpenAiResponsesApi(
     private val transport: works.resolve.pathfinder.ai.transport.HttpStreamingTransport,
     private val retry: ProviderRetry = ProviderRetry(),
-    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val clock: Clock = Clock.System,
 ) : ChatApi {
 
     /**
@@ -205,7 +212,7 @@ class OpenAiResponsesApi(
         context: Context,
         options: OpenAiResponsesOptions = OpenAiResponsesOptions(),
     ): Flow<AssistantMessageEvent> = flow {
-        val startedAtMs = nowMs()
+        val startedAtMs = clock.now().toEpochMilliseconds()
         val compatForGrammar = OpenAiResponsesShared.getCompat(model)
         val grammarToolInputProperties = createGrammarToolInputProperties(
             context.tools,
@@ -431,6 +438,13 @@ data class AzureOpenAiResponsesOptions(
     val maxTokens: Int? = null,
     val reasoningEffort: ModelThinkingLevel? = null,
     val reasoningSummary: String? = null,
+    /** pi's AzureOpenAIResponsesOptions.toolChoice — a raw `tool_choice` wire
+     * passthrough, loosely typed in pi as the SDK union
+     * `ResponseCreateParamsStreaming["tool_choice"]`
+     * (azure-openai-responses.ts:59, forwarded verbatim at :312), so it
+     * stays a raw String? rather than a sealed type; [mapResponsesToolChoice]
+     * maps the sealed [ToolChoice] onto this wire value on the streamSimple
+     * path. */
     val toolChoice: String? = null,
     val azureApiVersion: String? = null,
     val azureResourceName: String? = null,
@@ -576,7 +590,7 @@ internal fun normalizeAzureBaseUrlFor(raw: String): String {
 class AzureOpenAiResponsesApi(
     private val transport: works.resolve.pathfinder.ai.transport.HttpStreamingTransport,
     private val retry: ProviderRetry = ProviderRetry(),
-    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val clock: Clock = Clock.System,
 ) : ChatApi {
 
     /**
@@ -625,7 +639,7 @@ class AzureOpenAiResponsesApi(
         options: AzureOpenAiResponsesOptions = AzureOpenAiResponsesOptions(),
     ): Flow<AssistantMessageEvent> = flow {
         val deploymentName = resolveDeploymentName(model, options)
-        val startedAtMs = nowMs()
+        val startedAtMs = clock.now().toEpochMilliseconds()
         val grammarToolInputProperties = createGrammarToolInputProperties(
             context.tools,
             model.responsesCompat?.supportsOpenAIGrammarTools ?: false,
@@ -783,13 +797,18 @@ internal fun buildAzureParams(
 // Shared SSE plumbing
 // ---------------------------------------------------------------------------
 
-/** Maps a core ToolChoice onto the Responses `tool_choice` wire value. */
+/** Maps a core ToolChoice onto the Responses `tool_choice` wire value. The
+ * function case is built through the JSON DOM so the name is properly
+ * escaped, matching the SDK-serialized object pi forwards for that union
+ * member. */
 internal fun mapResponsesToolChoice(choice: ToolChoice): String = when (choice) {
     ToolChoice.Auto -> "auto"
     ToolChoice.None -> "none"
     ToolChoice.Any, ToolChoice.Required -> "required"
-    is ToolChoice.Function ->
-        """{"type":"function","function":{"name":"${choice.name}"}}"""
+    is ToolChoice.Function -> buildJsonObject {
+        put("type", "function")
+        put("function", buildJsonObject { put("name", choice.name) })
+    }.toString()
 }
 
 internal fun toModelThinkingLevel(level: ThinkingLevel): ModelThinkingLevel =

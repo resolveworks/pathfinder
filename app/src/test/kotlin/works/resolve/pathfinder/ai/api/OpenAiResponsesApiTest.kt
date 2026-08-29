@@ -27,6 +27,7 @@ import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingLevelMap
 import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
@@ -57,7 +58,7 @@ class OpenAiResponsesApiTest {
     private fun api(transport: FakeTransport) = OpenAiResponsesApi(
         transport,
         ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),
-        nowMs = { 1_770_000_000_000L },
+        clock = FakeClock(1_770_000_000_000L),
     )
 
     private fun completedChunk(text: String = "ok") = listOf(
