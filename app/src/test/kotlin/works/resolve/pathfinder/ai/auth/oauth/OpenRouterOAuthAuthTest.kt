@@ -6,7 +6,12 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
@@ -16,7 +21,9 @@ import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.Pkce
 import works.resolve.pathfinder.ai.auth.PkceGenerator
 import java.io.IOException
+import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
+import java.net.URL
 
 /** Ports the semantics of pi `packages/ai/src/auth/oauth/openrouter.ts`. */
 class OpenRouterOAuthAuthTest {
@@ -34,6 +41,23 @@ class OpenRouterOAuthAuthTest {
 
         override suspend fun notify(event: AuthEvent) {
             events += event
+        }
+    }
+
+    /** Never answers the manual prompt, so the loopback callback (or timeout) decides the race. */
+    private class HangingInteraction : AuthInteraction {
+        val events = mutableListOf<AuthEvent>()
+        val prompts = mutableListOf<AuthPrompt>()
+        val authUrl = CompletableDeferred<AuthEvent.AuthUrl>()
+
+        override suspend fun prompt(prompt: AuthPrompt): String {
+            prompts += prompt
+            awaitCancellation()
+        }
+
+        override suspend fun notify(event: AuthEvent) {
+            events += event
+            if (event is AuthEvent.AuthUrl) authUrl.complete(event)
         }
     }
 
@@ -62,8 +86,29 @@ class OpenRouterOAuthAuthTest {
 
     private fun pkce(): Pkce = fixedPkce().generate()
 
+    /** Drives the loopback callback with a real HTTP GET (server transport itself is covered by LoopbackOAuthServerTest). */
+    private fun httpGet(url: String): Pair<Int, String> = runBlocking {
+        withContext(Dispatchers.IO) {
+            val connection = URL(url).openConnection() as HttpURLConnection
+            connection.connectTimeout = 5_000
+            connection.readTimeout = 15_000
+            try {
+                val status = connection.responseCode
+                val stream = if (status in 200..399) connection.inputStream else connection.errorStream
+                status to (stream?.bufferedReader()?.use { it.readText() } ?: "")
+            } finally {
+                connection.disconnect()
+            }
+        }
+    }
+
+    private fun callbackUrlFrom(authorizeUrl: String): String {
+        val query = authorizeUrl.substringAfter("?", "")
+        return parseQuery(query).entries.first { it.key == "callback_url" }.value
+    }
+
     @Test
-    fun `authorize URL uses headless PKCE mode without callback_url`() = runBlocking {
+    fun `authorize URL carries the loopback callback_url with pi's exact param order`() = runBlocking {
         val (auth, http) = flow()
         val interaction = RecordingInteraction()
 
@@ -71,19 +116,33 @@ class OpenRouterOAuthAuthTest {
 
         val urlEvent = interaction.events.filterIsInstance<AuthEvent.AuthUrl>().single()
         val pkcePair = pkce()
+        val callbackUrl = callbackUrlFrom(urlEvent.url)
+        assertTrue(
+            Regex("""^http://127\.0\.0\.1:\d+/oauth/callback/[0-9a-f-]{36}$""").matches(callbackUrl),
+            "callback_url: $callbackUrl",
+        )
         assertEquals(
-            "https://openrouter.ai/auth?code_challenge=${pkcePair.challenge}" +
-                "&code_challenge_method=S256&key_label=Pathfinder",
+            "https://openrouter.ai/auth?callback_url=" + java.net.URLEncoder.encode(callbackUrl, "UTF-8").replace("+", "%20") +
+                "&code_challenge=${pkcePair.challenge}&code_challenge_method=S256",
             urlEvent.url,
         )
-        assertTrue("callback_url" !in urlEvent.url)
-        assertTrue(urlEvent.instructions!!.contains("authorization code"))
-        // Login completes without any request other than the key exchange.
+        assertTrue("key_label" !in urlEvent.url)
+        assertEquals(
+            "Complete sign-in in your browser. If the browser is on another machine, paste the final redirect URL here.",
+            urlEvent.instructions,
+        )
+
+        // Progress announcing the callback URL precedes the auth URL (pi's order).
+        val progress = interaction.events.filterIsInstance<AuthEvent.Progress>().first()
+        assertEquals("Listening for OpenRouter OAuth callback on $callbackUrl", progress.message)
+        assertTrue(interaction.events.indexOf(progress) < interaction.events.indexOf(urlEvent))
+
+        // Manual fallback completes the login; only the key-exchange request happens.
         assertEquals(1, http.requests.size)
     }
 
     @Test
-    fun `manual code prompt mirrors pi's message`() = runBlocking {
+    fun `manual code prompt mirrors pi's message and uses the callback URL as placeholder`() = runBlocking {
         val (auth, _) = flow()
         val interaction = RecordingInteraction()
 
@@ -94,6 +153,140 @@ class OpenRouterOAuthAuthTest {
             "Complete sign-in in your browser, or paste the authorization code / redirect URL here:",
             prompt.message,
         )
+        val urlEvent = interaction.events.filterIsInstance<AuthEvent.AuthUrl>().single()
+        assertEquals(callbackUrlFrom(urlEvent.url), prompt.placeholder)
+    }
+
+    @Test
+    fun `server-driven login exchanges the code inside the handler and returns the credential`() = runBlocking {
+        val http = FakeHttpClient()
+        val auth = OpenRouterOAuthAuth(http, fixedPkce())
+        val interaction = HangingInteraction()
+
+        val login = async { auth.login(interaction) }
+        val callbackUrl = callbackUrlFrom(interaction.authUrl.await().url)
+        val (status, body) = httpGet("$callbackUrl?code=or-v1-xyz")
+
+        assertEquals(200, status)
+        assertTrue("Signed in to OpenRouter. You may now close this page." in body, body)
+        val credential = login.await()
+        assertEquals("sk-or-key", credential.access)
+        assertEquals("", credential.refresh)
+        assertEquals(OpenRouterOAuthAuth.NON_EXPIRING_EPOCH_MS, credential.expires)
+
+        // The exchange ran inside the handler (manual prompt never answered).
+        assertEquals(1, http.requests.size)
+        assertEquals("or-v1-xyz", parseCode(http.requests.single()))
+    }
+
+    @Test
+    fun `exchange failure inside the handler yields a 502 page and fails the login`() = runBlocking {
+        val http = FakeHttpClient(respond = { jsonResponse(403, "{\"error_description\":\"code expired\"}") })
+        val auth = OpenRouterOAuthAuth(http, fixedPkce())
+        val interaction = HangingInteraction()
+
+        supervisorScope {
+            val login = async { auth.login(interaction) }
+            val callbackUrl = callbackUrlFrom(interaction.authUrl.await().url)
+            val (status, body) = httpGet("$callbackUrl?code=or-v1-bad")
+
+            assertEquals(502, status)
+            assertTrue("OpenRouter key exchange failed." in body, body)
+            assertTrue("OpenRouter OAuth key exchange failed (HTTP 403): code expired" in body, body)
+            val error = try {
+                login.await()
+                null
+            } catch (error: IllegalStateException) {
+                error
+            }
+            assertEquals("OpenRouter OAuth key exchange failed (HTTP 403): code expired", requireNotNull(error) { "login completed" }.message)
+        }
+    }
+
+    @Test
+    fun `error query param yields a 400 denied page and fails the login`() = runBlocking {
+        val (auth, http) = flow()
+        val interaction = HangingInteraction()
+
+        supervisorScope {
+            val login = async { auth.login(interaction) }
+            val callbackUrl = callbackUrlFrom(interaction.authUrl.await().url)
+            val (status, body) = httpGet("$callbackUrl?error=access_denied&error_description=user+said+no")
+
+            assertEquals(400, status)
+            assertTrue("OpenRouter authorization was denied." in body, body)
+            assertTrue("user said no" in body, body)
+            val error = try {
+                login.await()
+                null
+            } catch (error: IllegalStateException) {
+                error
+            }
+            assertEquals("OpenRouter authorization failed: user said no", requireNotNull(error) { "login completed" }.message)
+        }
+        // Denied before any claim: no token exchange request was made.
+        assertTrue(http.requests.isEmpty())
+    }
+
+    @Test
+    fun `concurrent second callback is rejected with 409`() = runBlocking {
+        val (auth, http) = flow()
+        val interaction = HangingInteraction()
+
+        val login = async { auth.login(interaction) }
+        val callbackUrl = callbackUrlFrom(interaction.authUrl.await().url)
+        // Both requests arrive before the winning exchange can settle the
+        // login and close the server (pi's `claimed` guard).
+        val first = async { httpGet("$callbackUrl?code=or-v1-first") }
+        val second = async { httpGet("$callbackUrl?code=or-v1-second") }
+
+        val statuses = listOf(first.await().first, second.await().first).sorted()
+        assertEquals(listOf(200, 409), statuses)
+        assertEquals("sk-or-key", login.await().access)
+        // Only the winning callback's exchange ran (either request may win).
+        assertEquals(1, http.requests.size)
+        assertTrue(parseCode(http.requests.single()) in setOf("or-v1-first", "or-v1-second"))
+    }
+
+    @Test
+    fun `wrong path and missing code answer without claiming the callback`() = runBlocking {
+        val (auth, http) = flow()
+        val interaction = HangingInteraction()
+
+        val login = async { auth.login(interaction) }
+        val callbackUrl = callbackUrlFrom(interaction.authUrl.await().url)
+        val port = callbackUrl.substringAfterLast(":").substringBefore("/").toInt()
+
+        assertEquals(404, httpGet("http://127.0.0.1:$port/oauth/callback/not-the-path?code=x").first)
+        assertEquals(400, httpGet("$callbackUrl?state=1").first)
+        assertEquals(200, httpGet("$callbackUrl?code=or-v1-late").first)
+
+        assertEquals("sk-or-key", login.await().access)
+        // Only the valid callback exchanged.
+        assertEquals(1, http.requests.size)
+        assertEquals("or-v1-late", parseCode(http.requests.single()))
+    }
+
+    @Test
+    fun `timeout with no callback fails the login with pi's message`() {
+        val http = FakeHttpClient()
+        val auth = OpenRouterOAuthAuth(http, fixedPkce(), loginTimeoutMs = 200)
+        val interaction = HangingInteraction()
+
+        val error = assertFailsWith<IllegalStateException> {
+            runBlocking { auth.login(interaction) }
+        }
+        assertEquals("OpenRouter OAuth login timed out", error.message)
+        assertTrue(http.requests.isEmpty())
+    }
+
+    @Test
+    fun `manual-prompt answer wins when no callback arrives`() = runBlocking {
+        val (auth, http) = flow()
+        val credential = auth.login(RecordingInteraction("https://openrouter.ai/auth?code=or-v1-manual"))
+
+        assertEquals("sk-or-key", credential.access)
+        assertEquals("or-v1-manual", parseCode(http.requests.single()))
     }
 
     @Test
@@ -131,11 +324,11 @@ class OpenRouterOAuthAuthTest {
     }
 
     @Test
-    fun `successful exchange posts pi's payload and returns a non-expiring credential`() = runBlocking {
+    fun `manual exchange posts pi's payload and emits pi's progress event`() = runBlocking {
         val (auth, http) = flow()
         val interaction = RecordingInteraction("https://openrouter.ai/auth?code=or-v1-xyz")
 
-        val credential = auth.login(interaction)
+        auth.login(interaction)
 
         val request = http.requests.single()
         assertEquals("POST", request.method)
@@ -145,18 +338,13 @@ class OpenRouterOAuthAuthTest {
             request.headers,
         )
         assertEquals(OpenRouterOAuthAuth.TOKEN_EXCHANGE_TIMEOUT_MS, request.timeoutMs)
-        val sent = Json.parseToJsonElement(request.body.decodeToString()).let { it as kotlinx.serialization.json.JsonObject }
+        val sent = Json.parseToJsonElement(request.body.decodeToString()) as kotlinx.serialization.json.JsonObject
         val pkcePair = pkce()
         assertEquals("or-v1-xyz", sent["code"]!!.jsonPrimitiveContent())
         assertEquals(pkcePair.verifier, sent["code_verifier"]!!.jsonPrimitiveContent())
         assertEquals("S256", sent["code_challenge_method"]!!.jsonPrimitiveContent())
 
-        assertEquals("sk-or-key", credential.access)
-        assertEquals("", credential.refresh)
-        assertEquals(OpenRouterOAuthAuth.NON_EXPIRING_EPOCH_MS, credential.expires)
-
-        val progress = interaction.events.filterIsInstance<AuthEvent.Progress>().single()
-        assertEquals("Exchanging authorization code for an API key...", progress.message)
+        assertTrue(interaction.events.filterIsInstance<AuthEvent.Progress>().any { it.message == "Exchanging authorization code for an API key..." })
     }
 
     @Test
@@ -283,5 +471,4 @@ class OpenRouterOAuthAuthTest {
 
     private fun kotlinx.serialization.json.JsonElement.jsonPrimitiveContent(): String =
         (this as kotlinx.serialization.json.JsonPrimitive).content
-
 }
