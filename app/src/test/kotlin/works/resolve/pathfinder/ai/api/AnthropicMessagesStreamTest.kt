@@ -58,8 +58,9 @@ class AnthropicMessagesStreamTest {
 
     private fun api(transport: FakeTransport) = AnthropicMessagesApi(
         transport,
-        ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
-        nowMs = { 1_770_000_000_000L },
+
+ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
+clock = FakeClock(1_770_000_000_000L),
     )
 
     private fun messageStart(

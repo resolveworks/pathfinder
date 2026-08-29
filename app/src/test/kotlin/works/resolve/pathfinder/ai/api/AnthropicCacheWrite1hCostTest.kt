@@ -60,8 +60,9 @@ class AnthropicCacheWrite1hCostTest {
         val done = assertIs<AssistantMessageEvent.Done>(
             AnthropicMessagesApi(
                 transport,
-                ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
-                nowMs = { 1_770_000_000_000L },
+
+ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
+clock = FakeClock(1_770_000_000_000L),
             ).stream(opus, context, AnthropicMessagesOptions(apiKey = "test-key")).toList().last(),
         )
         return done.message.usage
