@@ -3,7 +3,6 @@ package works.resolve.pathfinder.ai.auth.oauth
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -15,6 +14,11 @@ import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.PkceGenerator
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.ai.utils.stringOrNull
+import works.resolve.pathfinder.ai.utils.strictDouble
 
 /**
  * OpenAI Codex (ChatGPT OAuth) flow, ported from pi
@@ -573,8 +577,8 @@ class OpenAiCodexOAuthAuth(
     private fun errorCode(body: String): String? {
         val error = (parseJson(body) as? JsonObject)?.get("error") ?: return null
         return when (error) {
-            is JsonPrimitive -> error.content.takeIf { error.isString }
-            is JsonObject -> (error["code"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            is JsonPrimitive -> error.stringOrNull()
+            is JsonObject -> error.string("code")
             else -> null
         }
     }
@@ -658,16 +662,12 @@ class OpenAiCodexOAuthAuth(
         val json = parseJson(text)?.let { it as? JsonObject }
         val access = json?.stringField("access_token")
         val refresh = json?.stringField("refresh_token")
-        val expiresIn =
-            (json?.get("expires_in") as? JsonPrimitive)
-                ?.takeIf { !it.isString }
-                ?.content
-                ?.toDoubleOrNull()
-        if (access == null || refresh == null || expiresIn == null || !expiresIn.isFinite()) {
+        val expiresIn = json?.strictDouble("expires_in")
+        if (access == null || refresh == null || expiresIn == null) {
             val missing = listOfNotNull(
                 if (access == null) "access_token" else null,
                 if (refresh == null) "refresh_token" else null,
-                if (expiresIn == null || !expiresIn.isFinite()) "expires_in" else null,
+                if (expiresIn == null) "expires_in" else null,
             )
             throw IllegalStateException(
                 "OpenAI Codex token ${operation.id} response missing fields: ${missing.joinToString()}",
@@ -716,8 +716,7 @@ class OpenAiCodexOAuthAuth(
      */
     internal fun getAccountId(accessToken: String): String? =
         decodeJwt(accessToken)
-            ?.get(JWT_CLAIM_PATH)
-            ?.let { it as? JsonObject }
+            ?.obj(JWT_CLAIM_PATH)
             ?.stringField("chatgpt_account_id")
 
     /**
@@ -772,14 +771,19 @@ class OpenAiCodexOAuthAuth(
 
     private fun parseJson(text: String): kotlinx.serialization.json.JsonElement? =
         try {
-            Json.parseToJsonElement(text)
+            lenientJson.parseToJsonElement(text)
         } catch (_: Exception) {
             null
         }
 
-    /** pi truthiness check: non-empty string, JSON string primitive only. */
+    /**
+     * pi truthiness check: `!json?.field` — a non-empty JSON string primitive
+     * only (pi openai-codex.ts `!json?.access_token`, `!json.device_auth_id`,
+     * …). Delegates the strict `typeof` read to the shared surface and adds
+     * the empty-string falsy check on top.
+     */
     private fun JsonObject.stringField(field: String): String? =
-        (get(field) as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() }
+        string(field)?.takeIf { it.isNotEmpty() }
 
     /**
      * Appends a sanitized `: error=<detail>` suffix for a non-empty body (see

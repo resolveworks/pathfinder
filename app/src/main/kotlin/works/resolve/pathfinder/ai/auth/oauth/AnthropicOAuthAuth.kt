@@ -6,9 +6,7 @@ import java.net.URLDecoder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.auth.AuthEvent
@@ -18,6 +16,10 @@ import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.PkceGenerator
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.requireString
+import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.ai.utils.strictDouble
 
 /**
  * Anthropic OAuth flow (Claude Pro/Max), ported from pi
@@ -343,7 +345,7 @@ class AnthropicOAuthAuth(
 
         val tokenData: JsonObject
         try {
-            tokenData = Json.parseToJsonElement(responseBody) as? JsonObject
+            tokenData = lenientJson.parseToJsonElement(responseBody) as? JsonObject
                 ?: throw IllegalArgumentException("JSON is not an object")
         } catch (_: Exception) {
             // No formatErrorDetails here: the parser's message embeds the raw
@@ -380,7 +382,7 @@ class AnthropicOAuthAuth(
 
         val data: JsonObject
         try {
-            data = Json.parseToJsonElement(responseBody) as? JsonObject
+            data = lenientJson.parseToJsonElement(responseBody) as? JsonObject
                 ?: throw IllegalArgumentException("JSON is not an object")
         } catch (_: Exception) {
             // No formatErrorDetails here: the parser's message embeds the raw
@@ -406,14 +408,15 @@ class AnthropicOAuthAuth(
      * same arithmetic: `Date.now() + expires_in * 1000 - 5 * 60 * 1000`.
      */
     private fun credentialFrom(body: JsonObject): OAuthCredential {
-        val access = requiredString(body, "access_token")
-        val refresh = requiredString(body, "refresh_token")
-        val expiresInSeconds = (body["expires_in"] as? JsonPrimitive)
-            ?.takeIf { !it.isString }
-            ?.content
-            ?.toDoubleOrNull()
-            ?.takeIf { it.isFinite() && it > 0 }
-            ?: throw IllegalStateException("Invalid Anthropic OAuth response field: expires_in")
+        // requireString is strict (`typeof string`), but this port's named-field
+        // validation (documented class-KDoc divergence from pi's unchecked
+        // cast) also rejects empty strings, like the sibling xAI port.
+        val access = body.requireString("access_token") { invalidField(it) }.takeIf { it.isNotEmpty() }
+            ?: throw invalidField("access_token")
+        val refresh = body.requireString("refresh_token") { invalidField(it) }.takeIf { it.isNotEmpty() }
+            ?: throw invalidField("refresh_token")
+        val expiresInSeconds = body.strictDouble("expires_in")?.takeIf { it > 0 }
+            ?: throw invalidField("expires_in")
         return OAuthCredential(
             access = access,
             refresh = refresh,
@@ -421,13 +424,8 @@ class AnthropicOAuthAuth(
         )
     }
 
-    private fun requiredString(body: JsonObject, field: String): String {
-        val value = (body[field] as? JsonPrimitive)?.takeIf { it.isString }?.content
-        if (value.isNullOrEmpty()) {
-            throw IllegalStateException("Invalid Anthropic OAuth response field: $field")
-        }
-        return value
-    }
+    private fun invalidField(field: String): IllegalStateException =
+        IllegalStateException("Invalid Anthropic OAuth response field: $field")
 
     /**
      * Port of pi `formatErrorDetails` reduced to its portable core: pi
@@ -477,18 +475,18 @@ class AnthropicOAuthAuth(
      */
     private fun safeBodySummary(responseBody: String): String {
         val body = try {
-            Json.parseToJsonElement(responseBody) as? JsonObject ?: return "<redacted>"
+            lenientJson.parseToJsonElement(responseBody) as? JsonObject ?: return "<redacted>"
         } catch (_: Exception) {
             return "<redacted>"
         }
-        val error = (body["error"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-        val description = (body["error_description"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val error = body.string("error")
+        val description = body.string("error_description")
         val detail = listOfNotNull(error, description).joinToString(": ")
         return if (detail.isNotEmpty()) "error=$detail" else "<redacted>"
     }
 
     private fun jsonRequest(fields: Map<String, String>): ByteArray =
-        json.encodeToString(
+        lenientJson.encodeToString(
             JsonObject.serializer(),
             buildJsonObject {
                 for ((name, value) in fields) put(name, value)
@@ -530,8 +528,6 @@ class AnthropicOAuthAuth(
 
         /** pi `AbortSignal.timeout(30_000)` bounding every token exchange. */
         const val REQUEST_TIMEOUT_MS: Int = 30_000
-
-        private val json = Json { ignoreUnknownKeys = true }
 
         /**
          * `application/x-www-form-urlencoded` serialization matching pi's

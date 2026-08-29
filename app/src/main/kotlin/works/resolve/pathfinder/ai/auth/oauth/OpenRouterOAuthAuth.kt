@@ -7,9 +7,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.auth.AuthEvent
@@ -19,6 +17,9 @@ import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.PkceGenerator
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.string
 import java.net.SocketTimeoutException
 import java.net.URI
 import java.net.URLDecoder
@@ -275,7 +276,7 @@ class OpenRouterOAuthAuth(
             )
         }
 
-        val key = (body["key"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val key = body.string("key")
         if (key.isNullOrEmpty()) {
             throw IllegalStateException("OpenRouter OAuth response carries no \"key\"")
         }
@@ -296,7 +297,7 @@ class OpenRouterOAuthAuth(
         const val LOGIN_TIMEOUT_MS: Long = 5 * 60 * 1000
         const val TOKEN_EXCHANGE_TIMEOUT_MS: Int = 30_000
 
-        private val json = Json { ignoreUnknownKeys = true }
+        private val json = lenientJson
 
         /**
          * Extracts the authorization code from any user input form, mirroring
@@ -345,25 +346,26 @@ class OpenRouterOAuthAuth(
             }
 
         internal fun errorDetail(body: JsonObject): String? {
-            (body["error_description"] as? JsonPrimitive)?.takeIf { it.isString }?.let { return it.content }
-            (body["message"] as? JsonPrimitive)?.takeIf { it.isString }?.let { return it.content }
-            body["error"]?.let { field ->
-                (field as? JsonPrimitive)?.takeIf { it.isString }?.let { return it.content }
-                (field as? JsonObject)?.get("message")?.let { message ->
-                    (message as? JsonPrimitive)?.takeIf { it.isString }?.let { return it.content }
-                }
-            }
+            body.string("error_description")?.let { return it }
+            body.string("message")?.let { return it }
+            body.string("error")?.let { return it }
+            body.obj("error")?.string("message")?.let { return it }
             return null
         }
 
         /**
-         * Parses the response body as a JSON object (pi tolerates invalid
-         * JSON on error responses but fails ok responses with pi's message).
+         * Parses the response body as a JSON object. Lenient by design, like
+         * pi openrouter.ts's exchange: pi wraps `response.json()` in a catch
+         * that only throws for ok responses (`OpenRouter OAuth returned
+         * invalid JSON`); an unparseable error body keeps pi's empty `body =
+         * {}` default, and non-object values (arrays, scalars, null — pi's
+         * `typeof parsed === "object" && !Array.isArray(parsed)` check) also
+         * leave the empty object so the non-2xx path reports status only.
          */
         private fun parseBody(response: OAuthHttpResponse): JsonObject {
             val text = response.body.toString(Charsets.UTF_8)
             val parsed = try {
-                Json.parseToJsonElement(text)
+                lenientJson.parseToJsonElement(text)
             } catch (_: Exception) {
                 if (response.status in 200..299) {
                     throw IllegalStateException("OpenRouter OAuth returned invalid JSON")

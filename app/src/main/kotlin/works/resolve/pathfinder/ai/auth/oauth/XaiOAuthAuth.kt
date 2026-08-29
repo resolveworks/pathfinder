@@ -1,14 +1,15 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.ai.utils.strictDouble
 
 /**
  * xAI OAuth device-code flow, ported from pi
@@ -100,13 +101,11 @@ class XaiOAuthAuth(
      * poller applies its default instead of failing.
      */
     private fun parseDeviceCode(body: JsonObject): XaiDeviceCode {
-        val interval = (body["interval"] as? JsonPrimitive)?.takeIf { it.isString.not() && it.content.isNotEmpty() }
-        val intervalSeconds =
-            interval?.content?.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 }
+        val intervalSeconds = body.strictDouble("interval")?.takeIf { it > 0 }
         val verificationUriComplete =
-            (body["verification_uri_complete"] as? JsonPrimitive)
-                ?.takeIf { it.isString && it.content.isNotEmpty() }
-                ?.let { validateVerificationUri(it.content) }
+            body.string("verification_uri_complete")
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { validateVerificationUri(it) }
         return XaiDeviceCode(
             deviceCode = requiredString(body, "device_code"),
             userCode = requiredString(body, "user_code"),
@@ -140,10 +139,10 @@ class XaiOAuthAuth(
                             credentialsFromTokenResponse(response.body),
                         )
                     } else {
-                        when (val error = (response.body["error"] as? JsonPrimitive)?.takeIf { it.isString }?.content) {
+                        when (val error = response.body.string("error")) {
                         "authorization_pending" -> OAuthDeviceCodePollResult.Pending
                         "slow_down" -> OAuthDeviceCodePollResult.SlowDown(
-                            intervalSeconds = numberField(response.body, "interval"),
+                            intervalSeconds = response.body.strictDouble("interval"),
                         )
                         "access_denied", "authorization_denied" ->
                             OAuthDeviceCodePollResult.Failed("xAI device authorization was denied")
@@ -199,30 +198,23 @@ class XaiOAuthAuth(
 
     /** Test seam: parses a raw JSON body via [parseDeviceCode]. */
     internal fun parseDeviceCodeForTest(body: String): XaiDeviceCode =
-        parseDeviceCode(Json.parseToJsonElement(body) as JsonObject)
+        parseDeviceCode(lenientJson.parseToJsonElement(body) as JsonObject)
 
     /** Port of pi `requiredString`. */
     private fun requiredString(body: JsonObject, field: String): String {
-        val value = (body[field] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val value = body.string(field)
         if (value.isNullOrEmpty()) {
             throw IllegalStateException("Invalid xAI OAuth response field: $field")
         }
         return value
     }
 
-    /** Port of pi `positiveNumber`. */
+    /** Port of pi `positiveNumber` (finite, non-string-encoded, > 0). */
     private fun positiveNumber(body: JsonObject, field: String): Long {
-        val value = numberField(body, field) ?: throw invalidField(field)
+        val value = body.strictDouble(field) ?: throw invalidField(field)
         if (value <= 0) throw invalidField(field)
         return value.toLong()
     }
-
-    private fun numberField(body: JsonObject, field: String): Double? =
-        (body[field] as? JsonPrimitive)
-            ?.takeIf { !it.isString }
-            ?.content
-            ?.toDoubleOrNull()
-            ?.takeIf { it.isFinite() }
 
     private fun invalidField(field: String): IllegalStateException =
         IllegalStateException("Invalid xAI OAuth response field: $field")
@@ -288,7 +280,7 @@ class XaiOAuthAuth(
 
         val text = response.body.toString(Charsets.UTF_8)
         val parsed = try {
-            Json.parseToJsonElement(text)
+            lenientJson.parseToJsonElement(text)
         } catch (_: Exception) {
             throw IllegalStateException("xAI OAuth returned invalid JSON (HTTP ${response.status})")
         }
@@ -301,9 +293,8 @@ class XaiOAuthAuth(
 
     /** Port of pi `requestFailure` (message verbatim, no secrets). */
     private fun requestFailure(action: String, response: FormResponse): IllegalStateException {
-        val error = (response.body["error"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-        val description =
-            (response.body["error_description"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val error = response.body.string("error")
+        val description = response.body.string("error_description")
         val detail = listOfNotNull(error, description).joinToString(": ")
         return IllegalStateException(
             "xAI OAuth $action failed (HTTP ${response.status})${if (detail.isNotEmpty()) ": $detail" else ""}",

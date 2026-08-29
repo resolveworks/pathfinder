@@ -1,8 +1,8 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 import kotlin.math.max
 
@@ -102,9 +102,12 @@ internal suspend fun <T> pollOAuthDeviceCodeFlow(
     }
 
     while (now() < deadline) {
-        val job = coroutineContext[Job]
-        if (job?.isActive == false) {
-            throw CancellationException(CANCEL_MESSAGE)
+        // pi checks `signal.aborted` before each poll; coroutine cancellation
+        // carries pi's cancel message.
+        try {
+            coroutineContext.ensureActive()
+        } catch (error: CancellationException) {
+            throw CancellationException(CANCEL_MESSAGE, error)
         }
 
         when (val result = options.poll()) {

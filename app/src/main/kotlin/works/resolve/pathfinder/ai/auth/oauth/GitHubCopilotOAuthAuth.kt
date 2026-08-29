@@ -4,13 +4,12 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoField
 import java.util.Base64
 import java.util.Locale
-import kotlin.coroutines.coroutineContext
 import kotlin.math.max
 import kotlin.math.pow
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.serialization.json.Json
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -24,6 +23,11 @@ import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.strictDouble
+import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.ai.utils.stringOrNull
 
 /**
  * GitHub Copilot OAuth account flow, ported from pi
@@ -83,7 +87,13 @@ class GitHubCopilotOAuthAuth(
                 placeholder = "company.ghe.com",
             ),
         )
-        if (coroutineContext[Job]?.isActive == false) throw CancellationException("Login cancelled")
+        // pi checks `signal.aborted` after the prompt; mapped to cooperative
+        // cancellation (conventions doc) with pi's "Login cancelled" message.
+        try {
+            currentCoroutineContext().ensureActive()
+        } catch (error: CancellationException) {
+            throw CancellationException("Login cancelled", error)
+        }
 
         val trimmed = input.trim()
         val enterpriseDomain = normalizeDomain(input)
@@ -215,12 +225,11 @@ class GitHubCopilotOAuthAuth(
         data class AccountModel(val id: String, val pickerEnabled: Boolean, val policyState: String?)
 
         val accountModels = data.flatMap { rawItem ->
-            val item = rawItem as? JsonObject
-            val id = (item?.get("id") as? JsonPrimitive)?.takeIf { it.isString }?.content
-            if (item == null || id == null) return@flatMap emptyList()
+            val item = rawItem as? JsonObject ?: return@flatMap emptyList()
+            val id = item.string("id") ?: return@flatMap emptyList()
 
-            val capabilities = item["capabilities"] as? JsonObject
-            val supports = capabilities?.get("supports") as? JsonObject
+            val capabilities = item.obj("capabilities")
+            val supports = capabilities.obj("supports")
             // pi: `supports?.tool_calls === false` — only an explicit boolean false skips.
             if (supports?.get("tool_calls") == JsonPrimitive(false)) return@flatMap emptyList()
 
@@ -228,8 +237,7 @@ class GitHubCopilotOAuthAuth(
                 AccountModel(
                     id = id,
                     pickerEnabled = item["model_picker_enabled"] == JsonPrimitive(true),
-                    policyState = (item["policy"] as? JsonObject)?.get("state")
-                        ?.let { it as? JsonPrimitive }?.takeIf { it.isString }?.content,
+                    policyState = item.obj("policy")?.get("state").stringOrNull(),
                 ),
             )
         }
@@ -347,7 +355,7 @@ class GitHubCopilotOAuthAuth(
             throw statusError(response.status, response.body)
         }
         val raw = try {
-            Json.parseToJsonElement(response.body.toString(Charsets.UTF_8))
+            lenientJson.parseToJsonElement(response.body.toString(Charsets.UTF_8))
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             throw IllegalStateException("Invalid Copilot models response")
@@ -363,7 +371,7 @@ class GitHubCopilotOAuthAuth(
             throw statusError(response.status, response.body)
         }
         return try {
-            Json.parseToJsonElement(response.body.toString(Charsets.UTF_8))
+            lenientJson.parseToJsonElement(response.body.toString(Charsets.UTF_8))
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             throw IllegalStateException("Invalid JSON (HTTP ${response.status})")
@@ -399,11 +407,11 @@ class GitHubCopilotOAuthAuth(
             ),
         ).let { recordOr(it, "Invalid device code response") }
 
-        val deviceCode = data.stringField("device_code")
-        val userCode = data.stringField("user_code")
-        val verificationUri = data.stringField("verification_uri")
-        val interval = data.numberField("interval")
-        val expiresIn = data.numberField("expires_in")
+        val deviceCode = data.string("device_code")
+        val userCode = data.string("user_code")
+        val verificationUri = data.string("verification_uri")
+        val interval = data.strictDouble("interval")
+        val expiresIn = data.strictDouble("expires_in")
 
         // pi: `interval` may be absent but must be a number when present.
         val intervalAbsent = data["interval"] == null || data["interval"] is JsonNull
@@ -453,19 +461,19 @@ class GitHubCopilotOAuthAuth(
                     ).let { recordOr(it, "Invalid device token response") }
 
                     when {
-                        raw.stringField("access_token") != null ->
-                            OAuthDeviceCodePollResult.Complete(raw.stringField("access_token")!!)
+                        raw.string("access_token") != null ->
+                            OAuthDeviceCodePollResult.Complete(raw.string("access_token")!!)
 
-                        raw.stringField("error") != null -> when (raw.stringField("error")) {
+                        raw.string("error") != null -> when (raw.string("error")) {
                                 "authorization_pending" -> OAuthDeviceCodePollResult.Pending
                                 "slow_down" -> OAuthDeviceCodePollResult.SlowDown(
-                                    intervalSeconds = raw.numberField("interval"),
+                                    intervalSeconds = raw.strictDouble("interval"),
                                 )
                                 else -> {
-                                    val description = raw.stringField("error_description")
+                                    val description = raw.string("error_description")
                                     val descriptionSuffix = description?.let { ": $it" } ?: ""
                                     OAuthDeviceCodePollResult.Failed(
-                                        "Device flow failed: ${raw.stringField("error")}$descriptionSuffix",
+                                        "Device flow failed: ${raw.string("error")}$descriptionSuffix",
                                     )
                                 }
                             }
@@ -504,8 +512,8 @@ class GitHubCopilotOAuthAuth(
             body = ByteArray(0),
         ).let { recordOr(it, "Invalid Copilot token response") }
 
-        val token = raw.stringField("token")
-        val expiresAt = raw.numberField("expires_at")
+        val token = raw.string("token")
+        val expiresAt = raw.strictDouble("expires_at")
         if (token == null || expiresAt == null) {
             throw IllegalStateException("Invalid Copilot token response fields")
         }
@@ -613,8 +621,7 @@ class GitHubCopilotOAuthAuth(
 
     /** Port of pi `copilotEnterpriseDomain`. */
     internal fun copilotEnterpriseDomain(credential: OAuthCredential): String? {
-        val enterpriseUrl = credential.extras["enterpriseUrl"]?.let { it as? JsonPrimitive }
-            ?.takeIf { it.isString }?.content
+        val enterpriseUrl = credential.extras["enterpriseUrl"].stringOrNull()
         if (enterpriseUrl.isNullOrEmpty()) return null
         return normalizeDomain(enterpriseUrl)
     }
@@ -623,24 +630,15 @@ class GitHubCopilotOAuthAuth(
 
     /**
      * pi's `!raw || typeof raw !== "object"` guard: JSON objects pass
-     * through; arrays pass pi's check too (JS arrays are objects) but then
-     * fail field validation; scalars/null fail with [message].
+     * through; arrays pass pi's check too (JS `typeof [] === "object"`), so
+     * they are mapped to the empty object and fail downstream field
+     * validation exactly like upstream; scalars/null fail with [message].
      */
     private fun recordOr(raw: JsonElement?, message: String): JsonObject = when (raw) {
         is JsonObject -> raw
         is JsonArray -> JsonObject(emptyMap())
         else -> throw IllegalStateException(message)
     }
-
-    private fun JsonObject.stringField(field: String): String? =
-        (this[field] as? JsonPrimitive)?.takeIf { it.isString }?.content
-
-    private fun JsonObject.numberField(field: String): Double? =
-        (this[field] as? JsonPrimitive)
-            ?.takeIf { it !is JsonNull && !it.isString }
-            ?.content
-            ?.toDoubleOrNull()
-            ?.takeIf { it.isFinite() }
 
     /**
      * Safe non-OK failure for a status/body pair (Pathfinder security
@@ -659,14 +657,14 @@ class GitHubCopilotOAuthAuth(
 
     private fun safeErrorDetail(body: ByteArray): String {
         val parsed = try {
-            Json.parseToJsonElement(body.toString(Charsets.UTF_8))
+            lenientJson.parseToJsonElement(body.toString(Charsets.UTF_8))
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             return REDACTED_BODY
         }
         val obj = parsed as? JsonObject ?: return REDACTED_BODY
-        val error = obj.stringField("error")
-        val description = obj.stringField("error_description")
+        val error = obj.string("error")
+        val description = obj.string("error_description")
         return listOfNotNull(error, description).joinToString(": ").ifEmpty { REDACTED_BODY }
     }
 

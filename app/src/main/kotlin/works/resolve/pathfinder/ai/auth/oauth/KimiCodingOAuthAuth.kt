@@ -4,20 +4,20 @@ import java.io.IOException
 import java.net.URI
 import java.net.URLEncoder
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.doubleOrNull
-import kotlin.coroutines.coroutineContext
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
-
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.ai.utils.strictDouble
 /**
  * Kimi Code (subscription) OAuth flow, ported from pi
  * `packages/ai/src/auth/oauth/kimi-coding.ts`.
@@ -107,10 +107,14 @@ class KimiCodingOAuthAuth(
         }
 
         val json = readJson(response)
-        val deviceCode = json?.string("device_code")
-        val userCode = json?.string("user_code")
-        val verificationUri = json?.string("verification_uri")
-        val verificationUriComplete = json?.string("verification_uri_complete")
+        // pi's `json?.field` — field access only succeeds on objects (arrays
+        // have no fields, `undefined` upstream), matching pi's
+        // `Record<string, unknown> | null` shape.
+        val record = json as? JsonObject
+        val deviceCode = record.string("device_code")
+        val userCode = record.string("user_code")
+        val verificationUri = record.string("verification_uri")
+        val verificationUriComplete = record.string("verification_uri_complete")
         if (deviceCode == null || userCode == null || verificationUri == null || verificationUriComplete == null ||
             trustedHttpUrl(verificationUriComplete) == null || trustedHttpUrl(verificationUri) == null
         ) {
@@ -119,8 +123,8 @@ class KimiCodingOAuthAuth(
             )
         }
 
-        val interval = json.number("interval")
-        val expiresIn = json.number("expires_in")
+        val interval = record.strictDouble("interval")
+        val expiresIn = record.strictDouble("expires_in")
         return DeviceAuthorization(
             deviceCode = deviceCode,
             userCode = userCode,
@@ -133,9 +137,13 @@ class KimiCodingOAuthAuth(
 
     /** Port of pi `parseTokenResponse`. */
     internal fun parseTokenResponse(json: JsonElement?, operation: String): TokenResponse {
-        val accessToken = json?.string("access_token")
-        val refreshToken = json?.string("refresh_token")
-        val expiresIn = json?.number("expires_in")
+        // strictDouble matches pi's `typeof n === "number" &&
+        // Number.isFinite(n)`: JSON.parse output can never be non-finite, so
+        // the shared finite filter is exactly pi's guard.
+        val record = json as? JsonObject
+        val accessToken = record.string("access_token")
+        val refreshToken = record.string("refresh_token")
+        val expiresIn = record.strictDouble("expires_in")
         if (accessToken.isNullOrEmpty() || refreshToken.isNullOrEmpty() ||
             expiresIn == null || !expiresIn.isFinite() || expiresIn <= 0
         ) {
@@ -192,7 +200,8 @@ class KimiCodingOAuthAuth(
         }
 
         val json = readJson(response)
-        if (response.status in 200..299 && json?.string("access_token") != null) {
+        val record = json as? JsonObject
+        if (response.status in 200..299 && record.string("access_token") != null) {
             return try {
                 OAuthDeviceCodePollResult.Complete(parseTokenResponse(json, "poll"))
             } catch (error: IllegalStateException) {
@@ -200,12 +209,12 @@ class KimiCodingOAuthAuth(
             }
         }
 
-        val error = json?.string("error")
-        val description = json?.string("error_description")?.let { ": $it" } ?: ""
+        val error = record.string("error")
+        val description = record.string("error_description")?.let { ": $it" } ?: ""
         return when (error) {
             "authorization_pending" -> OAuthDeviceCodePollResult.Pending
             "slow_down" -> {
-                val interval = json.number("interval")
+                val interval = record.strictDouble("interval")
                 OAuthDeviceCodePollResult.SlowDown(
                     if (interval != null && interval > 0) interval else null,
                 )
@@ -237,7 +246,7 @@ class KimiCodingOAuthAuth(
         for (attempt in 0..REFRESH_MAX_RETRIES) {
             if (attempt > 0) {
                 delay(1000L shl (attempt - 1))
-                coroutineContext.ensureActive()
+                currentCoroutineContext().ensureActive()
                 // pi: throw new Error("Kimi Code token refresh aborted") when the signal is aborted.
             }
 
@@ -267,13 +276,14 @@ class KimiCodingOAuthAuth(
             }
 
             val json = readJson(response)
+            val record = json as? JsonObject
             if (response.status in 200..299) {
                 return parseTokenResponse(json, "refresh")
             }
 
             // Unauthorized: the stored credential is dead; Models clears it and prompts re-login.
-            if (response.status == 401 || response.status == 403 || json?.string("error") == "invalid_grant") {
-                val description = json?.string("error_description")?.let { ": $it" } ?: ""
+            if (response.status == 401 || response.status == 403 || record.string("error") == "invalid_grant") {
+                val description = record.string("error_description")?.let { ": $it" } ?: ""
                 throw IllegalStateException(
                     "Kimi Code token refresh unauthorized (status ${response.status})$description",
                 )
@@ -348,11 +358,11 @@ class KimiCodingOAuthAuth(
          */
         internal fun readJson(response: OAuthHttpResponse): JsonElement? {
             val parsed = try {
-                Json.parseToJsonElement(response.body.toString(Charsets.UTF_8))
+                lenientJson.parseToJsonElement(response.body.toString(Charsets.UTF_8))
             } catch (_: Exception) {
                 return null
             }
-            return if (parsed is JsonObject || parsed is kotlinx.serialization.json.JsonArray) parsed else null
+            return if (parsed is JsonObject || parsed is JsonArray) parsed else null
         }
 
         /**
@@ -394,18 +404,6 @@ class KimiCodingOAuthAuth(
                 null
             }
         }
-
-        /** pi reads string fields with `typeof === "string"`; arrays have no fields (→ `undefined`). */
-        private fun JsonElement?.string(name: String): String? =
-            ((this as? JsonObject)?.get(name) as? JsonPrimitive)?.takeIf { it.isString }?.content
-
-        /**
-         * pi reads numeric fields with `typeof === "number"` +
-         * `Number.isFinite`; quoted numeric strings (JSON string primitives)
-         * are rejected so callers apply their fallbacks, exactly like pi.
-         */
-        private fun JsonElement?.number(name: String): Double? =
-            ((this as? JsonObject)?.get(name) as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull
 
         /** pi's `JSON.stringify(json)` rendering (`"null"` for null, compact JSON otherwise). */
         private fun JsonElement?.jsonString(): String = this?.toString() ?: "null"
