@@ -60,8 +60,10 @@ dependencies {
     // Coroutines (used directly by production code; version shared with coroutines-test)
     implementation(libs.kotlinx.coroutines.android)
 
-    // Settings persistence
+    // OAuth login URLs open in a Custom Tab (ui/CustomTab.kt)
     implementation(libs.androidx.browser)
+
+    // Settings persistence
     implementation(libs.androidx.datastore.preferences)
 
     // HTTP + JSON for the native provider layer (works.resolve.pathfinder.ai)
