@@ -5,7 +5,10 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.core.clampThinkingLevel
-import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.core.toModelThinkingLevel
+import works.resolve.pathfinder.ai.core.toThinkingLevelOrNull
+import works.resolve.pathfinder.ai.utils.optionsToString
+import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -48,12 +51,20 @@ object GoogleRequest {
         val toolChoice: String? = null,
         val thinking: GoogleThinking? = null,
     ) {
-        override fun toString(): String =
-            "CommonOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
-                ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
-                ", timeoutMs=$timeoutMs, maxRetries=$maxRetries, maxRetryDelayMs=$maxRetryDelayMs" +
-                ", env=${env.keys}, headers=${headers.keys}, toolChoice=$toolChoice," +
-                " thinking=${thinking?.enabled})"
+        override fun toString(): String = optionsToString(
+            "CommonOptions",
+            "apiKey" to redactedSecret(apiKey),
+            "sessionId" to sessionId,
+            "temperature" to temperature,
+            "maxTokens" to maxTokens,
+            "timeoutMs" to timeoutMs,
+            "maxRetries" to maxRetries,
+            "maxRetryDelayMs" to maxRetryDelayMs,
+            "env" to env.keys,
+            "headers" to headers.keys,
+            "toolChoice" to toolChoice,
+            "thinking" to thinking?.enabled,
+        )
     }
 
     /** pi's buildParams, on the REST wire. */
@@ -172,9 +183,6 @@ object GoogleRequest {
         return GoogleThinking(enabled = true, budgetTokens = getGoogleBudget(model, resolvedLevel, budgets))
     }
 
-    private fun ThinkingLevel.toModelThinkingLevel(): ModelThinkingLevel =
-        ModelThinkingLevel.valueOf(name)
-
     /** pi's getThinkingLevel. */
     private fun getThinkingLevel(
         effort: GoogleShared.ResolvedGoogleThinkingLevel,
@@ -213,8 +221,12 @@ object GoogleRequest {
         level: GoogleShared.ResolvedGoogleThinkingLevel,
         customBudgets: Map<ThinkingLevel, Int>,
     ): Int {
-        val asThinkingLevel = ThinkingLevel.valueOf(level.name)
-        customBudgets[asThinkingLevel]?.let { return it }
+        // ResolvedGoogleThinkingLevel names are a subset of ModelThinkingLevel
+        // (no off/xhigh/max), so the shared up/down mappers cover the
+        // TS `Record<ThinkingLevel, number>` lookup without a hand-rolled
+        // valueOf on the resolved level.
+        val asThinkingLevel = ModelThinkingLevel.valueOf(level.name).toThinkingLevelOrNull()
+        asThinkingLevel?.let { customBudgets[it] }?.let { return it }
 
         val defaults = when {
             model.id.contains("2.5-pro") -> mapOf(

@@ -15,9 +15,9 @@ import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
+import works.resolve.pathfinder.ai.utils.lenientJson
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -375,14 +375,11 @@ object GoogleShared {
     }
 
     private fun parseArgsOrEmpty(raw: String): JsonElement = try {
-        val parsed = Json.parseToJsonElement(raw)
+        val parsed = lenientJson.parseToJsonElement(raw)
         if (parsed is JsonObject) parsed else JsonObject(emptyMap())
     } catch (_: Exception) {
         JsonObject(emptyMap())
     }
-
-    /** JSON parser shared by argument replay and stream decoding. */
-    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
     // JSON Schema meta-declarations stripped when using legacy OpenAPI `parameters`.
     private val JSON_SCHEMA_META_DECLARATIONS = setOf(
@@ -485,7 +482,3 @@ object GoogleShared {
 
 }
 
-private typealias Json = kotlinx.serialization.json.Json
-
-private fun JsonElement?.stringOrNull(): String? =
-    (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content

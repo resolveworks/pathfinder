@@ -18,15 +18,17 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.int
+import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
+import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.strOrNull
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * Streaming engine for the Google Generative AI adapter. This is the loop
@@ -192,7 +194,7 @@ internal object GoogleStreamEngine {
         fun processChunk(event: SseEvent): List<AssistantMessageEvent> {
             val events = mutableListOf<AssistantMessageEvent>()
             val chunk = try {
-                GoogleShared.json.parseToJsonElement(event.data)
+                lenientJson.parseToJsonElement(event.data)
             } catch (error: Exception) {
                 throw ProviderStreamException(
                     "Malformed SSE JSON payload: ${error.message ?: error::class.simpleName}",
@@ -205,7 +207,7 @@ internal object GoogleStreamEngine {
             // @google/genai documents responseId as an output-only identifier;
             // keep the first non-empty one from the stream.
             if (responseId.isNullOrEmpty()) {
-                responseId = chunk["responseId"].stringOrNull()?.takeIf { it.isNotEmpty() }
+                responseId = chunk["responseId"].strOrNull()?.takeIf { it.isNotEmpty() }
             }
 
             val candidate = (chunk["candidates"] as? JsonArray)?.firstOrNull() as? JsonObject
@@ -214,7 +216,7 @@ internal object GoogleStreamEngine {
                 events += processPart(part)
             }
 
-            candidate?.get("finishReason").stringOrNull()?.let { reason ->
+            candidate?.get("finishReason").strOrNull()?.let { reason ->
                 rawStopReason = reason
                 stopReason = GoogleShared.mapStopReason(reason)
                 if (content.any { it is ToolCall } && stopReason == StopReason.STOP) {
@@ -222,17 +224,18 @@ internal object GoogleStreamEngine {
                 }
             }
 
-            (chunk["usageMetadata"] as? JsonObject)?.let { meta ->                val promptTokens = meta.intOrZero("promptTokenCount")
-                val cachedTokens = meta.intOrZero("cachedContentTokenCount")
-                val candidatesTokens = meta.intOrZero("candidatesTokenCount")
-                val thoughtsTokens = meta.intOrZero("thoughtsTokenCount")
+            chunk.obj("usageMetadata")?.let { meta ->
+                val promptTokens = meta.int("promptTokenCount") ?: 0
+                val cachedTokens = meta.int("cachedContentTokenCount") ?: 0
+                val candidatesTokens = meta.int("candidatesTokenCount") ?: 0
+                val thoughtsTokens = meta.int("thoughtsTokenCount") ?: 0
                 val newUsage = Usage(
                     input = promptTokens - cachedTokens,
                     output = candidatesTokens + thoughtsTokens,
                     cacheRead = cachedTokens,
                     cacheWrite = 0,
                     reasoning = thoughtsTokens,
-                    totalTokens = meta.intOrZero("totalTokenCount"),
+                    totalTokens = meta.int("totalTokenCount") ?: 0,
                 )
                 usage = newUsage.copy(cost = calculateCost(model, newUsage))
             }
@@ -242,7 +245,7 @@ internal object GoogleStreamEngine {
 
         private fun processPart(part: JsonObject): List<AssistantMessageEvent> {
             val events = mutableListOf<AssistantMessageEvent>()
-            val text = part["text"].stringOrNull()
+            val text = part["text"].strOrNull()
 
             if (text != null) {
                 val isThinking = GoogleShared.isThinkingPart(part)
@@ -267,14 +270,14 @@ internal object GoogleStreamEngine {
                     currentThinking!! .append(text)
                     currentThinkingSignature = GoogleShared.retainThoughtSignature(
                         currentThinkingSignature,
-                        part["thoughtSignature"].stringOrNull(),
+                        part["thoughtSignature"].strOrNull(),
                     )
                     events.add(AssistantMessageEvent.ThinkingDelta(blockIndex(), text, snapshot()))
                 } else {
                     currentText!!.append(text)
                     currentTextSignature = GoogleShared.retainThoughtSignature(
                         currentTextSignature,
-                        part["thoughtSignature"].stringOrNull(),
+                        part["thoughtSignature"].strOrNull(),
                     )
                     events.add(AssistantMessageEvent.TextDelta(blockIndex(), text, snapshot()))
                 }
@@ -285,8 +288,8 @@ internal object GoogleStreamEngine {
                 closeOpenBlock()?.let { events.add(it) }
 
                 val args = functionCall["args"] as? JsonObject ?: JsonObject(emptyMap())
-                val name = functionCall["name"].stringOrNull() ?: ""
-                val providedId = functionCall["id"].stringOrNull()
+                val name = functionCall["name"].strOrNull() ?: ""
+                val providedId = functionCall["id"].strOrNull()
                 val needsNewId = providedId.isNullOrEmpty() ||
                     content.any { it is ToolCall && it.id == providedId }
                 val toolCallId = if (needsNewId) {
@@ -299,7 +302,7 @@ internal object GoogleStreamEngine {
                     id = toolCallId,
                     name = name,
                     arguments = args.toString(),
-                    thoughtSignature = part["thoughtSignature"].stringOrNull()
+                    thoughtSignature = part["thoughtSignature"].strOrNull()
                         ?.takeIf { it.isNotEmpty() },
                 )
                 content.add(toolCall)
@@ -332,12 +335,4 @@ internal object GoogleStreamEngine {
             return null
         }
     }
-}
-
-private fun kotlinx.serialization.json.JsonElement?.stringOrNull(): String? =
-    (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
-
-private fun JsonObject.intOrZero(key: String): Int {
-    val primitive = (this[key] as? JsonPrimitive)?.takeIf { it !is JsonNull } ?: return 0
-    return runCatching { primitive.content.toInt() }.getOrElse { 0 }
 }
