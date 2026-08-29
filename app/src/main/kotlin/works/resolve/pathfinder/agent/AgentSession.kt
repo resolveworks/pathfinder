@@ -25,6 +25,7 @@ import works.resolve.pathfinder.agent.compaction.prepareCompaction
 import works.resolve.pathfinder.agent.compaction.shouldCompact
 import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.settings.RetrySettings
+import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -79,6 +80,8 @@ class AgentSession(
     private val models: Models? = null,
     /** Injectable backoff sleep so tests never wait. */
     private val sleep: suspend (Long) -> Unit = { delay(it) },
+    /** Wall clock for minting message timestamps (TS→Kotlin timing rule). */
+    private val clock: Clock = Clock.System,
 ) {
     /** The session tree; only this class appends to it during prompts. */
     var conversation: Conversation = conversation
@@ -181,7 +184,7 @@ class AgentSession(
         }
 
         try {
-            val promptMessage = UserMessage.ofText(text, System.currentTimeMillis())
+            val promptMessage = UserMessage.ofText(text, clock.now().toEpochMilliseconds())
             coroutineScope {
                 // Lazily started so promptJob is published before the job can
                 // run anything, mirroring Agent.prompt's abort guarantee.
@@ -474,6 +477,7 @@ class AgentSession(
                         baseDelayMs = retrySettings.baseDelayMs,
                     ),
                     callbacks = summarizationRetryCallbacks(reason),
+                    clock = clock,
                 )
             ) {
                 is CompactionOutcome.Err -> {

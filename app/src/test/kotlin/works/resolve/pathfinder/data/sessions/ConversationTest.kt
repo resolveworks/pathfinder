@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.data.sessions
 
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
 import kotlin.test.assertFailsWith
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -10,14 +11,13 @@ import org.junit.Test
 class ConversationTest {
 
     private var nextId = 0
-    private var now = 0L
 
     private fun newConversation(): Conversation =
         Conversation(
             entries = emptyList(),
             leafId = null,
             idGenerator = { "e${nextId++}" },
-            clock = { ++now },
+            clock = FakeClock(),
         )
 
     private fun msg(text: String) = UserMessage.ofText(text)
@@ -131,11 +131,10 @@ class ConversationTest {
     @Test
     fun deepLinearConversationDoesNotOverflowStack() {
         var next = 0
-        var tick = 0L
         var conversation = Conversation(
             emptyList(), null,
             idGenerator = { "d${next++}" },
-            clock = { ++tick },
+            clock = FakeClock(),
         )
         repeat(20_000) { conversation = conversation.append(msg("m$it")) }
 

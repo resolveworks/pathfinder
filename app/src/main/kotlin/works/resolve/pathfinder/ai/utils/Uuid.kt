@@ -23,6 +23,11 @@ import java.security.SecureRandom
  *   keep the same monotonicity guarantee under Kotlin concurrency.
  * - pi extracts the timestamp bytes with float division on a double; here the
  *   equivalent `Long` shifts are used.
+ *
+ * The internal `System.currentTimeMillis()` below is a deliberate exception
+ * to the "no System.currentTimeMillis in domain code" timing rule: this is a
+ * verbatim port of pi's `Date.now()`-based generator, and reading wall time is
+ * the function's entire job (it is not minting event timestamps).
  */
 fun uuidv7(): String = Uuidv7.next()
 

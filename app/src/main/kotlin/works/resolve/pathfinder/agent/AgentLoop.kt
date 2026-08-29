@@ -12,6 +12,7 @@ import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.utils.lenientJson
+import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
@@ -56,6 +57,8 @@ data class AgentLoopConfig(
      * agent-loop.ts).
      */
     val toolExecution: ToolExecutionMode = ToolExecutionMode.PARALLEL,
+    /** Wall clock for minting message timestamps (TS→Kotlin timing rule). */
+    val clock: Clock = Clock.System,
 )
 
 /** Lifecycle events emitted by the agent loop, reduced from pi's AgentEvent. */
@@ -338,7 +341,7 @@ private suspend fun runLoop(
             // runLoop comment, agent-loop.ts:210-216).
             val executedToolBatch =
                 if (message.stopReason == StopReason.LENGTH) {
-                    failToolCallsFromTruncatedMessage(toolCalls, emit)
+                    failToolCallsFromTruncatedMessage(toolCalls, config.clock, emit)
                 } else {
                     executeToolCalls(context, toolCalls, config, emit)
                 }
@@ -442,7 +445,7 @@ private suspend fun streamAssistantResponse(
                 errorMessage = "Provider stream completed without a terminal event",
             )
         } else {
-            unsupportedErrorMessage(config.model, System.currentTimeMillis())
+            unsupportedErrorMessage(config.model, config.clock.now().toEpochMilliseconds())
         }
         if (!started) {
             emit(AgentEvent.MessageStart(message))
@@ -465,6 +468,7 @@ private suspend fun streamAssistantResponse(
  */
 private suspend fun failToolCallsFromTruncatedMessage(
     toolCalls: List<ToolCall>,
+    clock: Clock,
     emit: suspend (AgentEvent) -> Unit,
 ): ExecutedToolCallBatch {
     val messages = mutableListOf<ToolResultMessage>()
@@ -485,7 +489,7 @@ private suspend fun failToolCallsFromTruncatedMessage(
             isError = true,
         )
         emitToolExecutionEnd(finalized, emit)
-        val toolResultMessage = createToolResultMessage(finalized)
+        val toolResultMessage = createToolResultMessage(finalized, clock)
         emitToolResultMessage(toolResultMessage, emit)
         messages.add(toolResultMessage)
     }
@@ -549,7 +553,7 @@ private suspend fun executeToolCallsSequential(
         }
 
         emitToolExecutionEnd(finalized, emit)
-        val toolResultMessage = createToolResultMessage(finalized)
+        val toolResultMessage = createToolResultMessage(finalized, config.clock)
         emitToolResultMessage(toolResultMessage, emit)
         finalizedCalls.add(finalized)
         messages.add(toolResultMessage)
@@ -617,7 +621,7 @@ private suspend fun executeToolCallsParallel(
     }
     val messages = mutableListOf<ToolResultMessage>()
     for (finalized in orderedFinalizedCalls) {
-        val toolResultMessage = createToolResultMessage(finalized)
+        val toolResultMessage = createToolResultMessage(finalized, config.clock)
         emitToolResultMessage(toolResultMessage, emit)
         messages.add(toolResultMessage)
     }
@@ -800,7 +804,10 @@ private suspend fun emitToolExecutionEnd(
  * `content ?? []` null-guard is unnecessary in Kotlin —
  * [AgentToolResult.content] is a non-null list.
  */
-private fun createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResultMessage =
+private fun createToolResultMessage(
+    finalized: FinalizedToolCallOutcome,
+    clock: Clock,
+): ToolResultMessage =
     ToolResultMessage(
         toolCallId = finalized.toolCall.id,
         toolName = finalized.toolCall.name,
@@ -809,7 +816,7 @@ private fun createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolRe
         usage = finalized.result.usage,
         addedToolNames = finalized.result.addedToolNames,
         isError = finalized.isError,
-        timestamp = System.currentTimeMillis(),
+        timestamp = clock.now().toEpochMilliseconds(),
     )
 
 /** Ported from pi's emitToolResultMessage (agent-loop.ts:774-778). */

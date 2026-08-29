@@ -2,6 +2,7 @@ package works.resolve.pathfinder.data.sessions
 
 import java.io.File
 import java.io.IOException
+import kotlin.time.Clock
 import works.resolve.pathfinder.ai.utils.uuidv7
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -29,7 +30,7 @@ import kotlinx.coroutines.withContext
  */
 class SessionStore(
     private val root: File,
-    private val clock: () -> Long = { System.currentTimeMillis() },
+    private val clock: Clock = Clock.System,
     /** Session ids default to pi's `options.id ?? uuidv7()` (agent jsonl repo). */
     private val idFactory: () -> String = ::uuidv7,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -48,7 +49,7 @@ class SessionStore(
 
     /** Creates and persists a new (initially empty) session. */
     override suspend fun create(title: String): Session = mutex.withLock {
-        val now = clock()
+        val now = clock.now().toEpochMilliseconds()
         val session = Session(
             id = idFactory(),
             title = title,
@@ -93,7 +94,7 @@ class SessionStore(
      * stored session (with the new timestamp and defensive copies).
      */
     override suspend fun save(session: Session): Session = mutex.withLock {
-        val stored = defensiveCopy(session).copy(updatedAt = clock())
+        val stored = defensiveCopy(session).copy(updatedAt = clock.now().toEpochMilliseconds())
         withContext(ioDispatcher) { write(stored) }
         stored
     }

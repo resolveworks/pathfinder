@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.agent.compaction
 
+import kotlin.time.Clock
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Content
@@ -537,12 +538,12 @@ private fun summaryMaxTokens(reserveTokens: Int, model: Model, fraction: Double)
     return if (model.maxTokens > 0) minOf(fromReserve, model.maxTokens) else fromReserve
 }
 
-private fun summarizationContext(promptText: String): Context = Context(
+private fun summarizationContext(promptText: String, clock: Clock): Context = Context(
     systemPrompt = SUMMARIZATION_SYSTEM_PROMPT,
     messages = listOf(
         UserMessage(
             content = listOf(TextContent(promptText)),
-            timestamp = System.currentTimeMillis(),
+            timestamp = clock.now().toEpochMilliseconds(),
         ),
     ),
 )
@@ -569,7 +570,10 @@ private fun completionOptions(
  * cancellation here); the `thinkingLevel` parameter uses
  * [ModelThinkingLevel] because pi's `ThinkingLevel` includes "off", which
  * pathfinder's core `ThinkingLevel` enum models as `ModelThinkingLevel.OFF`;
- * the retry runner adaptation is documented on [completeSimpleWithRetries].
+ * the retry runner adaptation is documented on [completeSimpleWithRetries]; and
+ * the wall [clock] used to timestamp the summarization prompt is received
+ * from the caller (TS→Kotlin timing rule: pure functions get the clock from
+ * their caller) rather than defaulting here.
  */
 suspend fun generateSummary(
     currentMessages: List<Message>,
@@ -582,10 +586,11 @@ suspend fun generateSummary(
     retry: RetryPolicy? = null,
     callbacks: RetryCallbacks? = null,
     retryRunner: Retry = DEFAULT_RETRY,
+    clock: Clock,
 ): CompactionResult<String> =
     when (val result = generateSummaryWithUsage(
         currentMessages, models, model, reserveTokens,
-        customInstructions, previousSummary, thinkingLevel, retry, callbacks, retryRunner,
+        customInstructions, previousSummary, thinkingLevel, retry, callbacks, retryRunner, clock,
     )) {
         is CompactionResult.Ok -> ok(result.value.text)
         is CompactionResult.Err -> err(result.error)
@@ -611,6 +616,7 @@ suspend fun generateSummaryWithUsage(
     retry: RetryPolicy? = null,
     callbacks: RetryCallbacks? = null,
     retryRunner: Retry = DEFAULT_RETRY,
+    clock: Clock,
 ): CompactionResult<GeneratedSummary> {
     val maxTokens = summaryMaxTokens(reserveTokens, model, 0.8)
     var basePrompt = if (previousSummary != null) UPDATE_SUMMARIZATION_PROMPT else SUMMARIZATION_PROMPT
@@ -627,7 +633,7 @@ suspend fun generateSummaryWithUsage(
     val response = completeSimpleWithRetries(
         models,
         model,
-        summarizationContext(promptText),
+        summarizationContext(promptText, clock),
         completionOptions(model, maxTokens, thinkingLevel),
         retry,
         callbacks,
@@ -756,7 +762,8 @@ fun prepareCompaction(
  * Divergences: pi's `signal` parameter is dropped (coroutine cancellation);
  * `details` is typed [CompactionDetails] rather than upstream's generic
  * `T = unknown`. The retry runner adaptation is documented on
- * [completeSimpleWithRetries].
+ * [completeSimpleWithRetries]. The wall [clock] for the summarization
+ * prompts is received from the caller (TS→Kotlin timing rule).
  */
 suspend fun compact(
     preparation: CompactionPreparation,
@@ -767,6 +774,7 @@ suspend fun compact(
     retry: RetryPolicy? = null,
     callbacks: RetryCallbacks? = null,
     retryRunner: Retry = DEFAULT_RETRY,
+    clock: Clock,
 ): CompactionResult<CompactResult> {
     val (messagesToSummarize, turnPrefixMessages, retainedTail, isSplitTurn, tokensBefore, previousSummary, fileOps, settings) =
         preparation
@@ -780,7 +788,7 @@ suspend fun compact(
         if (messagesToSummarize.isNotEmpty()) {
             val historyResult = generateSummaryWithUsage(
                 messagesToSummarize, models, model, settings.reserveTokens,
-                customInstructions, previousSummary, thinkingLevel, retry, callbacks, retryRunner,
+                customInstructions, previousSummary, thinkingLevel, retry, callbacks, retryRunner, clock,
             )
             if (historyResult is CompactionResult.Err) return err(historyResult.error)
             historyResult as CompactionResult.Ok
@@ -789,7 +797,7 @@ suspend fun compact(
         }
         val turnPrefixResult = generateTurnPrefixSummary(
             turnPrefixMessages, models, model, settings.reserveTokens,
-            thinkingLevel, retry, callbacks, retryRunner,
+            thinkingLevel, retry, callbacks, retryRunner, clock,
         )
         if (turnPrefixResult is CompactionResult.Err) return err(turnPrefixResult.error)
         turnPrefixResult as CompactionResult.Ok
@@ -799,7 +807,7 @@ suspend fun compact(
     } else {
         val summaryResult = generateSummaryWithUsage(
             messagesToSummarize, models, model, settings.reserveTokens,
-            customInstructions, previousSummary, thinkingLevel, retry, callbacks, retryRunner,
+            customInstructions, previousSummary, thinkingLevel, retry, callbacks, retryRunner, clock,
         )
         if (summaryResult is CompactionResult.Err) return err(summaryResult.error)
         summaryResult as CompactionResult.Ok
@@ -834,6 +842,7 @@ private suspend fun generateTurnPrefixSummary(
     retry: RetryPolicy?,
     callbacks: RetryCallbacks?,
     retryRunner: Retry,
+    clock: Clock,
 ): CompactionResult<GeneratedSummary> {
     val maxTokens = summaryMaxTokens(reserveTokens, model, 0.5)
     val conversationText = serializeConversation(messages)
@@ -842,7 +851,7 @@ private suspend fun generateTurnPrefixSummary(
     val response = completeSimpleWithRetries(
         models,
         model,
-        summarizationContext(promptText),
+        summarizationContext(promptText, clock),
         completionOptions(model, maxTokens, thinkingLevel),
         retry,
         callbacks,
