@@ -31,6 +31,7 @@ import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.Transport
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.WebSocketCloseException
@@ -63,11 +64,8 @@ class OpenAICodexWebSocketStreamTest {
         responsesCompat = OpenAiResponsesCompat(supportsStrictMode = true),
     )
 
-    /** pi's tests reset the module state between cases. */
-    private suspend fun cleanSlate() {
-        OpenAICodexWebSocketSessions.nowMs = System::currentTimeMillis
-        OpenAICodexWebSocketSessions.resetForTest()
-    }
+    /** Fresh pooled-session state per test (pi's tests reset module state between cases). */
+    private fun cleanSlate() = OpenAICodexWebSocketSessions(FakeClock())
 
     private fun jwt(accountId: String): String {
         val encode: (String) -> String = { text ->
@@ -152,7 +150,8 @@ class OpenAICodexWebSocketStreamTest {
     private fun api(
         http: FakeTransport,
         ws: WebSocketStreamingTransport,
-    ) = OpenAICodexResponsesApi(http, webSocketTransport = ws)
+        sessions: OpenAICodexWebSocketSessions = cleanSlate(),
+    ) = OpenAICodexResponsesApi(http, webSocketTransport = ws, webSocketSessions = sessions)
 
     // ------------------------------------------------------------------
     // Server event fixtures (pi's buildSSEPayload / mock shapes)
@@ -251,11 +250,11 @@ class OpenAICodexWebSocketStreamTest {
 
     @Test
     fun `auto transport uses websocket with cached context`() = runTest {
-        cleanSlate()
+        val sessions = cleanSlate()
         val ws = FakeWebSocketTransport()
         val http = FakeTransport()
         ws.onConnect = { it.onSend = { _ -> it.serverAll(textEvents("resp_1")) } }
-        val api = api(http, ws)
+        val api = api(http, ws, sessions)
 
         val events = api.stream(
             model,
@@ -281,17 +280,17 @@ class OpenAICodexWebSocketStreamTest {
         assertEquals("responses_websockets=2026-02-06", headers["OpenAI-Beta"])
         assertEquals("acc_test", headers["chatgpt-account-id"])
         assertTrue(http.requests.isEmpty())
-        val stats = getOpenAICodexWebSocketDebugStats("session-auto")!!
+        val stats = sessions.getOpenAICodexWebSocketDebugStats("session-auto")!!
         assertEquals(1, stats.cachedContextRequests)
         assertEquals(1, stats.fullContextRequests)
     }
 
     @Test
     fun `second request sends previous_response_id and the input delta only`() = runTest {
-        cleanSlate()
+        val sessions = cleanSlate()
         val ws = FakeWebSocketTransport()
         val http = FakeTransport()
-        val api = api(http, ws)
+        val api = api(http, ws, sessions)
 
         val firstContext = Context(
             systemPrompt = "You are a helpful assistant.",
@@ -348,7 +347,7 @@ class OpenAICodexWebSocketStreamTest {
             },
             secondFrame["input"],
         )
-        val stats = getOpenAICodexWebSocketDebugStats("session-1")!!
+        val stats = sessions.getOpenAICodexWebSocketDebugStats("session-1")!!
         assertEquals(2, stats.requests)
         assertEquals(1, stats.connectionsCreated)
         assertEquals(1, stats.connectionsReused)
@@ -362,10 +361,10 @@ class OpenAICodexWebSocketStreamTest {
 
     @Test
     fun `cached websockets are scoped to the authenticated account`() = runTest {
-        cleanSlate()
+        val sessions = cleanSlate()
         val ws = FakeWebSocketTransport()
         val http = FakeTransport()
-        val api = api(http, ws)
+        val api = api(http, ws, sessions)
         var responseId = 0
         ws.onConnect = { connection ->
             connection.onSend = { _ ->
@@ -402,17 +401,17 @@ class OpenAICodexWebSocketStreamTest {
             ws.requests.map { it.second["Authorization"]!! },
         )
         assertTrue(http.requests.isEmpty())
-        val stats = getOpenAICodexWebSocketDebugStats("shared-session")!!
+        val stats = sessions.getOpenAICodexWebSocketDebugStats("shared-session")!!
         assertEquals(2, stats.connectionsCreated)
         assertEquals(1, stats.connectionsReused)
     }
 
     @Test
     fun `closes one-shot websockets when cacheRetention is none`() = runTest {
-        cleanSlate()
+        val sessions = cleanSlate()
         val ws = FakeWebSocketTransport()
         val http = FakeTransport()
-        val api = api(http, ws)
+        val api = api(http, ws, sessions)
         ws.onConnect = { it.onSend = { _ -> it.serverAll(completedOnly("resp_${ws.connections.size}")) } }
 
         val options = OpenAICodexResponsesOptions(
@@ -429,19 +428,19 @@ class OpenAICodexWebSocketStreamTest {
         ws.connections.forEach { assertFalse(it.isOpen) }
         assertEquals(2, ws.connections.sumOf { it.sent.size })
         ws.connections.forEach { assertNull(frameOf(it)["prompt_cache_key"]) }
-        assertNull(getOpenAICodexWebSocketDebugStats("one-off-summary"))
+        assertNull(sessions.getOpenAICodexWebSocketDebugStats("one-off-summary"))
         assertTrue(http.requests.isEmpty())
     }
 
     @Test
     fun `falls back to sse when websocket connect times out and the session stays sticky`() = runTest {
-        cleanSlate()
+        val sessions = cleanSlate()
         val ws = FakeWebSocketTransport()
         ws.connectError = IOException("WebSocket connect timeout after 50ms")
         val http = FakeTransport()
         http.enqueueResponse(sse(*sseChunks().toTypedArray()))
         http.enqueueResponse(sse(*sseChunks().toTypedArray()))
-        val api = api(http, ws)
+        val api = api(http, ws, sessions)
         val context = Context(systemPrompt = "You are a helpful assistant.", messages = listOf(UserMessage.ofText("Say hello")))
 
         val events = api.stream(
@@ -458,7 +457,7 @@ class OpenAICodexWebSocketStreamTest {
         val result = messageOf(events)
         assertTrue(result.content.any { it is TextContent && it.text == "Hello" })
         assertEquals(1, http.requests.size)
-        val stats = getOpenAICodexWebSocketDebugStats("ws-connect-timeout")!!
+        val stats = sessions.getOpenAICodexWebSocketDebugStats("ws-connect-timeout")!!
         assertEquals(1, stats.websocketFailures)
         assertEquals(1, stats.sseFallbacks)
         assertEquals(true, stats.websocketFallbackActive)
@@ -476,15 +475,15 @@ class OpenAICodexWebSocketStreamTest {
         ).toList()
         assertEquals(2, http.requests.size)
         assertEquals(1, ws.requests.size)
-        assertEquals(2, getOpenAICodexWebSocketDebugStats("ws-connect-timeout")!!.sseFallbacks)
+        assertEquals(2, sessions.getOpenAICodexWebSocketDebugStats("ws-connect-timeout")!!.sseFallbacks)
     }
 
     @Test
     fun `reconnects once when the connection limit is reached before output starts`() = runTest {
-        cleanSlate()
+        val sessions = cleanSlate()
         val ws = FakeWebSocketTransport()
         val http = FakeTransport()
-        val api = api(http, ws)
+        val api = api(http, ws, sessions)
         ws.onConnect = { connection ->
             connection.onSend = { _ ->
                 if (ws.connections.indexOf(connection) == 0) {
@@ -507,11 +506,11 @@ class OpenAICodexWebSocketStreamTest {
 
     @Test
     fun `falls back to sse when idle before the first event`() = runTest {
-        cleanSlate()
+        val sessions = cleanSlate()
         val ws = FakeWebSocketTransport()
         val http = FakeTransport()
         http.enqueueResponse(sse(*sseChunks().toTypedArray()))
-        val api = api(http, ws)
+        val api = api(http, ws, sessions)
         val context = Context(systemPrompt = "You are a helpful assistant.", messages = listOf(UserMessage.ofText("Say hello")))
 
         val events = api.stream(
@@ -527,7 +526,7 @@ class OpenAICodexWebSocketStreamTest {
         val result = messageOf(events)
         assertTrue(result.content.any { it is TextContent && it.text == "Hello" })
         assertEquals(1, http.requests.size)
-        val stats = getOpenAICodexWebSocketDebugStats("ws-idle-before-start")!!
+        val stats = sessions.getOpenAICodexWebSocketDebugStats("ws-idle-before-start")!!
         assertEquals(1, stats.websocketFailures)
         assertEquals(1, stats.sseFallbacks)
         assertEquals(true, stats.websocketFallbackActive)
@@ -535,10 +534,10 @@ class OpenAICodexWebSocketStreamTest {
 
     @Test
     fun `errors when idle after the stream started`() = runTest {
-        cleanSlate()
+        val sessions = cleanSlate()
         val ws = FakeWebSocketTransport()
         val http = FakeTransport()
-        val api = api(http, ws)
+        val api = api(http, ws, sessions)
         ws.onConnect = { connection ->
             connection.onSend = { _ ->
                 connection.server(
@@ -570,12 +569,11 @@ class OpenAICodexWebSocketStreamTest {
 
     @Test
     fun `opens a fresh connection past the backend connection age limit`() = runTest {
-        cleanSlate()
+        val clock = FakeClock(1_000_000L)
+        val sessions = OpenAICodexWebSocketSessions(clock)
         val ws = FakeWebSocketTransport()
         val http = FakeTransport()
-        val api = api(http, ws)
-        val startAt = 1_000_000L
-        OpenAICodexWebSocketSessions.nowMs = { startAt }
+        val api = api(http, ws, sessions)
         var responseCount = 0
         ws.onConnect = { connection ->
             connection.onSend = { _ ->
@@ -592,7 +590,7 @@ class OpenAICodexWebSocketStreamTest {
             firstContext,
             OpenAICodexResponsesOptions(apiKey = jwt("acc_test"), sessionId = "aged-ws-session", transport = Transport.WEBSOCKET_CACHED),
         ).toList()
-        OpenAICodexWebSocketSessions.nowMs = { startAt + 56 * 60 * 1000 }
+        clock.advanceMillis(56 * 60 * 1000)
         val secondContext = Context(
             systemPrompt = "You are a helpful assistant.",
             messages = firstContext.messages + UserMessage.ofText("Now finish"),
@@ -605,17 +603,17 @@ class OpenAICodexWebSocketStreamTest {
 
         assertEquals(2, ws.connections.size)
         assertFalse(ws.connections[0].isOpen)
-        val stats = getOpenAICodexWebSocketDebugStats("aged-ws-session")!!
+        val stats = sessions.getOpenAICodexWebSocketDebugStats("aged-ws-session")!!
         assertEquals(2, stats.connectionsCreated)
         assertEquals(0, stats.connectionsReused)
     }
 
     @Test
     fun `previous_response_not_found is retried once with the full body`() = runTest {
-        cleanSlate()
+        val sessions = cleanSlate()
         val ws = FakeWebSocketTransport()
         val http = FakeTransport()
-        val api = api(http, ws)
+        val api = api(http, ws, sessions)
         val context = Context(
             systemPrompt = "You are a helpful assistant.",
             messages = listOf(UserMessage.ofText("Say hello")),
@@ -663,7 +661,7 @@ class OpenAICodexWebSocketStreamTest {
         val retryInput = frameOf(ws.connections[1], 0)["input"] as JsonArray
         assertEquals(3, retryInput.size)
         assertTrue(http.requests.isEmpty())
-        val stats = getOpenAICodexWebSocketDebugStats("missing")!!
+        val stats = sessions.getOpenAICodexWebSocketDebugStats("missing")!!
         assertEquals(3, stats.requests)
         assertEquals(2, stats.connectionsCreated)
         assertEquals(1, stats.connectionsReused)
@@ -675,7 +673,6 @@ class OpenAICodexWebSocketStreamTest {
 
     @Test
     fun `abort closes the pooled socket`() = runTest {
-        cleanSlate()
         val ws = FakeWebSocketTransport()
         val http = FakeTransport()
         val connection = FakeWebSocketConnection()
@@ -695,7 +692,7 @@ class OpenAICodexWebSocketStreamTest {
             )
         }
         ws.connectStub = connection
-        val api = OpenAICodexResponsesApi(http, webSocketTransport = ws)
+        val api = OpenAICodexResponsesApi(http, webSocketTransport = ws, webSocketSessions = cleanSlate())
 
         val job = launch(start = CoroutineStart.UNDISPATCHED) {
             api.stream(
@@ -711,11 +708,11 @@ class OpenAICodexWebSocketStreamTest {
 
     @Test
     fun `close before completion is a transport error`() = runTest {
-        cleanSlate()
+        val sessions = cleanSlate()
         val ws = FakeWebSocketTransport()
         val http = FakeTransport()
         http.enqueueResponse(sse(*sseChunks().toTypedArray()))
-        val api = api(http, ws)
+        val api = api(http, ws, sessions)
         ws.onConnect = { connection ->
             connection.onSend = { _ ->
                 connection.closedByServer(code = 1011, reason = "boom")
