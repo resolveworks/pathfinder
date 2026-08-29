@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.api
 
+import kotlin.time.Clock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,6 +17,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.transport.WebSocketConnection
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
+import works.resolve.pathfinder.ai.utils.arr
 
 /**
  * Port of pi's Codex WebSocket connection pool, debug stats, and SSE-fallback
@@ -32,20 +34,25 @@ import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
  *   (session-resources.ts, a Node session-lifecycle hook with no Android
  *   counterpart); here the public [closeOpenAICodexWebSocketSessions] plus the
  *   idle TTL / max connection age own cleanup.
- * - pi's clock reads `Date.now()`; [nowMs] is injectable for tests.
+ * - pi's clock reads `Date.now()`; [clock] (kotlin.time.Clock, per the
+ *   translation conventions) is constructor-injected for tests.
  */
-internal object OpenAICodexWebSocketSessions {
+class OpenAICodexWebSocketSessions(
+    val clock: Clock = Clock.System,
+) {
 
-    /** pi SESSION_WEBSOCKET_CACHE_TTL_MS (openai-codex-responses.ts ~:830). */
-    const val SESSION_WEBSOCKET_CACHE_TTL_MS: Long = 5 * 60 * 1000
+    private fun nowMs(): Long = clock.now().toEpochMilliseconds()
 
-    /** pi SESSION_WEBSOCKET_MAX_AGE_MS (openai-codex-responses.ts ~:831). */
-    const val SESSION_WEBSOCKET_MAX_AGE_MS: Long = 55 * 60 * 1000
+    companion object {
+        /** pi SESSION_WEBSOCKET_CACHE_TTL_MS (openai-codex-responses.ts ~:830). */
+        const val SESSION_WEBSOCKET_CACHE_TTL_MS: Long = 5 * 60 * 1000
 
-    /** pi OPENAI_BETA_RESPONSES_WEBSOCKETS (openai-codex-responses.ts ~:829). */
-    const val OPENAI_BETA_RESPONSES_WEBSOCKETS = "responses_websockets=2026-02-06"
+        /** pi SESSION_WEBSOCKET_MAX_AGE_MS (openai-codex-responses.ts ~:831). */
+        const val SESSION_WEBSOCKET_MAX_AGE_MS: Long = 55 * 60 * 1000
 
-    internal var nowMs: () -> Long = System::currentTimeMillis
+        /** pi OPENAI_BETA_RESPONSES_WEBSOCKETS (openai-codex-responses.ts ~:829). */
+        const val OPENAI_BETA_RESPONSES_WEBSOCKETS = "responses_websockets=2026-02-06"
+    }
 
     private val mutex = Mutex()
     private val timerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -145,7 +152,7 @@ internal object OpenAICodexWebSocketSessions {
      * itself happens outside the lock; insertion afterwards mirrors pi's
      * post-await map insert (last writer wins per session/account).
      */
-    suspend fun acquire(
+    internal suspend fun acquire(
         transport: WebSocketStreamingTransport,
         url: String,
         headers: Map<String, String>,
@@ -245,6 +252,28 @@ internal object OpenAICodexWebSocketSessions {
         }
         resetStats(null)
     }
+
+    /** pi's getOpenAICodexWebSocketDebugStats (~:875): a copy, or null. */
+    fun getOpenAICodexWebSocketDebugStats(sessionId: String): OpenAICodexWebSocketDebugStats? =
+        getStats(sessionId)
+
+    /**
+     * pi's resetOpenAICodexWebSocketDebugStats (~:882): drops the session's
+     * stats and SSE-fallback stickiness, or everything when null.
+     */
+    fun resetOpenAICodexWebSocketDebugStats(sessionId: String? = null) {
+        resetStats(sessionId)
+    }
+
+    /**
+     * pi's closeOpenAICodexWebSocketSessions (~:904): closes the session's
+     * pooled sockets with 1000/"debug_close" (all of them when null). Note
+     * upstream does NOT clear the SSE-fallback set here (only
+     * [resetOpenAICodexWebSocketDebugStats] does); this port preserves that.
+     */
+    fun closeOpenAICodexWebSocketSessions(sessionId: String? = null) {
+        closeSessions(sessionId)
+    }
 }
 
 /** pi's OpenAICodexWebSocketDebugStats (openai-codex-responses.ts ~:845). */
@@ -264,26 +293,6 @@ data class OpenAICodexWebSocketDebugStats(
     var websocketFallbackActive: Boolean? = null,
     var lastWebSocketError: String? = null,
 )
-
-/** pi's getOpenAICodexWebSocketDebugStats (~:875): a copy, or null. */
-fun getOpenAICodexWebSocketDebugStats(sessionId: String): OpenAICodexWebSocketDebugStats? =
-    OpenAICodexWebSocketSessions.getStats(sessionId)
-
-/**
- * pi's resetOpenAICodexWebSocketDebugStats (~:882): drops the session's stats
- * and SSE-fallback stickiness, or everything when null.
- */
-fun resetOpenAICodexWebSocketDebugStats(sessionId: String? = null) =
-    OpenAICodexWebSocketSessions.resetStats(sessionId)
-
-/**
- * pi's closeOpenAICodexWebSocketSessions (~:904): closes the session's pooled
- * sockets with 1000/"debug_close" (all of them when null). Note upstream does
- * NOT clear the SSE-fallback set here (only [resetOpenAICodexWebSocketDebugStats]
- * does); this port preserves that.
- */
-fun closeOpenAICodexWebSocketSessions(sessionId: String? = null) =
-    OpenAICodexWebSocketSessions.closeSessions(sessionId)
 
 // ---------------------------------------------------------------------------
 // Cached-context helpers (openai-codex-responses.ts ~:1389-1442)
@@ -317,8 +326,8 @@ internal fun getCachedWebSocketInputDelta(
     continuation: OpenAICodexWebSocketSessions.CachedWebSocketContinuation,
 ): JsonArray? {
     if (!requestBodiesMatchExceptInput(body, continuation.lastRequestBody)) return null
-    val currentInput = body["input"] as? JsonArray ?: JsonArray(emptyList())
-    val lastInput = continuation.lastRequestBody["input"] as? JsonArray ?: JsonArray(emptyList())
+    val currentInput = body.arr("input") ?: JsonArray(emptyList())
+    val lastInput = continuation.lastRequestBody.arr("input") ?: JsonArray(emptyList())
     val baseline = JsonArray(lastInput + continuation.lastResponseItems)
     if (currentInput.size < baseline.size) return null
     val prefix = JsonArray(currentInput.take(baseline.size))

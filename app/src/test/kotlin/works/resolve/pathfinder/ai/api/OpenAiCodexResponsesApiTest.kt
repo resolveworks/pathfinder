@@ -34,6 +34,7 @@ import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.ThinkingLevelMap
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.utils.compressRequestBodyZstd
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
 import works.resolve.pathfinder.ai.testing.sse
@@ -71,7 +72,7 @@ class OpenAiCodexResponsesApiTest {
         compressRequestBody: (String) -> ByteArray? = ::compressRequestBodyZstd,
     ) = OpenAICodexResponsesApi(
         transport,
-        nowMs = { 0L },
+        clock = FakeClock(0L),
         sleep = { calls.add(it) },
         compressRequestBody = compressRequestBody,
         webSocketTransport = NoWebSocketTransport,
@@ -598,7 +599,7 @@ class OpenAiCodexResponsesApiTest {
         val delays = mutableListOf<Long>()
         val events = OpenAICodexResponsesApi(
             transport,
-            nowMs = { 1_445_412_475_000L },
+            clock = FakeClock(1_445_412_475_000L),
             sleep = { delays.add(it) },
             webSocketTransport = NoWebSocketTransport,
         ).stream(

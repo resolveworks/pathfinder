@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ai.api
 
 import java.io.IOException
 import java.util.Base64
+import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -82,6 +83,15 @@ data class OpenAICodexResponsesOptions(
     val reasoningSummary: String? = null,
     val serviceTier: String? = null,
     val textVerbosity: String? = null,
+    /**
+     * Divergence note (Sealed types/unions convention): pi types this as a
+     * string-literal union `"auto" | "none" | "required"`
+     * (openai-codex-responses.ts:77). The port keeps it a passthrough
+     * `String?` instead of an enum because the value originates as a
+     * Responses wire string (`mapResponsesToolChoice`, whose union carries
+     * non-constant `function` members upstream) and is re-serialized
+     * verbatim (buildRequestBody `tool_choice`).
+     */
     val toolChoice: String? = null,
     val cacheRetention: CacheRetention? = null,
     val timeoutMs: Long? = null,
@@ -334,7 +344,12 @@ internal fun mapCodexEvent(
 /** Pi's parseErrorResponse friendly usage-limit message. `raw || statusText || "Request failed"`
  * (openai-codex-responses.ts parseErrorResponse); the status line reason
  * phrase surfaces when the body is empty, as fetch's Response.statusText does. */
-internal fun parseCodexErrorResponse(status: Int, body: String, statusText: String? = null): Pair<String, String?> {
+internal fun parseCodexErrorResponse(
+    status: Int,
+    body: String,
+    statusText: String? = null,
+    nowMs: () -> Long,
+): Pair<String, String?> {
     var message = body.ifEmpty { statusText?.takeIf { it.isNotEmpty() } ?: "Request failed" }
     var friendly: String? = null
     try {
@@ -351,7 +366,7 @@ internal fun parseCodexErrorResponse(status: Int, body: String, statusText: Stri
                 // timestamps do not count.
                 val resetsAt = err.strictDouble("resets_at")
                 val whenText = resetsAt?.let {
-                    val mins = maxOf(0, Math.round((it * 1000 - System.currentTimeMillis()) / 60000.0))
+                    val mins = maxOf(0, Math.round((it * 1000 - nowMs()) / 60000.0))
                     " Try again in ~${mins.toInt()} min."
                 } ?: ""
                 friendly = ("You have hit your ChatGPT usage limit$plan.$whenText").trim()
@@ -528,14 +543,19 @@ internal fun buildCodexRequestBody(
  */
 class OpenAICodexResponsesApi(
     private val transport: works.resolve.pathfinder.ai.transport.HttpStreamingTransport,
-    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val clock: Clock = Clock.System,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     // Narrow seam over pi's compressRequestBodyZstd for tests (injects the
     // compression-failure fallback).
     private val compressRequestBody: (String) -> ByteArray? = ::compressRequestBodyZstd,
     /** WebSocket seam (pi's WebSocket constructor); required on Android. */
     private val webSocketTransport: WebSocketStreamingTransport,
+    /** Pooled WebSocket session state (pi's module-level websocketSessionCache). */
+    private val webSocketSessions: OpenAICodexWebSocketSessions = OpenAICodexWebSocketSessions(clock),
 ) : ChatApi {
+
+    private fun nowMs(): Long = clock.now().toEpochMilliseconds()
+
 
     /**
      * pi's streamSimple for openai-codex-responses: missing keys fail fast,
@@ -651,9 +671,9 @@ class OpenAICodexResponsesApi(
             )
             val transportOption = options.transport ?: Transport.AUTO
             val websocketDisabledForSession = transportOption != Transport.SSE &&
-                OpenAICodexWebSocketSessions.isSseFallbackActive(cacheSessionId)
+                webSocketSessions.isSseFallbackActive(cacheSessionId)
             if (websocketDisabledForSession) {
-                OpenAICodexWebSocketSessions.recordSseFallback(cacheSessionId)
+                webSocketSessions.recordSseFallback(cacheSessionId)
             }
 
             if (transportOption != Transport.SSE && !websocketDisabledForSession) {
@@ -707,11 +727,11 @@ class OpenAICodexResponsesApi(
                         // pi also appends a provider_transport_failure
                         // AssistantMessage diagnostic here; diagnostics are not
                         // ported (see the class KDoc divergence note).
-                        OpenAICodexWebSocketSessions.recordWebSocketFailure(cacheSessionId, error)
+                        webSocketSessions.recordWebSocketFailure(cacheSessionId, error)
                         if (websocketStarted) throw error
                         // SSE becomes sticky for this session; fall through to
                         // the SSE path with the already-built headers/body.
-                        OpenAICodexWebSocketSessions.recordSseFallback(cacheSessionId)
+                        webSocketSessions.recordSseFallback(cacheSessionId)
                         break
                     }
                 }
@@ -866,7 +886,7 @@ class OpenAICodexResponsesApi(
         grammarToolInputProperties: Map<String, String>,
         options: OpenAICodexResponsesOptions,
     ) {
-        val acquired = OpenAICodexWebSocketSessions.acquire(
+        val acquired = webSocketSessions.acquire(
             webSocketTransport,
             url,
             headers,
@@ -887,12 +907,12 @@ class OpenAICodexResponsesApi(
         } else {
             fullBody
         }
-        val stats = cacheSessionId?.let { OpenAICodexWebSocketSessions.getOrCreateStats(it) }
+        val stats = cacheSessionId?.let { webSocketSessions.getOrCreateStats(it) }
         if (stats != null) {
             stats.requests++
             if (acquired.reused) stats.connectionsReused++ else stats.connectionsCreated++
             if (useCachedContext) stats.cachedContextRequests++
-            if (requestBody["store"] as? JsonPrimitive == JsonPrimitive(true)) stats.storeTrueRequests++
+            if (requestBody.strictBoolean("store") == true) stats.storeTrueRequests++
             val inputItems = (requestBody["input"] as? JsonArray)?.size ?: 0
             stats.lastInputItems = inputItems
             val previousResponseId = requestBody.str("previous_response_id")
@@ -1008,7 +1028,7 @@ class OpenAICodexResponsesApi(
                 // never retry.
                 val terminal: Exception = when (error) {
                     is ProviderHttpException -> {
-                        val (message, friendly) = parseCodexErrorResponse(error.status, error.body, error.statusText)
+                        val (message, friendly) = parseCodexErrorResponse(error.status, error.body, error.statusText, ::nowMs)
                         if (friendly != null) {
                             throw ProviderStreamException(friendly)
                         }
@@ -1016,7 +1036,7 @@ class OpenAICodexResponsesApi(
                             val retryAfter = getRetryAfterDelayMs(
                                 error.header("retry-after-ms"),
                                 error.header("retry-after"),
-                                nowMs,
+                                ::nowMs,
                             )
                             val delayMs = if (retryAfter == null) {
                                 (BASE_DELAY_MS * Math.pow(2.0, attempt.toDouble())).toLong()
