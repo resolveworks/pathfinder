@@ -30,6 +30,11 @@ import works.resolve.pathfinder.data.sessions.MessageEntry
 import works.resolve.pathfinder.data.sessions.Session
 import works.resolve.pathfinder.data.sessions.SessionRepository
 import works.resolve.pathfinder.data.sessions.SessionSummary
+import works.resolve.pathfinder.telemetry.NOOP_TELEMETRY_CONTEXT
+import works.resolve.pathfinder.telemetry.SpanOptions
+import works.resolve.pathfinder.telemetry.TelemetryContext
+import works.resolve.pathfinder.telemetry.attr
+import works.resolve.pathfinder.telemetry.automaticErrorStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -107,6 +112,8 @@ class ChatViewModel(
     private val authService: ProviderAuthService,
     private val sessionStore: SessionRepository,
     private val agentFactory: AgentFactory,
+    /** Diagnostic span backend for the UI error boundary (pi threads TelemetryContext the same way). */
+    private val telemetryContext: TelemetryContext = NOOP_TELEMETRY_CONTEXT,
 ) : ViewModel() {
 
     // Catalog-driven provider/model surface: option lists are computed from
@@ -200,7 +207,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_CREDENTIAL_SAVE)
+                setError(ERROR_CREDENTIAL_SAVE, e)
                 return@launch
             }
             refreshOptions()
@@ -220,7 +227,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_CREDENTIAL_SAVE)
+                setError(ERROR_CREDENTIAL_SAVE, e)
             }
         }
     }
@@ -247,7 +254,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_SETTINGS_SAVE)
+                setError(ERROR_SETTINGS_SAVE, e)
             }
         }
     }
@@ -329,7 +336,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_SESSION_CREATE)
+                setError(ERROR_SESSION_CREATE, e)
             }
         }
     }
@@ -356,7 +363,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_SESSION_LOAD)
+                setError(ERROR_SESSION_LOAD, e)
             }
         }
     }
@@ -390,6 +397,7 @@ class ChatViewModel(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    recordDegradation("init_provider_configured", e)
                     false
                 }
                 updateState {
@@ -441,7 +449,8 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            updateState { it.copy(status = ChatStatus.Failed, error = ERROR_INIT) }
+            setError(ERROR_INIT, e)
+            updateState { it.copy(status = ChatStatus.Failed) }
         }
     }
 
@@ -470,7 +479,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_SETTINGS_SAVE)
+            setError(ERROR_SETTINGS_SAVE, e)
             return false
         }
         // Commit the session before binding: state collection starts
@@ -505,7 +514,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_SESSION_CREATE)
+            setError(ERROR_SESSION_CREATE, e)
             return null
         }
         val newAgent = tryCreateAgent(
@@ -527,7 +536,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_CONFIG_INVALID)
+            setError(ERROR_CONFIG_INVALID, e)
             null
         }
 
@@ -653,7 +662,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_SESSION_SAVE)
+                setError(ERROR_SESSION_SAVE, e)
             }
         }
     }
@@ -700,7 +709,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE)
+            setError(ERROR_CREDENTIAL_SAVE, e)
             return
         }
         if (selectable.none { it.id == trimmedModelId }) {
@@ -717,7 +726,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE)
+            setError(ERROR_CREDENTIAL_SAVE, e)
             return
         }
         if (!providerConfigured) {
@@ -816,7 +825,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE)
+            setError(ERROR_CREDENTIAL_SAVE, e)
             return
         }
         onCredentialStored()
@@ -894,7 +903,7 @@ class ChatViewModel(
                 return@launch
             } catch (e: Exception) {
                 updateState { it.copy(authFlow = null) }
-                setError(ERROR_AUTH_LOGIN)
+                setError(ERROR_AUTH_LOGIN, e)
                 return@launch
             }
             updateState { it.copy(authFlow = null) }
@@ -993,6 +1002,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            recordDegradation("available_models", e)
             return false
         }
         if (selectable.none { it.id == settings.modelId }) return false
@@ -1001,6 +1011,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            recordDegradation("is_configured", e)
             false
         }
     }
@@ -1024,7 +1035,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE)
+            setError(ERROR_CREDENTIAL_SAVE, e)
             return
         }
         val configured = configuredOverride ?: try {
@@ -1032,7 +1043,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE)
+            setError(ERROR_CREDENTIAL_SAVE, e)
             return
         }
         val configuredIds = providerOptions.filter { it.configured }.map { it.id }.toSet()
@@ -1048,7 +1059,7 @@ class ChatViewModel(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    setError(ERROR_CREDENTIAL_SAVE)
+                    setError(ERROR_CREDENTIAL_SAVE, e)
                     return
                 }
                 available.map { model ->
@@ -1081,6 +1092,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            recordDegradation("selected_model", e)
             null
         }
         val model = available?.firstOrNull { it.id == settings.modelId } ?: return null
@@ -1101,7 +1113,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_SETTINGS_SAVE)
+            setError(ERROR_SETTINGS_SAVE, e)
             return false
         }
     }
@@ -1136,8 +1148,40 @@ class ChatViewModel(
 
     // ---- helpers ----
 
-    private fun setError(message: String) {
+    /**
+     * Records a `pf.chat.degraded` telemetry span: a failure the ViewModel
+     * deliberately absorbs into degraded UI state ("unconfigured", "no
+     * selection") instead of an error — pi's degradation semantics, kept,
+     * but no longer invisible on-device (the credential store failing to
+     * read must be distinguishable from an actually-missing credential).
+     */
+    private suspend fun recordDegradation(operation: String, cause: Throwable) {
+        telemetryContext.startSpan(
+            SpanOptions(name = SPAN_DEGRADED, attributes = mapOf(ATTR_OPERATION to attr(operation))),
+        ) { span ->
+            span.setStatus(automaticErrorStatus(cause))
+        }
+    }
+
+    /**
+     * Surfaces [message] as the UI error. This is the UI's single error
+     * boundary, so when a [cause] exception is available it is also recorded
+     * as a `pf.chat.error` telemetry span — the only place otherwise-invisible
+     * failures become diagnosable on-device (the ported OAuth flows build
+     * redacted exception messages by construction, which is what makes the
+     * detail safe to record). The generic [message] itself is a static UI
+     * string and carries no secrets.
+     */
+    private fun setError(message: String, cause: Throwable? = null) {
         updateState { it.copy(error = message) }
+        if (cause == null) return
+        viewModelScope.launch {
+            telemetryContext.startSpan(
+                SpanOptions(name = SPAN_ERROR, attributes = mapOf(ATTR_UI_ERROR to attr(message))),
+            ) { span ->
+                span.setStatus(automaticErrorStatus(cause))
+            }
+        }
     }
 
     private fun updateState(transform: (ChatUiState) -> ChatUiState) {
@@ -1149,6 +1193,12 @@ class ChatViewModel(
 
     private companion object {
         const val DEFAULT_SESSION_TITLE = "New chat"
+
+        /** App-owned span vocabulary (pi packages define `pi.*` schemas; Pathfinder's are `pf.*`). */
+        const val SPAN_ERROR = "pf.chat.error"
+        const val ATTR_UI_ERROR = "pf.error.ui_message"
+        const val SPAN_DEGRADED = "pf.chat.degraded"
+        const val ATTR_OPERATION = "pf.degraded.operation"
         const val TITLE_MAX_LENGTH = 48
 
         const val ERROR_INIT = "Could not load chat data"

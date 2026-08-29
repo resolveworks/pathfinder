@@ -17,10 +17,9 @@ import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
 import works.resolve.pathfinder.data.sessions.SessionStore
 import works.resolve.pathfinder.data.settings.SettingsRepository
-import works.resolve.pathfinder.logging.AppLogger
-import works.resolve.pathfinder.logging.LogLevel
-import works.resolve.pathfinder.logging.LogcatLogger
+import works.resolve.pathfinder.logging.LogcatTelemetryContext
 import works.resolve.pathfinder.ui.chat.ChatViewModel
+import works.resolve.pathfinder.telemetry.TelemetryContext
 import java.io.File
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
@@ -45,7 +44,8 @@ import okhttp3.OkHttpClient
  */
 class PathfinderApplication : Application() {
 
-    val logger: AppLogger = LogcatLogger()
+    /** The app's single telemetry backend: spans rendered as structured Logcat lines. */
+    val telemetry: TelemetryContext by lazy { LogcatTelemetryContext() }
 
     private val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -76,7 +76,12 @@ class PathfinderApplication : Application() {
 
     /** Login/logout orchestration over the catalog, registry, and credential store. */
     val authService: ProviderAuthService by lazy {
-        ProviderAuthService(catalog = modelCatalog, registry = authRegistry, credentials = credentials)
+        ProviderAuthService(
+            catalog = modelCatalog,
+            registry = authRegistry,
+            credentials = credentials,
+            telemetryContext = telemetry,
+        )
     }
 
     val settingsRepository: SettingsRepository by lazy {
@@ -115,17 +120,16 @@ class PathfinderApplication : Application() {
                 authService = authService,
                 sessionStore = sessionStore,
                 agentFactory = agentFactory,
+                telemetryContext = telemetry,
             )
         }
     }
 
     override fun onCreate() {
         super.onCreate()
-        logger.log(LogLevel.Info, COMPONENT, "application created")
     }
 
     private companion object {
-        const val COMPONENT = "App"
         const val SESSIONS_DIRECTORY = "sessions"
         const val CONNECT_TIMEOUT_SECONDS = 30L
     }

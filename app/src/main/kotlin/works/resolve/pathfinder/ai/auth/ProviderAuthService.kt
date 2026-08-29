@@ -5,6 +5,10 @@ import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.providers.filterCatalogModels
 import kotlinx.coroutines.CancellationException
+import works.resolve.pathfinder.telemetry.NOOP_TELEMETRY_CONTEXT
+import works.resolve.pathfinder.telemetry.SpanOptions
+import works.resolve.pathfinder.telemetry.TelemetryContext
+import works.resolve.pathfinder.telemetry.attr
 
 /**
  * One selectable auth method for a provider, without secret material — the
@@ -61,6 +65,8 @@ class ProviderAuthService(
     private val catalog: ProviderCatalog,
     private val registry: CatalogAuthRegistry,
     private val credentials: CredentialStore,
+    /** Diagnostic span backend for login operations (pi threads TelemetryContext the same way). */
+    private val telemetryContext: TelemetryContext = NOOP_TELEMETRY_CONTEXT,
 ) {
     private fun requireProvider(providerId: String): CatalogProvider =
         catalog.getProvider(providerId)
@@ -168,11 +174,37 @@ class ProviderAuthService(
 
     /**
      * Run the selected method's login and persist its credential (pi's
-     * `Models.login`). The stored credential is replaced atomically — only
+     * `Models.login`), recorded as one `pf.auth.login` telemetry span: start
+     * attributes carry the provider and method type, the end attribute the
+     * outcome, and a failure settles the span with the thrown error (the
+     * ported flows' exception messages are redacted by construction, which
+     * is what makes them safe to record). The span changes nothing about the
+     * operation's semantics.
+     *
+     * The stored credential is replaced atomically — only
      * after a successful login — via [CredentialStore.modify]. Returns the
      * non-secret [AuthStatus] of the newly stored credential.
      */
-    suspend fun login(providerId: String, type: AuthType, interaction: AuthInteraction): AuthStatus {
+    suspend fun login(providerId: String, type: AuthType, interaction: AuthInteraction): AuthStatus =
+        telemetryContext.startSpan(
+            SpanOptions(
+                name = SPAN_LOGIN,
+                attributes = mapOf(
+                    ATTR_PROVIDER to attr(providerId),
+                    ATTR_TYPE to attr(type.wire),
+                ),
+            ),
+        ) { span ->
+            val status = loginSpanned(providerId, type, interaction)
+            span.setAttributes(mapOf(ATTR_OUTCOME to attr(OUTCOME_PERSISTED)))
+            status
+        }
+
+    private suspend fun loginSpanned(
+        providerId: String,
+        type: AuthType,
+        interaction: AuthInteraction,
+    ): AuthStatus {
         val provider = requireProvider(providerId)
         val credential = try {
             when (type) {
@@ -243,4 +275,13 @@ class ProviderAuthService(
 
     private fun apiKeyLabel(provider: CatalogProvider): String =
         provider.auth.label ?: "${provider.name} API key"
+
+    private companion object {
+        /** App-owned span vocabulary (pi packages define `pi.*` schemas; Pathfinder's are `pf.*`). */
+        const val SPAN_LOGIN = "pf.auth.login"
+        const val ATTR_PROVIDER = "pf.auth.provider"
+        const val ATTR_TYPE = "pf.auth.type"
+        const val ATTR_OUTCOME = "pf.auth.outcome"
+        const val OUTCOME_PERSISTED = "persisted"
+    }
 }

@@ -22,10 +22,10 @@ data class ModelAuth(
     val baseUrl: String? = null,
 )
 
-/** Auth method tag (pi `AuthType`). */
-enum class AuthType {
-    API_KEY,
-    OAUTH,
+/** Auth method tag (pi `AuthType`: `"api_key" | "oauth"`). */
+enum class AuthType(val wire: String) {
+    API_KEY("api_key"),
+    OAUTH("oauth"),
 }
 
 /** Result of resolving auth for a model (pi `AuthResult`). */

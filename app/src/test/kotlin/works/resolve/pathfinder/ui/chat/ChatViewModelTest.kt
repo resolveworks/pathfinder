@@ -193,6 +193,9 @@ class ChatViewModelTest {
     private inner class Harness {
         val credentials = FakeCredentialStore()
 
+        /** Records the ViewModel's telemetry spans for boundary assertions. */
+        val telemetry = works.resolve.pathfinder.telemetry.InMemoryTelemetryContext()
+
         /** Registered OAuth flows: zai (also has API-key prompts → both methods) and the promptless oauth-only provider. */
         val oauthZai = FakeOAuthAuth()
         val oauthOnly = FakeOAuthAuth(
@@ -210,6 +213,7 @@ class ChatViewModelTest {
                 mapOf("zai" to oauthZai, "oauth-only" to oauthOnly, "github-copilot" to oauthCopilot),
             ),
             credentials = credentials,
+            telemetryContext = telemetry,
         )
         val dataStoreScope = CoroutineScope(SupervisorJob() + mainDispatcherRule.testDispatcher)
         val settings = SettingsRepository(
@@ -294,6 +298,7 @@ class ChatViewModelTest {
             authService = authService,
             sessionStore = sessions,
             agentFactory = factory,
+            telemetryContext = telemetry,
         )
 
         fun assistant(text: String, stopReason: StopReason = StopReason.STOP, error: String? = null) =
@@ -1770,6 +1775,73 @@ class ChatViewModelTest {
         // The stored credential is the OAuth one (account login replaced nothing
         // else — the store was empty before).
         assertEquals(CredentialType.OAUTH, h.credentials.creds["zai"]?.type)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun accountLogin_failure_recordsTelemetryAtBothBoundaries() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        val oauthMethod = vm.providerAuthMethods("zai").first { it.type == AuthType.OAUTH }
+
+        h.oauthZai.loginFn = { throw IllegalStateException("token exchange failed (400)") }
+        vm.beginProviderAuthLogin("zai", oauthMethod)
+        vm.uiState.first { it.authFlow == null && it.error != null }
+
+        // The login operation itself is one error span (from ProviderAuthService).
+        val loginSpan = h.telemetry.spans().single { it.name == "pf.auth.login" }
+        assertEquals(
+            works.resolve.pathfinder.telemetry.attr("zai"),
+            loginSpan.attributes["pf.auth.provider"],
+        )
+        assertTrue(loginSpan.status is works.resolve.pathfinder.telemetry.SpanStatus.Error)
+
+        // The UI error boundary records the swallowed exception with the
+        // generic UI message — the only trace of what actually failed.
+        vm.uiState.first { _ ->
+            h.telemetry.spans().any { it.name == "pf.chat.error" }
+        }
+        val errorSpan = h.telemetry.spans().single { it.name == "pf.chat.error" }
+        assertEquals(
+            works.resolve.pathfinder.telemetry.attr("Could not complete sign-in"),
+            errorSpan.attributes["pf.error.ui_message"],
+        )
+        val status = errorSpan.status as works.resolve.pathfinder.telemetry.SpanStatus.Error
+        // The UI boundary records the wrapped ModelsError (ProviderAuthService wraps
+        // flow failures); its message and cause chain carry the actual reason.
+        assertEquals("works.resolve.pathfinder.ai.auth.ModelsError", status.error?.name)
+        assertTrue(status.error?.message!!.contains("token exchange failed (400)"))
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun credentialReadFailure_degradesWithTelemetryNotSilence() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        // Persist a valid provider+model selection, then make credential reads
+        // fail: the restoration path must degrade to NeedsConfiguration
+        // (pi's semantics) while recording why — the failure must be
+        // distinguishable on-device from an actually-missing credential.
+        h.settings.setProviderId("zai")
+        h.settings.setModelId(testModel.id)
+        h.credentials.failWrites = true
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+        val degraded = h.telemetry.spans().filter { it.name == "pf.chat.degraded" }
+        assertTrue(degraded.isNotEmpty())
+        assertTrue(degraded.all { it.status is works.resolve.pathfinder.telemetry.SpanStatus.Error })
+        // The credential-read failure is named, not silently absorbed into
+        // "unconfigured" (the init projection and the options refresh each
+        // record their own degraded operation).
+        assertTrue(
+            degraded.any { it.attributes["pf.degraded.operation"] == works.resolve.pathfinder.telemetry.attr("available_models") },
+        )
+        assertTrue(
+            degraded.any { it.attributes["pf.degraded.operation"] == works.resolve.pathfinder.telemetry.attr("init_provider_configured") },
+        )
 
         vm.closeForTest()
     }
