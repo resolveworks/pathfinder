@@ -2,6 +2,8 @@ package works.resolve.pathfinder.ai.core
 
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import works.resolve.pathfinder.ai.utils.optionsToString
+import works.resolve.pathfinder.ai.utils.redactedSecret
 
 /**
  * Stream event protocol ported from pi's AssistantMessageEvent. A successful
@@ -101,10 +103,16 @@ data class StreamOptions(
     /** Cap on server-requested retry delays; delays above this fail immediately. 0 disables. */
     val maxRetryDelayMs: Long = DEFAULT_MAX_RETRY_DELAY_MS,
 ) {
-    override fun toString(): String =
-        "StreamOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
-            ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
-            ", timeoutMs=$timeoutMs, maxRetries=$maxRetries, maxRetryDelayMs=$maxRetryDelayMs)"
+    override fun toString(): String = optionsToString(
+        "StreamOptions",
+        "apiKey" to redactedSecret(apiKey),
+        "sessionId" to sessionId,
+        "temperature" to temperature,
+        "maxTokens" to maxTokens,
+        "timeoutMs" to timeoutMs,
+        "maxRetries" to maxRetries,
+        "maxRetryDelayMs" to maxRetryDelayMs,
+    )
 
     companion object {
         const val DEFAULT_MAX_RETRY_DELAY_MS = 60_000L
@@ -178,15 +186,26 @@ data class SimpleStreamOptions(
      */
     val websocketConnectTimeoutMs: Long? = null,
 ) {
-    override fun toString(): String =
-        "SimpleStreamOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
-            ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
-            ", reasoning=$reasoning, toolChoice=$toolChoice, cacheRetention=$cacheRetention" +
-            ", timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
-            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys}" +
-            ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
-            ", samplingParams=${samplingParams?.keys}, transport=$transport" +
-            ", websocketConnectTimeoutMs=$websocketConnectTimeoutMs)"
+    override fun toString(): String = optionsToString(
+        "SimpleStreamOptions",
+        "apiKey" to redactedSecret(apiKey),
+        "sessionId" to sessionId,
+        "temperature" to temperature,
+        "maxTokens" to maxTokens,
+        "reasoning" to reasoning,
+        "toolChoice" to toolChoice,
+        "cacheRetention" to cacheRetention,
+        "timeoutMs" to timeoutMs,
+        "maxRetries" to maxRetries,
+        "maxRetryDelayMs" to maxRetryDelayMs,
+        "env" to env.keys,
+        "headers" to headers.keys,
+        "onPayload" to (onPayload != null),
+        "onResponse" to (onResponse != null),
+        "samplingParams" to samplingParams?.keys,
+        "transport" to transport,
+        "websocketConnectTimeoutMs" to websocketConnectTimeoutMs,
+    )
 
     fun toStreamOptions(reasoningEffort: ModelThinkingLevel?): OpenAiCompletionsOptions =
         OpenAiCompletionsOptions(
@@ -271,14 +290,24 @@ data class OpenAiCompletionsOptions(
      */
     val samplingParams: Map<String, JsonElement>? = null,
 ) {
-    override fun toString(): String =
-        "OpenAiCompletionsOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
-            ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
-            ", reasoningEffort=$reasoningEffort, toolChoice=$toolChoice, cacheRetention=$cacheRetention" +
-            ", timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
-            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys}" +
-            ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
-            ", samplingParams=${samplingParams?.keys})"
+    override fun toString(): String = optionsToString(
+        "OpenAiCompletionsOptions",
+        "apiKey" to redactedSecret(apiKey),
+        "sessionId" to sessionId,
+        "temperature" to temperature,
+        "maxTokens" to maxTokens,
+        "reasoningEffort" to reasoningEffort,
+        "toolChoice" to toolChoice,
+        "cacheRetention" to cacheRetention,
+        "timeoutMs" to timeoutMs,
+        "maxRetries" to maxRetries,
+        "maxRetryDelayMs" to maxRetryDelayMs,
+        "env" to env.keys,
+        "headers" to headers.keys,
+        "onPayload" to (onPayload != null),
+        "onResponse" to (onResponse != null),
+        "samplingParams" to samplingParams?.keys,
+    )
 }
 
 /**

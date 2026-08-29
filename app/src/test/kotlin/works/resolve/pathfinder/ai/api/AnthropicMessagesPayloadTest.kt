@@ -662,7 +662,7 @@ class AnthropicMessagesPayloadTest {
         val requireTool = tool.copy(
             constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
         )
-        val failure = assertFailsWith<Error> {
+        val failure = assertFailsWith<ConstrainedSamplingError> {
             body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(requireTool)))
         }
         assertEquals(

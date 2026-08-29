@@ -117,7 +117,7 @@ class ConstrainedSamplingTest {
             val requiring = tool.copy(
                 constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
             )
-            val failure = assertFailsWith<Error> { resolveJsonSchemaStrictSampling(requiring, true) }
+            val failure = assertFailsWith<ConstrainedSamplingError> { resolveJsonSchemaStrictSampling(requiring, true) }
             assertTrue(
                 failure.message!!.contains(error),
                 "expected \"$error\" in \"${failure.message}\"",
@@ -146,7 +146,7 @@ class ConstrainedSamplingTest {
         assertEquals(true, resolveJsonSchemaStrictSampling(require, supportsStrictMode = true))
 
         assertNull(resolveJsonSchemaStrictSampling(prefer, supportsStrictMode = false))
-        val failure = assertFailsWith<Error> { resolveJsonSchemaStrictSampling(require, supportsStrictMode = false) }
+        val failure = assertFailsWith<ConstrainedSamplingError> { resolveJsonSchemaStrictSampling(require, supportsStrictMode = false) }
         assertEquals(
             "Tool \"sample_tool\" requires JSON-schema constrained sampling, but strict tools are unsupported.",
             failure.message,
@@ -184,7 +184,7 @@ class ConstrainedSamplingTest {
                 mapOf(GrammarFormat.OPENAI_LARK to "   "),
             ),
         )
-        val failure = assertFailsWith<Error> {
+        val failure = assertFailsWith<ConstrainedSamplingError> {
             resolveGrammarConstrainedSampling(blank, supportsOpenAIGrammarTools = true)
         }
         assertEquals(
@@ -214,7 +214,7 @@ class ConstrainedSamplingTest {
                 parameters,
                 ConstrainedSamplingConfig.Grammar(mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/")),
             )
-            val failure = assertFailsWith<Error> {
+            val failure = assertFailsWith<ConstrainedSamplingError> {
                 resolveGrammarConstrainedSampling(tool, supportsOpenAIGrammarTools = true)
             }
             assertEquals(
@@ -253,7 +253,7 @@ class ConstrainedSamplingTest {
         val arguments = JsonObject(mapOf("payload" to JsonPrimitive("abc")))
         assertEquals("abc", getGrammarToolInput("sample_tool", arguments, "payload"))
         for (invalid in listOf(JsonObject(emptyMap()), JsonObject(mapOf("payload" to JsonPrimitive(42))))) {
-            val failure = assertFailsWith<Error> { getGrammarToolInput("sample_tool", invalid, "payload") }
+            val failure = assertFailsWith<ConstrainedSamplingError> { getGrammarToolInput("sample_tool", invalid, "payload") }
             assertEquals(
                 "Grammar tool call \"sample_tool\" requires argument \"payload\" to be a string.",
                 failure.message,
@@ -269,7 +269,7 @@ class ConstrainedSamplingTest {
 
         assertEquals("""{"payload":"a\"\nb"}""", first + second)
         assertNull(appendGrammarToolInputJsonDelta(buffer, "payload", "a\"\nb", close = true))
-        val failure = assertFailsWith<Error> {
+        val failure = assertFailsWith<ConstrainedSamplingError> {
             appendGrammarToolInputJsonDelta(buffer, "payload", "changed", close = true)
         }
         assertEquals(
@@ -283,7 +283,7 @@ class ConstrainedSamplingTest {
         val buffer = GrammarToolInputJsonBuffer()
         appendGrammarToolInputJsonDelta(buffer, "payload", "ab", close = false)
         assertNull(appendGrammarToolInputJsonDelta(buffer, "payload", "ab", close = false))
-        val failure = assertFailsWith<Error> {
+        val failure = assertFailsWith<ConstrainedSamplingError> {
             appendGrammarToolInputJsonDelta(buffer, "payload", "ax", close = false)
         }
         assertEquals(
