@@ -38,6 +38,14 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.compressRequestBodyZstd
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.optionsToString
+import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.ai.utils.str
+import works.resolve.pathfinder.ai.utils.strictBoolean
+import works.resolve.pathfinder.ai.utils.strictDouble
+import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.ai.utils.stringOrNull
 
 /**
  * OpenAI Codex Responses streaming adapter, ported from pi's
@@ -104,14 +112,28 @@ data class OpenAICodexResponsesOptions(
     val websocketConnectTimeoutMs: Long? = null,
 ) {
     override fun toString(): String =
-        "OpenAICodexResponsesOptions(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
-            ", sessionId=$sessionId, temperature=$temperature, maxTokens=$maxTokens" +
-            ", reasoningEffort=$reasoningEffort, reasoningSummary=$reasoningSummary" +
-            ", serviceTier=$serviceTier, textVerbosity=$textVerbosity, toolChoice=$toolChoice" +
-            ", cacheRetention=$cacheRetention, timeoutMs=$timeoutMs, maxRetries=$maxRetries" +
-            ", maxRetryDelayMs=$maxRetryDelayMs, env=${env.keys}, headers=${headers.keys}" +
-            ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
-            ", transport=$transport, websocketConnectTimeoutMs=$websocketConnectTimeoutMs)"
+        optionsToString(
+            "OpenAICodexResponsesOptions",
+            "apiKey" to redactedSecret(apiKey),
+            "sessionId" to sessionId,
+            "temperature" to temperature,
+            "maxTokens" to maxTokens,
+            "reasoningEffort" to reasoningEffort,
+            "reasoningSummary" to reasoningSummary,
+            "serviceTier" to serviceTier,
+            "textVerbosity" to textVerbosity,
+            "toolChoice" to toolChoice,
+            "cacheRetention" to cacheRetention,
+            "timeoutMs" to timeoutMs,
+            "maxRetries" to maxRetries,
+            "maxRetryDelayMs" to maxRetryDelayMs,
+            "env" to env.keys,
+            "headers" to headers.keys,
+            "onPayload" to (onPayload != null),
+            "onResponse" to (onResponse != null),
+            "transport" to transport,
+            "websocketConnectTimeoutMs" to websocketConnectTimeoutMs,
+        )
 }
 
 internal const val DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
@@ -207,8 +229,7 @@ internal fun extractAccountId(token: String): String {
             parts[1].replace('-', '+').replace('_', '/').padBase64(),
         ).decodeToString()
         val json = responsesJson.parseToJsonElement(payload) as? JsonObject ?: error("Invalid token")
-        val auth = json[JWT_CLAIM_PATH] as? JsonObject
-        val accountId = (auth?.get("chatgpt_account_id") as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val accountId = json.obj(JWT_CLAIM_PATH)?.str("chatgpt_account_id")
         if (accountId.isNullOrEmpty()) error("No account ID in token")
         return accountId
     } catch (_: Exception) {
@@ -263,12 +284,12 @@ internal fun mapCodexEvent(
     event: JsonObject,
     onEndTurn: (Boolean) -> Unit,
 ): Pair<JsonObject, Boolean>? {
-    val type = event["type"].textOrNull() ?: return null
+    val type = event.string("type") ?: return null
 
     if (type == "error") {
-        val nested = event.respObj("error")
-        val code = event["code"].textOrNull() ?: nested?.get("code").textOrNull()
-        val message = event["message"].textOrNull() ?: nested?.get("message").textOrNull()
+        val nested = event.obj("error")
+        val code = event.string("code") ?: nested?.get("code").stringOrNull()
+        val message = event.string("message") ?: nested?.get("message").stringOrNull()
         throw CodexApiException(
             "Codex error: ${message ?: code ?: event.toString()}",
             code,
@@ -276,28 +297,24 @@ internal fun mapCodexEvent(
     }
 
     if (type == "response.failed") {
-        val response = event.respObj("response")
-        val error = response?.respObj("error")
+        val response = event.obj("response")
+        val error = response?.obj("error")
         throw CodexApiException(
-            error?.get("message").textOrNull() ?: "Codex response failed",
-            error?.get("code").textOrNull(),
+            error?.get("message").stringOrNull() ?: "Codex response failed",
+            error?.get("code").stringOrNull(),
         )
     }
 
     if (type == "response.done" || type == "response.completed" || type == "response.incomplete") {
-        val response = event.respObj("response")
-        val endTurn = response?.get("end_turn") as? JsonPrimitive
-        if (endTurn != null && !endTurn.isString &&
-            (endTurn.content == "true" || endTurn.content == "false")
-        ) {
-            onEndTurn(endTurn.content == "true")
-        }
+        val response = event.obj("response")
+        // pi checks `typeof response.end_turn === "boolean"` — strict read
+        // (the old inline cast accepted "true"/"false" string primitives).
+        response?.strictBoolean("end_turn")?.let(onEndTurn)
         val normalizedResponse = response?.let {
             buildJsonObject {
                 it.forEach { (k, v) ->
                     if (k == "status") {
-                        val status = (v as? JsonPrimitive)?.takeIf { p -> p.isString }?.content
-                        if (status != null && status in CODEX_RESPONSE_STATUSES) put(k, v)
+                        if (v.stringOrNull() in CODEX_RESPONSE_STATUSES) put(k, v)
                     } else {
                         put(k, v)
                     }
@@ -324,19 +341,22 @@ internal fun parseCodexErrorResponse(status: Int, body: String, statusText: Stri
         val parsed = responsesJson.parseToJsonElement(body) as? JsonObject
         val err = parsed?.get("error") as? JsonObject
         if (err != null) {
-            val code = err["code"].textOrNull() ?: err["type"].textOrNull() ?: ""
+            val code = err.str("code") ?: err.str("type") ?: ""
             val usageLimit = Regex("usage_limit_reached|usage_not_included|rate_limit_exceeded")
                 .containsMatchIn(code) || status == 429
             if (usageLimit) {
-                val plan = err["plan_type"].textOrNull()?.let { " (${it.lowercase()} plan)" } ?: ""
-                val resetsAt = (err["resets_at"] as? JsonPrimitive)?.content?.toDoubleOrNull()
+                val plan = err.str("plan_type")?.let { " (${it.lowercase()} plan)" } ?: ""
+                // pi types resets_at as a number (openai-codex-responses.ts
+                // parseErrorResponse); strict numeric read — string-encoded
+                // timestamps do not count.
+                val resetsAt = err.strictDouble("resets_at")
                 val whenText = resetsAt?.let {
                     val mins = maxOf(0, Math.round((it * 1000 - System.currentTimeMillis()) / 60000.0))
                     " Try again in ~${mins.toInt()} min."
                 } ?: ""
                 friendly = ("You have hit your ChatGPT usage limit$plan.$whenText").trim()
             }
-            message = err["message"].textOrNull() ?: friendly ?: message
+            message = err.str("message") ?: friendly ?: message
         }
     } catch (_: Exception) {
         // Non-JSON body: keep the raw text.
@@ -527,7 +547,7 @@ class OpenAICodexResponsesApi(
         options: works.resolve.pathfinder.ai.core.SimpleStreamOptions,
     ): Flow<AssistantMessageEvent> {
         val apiKey = options.apiKey
-            ?: throw IllegalStateException("No API key for provider: ${model.provider}")
+            ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
         val clamped = options.reasoning?.let {
             works.resolve.pathfinder.ai.core.clampThinkingLevel(model, toModelThinkingLevel(it))
         }
@@ -604,7 +624,7 @@ class OpenAICodexResponsesApi(
         }
         try {
             val apiKey = options.apiKey
-                ?: throw IllegalStateException("No API key for provider: ${model.provider}")
+                ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
             val accountId = extractAccountId(apiKey)
             val cacheRetention = OpenAiResponsesShared.resolveCacheRetention(
                 options.cacheRetention,
@@ -806,7 +826,7 @@ class OpenAICodexResponsesApi(
                     }
                     val obj = parsed as? JsonObject
                         ?: throw CodexProtocolException("Invalid Codex WebSocket JSON: expected an object")
-                    when (obj["type"].textOrNull()) {
+                    when (obj.string("type")) {
                         "response.completed", "response.done", "response.incomplete" -> sawCompletion = true
                     }
                     obj
@@ -875,7 +895,7 @@ class OpenAICodexResponsesApi(
             if (requestBody["store"] as? JsonPrimitive == JsonPrimitive(true)) stats.storeTrueRequests++
             val inputItems = (requestBody["input"] as? JsonArray)?.size ?: 0
             stats.lastInputItems = inputItems
-            val previousResponseId = requestBody["previous_response_id"].textOrNull()
+            val previousResponseId = requestBody.str("previous_response_id")
             if (previousResponseId != null) {
                 stats.deltaRequests++
                 stats.lastDeltaInputItems = inputItems
@@ -920,8 +940,8 @@ class OpenAICodexResponsesApi(
                                 grammarToolInputProperties = grammarToolInputProperties,
                             ),
                         ).filter {
-                            it["type"].textOrNull() != "function_call_output" &&
-                                it["type"].textOrNull() != "custom_tool_call_output"
+                            it.str("type") != "function_call_output" &&
+                                it.str("type") != "custom_tool_call_output"
                         }
                     entry.continuation = OpenAICodexWebSocketSessions.CachedWebSocketContinuation(
                         lastRequestBody = fullBody,
@@ -931,6 +951,12 @@ class OpenAICodexResponsesApi(
                 }
             }
         } catch (error: Throwable) {
+            // Throwable (not Exception): this is a cleanup-and-rethrow block
+            // mirroring pi's `catch (error)` around processWebSocketStream
+            // (~:1534) — the continuation must be invalidated and the pooled
+            // connection dropped even for Errors escaping OkHttp completion
+            // handlers. The error is rethrown unchanged, so cancellation
+            // passes through untouched (stream-error contract unaffected).
             entry?.continuation = null
             keepConnection = false
             throw error
