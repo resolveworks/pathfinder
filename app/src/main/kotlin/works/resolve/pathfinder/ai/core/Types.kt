@@ -29,6 +29,37 @@ enum class Transport { SSE, WEBSOCKET, WEBSOCKET_CACHED, AUTO }
 enum class ModelThinkingLevel { OFF, MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX }
 
 /**
+ * pi models these levels as the union `"off" | ThinkingLevel`
+ * (types.ts:83-85): every ThinkingLevel names exactly one
+ * ModelThinkingLevel, so mapping up is total. Explicit `when` (not
+ * `valueOf(name)`) so a new upstream level forces an update here instead of
+ * failing at runtime.
+ */
+fun ThinkingLevel.toModelThinkingLevel(): ModelThinkingLevel = when (this) {
+    ThinkingLevel.MINIMAL -> ModelThinkingLevel.MINIMAL
+    ThinkingLevel.LOW -> ModelThinkingLevel.LOW
+    ThinkingLevel.MEDIUM -> ModelThinkingLevel.MEDIUM
+    ThinkingLevel.HIGH -> ModelThinkingLevel.HIGH
+    ThinkingLevel.XHIGH -> ModelThinkingLevel.XHIGH
+    ThinkingLevel.MAX -> ModelThinkingLevel.MAX
+}
+
+/**
+ * The down direction of pi's `"off" | ThinkingLevel` union: OFF has no
+ * ThinkingLevel, so it maps to null and callers decide what "off" means at
+ * their boundary.
+ */
+fun ModelThinkingLevel.toThinkingLevelOrNull(): ThinkingLevel? = when (this) {
+    ModelThinkingLevel.OFF -> null
+    ModelThinkingLevel.MINIMAL -> ThinkingLevel.MINIMAL
+    ModelThinkingLevel.LOW -> ThinkingLevel.LOW
+    ModelThinkingLevel.MEDIUM -> ThinkingLevel.MEDIUM
+    ModelThinkingLevel.HIGH -> ThinkingLevel.HIGH
+    ModelThinkingLevel.XHIGH -> ThinkingLevel.XHIGH
+    ModelThinkingLevel.MAX -> ThinkingLevel.MAX
+}
+
+/**
  * Maps pi thinking levels to provider-specific reasoning-effort strings,
  * mirroring pi's `ThinkingLevelMap`: a key present with a non-null string maps
  * the level to that effort; a key present with `null` marks the level
