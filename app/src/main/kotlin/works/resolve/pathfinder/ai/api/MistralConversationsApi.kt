@@ -28,7 +28,9 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.long
 import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.strOrNull
@@ -42,11 +44,11 @@ import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlin.time.Clock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 /** pi's MistralReasoningEffort. */
@@ -136,7 +138,7 @@ data class MistralOptions(
  */
 class MistralConversationsApi(
     private val transport: HttpStreamingTransport,
-    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val clock: Clock = Clock.System,
 ) : ChatApi {
 
     fun stream(
@@ -181,7 +183,7 @@ class MistralConversationsApi(
         context: Context,
         options: MistralOptions,
     ): Flow<AssistantMessageEvent> = flow {
-        val startedAtMs = nowMs()
+        val startedAtMs = clock.now().toEpochMilliseconds()
         val state = MistralStreamingState(model, startedAtMs)
         try {
             val apiKey = options.apiKey
@@ -328,9 +330,9 @@ class MistralConversationsApi(
         data["id"].strOrNull()?.takeIf { it.isNotEmpty() && state.responseId == null }
             ?.let { state.responseId = it }
 
-        (data["usage"] as? JsonObject)?.let { state.usage = parseChunkUsage(it, model) }
+        data.obj("usage")?.let { state.usage = parseChunkUsage(it, model) }
 
-        val choice = (data["choices"] as JsonArray).firstOrNull() as? JsonObject ?: return emptyList()
+        val choice = data.arr("choices")!!.firstOrNull() as? JsonObject ?: return emptyList()
 
         choice["finish_reason"].strOrNull()?.let { raw ->
             state.rawStopReason = raw
@@ -340,7 +342,7 @@ class MistralConversationsApi(
         }
 
         val events = mutableListOf<AssistantMessageEvent>()
-        val delta = choice["delta"] as? JsonObject
+        val delta = choice.obj("delta")
 
         if (delta != null) {
             when (val content = delta["content"]) {
@@ -364,7 +366,7 @@ class MistralConversationsApi(
                 else -> Unit
             }
 
-            (delta["tool_calls"] as? JsonArray)?.forEach { element ->
+            delta.arr("tool_calls")?.forEach { element ->
                 (element as? JsonObject)?.let { events += state.appendToolCallDelta(it) }
             }
         }
@@ -603,14 +605,14 @@ internal class MistralStreamingState(private val model: Model, private val times
         events += closeCurrentBlock()
 
         val id = toolCall["id"].strOrNull()
-        val index = toolCall["index"]?.let { (it as? JsonPrimitive)?.longOrNull?.toInt() } ?: 0
+        val index = toolCall.long("index")?.toInt() ?: 0
         val callId = if (!id.isNullOrEmpty() && id != "null") {
             id
         } else {
             deriveMistralToolCallId("toolcall:$index", 0)
         }
         val key = "$callId:$index"
-        val function = toolCall["function"] as? JsonObject
+        val function = toolCall.obj("function")
         val name = function?.get("name").strOrNull() ?: ""
 
         var blockIndex = toolBlocksByKey[key]

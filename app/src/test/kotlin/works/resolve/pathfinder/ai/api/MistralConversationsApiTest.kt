@@ -18,6 +18,7 @@ import works.resolve.pathfinder.ai.core.SimpleToolChoice
 import works.resolve.pathfinder.ai.core.ToolChoice
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.NetworkException
@@ -49,7 +50,7 @@ class MistralConversationsApiTest {
 
     private fun api(transport: FakeTransport) = MistralConversationsApi(
         transport,
-        nowMs = { 1_770_000_000_000L },
+        clock = FakeClock(1_770_000_000_000L),
     )
 
     private fun terminalEvent(finishReason: String = "stop") = """
