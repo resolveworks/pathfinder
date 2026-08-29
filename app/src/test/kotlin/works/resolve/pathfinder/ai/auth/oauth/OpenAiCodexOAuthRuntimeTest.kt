@@ -132,7 +132,7 @@ class OpenAiCodexOAuthRuntimeTest {
             assertEquals("/backend-api/codex/responses", recorded.path)
             assertEquals("Bearer $accessJwt", recorded.getHeader("Authorization"))
             assertEquals(accountId, recorded.getHeader("chatgpt-account-id"))
-            assertEquals("pi", recorded.getHeader("originator"))
+            assertEquals("pathfinder", recorded.getHeader("originator"))
             assertTrue(recorded.getHeader("Authorization")!!.startsWith("Bearer "))
         } finally {
             server.shutdown()

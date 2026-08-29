@@ -152,7 +152,7 @@ class OpenAiCodexResponsesApiTest {
         assertEquals("https://chatgpt.com/backend-api/codex/responses", request.url)
         assertEquals("Bearer $apiKey", request.headers["Authorization"])
         assertEquals("acc-123", request.headers["chatgpt-account-id"])
-        assertEquals("pi", request.headers["originator"])
+        assertEquals("pathfinder", request.headers["originator"])
         assertEquals("responses=experimental", request.headers["OpenAI-Beta"])
         assertEquals("text/event-stream", request.headers["accept"])
         assertEquals("application/json", request.headers["content-type"])

@@ -356,7 +356,10 @@ internal fun buildBaseCodexHeaders(
     headers.putAll(optionsHeaders) // null values delete (pi's Headers.delete)
     headers["Authorization"] = "Bearer $token"
     headers["chatgpt-account-id"] = accountId
-    headers["originator"] = "pi"
+    // pi sends `originator: "pi"` (its own client identity); Pathfinder
+    // identifies itself instead — deliberate, owner-approved divergence,
+    // consistent with the OAuth authorize URL's originator default.
+    headers["originator"] = "pathfinder"
     headers["User-Agent"] = getPiUserAgent()
     return headers
 }
