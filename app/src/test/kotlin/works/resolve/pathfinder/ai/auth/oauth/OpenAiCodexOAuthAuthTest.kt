@@ -8,8 +8,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 import works.resolve.pathfinder.ai.auth.AuthEvent
@@ -79,11 +81,13 @@ class OpenAiCodexOAuthAuthTest {
         http: OAuthHttpClient,
         nowMs: Long = 1_000_000L,
         state: String = "0123456789abcdef",
+        callbackPort: Int = 0,
     ) = OpenAiCodexOAuthAuth(
         http = http,
         now = { nowMs },
         createState = { state },
         pkce = fixedPkce(),
+        callbackPort = callbackPort,
     )
 
     private fun fixedPkce() = works.resolve.pathfinder.ai.auth.PkceGenerator { rawVerifierBytes }
@@ -393,7 +397,7 @@ class OpenAiCodexOAuthAuthTest {
                 "&state=0123456789abcdef" +
                 "&id_token_add_organizations=true" +
                 "&codex_cli_simplified_flow=true" +
-                "&originator=pi",
+                "&originator=pathfinder",
             url.url,
         )
 
@@ -521,6 +525,205 @@ class OpenAiCodexOAuthAuthTest {
             assertEquals("Missing authorization code", error.message)
             assertTrue(http.requests.isEmpty())
         }
+    }
+
+    /** An interaction that answers the select with `browser` and parks the manual-code prompt until the test completes it. */
+    private class GatedManualInteraction : AuthInteraction {
+        val events = mutableListOf<AuthEvent>()
+        val prompts = mutableListOf<AuthPrompt>()
+        val manualAnswer = CompletableDeferred<String>()
+
+        override suspend fun prompt(prompt: AuthPrompt): String {
+            prompts += prompt
+            return when (prompt) {
+                is AuthPrompt.Select -> "browser"
+                is AuthPrompt.ManualCode -> manualAnswer.await()
+                else -> error("unexpected prompt: $prompt")
+            }
+        }
+
+        override suspend fun notify(event: AuthEvent) {
+            events += event
+        }
+    }
+
+    /** Drives the loopback callback server with a real HTTP GET (status, body). */
+    private fun httpGet(port: Int, path: String): Pair<Int, String> {
+        val connection = java.net.URL("http://127.0.0.1:$port$path").openConnection()
+            as java.net.HttpURLConnection
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 10_000
+        try {
+            val status = connection.responseCode
+            val stream = if (status in 200..399) connection.inputStream else connection.errorStream
+            return status to stream.readBytes().decodeToString()
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /** Waits until the browser flow has bound its loopback server and parked the manual prompt. */
+    private suspend fun awaitBrowserPrompt(interaction: GatedManualInteraction, flow: OpenAiCodexOAuthAuth): Int {
+        while (interaction.prompts.size < 2 || flow.lastCallbackPort == null) {
+            kotlinx.coroutines.yield()
+        }
+        return flow.lastCallbackPort!!
+    }
+
+    @Test
+    fun `browser login completes from the loopback callback server`() = runTest {
+        val http = FakeHttpClient()
+        http.enqueue(
+            json(200, """{"access_token":"${accessToken("account-server")}","refresh_token":"r","expires_in":10}"""),
+        )
+        val interaction = GatedManualInteraction()
+        val flow = auth(http)
+        val login = async { flow.login(interaction) }
+
+        val port = awaitBrowserPrompt(interaction, flow)
+        val (status, body) = withContext(Dispatchers.IO) {
+            httpGet(port, "/auth/callback?code=server-code&state=0123456789abcdef")
+        }
+
+        assertEquals(200, status)
+        assertTrue("OpenAI authentication completed. You can close this window." in body, body)
+        assertEquals("server-code", formFields(http.requests.single())["code"])
+        assertEquals("account-server", login.await().extras["accountId"]!!.jsonPrimitive.content)
+        // The manual prompt was never answered; the server result won outright.
+        assertTrue(!interaction.manualAnswer.isCompleted)
+    }
+
+    @Test
+    fun `callback state mismatch yields 400 and falls back to the manual prompt`() = runTest {
+        val http = FakeHttpClient()
+        http.enqueue(
+            json(200, """{"access_token":"${accessToken("account-mismatch")}","refresh_token":"r","expires_in":10}"""),
+        )
+        val interaction = GatedManualInteraction()
+        val flow = auth(http)
+        val login = async { flow.login(interaction) }
+
+        val port = awaitBrowserPrompt(interaction, flow)
+        val (status, body) = withContext(Dispatchers.IO) {
+            httpGet(port, "/auth/callback?code=evil-code&state=evil")
+        }
+
+        assertEquals(400, status)
+        assertTrue("State mismatch." in body, body)
+        assertTrue(http.requests.isEmpty(), "no exchange after a state mismatch")
+
+        // The login is still parked on the manual prompt; a pasted code finishes it.
+        interaction.manualAnswer.complete("manual-after-mismatch")
+        login.await()
+        assertEquals("manual-after-mismatch", formFields(http.requests.single())["code"])
+    }
+
+    @Test
+    fun `callback without a code yields 400`() = runTest {
+        val http = FakeHttpClient()
+        http.enqueue(
+            json(200, """{"access_token":"${accessToken("account-nocode")}","refresh_token":"r","expires_in":10}"""),
+        )
+        val interaction = GatedManualInteraction()
+        val flow = auth(http)
+        val login = async { flow.login(interaction) }
+
+        val port = awaitBrowserPrompt(interaction, flow)
+        val (status, body) = withContext(Dispatchers.IO) {
+            httpGet(port, "/auth/callback?state=0123456789abcdef")
+        }
+
+        assertEquals(400, status)
+        assertTrue("Missing authorization code." in body, body)
+        assertTrue(http.requests.isEmpty())
+
+        interaction.manualAnswer.complete("manual-after-nocode")
+        login.await()
+        assertEquals("manual-after-nocode", formFields(http.requests.single())["code"])
+    }
+
+    @Test
+    fun `callback on the wrong path yields 404`() = runTest {
+        val http = FakeHttpClient()
+        http.enqueue(
+            json(200, """{"access_token":"${accessToken("account-404")}","refresh_token":"r","expires_in":10}"""),
+        )
+        val interaction = GatedManualInteraction()
+        val flow = auth(http)
+        val login = async { flow.login(interaction) }
+
+        val port = awaitBrowserPrompt(interaction, flow)
+        val (status, body) = withContext(Dispatchers.IO) {
+            httpGet(port, "/wrong?code=c&state=0123456789abcdef")
+        }
+
+        assertEquals(404, status)
+        assertTrue("Callback route not found." in body, body)
+        assertTrue(http.requests.isEmpty())
+
+        interaction.manualAnswer.complete("manual-after-404")
+        login.await()
+        assertEquals("manual-after-404", formFields(http.requests.single())["code"])
+    }
+
+    @Test
+    fun `manual prompt answer wins when no callback arrives`() = runTest {
+        val http = FakeHttpClient()
+        http.enqueue(
+            json(200, """{"access_token":"${accessToken("account-manual")}","refresh_token":"r","expires_in":10}"""),
+        )
+        val interaction = GatedManualInteraction()
+        val flow = auth(http)
+        val login = async { flow.login(interaction) }
+
+        awaitBrowserPrompt(interaction, flow)
+        // No callback request at all: cancelWait unblocks the race.
+        interaction.manualAnswer.complete("pasted-without-callback")
+
+        val credential = login.await()
+        assertEquals("pasted-without-callback", formFields(http.requests.single())["code"])
+        assertEquals("account-manual", credential.extras["accountId"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `bind conflict on the callback port degrades to the manual-only flow`() = runTest {
+        val http = FakeHttpClient()
+        http.enqueue(
+            json(200, """{"access_token":"${accessToken("account-bindfail")}","refresh_token":"r","expires_in":10}"""),
+        )
+        val blocker = java.net.ServerSocket(0)
+        try {
+            val flow = auth(http, callbackPort = blocker.localPort)
+            val credential = flow.login(
+                RecordingInteraction(
+                    mapOf(
+                        "Select" to { "browser" },
+                        "ManualCode" to { "pasted-when-port-taken" },
+                    ),
+                ),
+            )
+            assertNull(flow.lastCallbackPort, "bind failure must not record a port")
+            assertEquals("pasted-when-port-taken", formFields(http.requests.single())["code"])
+            assertEquals("account-bindfail", credential.extras["accountId"]!!.jsonPrimitive.content)
+        } finally {
+            blocker.close()
+        }
+    }
+
+    @Test
+    fun `manual prompt failure surfaces as the login error`() = runTest {
+        val http = FakeHttpClient()
+        val interaction = object : AuthInteraction {
+            override suspend fun prompt(prompt: AuthPrompt): String =
+                if (prompt is AuthPrompt.Select) "browser" else throw IllegalStateException("prompt dismissed")
+
+            override suspend fun notify(event: AuthEvent) {}
+        }
+        val error = assertFailsWith<IllegalStateException> {
+            auth(http).login(interaction)
+        }
+        assertEquals("prompt dismissed", error.message)
+        assertTrue(http.requests.isEmpty())
     }
 
     // ------------------------------------------------------------------
