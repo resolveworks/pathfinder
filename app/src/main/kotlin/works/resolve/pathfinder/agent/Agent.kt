@@ -6,6 +6,7 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.data.settings.RetrySettings
+import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -67,6 +68,8 @@ class Agent(
     tools: List<AgentTool> = emptyList(),
     /** Tool execution mode (pi's AgentOptions.toolExecution, default "parallel"). */
     private val toolExecution: ToolExecutionMode = ToolExecutionMode.PARALLEL,
+    /** Wall clock for minting message timestamps (TS→Kotlin timing rule). */
+    private val clock: Clock = Clock.System,
     private val streamFn: StreamFn,
 ) {
     /** Guards [active] and transcript mutations; all critical sections are brief and non-suspending. */
@@ -154,6 +157,7 @@ class Agent(
                 options = streamOptions,
                 streamFn = streamFn,
                 toolExecution = toolExecution,
+                clock = clock,
             )
 
             coroutineScope {
@@ -257,7 +261,7 @@ class Agent(
             model = model.id,
             stopReason = if (aborted) StopReason.ABORTED else StopReason.ERROR,
             errorMessage = if (aborted) ABORT_ERROR_MESSAGE else safeErrorMessage(cause),
-            timestamp = System.currentTimeMillis(),
+            timestamp = clock.now().toEpochMilliseconds(),
         )
         processEvent(AgentEvent.MessageStart(failure))
         processEvent(AgentEvent.MessageEnd(failure))

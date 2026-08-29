@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.data.sessions
 
+import kotlin.time.Clock
 import works.resolve.pathfinder.agent.compaction.CompactionDetails
 import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.Usage
@@ -23,10 +24,10 @@ class Conversation(
     val entries: List<SessionEntry>,
     val leafId: String?,
     idGenerator: () -> String = ::uuidv7,
-    clock: () -> Long = { System.currentTimeMillis() },
+    clock: Clock = Clock.System,
 ) {
     private val nextId: () -> String = idGenerator
-    private val now: () -> Long = clock
+    private val clock: Clock = clock
 
     /** Appends [message] as a child of the current leaf (or as a root when the
      * leaf is null) and advances the leaf to the new entry. */
@@ -34,10 +35,10 @@ class Conversation(
         val entry = MessageEntry(
             id = nextId(),
             parentId = leafId,
-            timestamp = now(),
+            timestamp = clock.now().toEpochMilliseconds(),
             message = message,
         )
-        return Conversation(entries + entry, entry.id, nextId, now)
+        return Conversation(entries + entry, entry.id, nextId, clock)
     }
 
     /**
@@ -58,24 +59,24 @@ class Conversation(
         val entry = CompactionEntry(
             id = nextId(),
             parentId = leafId,
-            timestamp = now(),
+            timestamp = clock.now().toEpochMilliseconds(),
             summary = summary,
             retainedTail = retainedTail,
             tokensBefore = tokensBefore,
             details = details,
             usage = usage,
         )
-        return Conversation(entries + entry, entry.id, nextId, now)
+        return Conversation(entries + entry, entry.id, nextId, clock)
     }
 
     /** Moves the leaf to [entryId]; throws [IllegalArgumentException] when unknown. */
     fun branch(entryId: String): Conversation {
         require(entries.any { it.id == entryId }) { "Unknown entry id: $entryId" }
-        return Conversation(entries, entryId, nextId, now)
+        return Conversation(entries, entryId, nextId, clock)
     }
 
     /** Clears the leaf; the next append starts a new root. */
-    fun resetLeaf(): Conversation = Conversation(entries, null, nextId, now)
+    fun resetLeaf(): Conversation = Conversation(entries, null, nextId, clock)
 
     /** Root→leaf path (pi's getBranch), in conversation order. */
     fun activeEntries(): List<SessionEntry> {

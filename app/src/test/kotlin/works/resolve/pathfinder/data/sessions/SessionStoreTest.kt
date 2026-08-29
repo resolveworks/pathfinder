@@ -10,6 +10,7 @@ import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
 import java.io.File
 import kotlin.test.assertFailsWith
 import kotlinx.coroutines.test.runTest
@@ -28,7 +29,7 @@ class SessionStoreTest {
     @get:Rule
     val tmpFolder = TemporaryFolder()
 
-    private var now = 1_000L
+    private val clock = FakeClock(1_000)
     private var nextId = 0
     private lateinit var root: File
 
@@ -36,7 +37,7 @@ class SessionStoreTest {
         if (!::root.isInitialized) root = tmpFolder.newFolder("sessions")
         return SessionStore(
             root = root,
-            clock = { now },
+            clock = clock,
             idFactory = { "sess-${nextId++}" },
             maxFileBytes = maxFileBytes,
         )
@@ -46,7 +47,7 @@ class SessionStoreTest {
         if (!::root.isInitialized) root = tmpFolder.newFolder("sessions")
         return SessionStore(
             root = root,
-            clock = { now },
+            clock = clock,
             idFactory = { nextId++.toString() },
             maxFileBytes = maxFileBytes,
         )
@@ -103,9 +104,9 @@ class SessionStoreTest {
     fun createListOrderingNewestUpdatedFirst() = runTest {
         val store = newStore()
         val a = store.create("a")
-        now += 10
+        clock.advanceMillis(10)
         val b = store.create("b")
-        now += 10
+        clock.advanceMillis(10)
         store.save(a.copy(title = "a2"))
 
         val summaries = store.summaries()
@@ -118,7 +119,7 @@ class SessionStoreTest {
     fun fullRoundTripAcrossRestart() = runTest {
         val store = newStore()
         val created = store.create("session one")
-        now += 5
+        clock.advanceMillis(5)
         val saved = store.save(created.withMessages(fullTranscript()))
 
         // Simulate restart: fresh store instance over the same directory.
@@ -132,7 +133,7 @@ class SessionStoreTest {
     fun roundTripPreservesEntriesAndLeafId() = runTest {
         val store = newStore()
         val created = store.create("branchy")
-        now += 5
+        clock.advanceMillis(5)
         val root = MessageEntry("m0", null, 1L, UserMessage.ofText("a", 1L))
         val left = MessageEntry("m1", "m0", 2L, UserMessage.ofText("b", 2L))
         val right = MessageEntry("m2", "m0", 3L, UserMessage.ofText("c", 3L))
@@ -149,9 +150,9 @@ class SessionStoreTest {
     fun saveBumpsUpdatedAtAndPersistsTitleAndTranscriptChanges() = runTest {
         val store = newStore()
         val created = store.create()
-        now += 100
+        clock.advanceMillis(100)
         val saved = store.save(created.withMessages(listOf(UserMessage.ofText("hey", 7L))).copy(title = "renamed"))
-        assertEquals(now, saved.updatedAt)
+        assertEquals(clock.now().toEpochMilliseconds(), saved.updatedAt)
         assertEquals(created.createdAt, saved.createdAt)
 
         val loaded = store.load(created.id)!!
@@ -316,7 +317,7 @@ class SessionStoreTest {
         val created = store.create()
         // Interleaved saves of different sizes must all land atomically.
         repeat(20) { i ->
-            now += 1
+            clock.advanceMillis(1)
             store.save(created.withMessages((0..i).map { UserMessage.ofText("m$it") }).copy(title = "t$i"))
         }
         val loaded = store.load(created.id)!!

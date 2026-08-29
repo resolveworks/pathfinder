@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.models
 
+import kotlin.time.Clock
 import works.resolve.pathfinder.ai.api.ChatApi
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
@@ -84,6 +85,8 @@ class Provider(
  */
 class Models(
     providers: List<Provider>,
+    /** Wall clock for minting message timestamps (TS→Kotlin timing rule). */
+    private val clock: Clock = Clock.System,
 ) {
     private val byId = providers.associateBy { it.id }
 
@@ -233,7 +236,7 @@ class Models(
                     stopReason = StopReason.ERROR,
                     // Safe generic message: no exception or credential text.
                     errorMessage = message,
-                    timestamp = System.currentTimeMillis(),
+                    timestamp = clock.now().toEpochMilliseconds(),
                 ),
             ),
         )

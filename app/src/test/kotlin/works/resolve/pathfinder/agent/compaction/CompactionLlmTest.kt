@@ -10,6 +10,7 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.core.ToolCall
@@ -298,17 +299,17 @@ class CompactionLlmTest {
 
         val reasoning = createFauxModel(reasoning = true)
         reasoning.enqueue(fauxAssistantMessage("## Goal\nTest summary"))
-        generateSummary(messages, reasoning.models, reasoning.model, 2000, thinkingLevel = ModelThinkingLevel.MEDIUM)
+        generateSummary(messages, reasoning.models, reasoning.model, 2000, thinkingLevel = ModelThinkingLevel.MEDIUM, clock = FakeClock())
         assertEquals(ThinkingLevel.MEDIUM, reasoning.api.seenOptions[0].reasoning)
 
         val off = createFauxModel(reasoning = true)
         off.enqueue(fauxAssistantMessage("## Goal\nTest summary"))
-        generateSummary(messages, off.models, off.model, 2000, thinkingLevel = ModelThinkingLevel.OFF)
+        generateSummary(messages, off.models, off.model, 2000, thinkingLevel = ModelThinkingLevel.OFF, clock = FakeClock())
         assertNull(off.api.seenOptions[0].reasoning)
 
         val nonReasoning = createFauxModel(reasoning = false)
         nonReasoning.enqueue(fauxAssistantMessage("## Goal\nTest summary"))
-        generateSummary(messages, nonReasoning.models, nonReasoning.model, 2000, thinkingLevel = ModelThinkingLevel.MEDIUM)
+        generateSummary(messages, nonReasoning.models, nonReasoning.model, 2000, thinkingLevel = ModelThinkingLevel.MEDIUM, clock = FakeClock())
         assertNull(nonReasoning.api.seenOptions[0].reasoning)
     }
 
@@ -322,6 +323,7 @@ class CompactionLlmTest {
             val result = generateSummaryWithUsage(
                 messages, faux.models, faux.model, 2000,
                 customInstructions = "focus", previousSummary = "old summary",
+                clock = FakeClock(),
             )
         ) {
             is CompactionResult.Ok -> result.value
@@ -349,7 +351,7 @@ class CompactionLlmTest {
 
         assertEquals(
             "## Goal\nTest summary",
-            when (val result = generateSummary(messages, faux.models, faux.model, 2000)) {
+            when (val result = generateSummary(messages, faux.models, faux.model, 2000, clock = FakeClock())) {
                 is CompactionResult.Ok -> result.value
                 is CompactionResult.Err -> error(result.error.message ?: "compaction failed")
             },
@@ -362,7 +364,7 @@ class CompactionLlmTest {
 
         val errorFaux = createFauxModel(reasoning = false)
         errorFaux.enqueue(fauxAssistantMessage("", stopReason = StopReason.ERROR, errorMessage = "boom"))
-        when (val errorResult = generateSummary(messages, errorFaux.models, errorFaux.model, 2000)) {
+        when (val errorResult = generateSummary(messages, errorFaux.models, errorFaux.model, 2000, clock = FakeClock())) {
             is CompactionResult.Err -> {
                 assertEquals(CompactionErrorCode.SUMMARIZATION_FAILED, errorResult.error.code)
                 assertEquals("Summarization failed: boom", errorResult.error.message)
@@ -372,7 +374,7 @@ class CompactionLlmTest {
 
         val abortedFaux = createFauxModel(reasoning = false)
         abortedFaux.enqueue(fauxAssistantMessage("", stopReason = StopReason.ABORTED, errorMessage = "stopped"))
-        when (val abortedResult = generateSummary(messages, abortedFaux.models, abortedFaux.model, 2000)) {
+        when (val abortedResult = generateSummary(messages, abortedFaux.models, abortedFaux.model, 2000, clock = FakeClock())) {
             is CompactionResult.Err -> {
                 assertEquals(CompactionErrorCode.ABORTED, abortedResult.error.code)
                 assertEquals("stopped", abortedResult.error.message)
@@ -521,6 +523,7 @@ class CompactionLlmTest {
             preparation(messages, messages, isSplitTurn = true, tokensBefore = 600000, settings = CompactionSettings(enabled = true, reserveTokens = 500000, keepRecentTokens = 20000)),
             faux.models,
             faux.model,
+            clock = FakeClock(),
         )
 
         assertEquals(listOf(128000, 128000), faux.api.seenOptions.map { it.maxTokens })
@@ -534,7 +537,7 @@ class CompactionLlmTest {
         val faux = createFauxModel(reasoning = false)
         faux.enqueue(fauxAssistantMessage("", stopReason = StopReason.ERROR, errorMessage = "history failed"))
 
-        when (val result = compact(preparation(messages, emptyList(), isSplitTurn = false), faux.models, faux.model)) {
+        when (val result = compact(preparation(messages, emptyList(), isSplitTurn = false), faux.models, faux.model, clock = FakeClock())) {
             is CompactionResult.Err -> {
                 assertEquals(CompactionErrorCode.SUMMARIZATION_FAILED, result.error.code)
                 assertEquals("Summarization failed: history failed", result.error.message)
@@ -552,7 +555,7 @@ class CompactionLlmTest {
             fauxAssistantMessage("turn prefix summary", usage = createMockUsage(5, 6, 7, 8)),
         )
 
-        val result = compactValue(compact(preparation(messages, messages, isSplitTurn = true), faux.models, faux.model))
+        val result = compactValue(compact(preparation(messages, messages, isSplitTurn = true), faux.models, faux.model, clock = FakeClock()))
 
         assertEquals(createMockUsage(6, 8, 10, 12), result.usage)
     }
@@ -563,7 +566,7 @@ class CompactionLlmTest {
         val faux = createFauxModel(reasoning = true)
         faux.enqueue(fauxAssistantMessage("## Original Request\nTest summary"))
 
-        compact(preparation(emptyList(), messages, isSplitTurn = true), faux.models, faux.model, thinkingLevel = ModelThinkingLevel.HIGH)
+        compact(preparation(emptyList(), messages, isSplitTurn = true), faux.models, faux.model, thinkingLevel = ModelThinkingLevel.HIGH, clock = FakeClock())
 
         assertEquals(ThinkingLevel.HIGH, faux.api.seenOptions[0].reasoning)
     }
@@ -575,7 +578,7 @@ class CompactionLlmTest {
 
         val faux = createFauxModel(reasoning = false)
         faux.enqueue(fauxAssistantMessage("", stopReason = StopReason.ERROR, errorMessage = "prefix failed"))
-        when (val result = compact(prep, faux.models, faux.model)) {
+        when (val result = compact(prep, faux.models, faux.model, clock = FakeClock())) {
             is CompactionResult.Err -> {
                 assertEquals(CompactionErrorCode.SUMMARIZATION_FAILED, result.error.code)
                 assertEquals("Turn prefix summarization failed: prefix failed", result.error.message)
@@ -585,7 +588,7 @@ class CompactionLlmTest {
 
         val abortedFaux = createFauxModel(reasoning = false)
         abortedFaux.enqueue(fauxAssistantMessage("", stopReason = StopReason.ABORTED, errorMessage = "prefix stopped"))
-        when (val result = compact(prep, abortedFaux.models, abortedFaux.model)) {
+        when (val result = compact(prep, abortedFaux.models, abortedFaux.model, clock = FakeClock())) {
             is CompactionResult.Err -> {
                 assertEquals(CompactionErrorCode.ABORTED, result.error.code)
                 assertEquals("prefix stopped", result.error.message)
@@ -614,7 +617,7 @@ class CompactionLlmTest {
             fauxAssistantMessage("## Goal\nTest summary"),
             fauxAssistantMessage("## Original Request\nTest summary"),
         )
-        val result = compactValue(compact(prep, faux.models, faux.model))
+        val result = compactValue(compact(prep, faux.models, faux.model, clock = FakeClock()))
         assertTrue(result.summary.isNotEmpty())
         assertTrue((result.usage?.totalTokens ?: 0) > 0)
         assertTrue(result.retainedTail.isNotEmpty())
