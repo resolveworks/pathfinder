@@ -28,6 +28,7 @@ import works.resolve.pathfinder.ai.models.ResolvedAuth
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.lenientJson
 
 /**
  * One credential prompt from the catalog, mirroring pi's auth prompt
@@ -180,7 +181,7 @@ class ProviderCatalog(val providers: List<CatalogProvider>) {
             throw IllegalArgumentException("Malformed model catalog: ${error.message}", error)
         }
 
-        private val json = Json { ignoreUnknownKeys = true }
+        private val json = lenientJson
     }
 }
 

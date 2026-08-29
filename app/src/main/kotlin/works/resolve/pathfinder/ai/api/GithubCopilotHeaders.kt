@@ -22,7 +22,7 @@ import works.resolve.pathfinder.ai.core.Model
  */
 
 /** Pi's "user" | "agent" initiator discriminator for X-Initiator. */
-enum class CopilotInitiator(val headerValue: String) {
+enum class CopilotInitiator(val wire: String) {
     USER("user"),
     AGENT("agent"),
 }
@@ -65,7 +65,7 @@ fun buildCopilotDynamicHeaders(
     messages: List<Message>,
     hasImages: Boolean,
 ): Map<String, String> = buildMap {
-    put("X-Initiator", inferCopilotInitiator(messages).headerValue)
+    put("X-Initiator", inferCopilotInitiator(messages).wire)
     put("Openai-Intent", "conversation-edits")
     if (hasImages) {
         put("Copilot-Vision-Request", "true")
