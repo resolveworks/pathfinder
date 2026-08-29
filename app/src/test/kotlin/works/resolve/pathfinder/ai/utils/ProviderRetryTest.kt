@@ -124,7 +124,7 @@ class ProviderRetryTest {
     fun `server-requested delay above cap fails immediately`() = runTest {
         val h = Harness()
         var calls = 0
-        val error = assertFailsWith<IllegalStateException> {
+        val error = assertFailsWith<RetryDelayExceededError> {
             h.retry.retryProviderRequest(maxRetries = 3, maxRetryDelayMs = 5000) {
                 calls++
                 throw httpError(429, mapOf("retry-after-ms" to listOf("60000")))

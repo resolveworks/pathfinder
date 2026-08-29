@@ -9,6 +9,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
@@ -37,7 +39,9 @@ import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.ai.utils.RetryDelayExceededError
 import works.resolve.pathfinder.ai.utils.compressRequestBodyZstd
+import works.resolve.pathfinder.ai.utils.validateRetryDelayMs
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
@@ -176,7 +180,7 @@ internal fun isWebSocketConnectionLimitReachedError(error: Throwable): Boolean =
 internal fun isPreviousResponseNotFoundError(error: Throwable): Boolean =
     error is CodexApiException && error.code == "previous_response_not_found"
 
-/** Pi's isTerminalRateLimitError. */
+/** Pi's isTerminalRateLimitError (openai-codex-responses.ts:114-118, /i). */
 internal fun isTerminalRateLimitError(errorText: String): Boolean =
     Regex(
         "GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|" +
@@ -184,15 +188,22 @@ internal fun isTerminalRateLimitError(errorText: String): Boolean =
         RegexOption.IGNORE_CASE,
     ).containsMatchIn(errorText)
 
-/** Pi's isRetryableError. */
+/** Pi's isRetryableError (openai-codex-responses.ts:122-130, /i). */
 internal fun isRetryableError(status: Int, errorText: String): Boolean {
     if (status == 429 && isTerminalRateLimitError(errorText)) return false
     if (status == 429 || status == 500 || status == 502 || status == 503 || status == 504) return true
-    return Regex("rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused")
+    return Regex("rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused", RegexOption.IGNORE_CASE)
         .containsMatchIn(errorText)
 }
 
-/** Pi's getRetryAfterDelayMs from response headers. */
+/** Pi's getRetryAfterDelayMs from response headers.
+ *
+ * Parsing stays codex-local rather than shared with [works.resolve.pathfinder.ai.utils.ProviderRetry]:
+ * pi's two parsers are deliberately different (codex uses strict
+ * whole-string `Number` parsing and clamps to >= 0;
+ * provider-retry.ts uses `Number.parseFloat` without clamping), so they are
+ * not verifiably identical and are not deduplicated. The delay-cap check
+ * they feed into is shared (validateRetryDelayMs in ProviderRetry.kt). */
 internal fun getRetryAfterDelayMs(
     retryAfterMs: String?,
     retryAfter: String?,
@@ -215,21 +226,6 @@ internal fun getRetryAfterDelayMs(
     return maxOf(0L, date - nowMs())
 }
 
-/** Pi's validateRetryDelayMs; throws when the server delay exceeds the cap. */
-internal fun validateRetryDelayMs(delayMs: Long, maxRetryDelayMs: Long): Long {
-    if (maxRetryDelayMs > 0 && delayMs > maxRetryDelayMs) {
-        throw CodexRetryDelayExceededException(
-            "Server requested ${ceilSeconds(delayMs)}s retry delay (max: ${ceilSeconds(maxRetryDelayMs)}s)",
-        )
-    }
-    return delayMs
-}
-
-/** Pi's RetryDelayExceededError: never retried. */
-internal class CodexRetryDelayExceededException(message: String) : IllegalStateException(message)
-
-private fun ceilSeconds(ms: Long): Long = (ms + 999) / 1000
-
 /** Pi's extractAccountId: chatgpt_account_id claim from the JWT API key. */
 internal fun extractAccountId(token: String): String {
     try {
@@ -238,7 +234,10 @@ internal fun extractAccountId(token: String): String {
         val payload = Base64.getDecoder().decode(
             parts[1].replace('-', '+').replace('_', '/').padBase64(),
         ).decodeToString()
-        val json = responsesJson.parseToJsonElement(payload) as? JsonObject ?: error("Invalid token")
+        val json = responsesJson.parseToJsonElement(payload)
+            // Element-shape dispatch: a JWT payload is a JSON object; anything
+            // else is an invalid token (pi's JSON.parse + property access).
+            as? JsonObject ?: error("Invalid token")
         val accountId = json.obj(JWT_CLAIM_PATH)?.str("chatgpt_account_id")
         if (accountId.isNullOrEmpty()) error("No account ID in token")
         return accountId
@@ -546,8 +545,10 @@ class OpenAICodexResponsesApi(
     private val clock: Clock = Clock.System,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     // Narrow seam over pi's compressRequestBodyZstd for tests (injects the
-    // compression-failure fallback).
+    // compression-failure fallback). Blocking zstd JNI runs under
+    // [ioDispatcher] at the call site (SessionStore blocking-IO pattern).
     private val compressRequestBody: (String) -> ByteArray? = ::compressRequestBodyZstd,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     /** WebSocket seam (pi's WebSocket constructor); required on Android. */
     private val webSocketTransport: WebSocketStreamingTransport,
     /** Pooled WebSocket session state (pi's module-level websocketSessionCache). */
@@ -741,7 +742,7 @@ class OpenAICodexResponsesApi(
             // (openai-codex-responses.ts:368-375): the Codex backend decodes
             // Content-Encoding: zstd; the uncompressed JSON is sent unchanged
             // when compression is unavailable.
-            val compressedBody = compressRequestBody(bodyJson)
+            val compressedBody = withContext(ioDispatcher) { compressRequestBody(bodyJson) }
             val body: ByteArray
             if (compressedBody != null) {
                 headers["content-encoding"] = "zstd"
@@ -1055,7 +1056,7 @@ class OpenAICodexResponsesApi(
                 // usage-limit failure.
                 lastError = terminal
                 val retryable = attempt < maxRetries &&
-                    terminal !is CodexRetryDelayExceededException &&
+                    terminal !is RetryDelayExceededError &&
                     !terminal.message.orEmpty().contains("usage limit")
                 if (!retryable) throw terminal
                 sleep((BASE_DELAY_MS * Math.pow(2.0, attempt.toDouble())).toLong())

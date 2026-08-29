@@ -8,7 +8,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
@@ -70,11 +72,13 @@ class OpenAiCodexResponsesApiTest {
         transport: FakeTransport,
         calls: MutableList<Long> = mutableListOf(),
         compressRequestBody: (String) -> ByteArray? = ::compressRequestBodyZstd,
+        ioDispatcher: CoroutineDispatcher = Dispatchers.Unconfined,
     ) = OpenAICodexResponsesApi(
         transport,
         clock = FakeClock(0L),
         sleep = { calls.add(it) },
         compressRequestBody = compressRequestBody,
+        ioDispatcher = ioDispatcher,
         webSocketTransport = NoWebSocketTransport,
     )
 

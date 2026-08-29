@@ -244,15 +244,6 @@ class OpenAICodexWebSocketSessions(
         if (accountEntries.isEmpty()) sessionCache.remove(sessionId)
     }
 
-    /** Test seam (suspend, synchronous): mirrors pi's tests calling close + reset between cases. */
-    suspend fun resetForTest() {
-        mutex.withLock {
-            sessionCache.values.forEach { entries -> entries.values.forEach(::closeEntry) }
-            sessionCache.clear()
-        }
-        resetStats(null)
-    }
-
     /** pi's getOpenAICodexWebSocketDebugStats (~:875): a copy, or null. */
     fun getOpenAICodexWebSocketDebugStats(sessionId: String): OpenAICodexWebSocketDebugStats? =
         getStats(sessionId)
