@@ -1,12 +1,14 @@
 package works.resolve.pathfinder.data.credentials
 
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.auth.OAuthCredential
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.requireString
+import works.resolve.pathfinder.ai.utils.strictLong
+import works.resolve.pathfinder.ai.utils.stringOrNull
 
 /**
  * Pure (JVM-testable) codec between [Credential] and its on-disk form, ported
@@ -23,8 +25,6 @@ import works.resolve.pathfinder.ai.auth.OAuthCredential
  * [CredentialFormatException].
  */
 object CredentialCodec {
-
-    private val json = Json { ignoreUnknownKeys = true }
 
     fun encode(credential: Credential): String = when (credential) {
         is ApiKeyCredential -> {
@@ -52,15 +52,17 @@ object CredentialCodec {
     /** Decodes a type-tagged JSON object; throws [CredentialFormatException] on any other input. */
     fun decode(raw: String): Credential {
         val element = try {
-            json.parseToJsonElement(raw)
+            lenientJson.parseToJsonElement(raw)
         } catch (_: Exception) {
             throw CredentialFormatException("Malformed credential JSON")
         }
         val obj = element as? JsonObject ?: throw CredentialFormatException("Credential JSON is not an object")
         val typeField = obj["type"]
+        // JSON null is a non-string primitive and must hit the "not a string"
+        // branch, not the missing branch — hence the explicit null check.
         val type = when {
             typeField == null -> null
-            typeField is JsonPrimitive && typeField.isString -> typeField.content
+            typeField.stringOrNull() != null -> typeField.stringOrNull()
             else -> throw CredentialFormatException("Credential type is not a string")
         }
         return when (type) {
@@ -73,28 +75,23 @@ object CredentialCodec {
 
     private fun decodeApiKey(obj: JsonObject): ApiKeyCredential = ApiKeyCredential(
         key = obj["key"]?.let { key ->
-            (key as? JsonPrimitive)?.takeIf { it.isString }?.content
-                ?: throw CredentialFormatException("Key is not a string")
+            key.stringOrNull() ?: throw CredentialFormatException("Key is not a string")
         },
         env = obj["env"]?.let { env ->
             (env as? JsonObject)?.entries?.associate { (name, value) ->
-                name to ((value as? JsonPrimitive)?.takeIf { it.isString }?.content
+                name to (value.stringOrNull()
                     ?: throw CredentialFormatException("Non-string env value for $name"))
             } ?: throw CredentialFormatException("Env is not an object")
         } ?: emptyMap(),
     )
 
     private fun decodeOAuth(obj: JsonObject): OAuthCredential = OAuthCredential(
-        access = stringField(obj, "access"),
-        refresh = stringField(obj, "refresh"),
-        expires = (obj["expires"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toLongOrNull()
+        access = obj.requireString("access") { name -> CredentialFormatException("Missing or non-string $name") },
+        refresh = obj.requireString("refresh") { name -> CredentialFormatException("Missing or non-string $name") },
+        expires = obj.strictLong("expires")
             ?: throw CredentialFormatException("Missing or non-numeric expires"),
         extras = obj.filterKeys { it !in OAuthCredential.RESERVED_FIELDS },
     )
-
-    private fun stringField(obj: JsonObject, name: String): String =
-        (obj[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
-            ?: throw CredentialFormatException("Missing or non-string $name")
 
     private const val TYPE_API_KEY = "api_key"
     private const val TYPE_OAUTH = "oauth"
