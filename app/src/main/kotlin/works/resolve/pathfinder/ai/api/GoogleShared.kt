@@ -14,12 +14,14 @@ import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.str
+import works.resolve.pathfinder.ai.utils.strictBoolean
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -95,10 +97,11 @@ object GoogleShared {
     /**
      * Whether a streamed Gemini part is thinking content. Port of
      * google-shared.ts `isThinkingPart`: `thought: true` is the definitive
-     * marker; `thoughtSignature` can appear on any part type and does not make
+     * marker (read strictly, like the upstream `=== true`);
+     * `thoughtSignature` can appear on any part type and does not make
      * the part thinking. See https://ai.google.dev/gemini-api/docs/thought-signatures
      */
-    fun isThinkingPart(part: JsonObject): Boolean = (part["thought"] as? JsonPrimitive)?.content == "true"
+    fun isThinkingPart(part: JsonObject): Boolean = part.strictBoolean("thought") == true
 
     /**
      * Retain thought signatures during streaming. Port of google-shared.ts
@@ -310,9 +313,10 @@ object GoogleShared {
                     // The Cloud Code Assist API requires all function responses in a
                     // single user turn: merge into a preceding function-response turn.
                     val lastContent = contents.lastOrNull()
-                    val lastParts = (lastContent?.get("parts") as? JsonArray)
-                    if (lastContent?.get("role")?.let { (it as? JsonPrimitive)?.content } == "user" &&
-                        lastParts != null && lastParts.any { (it as? JsonObject)?.containsKey("functionResponse") == true }
+                    val lastParts = lastContent?.arr("parts")
+                    if (lastContent?.str("role") == "user" &&
+                        lastParts != null &&
+                        lastParts.filterIsInstance<JsonObject>().any { it.containsKey("functionResponse") }
                     ) {
                         contents[contents.size - 1] = buildJsonObject {
                             put("role", "user")

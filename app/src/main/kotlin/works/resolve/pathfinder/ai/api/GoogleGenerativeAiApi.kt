@@ -11,6 +11,7 @@ import works.resolve.pathfinder.ai.core.mergeHeaders
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import kotlin.time.Clock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.serialization.json.JsonObject
@@ -37,7 +38,7 @@ import kotlinx.serialization.json.JsonObject
 class GoogleGenerativeAiApi(
     private val transport: HttpStreamingTransport,
     private val retry: ProviderRetry = ProviderRetry(),
-    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val clock: Clock = Clock.System,
 ) : ChatApi {
 
     /** pi's GoogleOptions: StreamOptions plus toolChoice and thinking. */
@@ -164,7 +165,7 @@ class GoogleGenerativeAiApi(
                 GoogleStreamEngine.stream(
                     transport,
                     retry,
-                    nowMs,
+                    clock,
                     model,
                     GoogleStreamEngine.Plan(
                         url = url,
@@ -193,7 +194,7 @@ class GoogleGenerativeAiApi(
             model = model.id,
             stopReason = works.resolve.pathfinder.ai.core.StopReason.ERROR,
             errorMessage = "No API key for provider: ${model.provider}",
-            timestamp = nowMs(),
+            timestamp = clock.now().toEpochMilliseconds(),
         )
         emit(
             works.resolve.pathfinder.ai.core.AssistantMessageEvent.Error(

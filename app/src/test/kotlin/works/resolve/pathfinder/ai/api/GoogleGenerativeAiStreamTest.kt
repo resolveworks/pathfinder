@@ -11,6 +11,7 @@ import works.resolve.pathfinder.ai.core.ThinkingContent
 import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import kotlin.test.Test
@@ -50,7 +51,7 @@ class GoogleGenerativeAiStreamTest {
     private fun api(transport: FakeTransport) = GoogleGenerativeAiApi(
         transport,
         works.resolve.pathfinder.ai.utils.ProviderRetry(sleep = {}, nowMs = { 0L }, random = { 0.0 }),
-        nowMs = { 1_770_000_000_000L },
+        clock = FakeClock(startEpochMs = 1_770_000_000_000L),
     )
 
     private suspend fun events(transport: FakeTransport) = api(transport)
