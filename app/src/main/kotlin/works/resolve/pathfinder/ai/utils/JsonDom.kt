@@ -51,8 +51,15 @@ internal fun JsonObject?.long(key: String): Long? = this?.get(key).primitiveOrNu
 /** [key] as a Double (kotlinx semantics). */
 internal fun JsonObject?.double(key: String): Double? = this?.get(key).primitiveOrNull()?.doubleOrNull
 
-/** [key] as a Boolean (kotlinx semantics). */
+/** [key] as a boolean primitive per kotlinx semantics. */
 internal fun JsonObject?.boolean(key: String): Boolean? = this?.get(key).primitiveOrNull()?.booleanOrNull
+
+/**
+ * pi truthiness read (`!json?.field`): a non-empty string primitive. Absent,
+ * JSON null, the empty string, and non-string primitives all yield null.
+ */
+internal fun JsonObject?.truthyString(key: String): String? =
+    string(key)?.takeIf { it.isNotEmpty() }
 
 /** Nested object at [key]; null when absent or of another kind. */
 internal fun JsonObject?.obj(key: String): JsonObject? = this?.get(key) as? JsonObject

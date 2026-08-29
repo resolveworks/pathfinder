@@ -17,6 +17,7 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.SimpleToolChoice
+import works.resolve.pathfinder.ai.core.toModelThinkingLevel
 import works.resolve.pathfinder.ai.core.ProviderResponse
 import works.resolve.pathfinder.ai.core.headersToRecord
 import works.resolve.pathfinder.ai.core.mergeSamplingParams
@@ -176,7 +177,7 @@ class OpenAiResponsesApi(
     ): Flow<AssistantMessageEvent> {
         val apiKey = options.apiKey
         val clamped = options.reasoning?.let {
-            works.resolve.pathfinder.ai.core.clampThinkingLevel(model, toModelThinkingLevel(it))
+            works.resolve.pathfinder.ai.core.clampThinkingLevel(model, it.toModelThinkingLevel())
         }
         val reasoningEffort = if (clamped == ModelThinkingLevel.OFF) null else clamped
         return stream(
@@ -605,7 +606,7 @@ class AzureOpenAiResponsesApi(
         val apiKey = options.apiKey
             ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
         val clamped = options.reasoning?.let {
-            works.resolve.pathfinder.ai.core.clampThinkingLevel(model, toModelThinkingLevel(it))
+            works.resolve.pathfinder.ai.core.clampThinkingLevel(model, it.toModelThinkingLevel())
         }
         val reasoningEffort = if (clamped == ModelThinkingLevel.OFF) null else clamped
         return stream(
@@ -810,9 +811,6 @@ internal fun mapResponsesToolChoice(choice: ToolChoice): String = when (choice) 
         put("function", buildJsonObject { put("name", choice.name) })
     }.toString()
 }
-
-internal fun toModelThinkingLevel(level: ThinkingLevel): ModelThinkingLevel =
-    ModelThinkingLevel.valueOf(level.name)
 
 /** Canonical JSON instance for the Responses family: the shared [lenientJson]. */
 internal val responsesJson: Json = lenientJson

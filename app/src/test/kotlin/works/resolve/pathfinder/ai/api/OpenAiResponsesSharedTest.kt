@@ -36,6 +36,7 @@ import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
 
@@ -47,7 +48,7 @@ import works.resolve.pathfinder.ai.utils.shortHash
  */
 class OpenAiResponsesSharedTest {
 
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = lenientJson
 
     private fun model(
         provider: String = "openai",

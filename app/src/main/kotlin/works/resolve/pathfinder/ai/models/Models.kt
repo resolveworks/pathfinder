@@ -9,6 +9,8 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.mergeHeaders
+import works.resolve.pathfinder.ai.utils.optionsToString
+import works.resolve.pathfinder.ai.utils.redactedSecret
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -38,9 +40,13 @@ class ResolvedAuth(
      */
     val baseUrl: String? = null,
 ) {
-    override fun toString(): String =
-        "ResolvedAuth(apiKey=" + (apiKey?.let { "<redacted>" } ?: "null") +
-            ", env=${env.keys}, headers=${headers.keys}, baseUrl=$baseUrl)"
+    override fun toString(): String = optionsToString(
+        "ResolvedAuth",
+        "apiKey" to redactedSecret(apiKey),
+        "env" to env.keys,
+        "headers" to headers.keys,
+        "baseUrl" to baseUrl,
+    )
 }
 
 /**

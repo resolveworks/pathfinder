@@ -18,6 +18,7 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
+import works.resolve.pathfinder.ai.utils.truthyString
 import kotlin.time.Clock
 import works.resolve.pathfinder.ai.utils.strictDouble
 
@@ -439,8 +440,8 @@ class OpenAiCodexOAuthAuth(
 
         val json = parseJson(text)?.let { it as? JsonObject }
         val intervalSeconds = coerceIntervalSeconds(json)
-        val deviceAuthId = json?.stringField("device_auth_id")
-        val userCode = json?.stringField("user_code")
+        val deviceAuthId = json?.truthyString("device_auth_id")
+        val userCode = json?.truthyString("user_code")
         val intervalValid = intervalSeconds.isFinite() && intervalSeconds >= 0
         if (deviceAuthId == null || userCode == null || !intervalValid) {
             val missing = listOfNotNull(
@@ -536,8 +537,8 @@ class OpenAiCodexOAuthAuth(
 
                     if (response.status in 200..299) {
                         val json = parseJson(text) as? JsonObject
-                        val authorizationCode = json?.stringField("authorization_code")
-                        val codeVerifier = json?.stringField("code_verifier")
+                        val authorizationCode = json?.truthyString("authorization_code")
+                        val codeVerifier = json?.truthyString("code_verifier")
                         if (authorizationCode == null || codeVerifier == null) {
                             // pi echoes the raw body, which can carry the
                             // authorization code / code verifier; report the
@@ -661,8 +662,8 @@ class OpenAiCodexOAuthAuth(
         }
 
         val json = parseJson(text)?.let { it as? JsonObject }
-        val access = json?.stringField("access_token")
-        val refresh = json?.stringField("refresh_token")
+        val access = json?.truthyString("access_token")
+        val refresh = json?.truthyString("refresh_token")
         val expiresIn = json?.strictDouble("expires_in")
         if (access == null || refresh == null || expiresIn == null) {
             val missing = listOfNotNull(
@@ -718,7 +719,7 @@ class OpenAiCodexOAuthAuth(
     internal fun getAccountId(accessToken: String): String? =
         decodeJwt(accessToken)
             ?.obj(JWT_CLAIM_PATH)
-            ?.stringField("chatgpt_account_id")
+            ?.truthyString("chatgpt_account_id")
 
     /**
      * Port of pi `credentialsFromToken`: extracts the account id from the
@@ -778,15 +779,6 @@ class OpenAiCodexOAuthAuth(
         }
 
     /**
-     * pi truthiness check: `!json?.field` — a non-empty JSON string primitive
-     * only (pi openai-codex.ts `!json?.access_token`, `!json.device_auth_id`,
-     * …). Delegates the strict `typeof` read to the shared surface and adds
-     * the empty-string falsy check on top.
-     */
-    private fun JsonObject.stringField(field: String): String? =
-        string(field)?.takeIf { it.isNotEmpty() }
-
-    /**
      * Appends a sanitized `: error=<detail>` suffix for a non-empty body (see
      * class KDoc): only structured `error` / `error.code` / `error.message` /
      * `error_description` strings survive, scrubbed of any [secrets]; an
@@ -803,12 +795,12 @@ class OpenAiCodexOAuthAuth(
         when (val error = obj?.get("error")) {
             is JsonPrimitive -> if (error.isString) parts += error.content
             is JsonObject -> {
-                error.stringField("code")?.let { parts += it }
-                error.stringField("message")?.let { parts += it }
+                error.truthyString("code")?.let { parts += it }
+                error.truthyString("message")?.let { parts += it }
             }
             else -> {}
         }
-        obj?.stringField("error_description")?.let { parts += it }
+        obj?.truthyString("error_description")?.let { parts += it }
         if (parts.isEmpty()) return "$message: <redacted>"
         return "$message: error=" + scrub(parts.joinToString(": "), secrets)
     }

@@ -26,6 +26,7 @@ import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.ProviderResponse
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.Transport
+import works.resolve.pathfinder.ai.core.toModelThinkingLevel
 import works.resolve.pathfinder.ai.core.headersToRecord
 import works.resolve.pathfinder.ai.core.toToolChoice
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
@@ -570,7 +571,7 @@ class OpenAICodexResponsesApi(
         val apiKey = options.apiKey
             ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
         val clamped = options.reasoning?.let {
-            works.resolve.pathfinder.ai.core.clampThinkingLevel(model, toModelThinkingLevel(it))
+            works.resolve.pathfinder.ai.core.clampThinkingLevel(model, it.toModelThinkingLevel())
         }
         val reasoningEffort = if (clamped == ModelThinkingLevel.OFF) null else clamped
         return stream(

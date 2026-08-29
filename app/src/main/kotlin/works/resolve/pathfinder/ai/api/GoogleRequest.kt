@@ -222,9 +222,9 @@ object GoogleRequest {
         customBudgets: Map<ThinkingLevel, Int>,
     ): Int {
         // ResolvedGoogleThinkingLevel names are a subset of ModelThinkingLevel
-        // (no off/xhigh/max), so the shared up/down mappers cover the
-        // TS `Record<ThinkingLevel, number>` lookup without a hand-rolled
-        // valueOf on the resolved level.
+        // (no off/xhigh/max); map to the shared ThinkingLevel for the custom
+        // budget lookup. valueOf is acceptable here per conventions: the
+        // input is a config-derived enum, so drift fails fast.
         val asThinkingLevel = ModelThinkingLevel.valueOf(level.name).toThinkingLevelOrNull()
         asThinkingLevel?.let { customBudgets[it] }?.let { return it }
 

@@ -28,7 +28,9 @@ import works.resolve.pathfinder.ai.models.ResolvedAuth
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.boolean
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.string
 
 /**
  * One credential prompt from the catalog, mirroring pi's auth prompt
@@ -504,11 +506,11 @@ private fun parseChatTemplateKwarg(
     where: String,
 ): ChatTemplateKwargValue {
     if (value is JsonObject && value.containsKey("\$var")) {
-        val varName = (value["\$var"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val varName = value.string("\$var")
         if (varName == null) {
             throw IllegalArgumentException("Malformed \$var reference for $where")
         }
-        val omitWhenOff = (value["omitWhenOff"] as? JsonPrimitive)?.booleanOrNull ?: false
+        val omitWhenOff = value.boolean("omitWhenOff") ?: false
         return ChatTemplateKwargValue.Ref(varName = varName, omitWhenOff = omitWhenOff)
     }
     return ChatTemplateKwargValue.Scalar(value)

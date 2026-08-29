@@ -6,6 +6,7 @@ import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.InputModality
 import works.resolve.pathfinder.ai.core.Model
+import works.resolve.pathfinder.ai.core.toModelThinkingLevel
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
 import works.resolve.pathfinder.ai.core.ProviderResponse
@@ -273,7 +274,7 @@ class MistralConversationsApi(
         val apiKey = options.apiKey
             ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
 
-        val clamped = options.reasoning?.let { clampThinkingLevel(model, toModelThinkingLevel(it)) }
+        val clamped = options.reasoning?.let { clampThinkingLevel(model, it.toModelThinkingLevel()) }
         val reasoning = if (clamped == ModelThinkingLevel.OFF) null else clamped
         val useReasoning = model.reasoning && reasoning != null
         val maxTokens = clampMaxTokensToContext(model, context, options.maxTokens ?: model.maxTokens)

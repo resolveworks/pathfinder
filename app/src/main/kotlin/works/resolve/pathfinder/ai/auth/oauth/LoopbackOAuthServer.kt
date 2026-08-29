@@ -4,6 +4,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -131,8 +132,15 @@ internal class LoopbackOAuthServer<R>(
                 } catch (_: IOException) {
                     continue
                 }
-                // One connection must never kill the accept loop.
-                runCatching { serveConnection(socket, ::settle) }
+                // One connection must never kill the accept loop — but
+                // cancellation must propagate (runCatching would swallow it,
+                // see the runCatching rule in AGENTS.md).
+                try {
+                    serveConnection(socket, ::settle)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                }
                 runCatching { socket.close() }
             }
         }
@@ -169,6 +177,8 @@ internal class LoopbackOAuthServer<R>(
 
             val response = try {
                 handler(request, settle)
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
                 LoopbackCallbackResponse(500, oauthErrorHtml("Internal error while processing OAuth callback."))
             }

@@ -17,6 +17,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /** Ports the semantics of pi `packages/ai/src/auth/resolve.ts`. */
 class ResolveProviderAuthTest {
+    /** Fixed epoch base so expiry boundaries never depend on the wall clock. */
+    private val nowMs = 1_770_000_000_000L
+    private val clock = works.resolve.pathfinder.ai.testing.FakeClock(nowMs)
+
 
     private class RecordingAuthContext(val env: Map<String, String> = emptyMap()) : AuthContext {
         override suspend fun env(name: String): String? = env[name]
@@ -65,7 +69,7 @@ class ResolveProviderAuthTest {
     fun `ambient env resolves when nothing is stored`() = runTest {
         val store = InMemoryCredentialStore()
         val apiKey = StubApiKeyAuth(resolved = AuthResult(ModelAuth(apiKey = "env-key"), source = "OPENAI_API_KEY"))
-        val result = resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext())
+        val result = resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext(), clock = clock)
         assertEquals("env-key", result?.auth?.apiKey)
         assertEquals("OPENAI_API_KEY", result?.source)
     }
@@ -81,7 +85,7 @@ class ResolveProviderAuthTest {
                 AuthResult(ModelAuth(apiKey = credential?.key))
             },
         )
-        val result = resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext(env = mapOf("OPENAI_API_KEY" to "env-key")))
+        val result = resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext(env = mapOf("OPENAI_API_KEY" to "env-key")), clock = clock)
         assertEquals("stored", result?.auth?.apiKey)
         assertEquals("stored", seen.key)
     }
@@ -102,6 +106,7 @@ class ResolveProviderAuthTest {
             store,
             RecordingAuthContext(),
             AuthResolutionOverrides(apiKey = "explicit", env = mapOf("A" to "1")),
+            clock = clock,
         )
         assertEquals("explicit", result?.auth?.apiKey)
         assertEquals(mapOf("A" to "1"), seen.env)
@@ -123,6 +128,7 @@ class ResolveProviderAuthTest {
             store,
             RecordingAuthContext(),
             AuthResolutionOverrides(env = mapOf("A" to "override-a")),
+            clock = clock,
         )
         assertEquals(mapOf("A" to "override-a", "B" to "stored-b"), result?.env)
         assertEquals("override-a", seen.env["A"])
@@ -132,21 +138,21 @@ class ResolveProviderAuthTest {
     fun `unconfigured provider resolves null`() = runTest {
         val store = InMemoryCredentialStore()
         val apiKey = StubApiKeyAuth(resolved = null)
-        assertNull(resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext()))
+        assertNull(resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext(), clock = clock))
     }
 
     @Test
     fun `provider without apiKey handler and no stored credential resolves null`() = runTest {
         val store = InMemoryCredentialStore()
-        assertNull(resolveProviderAuth(provider(), store, RecordingAuthContext()))
+        assertNull(resolveProviderAuth(provider(), store, RecordingAuthContext(), clock = clock))
     }
 
     @Test
     fun `valid stored oauth credential derives auth without refresh`() = runTest {
         val store = InMemoryCredentialStore()
-        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = System.currentTimeMillis() + 60 * 60 * 1000L) }
-        val oauth = StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", System.currentTimeMillis() + 60 * 60 * 1000L))
-        val result = resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext())
+        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = nowMs + 60 * 60 * 1000L) }
+        val oauth = StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", nowMs + 60 * 60 * 1000L))
+        val result = resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext(), clock = clock)
         assertEquals(ModelAuth(apiKey = "token"), result?.auth)
         assertEquals("OAuth", result?.source)
         assertEquals(0, oauth.refreshCalls)
@@ -155,13 +161,13 @@ class ResolveProviderAuthTest {
     @Test
     fun `expiring stored oauth refreshes once under the store lock and persists`() = runTest {
         val store = InMemoryCredentialStore()
-        val expiring = OAuthCredential(access = "a", refresh = "r", expires = System.currentTimeMillis() + 1000L)
+        val expiring = OAuthCredential(access = "a", refresh = "r", expires = nowMs + 1000L)
         store.modify("openai") { expiring }
-        val refreshed = OAuthCredential(access = "a2", refresh = "r2", expires = System.currentTimeMillis() + 60 * 60 * 1000L)
+        val refreshed = OAuthCredential(access = "a2", refresh = "r2", expires = nowMs + 60 * 60 * 1000L)
         val oauth = StubOAuthAuth(refreshed = refreshed)
 
         val results = List(8) {
-            async { resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext()) }
+            async { resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext(), clock = clock) }
         }.awaitAll()
 
         assertEquals(1, oauth.refreshCalls)
@@ -173,12 +179,12 @@ class ResolveProviderAuthTest {
     @Test
     fun `expired oauth refresh keeps ambient env out (no silent fallback)`() = runTest {
         val store = InMemoryCredentialStore()
-        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = System.currentTimeMillis() - 1000L) }
-        val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", System.currentTimeMillis() - 1000L)) {
+        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = nowMs - 1000L) }
+        val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", nowMs - 1000L)) {
             override suspend fun refresh(credential: OAuthCredential): OAuthCredential = error("invalid_grant")
         }
         val error = assertFailsWith<ModelsError> {
-            resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext())
+            resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext(), clock = clock)
         }
         assertEquals(ModelsErrorCode.OAUTH, error.code)
         // Failed refresh preserves the credential for re-login.
@@ -188,8 +194,8 @@ class ResolveProviderAuthTest {
     @Test
     fun `explicit minimum validity is enforced after refresh`() = runTest {
         val store = InMemoryCredentialStore()
-        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = System.currentTimeMillis()) }
-        val stillSoon = OAuthCredential(access = "a2", refresh = "r2", expires = System.currentTimeMillis() + 60 * 1000L)
+        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = nowMs) }
+        val stillSoon = OAuthCredential(access = "a2", refresh = "r2", expires = nowMs + 60 * 1000L)
         val oauth = StubOAuthAuth(refreshed = stillSoon)
         val error = assertFailsWith<ModelsError> {
             resolveProviderAuth(
@@ -197,6 +203,7 @@ class ResolveProviderAuthTest {
                 store,
                 RecordingAuthContext(),
                 AuthResolutionOverrides(minOAuthValidityMs = 10 * 60 * 1000L),
+                clock = clock,
             )
         }
         assertEquals(ModelsErrorCode.OAUTH, error.code)
@@ -208,7 +215,7 @@ class ResolveProviderAuthTest {
         val store = InMemoryCredentialStore()
         val apiKey = StubApiKeyAuth(resolveImpl = { error("ambient failure") })
         val error = assertFailsWith<ModelsError> {
-            resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext())
+            resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext(), clock = clock)
         }
         assertEquals(ModelsErrorCode.AUTH, error.code)
         assertTrue(error.message.orEmpty().contains("API key auth failed for provider openai"))
@@ -218,24 +225,24 @@ class ResolveProviderAuthTest {
     @Test
     fun `stored credential without matching handler resolves null`() = runTest {
         val store = InMemoryCredentialStore()
-        store.modify("openai") { OAuthCredential("a", "r", System.currentTimeMillis() + 60 * 60 * 1000L) }
+        store.modify("openai") { OAuthCredential("a", "r", nowMs + 60 * 60 * 1000L) }
         // OAuth credential stored, but only apiKey handler configured.
         val apiKey = StubApiKeyAuth(resolved = AuthResult(ModelAuth(apiKey = "ambient")))
-        assertNull(resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext()))
+        assertNull(resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext(), clock = clock))
     }
 
     @Test
     fun `oauth refresh is bounded by the 15s internal timeout`() = runTest {
         val store = InMemoryCredentialStore()
-        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = System.currentTimeMillis()) }
-        val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", System.currentTimeMillis() + 60 * 60 * 1000L)) {
+        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = nowMs) }
+        val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", nowMs + 60 * 60 * 1000L)) {
             override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
                 delay(Long.MAX_VALUE) // virtual time: fast-forwards past the 15s bound
                 error("unreachable")
             }
         }
         val error = assertFailsWith<ModelsError> {
-            resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext())
+            resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext(), clock = clock)
         }
         assertEquals(ModelsErrorCode.OAUTH, error.code)
         assertTrue(error.message.orEmpty().contains("timed out"))
@@ -245,15 +252,15 @@ class ResolveProviderAuthTest {
     @Test
     fun `caller cancellation during refresh propagates as cancellation, not ModelsError`() = runTest {
         val store = InMemoryCredentialStore()
-        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = System.currentTimeMillis()) }
-        val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", System.currentTimeMillis() + 60 * 60 * 1000L)) {
+        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = nowMs) }
+        val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", nowMs + 60 * 60 * 1000L)) {
             override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
                 awaitCancellation()
             }
         }
         val job = launch {
             try {
-                resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext())
+                resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext(), clock = clock)
             } catch (e: ModelsError) {
                 error("cancellation must not be wrapped: ${e.message}")
             }
@@ -271,7 +278,7 @@ class ResolveProviderAuthTest {
         )
         val job = launch {
             try {
-                resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext())
+                resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext(), clock = clock)
             } catch (e: ModelsError) {
                 error("cancellation must not be wrapped: ${e.message}")
             }
@@ -288,7 +295,7 @@ class ResolveProviderAuthTest {
         }
         val job = launch {
             try {
-                resolveProviderAuth(provider(), store, RecordingAuthContext())
+                resolveProviderAuth(provider(), store, RecordingAuthContext(), clock = clock)
             } catch (e: ModelsError) {
                 error("cancellation must not be wrapped: ${e.message}")
             }
@@ -301,8 +308,8 @@ class ResolveProviderAuthTest {
     @Test
     fun `outer caller withTimeout cancellation is not wrapped as a refresh timeout`() = runTest {
         val store = InMemoryCredentialStore()
-        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = System.currentTimeMillis()) }
-        val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", System.currentTimeMillis() + 60 * 60 * 1000L)) {
+        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = nowMs) }
+        val oauth = object : OAuthAuth by StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", nowMs + 60 * 60 * 1000L)) {
             override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
                 delay(Long.MAX_VALUE) // virtual time advances past the caller's 1s bound
                 error("unreachable")
@@ -310,7 +317,7 @@ class ResolveProviderAuthTest {
         }
         val thrown = withTimeoutOrNull(1000) {
             try {
-                resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext())
+                resolveProviderAuth(provider(oauth = oauth), store, RecordingAuthContext(), clock = clock)
                 null
             } catch (e: ModelsError) {
                 error("outer cancellation must not be wrapped: ${e.message}")
@@ -337,6 +344,7 @@ class ResolveProviderAuthTest {
             store,
             RecordingAuthContext(env = mapOf("A" to "ambient-a")),
             AuthResolutionOverrides(env = mapOf("A" to "")),
+            clock = clock,
         )
         assertEquals("ambient-a", result?.auth?.apiKey)
     }
@@ -344,8 +352,8 @@ class ResolveProviderAuthTest {
     @Test
     fun `logout during pending refresh resolves null`() = runTest {
         val store = InMemoryCredentialStore()
-        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = System.currentTimeMillis()) }
-        val oauth = StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", System.currentTimeMillis() + 60 * 60 * 1000L))
+        store.modify("openai") { OAuthCredential(access = "a", refresh = "r", expires = nowMs) }
+        val oauth = StubOAuthAuth(refreshed = OAuthCredential("a2", "r2", nowMs + 60 * 60 * 1000L))
         val storeView = object : CredentialStore by store {
             override suspend fun modify(
                 providerId: String,
@@ -358,7 +366,7 @@ class ResolveProviderAuthTest {
                 return store.modify(providerId, update)
             }
         }
-        assertNull(resolveProviderAuth(provider(oauth = oauth), storeView, RecordingAuthContext()))
+        assertNull(resolveProviderAuth(provider(oauth = oauth), storeView, RecordingAuthContext(), clock = clock))
         assertNull(store.read("openai"))
     }
 }
