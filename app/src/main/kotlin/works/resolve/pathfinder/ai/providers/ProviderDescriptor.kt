@@ -21,23 +21,26 @@ data class ModelDescriptor(
     val model: LLModel,
 )
 
-/** How a provider authenticates: an API key the user supplies, or a hosted sign-in flow. */
+/**
+ * How a provider authenticates: an API-key form, or the ChatGPT OAuth
+ * sign-in flow driven by the UI and the runtime.
+ */
 sealed interface ProviderAuthKind {
-    /** The user types an API key; [prompt] labels the credential form's field. */
+    /** Labels the provider's API-key credential form field. */
     data class ApiKey(val prompt: String) : ProviderAuthKind
 
-    /** The provider signs in through its own hosted flow (ChatGPT device-code sign-in). */
+    /** ChatGPT subscription sign-in (device-code OAuth). */
     data object ChatGptSignIn : ProviderAuthKind
 }
 
 /**
  * One provider the app can be configured with: its stable id, display name,
- * authentication kind, and its selectable models.
+ * how it authenticates, and its selectable models.
  */
 data class ProviderDescriptor(
     val id: String,
     val displayName: String,
-    /** Credential form shape for this provider (API key vs hosted sign-in). */
+    /** Credential UX and runtime dispatch for this provider. */
     val authKind: ProviderAuthKind,
     val models: List<ModelDescriptor>,
 ) {
@@ -89,6 +92,22 @@ object ProviderDescriptors {
             authKind = ProviderAuthKind.ApiKey("Mistral API key"),
             definitions = MistralAIModels,
         ),
+        // ChatGPT-subscription backend: same Responses API as OpenAI, but at
+        // chatgpt.com with OAuth tokens (see ai/openaicodex/). Models are the
+        // codex entries of Koog's OpenAIModels — enumerated from Koog's own
+        // definitions, not hand-copied.
+        provider(
+            id = "openai-codex",
+            displayName = "OpenAI Codex",
+            authKind = ProviderAuthKind.ChatGptSignIn,
+            models = listOf(
+                OpenAIModels.Chat.GPT5Codex,
+                OpenAIModels.Chat.GPT5_1Codex,
+                OpenAIModels.Chat.GPT5_1CodexMax,
+                OpenAIModels.Chat.GPT5_2Codex,
+                OpenAIModels.Chat.GPT5_3Codex,
+            ),
+        ),
     )
 
     fun byId(providerId: String): ProviderDescriptor? = all.firstOrNull { it.id == providerId }
@@ -98,11 +117,18 @@ object ProviderDescriptors {
         displayName: String,
         authKind: ProviderAuthKind,
         definitions: LLModelDefinitions,
+    ): ProviderDescriptor = provider(id, displayName, authKind, definitions.models)
+
+    private fun provider(
+        id: String,
+        displayName: String,
+        authKind: ProviderAuthKind,
+        models: List<LLModel>,
     ): ProviderDescriptor = ProviderDescriptor(
         id = id,
         displayName = displayName,
         authKind = authKind,
-        models = definitions.models
+        models = models
             .filter { it.supports(LLMCapability.Completion) }
             .map { model ->
                 ModelDescriptor(id = model.id, displayName = model.id, model = model)

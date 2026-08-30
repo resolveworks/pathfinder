@@ -61,14 +61,21 @@ private class FakeStreamingClient(
     }
 }
 
-/** In-memory [CredentialStore]; the key is only ever seen by the factory. */
+/** In-memory mutable [CredentialStore]; credential values are only ever seen by the factories. */
 private class FakeCredentialStore(
-    private val keys: Map<String, String> = emptyMap(),
+    initial: Map<String, Credential> = emptyMap(),
 ) : CredentialStore {
-    override suspend fun read(providerId: String): Credential? = keys[providerId]?.let(Credential::ApiKey)
-    override suspend fun set(providerId: String, credential: Credential) = error("unused")
-    override suspend fun list(): List<String> = keys.keys.toList()
-    override suspend fun delete(providerId: String) = error("unused")
+    private val stored = initial.toMutableMap()
+    val writes = mutableListOf<Pair<String, Credential>>()
+    override suspend fun read(providerId: String): Credential? = stored[providerId]
+    override suspend fun set(providerId: String, credential: Credential) {
+        stored[providerId] = credential
+        writes += providerId to credential
+    }
+    override suspend fun list(): List<String> = stored.keys.toList()
+    override suspend fun delete(providerId: String) {
+        stored.remove(providerId)
+    }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -83,15 +90,20 @@ class KoogChatRuntimeTest {
         seenKeys: MutableList<String> = mutableListOf(),
         seenProviders: MutableList<LLMProvider> = mutableListOf(),
         frames: () -> Flow<StreamFrame>,
-    ) = KoogChatRuntime(
-        credentials = FakeCredentialStore(keys),
-        scope = CoroutineScope(Dispatchers.Unconfined),
-        clientFactory = { provider, apiKey ->
-            seenKeys += apiKey
-            seenProviders += provider
-            FakeStreamingClient(frames())
-        },
-    )
+    ): KoogChatRuntime {
+        val store = FakeCredentialStore(keys.mapValues { (_, key) -> Credential.ApiKey(key) })
+        return KoogChatRuntime(
+            credentials = store,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            clientFactory = { provider, apiKey ->
+                seenKeys += apiKey
+                seenProviders += provider
+                FakeStreamingClient(frames())
+            },
+            oauthRefresher = { error("not reached") },
+            codexClientFactory = { _, _ -> error("not reached") },
+        )
+    }
 
     private fun newSession(runtime: ChatRuntime) =
         runtime.createSession(settings, sessionId = "s1", conversation = Conversation(emptyList(), null))
@@ -231,5 +243,148 @@ class KoogChatRuntimeTest {
                 conversation = Conversation(emptyList(), null),
             )
         }
+    }
+
+    // --- ChatGPT Codex provider (OAuth dispatch) ---
+
+    private val codex = ProviderDescriptors.byId("openai-codex")!!
+    private var now = 1_000_000L
+
+    private fun oauthCredential(
+        accessToken: String = "token-1",
+        expiresInMillis: Long = 3_600_000,
+    ) = Credential.ChatGptOAuth(
+        accessToken = accessToken,
+        refreshToken = "refresh-1",
+        expiresAtEpochMillis = now + expiresInMillis,
+        accountId = "acct-1",
+    )
+
+    private fun codexRuntime(
+        store: FakeCredentialStore,
+        seenTokens: MutableList<String>,
+        refreshCalls: MutableList<Credential.ChatGptOAuth>,
+        refreshed: suspend (Credential.ChatGptOAuth) -> Credential.ChatGptOAuth,
+        frames: () -> Flow<StreamFrame>,
+    ) = KoogChatRuntime(
+        credentials = store,
+        scope = CoroutineScope(Dispatchers.Unconfined),
+        clientFactory = { _, _ -> error("not reached") },
+        clock = { now },
+        oauthRefresher = { credential ->
+            refreshCalls += credential
+            refreshed(credential)
+        },
+        codexClientFactory = { accessToken, _ ->
+            seenTokens += accessToken
+            FakeStreamingClient(frames())
+        },
+    )
+
+    private fun codexSession(runtime: ChatRuntime) = runtime.createSession(
+        ModelSettings(providerId = codex.id, modelId = codex.models.first().id),
+        sessionId = "s1",
+        conversation = Conversation(emptyList(), null),
+    )
+
+    @Test
+    fun codexUsesStoredTokenWithoutRefreshWhenFarFromExpiry() = runTest {
+        val store = FakeCredentialStore(mapOf(codex.id to oauthCredential(expiresInMillis = 3_600_000)))
+        val seenTokens = mutableListOf<String>()
+        val refreshCalls = mutableListOf<Credential.ChatGptOAuth>()
+        val runtime = codexRuntime(
+            store, seenTokens, refreshCalls,
+            refreshed = { error("not reached") },
+            frames = {
+                streamFrameFlow {
+                    emitTextDelta("hi")
+                    emitEnd(finishReason = "stop")
+                }
+            },
+        )
+        val session = codexSession(runtime)
+
+        session.prompt("hello")
+        val state = session.state.value
+
+        assertEquals(emptyList(), refreshCalls)
+        assertEquals(listOf("token-1"), seenTokens)
+        assertEquals("hi", (state.committedMessages.last() as Message.Assistant).textContent())
+        assertEquals(emptyList(), store.writes) // nothing persisted
+    }
+
+    @Test
+    fun codexRefreshesPersistsAndBuildsClientWithRefreshedToken() = runTest {
+        val store = FakeCredentialStore(mapOf(codex.id to oauthCredential(expiresInMillis = 30_000)))
+        val seenTokens = mutableListOf<String>()
+        val refreshCalls = mutableListOf<Credential.ChatGptOAuth>()
+        val runtime = codexRuntime(
+            store, seenTokens, refreshCalls,
+            refreshed = { old ->
+                Credential.ChatGptOAuth(
+                    accessToken = "token-2",
+                    refreshToken = old.refreshToken,
+                    expiresAtEpochMillis = now + 3_600_000,
+                    accountId = old.accountId,
+                )
+            },
+            frames = {
+                streamFrameFlow {
+                    emitEnd(finishReason = "stop")
+                }
+            },
+        )
+        val session = codexSession(runtime)
+
+        session.prompt("hello")
+
+        assertEquals(1, refreshCalls.size)
+        assertEquals(listOf("token-2"), seenTokens) // built with the refreshed token
+        assertEquals(1, store.writes.size) // refreshed credential persisted
+        assertEquals(codex.id, store.writes.single().first)
+        assertNull(session.state.value.error)
+    }
+
+    @Test
+    fun codexRefreshFailureSurfacesUserSafeErrorWithoutTokens() = runTest {
+        val store = FakeCredentialStore(mapOf(codex.id to oauthCredential(expiresInMillis = 30_000)))
+        val seenTokens = mutableListOf<String>()
+        val runtime = codexRuntime(
+            store, seenTokens, mutableListOf(),
+            refreshed = { throw RuntimeException("secret refresh payload") },
+            frames = { error("not reached") },
+        )
+        val session = codexSession(runtime)
+
+        session.prompt("hello")
+        val state = session.state.value
+
+        assertFalse(state.isStreaming)
+        val error = assertNotNull(state.error)
+        assertTrue("sign-in expired" in error, error) // fixed text
+        assertFalse("secret refresh payload" in error)
+        assertFalse("token-1" in error)
+        assertEquals(emptyList(), seenTokens) // no client built
+        assertEquals(emptyList(), store.writes) // nothing persisted
+        assertEquals(1, session.conversation.entries.size) // user message stays
+    }
+
+    @Test
+    fun codexWithWrongCredentialKindFailsWithMissingSignInError() = runTest {
+        val store = FakeCredentialStore(mapOf(codex.id to Credential.ApiKey("test-key")))
+        val runtime = codexRuntime(
+            store, mutableListOf(), mutableListOf(),
+            refreshed = { error("not reached") },
+            frames = { error("not reached") },
+        )
+        val session = codexSession(runtime)
+
+        session.prompt("hello")
+        val state = session.state.value
+
+        assertFalse(state.isStreaming)
+        val error = assertNotNull(state.error)
+        assertEquals("Sign in with ChatGPT in Settings before sending a message.", error)
+        assertEquals(1, session.conversation.entries.size)
     }
 }

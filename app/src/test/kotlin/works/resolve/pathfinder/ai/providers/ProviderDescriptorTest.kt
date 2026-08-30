@@ -13,20 +13,25 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * The provider surface: exactly five providers, models derived from Koog's
- * own model-definition objects, stable ids.
+ * The provider surface: exactly six providers, models derived from Koog's
+ * own model-definition objects, stable ids, auth kinds.
  */
 class ProviderDescriptorTest {
 
     @Test
-    fun `five providers exist with stable ids`() {
+    fun `six providers exist with stable ids and auth kinds`() {
         assertEquals(
-            listOf("anthropic", "openai", "google", "openrouter", "mistral"),
+            listOf("anthropic", "openai", "google", "openrouter", "mistral", "openai-codex"),
             ProviderDescriptors.all.map { it.id },
         )
         assertEquals("Anthropic", ProviderDescriptors.byId("anthropic")!!.displayName)
         assertNotNull(ProviderDescriptors.byId("openai"))
         assertNotNull(ProviderDescriptors.byId("openrouter"))
+        val codex = ProviderDescriptors.byId("openai-codex")!!
+        assertEquals("OpenAI Codex", codex.displayName)
+        assertEquals(ProviderAuthKind.ChatGptSignIn, codex.authKind)
+        // API-key providers label their credential form.
+        assertTrue(ProviderDescriptors.byId("anthropic")!!.authKind is ProviderAuthKind.ApiKey)
     }
 
     @Test
@@ -37,6 +42,15 @@ class ProviderDescriptorTest {
             "google" to GoogleModels.models,
             "openrouter" to OpenRouterModels.models,
             "mistral" to MistralAIModels.models,
+            // The codex provider enumerates the codex entries of Koog's
+            // OpenAIModels — the subset that runs on the ChatGPT backend.
+            "openai-codex" to listOf(
+                OpenAIModels.Chat.GPT5Codex,
+                OpenAIModels.Chat.GPT5_1Codex,
+                OpenAIModels.Chat.GPT5_1CodexMax,
+                OpenAIModels.Chat.GPT5_2Codex,
+                OpenAIModels.Chat.GPT5_3Codex,
+            ),
         )
         for (provider in ProviderDescriptors.all) {
             // The exact chat-completion subset of Koog's definitions.
