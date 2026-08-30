@@ -13,6 +13,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import works.resolve.pathfinder.diagnostics.DiagnosticEvent
+import works.resolve.pathfinder.diagnostics.Diagnostics
 
 /**
  * Simple file-backed store for persistent chat sessions. One bounded JSON file
@@ -27,6 +29,14 @@ import kotlinx.coroutines.withContext
  * move is unsupported the write falls back to a non-atomic replace: the
  * previous target either stays fully intact or is fully replaced, so no
  * partial target is ever left behind — the temp file is always cleaned up.
+ *
+ * Failures are additionally recorded as sanitized diagnostics entries
+ * ([Diagnostics.failure] carries only the exception type chain and first
+ * Pathfinder stack frame — never messages, paths, or transcript content):
+ * load failures as [DiagnosticEvent.SESSION_LOAD_FAILED], write failures as
+ * [DiagnosticEvent.SESSION_SAVE_FAILED] before the rethrow, and unreadable
+ * entries during [summaries] as [DiagnosticEvent.SESSION_SUMMARY_SKIPPED]
+ * (skipped, not rethrown). Cancellation is never recorded.
  */
 class SessionStore(
     private val root: File,
@@ -67,7 +77,14 @@ class SessionStore(
         withContext(ioDispatcher) {
             sessionFiles()
                 .mapNotNull { file ->
-                    runCatching { read(file) }.getOrNull()?.let { session ->
+                    try {
+                        read(file, DiagnosticEvent.SESSION_SUMMARY_SKIPPED)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // Recorded by read() as a WARN skip; listing continues.
+                        null
+                    }?.let { session ->
                         SessionSummary(
                             id = session.id,
                             title = session.title,
@@ -144,11 +161,24 @@ class SessionStore(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            Diagnostics.failure(DiagnosticEvent.SESSION_SAVE_FAILED, e)
             throw SessionDataException("Failed to write session", e)
         }
     }
 
-    private fun read(file: File): Session {
+    private fun read(
+        file: File,
+        failureEvent: DiagnosticEvent = DiagnosticEvent.SESSION_LOAD_FAILED,
+    ): Session = try {
+        readDecoded(file)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Diagnostics.failure(failureEvent, e)
+        throw e
+    }
+
+    private fun readDecoded(file: File): Session {
         if (file.length() > maxFileBytes) {
             throw SessionDataException("Session file exceeds size limit")
         }
