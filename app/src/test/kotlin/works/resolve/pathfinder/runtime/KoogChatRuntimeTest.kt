@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.agent
+package works.resolve.pathfinder.runtime
 
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClientAPI
@@ -26,8 +26,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.awaitCancellation
-import works.resolve.pathfinder.ai.providers.ProviderDescriptor
-import works.resolve.pathfinder.ai.providers.ProviderDescriptors
+import works.resolve.pathfinder.runtime.ProviderDescriptor
+import works.resolve.pathfinder.runtime.ProviderDescriptors
 import works.resolve.pathfinder.data.credentials.Credential
 import works.resolve.pathfinder.data.credentials.CredentialStore
 import works.resolve.pathfinder.data.sessions.Conversation

@@ -17,12 +17,13 @@ agent abstractions that Koog already supplies.
 
 ## Layout
 
-- `agent/` — `ChatRuntime` (the permanent ViewModel⇄runtime seam) and
-  `KoogChatRuntime`, its Koog implementation. ViewModels depend only on
-  `ChatRuntime`.
-- `ai/providers/` — `ProviderDescriptor`, the app's curated provider list
-  (five providers; models enumerated from Koog `LLModelDefinitions`).
-  Presentation metadata only; no protocol behavior lives here.
+- `runtime/` — the model-facing layer over Koog. `ChatRuntime` is the
+  permanent ViewModel⇄runtime seam and `KoogChatRuntime` its Koog
+  implementation; ViewModels depend only on `ChatRuntime`. Also holds
+  `ProviderDescriptor`, the app's curated provider list (six providers;
+  models enumerated from Koog `LLModelDefinitions` — presentation metadata
+  only), and the ChatGPT Codex client/OAuth glue
+  (`CodexLLMClients`, `CodexOAuthClient`).
 - `data/sessions/` — the tree-session layer (`Conversation`,
   `Session*`) and `SessionCodec` (format 3; old formats fail fast).
 - `data/credentials/` — Keystore-backed per-provider API-key storage.

@@ -5,9 +5,9 @@ import android.content.Context
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import works.resolve.pathfinder.agent.ChatRuntime
-import works.resolve.pathfinder.agent.KoogChatRuntime
-import works.resolve.pathfinder.ai.openaicodex.CodexOAuthClient
+import works.resolve.pathfinder.runtime.ChatRuntime
+import works.resolve.pathfinder.runtime.KoogChatRuntime
+import works.resolve.pathfinder.runtime.CodexOAuthClient
 import works.resolve.pathfinder.data.credentials.CredentialStore
 import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
@@ -56,9 +56,10 @@ class PathfinderApplication : Application() {
     val chatRuntime: ChatRuntime by lazy { KoogChatRuntime(credentials, applicationScope) }
 
     /**
-     * Lightweight dedicated Ktor/OkHttp client for the Codex OAuth device-flow
-     * endpoints — consistent with the app's Ktor/OkHttp stack, kept separate
-     * from the chat runtime's engine (auth traffic is short-lived and rare).
+     * Lightweight dedicated Ktor/OkHttp client for the Codex OAuth
+     * endpoints (both sign-in flows and token refresh) — consistent with the
+     * app's Ktor/OkHttp stack, kept separate from the chat runtime's engine
+     * (auth traffic is short-lived and rare).
      */
     val codexOAuthClient: CodexOAuthClient by lazy {
         CodexOAuthClient(HttpClient(OkHttp))

@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.ai.openaicodex
+package works.resolve.pathfinder.runtime
 
 import ai.koog.http.client.KoogHttpClient
 import ai.koog.prompt.Prompt

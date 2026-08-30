@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.agent
+package works.resolve.pathfinder.runtime
 
 import ai.koog.prompt.message.Message
 import kotlinx.coroutines.flow.StateFlow

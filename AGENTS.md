@@ -62,15 +62,15 @@ modifying one layer to impersonate another.
 - Runtime and provider code uses Koog types end to end; Pathfinder does not
   maintain alternative message, model, event, streaming, tool, or execution
   contracts.
-- `agent/ChatRuntime.kt` is the permanent seam between ViewModels and the
-  runtime. `agent/KoogChatRuntime.kt` is its Koog implementation: per-prompt
+- `runtime/ChatRuntime.kt` is the permanent seam between ViewModels and the
+  runtime. `runtime/KoogChatRuntime.kt` is its Koog implementation: per-prompt
   credential read, a Koog `Prompt` built from the active branch,
   `executeStreaming` frames folded into state, abort that commits rendered
   partials, fixed user-safe error strings, and a shared Ktor/OkHttp engine.
   ViewModels depend only on `ChatRuntime`.
 - Authentication is a per-provider API key stored in the Keystore-backed
   `data/credentials` store and supplied to Koog clients at prompt time.
-- Five providers are declared in `ai/providers/ProviderDescriptor.kt`; models
+- Six providers are declared in `runtime/ProviderDescriptor.kt`; models
   are enumerated from Koog `LLModelDefinitions`. App catalog data is
   presentation metadata only, never a parallel protocol surface.
 - Tree-session behavior is a Pathfinder session layer around Koog history;
@@ -94,8 +94,8 @@ modifying one layer to impersonate another.
   capabilities, streaming, and transport.
 - **Pathfinder extensions:** tree-backed session/history projection
   (`data/sessions`), Keystore-backed API-key credentials (`data/credentials`),
-  provider descriptors (`ai/providers`), and the `ChatRuntime` seam
-  (`agent`).
+  and the `runtime` package: provider descriptors and the `ChatRuntime`
+  seam.
 - **Android app:** presentation, lifecycle, navigation, input, settings,
   persistence, and platform APIs (`ui`, `MainActivity`, `PathfinderApplication`
   as the manual composition root).

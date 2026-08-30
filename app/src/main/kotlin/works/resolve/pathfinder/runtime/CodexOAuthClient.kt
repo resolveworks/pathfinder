@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.ai.openaicodex
+package works.resolve.pathfinder.runtime
 
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
@@ -10,6 +10,8 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Parameters
 import io.ktor.http.contentType
+import io.ktor.http.formUrlEncode
+import io.ktor.http.parseQueryString
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -17,10 +19,13 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import java.net.URI
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.Base64
 
 /**
- * Fixed, user-safe error for every failure mode of the Codex OAuth device flow.
+ * Fixed, user-safe error for every failure mode of the Codex OAuth flows.
  * Messages never include response bodies, tokens, codes, or URLs with params —
  * only the failing step and, where relevant, an HTTP status code.
  */
@@ -39,6 +44,19 @@ data class CodexDeviceAuth(
 )
 
 /**
+ * Browser-flow parameters for one authorization attempt: the authorize URL to
+ * load in a browser/WebView, the `state` the redirect must echo, and the
+ * single-use PKCE code verifier (RFC 7636). The verifier is ephemeral: it
+ * lives only in the caller's in-memory sign-in flow, is never persisted, and
+ * is never logged.
+ */
+data class CodexBrowserAuth(
+    val authorizeUrl: String,
+    val state: String,
+    val codeVerifier: String,
+)
+
+/**
  * Result of a successful token exchange or refresh.
  */
 data class CodexTokens(
@@ -51,28 +69,36 @@ data class CodexTokens(
 )
 
 /**
- * OAuth device-code client for the "OpenAI Codex" (ChatGPT subscription) provider.
+ * OAuth client for the "OpenAI Codex" (ChatGPT subscription) provider, with
+ * both sign-in flows pi implements (`packages/ai/src/auth/oauth/openai-codex.ts`):
  *
- * Behavioral reference: pi's implementation at
- * `packages/ai/src/auth/oauth/openai-codex.ts` (`startOpenAICodexDeviceAuth`,
- * `pollOpenAICodexDeviceAuth`, `loginOpenAICodexDeviceCode`, JWT account-id
- * decode) and `packages/ai/src/auth/oauth/device-code.ts`
- * (`pollOAuthDeviceCodeFlow` — pending/slow_down/timeout semantics).
+ * - the device-code flow (`loginOpenAICodexDeviceCode`: user code + polling,
+ *   pi's `startOpenAICodexDeviceAuth` / `pollOpenAICodexDeviceAuth` and
+ *   `packages/ai/src/auth/oauth/device-code.ts` pending/slow_down/timeout
+ *   semantics);
+ * - the browser flow (`loginOpenAICodex`: PKCE + `state` via
+ *   `createAuthorizationFlow`). On Android the authorize URL is loaded in an
+ *   in-app WebView that intercepts the fixed loopback redirect
+ *   `http://localhost:1455/auth/callback` (pi instead runs a local HTTP
+ *   server on that port); the intercepted URL is handed back to
+ *   [completeBrowserLogin], which validates it and exchanges the code.
  *
- * Pure protocol component: the HTTP client and clock are injected so tests can
- * drive it with Ktor's MockEngine and virtual time. Credential storage, the
- * Koog client wiring, and UI live elsewhere.
+ * JWT account-id decode follows pi's `getAccountId`. Pure protocol component:
+ * the HTTP client and clock are injected so tests can drive it with Ktor's
+ * MockEngine and virtual time. Credential storage, the Koog client wiring,
+ * and UI live elsewhere.
  *
- * Polling waits use [delay], so cancelling the calling coroutine aborts the
- * flow cleanly.
+ * Device-flow polling waits use [delay], so cancelling the calling coroutine
+ * aborts the flow cleanly.
  */
 class CodexOAuthClient(
     private val httpClient: HttpClient,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
-    /** OAuth client id for the Codex CLI device flow (see pi's openai-codex.ts). */
+    /** OAuth client id for the Codex CLI flows (see pi's openai-codex.ts). */
     private val clientId = "app_EMoamEEZ73f0CkXaXp7hrann"
 
+    private val authorizeUrl = "https://auth.openai.com/oauth/authorize"
     private val deviceUserCodeUrl = "https://auth.openai.com/api/accounts/deviceauth/usercode"
     private val deviceTokenUrl = "https://auth.openai.com/api/accounts/deviceauth/token"
     private val tokenUrl = "https://auth.openai.com/oauth/token"
@@ -80,11 +106,26 @@ class CodexOAuthClient(
     private val deviceRedirectUri = "https://auth.openai.com/deviceauth/callback"
     private val jwtClaimPath = "https://api.openai.com/auth"
 
+    /** Loopback redirect the Codex client id is registered for (pi's REDIRECT_URI). */
+    private val browserRedirectUri = "http://localhost:1455/auth/callback"
+    private val scope = "openid profile email offline_access"
+
+    /** `originator` marker identifying this app in the authorize request. */
+    private val originator = "pathfinder"
+
     /** Device-flow timeout, 15 minutes (pi's `DEVICE_CODE_TIMEOUT_SECONDS`). */
     private val flowTimeoutMillis = 15 * 60 * 1000L
 
     /** Minimum polling wait so a server-supplied 0 interval does not hot-loop. */
     private val minimumIntervalMillis = 1000L
+
+    /** PKCE verifier entropy (pi: 32 random bytes, base64url-encoded to 43 chars). */
+    private val pkceVerifierBytes = 32
+
+    /** `state` entropy (pi: 16 random bytes, hex-encoded). */
+    private val stateBytes = 16
+
+    private val secureRandom = SecureRandom()
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -135,7 +176,11 @@ class CodexOAuthClient(
         while (true) {
             when (val result = pollDeviceToken(device)) {
                 is DevicePollResult.Complete ->
-                    return exchangeAuthorizationCode(result.authorizationCode, result.codeVerifier)
+                    return exchangeAuthorizationCode(
+                        result.authorizationCode,
+                        result.codeVerifier,
+                        deviceRedirectUri,
+                    )
                 is DevicePollResult.Failed ->
                     throw CodexOAuthException("Sign-in failed (HTTP ${result.status}).")
                 DevicePollResult.Pending -> Unit
@@ -190,8 +235,78 @@ class CodexOAuthClient(
         }
     }
 
+    /**
+     * Starts the browser flow: builds the PKCE-protected authorize URL
+     * (pi's `createAuthorizationFlow`) and returns it with the `state` and
+     * code verifier needed to complete the flow. Pure local computation — no
+     * network — so it cannot fail in practice.
+     */
+    fun beginBrowserLogin(): CodexBrowserAuth {
+        val verifier = randomBytes(pkceVerifierBytes).toBase64Url()
+        val challenge = sha256(verifier.encodeToByteArray()).toBase64Url()
+        val state = randomBytes(stateBytes).toHexString()
+
+        val query = Parameters.build {
+            append("response_type", "code")
+            append("client_id", clientId)
+            append("redirect_uri", browserRedirectUri)
+            append("scope", scope)
+            append("code_challenge", challenge)
+            append("code_challenge_method", "S256")
+            append("state", state)
+            append("id_token_add_organizations", "true")
+            append("codex_cli_simplified_flow", "true")
+            append("originator", originator)
+        }
+        return CodexBrowserAuth(
+            authorizeUrl = "$authorizeUrl?${query.formUrlEncode()}",
+            state = state,
+            codeVerifier = verifier,
+        )
+    }
+
+    /**
+     * True when [url] is the browser flow's loopback redirect (scheme, host,
+     * port, and path of the registered `redirect_uri`). Used by the WebView
+     * layer to intercept the redirect instead of loading it; query contents
+     * are validated separately by [completeBrowserLogin].
+     */
+    fun isBrowserRedirect(url: String): Boolean {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return false
+        return uri.scheme == "http" &&
+            uri.host == "localhost" &&
+            uri.port == 1455 &&
+            uri.path == "/auth/callback"
+    }
+
+    /**
+     * Completes the browser flow with the intercepted [redirectUrl]:
+     * validates it is the loopback redirect, that it echoes [CodexBrowserAuth.state],
+     * and that it carries an authorization code (an OAuth `error` redirect
+     * fails with a user-safe message), then exchanges the code with the
+     * PKCE verifier (pi's `exchangeAuthorizationCode`).
+     */
+    suspend fun completeBrowserLogin(auth: CodexBrowserAuth, redirectUrl: String): CodexTokens {
+        if (!isBrowserRedirect(redirectUrl)) {
+            throw CodexOAuthException("Sign-in could not be completed.")
+        }
+        val query = parseQueryString(runCatching { URI(redirectUrl).rawQuery }.getOrNull() ?: "")
+        if (query["error"] != null) {
+            throw CodexOAuthException("Sign-in was not completed.")
+        }
+        val code = query["code"]
+        if (query["state"] != auth.state || code == null) {
+            throw CodexOAuthException("Sign-in could not be completed.")
+        }
+        return exchangeAuthorizationCode(code, auth.codeVerifier, browserRedirectUri)
+    }
+
     /** Exchanges the device flow's authorization code for tokens (pi's `exchangeAuthorizationCode`). */
-    private suspend fun exchangeAuthorizationCode(authorizationCode: String, codeVerifier: String): CodexTokens =
+    private suspend fun exchangeAuthorizationCode(
+        authorizationCode: String,
+        codeVerifier: String,
+        redirectUri: String,
+    ): CodexTokens =
         requestTokens(
             "Sign-in could not be completed",
             Parameters.build {
@@ -199,7 +314,7 @@ class CodexOAuthClient(
                 append("client_id", clientId)
                 append("code", authorizationCode)
                 append("code_verifier", codeVerifier)
-                append("redirect_uri", deviceRedirectUri)
+                append("redirect_uri", redirectUri)
             },
         )
 
@@ -261,6 +376,17 @@ class CodexOAuthClient(
         val accountId = claim.stringOrNull("chatgpt_account_id") ?: return null
         return accountId.ifEmpty { null }
     }
+
+    private fun randomBytes(count: Int): ByteArray =
+        ByteArray(count).also(secureRandom::nextBytes)
+
+    private fun sha256(bytes: ByteArray): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest(bytes)
+
+    private fun ByteArray.toBase64Url(): String =
+        Base64.getUrlEncoder().withoutPadding().encodeToString(this)
+
+    private fun ByteArray.toHexString(): String = joinToString("") { "%02x".format(it) }
 
     private fun String.parseJsonObjectOrNull(): JsonObject? =
         runCatching { json.parseToJsonElement(this).jsonObject }.getOrNull()

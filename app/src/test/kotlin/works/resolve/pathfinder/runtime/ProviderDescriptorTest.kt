@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.ai.providers
+package works.resolve.pathfinder.runtime
 
 import ai.koog.prompt.executor.clients.anthropic.AnthropicModels
 import ai.koog.prompt.executor.clients.google.GoogleModels

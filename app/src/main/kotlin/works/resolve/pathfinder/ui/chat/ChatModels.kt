@@ -2,7 +2,7 @@ package works.resolve.pathfinder.ui.chat
 
 import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable
-import works.resolve.pathfinder.ai.providers.ProviderAuthKind
+import works.resolve.pathfinder.runtime.ProviderAuthKind
 import works.resolve.pathfinder.data.sessions.SessionSummary
 
 enum class ChatRole {
@@ -50,6 +50,10 @@ data object ProvidersNavKey : NavKey
 @Serializable
 data class ProviderAuthNavKey(val providerId: String) : NavKey
 
+/** Navigation 3 destination key: the in-app WebView sign-in of one provider. */
+@Serializable
+data class CodexSignInNavKey(val providerId: String) : NavKey
+
 /** Outcome of initial load of settings, credentials, and sessions. */
 enum class ChatStatus {
     /** Initial load in progress. */
@@ -72,13 +76,34 @@ data class ProviderOption(
     val configured: Boolean,
 )
 
-/** Live ChatGPT device-code sign-in, null when idle. UI-safe projection only: no tokens. */
-data class CodexSignInState(
-    val userCode: String,
-    val verificationUri: String,
-    /** Fixed user-safe error text from a failed sign-in, null while awaiting. */
-    val error: String? = null,
-)
+/**
+ * Live ChatGPT sign-in, null when idle. UI-safe projection only: no tokens,
+ * no PKCE verifier, no redirect URLs with parameters.
+ */
+sealed interface CodexSignInState {
+    /**
+     * Device-code flow: the user enters [userCode] at [verificationUri]; the
+     * sign-in polls until approved (or fails with [error]).
+     */
+    data class Device(
+        val userCode: String,
+        val verificationUri: String,
+        val error: String? = null,
+    ) : CodexSignInState
+
+    /**
+     * Browser flow: the in-app WebView destination loads [authorizeUrl] and
+     * forwards intercepted loopback redirects back to the ViewModel. The
+     * exchange phase ([completing]) and the stored result ([completed]) render
+     * as native result pages; [error] shows a retryable failure.
+     */
+    data class Browser(
+        val authorizeUrl: String,
+        val completing: Boolean = false,
+        val completed: Boolean = false,
+        val error: String? = null,
+    ) : CodexSignInState
+}
 
 /** Row of the model picker: one per model of a configured provider. */
 data class ModelOption(
@@ -153,7 +178,7 @@ data class ChatUiState(
     val treeRows: List<TreeRow> = emptyList(),
     /** In-memory tree-panel filter (never persisted). */
     val treeFilter: TreeFilter = TreeFilter.DEFAULT,
-    /** Live ChatGPT device-code sign-in, null when idle. */
+    /** Live ChatGPT sign-in (browser or device code), null when idle. */
     val codexSignIn: CodexSignInState? = null,
     val error: String? = null,
 )

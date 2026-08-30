@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.ai.openaicodex
+package works.resolve.pathfinder.runtime
 
 import ai.koog.http.client.KoogHttpClient
 import ai.koog.prompt.executor.clients.LLMClientAPI
@@ -42,7 +42,7 @@ public object CodexLLMClients {
      *
      * pi sends `context.systemPrompt || "You are a helpful assistant."`
      * (`openai-codex-responses.ts`, request body builder); Pathfinder has no
-     * system prompt (see `agent/KoogChatRuntime.kt`), so the fallback is always used.
+     * system prompt (see `runtime/KoogChatRuntime.kt`), so the fallback is always used.
      */
     private const val INSTRUCTIONS = "You are a helpful assistant."
 

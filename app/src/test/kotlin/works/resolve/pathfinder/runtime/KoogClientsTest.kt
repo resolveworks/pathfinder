@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.agent
+package works.resolve.pathfinder.runtime
 
 import ai.koog.http.client.ktor.KtorKoogHttpClient
 import ai.koog.prompt.executor.clients.LLMClientAPI
@@ -14,7 +14,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
-import works.resolve.pathfinder.ai.providers.ProviderDescriptors
+import works.resolve.pathfinder.runtime.ProviderDescriptors
 
 /**
  * The default construction path maps every shipped Koog [LLMProvider] to its

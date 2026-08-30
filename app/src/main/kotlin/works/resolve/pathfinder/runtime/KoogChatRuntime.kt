@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.agent
+package works.resolve.pathfinder.runtime
 
 import ai.koog.http.client.KoogHttpClient
 import ai.koog.http.client.ktor.KtorKoogHttpClient
@@ -26,11 +26,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import works.resolve.pathfinder.ai.openaicodex.CodexLLMClients
-import works.resolve.pathfinder.ai.openaicodex.CodexOAuthClient
-import works.resolve.pathfinder.ai.providers.ProviderAuthKind
-import works.resolve.pathfinder.ai.providers.ProviderDescriptor
-import works.resolve.pathfinder.ai.providers.ProviderDescriptors
+import works.resolve.pathfinder.runtime.CodexLLMClients
+import works.resolve.pathfinder.runtime.CodexOAuthClient
+import works.resolve.pathfinder.runtime.ProviderAuthKind
+import works.resolve.pathfinder.runtime.ProviderDescriptor
+import works.resolve.pathfinder.runtime.ProviderDescriptors
 import works.resolve.pathfinder.data.credentials.Credential
 import works.resolve.pathfinder.data.credentials.CredentialStore
 import works.resolve.pathfinder.data.sessions.Conversation
@@ -85,7 +85,7 @@ import works.resolve.pathfinder.data.settings.ModelSettings
  * providers use [clientFactory]; the ChatGPT Codex provider refreshes its
  * OAuth access token before use (see [REFRESH_MARGIN_MILLIS]), persists the
  * refreshed credential, and builds its client via [codexClientFactory] with
- * the ChatGPT-backend prompt params (`ai/openaicodex/CodexLLMClients.kt`).
+ * the ChatGPT-backend prompt params (`runtime/CodexLLMClients.kt`).
  *
  * @param clientFactory Production default maps the Koog
  *   [ai.koog.prompt.llm.LLMProvider] of the selected model to its Koog client

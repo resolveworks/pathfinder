@@ -32,9 +32,11 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -65,10 +67,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -83,6 +87,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
@@ -91,7 +96,10 @@ import androidx.navigation3.ui.NavDisplay
 import works.resolve.pathfinder.R
 import android.content.Intent
 import android.net.Uri
-import works.resolve.pathfinder.ai.providers.ProviderAuthKind
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import works.resolve.pathfinder.runtime.ProviderAuthKind
 import works.resolve.pathfinder.data.sessions.SessionSummary
 import works.resolve.pathfinder.ui.chat.markdown.MarkdownText
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
@@ -124,8 +132,11 @@ fun ChatRoute(
         onSaveModelSelection = viewModel::saveModelSelection,
         onSaveProviderCredential = viewModel::saveProviderCredential,
         onRemoveProviderCredential = viewModel::removeProviderCredential,
-        onBeginCodexSignIn = viewModel::beginCodexSignIn,
+        onBeginCodexDeviceSignIn = viewModel::beginCodexDeviceSignIn,
+        onBeginCodexBrowserSignIn = viewModel::beginCodexBrowserSignIn,
+        onCodexBrowserRedirect = viewModel::onCodexBrowserRedirect,
         onCancelCodexSignIn = viewModel::cancelCodexSignIn,
+        onCancelCodexDeviceSignIn = viewModel::cancelCodexDeviceSignIn,
         onRefreshProviderStatus = viewModel::refreshProviderStatus,
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
@@ -166,8 +177,11 @@ fun ChatScreen(
     onSaveModelSelection: (providerId: String, modelId: String) -> Unit,
     onSaveProviderCredential: (providerId: String, apiKey: String) -> Unit,
     onRemoveProviderCredential: (providerId: String) -> Unit,
-    onBeginCodexSignIn: (providerId: String) -> Unit,
+    onBeginCodexDeviceSignIn: (providerId: String) -> Unit,
+    onBeginCodexBrowserSignIn: (providerId: String) -> Unit,
+    onCodexBrowserRedirect: (url: String) -> Boolean,
     onCancelCodexSignIn: () -> Unit,
+    onCancelCodexDeviceSignIn: () -> Unit,
     onRefreshProviderStatus: () -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
@@ -231,6 +245,7 @@ fun ChatScreen(
     val pushModelSettings: () -> Unit = { backStack.add(ModelSettingsNavKey) }
     val pushProviders: () -> Unit = { backStack.add(ProvidersNavKey) }
     val pushProviderAuth: (String) -> Unit = { backStack.add(ProviderAuthNavKey(it)) }
+    val pushCodexSignIn: (String) -> Unit = { backStack.add(CodexSignInNavKey(it)) }
     val popBackStack: () -> Unit = {
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
@@ -281,6 +296,7 @@ fun ChatScreen(
                             is ProviderAuthNavKey -> uiState.providerOptions
                                 .firstOrNull { it.id == topKey.providerId }?.name
                                 ?: stringResource(R.string.providers_title)
+                            is CodexSignInNavKey -> stringResource(R.string.signin_chatgpt_web_title)
                             else -> stringResource(
                                 if (onTreePage) R.string.tree_title else R.string.chat_title,
                             )
@@ -404,12 +420,43 @@ fun ChatScreen(
                                         onSave = { apiKey ->
                                             onSaveProviderCredential(key.providerId, apiKey)
                                         },
-                                        onBeginSignIn = { onBeginCodexSignIn(key.providerId) },
-                                        onCancelSignIn = onCancelCodexSignIn,
+                                        onBeginBrowserSignIn = {
+                                            // Start before pushing: the flow's
+                                            // state must exist when the WebView
+                                            // destination composes.
+                                            onBeginCodexBrowserSignIn(key.providerId)
+                                            pushCodexSignIn(key.providerId)
+                                        },
+                                        onBeginDeviceSignIn = { onBeginCodexDeviceSignIn(key.providerId) },
+                                        onCancelDeviceSignIn = onCancelCodexDeviceSignIn,
                                         onRemove = { onRemoveProviderCredential(key.providerId) },
                                         onClose = popBackStack,
                                     )
                                 }
+                            }
+                            entry<CodexSignInNavKey> { key ->
+                                CodexBrowserSignInContent(
+                                    signIn = uiState.codexSignIn as? CodexSignInState.Browser,
+                                    onRedirect = onCodexBrowserRedirect,
+                                    onRetry = {
+                                        onCancelCodexSignIn()
+                                        onBeginCodexBrowserSignIn(key.providerId)
+                                    },
+                                    // Leaving the screen (back, result close)
+                                    // cancels the flow.
+                                    onCancel = onCancelCodexSignIn,
+                                    onClose = {
+                                        onCancelCodexSignIn()
+                                        // Pop the WebView destination and the
+                                        // credential form beneath it.
+                                        if (backStack.lastOrNull() is CodexSignInNavKey) {
+                                            backStack.removeAt(backStack.lastIndex)
+                                        }
+                                        if (backStack.lastOrNull() is ProviderAuthNavKey) {
+                                            backStack.removeAt(backStack.lastIndex)
+                                        }
+                                    },
+                                )
                             }
                         },
                     )
@@ -770,14 +817,15 @@ private fun ProvidersContent(
 /**
  * Credential surface for one provider, branched on its auth kind: the
  * API-key form (secret input lives only in ephemeral Compose memory, never
- * logged or saved) or the ChatGPT device-code sign-in card.
+ * logged or saved) or the ChatGPT sign-in card.
  */
 @Composable
 private fun ProviderAuthContent(
     provider: ProviderOption,
     signIn: CodexSignInState?,
-    onBeginSignIn: () -> Unit,
-    onCancelSignIn: () -> Unit,
+    onBeginBrowserSignIn: () -> Unit,
+    onBeginDeviceSignIn: () -> Unit,
+    onCancelDeviceSignIn: () -> Unit,
     onSave: (apiKey: String) -> Unit,
     onRemove: () -> Unit,
     onClose: () -> Unit,
@@ -786,7 +834,15 @@ private fun ProviderAuthContent(
         is ProviderAuthKind.ApiKey ->
             ApiKeyAuthContent(provider, onSave, onRemove, onClose)
         ProviderAuthKind.ChatGptSignIn ->
-            ChatGptSignInContent(provider, signIn, onBeginSignIn, onCancelSignIn, onRemove, onClose)
+            ChatGptSignInContent(
+                provider,
+                signIn,
+                onBeginBrowserSignIn,
+                onBeginDeviceSignIn,
+                onCancelDeviceSignIn,
+                onRemove,
+                onClose,
+            )
     }
 }
 
@@ -873,27 +929,29 @@ private fun ApiKeyAuthContent(
     }
 }
 
-// ---- ChatGPT device-code sign-in ----
+// ---- ChatGPT sign-in ----
 
 /**
- * ChatGPT sign-in card for one provider: starts the device-code flow, shows
- * the user code, opens the verification page, and waits for approval. The
- * user code and verification URI live only in the ViewModel's ephemeral
- * sign-in state; leaving this screen (navigation, back) cancels the flow
- * via [onCancelSignIn], so no credential is ever written half-way.
+ * ChatGPT sign-in card for one provider: offers both flows pi offers — the
+ * default in-app browser sign-in (which pushes the WebView destination that
+ * owns the flow) and the device-code flow rendered here. The user code and
+ * verification URI live only in the ViewModel's ephemeral sign-in state;
+ * leaving this screen cancels a device-code flow via [onCancelDeviceSignIn]
+ * (a browser sign-in belongs to the WebView destination and survives), so no
+ * credential is ever written half-way.
  */
 @Composable
 private fun ChatGptSignInContent(
     provider: ProviderOption,
     signIn: CodexSignInState?,
-    onBeginSignIn: () -> Unit,
-    onCancelSignIn: () -> Unit,
+    onBeginBrowserSignIn: () -> Unit,
+    onBeginDeviceSignIn: () -> Unit,
+    onCancelDeviceSignIn: () -> Unit,
     onRemove: () -> Unit,
     onClose: () -> Unit,
 ) {
-    // Leaving the screen stops the flow: the polling job is cancelled and
-    // its ephemeral state cleared.
-    DisposableEffect(Unit) { onDispose { onCancelSignIn() } }
+    // Leaving the screen stops a device-code flow shown here.
+    DisposableEffect(Unit) { onDispose { onCancelDeviceSignIn() } }
 
     var confirmRemove by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -911,42 +969,28 @@ private fun ChatGptSignInContent(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (signIn == null) {
-            if (provider.configured) {
-                Text(
-                    text = stringResource(R.string.signin_chatgpt_signed_in),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.secondary,
-                )
-                TextButton(onClick = onClose) { Text(stringResource(R.string.action_cancel)) }
-            } else {
-                Button(onClick = onBeginSignIn) {
-                    Text(stringResource(R.string.signin_chatgpt_action))
+        when (signIn) {
+            null -> {
+                if (provider.configured) {
+                    Text(
+                        text = stringResource(R.string.signin_chatgpt_signed_in),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                } else {
+                    // Default flow first (pi: "Browser login (default)"),
+                    // device code as the secondary option.
+                    Button(onClick = onBeginBrowserSignIn) {
+                        Text(stringResource(R.string.signin_chatgpt_action_browser))
+                    }
+                    TextButton(onClick = onBeginDeviceSignIn) {
+                        Text(stringResource(R.string.signin_chatgpt_action_device))
+                    }
                 }
-                TextButton(onClick = onClose) { Text(stringResource(R.string.action_cancel)) }
             }
-        } else {
-            Text(
-                text = stringResource(R.string.signin_chatgpt_code_label),
-                style = MaterialTheme.typography.labelLarge,
-            )
-            SelectionContainer {
-                Text(
-                    text = signIn.userCode,
-                    style = MaterialTheme.typography.headlineMedium,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            // Stock Android view intent; no new dependency or manifest change.
-            Button(
-                onClick = {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(signIn.verificationUri)))
-                },
-            ) {
-                Text(stringResource(R.string.signin_chatgpt_open_page))
-            }
-            if (signIn.error == null) {
+            is CodexSignInState.Browser -> {
+                // Transient fallback: the browser flow renders in its own
+                // WebView destination on top of this screen.
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -962,15 +1006,55 @@ private fun ChatGptSignInContent(
                     )
                 }
             }
-            signIn.error?.let { error ->
+            is CodexSignInState.Device -> {
                 Text(
-                    text = error,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
+                    text = stringResource(R.string.signin_chatgpt_code_label),
+                    style = MaterialTheme.typography.labelLarge,
                 )
+                SelectionContainer {
+                    Text(
+                        text = signIn.userCode,
+                        style = MaterialTheme.typography.headlineMedium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                // Stock Android view intent; no new dependency or manifest change.
+                Button(
+                    onClick = {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(signIn.verificationUri)),
+                        )
+                    },
+                ) {
+                    Text(stringResource(R.string.signin_chatgpt_open_page))
+                }
+                if (signIn.error == null) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Text(
+                            text = stringResource(R.string.signin_chatgpt_waiting),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                signIn.error?.let { error ->
+                    Text(
+                        text = error,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
-            TextButton(onClick = onCancelSignIn) { Text(stringResource(R.string.action_cancel)) }
         }
+        TextButton(onClick = onClose) { Text(stringResource(R.string.action_cancel)) }
         if (provider.configured && signIn == null) {
             TextButton(
                 onClick = { confirmRemove = true },
@@ -1005,6 +1089,141 @@ private fun ChatGptSignInContent(
                 }
             },
         )
+    }
+}
+
+/**
+ * In-app ChatGPT browser sign-in: a WebView loading the authorize URL,
+ * with the flow's fixed loopback redirect intercepted instead of loaded
+ * (the registered `redirect_uri` is `http://localhost:1455/auth/callback`,
+ * pi's REDIRECT_URI — nothing is listening there on-device). Phases render
+ * as full-screen native pages: the WebView itself while signing in, a
+ * progress page while the code is exchanged, a result page with a close
+ * button once the credential is stored (pi's oauthSuccessHtml equivalent),
+ * and a retryable error page. Leaving this screen cancels the flow.
+ */
+@Composable
+private fun CodexBrowserSignInContent(
+    signIn: CodexSignInState.Browser?,
+    onRedirect: (url: String) -> Boolean,
+    onRetry: () -> Unit,
+    onCancel: () -> Unit,
+    onClose: () -> Unit,
+) {
+    DisposableEffect(Unit) { onDispose { onCancel() } }
+
+    when {
+        // Transient moment between pushing this destination and the
+        // sign-in state landing.
+        signIn == null -> {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        }
+        signIn.error != null -> {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(48.dp),
+                )
+                Spacer(Modifier.padding(top = 16.dp))
+                Text(
+                    text = signIn.error,
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.padding(top = 24.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onRetry) {
+                        Text(stringResource(R.string.signin_chatgpt_retry))
+                    }
+                    TextButton(onClick = onCancel) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                }
+            }
+        }
+        signIn.completed -> {
+            // Result page (pi: "OpenAI authentication completed. You can
+            // close this window.") with the close button the user asked for.
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.size(48.dp),
+                )
+                Spacer(Modifier.padding(top = 16.dp))
+                Text(
+                    text = stringResource(R.string.signin_chatgpt_success_title),
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+                Text(
+                    text = stringResource(R.string.signin_chatgpt_success_message),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.padding(top = 24.dp))
+                Button(onClick = onClose) {
+                    Text(stringResource(R.string.action_close))
+                }
+            }
+        }
+        signIn.completing -> {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.padding(top = 16.dp))
+                    Text(
+                        text = stringResource(R.string.signin_chatgpt_completing),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        else -> {
+            // Keyed on the URL so a retry builds a fresh WebView. The
+            // auth.openai.com pages need script and DOM storage; cookies stay
+            // first-party and Safe Browsing stays on (WebView defaults).
+            val currentOnRedirect by rememberUpdatedState(onRedirect)
+            key(signIn.authorizeUrl) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { context ->
+                        WebView(context).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(
+                                    view: WebView,
+                                    request: WebResourceRequest,
+                                ): Boolean = currentOnRedirect(request.url.toString())
+                            }
+                            loadUrl(signIn.authorizeUrl)
+                        }
+                    },
+                    onRelease = { it.destroy() },
+                )
+            }
+        }
     }
 }
 
@@ -1339,8 +1558,11 @@ private fun PreviewChatScreen(
             onSaveModelSelection = { _, _ -> },
             onSaveProviderCredential = { _, _ -> },
             onRemoveProviderCredential = { },
-            onBeginCodexSignIn = { },
+            onBeginCodexDeviceSignIn = { },
+            onBeginCodexBrowserSignIn = { },
+            onCodexBrowserRedirect = { false },
             onCancelCodexSignIn = { },
+            onCancelCodexDeviceSignIn = { },
             onRefreshProviderStatus = {},
             onNewSession = {},
             onSwitchSession = {},
@@ -1463,7 +1685,7 @@ private fun ChatScreenCodexSignInAwaitingPreview() {
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
             configured = true,
-            codexSignIn = CodexSignInState(
+            codexSignIn = CodexSignInState.Device(
                 userCode = "ABCD-1234",
                 verificationUri = "https://auth.openai.com/codex/device",
             ),
@@ -1482,13 +1704,86 @@ private fun ChatScreenCodexSignInErrorPreview() {
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
             configured = true,
-            codexSignIn = CodexSignInState(
+            codexSignIn = CodexSignInState.Device(
                 userCode = "ABCD-1234",
                 verificationUri = "https://auth.openai.com/codex/device",
                 error = "Sign-in timed out.",
             ),
         ),
         extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("openai-codex")),
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenCodexBrowserSignInPreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            providerOptions = PREVIEW_PROVIDER_OPTIONS,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            configured = true,
+            codexSignIn = CodexSignInState.Browser(
+                authorizeUrl = "https://auth.openai.com/oauth/authorize?…",
+            ),
+        ),
+        extraKeys = listOf(
+            SettingsNavKey,
+            ProvidersNavKey,
+            ProviderAuthNavKey("openai-codex"),
+            CodexSignInNavKey("openai-codex"),
+        ),
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenCodexBrowserCompletedPreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            providerOptions = PREVIEW_PROVIDER_OPTIONS.map {
+                if (it.id == "openai-codex") it.copy(configured = true) else it
+            },
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            configured = true,
+            codexSignIn = CodexSignInState.Browser(
+                authorizeUrl = "https://auth.openai.com/oauth/authorize?…",
+                completed = true,
+            ),
+        ),
+        extraKeys = listOf(
+            SettingsNavKey,
+            ProvidersNavKey,
+            ProviderAuthNavKey("openai-codex"),
+            CodexSignInNavKey("openai-codex"),
+        ),
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenCodexBrowserErrorPreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            providerOptions = PREVIEW_PROVIDER_OPTIONS,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            configured = true,
+            codexSignIn = CodexSignInState.Browser(
+                authorizeUrl = "https://auth.openai.com/oauth/authorize?…",
+                error = "Sign-in could not be completed.",
+            ),
+        ),
+        extraKeys = listOf(
+            SettingsNavKey,
+            ProvidersNavKey,
+            ProviderAuthNavKey("openai-codex"),
+            CodexSignInNavKey("openai-codex"),
+        ),
     )
 }
 

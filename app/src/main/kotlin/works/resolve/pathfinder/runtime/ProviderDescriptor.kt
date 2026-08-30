@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.ai.providers
+package works.resolve.pathfinder.runtime
 
 import ai.koog.prompt.executor.clients.LLModelDefinitions
 import ai.koog.prompt.executor.clients.anthropic.AnthropicModels
@@ -29,7 +29,7 @@ sealed interface ProviderAuthKind {
     /** Labels the provider's API-key credential form field. */
     data class ApiKey(val prompt: String) : ProviderAuthKind
 
-    /** ChatGPT subscription sign-in (device-code OAuth). */
+    /** ChatGPT subscription sign-in: in-app browser OAuth or device code. */
     data object ChatGptSignIn : ProviderAuthKind
 }
 
@@ -93,7 +93,8 @@ object ProviderDescriptors {
             definitions = MistralAIModels,
         ),
         // ChatGPT-subscription backend: same Responses API as OpenAI, but at
-        // chatgpt.com with OAuth tokens (see ai/openaicodex/). Models are the
+        // chatgpt.com with OAuth tokens (see `runtime/CodexLLMClients.kt`).
+        // Models are the
         // codex entries of Koog's OpenAIModels — enumerated from Koog's own
         // definitions, not hand-copied.
         provider(

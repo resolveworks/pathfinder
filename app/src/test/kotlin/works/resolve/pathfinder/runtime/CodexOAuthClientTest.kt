@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.ai.openaicodex
+package works.resolve.pathfinder.runtime
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -7,14 +7,21 @@ import io.ktor.client.engine.mock.MockRequestHandler
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.HttpRequestData
 import io.ktor.client.request.HttpResponseData
+import io.ktor.client.request.forms.FormDataContent
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.Parameters
 import io.ktor.http.headersOf
+import io.ktor.http.parseQueryString
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
+import java.net.URI
+import java.security.MessageDigest
 import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -58,6 +65,9 @@ class CodexOAuthClientTest {
 
     private fun device(intervalSeconds: Long = 1) =
         CodexDeviceAuth("dav-1", "ABCD-EFGH", "https://auth.openai.com/codex/device", intervalSeconds)
+
+    private fun browserRedirectUrl(state: String, code: String = "ac-9") =
+        "http://localhost:1455/auth/callback?code=$code&state=$state"
 
     // --- beginDeviceLogin ---
 
@@ -199,6 +209,124 @@ class CodexOAuthClientTest {
                 clock = { testScheduler.currentTime },
         )
         assertFailsWith<CodexOAuthException> { oauth.awaitDeviceAuthorization(device()) }
+    }
+
+    // --- browser flow ---
+
+    @Test
+    fun `browser login builds the pkce authorize url`() {
+        val oauth = CodexOAuthClient(mockClient())
+        val auth = oauth.beginBrowserLogin()
+
+        val uri = URI(auth.authorizeUrl)
+        assertEquals("https", uri.scheme)
+        assertEquals("auth.openai.com", uri.host)
+        assertEquals("/oauth/authorize", uri.path)
+
+        val params = parseQueryString(uri.rawQuery!!)
+        assertEquals("code", params["response_type"])
+        assertEquals("app_EMoamEEZ73f0CkXaXp7hrann", params["client_id"])
+        assertEquals("http://localhost:1455/auth/callback", params["redirect_uri"])
+        assertEquals("openid profile email offline_access", params["scope"])
+        assertEquals("S256", params["code_challenge_method"])
+        assertEquals("true", params["id_token_add_organizations"])
+        assertEquals("true", params["codex_cli_simplified_flow"])
+        assertEquals("pathfinder", params["originator"])
+        assertEquals(auth.state, params["state"])
+
+        // PKCE shapes: 43-char base64url verifier, base64url(SHA-256(verifier))
+        // challenge, 32-char hex state (pi's generatePKCE / createState).
+        assertTrue(auth.codeVerifier.matches(Regex("^[A-Za-z0-9_-]{43}$")), auth.codeVerifier)
+        assertTrue(auth.state.matches(Regex("^[0-9a-f]{32}$")), auth.state)
+        val expectedChallenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
+            MessageDigest.getInstance("SHA-256").digest(auth.codeVerifier.encodeToByteArray()),
+        )
+        assertEquals(expectedChallenge, params["code_challenge"])
+    }
+
+    @Test
+    fun `browser login state and verifier are unique per run`() {
+        val oauth = CodexOAuthClient(mockClient())
+        val first = oauth.beginBrowserLogin()
+        val second = oauth.beginBrowserLogin()
+        assertNotEquals(first.state, second.state)
+        assertNotEquals(first.codeVerifier, second.codeVerifier)
+    }
+
+    @Test
+    fun `isBrowserRedirect matches only the loopback callback`() {
+        val oauth = CodexOAuthClient(mockClient())
+        assertTrue(oauth.isBrowserRedirect("http://localhost:1455/auth/callback"))
+        assertTrue(oauth.isBrowserRedirect(browserRedirectUrl("s")))
+        assertFalse(oauth.isBrowserRedirect("https://auth.openai.com/oauth/authorize?code=x"))
+        assertFalse(oauth.isBrowserRedirect("http://localhost:1455/auth/callback/extra"))
+        assertFalse(oauth.isBrowserRedirect("http://127.0.0.1:1455/auth/callback"))
+        assertFalse(oauth.isBrowserRedirect("http://localhost:1456/auth/callback"))
+        assertFalse(oauth.isBrowserRedirect("https://localhost:1455/auth/callback"))
+        assertFalse(oauth.isBrowserRedirect("not a url"))
+    }
+
+    @Test
+    fun `browser complete exchanges the code with the browser redirect uri`() = runTest {
+        var exchangedPath = ""
+        var exchangedForm: Parameters? = null
+        val client = HttpClient(MockEngine { request ->
+            exchangedPath = request.url.toString()
+            exchangedForm = (request.body as FormDataContent).formData
+            respond(tokenBody(), HttpStatusCode.OK, headersOf("Content-Type", "application/json"))
+        })
+        val oauth = CodexOAuthClient(client, clock = { testScheduler.currentTime })
+        val auth = oauth.beginBrowserLogin()
+
+        val tokens = oauth.completeBrowserLogin(auth, browserRedirectUrl(auth.state, code = "ac-9"))
+
+        assertEquals("acct-42", tokens.accountId)
+        assertEquals(testScheduler.currentTime + 3_600_000, tokens.expiresAtEpochMillis)
+        assertEquals("https://auth.openai.com/oauth/token", exchangedPath)
+        // The exchange must use the browser flow's redirect uri, not the
+        // device flow's, and the exact PKCE verifier generated at the start.
+        val form = exchangedForm
+        assertEquals("authorization_code", form?.get("grant_type"))
+        assertEquals("app_EMoamEEZ73f0CkXaXp7hrann", form?.get("client_id"))
+        assertEquals("ac-9", form?.get("code"))
+        assertEquals(auth.codeVerifier, form?.get("code_verifier"))
+        assertEquals("http://localhost:1455/auth/callback", form?.get("redirect_uri"))
+    }
+
+    @Test
+    fun `browser complete rejects a state mismatch`() = runTest {
+        val oauth = CodexOAuthClient(mockClient())
+        val auth = oauth.beginBrowserLogin()
+        assertFailsWith<CodexOAuthException> {
+            oauth.completeBrowserLogin(auth, browserRedirectUrl(state = "forged"))
+        }
+    }
+
+    @Test
+    fun `browser complete rejects an error redirect`() = runTest {
+        val oauth = CodexOAuthClient(mockClient())
+        val auth = oauth.beginBrowserLogin()
+        val url = "http://localhost:1455/auth/callback?error=access_denied&state=${auth.state}"
+        val failure = assertFailsWith<CodexOAuthException> { oauth.completeBrowserLogin(auth, url) }
+        assertTrue(failure.message!!.contains("was not completed", ignoreCase = true))
+    }
+
+    @Test
+    fun `browser complete rejects a redirect without a code`() = runTest {
+        val oauth = CodexOAuthClient(mockClient())
+        val auth = oauth.beginBrowserLogin()
+        assertFailsWith<CodexOAuthException> {
+            oauth.completeBrowserLogin(auth, "http://localhost:1455/auth/callback?state=${auth.state}")
+        }
+    }
+
+    @Test
+    fun `browser complete rejects a foreign url`() = runTest {
+        val oauth = CodexOAuthClient(mockClient())
+        val auth = oauth.beginBrowserLogin()
+        assertFailsWith<CodexOAuthException> {
+            oauth.completeBrowserLogin(auth, "https://evil.example.com/callback?code=ac&state=${auth.state}")
+        }
     }
 
     // --- refresh ---
