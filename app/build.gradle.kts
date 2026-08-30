@@ -78,6 +78,18 @@ dependencies {
     implementation(libs.zstd.jni) { artifact { type = "aar" } }
     testImplementation(libs.zstd.jni)
 
+    // Koog runtime: provider LLM clients (Anthropic, OpenAI, OpenRouter,
+    // Google, MistralAI), their shared contracts (prompt-llm, prompt-model,
+    // prompt-executor-clients arrive transitively), and the HTTP transport
+    // (Koog's Ktor client over an OkHttp engine shared with the app's stack).
+    implementation(libs.koog.prompt.executor.anthropic.client)
+    implementation(libs.koog.prompt.executor.openai.client)
+    implementation(libs.koog.prompt.executor.openrouter.client)
+    implementation(libs.koog.prompt.executor.google.client)
+    implementation(libs.koog.prompt.executor.mistralai.client)
+    implementation(libs.koog.http.client.ktor)
+    implementation(libs.ktor.client.okhttp)
+
     // Markdown parsing for message rendering (CommonMark + GFM extensions)
     implementation(libs.commonmark)
     implementation(libs.commonmark.ext.gfm.tables)
