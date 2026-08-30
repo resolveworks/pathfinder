@@ -36,17 +36,27 @@ class EncryptedCredentialStoreTest {
     fun `set persists and round trips`() = runTest {
         val dir = createTempDirectory()
         val store = newStore(dir)
-        store.set("openai", ApiKeyCredential("sk"))
-        assertEquals(ApiKeyCredential("sk"), store.read("openai"))
+        store.set("openai", Credential.ApiKey("sk"))
+        assertEquals(Credential.ApiKey("sk"), store.read("openai"))
+    }
+
+    @Test
+    fun `oauth credential round trips`() = runTest {
+        val dir = createTempDirectory()
+        val store = newStore(dir)
+        val credential = Credential.ChatGptOAuth("acc", "ref", 1_700_000_000_000, "acct")
+        store.set("openaicodex", credential)
+        assertEquals(credential, store.read("openaicodex"))
+        assertEquals(listOf("openaicodex"), store.list())
     }
 
     @Test
     fun `set replaces the stored credential wholesale`() = runTest {
         val dir = createTempDirectory()
         val store = newStore(dir)
-        store.set("openai", ApiKeyCredential("old"))
-        store.set("openai", ApiKeyCredential("new"))
-        assertEquals(ApiKeyCredential("new"), store.read("openai"))
+        store.set("openai", Credential.ApiKey("old"))
+        store.set("openai", Credential.ApiKey("new"))
+        assertEquals(Credential.ApiKey("new"), store.read("openai"))
     }
 
     @Test
@@ -69,8 +79,8 @@ class EncryptedCredentialStoreTest {
     fun `list reports configured provider ids without secrets`() = runTest {
         val dir = createTempDirectory()
         val store = newStore(dir)
-        store.set("openai", ApiKeyCredential("sk-SECRET"))
-        store.set("zai", ApiKeyCredential("other-SECRET"))
+        store.set("openai", Credential.ApiKey("sk-SECRET"))
+        store.set("zai", Credential.ApiKey("other-SECRET"))
         assertEquals(listOf("openai", "zai"), store.list())
     }
 
@@ -78,7 +88,7 @@ class EncryptedCredentialStoreTest {
     fun `delete removes the persisted entry`() = runTest {
         val dir = createTempDirectory()
         val store = newStore(dir)
-        store.set("openai", ApiKeyCredential("sk"))
+        store.set("openai", Credential.ApiKey("sk"))
         store.delete("openai")
         assertNull(store.read("openai"))
         assertTrue(!File(dir, "openai.bin").exists())
@@ -88,7 +98,7 @@ class EncryptedCredentialStoreTest {
     fun `list rejects corrupt or malformed entries instead of skipping them`() = runTest {
         val dir = createTempDirectory()
         val store = newStore(dir)
-        store.set("openai", ApiKeyCredential("sk"))
+        store.set("openai", Credential.ApiKey("sk"))
         writeRaw(dir, "zai", "{bad}") // object-looking malformed record
         assertFailsWith<CredentialFormatException> { store.list() }
 
@@ -106,7 +116,7 @@ class EncryptedCredentialStoreTest {
     fun `invalid provider ids are rejected`() = runTest {
         val store = newStore(createTempDirectory())
         assertFailsWith<IllegalArgumentException> { store.read("../evil") }
-        assertFailsWith<IllegalArgumentException> { store.set("", ApiKeyCredential("k")) }
+        assertFailsWith<IllegalArgumentException> { store.set("", Credential.ApiKey("k")) }
     }
 
     private fun createTempDirectory(): File = kotlin.io.path.createTempDirectory("credstore").toFile().apply { deleteOnExit() }

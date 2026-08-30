@@ -7,7 +7,7 @@ import ai.koog.prompt.message.MessagePart
 import works.resolve.pathfinder.agent.ChatRuntime
 import works.resolve.pathfinder.agent.ChatRuntimeSession
 import works.resolve.pathfinder.ai.providers.ProviderDescriptors
-import works.resolve.pathfinder.data.credentials.ApiKeyCredential
+import works.resolve.pathfinder.data.credentials.Credential
 import works.resolve.pathfinder.data.credentials.CredentialStore
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsStore
@@ -609,7 +609,7 @@ class ChatViewModel(
             return
         }
         try {
-            credentials.set(providerId, ApiKeyCredential(newKey))
+            credentials.set(providerId, Credential.ApiKey(newKey))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
