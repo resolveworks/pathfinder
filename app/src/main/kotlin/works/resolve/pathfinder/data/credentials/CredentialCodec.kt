@@ -90,7 +90,7 @@ object CredentialCodec {
         )
     }
 
-    /** Returns the string value of [name], null when missing, non-string, or JSON null. */
+    /** Returns the string value of [name]; null when missing, throws on non-string (incl. JSON null). */
     private fun JsonObject.stringField(name: String): String? {
         val field = this[name] ?: return null
         return field.stringOrNull() ?: throw CredentialFormatException("$name is not a string")
