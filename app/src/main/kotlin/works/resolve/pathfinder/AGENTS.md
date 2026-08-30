@@ -3,7 +3,7 @@
 This file refines the repository instructions for code under
 `works.resolve.pathfinder`. Pathfinder integrates Koog rather than translating
 pi into a parallel Kotlin runtime. Apply the pi translation rules below only to
-selected features, principally provider OAuth and session-tree semantics.
+selected features, principally session-tree semantics.
 
 ## Classify the code before changing it
 
@@ -67,9 +67,8 @@ when Koog already defines the runtime concept.
 
 - Koog owns runtime wire formats and provider serialization. Do not route Koog
   clients through Pathfinder-owned payload builders or JSON accessors.
-- Pi-ported OAuth formats and app persistence codecs may use the
-  shared JSON DOM/accessors in `ai/utils/JsonDom.kt`; do not create private
-  accessor-helper families in each file.
+- App persistence codecs may use the shared kotlinx.serialization JSON
+  DOM/accessors; do not create private accessor-helper families in each file.
 - Decode untrusted enum/string values with an exhaustive `when` and explicit
   unknown handling, never `valueOf`.
 - Persisted Pathfinder codecs stay strict: reject malformed or unknown data,
@@ -102,11 +101,7 @@ when Koog already defines the runtime concept.
 - Credentials cross from the Android Keystore-backed store into a Koog client
   (or justified narrow adapter) only when needed. Do not place secrets in
   long-lived UI state or general settings models.
-- OAuth provider responses may retain opaque extras, but secret-bearing values
-  must be redacted from `toString`, exceptions, telemetry, and logs.
 - Never log message content, prompts, tool arguments/results, or model output.
-- Browser authorization uses Custom Tabs/system browser and a narrow callback
-  boundary; never an embedded WebView.
 
 ## UI and sessions
 

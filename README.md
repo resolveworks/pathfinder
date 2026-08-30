@@ -3,8 +3,7 @@
 Pathfinder is a native Android AI client built on
 [Koog](https://github.com/JetBrains/koog). Koog provides the Kotlin agent and
 LLM runtime; Pathfinder adds a focused native Android experience and selected
-capabilities from [pi](https://pi.dev): provider OAuth login and branching,
-tree-based sessions.
+capabilities from [pi](https://pi.dev): branching, tree-based sessions.
 
 ## Direction
 
@@ -27,11 +26,10 @@ Pathfinder has three boundaries:
 - **Koog runtime** owns prompts and messages, model capabilities, LLM clients,
   streaming, tools, agent execution, and runtime features.
 - **Pathfinder extensions** connect Android-secured credentials to the runtime
-  and add selected pi behavior. OAuth flows remain provider-specific and
-  pi-faithful where useful; session storage preserves pi-style ancestry and
+  and add selected pi behavior. Session storage preserves pi-style ancestry and
   branching while projecting a branch into Koog conversation history.
 - **Android app** owns Compose UI, lifecycle, navigation, settings, persistence,
-  secure credential storage, and browser/callback integration. It exposes
+  secure credential storage, and platform integration. It exposes
   runtime state through a conventional MVVM/UDF flow.
 
 This keeps Koog replaceable and upgradeable without hiding it behind another
@@ -47,7 +45,7 @@ track the current implementation without backward-compatibility machinery.
 Development expects current local checkouts at:
 
 - `~/Projects/koog/` — primary reference for runtime and LLM behavior;
-- `~/Projects/pi/` — reference only for selected OAuth and tree-session ports.
+- `~/Projects/pi/` — reference only for the tree-session port.
 
 Before changing upstream-derived behavior, compare against current source,
 module documentation, and tests rather than remembered APIs. Koog should be
@@ -71,10 +69,9 @@ The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Security and diagnostics
 
-Provider credentials and OAuth tokens are stored behind Android
-Keystore-backed encryption. API keys, tokens, message content, tool data, and
-model responses must never be logged. OAuth authorization opens in a system
-browser surface rather than an embedded WebView.
+Provider API-key credentials are stored behind Android
+Keystore-backed encryption. API keys, message content, tool data, and
+model responses must never be logged.
 
 Operational lifecycle events use the `Pathfinder` Logcat tag:
 

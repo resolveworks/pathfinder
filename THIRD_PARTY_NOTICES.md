@@ -2,9 +2,11 @@
 
 ## pi
 
-The provider/chat streaming layer (under `app/src/main/kotlin/works/resolve/pathfinder/ai/`)
-and the agent loop (under `app/src/main/kotlin/works/resolve/pathfinder/agent/`) are
-Kotlin ports of portions of [pi](https://pi.dev) (the local pi project at
+The session-tree layer (under `app/src/main/kotlin/works/resolve/pathfinder/data/sessions/`),
+the markdown renderer (under
+`app/src/main/kotlin/works/resolve/pathfinder/ui/chat/markdown/`), and the
+telemetry contracts (under `app/src/main/kotlin/works/resolve/pathfinder/telemetry/`)
+are Kotlin ports of portions of [pi](https://pi.dev) (the local pi project at
 `~/Projects/pi`). Those portions are:
 
 Copyright (c) 2025 Mario Zechner

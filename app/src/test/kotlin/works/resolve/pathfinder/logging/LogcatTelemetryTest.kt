@@ -17,8 +17,8 @@ class LogcatTelemetryTest {
     @Test
     fun `start line carries direction, ids, parent, and attributes`() {
         assertEquals(
-            "> pf.auth.login id=2 parent=1 pf.auth.provider=openai-codex pf.auth.type=oauth",
-            renderStart(2, 1, "pf.auth.login", mapOf("pf.auth.provider" to attr("openai-codex"), "pf.auth.type" to attr("oauth"))),
+            "> pf.chat.error id=2 parent=1 pf.error.ui_message=\"Something went wrong\"",
+            renderStart(2, 1, "pf.chat.error", mapOf("pf.error.ui_message" to attr("Something went wrong"))),
         )
         assertEquals(
             "> pf.root id=1 parent=-",
@@ -29,16 +29,16 @@ class LogcatTelemetryTest {
     @Test
     fun `event line carries the span, event name, and attributes`() {
         assertEquals(
-            "+ pf.auth.login id=3 event=callback_received attempt=1",
-            renderEvent(3, "pf.auth.login", "callback_received", mapOf("attempt" to attr(1))),
+            "+ pf.chat.error id=3 event=stream_failed attempt=1",
+            renderEvent(3, "pf.chat.error", "stream_failed", mapOf("attempt" to attr(1))),
         )
     }
 
     @Test
     fun `end line carries status, duration, and accumulated attributes`() {
         assertEquals(
-            "< pf.auth.login id=2 status=ok duration_ms=1837 pf.auth.outcome=persisted",
-            renderEnd(2, "pf.auth.login", SpanStatus.Ok, mapOf("pf.auth.outcome" to attr("persisted")), 1837),
+            "< pf.chat.error id=2 status=ok duration_ms=1837 pf.degraded.operation=none",
+            renderEnd(2, "pf.chat.error", SpanStatus.Ok, mapOf("pf.degraded.operation" to attr("none")), 1837),
         )
     }
 
@@ -46,14 +46,14 @@ class LogcatTelemetryTest {
     fun `error end line carries error name and quoted message`() {
         val status = SpanStatus.Error(
             TelemetryError(
-                "java.lang.IllegalStateException",
-                "OpenAI Codex token exchange failed (400): error=invalid_grant",
+                "java.io.IOException",
+                "Connection closed mid-stream",
             ),
         )
         assertEquals(
-            "< pf.auth.login id=2 status=error error_name=java.lang.IllegalStateException" +
-                " error_message=\"OpenAI Codex token exchange failed (400): error=invalid_grant\" duration_ms=42",
-            renderEnd(2, "pf.auth.login", status, emptyMap(), 42),
+            "< pf.chat.error id=2 status=error error_name=java.io.IOException" +
+                " error_message=\"Connection closed mid-stream\" duration_ms=42",
+            renderEnd(2, "pf.chat.error", status, emptyMap(), 42),
         )
     }
 

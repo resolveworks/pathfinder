@@ -1,13 +1,12 @@
-# Koog runtime and provider-auth boundary
+# Koog runtime and provider boundary
 
 This file refines the repository instructions for code under
 `works.resolve.pathfinder.ai`. Koog supplies LLM models, prompts, provider
 clients, transport behavior, streaming, and agent-facing contracts. Pathfinder
-layers selected pi OAuth behavior on top.
+adds provider presentation metadata and API-key credential resolution.
 
 Read this file before changing providers, model selection, authentication,
-credentials, protocol adapters, transport, the generated catalog, or their
-tests and tooling.
+credentials, transport, or their tests and tooling.
 
 ## Ownership boundary
 
@@ -22,9 +21,7 @@ Pathfinder owns:
 
 - choosing the Koog modules/providers exposed by the app;
 - Android Keystore-backed credential persistence;
-- provider sign-in UI and browser/callback integration;
-- selected pi-derived OAuth flows and token refresh behavior;
-- narrow adapters that supply resolved credentials to Koog clients;
+- provider configuration UI;
 - app model/provider presentation and settings.
 
 Do not build a Pathfinder-wide provider abstraction over Koog. Composition may
@@ -38,15 +35,9 @@ For runtime/provider behavior, inspect the current implementation and tests in
 relevant `prompt-executor` client module. Also inspect `~/Projects/koog/http-client/`
 when transport behavior matters.
 
-For an explicitly selected OAuth flow, inspect current pi source and tests in
-`~/Projects/pi/packages/ai`. Pi is authoritative for authorization endpoints,
-PKCE/device/manual-code mechanics, polling, token refresh, and provider-specific
-credential fields. It is not authoritative for the prompt or provider-client
-contract once the credential enters Koog.
-
-When the upstreams do not compose directly, document the mismatch and adapt at
-the credential/client construction boundary. Do not silently alter one
-upstream's semantics to resemble the other.
+When the upstream does not compose directly with an Android requirement,
+document the mismatch and adapt at the credential/client construction boundary.
+Do not silently alter upstream semantics.
 
 ## Runtime rules
 
@@ -56,10 +47,6 @@ upstream's semantics to resemble the other.
   transport, or agent-loop abstractions where Koog supplies the contract.
 - Reuse Koog serialization, transport, retries, and stream handling rather than
   placing a parallel implementation in front of Koog.
-- Keep a pi-derived provider protocol adapter only when a selected OAuth
-  product path cannot use an existing Koog client. Such an exception must be
-  narrow, explicitly scoped, provenance-documented, and expressed through Koog
-  prompt/runtime contracts.
 - Compatibility with superseded development credentials or settings is not
   required unless explicitly requested. Unknown formats fail clearly rather
   than triggering hidden conversion.
@@ -72,46 +59,28 @@ A provider is supported only when authentication, model selection, requests,
 streaming, errors, cancellation, and app UX all work together.
 
 Use Koog's `LLMProvider`, `LLModel`, and capabilities as the runtime model
-surface. A curated app list may add presentation metadata, but must not create a
-parallel behavioral model registry.
-
-App model selection is Koog-compatible and derives runtime identity and
-capabilities from Koog. Any bundled catalog is app-owned presentation metadata,
-must be generated rather than hand-edited, and cannot carry a parallel pi
-protocol definition.
+surface. The app-owned provider surface (`ai/providers`) is presentation
+metadata that enumerates Koog's own `LLModelDefinitions` singletons rather than
+hand-copying models, so it cannot drift from the Koog runtime; it must not
+create a parallel behavioral model registry.
 
 Before adding a provider or capability, answer:
 
 1. Is it supported by current Koog, or is the missing piece narrow enough to
    justify and maintain as an adapter?
 2. Does it provide meaningful value in the Android client?
-3. Is its authentication path complete, including refresh/expiry behavior?
+3. Is its authentication path complete for the credential type the app stores?
 4. Can it use Koog runtime types without a parallel provider stack?
 5. Can it be tested end to end at the relevant boundary?
 
 If not, leave it out and record the reason rather than exposing partial support.
 
-## OAuth and credentials
+## Credentials
 
-Selected pi OAuth flows should remain provider-specific. Share low-level,
-behavior-neutral mechanics such as PKCE generation, loopback callback handling,
-device-code polling primitives, and HTTP helpers; do not flatten distinct
-provider semantics into a universal OAuth state machine.
-
-- Open authorization in a Chrome Custom Tab/system browser, never a WebView.
-- Keep the existing loopback callback approach only where the selected pi flow
-  uses it and Android behavior is tested; retain the provider's manual/device
-  fallback where applicable.
 - Store credentials only through the Android Keystore-backed credential
-  boundary. Access/refresh tokens are secrets.
-- Refresh is performed according to the source provider flow before client
-  construction or request execution. Persist rotated credentials atomically.
-- Keep provider-specific opaque fields losslessly when refresh requires them.
+  boundary. API keys are secrets.
 - Map a resolved credential into the minimal input accepted by the Koog client;
   do not leak the app credential-store type through Koog-facing runtime code.
-- If a Koog client assumes API-key authentication and an OAuth token requires
-  different headers/endpoints, implement that difference at client
-  configuration or a narrow client/HTTP adapter, with tests and provenance.
 
 Never log or expose credentials in telemetry, `toString`, exceptions, request
 diagnostics, or Compose state. Logs must also exclude prompts, message content,
@@ -127,17 +96,13 @@ Android artifact and maintenance surface smaller.
 Before adding a provider SDK or a new protocol/crypto dependency, verify Koog's
 current implementation and request an explicit scope decision if the dependency
 would bypass Koog or materially increase app size/security maintenance. Android
-browser, Keystore, and lifecycle APIs remain behind Pathfinder platform
-adapters.
+Keystore and lifecycle APIs remain behind Pathfinder platform adapters.
 
 ## Tests and provenance
 
 - Test credential resolution and Koog client construction without real secrets.
 - Use Koog test executors/utilities for agent and prompt behavior where
   available; do not maintain mocks for a parallel Pathfinder client API.
-- Keep pi parity tests for selected OAuth parsing, polling, refresh, expiry, and
-  error behavior. Cite exact upstream symbols/files in test names or KDoc.
-- Test cancellation, secret redaction, malformed stored credentials, and every
-  Android/Koog divergence.
-- Integration tests requiring real provider keys or tokens must be opt-in and
-  obtain them outside the repository.
+- Test cancellation, secret redaction, and malformed stored credentials.
+- Integration tests requiring real provider keys must be opt-in and obtain them
+  outside the repository.
