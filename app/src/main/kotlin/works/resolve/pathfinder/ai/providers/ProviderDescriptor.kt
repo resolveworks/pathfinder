@@ -22,14 +22,26 @@ data class ModelDescriptor(
 )
 
 /**
+ * How a provider authenticates: an API-key form, or the ChatGPT OAuth
+ * sign-in flow driven by the UI and the runtime.
+ */
+sealed interface ProviderAuthKind {
+    /** Labels the provider's API-key credential form field. */
+    data class ApiKey(val prompt: String) : ProviderAuthKind
+
+    /** ChatGPT subscription sign-in (device-code OAuth). */
+    data object ChatGptSignIn : ProviderAuthKind
+}
+
+/**
  * One provider the app can be configured with: its stable id, display name,
- * the API-key prompt for its credential form, and its selectable models.
+ * how it authenticates, and its selectable models.
  */
 data class ProviderDescriptor(
     val id: String,
     val displayName: String,
-    /** Label shown next to the API-key field of this provider's credential form. */
-    val apiKeyPrompt: String,
+    /** Credential UX and runtime dispatch for this provider. */
+    val authKind: ProviderAuthKind,
     val models: List<ModelDescriptor>,
 ) {
     fun model(modelId: String): ModelDescriptor? = models.firstOrNull { it.id == modelId }
@@ -53,32 +65,48 @@ object ProviderDescriptors {
         provider(
             id = "anthropic",
             displayName = "Anthropic",
-            apiKeyPrompt = "Anthropic API key",
+            authKind = ProviderAuthKind.ApiKey("Anthropic API key"),
             definitions = AnthropicModels,
         ),
         provider(
             id = "openai",
             displayName = "OpenAI",
-            apiKeyPrompt = "OpenAI API key",
+            authKind = ProviderAuthKind.ApiKey("OpenAI API key"),
             definitions = OpenAIModels,
         ),
         provider(
             id = "google",
             displayName = "Google",
-            apiKeyPrompt = "Google AI Studio API key",
+            authKind = ProviderAuthKind.ApiKey("Google AI Studio API key"),
             definitions = GoogleModels,
         ),
         provider(
             id = "openrouter",
             displayName = "OpenRouter",
-            apiKeyPrompt = "OpenRouter API key",
+            authKind = ProviderAuthKind.ApiKey("OpenRouter API key"),
             definitions = OpenRouterModels,
         ),
         provider(
             id = "mistral",
             displayName = "Mistral",
-            apiKeyPrompt = "Mistral API key",
+            authKind = ProviderAuthKind.ApiKey("Mistral API key"),
             definitions = MistralAIModels,
+        ),
+        // ChatGPT-subscription backend: same Responses API as OpenAI, but at
+        // chatgpt.com with OAuth tokens (see ai/openaicodex/). Models are the
+        // codex entries of Koog's OpenAIModels — enumerated from Koog's own
+        // definitions, not hand-copied.
+        provider(
+            id = "openai-codex",
+            displayName = "OpenAI Codex",
+            authKind = ProviderAuthKind.ChatGptSignIn,
+            models = listOf(
+                OpenAIModels.Chat.GPT5Codex,
+                OpenAIModels.Chat.GPT5_1Codex,
+                OpenAIModels.Chat.GPT5_1CodexMax,
+                OpenAIModels.Chat.GPT5_2Codex,
+                OpenAIModels.Chat.GPT5_3Codex,
+            ),
         ),
     )
 
@@ -87,13 +115,20 @@ object ProviderDescriptors {
     private fun provider(
         id: String,
         displayName: String,
-        apiKeyPrompt: String,
+        authKind: ProviderAuthKind,
         definitions: LLModelDefinitions,
+    ): ProviderDescriptor = provider(id, displayName, authKind, definitions.models)
+
+    private fun provider(
+        id: String,
+        displayName: String,
+        authKind: ProviderAuthKind,
+        models: List<LLModel>,
     ): ProviderDescriptor = ProviderDescriptor(
         id = id,
         displayName = displayName,
-        apiKeyPrompt = apiKeyPrompt,
-        models = definitions.models
+        authKind = authKind,
+        models = models
             .filter { it.supports(LLMCapability.Completion) }
             .map { model ->
                 ModelDescriptor(id = model.id, displayName = model.id, model = model)
