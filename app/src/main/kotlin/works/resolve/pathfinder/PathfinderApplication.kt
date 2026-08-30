@@ -6,7 +6,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import works.resolve.pathfinder.agent.ChatRuntime
-import works.resolve.pathfinder.agent.StubChatRuntime
+import works.resolve.pathfinder.agent.KoogChatRuntime
 import works.resolve.pathfinder.data.credentials.CredentialStore
 import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
@@ -16,6 +16,9 @@ import works.resolve.pathfinder.logging.LogcatTelemetryContext
 import works.resolve.pathfinder.ui.chat.ChatViewModel
 import works.resolve.pathfinder.telemetry.TelemetryContext
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 /**
  * Application-level manual dependency graph. Everything is process-wide
@@ -28,8 +31,8 @@ import java.io.File
  * - [CredentialStore] on the Android-Keystore-backed [KeystoreAeadCipher];
  * - [SettingsRepository] on a single Preferences DataStore file;
  * - [SessionStore] rooted under app-private `filesDir/sessions`;
- * - [ChatRuntime]: the ViewModel⇄runtime seam, currently a stub (the Koog
- *   runtime lands in the next change).
+ * - [ChatRuntime]: the ViewModel⇄runtime seam, backed by Koog executor
+ *   clients ([KoogChatRuntime]).
  */
 class PathfinderApplication : Application() {
 
@@ -48,8 +51,11 @@ class PathfinderApplication : Application() {
         SessionStore(File(filesDir, SESSIONS_DIRECTORY))
     }
 
-    /** Temporary stub seam; replaced by the Koog-backed runtime in the next change. */
-    val chatRuntime: ChatRuntime by lazy { StubChatRuntime() }
+    /** App-scoped runtime scope; supervisor so one failed stream does not kill siblings. */
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** Koog-backed runtime: per-prompt clients over a shared OkHttp engine (process lifetime). */
+    val chatRuntime: ChatRuntime by lazy { KoogChatRuntime(credentials, applicationScope) }
 
     /** Conventional creation point for the chat controller. */
     val chatViewModelFactory = viewModelFactory {
