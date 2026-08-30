@@ -1,5 +1,8 @@
 package works.resolve.pathfinder.data.credentials
 
+import works.resolve.pathfinder.diagnostics.DiagnosticEntry
+import works.resolve.pathfinder.diagnostics.DiagnosticEvent
+import works.resolve.pathfinder.diagnostics.Diagnostics
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertEquals
@@ -14,6 +17,18 @@ import java.io.File
  * production wiring of the same functions.
  */
 class EncryptedCredentialStoreTest {
+
+    private val entries = mutableListOf<DiagnosticEntry>()
+
+    @kotlin.test.BeforeTest
+    fun setUp() {
+        Diagnostics.install { entries += it }
+    }
+
+    @kotlin.test.AfterTest
+    fun tearDown() {
+        Diagnostics.install(null)
+    }
 
     private fun newStore(dir: File): EncryptedCredentialStore =
         EncryptedCredentialStore(
@@ -117,6 +132,66 @@ class EncryptedCredentialStoreTest {
         val store = newStore(createTempDirectory())
         assertFailsWith<IllegalArgumentException> { store.read("../evil") }
         assertFailsWith<IllegalArgumentException> { store.set("", Credential.ApiKey("k")) }
+    }
+
+    @Test
+    fun `decrypt failure throws and records one sanitized read failure`() = runTest {
+        val dir = createTempDirectory()
+        writeRaw(dir, "openai", "{\"type\":\"api_key\",\"key\":\"sk\"}")
+        val store = EncryptedCredentialStore(
+            dir = dir,
+            encrypt = { it },
+            decrypt = { throw IllegalStateException("keystore failure SECRET-MARKER") },
+        )
+        assertFailsWith<IllegalStateException> { store.read("openai") }
+        assertEquals(listOf(DiagnosticEvent.CREDENTIAL_READ_FAILED), entries.map { it.event })
+        val message = entries.single().message()
+        assertTrue(SECRET_MARKER !in message, message)
+    }
+
+    @Test
+    fun `undecodable stored credential records decode rejection`() = runTest {
+        val dir = createTempDirectory()
+        writeRaw(dir, "openai", "{bad json}")
+        val store = newStore(dir)
+        assertFailsWith<CredentialFormatException> { store.read("openai") }
+        assertEquals(listOf(DiagnosticEvent.CREDENTIAL_DECODE_REJECTED), entries.map { it.event })
+    }
+
+    @Test
+    fun `list over one corrupt file records exactly one decode rejection`() = runTest {
+        val dir = createTempDirectory()
+        val store = newStore(dir)
+        store.set("openai", Credential.ApiKey("sk"))
+        writeRaw(dir, "zai", "{bad}")
+        assertFailsWith<CredentialFormatException> { store.list() }
+        assertEquals(listOf(DiagnosticEvent.CREDENTIAL_DECODE_REJECTED), entries.map { it.event })
+    }
+
+    @Test
+    fun `encrypt failure records write failure and rethrows`() = runTest {
+        val store = EncryptedCredentialStore(
+            dir = createTempDirectory(),
+            encrypt = { throw IllegalStateException("encrypt failed SECRET-MARKER") },
+            decrypt = { it },
+        )
+        assertFailsWith<IllegalStateException> { store.set("openai", Credential.ApiKey("sk")) }
+        assertEquals(listOf(DiagnosticEvent.CREDENTIAL_WRITE_FAILED), entries.map { it.event })
+        val message = entries.single().message()
+        assertTrue(SECRET_MARKER !in message, message)
+    }
+
+    @Test
+    fun `happy path records no diagnostic entries`() = runTest {
+        val store = newStore(createTempDirectory())
+        store.set("openai", Credential.ApiKey("sk"))
+        assertEquals(Credential.ApiKey("sk"), store.read("openai"))
+        assertEquals(listOf("openai"), store.list())
+        assertTrue(entries.isEmpty(), entries.toString())
+    }
+
+    private companion object {
+        const val SECRET_MARKER = "SECRET-MARKER"
     }
 
     private fun createTempDirectory(): File = kotlin.io.path.createTempDirectory("credstore").toFile().apply { deleteOnExit() }

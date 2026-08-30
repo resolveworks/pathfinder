@@ -1,8 +1,11 @@
 package works.resolve.pathfinder.data.credentials
 
 import android.content.Context
+import works.resolve.pathfinder.diagnostics.DiagnosticEvent
+import works.resolve.pathfinder.diagnostics.Diagnostics
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -16,7 +19,9 @@ import kotlinx.coroutines.withContext
  *
  * Writes are serialized per provider with an in-process mutex — the app is a
  * single Android process. Key material never leaves the credential boundary
- * in plaintext and is never logged.
+ * in plaintext and is never logged; failures to read, decrypt, decode, or
+ * persist a credential are recorded as sanitized [DiagnosticEvent] entries
+ * (exception type chain only) before the original exception is rethrown.
  */
 class EncryptedCredentialStore(
     private val dir: File,
@@ -42,17 +47,31 @@ class EncryptedCredentialStore(
     private suspend fun readRaw(providerId: String): String? = withContext(Dispatchers.IO) {
         val file = fileFor(providerId)
         if (!file.exists()) return@withContext null
-        String(decrypt(file.readBytes()), Charsets.UTF_8)
+        try {
+            String(decrypt(file.readBytes()), Charsets.UTF_8)
+        } catch (error: Throwable) {
+            if (error !is CancellationException) {
+                Diagnostics.failure(DiagnosticEvent.CREDENTIAL_READ_FAILED, error)
+            }
+            throw error
+        }
     }
 
     private suspend fun writeRaw(providerId: String, encoded: String) = withContext(Dispatchers.IO) {
         val file = fileFor(providerId)
         file.parentFile?.mkdirs()
-        val tmp = File(file.parentFile, "${file.name}.tmp")
-        tmp.writeBytes(encrypt(encoded.toByteArray(Charsets.UTF_8)))
-        if (!tmp.renameTo(file)) {
-            file.delete()
-            check(tmp.renameTo(file)) { "Could not persist credential" }
+        try {
+            val tmp = File(file.parentFile, "${file.name}.tmp")
+            tmp.writeBytes(encrypt(encoded.toByteArray(Charsets.UTF_8)))
+            if (!tmp.renameTo(file)) {
+                file.delete()
+                check(tmp.renameTo(file)) { "Could not persist credential" }
+            }
+        } catch (error: Throwable) {
+            if (error !is CancellationException) {
+                Diagnostics.failure(DiagnosticEvent.CREDENTIAL_WRITE_FAILED, error)
+            }
+            throw error
         }
     }
 
@@ -61,7 +80,9 @@ class EncryptedCredentialStore(
             try {
                 CredentialCodec.decode(raw)
             } catch (error: CredentialFormatException) {
-                throw CredentialFormatException("Stored credential for $providerId is malformed: ${error.message}")
+                val wrapped = CredentialFormatException("Stored credential for $providerId is malformed: ${error.message}")
+                Diagnostics.failure(DiagnosticEvent.CREDENTIAL_DECODE_REJECTED, error)
+                throw wrapped
             }
         }
 
