@@ -1,37 +1,40 @@
 # pathfinder
 
 A native Android AI client built on [Koog](https://github.com/JetBrains/koog).
-Pathfinder uses Koog for its Kotlin agent and LLM foundation, adds a small set
-of selected capabilities from [pi](https://pi.dev)—provider OAuth login and
-tree-based sessions—and keeps the Android application layer thin.
+Pathfinder uses Koog as its Kotlin LLM runtime and keeps the Android
+application layer thin. The one selected port from [pi](https://pi.dev) is
+tree-based session semantics.
 
 ## Direction
 
-- **Koog is the runtime foundation.** Reuse Koog's prompt, message, model,
-  provider-client, streaming, tool, agent, feature, and lifecycle abstractions
-  instead of maintaining Pathfinder equivalents. Follow current Koog behavior
-  and public APIs rather than maintaining a parallel Pathfinder runtime.
+- **Koog is the runtime foundation.** Use Koog's prompt, message, model,
+  provider-client, streaming, and execution abstractions end to end.
+  Pathfinder consumes the narrow per-client artifacts
+  (`ai.koog:prompt-executor-{anthropic,openai,openrouter}-client`,
+  `prompt-executor-{google,mistralai}-client`), `ai.koog:http-client-ktor`
+  over Ktor/OkHttp — not the `koog-agents` umbrella.
 - **Extend Koog; do not fork it inside the app.** Prefer Koog modules and
-  extension points. Fill product-specific gaps with narrow adapters or
-  features. If a generally useful capability is missing, consider an upstream
-  Koog contribution before copying framework internals into Pathfinder.
-- **Port from pi selectively.** Pi is the source of truth only for capabilities
-  explicitly chosen from it: provider OAuth flows and branching session
-  semantics. Keep those ports isolated at the edge of Koog; they must
-  not grow into a second model, provider, or agent runtime.
+  extension points. Fill product-specific gaps with narrow adapters. If a
+  generally useful capability is missing, consider an upstream Koog
+  contribution before copying framework internals into Pathfinder.
+- **Port from pi selectively.** The only surviving pi port is tree-based
+  session semantics (branching, ancestry, conversation tree) in
+  `data/sessions`, with pi provenance kept in KDoc and tests. Pi history is
+  also fair to scavenge for designs of future features. There is no OAuth
+  port; it was deleted wholesale and may be rebuilt from git history later if
+  a product path needs it.
 - **Android is the application source of truth.** Use current platform
   guidance, Jetpack Compose, Material 3, and stock Android components and
-  interactions. Adapt runtime behavior to native Android UX rather than
-  copying any terminal interface.
+  interactions.
 - **Optimize for low maintenance.** Avoid parallel domain models, speculative
   abstractions, bespoke UI primitives, compatibility shims, and dependencies
   whose value does not justify their upkeep.
-- **Treat development data as disposable.** Implement only current Koog/pi
-  shapes and the app's current storage formats. Reject old formats rather than
-  adding migrations unless explicitly requested.
+- **Treat development data as disposable.** Implement only the app's current
+  storage formats. Reject old formats rather than adding migrations unless
+  explicitly requested.
 - **Track the platform.** Target the latest GrapheneOS release and current
-  Android, Kotlin, AGP, Compose, and AndroidX versions. Move forward to resolve
-  compatibility issues rather than downgrading.
+  Android, Kotlin, AGP, Compose, and AndroidX versions. Move forward to
+  resolve compatibility issues rather than downgrading.
 
 ## Sources of truth
 
@@ -47,10 +50,7 @@ include:
 
 - `prompt/` for messages, models, capabilities, prompt execution, and provider
   clients;
-- `agents/agents-core/` for agent execution, graph strategies, lifecycle, and
-  feature integration;
-- `agents/agents-tools/` for tool contracts and registries;
-- `agents/agents-features/` for reusable runtime features;
+- `agents/` for agent execution and features;
 - `http-client/` for transport integration.
 
 Use released Koog artifacts and public APIs where practical. The local checkout
@@ -60,47 +60,50 @@ and test it.
 
 ### pi
 
-The pi checkout at `~/Projects/pi/` is authoritative only for selected pi
-features. Before changing one, read its current source, package README, and
-tests. The selected features are:
-
-- provider OAuth and credential-resolution behavior from `packages/ai`;
-- conversation branching, ancestry, and session-tree behavior from
-  `packages/coding-agent`.
-
-Keep symbol-level pi provenance in KDoc and tests for translated logic. Preserve
-the selected behavior's event ordering, data semantics, cancellation, and error
-handling unless Android or Koog requires a documented boundary adaptation.
-Do not use pi as the default reference for capabilities Koog already owns.
+The pi checkout at `~/Projects/pi/` is authoritative only for tree-based
+session semantics: conversation branching, ancestry, and session-tree behavior
+from `packages/coding-agent`. Before changing that layer, read its current
+source, package README, and tests. Keep symbol-level pi provenance in KDoc and
+tests for translated logic, and preserve event ordering, data semantics,
+cancellation, and error handling unless Android or Koog requires a documented
+boundary adaptation. Do not use pi as the default reference for capabilities
+Koog already owns; for anything else, mine its git history for design
+reference only.
 
 ### Precedence
 
-Koog owns runtime contracts; pi owns only an explicitly selected port; Android
-owns platform behavior; Pathfinder owns product policy and glue. Resolve
-conflicts at an adapter boundary instead of modifying one layer to impersonate
-another.
+Koog owns runtime contracts; pi owns only the session-tree port; Android owns
+platform behavior; Pathfinder owns product policy and glue. Resolve conflicts
+at an adapter boundary instead of modifying one layer to impersonate another.
 
 ## Implementation boundaries
 
 - Runtime and provider code uses Koog types end to end; Pathfinder does not
-  maintain alternative message, model, event, streaming, tool, or agent-loop
+  maintain alternative message, model, event, streaming, tool, or execution
   contracts.
-- Pi-derived OAuth code exists only to resolve credentials for Koog clients or
-  a narrowly justified client adapter.
+- `agent/ChatRuntime.kt` is the permanent seam between ViewModels and the
+  runtime. `agent/KoogChatRuntime.kt` is its Koog implementation: per-prompt
+  credential read, a Koog `Prompt` built from the active branch,
+  `executeStreaming` frames folded into state, abort that commits rendered
+  partials, fixed user-safe error strings, and a shared Ktor/OkHttp engine.
+  ViewModels depend only on `ChatRuntime`.
+- Authentication is a per-provider API key stored in the Keystore-backed
+  `data/credentials` store and supplied to Koog clients at prompt time.
+- Five providers are declared in `ai/providers/ProviderDescriptor.kt`; models
+  are enumerated from Koog `LLModelDefinitions`. App catalog data is
+  presentation metadata only, never a parallel protocol surface.
 - Tree-session behavior is a Pathfinder session layer around Koog history;
-  branching semantics do not leak into Koog's core runtime.
-- Model and provider selection is expressed with Koog models and capabilities.
-  App-owned catalog data may add presentation metadata, but not parallel
-  protocol behavior.
-- Compatibility bridges and dual runtime stacks are not part of the
-  architecture.
+  branching semantics do not leak into Koog's runtime. Koog `Message` is
+  persisted via the `SessionCodec` format (version 3); old formats fail fast.
+- Compatibility bridges, dual runtime stacks, and migration machinery are not
+  part of the architecture.
 
 ## Naming and style
 
 - Koog-backed code uses Koog concepts and types directly. Do not create
   Pathfinder aliases or wrappers merely to preserve names from the old pi
   port.
-- A selected pi port keeps upstream exported names where that improves
+- The session-tree port keeps upstream exported names where that improves
   provenance. Translate TypeScript with the conventions in
   `app/src/main/kotlin/works/resolve/pathfinder/AGENTS.md`.
 - Pathfinder-owned and Android code follows current idiomatic Kotlin: data
@@ -112,32 +115,44 @@ another.
 ## Architecture
 
 - **Koog runtime:** prompt execution, LLM clients, messages, model
-  capabilities, tools, agent execution, and runtime features.
-- **Pathfinder extensions:** secure credential resolution, selected pi OAuth
-  flows, tree-backed session/history projection, and narrow Koog adapters.
+  capabilities, streaming, and transport.
+- **Pathfinder extensions:** tree-backed session/history projection
+  (`data/sessions`), Keystore-backed API-key credentials (`data/credentials`),
+  provider descriptors (`ai/providers`), and the `ChatRuntime` seam
+  (`agent`).
 - **Android app:** presentation, lifecycle, navigation, input, settings,
-  persistence, secure credential storage, and platform launch/callback APIs.
+  persistence, and platform APIs (`ui`, `MainActivity`, `PathfinderApplication`
+  as the manual composition root).
 
 UI follows single-activity Compose with MVVM/UDF: ViewModels expose immutable
 state through `StateFlow`; composables stay state-hoisted apart from ephemeral
-UI state and forward user intents. `PathfinderApplication` is the manual
-composition root. Add a DI framework only if the graph clearly warrants it.
+UI state and forward user intents. Add a DI framework only if the graph
+clearly warrants it.
 
-Do not duplicate Koog messages, models, stream events, or tool contracts in the
-UI or persistence layer. Project them into UI/storage shapes only at explicit
-boundaries. Session-tree entries may reference or encode Koog history, but the
-conversion must be centralized and tested.
+Do not duplicate Koog messages, models, stream events, or tool contracts in
+the UI or persistence layer. Project them into UI/storage shapes only at
+explicit boundaries. The conversion between stored session-tree entries and
+Koog history is centralized and tested.
 
-Provider and authentication-specific instructions are in
-`app/src/main/kotlin/works/resolve/pathfinder/ai/AGENTS.md`.
+## Tests
+
+The suite is intentionally tiny. Koog's own suite owns runtime behavior;
+Pathfinder tests only what it adds:
+
+- tree-session semantics (pi-parity where applicable);
+- the credential boundary;
+- `SessionCodec` format 3 round-trips and old-format rejection;
+- markdown parsers and provider descriptors;
+- runtime lifecycle/cancellation with an injected fake client.
+
+No ViewModel choreography tests, no per-provider protocol tests.
 
 ## Security
 
-Never log API keys, OAuth tokens, credential values, message text, tool
+Never log API keys, tokens, credential values, message text, tool
 arguments/results, or model responses. Secret form values may live only in
 ephemeral UI memory, and persisted credentials must remain inside the Android
-Keystore-backed credential boundary. Browser authentication uses system
-browser surfaces, never an embedded WebView.
+Keystore-backed credential boundary.
 
 ## Commands
 
