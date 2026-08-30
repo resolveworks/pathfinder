@@ -26,6 +26,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import works.resolve.pathfinder.ai.openaicodex.CodexLLMClients
+import works.resolve.pathfinder.ai.openaicodex.CodexOAuthClient
+import works.resolve.pathfinder.ai.providers.ProviderAuthKind
 import works.resolve.pathfinder.ai.providers.ProviderDescriptor
 import works.resolve.pathfinder.ai.providers.ProviderDescriptors
 import works.resolve.pathfinder.data.credentials.Credential
@@ -73,28 +76,61 @@ import works.resolve.pathfinder.data.settings.ModelSettings
  * ships), which suits long streaming responses; there is no Pathfinder retry
  * layer.
  *
- * Clients are constructed per prompt (they embed the current API key as
+ * Clients are constructed per prompt (they embed the current credential as
  * auth headers) over one shared Ktor/OkHttp [HttpClient] engine. Closing a
  * derived client does not close the shared engine; the engine's lifecycle is
  * tied to this runtime (see [close]).
+ *
+ * Two auth kinds, dispatched per provider ([ProviderAuthKind]): API-key
+ * providers use [clientFactory]; the ChatGPT Codex provider refreshes its
+ * OAuth access token before use (see [REFRESH_MARGIN_MILLIS]), persists the
+ * refreshed credential, and builds its client via [codexClientFactory] with
+ * the ChatGPT-backend prompt params (`ai/openaicodex/CodexLLMClients.kt`).
  *
  * @param clientFactory Production default maps the Koog
  *   [ai.koog.prompt.llm.LLMProvider] of the selected model to its Koog client
  *   (`prompt-executor-*-client/.../<Provider>LLMClient.kt`) over a shared
  *   OkHttp engine. Injected only by tests.
+ * @param clock Wall clock for OAuth token expiry checks (and the default
+ *   refresher). Injected only by tests.
+ * @param oauthRefresher Production default refreshes via [CodexOAuthClient]
+ *   over the shared engine. Injected only by tests.
+ * @param codexClientFactory Production default builds the ChatGPT-backend
+ *   client via [CodexLLMClients.create] over the shared engine. Injected
+ *   only by tests.
  */
 class KoogChatRuntime(
     private val credentials: CredentialStore,
     private val scope: CoroutineScope,
     private val clientFactory: ((LLMProvider, String) -> LLMClientAPI)? = null,
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val oauthRefresher: (suspend (Credential.ChatGptOAuth) -> Credential.ChatGptOAuth)? = null,
+    private val codexClientFactory: ((accessToken: String, accountId: String) -> LLMClientAPI)? = null,
 ) : ChatRuntime, AutoCloseable {
 
-    /** Shared OkHttp engine for the default factory (tests inject their own factory; no engine is built). */
-    private val engine: HttpClient? = if (clientFactory == null) HttpClient(OkHttp) else null
+    /** Shared OkHttp engine for the default factories (tests inject all their own factories; no engine is built). */
+    private val engine: HttpClient? =
+        if (clientFactory == null || oauthRefresher == null || codexClientFactory == null) HttpClient(OkHttp) else null
 
     private val factory: (LLMProvider, String) -> LLMClientAPI =
         clientFactory ?: { provider, apiKey ->
             KoogClients.create(provider, apiKey, KtorKoogHttpClient.Factory(engine!!))
+        }
+
+    private val refresher: suspend (Credential.ChatGptOAuth) -> Credential.ChatGptOAuth =
+        oauthRefresher ?: { credential ->
+            val tokens = CodexOAuthClient(engine!!, clock).refresh(credential.refreshToken)
+            Credential.ChatGptOAuth(
+                accessToken = tokens.accessToken,
+                refreshToken = tokens.refreshToken,
+                expiresAtEpochMillis = tokens.expiresAtEpochMillis,
+                accountId = tokens.accountId,
+            )
+        }
+
+    private val codexFactory: (String, String) -> LLMClientAPI =
+        codexClientFactory ?: { accessToken, accountId ->
+            CodexLLMClients.create(accessToken, accountId, KtorKoogHttpClient.Factory(engine!!))
         }
 
     override fun createSession(
@@ -116,6 +152,9 @@ class KoogChatRuntime(
             credentials = credentials,
             scope = scope,
             clientFactory = factory,
+            oauthRefresher = refresher,
+            codexClientFactory = codexFactory,
+            clock = clock,
         )
     }
 
@@ -124,6 +163,12 @@ class KoogChatRuntime(
         engine?.close()
     }
 }
+
+/**
+ * Refresh the access token when less than this remains until expiry — margin
+ * for request latency and clock skew between device and OpenAI's auth servers.
+ */
+private const val REFRESH_MARGIN_MILLIS = 60_000L
 
 /**
  * Maps a Koog [LLMProvider] to its executor client — the five providers the
@@ -227,6 +272,9 @@ private class KoogChatSession(
     private val credentials: CredentialStore,
     private val scope: CoroutineScope,
     private val clientFactory: (LLMProvider, String) -> LLMClientAPI,
+    private val oauthRefresher: suspend (Credential.ChatGptOAuth) -> Credential.ChatGptOAuth,
+    private val codexClientFactory: (String, String) -> LLMClientAPI,
+    private val clock: () -> Long,
 ) : ChatRuntimeSession {
 
     private val _state = MutableStateFlow(
@@ -268,20 +316,49 @@ private class KoogChatSession(
             fail(missingCredentialError())
             return
         }
-        // OAuth dispatch lands in a later chunk; a non-API-key credential
-        // is treated like a missing one for now.
-        val apiKey = (credential as? Credential.ApiKey)?.key ?: run {
-            fail(missingCredentialError())
-            return
+
+        val client: LLMClientAPI
+        val prompt = when (provider.authKind) {
+            is ProviderAuthKind.ApiKey -> {
+                val apiKey = (credential as? Credential.ApiKey)?.key ?: run {
+                    fail(missingCredentialError())
+                    return
+                }
+                client = clientFactory(model.provider, apiKey)
+                Prompt(messages = conversation.activeMessages(), id = promptId)
+            }
+
+            ProviderAuthKind.ChatGptSignIn -> {
+                val oauth = credential as? Credential.ChatGptOAuth ?: run {
+                    fail(missingCredentialError())
+                    return
+                }
+                val tokens = if (oauth.expiresAtEpochMillis - clock() < REFRESH_MARGIN_MILLIS) {
+                    try {
+                        val refreshed = oauthRefresher(oauth)
+                        credentials.set(provider.id, refreshed)
+                        refreshed
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        // Token-refresh failures are never surfaced verbatim.
+                        fail(signInExpiredError())
+                        return
+                    }
+                } else {
+                    oauth
+                }
+                client = codexClientFactory(tokens.accessToken, tokens.accountId)
+                Prompt(
+                    messages = conversation.activeMessages(),
+                    id = promptId,
+                    params = CodexLLMClients.promptParams(promptId),
+                )
+            }
         }
 
         val accumulator = StreamingAssistantAccumulator()
-        val client = clientFactory(model.provider, apiKey)
         try {
-            val prompt = Prompt(
-                messages = conversation.activeMessages(),
-                id = promptId,
-            )
             client.executeStreaming(prompt, model)
                 // Not every provider client applies this itself; a stream that
                 // ends without [StreamFrame.End] is a dropped connection.
@@ -333,10 +410,24 @@ private class KoogChatSession(
     }
 
     /** Fixed, user-safe error text; no provider payload or credential can leak through it. */
-    private fun missingCredentialError(): String =
-        "Add your ${provider.displayName} API key in Settings before sending a message."
+    private fun missingCredentialError(): String = when (provider.authKind) {
+        is ProviderAuthKind.ApiKey ->
+            "Add your ${provider.displayName} API key in Settings before sending a message."
+
+        ProviderAuthKind.ChatGptSignIn ->
+            "Sign in with ChatGPT in Settings before sending a message."
+    }
 
     /** Fixed, user-safe error text; no provider payload or credential can leak through it. */
-    private fun requestFailedError(): String =
-        "The request to ${provider.displayName} failed. Check your connection and API key, then try again."
+    private fun signInExpiredError(): String =
+        "Your ChatGPT sign-in expired. Sign in again in Settings."
+
+    /** Fixed, user-safe error text; no provider payload or credential can leak through it. */
+    private fun requestFailedError(): String = when (provider.authKind) {
+        is ProviderAuthKind.ApiKey ->
+            "The request to ${provider.displayName} failed. Check your connection and API key, then try again."
+
+        ProviderAuthKind.ChatGptSignIn ->
+            "The request to ${provider.displayName} failed. Check your connection and ChatGPT sign-in, then try again."
+    }
 }

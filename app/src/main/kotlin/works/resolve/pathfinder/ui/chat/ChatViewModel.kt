@@ -6,6 +6,7 @@ import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.MessagePart
 import works.resolve.pathfinder.agent.ChatRuntime
 import works.resolve.pathfinder.agent.ChatRuntimeSession
+import works.resolve.pathfinder.ai.providers.ProviderAuthKind
 import works.resolve.pathfinder.ai.providers.ProviderDescriptors
 import works.resolve.pathfinder.data.credentials.Credential
 import works.resolve.pathfinder.data.credentials.CredentialStore
@@ -695,7 +696,7 @@ class ChatViewModel(
                 ProviderOption(
                     id = provider.id,
                     name = provider.displayName,
-                    apiKeyPrompt = provider.apiKeyPrompt,
+                    apiKeyPrompt = (provider.authKind as? ProviderAuthKind.ApiKey)?.prompt.orEmpty(),
                     configured = provider.id in configuredIds,
                 )
             }
