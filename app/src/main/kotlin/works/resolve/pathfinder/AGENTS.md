@@ -29,7 +29,7 @@ agent abstractions that Koog already supplies.
 - `data/sessions/` — the pi-derived tree-session layer (`Conversation`,
   `Session*`) and `SessionCodec` (format 3; old formats fail fast).
 - `data/credentials/` — Keystore-backed per-provider API-key storage.
-- `data/settings/`, `ui/`, `logging/`, `telemetry/` — Pathfinder-owned.
+- `data/settings/`, `ui/` — Pathfinder-owned.
 
 There is no OAuth code; it was deleted with the old pi runtime and may be
 rebuilt from git history later if a product path needs it.

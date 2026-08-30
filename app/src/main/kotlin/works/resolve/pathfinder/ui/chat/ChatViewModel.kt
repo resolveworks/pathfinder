@@ -16,11 +16,6 @@ import works.resolve.pathfinder.data.sessions.MessageEntry
 import works.resolve.pathfinder.data.sessions.Session
 import works.resolve.pathfinder.data.sessions.SessionRepository
 import works.resolve.pathfinder.data.sessions.SessionSummary
-import works.resolve.pathfinder.telemetry.NOOP_TELEMETRY_CONTEXT
-import works.resolve.pathfinder.telemetry.SpanOptions
-import works.resolve.pathfinder.telemetry.TelemetryContext
-import works.resolve.pathfinder.telemetry.attr
-import works.resolve.pathfinder.telemetry.automaticErrorStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -72,8 +67,6 @@ class ChatViewModel(
     private val credentials: CredentialStore,
     private val sessionStore: SessionRepository,
     private val runtime: ChatRuntime,
-    /** Diagnostic span backend for the UI error boundary. */
-    private val telemetryContext: TelemetryContext = NOOP_TELEMETRY_CONTEXT,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -147,7 +140,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_CREDENTIAL_SAVE, e)
+                setError(ERROR_CREDENTIAL_SAVE)
                 return@launch
             }
             refreshOptions()
@@ -162,7 +155,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_CREDENTIAL_SAVE, e)
+                setError(ERROR_CREDENTIAL_SAVE)
             }
         }
     }
@@ -177,7 +170,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_SETTINGS_SAVE, e)
+                setError(ERROR_SETTINGS_SAVE)
             }
         }
     }
@@ -258,7 +251,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_SESSION_CREATE, e)
+                setError(ERROR_SESSION_CREATE)
             }
         }
     }
@@ -285,7 +278,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_SESSION_LOAD, e)
+                setError(ERROR_SESSION_LOAD)
             }
         }
     }
@@ -352,7 +345,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_INIT, e)
+            setError(ERROR_INIT)
             updateState { it.copy(status = ChatStatus.Failed) }
         }
     }
@@ -382,7 +375,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_SETTINGS_SAVE, e)
+            setError(ERROR_SETTINGS_SAVE)
             return false
         }
         activeSession = active
@@ -415,7 +408,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_CONFIG_INVALID, e)
+            setError(ERROR_CONFIG_INVALID)
             null
         }
 
@@ -500,7 +493,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_SESSION_SAVE, e)
+                setError(ERROR_SESSION_SAVE)
             }
         }
     }
@@ -544,7 +537,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE, e)
+            setError(ERROR_CREDENTIAL_SAVE)
             return
         }
         if (!providerConfigured) {
@@ -582,7 +575,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_SESSION_CREATE, e)
+                setError(ERROR_SESSION_CREATE)
                 return
             }
             val newSession = tryCreateSession(
@@ -620,7 +613,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE, e)
+            setError(ERROR_CREDENTIAL_SAVE)
             return
         }
         onCredentialStored()
@@ -645,7 +638,7 @@ class ChatViewModel(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    setError(ERROR_SESSION_CREATE, e)
+                    setError(ERROR_SESSION_CREATE)
                     return
                 }
                 val newSession = tryCreateSession(
@@ -676,8 +669,9 @@ class ChatViewModel(
             credentials.read(provider.id) != null
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            recordDegradation("is_configured", e)
+        } catch (_: Exception) {
+            // A failing read degrades to "not configured" rather than
+            // crashing configuration refresh.
             false
         }
     }
@@ -693,7 +687,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE, e)
+            setError(ERROR_CREDENTIAL_SAVE)
             return
         }
         val providerOptions = ProviderDescriptors.all
@@ -752,7 +746,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_SETTINGS_SAVE, e)
+            setError(ERROR_SETTINGS_SAVE)
             return false
         }
     }
@@ -788,36 +782,12 @@ class ChatViewModel(
     // ---- helpers ----
 
     /**
-     * Records a `pf.chat.degraded` telemetry span: a failure the ViewModel
-     * deliberately absorbs into degraded UI state instead of an error — the
-     * credential store failing to read must be distinguishable from an
-     * actually-missing credential.
-     */
-    private suspend fun recordDegradation(operation: String, cause: Throwable) {
-        telemetryContext.startSpan(
-            SpanOptions(name = SPAN_DEGRADED, attributes = mapOf(ATTR_OPERATION to attr(operation))),
-        ) { span ->
-            span.setStatus(automaticErrorStatus(cause))
-        }
-    }
-
-    /**
      * Surfaces [message] as the UI error. This is the UI's single error
-     * boundary, so when a [cause] exception is available it is also recorded
-     * as a `pf.chat.error` telemetry span — the only place otherwise-invisible
-     * failures become diagnosable on-device. The generic [message] itself is
-     * a static UI string and carries no secrets.
+     * boundary; messages are fixed user-safe strings and carry no provider
+     * or transport detail.
      */
-    private fun setError(message: String, cause: Throwable? = null) {
+    private fun setError(message: String) {
         updateState { it.copy(error = message) }
-        if (cause == null) return
-        viewModelScope.launch {
-            telemetryContext.startSpan(
-                SpanOptions(name = SPAN_ERROR, attributes = mapOf(ATTR_UI_ERROR to attr(message))),
-            ) { span ->
-                span.setStatus(automaticErrorStatus(cause))
-            }
-        }
     }
 
     private fun updateState(transform: (ChatUiState) -> ChatUiState) {
@@ -830,11 +800,6 @@ class ChatViewModel(
     private companion object {
         const val DEFAULT_SESSION_TITLE = "New chat"
 
-        /** App-owned span vocabulary (`pf.*` schema). */
-        const val SPAN_ERROR = "pf.chat.error"
-        const val ATTR_UI_ERROR = "pf.error.ui_message"
-        const val SPAN_DEGRADED = "pf.chat.degraded"
-        const val ATTR_OPERATION = "pf.degraded.operation"
         const val TITLE_MAX_LENGTH = 48
 
         const val ERROR_INIT = "Could not load chat data"

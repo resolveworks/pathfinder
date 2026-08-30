@@ -12,9 +12,7 @@ import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
 import works.resolve.pathfinder.data.sessions.SessionStore
 import works.resolve.pathfinder.data.settings.SettingsRepository
-import works.resolve.pathfinder.logging.LogcatTelemetryContext
 import works.resolve.pathfinder.ui.chat.ChatViewModel
-import works.resolve.pathfinder.telemetry.TelemetryContext
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,9 +33,6 @@ import kotlinx.coroutines.SupervisorJob
  *   clients ([KoogChatRuntime]).
  */
 class PathfinderApplication : Application() {
-
-    /** The app's single telemetry backend: spans rendered as structured Logcat lines. */
-    val telemetry: TelemetryContext by lazy { LogcatTelemetryContext() }
 
     val credentials: CredentialStore by lazy {
         EncryptedCredentialStore(this, KeystoreAeadCipher())
@@ -65,7 +60,6 @@ class PathfinderApplication : Application() {
                 credentials = credentials,
                 sessionStore = sessionStore,
                 runtime = chatRuntime,
-                telemetryContext = telemetry,
             )
         }
     }
