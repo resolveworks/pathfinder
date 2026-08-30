@@ -2,6 +2,7 @@ package works.resolve.pathfinder.runtime
 
 import ai.koog.prompt.executor.clients.LLModelDefinitions
 import ai.koog.prompt.executor.clients.anthropic.AnthropicModels
+import ai.koog.prompt.executor.clients.dashscope.DashscopeModels
 import ai.koog.prompt.executor.clients.deepseek.DeepSeekModels
 import ai.koog.prompt.executor.clients.google.GoogleModels
 import ai.koog.prompt.executor.clients.mistralai.MistralAIModels
@@ -98,6 +99,12 @@ object ProviderDescriptors {
             displayName = "DeepSeek",
             authKind = ProviderAuthKind.ApiKey("DeepSeek API key"),
             definitions = DeepSeekModels,
+        ),
+        provider(
+            id = "dashscope",
+            displayName = "DashScope",
+            authKind = ProviderAuthKind.ApiKey("DashScope API key"),
+            definitions = DashscopeModels,
         ),
         // Coding-plan providers without a dedicated Koog client module:
         // OpenAI-/Anthropic-protocol endpoints executed by Koog's stock

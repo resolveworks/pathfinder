@@ -3,6 +3,7 @@ package works.resolve.pathfinder.runtime
 import ai.koog.http.client.ktor.KtorKoogHttpClient
 import ai.koog.prompt.executor.clients.LLMClientAPI
 import ai.koog.prompt.executor.clients.anthropic.AnthropicLLMClient
+import ai.koog.prompt.executor.clients.dashscope.DashscopeLLMClient
 import ai.koog.prompt.executor.clients.deepseek.DeepSeekLLMClient
 import ai.koog.prompt.executor.clients.google.GoogleLLMClient
 import ai.koog.prompt.executor.clients.mistralai.MistralAILLMClient
@@ -36,6 +37,7 @@ class KoogClientsTest {
             LLMProvider.OpenRouter to OpenRouterLLMClient::class,
             LLMProvider.MistralAI to MistralAILLMClient::class,
             LLMProvider.DeepSeek to DeepSeekLLMClient::class,
+            LLMProvider.Alibaba to DashscopeLLMClient::class,
             // Coding-plan endpoints: stock Koog clients over their base URLs.
             LLMProvider.ZhipuAI to OpenAILLMClient::class,
             KimiProvider to AnthropicLLMClient::class,

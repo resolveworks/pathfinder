@@ -6,6 +6,7 @@ import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClientAPI
 import ai.koog.prompt.executor.clients.anthropic.AnthropicClientSettings
 import ai.koog.prompt.executor.clients.anthropic.AnthropicLLMClient
+import ai.koog.prompt.executor.clients.dashscope.DashscopeLLMClient
 import ai.koog.prompt.executor.clients.deepseek.DeepSeekLLMClient
 import ai.koog.prompt.executor.clients.google.GoogleLLMClient
 import ai.koog.prompt.executor.clients.mistralai.MistralAILLMClient
@@ -181,7 +182,7 @@ private const val REFRESH_MARGIN_MILLIS = 60_000L
  * mapping without going through the network.
  *
  * Three kinds of entry: first-party Koog clients (Anthropic, OpenAI, Google,
- * OpenRouter, MistralAI, DeepSeek); and coding-plan endpoints without a Koog
+ * OpenRouter, MistralAI, DeepSeek, DashScope); and coding-plan endpoints without a Koog
  * client module, executed by Koog's stock OpenAI/Anthropic clients against
  * their coding base URLs (Z.AI is OpenAI chat-completions protocol; Kimi
  * speaks the Anthropic Messages protocol, requiring a model version map —
@@ -207,6 +208,7 @@ internal object KoogClients {
         LLMProvider.OpenRouter -> OpenRouterLLMClient(apiKey, httpClientFactory = httpClientFactory)
         LLMProvider.MistralAI -> MistralAILLMClient(apiKey, httpClientFactory = httpClientFactory)
         LLMProvider.DeepSeek -> DeepSeekLLMClient(apiKey, httpClientFactory = httpClientFactory)
+        LLMProvider.Alibaba -> DashscopeLLMClient(apiKey, httpClientFactory = httpClientFactory)
         LLMProvider.ZhipuAI -> OpenAILLMClient(
             apiKey,
             settings = OpenAIClientSettings(

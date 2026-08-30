@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.runtime
 
 import ai.koog.prompt.executor.clients.anthropic.AnthropicModels
+import ai.koog.prompt.executor.clients.dashscope.DashscopeModels
 import ai.koog.prompt.executor.clients.deepseek.DeepSeekModels
 import ai.koog.prompt.executor.clients.google.GoogleModels
 import ai.koog.prompt.executor.clients.mistralai.MistralAIModels
@@ -15,7 +16,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * The provider surface: exactly nine providers, models derived from Koog's
+ * The provider surface: exactly ten providers, models derived from Koog's
  * own model-definition objects (enumerated providers) or hand-declared as
  * Koog LLModels from pi's catalogs (coding-plan providers), stable ids,
  * auth kinds.
@@ -23,11 +24,11 @@ import kotlin.test.assertTrue
 class ProviderDescriptorTest {
 
     @Test
-    fun `nine providers exist with stable ids and auth kinds`() {
+    fun `ten providers exist with stable ids and auth kinds`() {
         assertEquals(
             listOf(
                 "anthropic", "openai", "google", "openrouter", "mistral",
-                "deepseek", "zai", "kimi", "openai-codex",
+                "deepseek", "dashscope", "zai", "kimi", "openai-codex",
             ),
             ProviderDescriptors.all.map { it.id },
         )
@@ -52,6 +53,7 @@ class ProviderDescriptorTest {
             "openrouter" to OpenRouterModels.models,
             "mistral" to MistralAIModels.models,
             "deepseek" to DeepSeekModels.models,
+            "dashscope" to DashscopeModels.models,
             // The codex provider enumerates the codex entries of Koog's
             // OpenAIModels — the subset that runs on the ChatGPT backend.
             "openai-codex" to listOf(

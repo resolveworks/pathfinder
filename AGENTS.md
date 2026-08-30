@@ -70,9 +70,9 @@ modifying one layer to impersonate another.
   ViewModels depend only on `ChatRuntime`.
 - Authentication is a per-provider API key stored in the Keystore-backed
   `data/credentials` store and supplied to Koog clients at prompt time.
-- Nine providers are declared in `runtime/ProviderDescriptor.kt`; models
+- Ten providers are declared in `runtime/ProviderDescriptor.kt`; models
   are enumerated from Koog `LLModelDefinitions` where Koog ships a client
-  (DeepSeek included), and hand-declared as Koog `LLModel`s from pi's
+  (DeepSeek, DashScope included), and hand-declared as Koog `LLModel`s from pi's
   catalogs for coding-plan endpoints without a Koog client module (Z.AI,
   Kimi — executed by Koog's stock OpenAI/Anthropic clients against their
   coding base URLs, `runtime/CodingPlanModels.kt`). App catalog data is
