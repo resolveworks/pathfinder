@@ -339,6 +339,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.failure(DiagnosticEvent.UI_SETTINGS_WRITE_FAILED, e)
                 setError(ERROR_SETTINGS_SAVE)
             }
         }
@@ -514,6 +515,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            Diagnostics.failure(DiagnosticEvent.UI_INIT_FAILED, e)
             setError(ERROR_INIT)
             updateState { it.copy(status = ChatStatus.Failed) }
         }
@@ -544,6 +546,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            Diagnostics.failure(DiagnosticEvent.UI_SETTINGS_WRITE_FAILED, e)
             setError(ERROR_SETTINGS_SAVE)
             return false
         }
@@ -577,6 +580,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            Diagnostics.failure(DiagnosticEvent.UI_CONFIG_INVALID, e)
             setError(ERROR_CONFIG_INVALID)
             null
         }
@@ -917,6 +921,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            Diagnostics.failure(DiagnosticEvent.UI_SETTINGS_WRITE_FAILED, e)
             setError(ERROR_SETTINGS_SAVE)
             return false
         }
