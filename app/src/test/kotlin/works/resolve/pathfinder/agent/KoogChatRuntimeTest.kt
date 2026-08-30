@@ -81,12 +81,14 @@ class KoogChatRuntimeTest {
     private fun runtime(
         keys: Map<String, String> = mapOf("anthropic" to "test-key"),
         seenKeys: MutableList<String> = mutableListOf(),
+        seenProviders: MutableList<LLMProvider> = mutableListOf(),
         frames: () -> Flow<StreamFrame>,
     ) = KoogChatRuntime(
         credentials = FakeCredentialStore(keys),
         scope = CoroutineScope(Dispatchers.Unconfined),
-        clientFactory = { _, apiKey ->
+        clientFactory = { provider, apiKey ->
             seenKeys += apiKey
+            seenProviders += provider
             FakeStreamingClient(frames())
         },
     )
@@ -96,7 +98,8 @@ class KoogChatRuntimeTest {
 
     @Test
     fun promptStreamsDeltasAndCommitsFinalAssistantMessage() = runTest {
-        val runtime = runtime {
+        val seenProviders = mutableListOf<LLMProvider>()
+        val runtime = runtime(seenProviders = seenProviders) {
             streamFrameFlow {
                 emitReasoningDelta(id = "r", text = "thinking")
                 emitTextDelta("Hel")
@@ -109,6 +112,10 @@ class KoogChatRuntimeTest {
         session.prompt("hi")
         val state = session.state.value
 
+        // Client dispatch flows from the model's Koog provider, not from any
+        // Pathfinder provider id.
+        assertEquals(1, seenProviders.size)
+        assertEquals(LLMProvider.Anthropic, seenProviders.single())
         assertFalse(state.isStreaming)
         assertNull(state.streamingMessage)
         assertNull(state.error)
@@ -181,6 +188,29 @@ class KoogChatRuntimeTest {
         assertEquals(2, state.commitCount) // user + committed partial
         assertEquals("par", (state.committedMessages.last() as Message.Assistant).textContent())
         assertEquals(2, session.conversation.entries.size)
+    }
+
+    @Test
+    fun streamCompletingWithoutEndFrameSurfacesErrorAndDiscardsPartial() = runTest {
+        // A dropped connection: the flow completes normally, never emitting
+        // the terminal End frame. Koog's requireEndFrame() turns that into a
+        // failure; the runtime must not commit the truncated partial.
+        val runtime = runtime {
+            streamFrameFlow {
+                emitTextDelta("par")
+            }
+        }
+        val session = newSession(runtime)
+
+        session.prompt("hi")
+        val state = session.state.value
+
+        assertFalse(state.isStreaming)
+        val error = assertNotNull(state.error)
+        assertTrue(error.startsWith("The request to Anthropic failed"))
+        assertNull(state.streamingMessage) // truncated partial discarded
+        assertEquals(1, state.commitCount) // only the user message
+        assertEquals(1, session.conversation.entries.size)
     }
 
     @Test

@@ -6,6 +6,7 @@ import ai.koog.prompt.executor.clients.google.GoogleModels
 import ai.koog.prompt.executor.clients.mistralai.MistralAIModels
 import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import ai.koog.prompt.executor.clients.openrouter.OpenRouterModels
+import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLModel
 
 /** One selectable model of a provider, backed by its Koog [LLModel]. */
@@ -39,8 +40,12 @@ data class ProviderDescriptor(
  * objects. Model lists are enumerated from Koog's own `LLModelDefinitions`
  * singletons (`ai.koog.prompt.executor.clients.<provider>`) rather than
  * hand-copied, so the catalog cannot drift from the Koog runtime that will
- * execute against these models (chunk 2 maps each provider id to its Koog
- * executor client). This file is permanent app architecture.
+ * execute against these models (chunk 2 maps each provider's Koog
+ * [ai.koog.prompt.llm.LLMProvider] to its Koog executor client). Only models
+ * supporting [LLMCapability.Completion] are offered — the runtime executes
+ * streaming chat completions, and Koog's definition families also carry
+ * embedding/moderation models the product cannot run. This file is permanent
+ * app architecture.
  */
 object ProviderDescriptors {
 
@@ -88,8 +93,10 @@ object ProviderDescriptors {
         id = id,
         displayName = displayName,
         apiKeyPrompt = apiKeyPrompt,
-        models = definitions.models.map { model ->
-            ModelDescriptor(id = model.id, displayName = model.id, model = model)
-        },
+        models = definitions.models
+            .filter { it.supports(LLMCapability.Completion) }
+            .map { model ->
+                ModelDescriptor(id = model.id, displayName = model.id, model = model)
+            },
     )
 }

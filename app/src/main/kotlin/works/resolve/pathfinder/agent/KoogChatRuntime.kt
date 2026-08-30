@@ -10,11 +10,13 @@ import ai.koog.prompt.executor.clients.mistralai.MistralAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openrouter.OpenRouterLLMClient
 import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.message.ResponseMetaInfo
 import ai.koog.prompt.streaming.StreamFrame
+import ai.koog.prompt.streaming.requireEndFrame
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import kotlinx.coroutines.CancellationException
@@ -25,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import works.resolve.pathfinder.ai.providers.ProviderDescriptor
+import works.resolve.pathfinder.ai.providers.ProviderDescriptors
 import works.resolve.pathfinder.data.credentials.CredentialStore
 import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.settings.ModelSettings
@@ -56,7 +59,11 @@ import works.resolve.pathfinder.data.settings.ModelSettings
  *   chose to stop; the transcript keeps what they saw);
  * - on failure the partial assistant message is discarded, the tree stays
  *   valid (the user message remains committed), and a fixed, user-safe error
- *   string is surfaced. Provider payloads, exception messages, and
+ *   string is surfaced. Failure includes a stream that completes without
+ *   Koog's terminal [StreamFrame.End] frame — a dropped connection that not
+ *   every provider client turns into an error — which
+ *   [requireEndFrame][ai.koog.prompt.streaming.requireEndFrame] converts to
+ *   an exception. Provider payloads, exception messages, and
  *   credentials are never surfaced or logged.
  *
  * Retry/timeout configuration: clients are built with each Koog client's own
@@ -70,20 +77,21 @@ import works.resolve.pathfinder.data.settings.ModelSettings
  * derived client does not close the shared engine; the engine's lifecycle is
  * tied to this runtime (see [close]).
  *
- * @param clientFactory Production default maps each provider id to its Koog
- *   client (`prompt-executor-*-client/.../<Provider>LLMClient.kt`) over a
- *   shared OkHttp engine. Injected only by tests.
+ * @param clientFactory Production default maps the Koog
+ *   [ai.koog.prompt.llm.LLMProvider] of the selected model to its Koog client
+ *   (`prompt-executor-*-client/.../<Provider>LLMClient.kt`) over a shared
+ *   OkHttp engine. Injected only by tests.
  */
 class KoogChatRuntime(
     private val credentials: CredentialStore,
     private val scope: CoroutineScope,
-    private val clientFactory: ((ProviderDescriptor, String) -> LLMClientAPI)? = null,
+    private val clientFactory: ((LLMProvider, String) -> LLMClientAPI)? = null,
 ) : ChatRuntime, AutoCloseable {
 
     /** Shared OkHttp engine for the default factory (tests inject their own factory; no engine is built). */
     private val engine: HttpClient? = if (clientFactory == null) HttpClient(OkHttp) else null
 
-    private val factory: (ProviderDescriptor, String) -> LLMClientAPI =
+    private val factory: (LLMProvider, String) -> LLMClientAPI =
         clientFactory ?: { provider, apiKey ->
             KoogClients.create(provider, apiKey, KtorKoogHttpClient.Factory(engine!!))
         }
@@ -93,7 +101,7 @@ class KoogChatRuntime(
         sessionId: String,
         conversation: Conversation,
     ): ChatRuntimeSession {
-        val provider = requireNotNull(ProviderDescriptorsById[settings.providerId]) {
+        val provider = requireNotNull(ProviderDescriptors.byId(settings.providerId)) {
             "Unknown provider: ${settings.providerId}"
         }
         val model = requireNotNull(provider.model(settings.modelId)) {
@@ -114,31 +122,27 @@ class KoogChatRuntime(
     override fun close() {
         engine?.close()
     }
-
-    private companion object {
-        val ProviderDescriptorsById: Map<String, ProviderDescriptor> =
-            works.resolve.pathfinder.ai.providers.ProviderDescriptors.all.associateBy { it.id }
-    }
 }
 
 /**
- * Maps a [ProviderDescriptor] id to its Koog executor client. Kept internal
- * so tests can assert the full mapping without going through the network.
+ * Maps a Koog [LLMProvider] to its executor client — the five providers the
+ * product ships, and only those. Kept internal so tests can assert the full
+ * mapping without going through the network.
  */
 internal object KoogClients {
 
     /** Creates the Koog [LLMClientAPI] for [provider], authenticated with [apiKey]. */
     fun create(
-        provider: ProviderDescriptor,
+        provider: LLMProvider,
         apiKey: String,
         httpClientFactory: KoogHttpClient.Factory,
-    ): LLMClientAPI = when (provider.id) {
-        "anthropic" -> AnthropicLLMClient(apiKey, httpClientFactory = httpClientFactory)
-        "openai" -> OpenAILLMClient(apiKey, httpClientFactory = httpClientFactory)
-        "google" -> GoogleLLMClient(apiKey, httpClientFactory = httpClientFactory)
-        "openrouter" -> OpenRouterLLMClient(apiKey, httpClientFactory = httpClientFactory)
-        "mistral" -> MistralAILLMClient(apiKey, httpClientFactory = httpClientFactory)
-        else -> throw IllegalArgumentException("Unknown provider: ${provider.id}")
+    ): LLMClientAPI = when (provider) {
+        LLMProvider.Anthropic -> AnthropicLLMClient(apiKey, httpClientFactory = httpClientFactory)
+        LLMProvider.OpenAI -> OpenAILLMClient(apiKey, httpClientFactory = httpClientFactory)
+        LLMProvider.Google -> GoogleLLMClient(apiKey, httpClientFactory = httpClientFactory)
+        LLMProvider.OpenRouter -> OpenRouterLLMClient(apiKey, httpClientFactory = httpClientFactory)
+        LLMProvider.MistralAI -> MistralAILLMClient(apiKey, httpClientFactory = httpClientFactory)
+        else -> throw IllegalArgumentException("Unsupported provider: ${provider.id}")
     }
 }
 
@@ -221,7 +225,7 @@ private class KoogChatSession(
     private val promptId: String,
     private val credentials: CredentialStore,
     private val scope: CoroutineScope,
-    private val clientFactory: (ProviderDescriptor, String) -> LLMClientAPI,
+    private val clientFactory: (LLMProvider, String) -> LLMClientAPI,
 ) : ChatRuntimeSession {
 
     private val _state = MutableStateFlow(
@@ -269,16 +273,20 @@ private class KoogChatSession(
         }
 
         val accumulator = StreamingAssistantAccumulator()
-        val client = clientFactory(provider, credential.key)
+        val client = clientFactory(model.provider, credential.key)
         try {
             val prompt = Prompt(
                 messages = conversation.activeMessages(),
                 id = promptId,
             )
-            client.executeStreaming(prompt, model).collect { frame ->
-                accumulator.onFrame(frame)
-                _state.value = _state.value.copy(streamingMessage = accumulator.snapshot())
-            }
+            client.executeStreaming(prompt, model)
+                // Not every provider client applies this itself; a stream that
+                // ends without [StreamFrame.End] is a dropped connection.
+                .requireEndFrame()
+                .collect { frame ->
+                    accumulator.onFrame(frame)
+                    _state.value = _state.value.copy(streamingMessage = accumulator.snapshot())
+                }
             commit(accumulator.finalMessage())
         } catch (error: CancellationException) {
             // Abort: keep what the user saw. No error surfaced.
