@@ -19,9 +19,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * One line per span lifecycle step, so a span reads in logcat as:
  *
  * ```text
- * I Pathfinder: > pf.auth.login id=2 parent=- provider=openai-codex type=oauth
- * I Pathfinder: + pf.auth.login id=2 event=callback_received
- * E Pathfinder: < pf.auth.login id=2 status=error duration_ms=1837 error_name=java.lang.IllegalStateException error_message="OpenAI Codex token exchange failed (400): error=..." outcome=...
+ * I Pathfinder: > pf.chat.error id=2 parent=- ui_message="Something went wrong"
+ * I Pathfinder: + pf.chat.error id=2 event=stream_failed
+ * E Pathfinder: < pf.chat.error id=2 status=error duration_ms=1837 error_name=java.io.IOException error_message="..." outcome=...
  * ```
  *
  * Error-status spans pass their throwable to `Log.e` so the stack trace (and
@@ -40,8 +40,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * Security: values are sanitized (control characters escaped, length capped)
  * before they reach logcat, and the whole strategy is metadata-only —
  * credentials, message text, and model responses must never be recorded
- * (the ported OAuth flows construct redacted error messages by design; that
- * redaction is what makes exception detail safe to log here).
+ * (the UI error boundary constructs redacted, metadata-only messages by
+ * design; that redaction is what makes exception detail safe to log here).
  */
 class LogcatTelemetryContext(
     private val tag: String = DEFAULT_TAG,

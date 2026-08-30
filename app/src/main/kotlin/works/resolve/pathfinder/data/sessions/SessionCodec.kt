@@ -112,5 +112,5 @@ internal object SessionCodec {
 
     /** Strict long field; string-encoded numbers yield null. */
     private fun JsonObject.longField(key: String): Long? =
-        (this[key] as? JsonPrimitive)?.takeIf { it !is JsonPrimitive || !it.isString }?.longOrNull
+        (this[key] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull
 }
