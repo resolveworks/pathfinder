@@ -1,158 +1,143 @@
-# AI provider port scope
+# Koog runtime and provider-auth boundary
 
-This file refines the repository-level instructions for
-`works.resolve.pathfinder.ai`. It records why Pathfinder ports a focused set of
-pi's provider adapters and authentication paths. These are product and
-maintenance boundaries, not accidental missing work.
+This file refines the repository instructions for code under
+`works.resolve.pathfinder.ai`. Koog supplies LLM models, prompts, provider
+clients, transport behavior, streaming, and agent-facing contracts. Pathfinder
+layers selected pi OAuth behavior on top.
 
-Read this file before changing AI providers, protocol adapters, authentication,
-the generated model catalog, or their corresponding tests and tooling.
+Read this file before changing providers, model selection, authentication,
+credentials, protocol adapters, transport, the generated catalog, or their
+tests and tooling.
 
-## The 20/80 rule
+## Ownership boundary
 
-Pathfinder aims to carry the high-value provider surface that makes a useful
-native phone client without reproducing every environment pi supports. Select
-providers aggressively, then port the selected providers faithfully.
+Koog owns:
 
-A smaller provider set is not permission to simplify pi's semantics inside that
-set. Once a provider or protocol is included, preserve its model data, request
-and response behavior, event ordering, authentication, errors, cancellation,
-and tests as closely as Kotlin and Android allow.
+- prompt/message and model-capability types;
+- provider clients and their request/response formats;
+- streaming contracts, tool calls, usage, and provider errors;
+- shared transport, retry, and prompt-execution behavior.
 
-Optimize for total maintenance cost rather than provider count. An adapter
-belongs when it is useful on a phone, maps cleanly to current pi, and can be
-implemented with a conventional Android boundary. Do not add a parallel domain
-model or misleading partial adapter merely to make a difficult provider appear
-supported.
+Pathfinder owns:
 
-## Implementation boundary
+- choosing the Koog modules/providers exposed by the app;
+- Android Keystore-backed credential persistence;
+- provider sign-in UI and browser/callback integration;
+- selected pi-derived OAuth flows and token refresh behavior;
+- narrow adapters that supply resolved credentials to Koog clients;
+- app model/provider presentation and settings.
 
-Port provider behavior directly to Kotlin using the app's existing transport,
-serialization, coroutine, and Android/JDK infrastructure. Do not introduce
-provider SDKs, AI frameworks, embedded language runtimes, or a universal OAuth
-framework. Default to no new runtime dependency; request an explicit scope
-decision when a dependency is needed to make a provider possible.
+Do not build a Pathfinder-wide provider abstraction over Koog. Composition may
+select/configure a Koog client, but runtime code should retain Koog's types and
+contracts.
 
-## Catalog and provider scope
+## Sources of truth
 
-The generated catalog is the static, app-supported provider surface. Inclusion
-means that the provider's model protocols and authentication paths are intended
-to work end to end; do not list a provider merely because pi knows its models.
-Keep generation tied to current pi data and fail visibly when an exclusion or
-provider definition becomes stale.
+For runtime/provider behavior, inspect the current implementation and tests in
+`~/Projects/koog/prompt/`, especially `prompt-llm`, `prompt-model`, and the
+relevant `prompt-executor` client module. Also inspect `~/Projects/koog/http-client/`
+when transport behavior matters.
 
-Retain static providers that can be ported faithfully using ordinary HTTPS
-JSON/SSE transport and standard API-key, PKCE, manual-code, or device-code
-authentication over narrow Android/JDK boundaries. PKCE browser flows use
-pi's loopback-callback pattern ported to a JDK `ServerSocket`
-(`auth/oauth/LoopbackOAuthServer.kt`): Android apps share the device network
-namespace, so a socket bound on 127.0.0.1 is reachable from the on-device
-browser and the login completes without pasting codes. The manual-code
-prompt stays as the raced fallback (remote browsers, squatted ports), and
-the browser opens in a Chrome Custom Tab (`ui/CustomTab.kt`). Do not replace
-this with embedded WebViews, app-owned OAuth client registrations, or a
-universal OAuth framework; provider semantics live in each flow exactly as
-pi structures them.
+For an explicitly selected OAuth flow, inspect current pi source and tests in
+`~/Projects/pi/packages/ai`. Pi is authoritative for authorization endpoints,
+PKCE/device/manual-code mechanics, polling, token refresh, and provider-specific
+credential fields. It is not authoritative for the prompt or provider-client
+contract once the credential enters Koog.
 
-The following exclusions are deliberate:
+When the upstreams do not compose directly, document the mismatch and adapt at
+the credential/client construction boundary. Do not silently alter one
+upstream's semantics to resemble the other.
 
-- **Radius and `llama.cpp`** are dynamic providers. Supporting them would add a
-  dynamic model store, discovery and refresh semantics, gateway configuration,
-  and local inference-server management. That complexity adds little value to
-  the focused phone client, so Pathfinder uses a bundled static catalog.
-- **Amazon Bedrock** is a protocol and dependency outlier. Faithful support
-  requires AWS binary EventStream handling, SigV4 signing, region and endpoint
-  resolution, profiles and the default credential chain, IAM/session/web-
-  identity cases, and AWS-specific errors. Pi delegates these to the AWS SDK.
-  A bearer-token-only port would provide materially narrower semantics, while
-  recreating full support without the SDK would add substantial
-  security-sensitive maintenance.
-- **Google Vertex AI** centers desktop/server Google Cloud behavior such as
-  Application Default Credentials, service accounts, project and location
-  resolution, and ambient configuration. Supporting only the Vertex Express
-  API-key path would again expose a narrower provider than pi. Pathfinder keeps
-  the ordinary Gemini API and omits Vertex to avoid that cloud credential
-  subsystem.
-- **Anthropic deferred tool loading and request metadata** are deliberate
-  reductions at the anthropic-messages boundary (see the divergence KDoc in
-  AnthropicMessagesPayload.kt): deferred tool loading (`splitDeferredTools`,
-  `tool_reference`, `defer_loading`, `supportsToolReferences`) exists upstream
-  for tool sets large enough to need on-demand loading, which a phone client
-  with a focused tool set does not have, and it is entangled with the already
-  excluded `StopReason "deferred"`/`DeferredHandle` shapes. `metadata.user_id`
-  has no identity source on a single-user device. Server-side fallbacks, by
-  contrast, are ported (`allowedFallbackModels` → `fallbacks` + the
-  `server-side-fallback-2026-07-01` beta + fallback cost attribution).
-- **Image-generation providers** are outside the selected conversational AI
-  provider surface. They require a separate media-generation product surface
-  rather than another chat protocol adapter.
-- **pi's `anthropic-dangerous-direct-browser-access` header** is deliberately
-  not sent (owner decision). pi includes it unconditionally in all three
-  anthropic-messages createClient branches to relax CORS for browser clients
-  (anthropic-messages.ts:907-965); Pathfinder's OkHttp transport is not a
-  browser client, so the header is meaningless here and the rest of the wire
-  shape follows pi.
-- **Anthropic ambient auth-token paths** are deliberately reduced: pi maps
-  ANTHROPIC_AUTH_TOKEN to `Authorization: Bearer` header auth and
-  ANTHROPIC_OAUTH_TOKEN to an apiKey source (providers/anthropic.ts:24-36),
-  but Android has no ambient env, and the port's credential boundary is the
-  NoopAuthContext/keystore layer, so only ANTHROPIC_API_KEY is surfaced.
-  Revisit if ambient-token auth becomes relevant.
+## Runtime rules
 
-Do not silently reintroduce an excluded provider through the catalog, a partial
-auth path, or a third-party SDK. An exclusion can be revisited explicitly if
-upstream or Android changes make a faithful implementation proportionate.
+- A usable provider path runs through credentials, a Koog client/executor,
+  session history, the ViewModel, and boundary tests.
+- Do not maintain Pathfinder message, model, event, payload, stream, retry,
+  transport, or agent-loop abstractions where Koog supplies the contract.
+- Reuse Koog serialization, transport, retries, and stream handling rather than
+  placing a parallel implementation in front of Koog.
+- Keep a pi-derived provider protocol adapter only when a selected OAuth
+  product path cannot use an existing Koog client. Such an exception must be
+  narrow, explicitly scoped, provenance-documented, and expressed through Koog
+  prompt/runtime contracts.
+- Compatibility with superseded development credentials or settings is not
+  required unless explicitly requested. Unknown formats fail clearly rather
+  than triggering hidden conversion.
 
-> Note: the Codex WebSocket transport, cached context, and zstd bullets above
-> were reversed by an explicit owner decision and are now ported
-> (OpenAiCodexResponsesApi.kt, OpenAICodexWebSocketSessions.kt,
-> ai/transport/WebSocketTransport.kt, ai/utils/ZstdCompression.kt, plus the
-> approved `zstd-jni` dependency). Their remaining divergences are documented
-> at those boundaries: no AssistantMessage transport-failure diagnostics, no
-> session-resources.ts lifecycle hook (the public close API plus idle TTL and
-> max connection age own cleanup), and abort as coroutine cancellation.
-> Pi's no-WebSocket-runtime branch (browsers and old Node falling back to SSE
-> when no WebSocket constructor exists) is likewise not ported, by owner
-> decision: the OkHttp WebSocket transport is required wiring, so the
-> SSE fallback for a missing WebSocket runtime does not exist (real WebSocket
-> failures still fall back to SSE exactly like pi).
+## Provider and model scope
 
-## Adapter capability scope
+Expose providers that work end to end on Android through a maintained Koog
+client or an explicitly approved narrow adapter. Provider count is not a goal.
+A provider is supported only when authentication, model selection, requests,
+streaming, errors, cancellation, and app UX all work together.
 
-Provider options such as grammar-constrained custom tools and deferred server
-tools should be added only after the native core models the
-corresponding pi concepts and data shapes. (Request hooks — onPayload /
-onResponse — and samplingParams are now ported; see [SimpleStreamOptions]
-and the per-adapter wiring sites for their pi provenance. Anthropic
-server-side fallbacks — `allowedFallbackModels`, the `fallbacks` request
-field, the `server-side-fallback-2026-07-01` beta, and fallback cost
-attribution — are now ported at the anthropic-messages boundary.) Do not add
-isolated wire fields that the runtime cannot represent correctly.
+Use Koog's `LLMProvider`, `LLModel`, and capabilities as the runtime model
+surface. A curated app list may add presentation metadata, but must not create a
+parallel behavioral model registry.
 
-When a narrow option is omitted, document it at the adapter or model boundary
-with the upstream symbol and the reason. Distinguish an intentional omission
-from unfinished parity, and do not advertise the omitted capability through
-the catalog or UI.
+App model selection is Koog-compatible and derives runtime identity and
+capabilities from Koog. Any bundled catalog is app-owned presentation metadata,
+must be generated rather than hand-edited, and cannot carry a parallel pi
+protocol definition.
 
-When concrete agent tools are eventually ported, mirror pi's coding-agent
-`constrainedSampling` usage (read/write/edit/bash behind experimental strict
-mode) so the ported constrained/strict tool sampling gets end-to-end
-prefer/require coverage; the production tool registry is intentionally empty
-until then.
+Before adding a provider or capability, answer:
 
-## Reconsidering scope
+1. Is it supported by current Koog, or is the missing piece narrow enough to
+   justify and maintain as an adapter?
+2. Does it provide meaningful value in the Android client?
+3. Is its authentication path complete, including refresh/expiry behavior?
+4. Can it use Koog runtime types without a parallel provider stack?
+5. Can it be tested end to end at the relevant boundary?
 
-Before adding a provider or expanding an adapter, answer all of the following:
+If not, leave it out and record the reason rather than exposing partial support.
 
-1. Does it provide meaningful value in a native phone client?
-2. Is there a current pi implementation and test surface to port rather than
-   reinterpret?
-3. Can Android-specific behavior stay at one narrow platform boundary?
-4. Can it be maintained without a provider-specific framework, parallel
-   runtime, or disproportionate security-sensitive code?
-5. Can the supported path be end to end rather than a misleading partial
-   implementation?
+## OAuth and credentials
 
-If not, leave it out and record the reason. If yes, read the current upstream
-source and package README, port it with symbol-level provenance, document every
-necessary divergence at its boundary, and test that divergence.
+Selected pi OAuth flows should remain provider-specific. Share low-level,
+behavior-neutral mechanics such as PKCE generation, loopback callback handling,
+device-code polling primitives, and HTTP helpers; do not flatten distinct
+provider semantics into a universal OAuth state machine.
+
+- Open authorization in a Chrome Custom Tab/system browser, never a WebView.
+- Keep the existing loopback callback approach only where the selected pi flow
+  uses it and Android behavior is tested; retain the provider's manual/device
+  fallback where applicable.
+- Store credentials only through the Android Keystore-backed credential
+  boundary. Access/refresh tokens are secrets.
+- Refresh is performed according to the source provider flow before client
+  construction or request execution. Persist rotated credentials atomically.
+- Keep provider-specific opaque fields losslessly when refresh requires them.
+- Map a resolved credential into the minimal input accepted by the Koog client;
+  do not leak the app credential-store type through Koog-facing runtime code.
+- If a Koog client assumes API-key authentication and an OAuth token requires
+  different headers/endpoints, implement that difference at client
+  configuration or a narrow client/HTTP adapter, with tests and provenance.
+
+Never log or expose credentials in telemetry, `toString`, exceptions, request
+diagnostics, or Compose state. Logs must also exclude prompts, message content,
+tool data, and model output.
+
+## Android and dependency decisions
+
+Prefer Koog's supported modules and HTTP client integration over Pathfinder
+transport code. Add only the provider modules required by the product surface;
+do not depend on an all-providers bundle by default if narrower modules keep the
+Android artifact and maintenance surface smaller.
+
+Before adding a provider SDK or a new protocol/crypto dependency, verify Koog's
+current implementation and request an explicit scope decision if the dependency
+would bypass Koog or materially increase app size/security maintenance. Android
+browser, Keystore, and lifecycle APIs remain behind Pathfinder platform
+adapters.
+
+## Tests and provenance
+
+- Test credential resolution and Koog client construction without real secrets.
+- Use Koog test executors/utilities for agent and prompt behavior where
+  available; do not maintain mocks for a parallel Pathfinder client API.
+- Keep pi parity tests for selected OAuth parsing, polling, refresh, expiry, and
+  error behavior. Cite exact upstream symbols/files in test names or KDoc.
+- Test cancellation, secret redaction, malformed stored credentials, and every
+  Android/Koog divergence.
+- Integration tests requiring real provider keys or tokens must be opt-in and
+  obtain them outside the repository.
