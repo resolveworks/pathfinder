@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.diagnostics
 
+import ai.koog.http.client.KoogHttpClientException
+
 /**
  * Stable, non-sensitive diagnostic events emitted by Pathfinder.
  *
@@ -44,6 +46,37 @@ internal enum class DiagnosticEvent(
     CODEX_TOKEN_REFRESH_ACCOUNT_INVALID("codex.token.refresh_account_invalid", DiagnosticLevel.ERROR),
     CODEX_TOKEN_REFRESH_SUCCEEDED("codex.token.refresh_succeeded", DiagnosticLevel.INFO),
     CODEX_SIGN_IN_UNEXPECTED_FAILURE("codex.sign_in.unexpected_failure", DiagnosticLevel.ERROR),
+
+    /*
+     * Chat execution (runtime/KoogChatRuntime.kt). Failures of the prompt
+     * request/stream itself; provider payloads and exception text stay out
+     * of the entry (type chain + HTTP status only).
+     */
+    CHAT_REQUEST_FAILED("chat.request_failed", DiagnosticLevel.ERROR),
+    CHAT_STREAM_INCOMPLETE("chat.stream_incomplete", DiagnosticLevel.ERROR),
+
+    /*
+     * Session persistence (data/sessions/SessionStore.kt). "Lowest layer
+     * logs" rule: the store records failures where they originate; UI-layer
+     * catches over the same operations do not duplicate them.
+     */
+    SESSION_LOAD_FAILED("session.load_failed", DiagnosticLevel.ERROR),
+    SESSION_SAVE_FAILED("session.save_failed", DiagnosticLevel.ERROR),
+    SESSION_SUMMARY_SKIPPED("session.summary_skipped", DiagnosticLevel.WARN),
+
+    /* Credential storage (data/credentials/EncryptedCredentialStore.kt). */
+    CREDENTIAL_READ_FAILED("credential.read_failed", DiagnosticLevel.ERROR),
+    CREDENTIAL_WRITE_FAILED("credential.write_failed", DiagnosticLevel.ERROR),
+    CREDENTIAL_DECODE_REJECTED("credential.decode_rejected", DiagnosticLevel.ERROR),
+
+    /*
+     * UI boundary (ui/chat/ChatViewModel.kt): swallowed failures with no
+     * instrumented lower layer (settings DataStore writes, configuration
+     * validation, init aggregate).
+     */
+    UI_INIT_FAILED("ui.init_failed", DiagnosticLevel.ERROR),
+    UI_SETTINGS_WRITE_FAILED("ui.settings_write_failed", DiagnosticLevel.ERROR),
+    UI_CONFIG_INVALID("ui.config_invalid", DiagnosticLevel.ERROR),
 }
 
 internal enum class DiagnosticLevel {
@@ -124,12 +157,32 @@ internal object Diagnostics {
     }
 
     fun failure(event: DiagnosticEvent, error: Throwable) {
-        record { DiagnosticEntry(event, failure = DiagnosticFailure.from(error)) }
+        record {
+            DiagnosticEntry(
+                event = event,
+                failure = DiagnosticFailure.from(error),
+                httpStatus = httpStatusOf(error),
+            )
+        }
     }
 
     fun httpFailure(event: DiagnosticEvent, status: Int) {
         record { DiagnosticEntry(event, httpStatus = status) }
     }
+
+    /**
+     * HTTP status of the first [KoogHttpClientException] in the cause chain,
+     * if any. Koog's clients wrap transport failures (including non-2xx
+     * responses, whose bodies the exception message embeds — never logged)
+     * so the status is only available by walking the chain.
+     */
+    private fun httpStatusOf(error: Throwable): Int? =
+        generateSequence<Throwable>(error) { current -> current.cause }
+            .take(STATUS_CAUSE_DEPTH)
+            .filterIsInstance<KoogHttpClientException>()
+            .firstNotNullOfOrNull { exception -> exception.statusCode }
+
+    private const val STATUS_CAUSE_DEPTH = 8
 
     fun event(event: DiagnosticEvent) {
         record { DiagnosticEntry(event) }
