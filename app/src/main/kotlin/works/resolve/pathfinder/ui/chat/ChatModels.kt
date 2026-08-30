@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ui.chat
 
 import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable
+import works.resolve.pathfinder.ai.providers.ProviderAuthKind
 import works.resolve.pathfinder.data.sessions.SessionSummary
 
 enum class ChatRole {
@@ -65,10 +66,18 @@ enum class ChatStatus {
 data class ProviderOption(
     val id: String,
     val name: String,
-    /** Label for the provider's API-key credential form field. */
-    val apiKeyPrompt: String,
-    /** True iff an API-key credential is stored for this provider. */
+    /** Projected descriptor auth kind: drives the credential form's shape. */
+    val authKind: ProviderAuthKind,
+    /** True iff a credential is stored for this provider. */
     val configured: Boolean,
+)
+
+/** Live ChatGPT device-code sign-in, null when idle. UI-safe projection only: no tokens. */
+data class CodexSignInState(
+    val userCode: String,
+    val verificationUri: String,
+    /** Fixed user-safe error text from a failed sign-in, null while awaiting. */
+    val error: String? = null,
 )
 
 /** Row of the model picker: one per model of a configured provider. */
@@ -144,5 +153,7 @@ data class ChatUiState(
     val treeRows: List<TreeRow> = emptyList(),
     /** In-memory tree-panel filter (never persisted). */
     val treeFilter: TreeFilter = TreeFilter.DEFAULT,
+    /** Live ChatGPT device-code sign-in, null when idle. */
+    val codexSignIn: CodexSignInState? = null,
     val error: String? = null,
 )

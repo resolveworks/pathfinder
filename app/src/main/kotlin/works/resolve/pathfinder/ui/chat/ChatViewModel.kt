@@ -6,7 +6,10 @@ import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.MessagePart
 import works.resolve.pathfinder.agent.ChatRuntime
 import works.resolve.pathfinder.agent.ChatRuntimeSession
+import works.resolve.pathfinder.ai.providers.ProviderAuthKind
 import works.resolve.pathfinder.ai.providers.ProviderDescriptors
+import works.resolve.pathfinder.ai.openaicodex.CodexOAuthClient
+import works.resolve.pathfinder.ai.openaicodex.CodexOAuthException
 import works.resolve.pathfinder.data.credentials.Credential
 import works.resolve.pathfinder.data.credentials.CredentialStore
 import works.resolve.pathfinder.data.settings.ModelSettings
@@ -67,6 +70,7 @@ class ChatViewModel(
     private val credentials: CredentialStore,
     private val sessionStore: SessionRepository,
     private val runtime: ChatRuntime,
+    private val codexOAuthClient: CodexOAuthClient,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -96,6 +100,9 @@ class ChatViewModel(
 
     /** Runtime-sourced error last projected into the UI, to detect runtime clearing. */
     private var lastRuntimeError: String? = null
+
+    /** In-flight ChatGPT device-code sign-in, if any. */
+    private var codexSignInJob: Job? = null
 
     init {
         viewModelScope.launch { initialize() }
@@ -157,6 +164,78 @@ class ChatViewModel(
             } catch (e: Exception) {
                 setError(ERROR_CREDENTIAL_SAVE)
             }
+        }
+    }
+
+    /**
+     * Starts the ChatGPT device-code sign-in for a ChatGptSignIn provider:
+     * requests the device code, shows it, and polls until approved, then
+     * stores the token set and reuses the shared credential-success path.
+     * The user code lives only in ephemeral UI state and is never logged.
+     * Cancellation (see [cancelCodexSignIn]) writes no credential.
+     */
+    fun beginCodexSignIn(providerId: String) {
+        val provider = ProviderDescriptors.byId(providerId)
+        if (provider == null) {
+            setError(ERROR_UNKNOWN_PROVIDER)
+            return
+        }
+        if (provider.authKind !is ProviderAuthKind.ChatGptSignIn) return
+        if (codexSignInJob?.isActive == true) return
+        codexSignInJob = viewModelScope.launch {
+            val device = try {
+                codexOAuthClient.beginDeviceLogin()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: CodexOAuthException) {
+                setError(e.message ?: ERROR_CODEX_SIGN_IN)
+                return@launch
+            } catch (e: Exception) {
+                setError(ERROR_CODEX_SIGN_IN)
+                return@launch
+            }
+            updateState { it.copy(codexSignIn = CodexSignInState(device.userCode, device.verificationUri)) }
+            try {
+                val tokens = codexOAuthClient.awaitDeviceAuthorization(device)
+                credentials.set(
+                    providerId,
+                    Credential.ChatGptOAuth(
+                        accessToken = tokens.accessToken,
+                        refreshToken = tokens.refreshToken,
+                        expiresAtEpochMillis = tokens.expiresAtEpochMillis,
+                        accountId = tokens.accountId,
+                    ),
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: CodexOAuthException) {
+                updateState { state ->
+                    state.codexSignIn
+                        ?.takeIf { it.error == null }
+                        ?.let { state.copy(codexSignIn = it.copy(error = e.message)) }
+                        ?: state.copy(codexSignIn = null)
+                }
+                return@launch
+            } catch (e: Exception) {
+                updateState { state ->
+                    state.codexSignIn
+                        ?.takeIf { it.error == null }
+                        ?.let { state.copy(codexSignIn = it.copy(error = ERROR_CODEX_SIGN_IN)) }
+                        ?: state.copy(codexSignIn = null)
+                }
+                return@launch
+            }
+            updateState { it.copy(codexSignIn = null) }
+            onCredentialStored()
+        }
+    }
+
+    /** Cancels an in-flight ChatGPT sign-in and clears its state; writes no credential. */
+    fun cancelCodexSignIn() {
+        codexSignInJob?.cancel()
+        codexSignInJob = null
+        if (_uiState.value.codexSignIn != null) {
+            updateState { it.copy(codexSignIn = null) }
         }
     }
 
@@ -695,7 +774,7 @@ class ChatViewModel(
                 ProviderOption(
                     id = provider.id,
                     name = provider.displayName,
-                    apiKeyPrompt = provider.apiKeyPrompt,
+                    authKind = provider.authKind,
                     configured = provider.id in configuredIds,
                 )
             }
@@ -817,6 +896,7 @@ class ChatViewModel(
         const val ERROR_ALREADY_STREAMING = "A response is already streaming"
         const val ERROR_ALREADY_AT_POINT = "Already at this point"
         const val ERROR_ENTRY_MISSING = "Message not found"
+        const val ERROR_CODEX_SIGN_IN = "Sign-in failed. Try again."
 
         /** Single-line, bounded title from the first user prompt. */
         fun deriveTitle(messages: List<Message>): String? {
