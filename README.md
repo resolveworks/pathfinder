@@ -75,18 +75,8 @@ payloads, and exception messages must never be logged.
 Debug APKs emit handled-failure and boundary lifecycle diagnostics under the
 `Pathfinder` Logcat tag. Entries use stable event identifiers and constrained
 metadata (HTTP status, exception type chain, and the first Pathfinder stack
-frame); raw `Throwable` values are never handed to Logcat. For runtime chat
-requests the HTTP status is harvested from Koog's `KoogHttpClientException`
-inside the cause chain. Non-debug APKs do not install a logging backend, and
-Pathfinder does not persist or upload logs.
-
-Instrumentation follows a lowest-layer-logs rule: the layer that first
-observes a failure emits the event, and higher layers that merely map it to a
-user-safe message do not duplicate it. Event areas mirror the code layout:
-`codex.*` (OAuth sign-in and token refresh), `chat.*` (prompt execution in the
-Koog runtime), `session.*` (transcript persistence), `credential.*`
-(Keystore-backed credential storage), `ui.*` (ViewModel boundary failures
-with no instrumented lower layer, e.g. settings writes).
+frame); raw `Throwable` values are never handed to Logcat. Non-debug APKs do
+not install a logging backend, and Pathfinder does not persist or upload logs.
 
 ```bash
 adb logcat -v time -s Pathfinder:I

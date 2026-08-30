@@ -10,6 +10,10 @@ import ai.koog.http.client.KoogHttpClientException
  * content, or exception messages. This follows Android's log-information
  * disclosure guidance while retaining enough detail to locate handled
  * failures in debug builds.
+ *
+ * Instrumentation follows a lowest-layer-logs rule: the layer that first
+ * observes a failure records the event; layers above it that merely map the
+ * failure to user-safe messages do not record duplicates.
  */
 internal enum class DiagnosticEvent(
     val id: String,
