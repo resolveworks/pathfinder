@@ -29,6 +29,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -108,6 +109,9 @@ class ChatViewModel(
     /** In-flight ChatGPT sign-in (device-code poll or browser exchange), if any. */
     private var codexSignInJob: Job? = null
 
+    /** Activity-resumed state; gates browser OAuth networking on modern Android. */
+    private val appForegrounded = MutableStateFlow(false)
+
     init {
         viewModelScope.launch { initialize() }
     }
@@ -121,6 +125,16 @@ class ChatViewModel(
     /** Clears the surfaced error without touching anything else. */
     fun dismissError() {
         updateState { it.copy(error = null) }
+    }
+
+    /** Reports that the app can perform foreground-only network work. */
+    fun onAppForegrounded() {
+        appForegrounded.value = true
+    }
+
+    /** Prevents OAuth network work after another activity covers Pathfinder. */
+    fun onAppBackgrounded() {
+        appForegrounded.value = false
     }
 
     /**
@@ -236,7 +250,7 @@ class ChatViewModel(
      * Starts the ChatGPT browser sign-in for a ChatGptSignIn provider (pi's
      * `loginOpenAICodex`): builds the PKCE authorize URL locally (no network
      * yet), binds the loopback redirect listener, and publishes the URL for
-     * the UI to open in the user's default browser — the browser shares the
+     * the UI to open in a browser-backed Custom Tab — the browser shares the
      * user's real login session, so an existing ChatGPT login carries over.
      * The browser's redirect lands on the listener, the code is exchanged,
      * the token set stored, and the shared credential-success path runs.
@@ -272,6 +286,13 @@ class ChatViewModel(
                 updateState { it.copy(codexSignIn = CodexSignInState.Browser(auth.authorizeUrl)) }
                 val redirectUrl = listener.awaitRedirect()
                 updateBrowserSignIn { it.copy(completing = true) }
+                // A full-screen Custom Tab stops Pathfinder's activity. Modern
+                // Android can then block this UID's public network access even
+                // though the browser can still reach the loopback listener.
+                // Exchange only after the activity resumes and networking is
+                // restored; the short-lived authorization code remains solely
+                // in this coroutine meanwhile.
+                appForegrounded.first { it }
                 val tokens = codexOAuthClient.completeBrowserLogin(auth, redirectUrl)
                 credentials.set(
                     providerId,

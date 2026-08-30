@@ -83,6 +83,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
@@ -897,8 +898,8 @@ private fun ApiKeyAuthContent(
 
 /**
  * ChatGPT sign-in card for one provider: offers both flows pi offers — the
- * default browser sign-in (the authorize URL opens in the user's default
- * browser, which waits with the loopback listener) and the device-code flow
+ * Custom Tab sign-in (the authorize URL opens in the user's browser-backed
+ * Custom Tab, which waits with the loopback listener) and the device-code flow
  * rendered here. The user code, verification URI, and authorize URL live only
  * in the ViewModel's ephemeral sign-in state; leaving this screen cancels
  * either in-flight sign-in via [onCancelSignIn], so no credential is ever
@@ -962,9 +963,9 @@ private fun ChatGptSignInContent(
                 LaunchedEffect(signIn.authorizeUrl) {
                     if (openedUrl != signIn.authorizeUrl) {
                         openedUrl = signIn.authorizeUrl
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse(signIn.authorizeUrl)),
-                        )
+                        CustomTabsIntent.Builder()
+                            .build()
+                            .launchUrl(context, Uri.parse(signIn.authorizeUrl))
                     }
                 }
                 Row(
