@@ -6,126 +6,63 @@ application layer thin.
 
 ## Direction
 
-- **Koog is the runtime foundation.** Use Koog's prompt, message, model,
-  provider-client, streaming, and execution abstractions end to end.
-  Pathfinder consumes the narrow per-client artifacts
-  (`ai.koog:prompt-executor-{anthropic,openai,openrouter}-client`,
-  `prompt-executor-{google,mistralai}-client`), `ai.koog:http-client-ktor`
-  over Ktor/OkHttp — not the `koog-agents` umbrella.
-- **Extend Koog; do not fork it inside the app.** Prefer Koog modules and
-  extension points. Fill product-specific gaps with narrow adapters. If a
-  generally useful capability is missing, consider an upstream Koog
-  contribution before copying framework internals into Pathfinder.
-- **Android is the application source of truth.** Use current platform
-  guidance, Jetpack Compose, Material 3, and stock Android components and
-  interactions.
-- **Optimize for low maintenance.** Avoid parallel domain models, speculative
-  abstractions, bespoke UI primitives, compatibility shims, and dependencies
-  whose value does not justify their upkeep.
-- **Treat development data as disposable.** Implement only the app's current
-  storage formats. Reject old formats rather than adding migrations unless
-  explicitly requested.
+- **Koog is the runtime foundation.** Use its prompt, message, model, client,
+  streaming, and execution abstractions end to end. Depend on the narrow
+  client modules the app needs rather than the `koog-agents` umbrella.
+- **Extend Koog; do not fork it inside the app.** Prefer released Koog APIs and
+  narrow Pathfinder adapters over copied framework internals or parallel
+  runtime contracts. Consider upstreaming generally useful missing behavior.
+- **Android owns platform behavior.** Follow current Android guidance and use
+  Jetpack Compose, Material 3, and stock platform interactions.
+- **Optimize for low maintenance.** Avoid speculative abstractions, bespoke UI
+  primitives, compatibility shims, and dependencies whose value does not
+  justify their upkeep.
+- **Treat development data as disposable.** Support only current storage
+  formats and reject old ones unless migration support is explicitly requested.
 - **Track the platform.** Target the latest GrapheneOS release and current
-  Android, Kotlin, AGP, Compose, and AndroidX versions. Move forward to
-  resolve compatibility issues rather than downgrading.
+  Android, Kotlin, AGP, Compose, and AndroidX versions. Resolve compatibility
+  issues by moving forward rather than downgrading.
 
 ## Sources of truth
 
 Use the source that owns the behavior being changed; do not work from
 remembered APIs.
 
-### Koog
+For runtime, prompt, model, provider, tool, streaming, or agent work, consult
+the relevant source, tests, root `README.md`, and module `Module.md` in the
+upstream checkout at `~/Projects/koog/`. The main areas are `prompt/`,
+`agents/`, and `http-client/`. Treat that checkout as the API and behavioral
+reference, not as code to copy into Pathfinder.
 
-The primary upstream checkout is `~/Projects/koog/`. Before changing runtime,
-prompt, model, provider, tool, streaming, or agent behavior, read the relevant
-Koog source, tests, root `README.md`, and module `Module.md`. Important areas
-include:
+Koog owns runtime contracts, Android owns platform behavior, and Pathfinder
+owns product policy and glue. Resolve conflicts with narrow adapters at those
+boundaries.
 
-- `prompt/` for messages, models, capabilities, prompt execution, and provider
-  clients;
-- `agents/` for agent execution and features;
-- `http-client/` for transport integration.
+## Project boundaries
 
-Use released Koog artifacts and public APIs where practical. The local checkout
-is the behavioral and API reference, not code to copy wholesale. When an
-Android constraint requires a divergence, keep it in a narrow platform adapter
-and test it.
+- Runtime and provider code uses Koog types directly; do not introduce
+  Pathfinder alternatives for messages, models, streaming, tools, or execution.
+- ViewModels depend on `ChatRuntime`; Koog integration remains behind that
+  boundary.
+- Credentials remain in the Keystore-backed credential store and are supplied
+  to provider clients only when needed.
+- Branching and session persistence are Pathfinder concerns layered around Koog
+  history; they must not alter Koog's runtime contracts.
+- Provider catalog data is presentation metadata, not a parallel model or
+  protocol surface.
+- UI follows single-activity Compose with MVVM/UDF. ViewModels expose immutable
+  state, composables keep only ephemeral UI state, and user actions flow back
+  as intents. Add DI only when the object graph warrants it.
 
-### Precedence
-
-Koog owns runtime contracts; Android owns platform behavior; Pathfinder owns
-product policy and glue. Resolve conflicts at an adapter boundary instead of
-modifying one layer to impersonate another.
-
-## Implementation boundaries
-
-- Runtime and provider code uses Koog types end to end; Pathfinder does not
-  maintain alternative message, model, event, streaming, tool, or execution
-  contracts.
-- `runtime/ChatRuntime.kt` is the permanent seam between ViewModels and the
-  runtime. `runtime/KoogChatRuntime.kt` is its Koog implementation: per-prompt
-  credential read, a Koog `Prompt` built from the active branch,
-  `executeStreaming` frames folded into state, abort that commits rendered
-  partials, fixed user-safe error strings, and a shared Ktor/OkHttp engine.
-  ViewModels depend only on `ChatRuntime`.
-- Authentication is a per-provider API key stored in the Keystore-backed
-  `data/credentials` store and supplied to Koog clients at prompt time.
-- Ten providers are declared in `runtime/ProviderDescriptor.kt`; models
-  are enumerated from Koog `LLModelDefinitions` where Koog ships a client
-  (DeepSeek, DashScope included), and hand-declared as Koog `LLModel`s from pi's
-  catalogs for coding-plan endpoints without a Koog client module (Z.AI,
-  Kimi — executed by Koog's stock OpenAI/Anthropic clients against their
-  coding base URLs, `runtime/CodingPlanModels.kt`). App catalog data is
-  presentation metadata only, never a parallel protocol surface.
-- Tree-session behavior is a Pathfinder session layer around Koog history;
-  branching semantics do not leak into Koog's runtime. Koog `Message` is
-  persisted via the `SessionCodec` format (version 3); old formats fail fast.
-- Compatibility bridges, dual runtime stacks, and migration machinery are not
-  part of the architecture.
-
-## Naming and style
-
-- Koog-backed code uses Koog concepts and types directly; do not wrap them in
-  Pathfinder aliases.
-- Pathfinder-owned and Android code follows current idiomatic Kotlin: data
-  classes, sealed types, nullability, coroutines, and standard library APIs.
-- Public APIs and non-obvious boundary adaptations require KDoc. Cite Koog
-  symbols by repository path.
-
-## Architecture
-
-- **Koog runtime:** prompt execution, LLM clients, messages, model
-  capabilities, streaming, and transport.
-- **Pathfinder extensions:** tree-backed session/history projection
-  (`data/sessions`), Keystore-backed API-key credentials (`data/credentials`),
-  and the `runtime` package: provider descriptors and the `ChatRuntime`
-  seam.
-- **Android app:** presentation, lifecycle, navigation, input, settings,
-  persistence, and platform APIs (`ui`, `MainActivity`, `PathfinderApplication`
-  as the manual composition root).
-
-UI follows single-activity Compose with MVVM/UDF: ViewModels expose immutable
-state through `StateFlow`; composables stay state-hoisted apart from ephemeral
-UI state and forward user intents. Add a DI framework only if the graph
-clearly warrants it.
-
-Do not duplicate Koog messages, models, stream events, or tool contracts in
-the UI or persistence layer. Project them into UI/storage shapes only at
-explicit boundaries. The conversion between stored session-tree entries and
-Koog history is centralized and tested.
+Use Koog terminology in Koog-backed code. Document public APIs and non-obvious
+boundary adaptations where the rationale is not evident from the code.
 
 ## Tests
 
-The suite is intentionally tiny. Koog's own suite owns runtime behavior;
-Pathfinder tests only what it adds:
-
-- tree-session semantics;
-- the credential boundary;
-- `SessionCodec` format 3 round-trips and old-format rejection;
-- markdown parsers and provider descriptors;
-- runtime lifecycle/cancellation with an injected fake client.
-
-No ViewModel choreography tests, no per-provider protocol tests.
+Keep tests focused on behavior Pathfinder owns, especially its persistence,
+credential, parsing, catalog, and runtime boundaries. Do not duplicate Koog's
+provider protocol or framework coverage, and prefer boundary tests over UI
+choreography tests.
 
 ## Security
 
