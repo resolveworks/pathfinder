@@ -56,7 +56,7 @@ class EncryptedCredentialStore(
         }
     }
 
-    private suspend fun decodeRaw(providerId: String): ApiKeyCredential? =
+    private suspend fun decodeRaw(providerId: String): Credential? =
         readRaw(providerId)?.let { raw ->
             try {
                 CredentialCodec.decode(raw)
@@ -65,11 +65,11 @@ class EncryptedCredentialStore(
             }
         }
 
-    override suspend fun read(providerId: String): ApiKeyCredential? = lockFor(providerId).withLock {
+    override suspend fun read(providerId: String): Credential? = lockFor(providerId).withLock {
         decodeRaw(providerId)
     }
 
-    override suspend fun set(providerId: String, credential: ApiKeyCredential) {
+    override suspend fun set(providerId: String, credential: Credential) {
         lockFor(providerId).withLock { writeRaw(providerId, CredentialCodec.encode(credential)) }
     }
 

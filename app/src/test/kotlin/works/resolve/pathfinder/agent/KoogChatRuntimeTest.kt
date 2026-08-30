@@ -28,7 +28,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.awaitCancellation
 import works.resolve.pathfinder.ai.providers.ProviderDescriptor
 import works.resolve.pathfinder.ai.providers.ProviderDescriptors
-import works.resolve.pathfinder.data.credentials.ApiKeyCredential
+import works.resolve.pathfinder.data.credentials.Credential
 import works.resolve.pathfinder.data.credentials.CredentialStore
 import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.settings.ModelSettings
@@ -65,8 +65,8 @@ private class FakeStreamingClient(
 private class FakeCredentialStore(
     private val keys: Map<String, String> = emptyMap(),
 ) : CredentialStore {
-    override suspend fun read(providerId: String): ApiKeyCredential? = keys[providerId]?.let(::ApiKeyCredential)
-    override suspend fun set(providerId: String, credential: ApiKeyCredential) = error("unused")
+    override suspend fun read(providerId: String): Credential? = keys[providerId]?.let(Credential::ApiKey)
+    override suspend fun set(providerId: String, credential: Credential) = error("unused")
     override suspend fun list(): List<String> = keys.keys.toList()
     override suspend fun delete(providerId: String) = error("unused")
 }

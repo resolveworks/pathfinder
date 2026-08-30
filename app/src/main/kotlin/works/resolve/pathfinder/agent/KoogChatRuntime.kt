@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import works.resolve.pathfinder.ai.providers.ProviderDescriptor
 import works.resolve.pathfinder.ai.providers.ProviderDescriptors
+import works.resolve.pathfinder.data.credentials.Credential
 import works.resolve.pathfinder.data.credentials.CredentialStore
 import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.settings.ModelSettings
@@ -267,13 +268,15 @@ private class KoogChatSession(
             fail(missingCredentialError())
             return
         }
-        if (credential == null) {
+        // OAuth dispatch lands in a later chunk; a non-API-key credential
+        // is treated like a missing one for now.
+        val apiKey = (credential as? Credential.ApiKey)?.key ?: run {
             fail(missingCredentialError())
             return
         }
 
         val accumulator = StreamingAssistantAccumulator()
-        val client = clientFactory(model.provider, credential.key)
+        val client = clientFactory(model.provider, apiKey)
         try {
             val prompt = Prompt(
                 messages = conversation.activeMessages(),

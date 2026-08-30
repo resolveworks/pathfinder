@@ -1,17 +1,33 @@
 package works.resolve.pathfinder.data.credentials
 
 /**
- * Per-provider API-key credential — the only credential shape Pathfinder
- * keeps (the pi-ported `auth.json` type-tagged contract, reduced to its
- * API-key variant; `packages/ai/src/auth/types.ts`). One credential per
- * provider; OAuth variants were removed with the pi runtime port.
- *
- * `toString` redacts the key; never log credentials.
+ * A per-provider credential — the type-tagged `auth.json` contract of pi
+ * (`packages/ai/src/auth/types.ts`), held as a sealed hierarchy. One
+ * credential per provider. Secret material never leaves the credential
+ * boundary in plaintext and is never logged.
  */
-data class ApiKeyCredential(
-    val key: String,
-) {
-    override fun toString(): String = "ApiKeyCredential(key=<redacted>)"
+sealed interface Credential {
+    /** Redacts all secret material in toString; never log credentials. */
+    data class ApiKey(
+        val key: String,
+    ) : Credential {
+        override fun toString(): String = "ApiKey(key=<redacted>)"
+    }
+
+    /**
+     * ChatGPT/Codex OAuth token set; expiresAt is wall-clock epoch millis.
+     * accountId is not secret and is shown in toString; tokens never are.
+     */
+    data class ChatGptOAuth(
+        val accessToken: String,
+        val refreshToken: String,
+        val expiresAtEpochMillis: Long,
+        val accountId: String,
+    ) : Credential {
+        override fun toString(): String =
+            "ChatGptOAuth(accessToken=<redacted>, refreshToken=<redacted>, " +
+                "expiresAtEpochMillis=$expiresAtEpochMillis, accountId=$accountId)"
+    }
 }
 
 /**
@@ -21,10 +37,10 @@ data class ApiKeyCredential(
  */
 interface CredentialStore {
     /** Reads the stored credential for [providerId], or null when none is stored. */
-    suspend fun read(providerId: String): ApiKeyCredential?
+    suspend fun read(providerId: String): Credential?
 
     /** Stores [credential] for [providerId], replacing any previous value wholesale. */
-    suspend fun set(providerId: String, credential: ApiKeyCredential)
+    suspend fun set(providerId: String, credential: Credential)
 
     /** Lists provider ids that have a stored credential (no secret material). */
     suspend fun list(): List<String>
