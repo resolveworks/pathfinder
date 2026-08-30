@@ -3,7 +3,7 @@ package works.resolve.pathfinder.data.sessions
 import java.io.File
 import java.io.IOException
 import kotlin.time.Clock
-import works.resolve.pathfinder.ai.utils.uuidv7
+import works.resolve.pathfinder.data.sessions.uuidv7
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption

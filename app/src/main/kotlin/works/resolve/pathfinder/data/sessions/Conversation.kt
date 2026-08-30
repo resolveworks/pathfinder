@@ -1,10 +1,7 @@
 package works.resolve.pathfinder.data.sessions
 
+import ai.koog.prompt.message.Message
 import kotlin.time.Clock
-import works.resolve.pathfinder.agent.compaction.CompactionDetails
-import works.resolve.pathfinder.ai.core.Message
-import works.resolve.pathfinder.ai.core.Usage
-import works.resolve.pathfinder.ai.utils.uuidv7
 
 /** Node of the conversation tree; children are sorted oldest-first. */
 data class SessionTreeNode(
@@ -19,6 +16,9 @@ data class SessionTreeNode(
  * advances the leaf to the new entry. Entry ids default to time-ordered
  * UUIDv7, pi's Session idGenerator default `{ next: () => uuidv7() }`
  * (agent/src/harness/session/session.ts).
+ *
+ * Messages are Koog `ai.koog.prompt.message.Message` values; this class is
+ * the one boundary where the session tree encodes Koog history.
  */
 class Conversation(
     val entries: List<SessionEntry>,
@@ -37,34 +37,6 @@ class Conversation(
             parentId = leafId,
             timestamp = clock.now().toEpochMilliseconds(),
             message = message,
-        )
-        return Conversation(entries + entry, entry.id, nextId, clock)
-    }
-
-    /**
-     * Appends a compaction cut as a child of the current leaf and advances
-     * the leaf to it (pi's sessionManager.appendCompaction, session-manager.ts
-     * ~1098). Divergences: upstream stores `firstKeptEntryId`/`fromHook` on
-     * the entry — pathfinder's [CompactionEntry] keeps the retained tail
-     * directly (harness entry shape) and has no extension producers, so both
-     * parameters are absent.
-     */
-    fun appendCompaction(
-        summary: String,
-        retainedTail: List<Message>,
-        tokensBefore: Int,
-        details: CompactionDetails? = null,
-        usage: Usage? = null,
-    ): Conversation {
-        val entry = CompactionEntry(
-            id = nextId(),
-            parentId = leafId,
-            timestamp = clock.now().toEpochMilliseconds(),
-            summary = summary,
-            retainedTail = retainedTail,
-            tokensBefore = tokensBefore,
-            details = details,
-            usage = usage,
         )
         return Conversation(entries + entry, entry.id, nextId, clock)
     }
@@ -144,24 +116,5 @@ class Conversation(
             }
         }
         return rootNodes.sortedBy { it.entry.timestamp }
-    }
-
-    companion object {
-        /** Builds a linearly chained conversation from a flat transcript
-         * (each message parented to the previous, leaf = last); used by v1
-         * migration and callers that still hold flat transcripts. */
-        fun fromMessages(messages: List<Message>): Conversation {
-            var conversation = Conversation(emptyList(), null)
-            for (message in messages) {
-                val entry = MessageEntry(
-                    id = uuidv7(),
-                    parentId = conversation.leafId,
-                    timestamp = message.timestamp,
-                    message = message,
-                )
-                conversation = Conversation(conversation.entries + entry, entry.id)
-            }
-            return conversation
-        }
     }
 }

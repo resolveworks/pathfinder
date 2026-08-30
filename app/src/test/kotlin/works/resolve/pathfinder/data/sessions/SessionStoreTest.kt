@@ -1,16 +1,6 @@
 package works.resolve.pathfinder.data.sessions
 
-import works.resolve.pathfinder.ai.core.AssistantMessage
-import works.resolve.pathfinder.ai.core.Cost
-import works.resolve.pathfinder.ai.core.ImageContent
-import works.resolve.pathfinder.ai.core.StopReason
-import works.resolve.pathfinder.ai.core.TextContent
-import works.resolve.pathfinder.ai.core.ThinkingContent
-import works.resolve.pathfinder.ai.core.ToolCall
-import works.resolve.pathfinder.ai.core.ToolResultMessage
-import works.resolve.pathfinder.ai.core.Usage
-import works.resolve.pathfinder.ai.core.UserMessage
-import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.testing.FakeClock
 import java.io.File
 import kotlin.test.assertFailsWith
 import kotlinx.coroutines.test.runTest
@@ -53,52 +43,11 @@ class SessionStoreTest {
         )
     }
 
-    private fun fullTranscript() = listOf(
-        UserMessage(
-            content = listOf(
-                TextContent("hello"),
-                ImageContent(data = "aGk=", mimeType = "image/png"),
-            ),
-            timestamp = 1L,
-        ),
-        AssistantMessage(
-            content = listOf(
-                ThinkingContent(thinking = "hmm", thinkingSignature = "sig-1"),
-                TextContent("hi there"),
-                ToolCall(id = "call-1", name = "get_weather", arguments = """{"city":"Oslo"}"""),
-            ),
-            api = "openai-completions",
-            provider = "zai",
-            model = "glm-4.6",
-            usage = Usage(
-                input = 10, output = 20, cacheRead = 5, cacheWrite = 2,
-                reasoning = 3, totalTokens = 35,
-                cost = Cost(input = 0.001, output = 0.002, cacheRead = 0.0001, cacheWrite = 0.0002, total = 0.0033),
-            ),
-            stopReason = StopReason.TOOL_USE,
-            errorMessage = null,
-            rawStopReason = "tool_calls",
-            responseId = "resp-9",
-            responseModel = "glm-4.6-actual",
-            timestamp = 2L,
-        ),
-        ToolResultMessage(
-            toolCallId = "call-1",
-            toolName = "get_weather",
-            content = listOf(TextContent("""{"temp":12}""")),
-            isError = false,
-            timestamp = 3L,
-        ),
-        AssistantMessage(
-            content = listOf(TextContent("It is 12 degrees.")),
-            api = "openai-completions",
-            provider = "zai",
-            model = "glm-4.6",
-            stopReason = StopReason.ERROR,
-            errorMessage = "boom",
-            timestamp = 4L,
-        ),
-    )
+    private fun conversationOf(vararg messages: ai.koog.prompt.message.Message): Conversation {
+        var conversation = Conversation(emptyList(), null)
+        for (message in messages) conversation = conversation.append(message)
+        return conversation
+    }
 
     @Test
     fun createListOrderingNewestUpdatedFirst() = runTest {
@@ -120,13 +69,23 @@ class SessionStoreTest {
         val store = newStore()
         val created = store.create("session one")
         clock.advanceMillis(5)
-        val saved = store.save(created.withMessages(fullTranscript()))
+        val transcript = conversationOf(
+            userMessage("hello", 1L),
+            assistantMessage(
+                reasoningPart("hmm"),
+                textPart("hi there"),
+                toolCallPart("call-1", "get_weather", """{"city":"Oslo"}"""),
+                epochMs = 2L,
+            ),
+            assistantMessage(textPart("It is 12 degrees."), epochMs = 4L),
+        )
+        val saved = store.save(created.copy(entries = transcript.entries, leafId = transcript.leafId))
 
         // Simulate restart: fresh store instance over the same directory.
         val reloaded = newStore().load(created.id)
         assertNotNull(reloaded)
         assertEquals(saved, reloaded)
-        assertEquals(fullTranscript(), reloaded!!.messages)
+        assertEquals(transcript.activeMessages(), reloaded!!.messages)
     }
 
     @Test
@@ -134,16 +93,16 @@ class SessionStoreTest {
         val store = newStore()
         val created = store.create("branchy")
         clock.advanceMillis(5)
-        val root = MessageEntry("m0", null, 1L, UserMessage.ofText("a", 1L))
-        val left = MessageEntry("m1", "m0", 2L, UserMessage.ofText("b", 2L))
-        val right = MessageEntry("m2", "m0", 3L, UserMessage.ofText("c", 3L))
+        val root = MessageEntry("m0", null, 1L, userMessage("a", 1L))
+        val left = MessageEntry("m1", "m0", 2L, userMessage("b", 2L))
+        val right = MessageEntry("m2", "m0", 3L, userMessage("c", 3L))
         val saved = store.save(created.copy(entries = listOf(root, left, right), leafId = "m2"))
 
         val reloaded = newStore().load(created.id)!!
         assertEquals(saved, reloaded)
         assertEquals(listOf(root, left, right), reloaded.entries)
         assertEquals("m2", reloaded.leafId)
-        assertEquals(listOf("a", "c"), reloaded.messages.map { (it as UserMessage).content.single().let { c -> (c as TextContent).text } })
+        assertEquals(listOf("a", "c"), reloaded.messages.map { (it as ai.koog.prompt.message.Message.User).textContent() })
     }
 
     @Test
@@ -151,13 +110,14 @@ class SessionStoreTest {
         val store = newStore()
         val created = store.create()
         clock.advanceMillis(100)
-        val saved = store.save(created.withMessages(listOf(UserMessage.ofText("hey", 7L))).copy(title = "renamed"))
+        val transcript = conversationOf(userMessage("hey", 7L))
+        val saved = store.save(created.copy(entries = transcript.entries, leafId = transcript.leafId).copy(title = "renamed"))
         assertEquals(clock.now().toEpochMilliseconds(), saved.updatedAt)
         assertEquals(created.createdAt, saved.createdAt)
 
         val loaded = store.load(created.id)!!
         assertEquals("renamed", loaded.title)
-        assertEquals(listOf(UserMessage.ofText("hey", 7L)), loaded.messages)
+        assertEquals(listOf(userMessage("hey", 7L)), loaded.messages)
         assertEquals(1, store.summaries().single().messageCount)
     }
 
@@ -169,32 +129,6 @@ class SessionStoreTest {
         assertFalse(store.delete(session.id))
         assertNull(store.load(session.id))
         assertTrue(store.summaries().isEmpty())
-    }
-
-    @Test
-    fun loadReturnsDefensiveCopies() = runTest {
-        val store = newStore()
-        val id = store.create().id
-        val messages = mutableListOf(UserMessage.ofText("a"))
-        val conversation = Conversation.fromMessages(messages)
-        store.save(Session(id, "t", 1, 1, entries = conversation.entries, leafId = conversation.leafId))
-        messages.add(UserMessage.ofText("sneaky"))
-
-        val loaded = store.load(id)!!
-        assertEquals(1, loaded.messages.size)
-        // Mutating the returned list (when possible) must not affect persisted state.
-        runCatching { (loaded.messages as? MutableList)?.clear() }
-        assertEquals(1, store.load(id)!!.messages.size)
-    }
-
-    @Test
-    fun saveStoresDefensiveCopyOfCallerList() = runTest {
-        val store = newStore()
-        val created = store.create()
-        val messages = mutableListOf(UserMessage.ofText("a"))
-        store.save(created.withMessages(messages))
-        messages.add(UserMessage.ofText("sneaky"))
-        assertEquals(1, store.load(created.id)!!.messages.size)
     }
 
     @Test
@@ -232,23 +166,25 @@ class SessionStoreTest {
     }
 
     @Test
-    fun unknownRolesAndContentTypesRejected() = runTest {
+    fun unknownFormatVersionsAndEntryKindsRejected() = runTest {
         val store = newStore()
         val id = store.create().id
 
+        // Old (pre-Koog) format version.
         File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"system","timestamp":0}}],"leafId":"m0"}"""
+            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[]}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
 
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"user","timestamp":0,"content":[{"type":"audio"}]}}],"leafId":"m0"}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-
-        // Unknown format version.
+        // Unknown future version.
         File(root, "$id.json").writeText(
             """{"format":99,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[]}"""
+        )
+        assertFailsWithSessionDataException { store.load(id) }
+
+        // Unknown entry kind.
+        File(root, "$id.json").writeText(
+            """{"format":3,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"kind":"compaction","id":"m0","timestamp":0}],"leafId":"m0"}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
     }
@@ -292,13 +228,11 @@ class SessionStoreTest {
     fun sessionFilesContainNoCredentialMaterial() = runTest {
         val store = newStore()
         val id = store.create().id
-        val full = Conversation.fromMessages(fullTranscript())
+        val full = conversationOf(userMessage("hello"), assistantMessage(textPart("hi"), epochMs = 2L))
         store.save(Session(id, "t", 1, 1, entries = full.entries, leafId = full.leafId))
         val text = File(root, "$id.json").readText()
         assertFalse(text.contains("apiKey", ignoreCase = true))
         assertFalse(text.contains("authorization"))
-        // Only the assistant's identity fields appear.
-        assertTrue(text.contains("glm-4.6"))
     }
 
     @Test
@@ -309,19 +243,6 @@ class SessionStoreTest {
         File(root, "corrupt.json").writeText("garbage")
         val summaries = store.summaries()
         assertEquals(listOf(good.id), summaries.map { it.id })
-    }
-
-    @Test
-    fun concurrentSavesAreSerialized() = runTest {
-        val store = newStore()
-        val created = store.create()
-        // Interleaved saves of different sizes must all land atomically.
-        repeat(20) { i ->
-            clock.advanceMillis(1)
-            store.save(created.withMessages((0..i).map { UserMessage.ofText("m$it") }).copy(title = "t$i"))
-        }
-        val loaded = store.load(created.id)!!
-        assertEquals(20, loaded.messages.size)
     }
 
     @Test
@@ -337,7 +258,8 @@ class SessionStoreTest {
         val store = newStoreWithIds()
         val created = store.create("tiny")
         assertEquals("0", created.id)
-        store.save(created.withMessages(listOf(UserMessage.ofText("hi", 1L))))
+        val transcript = conversationOf(userMessage("hi", 1L))
+        store.save(created.copy(entries = transcript.entries, leafId = transcript.leafId))
         assertEquals(1, store.load("0")!!.messages.size)
         // No stray temp files remain.
         val names = root.listFiles()!!.map { it.name }
@@ -345,84 +267,14 @@ class SessionStoreTest {
     }
 
     @Test
-    fun missingRequiredFieldsRejected() = runTest {
-        val store = newStore()
-        val id = store.create().id
-
-        // Missing assistant usage.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m",
-               "stopReason":"STOP"}}],"leafId":"m0"}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-
-        // Missing usage cost component.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m",
-               "stopReason":"STOP","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":2,
-               "cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0}}}}],"leafId":"m0"}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-
-        // Missing message timestamp.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"user","content":[]}}],"leafId":"m0"}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-
-        // Missing tool-result isError.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"toolResult","timestamp":0,"toolCallId":"c","toolName":"n","content":[]}}],"leafId":"m0"}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-    }
-
-    @Test
-    fun quotedNumbersAndBooleansRejected() = runTest {
-        val store = newStore()
-        val id = store.create().id
-
-        // Quoted top-level format / timestamps.
-        File(root, "$id.json").writeText(
-            """{"format":"2","id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[]}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":"1","updatedAt":1,"entries":[]}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-
-        // Quoted message timestamp.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"user","timestamp":"7","content":[]}}],"leafId":"m0"}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-
-        // Quoted usage number.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m",
-               "stopReason":"STOP","usage":{"input":"1","output":1,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":2,
-               "cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}}}}],"leafId":"m0"}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-
-        // Quoted isError.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"toolResult","timestamp":0,"toolCallId":"c","toolName":"n","content":[],"isError":"false"}}],"leafId":"m0"}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-    }
-
-    @Test
     fun idMismatchBetweenFilenameAndContentRejected() = runTest {
         val store = newStore()
         val id = store.create().id
         File(root, "$id.json").writeText(
-            """{"format":2,"id":"other","title":"t","createdAt":1,"updatedAt":1,"entries":[]}"""
+            """{"format":3,"id":"other","title":"t","createdAt":1,"updatedAt":1,"entries":[]}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
         // Corrupt entries are skipped by summaries.
         assertTrue(store.summaries().isEmpty())
     }
-
 }

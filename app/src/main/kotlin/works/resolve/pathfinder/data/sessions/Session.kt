@@ -1,6 +1,6 @@
 package works.resolve.pathfinder.data.sessions
 
-import works.resolve.pathfinder.ai.core.Message
+import ai.koog.prompt.message.Message
 
 /**
  * A persisted chat session transcript. Instances are immutable value objects;
@@ -24,16 +24,6 @@ data class Session(
     /** Messages along the active root→leaf path, in order. */
     val messages: List<Message>
         get() = Conversation(entries, leafId).activeMessages()
-
-    /**
-     * Returns a copy whose entry tree is a fresh linear chain built from
-     * [messages] (leaf = last). Mechanical adaptation for callers that still
-     * hold flat transcripts; branch structure is not preserved.
-     */
-    fun withMessages(messages: List<Message>): Session {
-        val conversation = Conversation.fromMessages(messages)
-        return copy(entries = conversation.entries, leafId = conversation.leafId)
-    }
 }
 
 /** Session listing entry; summaries are ordered newest-updated first. */
