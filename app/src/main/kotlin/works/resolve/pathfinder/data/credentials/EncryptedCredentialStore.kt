@@ -7,21 +7,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import works.resolve.pathfinder.ai.auth.Credential
-import works.resolve.pathfinder.ai.auth.CredentialInfo
-import works.resolve.pathfinder.ai.auth.CredentialStore
 
 /**
- * Persistent [CredentialStore] (pi contract from
- * `packages/ai/src/auth/types.ts`): stores one credential per provider as
+ * Persistent [CredentialStore]: stores one credential per provider as
  * AES-GCM ciphertext (via [KeystoreAeadCipher], backed by the Android
  * Keystore) in per-provider files under the app's private storage, serialized
  * with [CredentialCodec] (type-tagged JSON only).
  *
  * Writes are serialized per provider with an in-process mutex — the app is a
- * single Android process, so pi's cross-process file-lock requirement
- * collapses to this. Key material never leaves the credential boundary in
- * plaintext and is never logged.
+ * single Android process. Key material never leaves the credential boundary
+ * in plaintext and is never logged.
  */
 class EncryptedCredentialStore(
     private val dir: File,
@@ -61,7 +56,7 @@ class EncryptedCredentialStore(
         }
     }
 
-    private suspend fun decodeRaw(providerId: String): Credential? =
+    private suspend fun decodeRaw(providerId: String): ApiKeyCredential? =
         readRaw(providerId)?.let { raw ->
             try {
                 CredentialCodec.decode(raw)
@@ -70,36 +65,29 @@ class EncryptedCredentialStore(
             }
         }
 
-    override suspend fun read(providerId: String): Credential? = lockFor(providerId).withLock {
+    override suspend fun read(providerId: String): ApiKeyCredential? = lockFor(providerId).withLock {
         decodeRaw(providerId)
     }
 
-    override suspend fun list(): List<CredentialInfo> {
+    override suspend fun set(providerId: String, credential: ApiKeyCredential) {
+        lockFor(providerId).withLock { writeRaw(providerId, CredentialCodec.encode(credential)) }
+    }
+
+    override suspend fun list(): List<String> {
         val names = withContext(Dispatchers.IO) {
             (dir.listFiles { f -> f.isFile && f.name.endsWith(FILE_SUFFIX) } ?: emptyArray())
                 .map { it.name.removeSuffix(FILE_SUFFIX) }
         }
-        val infos = mutableListOf<CredentialInfo>()
+        val configured = mutableListOf<String>()
         for (providerId in names) {
             // Each entry is read under its provider lock so a same-provider
             // modify/delete cannot interleave, and storage/format failures
             // reject: configured credentials never silently disappear from
-            // the listing. Only the non-secret type tag is surfaced.
-            val credential = lockFor(providerId).withLock { decodeRaw(providerId) }
-                ?: continue // deleted between snapshot and lock: a race, not a failure
-            infos += CredentialInfo(providerId, credential.type)
+            // the listing.
+            val credential = lockFor(providerId).withLock { decodeRaw(providerId) } ?: continue
+            configured += providerId
         }
-        return infos.sortedBy { it.providerId }
-    }
-
-    override suspend fun modify(
-        providerId: String,
-        update: suspend (current: Credential?) -> Credential?,
-    ): Credential? = lockFor(providerId).withLock {
-        val current = decodeRaw(providerId)
-        val next = update(current)
-        if (next != null) writeRaw(providerId, CredentialCodec.encode(next))
-        next ?: current
+        return configured.sorted()
     }
 
     override suspend fun delete(providerId: String): Unit = lockFor(providerId).withLock {

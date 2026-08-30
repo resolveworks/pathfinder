@@ -5,14 +5,9 @@ import android.content.Context
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import works.resolve.pathfinder.agent.NativeAgentFactory
-import works.resolve.pathfinder.ai.providers.ProviderCatalog
-import works.resolve.pathfinder.ai.transport.OkHttpTransport
-import works.resolve.pathfinder.ai.transport.OkHttpWebSocketTransport
-import works.resolve.pathfinder.ai.auth.CatalogAuthRegistry
-import works.resolve.pathfinder.ai.auth.CredentialStore
-import works.resolve.pathfinder.ai.auth.ProductionCatalogAuthRegistry
-import works.resolve.pathfinder.ai.auth.ProviderAuthService
+import works.resolve.pathfinder.agent.ChatRuntime
+import works.resolve.pathfinder.agent.StubChatRuntime
+import works.resolve.pathfinder.data.credentials.CredentialStore
 import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
 import works.resolve.pathfinder.data.sessions.SessionStore
@@ -21,8 +16,6 @@ import works.resolve.pathfinder.logging.LogcatTelemetryContext
 import works.resolve.pathfinder.ui.chat.ChatViewModel
 import works.resolve.pathfinder.telemetry.TelemetryContext
 import java.io.File
-import java.util.concurrent.TimeUnit
-import okhttp3.OkHttpClient
 
 /**
  * Application-level manual dependency graph. Everything is process-wide
@@ -32,56 +25,19 @@ import okhttp3.OkHttpClient
  *
  * The graph is deliberately flat and conventional:
  *
- * - one shared [OkHttpClient]/[OkHttpTransport] for all provider requests,
- *   plus an [OkHttpWebSocketTransport] on the same client for the Codex
- *   WebSocket transport family;
- * - [CredentialStore] (pi's credential contract) on the Android-Keystore-backed
- *   [KeystoreAeadCipher];
+ * - [CredentialStore] on the Android-Keystore-backed [KeystoreAeadCipher];
  * - [SettingsRepository] on a single Preferences DataStore file;
  * - [SessionStore] rooted under app-private `filesDir/sessions`;
- * - the generated multi-provider model catalog, parsed once from assets;
- * - [NativeAgentFactory] wiring the native runtime to any catalog provider.
+ * - [ChatRuntime]: the ViewModel⇄runtime seam, currently a stub (the Koog
+ *   runtime lands in the next change).
  */
 class PathfinderApplication : Application() {
 
     /** The app's single telemetry backend: spans rendered as structured Logcat lines. */
     val telemetry: TelemetryContext by lazy { LogcatTelemetryContext() }
 
-    private val okHttpClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .build()
-    }
-
-    val transport: OkHttpTransport by lazy {
-        OkHttpTransport(client = okHttpClient)
-    }
-
-    /**
-     * WebSocket seam for the Codex adapter, sharing the HTTP client's
-     * connection pool and timeouts. Wired here, Codex requests default to
-     * pi's `"auto"` transport: WebSocket-first with per-session SSE fallback
-     * and cached context over the pooled connection.
-     */
-    val webSocketTransport: OkHttpWebSocketTransport by lazy {
-        OkHttpWebSocketTransport(client = okHttpClient)
-    }
-
     val credentials: CredentialStore by lazy {
         EncryptedCredentialStore(this, KeystoreAeadCipher())
-    }
-
-    /** Concrete OAuth flows shared by login UI and runtime auth resolution. */
-    val authRegistry: CatalogAuthRegistry by lazy { ProductionCatalogAuthRegistry }
-
-    /** Login/logout orchestration over the catalog, registry, and credential store. */
-    val authService: ProviderAuthService by lazy {
-        ProviderAuthService(
-            catalog = modelCatalog,
-            registry = authRegistry,
-            credentials = credentials,
-            telemetryContext = telemetry,
-        )
     }
 
     val settingsRepository: SettingsRepository by lazy {
@@ -92,34 +48,17 @@ class PathfinderApplication : Application() {
         SessionStore(File(filesDir, SESSIONS_DIRECTORY))
     }
 
-    /** Generated model catalog, parsed once from the bundled asset. */
-    val modelCatalog: ProviderCatalog by lazy {
-        assets.open("models-catalog.json").bufferedReader().use { it.readText() }
-            .let(ProviderCatalog.Companion::parse)
-    }
-
-    val agentFactory: NativeAgentFactory by lazy {
-        NativeAgentFactory(
-            credentials = credentials,
-            catalog = modelCatalog,
-            transport = transport,
-            webSocketTransport = webSocketTransport,
-            authRegistry = authRegistry,
-            // Production tool registry is intentionally empty for now; pi's
-            // tool surface lands with the tool-execution change.
-            tools = emptyList(),
-        )
-    }
+    /** Temporary stub seam; replaced by the Koog-backed runtime in the next change. */
+    val chatRuntime: ChatRuntime by lazy { StubChatRuntime() }
 
     /** Conventional creation point for the chat controller. */
     val chatViewModelFactory = viewModelFactory {
         initializer {
             ChatViewModel(
                 settingsRepository = settingsRepository,
-                catalog = modelCatalog,
-                authService = authService,
+                credentials = credentials,
                 sessionStore = sessionStore,
-                agentFactory = agentFactory,
+                runtime = chatRuntime,
                 telemetryContext = telemetry,
             )
         }
@@ -131,7 +70,6 @@ class PathfinderApplication : Application() {
 
     private companion object {
         const val SESSIONS_DIRECTORY = "sessions"
-        const val CONNECT_TIMEOUT_SECONDS = 30L
     }
 }
 

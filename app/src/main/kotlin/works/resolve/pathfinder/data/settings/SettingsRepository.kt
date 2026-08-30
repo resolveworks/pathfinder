@@ -4,8 +4,6 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.intPreferencesKey
-import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -21,12 +19,6 @@ class SettingsRepository(
         val MODEL_ID = stringPreferencesKey("model_id")
         val ACTIVE_SESSION_ID = stringPreferencesKey("active_session_id")
         val SHOW_THINKING = booleanPreferencesKey("show_thinking")
-        val RETRY_ENABLED = booleanPreferencesKey("retry_enabled")
-        val RETRY_MAX_RETRIES = intPreferencesKey("retry_max_retries")
-        val RETRY_BASE_DELAY_MS = longPreferencesKey("retry_base_delay_ms")
-        val COMPACTION_ENABLED = booleanPreferencesKey("compaction_enabled")
-        val COMPACTION_RESERVE_TOKENS = intPreferencesKey("compaction_reserve_tokens")
-        val COMPACTION_KEEP_RECENT_TOKENS = intPreferencesKey("compaction_keep_recent_tokens")
     }
 
     val settings: Flow<ModelSettings> = dataStore.data.map { prefs ->
@@ -35,33 +27,7 @@ class SettingsRepository(
             modelId = prefs[Keys.MODEL_ID] ?: "",
             activeSessionId = prefs[Keys.ACTIVE_SESSION_ID]?.takeIf { it.isNotBlank() },
             showThinking = prefs[Keys.SHOW_THINKING] ?: false,
-            retry = RetrySettings(
-                enabled = prefs[Keys.RETRY_ENABLED] ?: true,
-                maxRetries = prefs[Keys.RETRY_MAX_RETRIES] ?: 3,
-                baseDelayMs = prefs[Keys.RETRY_BASE_DELAY_MS] ?: 2000,
-            ),
-            compaction = works.resolve.pathfinder.agent.compaction.CompactionSettings(
-                enabled = prefs[Keys.COMPACTION_ENABLED] ?: true,
-                reserveTokens = prefs[Keys.COMPACTION_RESERVE_TOKENS] ?: 16384,
-                keepRecentTokens = prefs[Keys.COMPACTION_KEEP_RECENT_TOKENS] ?: 20000,
-            ),
         )
-    }
-
-    override suspend fun setRetrySettings(settings: RetrySettings) {
-        dataStore.edit { prefs ->
-            prefs[Keys.RETRY_ENABLED] = settings.enabled
-            prefs[Keys.RETRY_MAX_RETRIES] = settings.maxRetries
-            prefs[Keys.RETRY_BASE_DELAY_MS] = settings.baseDelayMs
-        }
-    }
-
-    override suspend fun setCompactionSettings(settings: works.resolve.pathfinder.agent.compaction.CompactionSettings) {
-        dataStore.edit { prefs ->
-            prefs[Keys.COMPACTION_ENABLED] = settings.enabled
-            prefs[Keys.COMPACTION_RESERVE_TOKENS] = settings.reserveTokens
-            prefs[Keys.COMPACTION_KEEP_RECENT_TOKENS] = settings.keepRecentTokens
-        }
     }
 
     override suspend fun setProviderId(providerId: String) {

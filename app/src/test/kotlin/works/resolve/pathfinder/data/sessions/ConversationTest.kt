@@ -1,7 +1,7 @@
 package works.resolve.pathfinder.data.sessions
 
-import works.resolve.pathfinder.ai.core.UserMessage
-import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.testing.FakeClock
+import ai.koog.prompt.message.Message
 import kotlin.test.assertFailsWith
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -20,7 +20,7 @@ class ConversationTest {
             clock = FakeClock(),
         )
 
-    private fun msg(text: String) = UserMessage.ofText(text)
+    private fun msg(text: String) = userMessage(text)
 
     @Test
     fun appendChainsFromEmpty() {
@@ -117,18 +117,6 @@ class ConversationTest {
     }
 
     @Test
-    fun fromMessagesChainsEntries() {
-        val c = Conversation.fromMessages(listOf(msg("a"), msg("b")))
-        assertNull(c.entries.first().parentId)
-        assertEquals(c.entries[0].id, c.entries[1].parentId)
-        assertEquals(c.entries.last().id, c.leafId)
-        assertEquals(listOf("a", "b"), c.activeMessages().texts())
-
-        assertEquals(0, Conversation.fromMessages(emptyList()).entries.size)
-        assertNull(Conversation.fromMessages(emptyList()).leafId)
-    }
-
-    @Test
     fun deepLinearConversationDoesNotOverflowStack() {
         var next = 0
         var conversation = Conversation(
@@ -148,6 +136,6 @@ class ConversationTest {
         assertEquals(conversation.leafId, node.entry.id)
     }
 
-    private fun List<works.resolve.pathfinder.ai.core.Message>.texts(): List<String> =
-        map { (it as UserMessage).content.single().let { (it as works.resolve.pathfinder.ai.core.TextContent).text } }
+    private fun List<ai.koog.prompt.message.Message>.texts(): List<String> =
+        map { (it as Message.User).textContent() }
 }

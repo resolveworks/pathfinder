@@ -15,10 +15,4 @@ interface SettingsStore {
     suspend fun setActiveSessionId(sessionId: String?)
 
     suspend fun setShowThinking(showThinking: Boolean)
-
-    /** Persists the agent auto-retry settings wholesale (pi's settings.retry). */
-    suspend fun setRetrySettings(settings: RetrySettings)
-
-    /** Persists the compaction thresholds wholesale (pi's settings compaction object). */
-    suspend fun setCompactionSettings(settings: works.resolve.pathfinder.agent.compaction.CompactionSettings)
 }

@@ -60,23 +60,11 @@ dependencies {
     // Coroutines (used directly by production code; version shared with coroutines-test)
     implementation(libs.kotlinx.coroutines.android)
 
-    // OAuth login URLs open in a Custom Tab (ui/CustomTab.kt)
-    implementation(libs.androidx.browser)
-
     // Settings persistence
     implementation(libs.androidx.datastore.preferences)
 
-    // HTTP + JSON for the native provider layer (works.resolve.pathfinder.ai)
-    implementation(libs.okhttp)
-    implementation(libs.okhttp.sse)
+    // JSON for persistence codecs (Koog messages in session files)
     implementation(libs.kotlinx.serialization.json)
-
-    // zstd request-body compression for the Codex SSE path, mirroring pi's
-    // openai-codex-responses.ts:51-54/208-223. Approved runtime dependency per
-    // the ai/AGENTS.md scope boundary. The AAR packages Android natives; the
-    // plain jar (testImplementation) carries desktop natives for unit tests.
-    implementation(libs.zstd.jni) { artifact { type = "aar" } }
-    testImplementation(libs.zstd.jni)
 
     // Koog runtime: provider LLM clients (Anthropic, OpenAI, OpenRouter,
     // Google, MistralAI), their shared contracts (prompt-llm, prompt-model,
@@ -100,5 +88,4 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.okhttp.mockwebserver)
 }

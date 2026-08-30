@@ -40,11 +40,9 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -74,8 +72,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -90,11 +86,7 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import works.resolve.pathfinder.R
-import works.resolve.pathfinder.ai.auth.AuthEvent
-import works.resolve.pathfinder.ai.auth.AuthMethodInfo
-import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.data.sessions.SessionSummary
-import works.resolve.pathfinder.ui.openInCustomTab
 import works.resolve.pathfinder.ui.chat.markdown.MarkdownText
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 import kotlinx.coroutines.launch
@@ -126,11 +118,6 @@ fun ChatRoute(
         onSaveModelSelection = viewModel::saveModelSelection,
         onSaveProviderCredential = viewModel::saveProviderCredential,
         onRemoveProviderCredential = viewModel::removeProviderCredential,
-        authPrompts = viewModel::providerAuthPrompts,
-        authMethods = viewModel::providerAuthMethods,
-        onBeginProviderAuthLogin = viewModel::beginProviderAuthLogin,
-        onSubmitAuthPrompt = viewModel::submitAuthPrompt,
-        onCancelProviderAuthLogin = viewModel::cancelProviderAuthLogin,
         onRefreshProviderStatus = viewModel::refreshProviderStatus,
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
@@ -158,7 +145,7 @@ fun ChatRoute(
  * configuration form. Submitting does not clear it — the form is popped
  * (and its inputs disposed) only after the save is confirmed successful
  * via the state's credential-success epoch, so a failed save retains the
- * typed inputs for correction.
+ * typed input for correction.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -169,13 +156,8 @@ fun ChatScreen(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onSaveModelSelection: (providerId: String, modelId: String) -> Unit,
-    onSaveProviderCredential: (providerId: String, apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
+    onSaveProviderCredential: (providerId: String, apiKey: String) -> Unit,
     onRemoveProviderCredential: (providerId: String) -> Unit,
-    authPrompts: (providerId: String) -> List<ProviderAuthPrompt>,
-    authMethods: (providerId: String) -> List<AuthMethodInfo>,
-    onBeginProviderAuthLogin: (providerId: String, method: AuthMethodInfo) -> Unit,
-    onSubmitAuthPrompt: (answer: String) -> Unit,
-    onCancelProviderAuthLogin: () -> Unit,
     onRefreshProviderStatus: () -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
@@ -228,7 +210,7 @@ fun ChatScreen(
     // single-entry root (ModelSettings/Chat), which is never popped; a
     // Ready-state save bumps only this epoch, returning the user from
     // ProviderAuth to Providers. A failed or incomplete save never bumps
-    // this epoch, so the form and its typed inputs stay intact.
+    // this epoch, so the form and its typed input stay intact.
     LaunchedEffect(uiState.credentialSuccessEpoch) {
         if (backStack.size > 1 && backStack.lastOrNull() is ProviderAuthNavKey) {
             backStack.removeAt(backStack.lastIndex)
@@ -333,15 +315,6 @@ fun ChatScreen(
                             .navigationBarsPadding()
                             .imePadding(),
                     ) {
-                        uiState.retryStatus?.let { retry ->
-                            RetryStatusRow(
-                                attempt = retry.attempt,
-                                maxAttempts = retry.maxAttempts,
-                            )
-                        }
-                        if (uiState.isCompacting) {
-                            CompactingStatusRow()
-                        }
                         Composer(
                             draft = uiState.draft,
                             onDraftChange = onDraftChange,
@@ -415,20 +388,12 @@ fun ChatScreen(
                                 val option = uiState.providerOptions
                                     .firstOrNull { it.id == key.providerId }
                                 if (option != null) {
-                                    ProviderAuthEntry(
+                                    ProviderAuthContent(
                                         provider = option,
-                                        flow = uiState.authFlow?.takeIf { it.providerId == key.providerId },
-                                        prompts = authPrompts(key.providerId),
-                                        methods = authMethods(key.providerId),
-                                        onSave = { apiKeyInput, envInputs ->
-                                            onSaveProviderCredential(key.providerId, apiKeyInput, envInputs)
+                                        onSave = { apiKey ->
+                                            onSaveProviderCredential(key.providerId, apiKey)
                                         },
                                         onRemove = { onRemoveProviderCredential(key.providerId) },
-                                        onBeginLogin = { method ->
-                                            onBeginProviderAuthLogin(key.providerId, method)
-                                        },
-                                        onSubmitPrompt = onSubmitAuthPrompt,
-                                        onCancelLogin = onCancelProviderAuthLogin,
                                         onClose = popBackStack,
                                     )
                                 }
@@ -568,7 +533,7 @@ private fun FailedContent(error: String, onOpenSettings: () -> Unit) {
             style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center,
         )
-        Spacer(modifier = Modifier.padding(top = 16.dp))
+        Spacer(Modifier.padding(top = 16.dp))
         Button(onClick = onOpenSettings) {
             Text(stringResource(R.string.action_configure))
         }
@@ -620,9 +585,8 @@ private fun SettingsContent(
 }
 
 /**
- * Model settings screen (pi's /model): a searchable picker over models of
- * configured providers only. Picking a row only changes local state; Save
- * commits it.
+ * Model settings screen: a searchable picker over models of configured
+ * providers only. Picking a row only changes local state; Save commits it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -677,7 +641,7 @@ private fun ModelSettingsContent(
                     supportingContent = { Text(option.providerName) },
                     trailingContent = if (isSelected) {
                         {
-                            // pi's model selector marks the current model with a check.
+                            // The model selector marks the current model with a check.
                             Icon(
                                 Icons.Default.Check,
                                 contentDescription = stringResource(R.string.model_selected),
@@ -717,8 +681,8 @@ private fun ModelSettingsContent(
 }
 
 /**
- * Providers screen (pi's /login list): every catalog provider with live
- * configured/unconfigured status, filtered by name/id substring.
+ * Providers screen: every provider with live configured/unconfigured status,
+ * filtered by name/id substring.
  */
 @Composable
 private fun ProvidersContent(
@@ -791,24 +755,22 @@ private fun ProvidersContent(
 }
 
 /**
- * Credential form for one provider (pi's auth dialog): one field per catalog
- * prompt in order — the first is the secret API key, later prompts fill env
- * slots. All inputs live in plain Compose memory only: never saved across
- * process death or recomposition-surviving state, never logged. Submitting
- * does not clear the inputs — the form is popped (and its inputs disposed)
- * only after the save is confirmed successful via the state's
- * credential-success epoch, so a failed save retains them for correction.
+ * API-key credential form for one provider: a single secret field labeled
+ * with the provider's own prompt. The input lives in plain Compose memory
+ * only: never saved across process death or recomposition-surviving state,
+ * never logged. Submitting does not clear the input — the form is popped
+ * (and its input disposed) only after the save is confirmed successful via
+ * the state's credential-success epoch, so a failed save retains it for
+ * correction.
  */
 @Composable
 private fun ProviderAuthContent(
     provider: ProviderOption,
-    prompts: List<ProviderAuthPrompt>,
-    onSave: (apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
+    onSave: (apiKey: String) -> Unit,
     onRemove: () -> Unit,
     onClose: () -> Unit,
 ) {
     var apiKeyInput by remember { mutableStateOf("") }
-    val envInputs = remember(prompts) { mutableStateMapOf<String, String>() }
     var confirmRemove by remember { mutableStateOf(false) }
 
     Column(
@@ -819,24 +781,19 @@ private fun ProviderAuthContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        prompts.forEach { prompt ->
-            val isSecret = prompt.secret
-            OutlinedTextField(
-                value = if (isSecret) apiKeyInput else envInputs[prompt.envKey].orEmpty(),
-                onValueChange = {
-                    if (isSecret) apiKeyInput = it else envInputs[prompt.envKey] = it
-                },
-                label = { Text(prompt.message) },
-                visualTransformation = if (isSecret) PasswordVisualTransformation() else VisualTransformation.None,
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+        OutlinedTextField(
+            value = apiKeyInput,
+            onValueChange = { apiKeyInput = it },
+            label = { Text(provider.apiKeyPrompt) },
+            visualTransformation = PasswordVisualTransformation(),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
         // Stacked so narrow widths never put Save, Cancel, and the
         // destructive Forget action in one horizontal row.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = { onSave(apiKeyInput, envInputs.toMap()) },
+                onClick = { onSave(apiKeyInput) },
             ) {
                 Text(stringResource(R.string.action_save))
             }
@@ -876,318 +833,6 @@ private fun ProviderAuthContent(
                 }
             },
         )
-    }
-}
-
-// ---- provider auth (pi's /login method selection and login dialog) ----
-
-/**
- * The provider-auth screen: routes between pi's three login surfaces — the
- * authentication-method selector (account/subscription vs API key, shown
- * only when the provider offers more than one method), the all-fields
- * API-key form (a sole API-key method goes straight there), and the
- * interactive login flow (a sole OAuth method starts immediately). While a
- * login flow for this provider is in flight, it replaces whatever surface
- * was showing (pi's login dialog replaces the editor).
- */
-@Composable
-private fun ProviderAuthEntry(
-    provider: ProviderOption,
-    flow: ProviderAuthFlow?,
-    prompts: List<ProviderAuthPrompt>,
-    methods: List<AuthMethodInfo>,
-    onSave: (apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
-    onRemove: () -> Unit,
-    onBeginLogin: (method: AuthMethodInfo) -> Unit,
-    onSubmitPrompt: (answer: String) -> Unit,
-    onCancelLogin: () -> Unit,
-    onClose: () -> Unit,
-) {
-    // System back during an active flow cancels the login first (pi's
-    // dialog escape); otherwise back pops the screen as usual.
-    BackHandler(enabled = flow != null) { onCancelLogin() }
-
-    if (flow != null) {
-        AuthFlowContent(
-            flow = flow,
-            onSubmit = onSubmitPrompt,
-            onCancel = onCancelLogin,
-        )
-        return
-    }
-
-    var showApiKeyForm by remember(provider.id) {
-        mutableStateOf(providerAuthScreenMode(methods) == ProviderAuthScreenMode.API_KEY_FORM)
-    }
-    when (providerAuthScreenMode(methods)) {
-        ProviderAuthScreenMode.API_KEY_FORM -> ProviderAuthContent(
-            provider = provider,
-            prompts = prompts,
-            onSave = onSave,
-            onRemove = onRemove,
-            onClose = onClose,
-        )
-        ProviderAuthScreenMode.METHOD_CHOICE -> if (showApiKeyForm) {
-            ProviderAuthContent(
-                provider = provider,
-                prompts = prompts,
-                onSave = onSave,
-                onRemove = onRemove,
-                onClose = onClose,
-            )
-        } else {
-            AuthMethodSelectorContent(
-                providerName = provider.name,
-                methods = methods,
-                onSelect = { method ->
-                    if (method.type == AuthType.API_KEY) {
-                        showApiKeyForm = true
-                    } else {
-                        onBeginLogin(method)
-                    }
-                },
-            )
-        }
-        ProviderAuthScreenMode.START_OAUTH -> {
-            val method = methods.first()
-            // Sole account method: start immediately (pi's startProviderLogin
-            // opens the login dialog without a selector step).
-            LaunchedEffect(provider.id) { onBeginLogin(method) }
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Text(
-                    text = stringResource(R.string.auth_waiting),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                TextButton(onClick = onCancelLogin) {
-                    Text(stringResource(R.string.action_cancel_sign_in))
-                }
-            }
-        }
-        ProviderAuthScreenMode.NO_METHODS -> Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = stringResource(R.string.auth_no_methods),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-        }
-    }
-}
-
-/**
- * Authentication-method selector (pi's auth-type selector): one row per
- * offered method, labeled with the method's own label (the catalog label
- * or the OAuth login label) and supporting text distinguishing
- * account/subscription sign-in from an API key.
- */
-@Composable
-private fun AuthMethodSelectorContent(
-    providerName: String,
-    methods: List<AuthMethodInfo>,
-    onSelect: (method: AuthMethodInfo) -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-    ) {
-        Text(
-            text = stringResource(R.string.auth_method_title, providerName),
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Spacer(Modifier.size(16.dp))
-        methods.forEach { method ->
-            ListItem(
-                headlineContent = { Text(method.label) },
-                supportingContent = {
-                    Text(
-                        stringResource(
-                            if (method.isSubscription) R.string.auth_method_account else R.string.auth_method_api_key,
-                        ),
-                    )
-                },
-                trailingContent = {
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
-                },
-                modifier = Modifier.clickable { onSelect(method) },
-            )
-            HorizontalDivider()
-        }
-    }
-}
-
-/**
- * Interactive login flow (pi's login dialog): ordered progress/info events
- * and the pending prompt, when one is suspended. Links, auth URLs, and the
- * device verification URI open only through explicit user-triggered
- * buttons — nothing auto-launches. Text/Secret/
- * ManualCode answers live in ephemeral `remember` state only (never
- * `rememberSaveable`) and cross straight back into the suspended prompt.
- */
-@Composable
-private fun AuthFlowContent(
-    flow: ProviderAuthFlow,
-    onSubmit: (answer: String) -> Unit,
-    onCancel: () -> Unit,
-) {
-    val context = LocalContext.current
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .imePadding()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        if (flow.pendingPrompt == null) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                CircularProgressIndicator(
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.size(18.dp),
-                )
-                Text(
-                    text = stringResource(R.string.auth_waiting),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        flow.events.forEach { event ->
-            AuthEventItem(event = event, onOpenUri = context::openInCustomTab)
-        }
-        flow.pendingPrompt?.let { prompt ->
-            AuthPromptItem(prompt = prompt, onSubmit = onSubmit, onCancel = onCancel)
-        }
-        TextButton(onClick = onCancel) {
-            Text(stringResource(R.string.action_cancel_sign_in))
-        }
-    }
-}
-
-/** One login event: info text with links, auth URL, device code, or progress. */
-@Composable
-private fun AuthEventItem(
-    event: AuthEvent,
-    onOpenUri: (url: String) -> Unit,
-) {
-    when (event) {
-        is AuthEvent.Info -> {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(event.message, style = MaterialTheme.typography.bodyMedium)
-                event.links.forEach { link ->
-                    FilledTonalButton(onClick = { onOpenUri(link.url) }) {
-                        Text(link.label ?: link.url)
-                    }
-                }
-            }
-        }
-        is AuthEvent.AuthUrl -> {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = event.url,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.secondary,
-                )
-                event.instructions?.let {
-                    Text(it, style = MaterialTheme.typography.bodyMedium)
-                }
-                Button(onClick = { onOpenUri(event.url) }) {
-                    Text(stringResource(R.string.auth_open_url))
-                }
-            }
-        }
-        is AuthEvent.DeviceCode -> {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = event.verificationUri,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.secondary,
-                )
-                Text(
-                    text = stringResource(R.string.auth_user_code, event.userCode),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Button(onClick = { onOpenUri(event.verificationUri) }) {
-                    Text(stringResource(R.string.auth_open_url))
-                }
-            }
-        }
-        is AuthEvent.Progress -> Text(
-            text = event.message,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-/**
- * The pending prompt: a selection list (submitting an option id) or an
- * ephemeral single-line input (Text/Secret/ManualCode). The answer never
- * enters saved or hoisted state — it is passed straight to [onSubmit].
- */
-@Composable
-private fun AuthPromptItem(
-    prompt: PendingAuthPrompt,
-    onSubmit: (answer: String) -> Unit,
-    onCancel: () -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(prompt.message, style = MaterialTheme.typography.bodyLarge)
-        prompt.placeholder?.let {
-            Text(
-                text = stringResource(R.string.auth_prompt_placeholder, it),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (prompt.kind == AuthPromptKind.SELECT) {
-            prompt.options.forEach { option ->
-                ListItem(
-                    headlineContent = { Text(option.label) },
-                    supportingContent = option.description?.let { desc -> { Text(desc) } },
-                    modifier = Modifier.clickable { onSubmit(option.id) },
-                )
-                HorizontalDivider()
-            }
-        } else {
-            // Ephemeral, keyed by the prompt itself so a new prompt resets
-            // the field; never rememberSaveable (no process-death retention).
-            var answer by remember(prompt.message) { mutableStateOf("") }
-            val secret = prompt.kind == AuthPromptKind.SECRET
-            OutlinedTextField(
-                value = answer,
-                onValueChange = { answer = it },
-                label = { Text(prompt.message) },
-                visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { onSubmit(answer) }),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { onSubmit(answer) }) {
-                    Text(stringResource(R.string.action_submit))
-                }
-                TextButton(onClick = onCancel) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            }
-        }
     }
 }
 
@@ -1302,7 +947,7 @@ private fun ConversationContent(
                     val hasVisibleText = streaming.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() }
                     val hasThinking = streaming.blocks.any { it is ChatBlock.Thinking }
                     MessageItem(
-                        message = if (hasVisibleText || hasThinking || streaming.error != null) {
+                        message = if (hasVisibleText || hasThinking) {
                             streaming
                         } else {
                             // No visible content at all yet: same "…" placeholder
@@ -1317,42 +962,17 @@ private fun ConversationContent(
                 }
             }
             items(uiState.messages.asReversed(), key = ChatMessage::id) { message ->
-                if (message.isCompactionMarker) {
-                    CompactedDivider()
-                } else {
-                    MessageItem(
-                        message = message,
-                        showThinking = uiState.showThinking,
-                        thinkingOverrides = thinkingOverrides,
-                    )
-                }
+                MessageItem(
+                    message = message,
+                    showThinking = uiState.showThinking,
+                    thinkingOverrides = thinkingOverrides,
+                )
                 HorizontalDivider()
             }
         }
     }
 }
 
-/**
- * Minimal divider marking a compaction cut in the active path (pi's
- * CompactionEntry): centered label between rules; the summary itself lives
- * in LLM context only.
- */
-@Composable
-private fun CompactedDivider() {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        HorizontalDivider(modifier = Modifier.weight(1f))
-        Text(
-            text = stringResource(R.string.chat_compacted),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 12.dp),
-        )
-        HorizontalDivider(modifier = Modifier.weight(1f))
-    }
-}
 /**
  * One chat row. User messages render plain concatenated text; assistant
  * messages render their blocks in content order — text blocks as markdown,
@@ -1369,8 +989,8 @@ private fun MessageItem(
 ) {
     ListItem(
         // pi renders user markdown literally (markers preserved, not parsed);
-        // the MVP equivalent here is plain text, so only the assistant path
-        // goes through MarkdownText.
+        // the equivalent here is plain text, so only the assistant path goes
+        // through MarkdownText.
         headlineContent = {
             if (message.role == ChatRole.Assistant) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1399,29 +1019,21 @@ private fun MessageItem(
         },
         overlineContent = {
             Text(
-                when {
-                    message.role == ChatRole.User -> stringResource(R.string.role_user)
-                    message.error != null -> stringResource(R.string.role_assistant_failed)
-                    else -> stringResource(R.string.role_assistant)
+                if (message.role == ChatRole.User) {
+                    stringResource(R.string.role_user)
+                } else {
+                    stringResource(R.string.role_assistant)
                 },
             )
-        },
-        supportingContent = message.error?.let { error ->
-            {
-                Text(
-                    text = error,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
         },
     )
 }
 
 /**
- * Collapsible unit for one thinking run (pi's assistant-message thinking):
- * a tappable header row — lowercase "thinking" label, a small loader only
- * while the owning message is still streaming, and an expand chevron — plus,
- * when expanded, the reasoning rendered as dimmed italic markdown.
+ * Collapsible unit for one thinking run: a tappable header row — lowercase
+ * "thinking" label, a small loader only while the owning message is still
+ * streaming, and an expand chevron — plus, when expanded, the reasoning
+ * rendered as dimmed italic markdown.
  */
 @Composable
 private fun ThinkingBlock(
@@ -1450,7 +1062,7 @@ private fun ThinkingBlock(
                     modifier = Modifier.size(14.dp),
                 )
             }
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(Modifier.weight(1f))
             Icon(
                 imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                 contentDescription = null,
@@ -1465,32 +1077,6 @@ private fun ThinkingBlock(
             )
         }
     }
-}
-
-/** Compact status line while the agent backs off before an auto-retry (nothing on success). */
-@Composable
-private fun RetryStatusRow(attempt: Int, maxAttempts: Int, modifier: Modifier = Modifier) {
-    Text(
-        text = stringResource(R.string.chat_retrying, attempt, maxAttempts),
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 2.dp),
-    )
-}
-
-/** Transient "Compacting…" status between compaction_start and compaction_end. */
-@Composable
-private fun CompactingStatusRow(modifier: Modifier = Modifier) {
-    Text(
-        text = stringResource(R.string.chat_compacting),
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 2.dp),
-    )
 }
 
 @Composable
@@ -1518,7 +1104,7 @@ private fun Composer(
             keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
             modifier = Modifier.weight(1f),
         )
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(Modifier.width(8.dp))
         if (isStreaming) {
             TextButton(onClick = onStop) { Text(stringResource(R.string.action_stop)) }
         } else {
@@ -1533,41 +1119,31 @@ private fun Composer(
 
 private val PREVIEW_MODEL_OPTIONS = listOf(
     ModelOption(
-        providerId = "zai",
-        providerName = "Z.AI",
-        modelId = "model-a",
-        name = "Preview Model A",
+        providerId = "anthropic",
+        providerName = "Anthropic",
+        modelId = "claude-haiku-4-5",
+        name = "claude-haiku-4-5",
     ),
     ModelOption(
-        providerId = "zai",
-        providerName = "Z.AI",
-        modelId = "model-b",
-        name = "Preview Model B",
+        providerId = "anthropic",
+        providerName = "Anthropic",
+        modelId = "claude-opus-4-6",
+        name = "claude-opus-4-6",
     ),
 )
 
 private val PREVIEW_PROVIDER_OPTIONS = listOf(
-    ProviderOption("anthropic", "Anthropic", configured = true),
-    ProviderOption("cloudflare-ai-gateway", "Cloudflare AI Gateway", configured = true),
-    ProviderOption("openai", "OpenAI", configured = false),
-    ProviderOption("zai", "Z.AI", configured = false),
-)
-
-private val PREVIEW_CLOUDFLARE_PROMPTS = listOf(
-    ProviderAuthPrompt("CLOUDFLARE_API_KEY", "Enter the Cloudflare API key", secret = true),
-    ProviderAuthPrompt("CLOUDFLARE_ACCOUNT_ID", "Enter the Cloudflare account ID", secret = false),
-)
-
-private val PREVIEW_AUTH_METHODS = listOf(
-    AuthMethodInfo(works.resolve.pathfinder.ai.auth.AuthType.OAUTH, "Sign in with a Z.AI account", isSubscription = true),
-    AuthMethodInfo(works.resolve.pathfinder.ai.auth.AuthType.API_KEY, "Z.AI API key", isSubscription = false),
+    ProviderOption("anthropic", "Anthropic", "Anthropic API key", configured = true),
+    ProviderOption("mistral", "Mistral", "Mistral API key", configured = true),
+    ProviderOption("openai", "OpenAI", "OpenAI API key", configured = false),
+    ProviderOption("openrouter", "OpenRouter", "OpenRouter API key", configured = false),
 )
 
 private val PREVIEW_SELECTED_MODEL = SelectedModel(
-    providerId = "zai",
-    providerName = "Z.AI",
-    modelId = "model-a",
-    modelName = "Preview Model A",
+    providerId = "anthropic",
+    providerName = "Anthropic",
+    modelId = "claude-haiku-4-5",
+    modelName = "claude-haiku-4-5",
 )
 
 @Composable
@@ -1575,8 +1151,6 @@ private fun PreviewChatScreen(
     uiState: ChatUiState,
     startKey: NavKey = ChatNavKey,
     extraKeys: List<NavKey> = emptyList(),
-    authPrompts: (String) -> List<ProviderAuthPrompt> = { emptyList() },
-    authMethods: (String) -> List<AuthMethodInfo> = { emptyList() },
 ) {
     PathfinderTheme {
         ChatScreen(
@@ -1586,13 +1160,8 @@ private fun PreviewChatScreen(
             onSend = {},
             onStop = {},
             onSaveModelSelection = { _, _ -> },
-            onSaveProviderCredential = { _, _, _ -> },
+            onSaveProviderCredential = { _, _ -> },
             onRemoveProviderCredential = { },
-            authPrompts = authPrompts,
-            authMethods = authMethods,
-            onBeginProviderAuthLogin = { _, _ -> },
-            onSubmitAuthPrompt = { },
-            onCancelProviderAuthLogin = { },
             onRefreshProviderStatus = {},
             onNewSession = {},
             onSwitchSession = {},
@@ -1613,8 +1182,8 @@ private fun ChatScreenNeedsConfigurationPreview() {
             status = ChatStatus.NeedsConfiguration,
             startKey = ProvidersNavKey,
             providerOptions = listOf(
-                ProviderOption("zai", "Z.AI", configured = false),
-                ProviderOption("cloudflare-ai-gateway", "Cloudflare AI Gateway", configured = false),
+                ProviderOption("anthropic", "Anthropic", "Anthropic API key", configured = false),
+                ProviderOption("openai", "OpenAI", "OpenAI API key", configured = false),
             ),
         ),
     )
@@ -1701,70 +1270,7 @@ private fun ChatScreenProviderAuthPreview() {
             selectedModel = PREVIEW_SELECTED_MODEL,
             configured = true,
         ),
-        extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("cloudflare-ai-gateway")),
-        authPrompts = { providerId ->
-            if (providerId == "cloudflare-ai-gateway") PREVIEW_CLOUDFLARE_PROMPTS else emptyList()
-        },
-        authMethods = { providerId ->
-            if (providerId == "cloudflare-ai-gateway") {
-                listOf(AuthMethodInfo(works.resolve.pathfinder.ai.auth.AuthType.API_KEY, "Cloudflare API key", isSubscription = false))
-            } else {
-                emptyList()
-            }
-        },
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-private fun ChatScreenAuthMethodChoicePreview() {
-    PreviewChatScreen(
-        uiState = ChatUiState(
-            status = ChatStatus.Ready,
-            providerOptions = PREVIEW_PROVIDER_OPTIONS,
-            modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
-        ),
-        extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("zai")),
-        authPrompts = { providerId ->
-            if (providerId == "zai") {
-                listOf(ProviderAuthPrompt("ZAI_API_KEY", "Enter Z.AI API key", secret = true))
-            } else {
-                emptyList()
-            }
-        },
-        authMethods = { providerId -> if (providerId == "zai") PREVIEW_AUTH_METHODS else emptyList() },
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-private fun ChatScreenAuthFlowPreview() {
-    PreviewChatScreen(
-        uiState = ChatUiState(
-            status = ChatStatus.Ready,
-            providerOptions = PREVIEW_PROVIDER_OPTIONS,
-            modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
-            authFlow = ProviderAuthFlow(
-                providerId = "zai",
-                method = PREVIEW_AUTH_METHODS.first(),
-                events = listOf(
-                    AuthEvent.Info("Open the link and sign in", emptyList()),
-                    AuthEvent.AuthUrl("https://auth.example.invalid/authorize", "Approve the request"),
-                    AuthEvent.DeviceCode("ABCD-1234", "https://verify.example.invalid/device"),
-                    AuthEvent.Progress("Waiting for approval"),
-                ),
-                pendingPrompt = PendingAuthPrompt(
-                    kind = AuthPromptKind.MANUAL_CODE,
-                    message = "Enter the code shown in the browser",
-                ),
-            ),
-        ),
-        extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("zai")),
-        authMethods = { providerId -> if (providerId == "zai") PREVIEW_AUTH_METHODS else emptyList() },
+        extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("anthropic")),
     )
 }
 

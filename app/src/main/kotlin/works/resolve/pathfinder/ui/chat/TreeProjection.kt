@@ -1,9 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
-import works.resolve.pathfinder.ai.core.AssistantMessage
-import works.resolve.pathfinder.ai.core.TextContent
-import works.resolve.pathfinder.ai.core.ToolResultMessage
-import works.resolve.pathfinder.ai.core.UserMessage
+import ai.koog.prompt.message.Message
 import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.sessions.MessageEntry
 import works.resolve.pathfinder.data.sessions.SessionEntry
@@ -45,7 +42,7 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
 
     fun isVisible(entry: SessionEntry): Boolean = when (filter) {
         TreeFilter.DEFAULT -> entry is MessageEntry
-        TreeFilter.USER_ONLY -> entry is MessageEntry && entry.message is UserMessage
+        TreeFilter.USER_ONLY -> entry is MessageEntry && entry.message is Message.User
     }
 
     // Visible tree: each visible entry attaches to its nearest visible
@@ -195,20 +192,13 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
 private fun SessionEntry.previewOf(): String {
     if (this !is MessageEntry) return "(no content)"
     val prefix = when (message) {
-        is UserMessage -> "You"
-        is AssistantMessage -> "Assistant"
-        is ToolResultMessage -> "Tool"
+        is Message.User -> "You"
+        is Message.Assistant -> "Assistant"
+        else -> return "(no content)"
     }
-    val body = when {
-        message is AssistantMessage && message.errorMessage != null -> message.errorMessage
-        else -> when (val m = message) {
-            is UserMessage -> m.content
-            is AssistantMessage -> m.content
-            is ToolResultMessage -> emptyList()
-        }.asSequence()
-            .filterIsInstance<TextContent>()
-            .joinToString("") { it.text }
-    }
+    val body = message.parts.asSequence()
+        .filterIsInstance<ai.koog.prompt.message.MessagePart.Text>()
+        .joinToString("") { it.text }
     val normalized = body
         .lineSequence()
         .map { it.trim() }
