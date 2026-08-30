@@ -108,18 +108,20 @@ class KoogChatRuntime(
     private val codexClientFactory: ((accessToken: String, accountId: String) -> LLMClientAPI)? = null,
 ) : ChatRuntime, AutoCloseable {
 
-    /** Shared OkHttp engine for the default factories (tests inject all their own factories; no engine is built). */
-    private val engine: HttpClient? =
-        if (clientFactory == null || oauthRefresher == null || codexClientFactory == null) HttpClient(OkHttp) else null
+    /**
+     * Shared OkHttp engine, built lazily on first use of any production
+     * default factory (tests that inject all of them never build one).
+     */
+    private val lazyEngine = lazy { HttpClient(OkHttp) }
 
     private val factory: (LLMProvider, String) -> LLMClientAPI =
         clientFactory ?: { provider, apiKey ->
-            KoogClients.create(provider, apiKey, KtorKoogHttpClient.Factory(engine!!))
+            KoogClients.create(provider, apiKey, KtorKoogHttpClient.Factory(lazyEngine.value))
         }
 
     private val refresher: suspend (Credential.ChatGptOAuth) -> Credential.ChatGptOAuth =
         oauthRefresher ?: { credential ->
-            val tokens = CodexOAuthClient(engine!!, clock).refresh(credential.refreshToken)
+            val tokens = CodexOAuthClient(lazyEngine.value, clock).refresh(credential.refreshToken)
             Credential.ChatGptOAuth(
                 accessToken = tokens.accessToken,
                 refreshToken = tokens.refreshToken,
@@ -130,7 +132,7 @@ class KoogChatRuntime(
 
     private val codexFactory: (String, String) -> LLMClientAPI =
         codexClientFactory ?: { accessToken, accountId ->
-            CodexLLMClients.create(accessToken, accountId, KtorKoogHttpClient.Factory(engine!!))
+            CodexLLMClients.create(accessToken, accountId, KtorKoogHttpClient.Factory(lazyEngine.value))
         }
 
     override fun createSession(
@@ -158,9 +160,9 @@ class KoogChatRuntime(
         )
     }
 
-    /** Closes the shared HTTP engine if this runtime owns it. No secrets involved. */
+    /** Closes the shared HTTP engine if it was ever built. No secrets involved. */
     override fun close() {
-        engine?.close()
+        if (lazyEngine.isInitialized()) lazyEngine.value.close()
     }
 }
 

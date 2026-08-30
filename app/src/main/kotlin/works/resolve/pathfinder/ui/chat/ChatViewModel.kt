@@ -175,12 +175,14 @@ class ChatViewModel(
      * Cancellation (see [cancelCodexSignIn]) writes no credential.
      */
     fun beginCodexSignIn(providerId: String) {
-        val provider = ProviderDescriptors.byId(providerId)
-        if (provider == null) {
-            setError(ERROR_UNKNOWN_PROVIDER)
-            return
+        val provider = requireNotNull(ProviderDescriptors.byId(providerId)) { "Unknown provider: $providerId" }
+        // A sign-in request for a non-ChatGPT provider is a UI wiring bug;
+        // fail loud instead of silently doing nothing.
+        require(provider.authKind is ProviderAuthKind.ChatGptSignIn) {
+            "Provider $providerId does not sign in with ChatGPT"
         }
-        if (provider.authKind !is ProviderAuthKind.ChatGptSignIn) return
+        // Real race, not a wiring bug: a second tap can land while the first
+        // sign-in is still between button press and codexSignIn state.
         if (codexSignInJob?.isActive == true) return
         codexSignInJob = viewModelScope.launch {
             val device = try {
@@ -209,20 +211,14 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: CodexOAuthException) {
-                updateState { state ->
-                    state.codexSignIn
-                        ?.takeIf { it.error == null }
-                        ?.let { state.copy(codexSignIn = it.copy(error = e.message)) }
-                        ?: state.copy(codexSignIn = null)
-                }
+                // codexSignIn is non-null here: it was set above, and the only
+                // other clearers are this coroutine (which returns on error)
+                // and cancelCodexSignIn (which cancels the job first, taking
+                // the CancellationException path instead).
+                updateState { it.copy(codexSignIn = it.codexSignIn!!.copy(error = e.message)) }
                 return@launch
             } catch (e: Exception) {
-                updateState { state ->
-                    state.codexSignIn
-                        ?.takeIf { it.error == null }
-                        ?.let { state.copy(codexSignIn = it.copy(error = ERROR_CODEX_SIGN_IN)) }
-                        ?: state.copy(codexSignIn = null)
-                }
+                updateState { it.copy(codexSignIn = it.codexSignIn!!.copy(error = ERROR_CODEX_SIGN_IN)) }
                 return@launch
             }
             updateState { it.copy(codexSignIn = null) }
@@ -678,9 +674,11 @@ class ChatViewModel(
     }
 
     private suspend fun saveProviderCredentialInternal(providerId: String, apiKey: String) {
-        if (ProviderDescriptors.byId(providerId) == null) {
-            setError(ERROR_UNKNOWN_PROVIDER)
-            return
+        val provider = requireNotNull(ProviderDescriptors.byId(providerId)) { "Unknown provider: $providerId" }
+        // An API-key save for a ChatGPT provider is a UI wiring bug; storing it
+        // would poison the credential the runtime later rejects as missing.
+        require(provider.authKind is ProviderAuthKind.ApiKey) {
+            "Provider $providerId does not authenticate with an API key"
         }
         val newKey = apiKey.trim()
         if (newKey.isEmpty()) {
@@ -884,7 +882,6 @@ class ChatViewModel(
         const val ERROR_INIT = "Could not load chat data"
         const val ERROR_CREDENTIAL_INCOMPLETE = "Enter this provider's API key before using its models"
         const val ERROR_UNKNOWN_MODEL = "Unknown model"
-        const val ERROR_UNKNOWN_PROVIDER = "Unknown provider"
         const val ERROR_CREDENTIAL_SAVE = "Could not store the API key"
         const val ERROR_SETTINGS_SAVE = "Could not save the configuration"
         const val ERROR_CONFIG_INVALID = "Invalid configuration"
