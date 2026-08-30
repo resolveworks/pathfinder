@@ -2,6 +2,7 @@ package works.resolve.pathfinder
 
 import android.app.Application
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -13,6 +14,8 @@ import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
 import works.resolve.pathfinder.data.sessions.SessionStore
 import works.resolve.pathfinder.data.settings.SettingsRepository
+import works.resolve.pathfinder.diagnostics.AndroidLogSink
+import works.resolve.pathfinder.diagnostics.Diagnostics
 import works.resolve.pathfinder.ui.chat.ChatViewModel
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -80,6 +83,9 @@ class PathfinderApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            Diagnostics.install(AndroidLogSink)
+        }
     }
 
     private companion object {

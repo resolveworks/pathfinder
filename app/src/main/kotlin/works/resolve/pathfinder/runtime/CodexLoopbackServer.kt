@@ -4,6 +4,8 @@ import io.ktor.http.parseQueryString
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import works.resolve.pathfinder.diagnostics.DiagnosticEvent
+import works.resolve.pathfinder.diagnostics.Diagnostics
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -67,9 +69,11 @@ class CodexLoopbackServer(private val state: String) : AutoCloseable {
                 server.bind(InetSocketAddress(InetAddress.getLoopbackAddress(), port))
             } catch (e: IOException) {
                 server.close()
+                Diagnostics.failure(DiagnosticEvent.CODEX_BROWSER_LISTENER_BIND_FAILED, e)
                 throw CodexOAuthException("Sign-in could not be started.")
             }
             serverSocket = server
+            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_LISTENER_BOUND)
         }
     }
 
@@ -85,6 +89,7 @@ class CodexLoopbackServer(private val state: String) : AutoCloseable {
         val server = requireBound()
         while (true) {
             val socket = runInterruptible(Dispatchers.IO) { server.accept() }
+            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_CONNECTION_RECEIVED)
             try {
                 val callback = runInterruptible(Dispatchers.IO) { serve(socket) }
                 if (callback != null) return callback
@@ -111,13 +116,18 @@ class CodexLoopbackServer(private val state: String) : AutoCloseable {
      */
     private fun serve(socket: Socket): String? {
         socket.soTimeout = headerTimeoutMillis
-        val head = readRequestHead(socket) ?: return null
+        val head = readRequestHead(socket) ?: run {
+            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_REQUEST_UNREADABLE)
+            return null
+        }
         val target = head.substringBefore("\r\n").split(' ').getOrNull(1)
         if (target.isNullOrEmpty()) {
+            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_REQUEST_MALFORMED)
             respond(socket, 400, "Bad Request", errorPage("Malformed request."))
             return null
         }
         if (target.substringBefore('?') != callbackPath) {
+            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_CALLBACK_PATH_INVALID)
             respond(socket, 404, "Not Found", errorPage("Callback route not found."))
             return null
         }
@@ -125,14 +135,17 @@ class CodexLoopbackServer(private val state: String) : AutoCloseable {
         val url = if (target.startsWith("http")) target else "http://localhost:${socket.localPort}$target"
         val query = runCatching { parseQueryString(URI(url).rawQuery ?: "") }.getOrNull()
         if (query == null || query["state"] != state) {
+            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_CALLBACK_STATE_INVALID)
             respond(socket, 400, "Bad Request", errorPage("State mismatch."))
             return null
         }
         if (query["code"].isNullOrEmpty()) {
+            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_CALLBACK_CODE_MISSING)
             respond(socket, 400, "Bad Request", errorPage("Missing authorization code."))
             return null
         }
         respond(socket, 200, "OK", successPage())
+        Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_CALLBACK_ACCEPTED)
         return url
     }
 

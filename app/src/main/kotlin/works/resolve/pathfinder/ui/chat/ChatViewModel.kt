@@ -21,6 +21,8 @@ import works.resolve.pathfinder.data.sessions.MessageEntry
 import works.resolve.pathfinder.data.sessions.Session
 import works.resolve.pathfinder.data.sessions.SessionRepository
 import works.resolve.pathfinder.data.sessions.SessionSummary
+import works.resolve.pathfinder.diagnostics.DiagnosticEvent
+import works.resolve.pathfinder.diagnostics.Diagnostics
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -195,6 +197,7 @@ class ChatViewModel(
                 setError(e.message ?: ERROR_CODEX_SIGN_IN)
                 return@launch
             } catch (e: Exception) {
+                Diagnostics.failure(DiagnosticEvent.CODEX_SIGN_IN_UNEXPECTED_FAILURE, e)
                 setError(ERROR_CODEX_SIGN_IN)
                 return@launch
             }
@@ -220,6 +223,7 @@ class ChatViewModel(
                 updateDeviceSignIn { it.copy(error = e.message) }
                 return@launch
             } catch (e: Exception) {
+                Diagnostics.failure(DiagnosticEvent.CODEX_SIGN_IN_UNEXPECTED_FAILURE, e)
                 updateDeviceSignIn { it.copy(error = ERROR_CODEX_SIGN_IN) }
                 return@launch
             }
@@ -255,6 +259,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.failure(DiagnosticEvent.CODEX_SIGN_IN_UNEXPECTED_FAILURE, e)
                 setError(ERROR_CODEX_SIGN_IN)
                 return@launch
             }
@@ -283,6 +288,7 @@ class ChatViewModel(
                 updateBrowserSignIn { it.copy(completing = false, error = e.message ?: ERROR_CODEX_SIGN_IN) }
                 return@launch
             } catch (e: Exception) {
+                Diagnostics.failure(DiagnosticEvent.CODEX_SIGN_IN_UNEXPECTED_FAILURE, e)
                 updateBrowserSignIn { it.copy(completing = false, error = ERROR_CODEX_SIGN_IN) }
                 return@launch
             } finally {

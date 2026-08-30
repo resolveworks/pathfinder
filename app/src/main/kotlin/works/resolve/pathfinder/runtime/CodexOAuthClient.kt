@@ -19,6 +19,8 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import works.resolve.pathfinder.diagnostics.DiagnosticEvent
+import works.resolve.pathfinder.diagnostics.Diagnostics
 import java.net.URI
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -142,19 +144,30 @@ class CodexOAuthClient(
                 contentType(ContentType.Application.Json)
                 setBody("""{"client_id":"$clientId"}""")
             }
-        }.getOrElse { throw CodexOAuthException("Sign-in could not be started.") }
+        }.getOrElse { error ->
+            Diagnostics.failure(DiagnosticEvent.CODEX_DEVICE_BEGIN_TRANSPORT_FAILED, error)
+            throw CodexOAuthException("Sign-in could not be started.")
+        }
 
         if (body.status != HttpStatusCode.OK) {
+            Diagnostics.httpFailure(DiagnosticEvent.CODEX_DEVICE_BEGIN_HTTP_FAILED, body.status.value)
             throw CodexOAuthException("Sign-in could not be started (HTTP ${body.status.value}).")
         }
 
-        val parsed = body.bodyAsText().parseJsonObjectOrNull()
-            ?: throw CodexOAuthException("Sign-in response was invalid.")
+        val responseText = runCatching { body.bodyAsText() }.getOrElse { error ->
+            Diagnostics.failure(DiagnosticEvent.CODEX_DEVICE_BEGIN_TRANSPORT_FAILED, error)
+            throw CodexOAuthException("Sign-in could not be started.")
+        }
+        val parsed = responseText.parseJsonObjectOrNull() ?: run {
+            Diagnostics.event(DiagnosticEvent.CODEX_DEVICE_BEGIN_RESPONSE_INVALID)
+            throw CodexOAuthException("Sign-in response was invalid.")
+        }
 
         val deviceAuthId = parsed.stringOrNull("device_auth_id")
         val userCode = parsed.stringOrNull("user_code")
         val interval = parsed.intervalSecondsOrNull()
         if (deviceAuthId == null || userCode == null || interval == null) {
+            Diagnostics.event(DiagnosticEvent.CODEX_DEVICE_BEGIN_RESPONSE_INVALID)
             throw CodexOAuthException("Sign-in response was invalid.")
         }
         return CodexDeviceAuth(deviceAuthId, userCode, verificationUri, interval)
@@ -209,13 +222,21 @@ class CodexOAuthClient(
                     """{"device_auth_id":"${device.deviceAuthId}","user_code":"${device.userCode}"}""",
                 )
             }
-        }.getOrElse { throw CodexOAuthException("Sign-in could not be checked.") }
+        }.getOrElse { error ->
+            Diagnostics.failure(DiagnosticEvent.CODEX_DEVICE_POLL_TRANSPORT_FAILED, error)
+            throw CodexOAuthException("Sign-in could not be checked.")
+        }
 
         if (response.status == HttpStatusCode.OK) {
-            val parsed = response.bodyAsText().parseJsonObjectOrNull()
+            val responseText = runCatching { response.bodyAsText() }.getOrElse { error ->
+                Diagnostics.failure(DiagnosticEvent.CODEX_DEVICE_POLL_TRANSPORT_FAILED, error)
+                throw CodexOAuthException("Sign-in could not be checked.")
+            }
+            val parsed = responseText.parseJsonObjectOrNull()
             val code = parsed?.stringOrNull("authorization_code")
             val verifier = parsed?.stringOrNull("code_verifier")
             if (code == null || verifier == null) {
+                Diagnostics.event(DiagnosticEvent.CODEX_DEVICE_POLL_RESPONSE_INVALID)
                 throw CodexOAuthException("Sign-in response was invalid.")
             }
             return DevicePollResult.Complete(code, verifier)
@@ -226,13 +247,20 @@ class CodexOAuthClient(
             return DevicePollResult.Pending
         }
 
-        val errorCode = response.bodyAsText().parseJsonObjectOrNull()
+        val errorBody = runCatching { response.bodyAsText() }.getOrElse { error ->
+            Diagnostics.failure(DiagnosticEvent.CODEX_DEVICE_POLL_TRANSPORT_FAILED, error)
+            throw CodexOAuthException("Sign-in could not be checked.")
+        }
+        val errorCode = errorBody.parseJsonObjectOrNull()
             ?.get("error")
             ?.let { if (it is JsonObject) it.stringOrNull("code") else (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
         return when (errorCode) {
             "deviceauth_authorization_pending" -> DevicePollResult.Pending
             "slow_down" -> DevicePollResult.SlowDown
-            else -> DevicePollResult.Failed(response.status.value)
+            else -> {
+                Diagnostics.httpFailure(DiagnosticEvent.CODEX_DEVICE_POLL_HTTP_FAILED, response.status.value)
+                DevicePollResult.Failed(response.status.value)
+            }
         }
     }
 
@@ -289,14 +317,17 @@ class CodexOAuthClient(
      */
     suspend fun completeBrowserLogin(auth: CodexBrowserAuth, redirectUrl: String): CodexTokens {
         if (!isBrowserRedirect(redirectUrl)) {
+            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_REDIRECT_INVALID)
             throw CodexOAuthException("Sign-in could not be completed.")
         }
         val query = parseQueryString(runCatching { URI(redirectUrl).rawQuery }.getOrNull() ?: "")
         if (query["error"] != null) {
+            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_AUTHORIZATION_DENIED)
             throw CodexOAuthException("Sign-in was not completed.")
         }
         val code = query["code"]
         if (query["state"] != auth.state || code == null) {
+            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_REDIRECT_PAYLOAD_INVALID)
             throw CodexOAuthException("Sign-in could not be completed.")
         }
         return exchangeAuthorizationCode(code, auth.codeVerifier, browserRedirectUri)
@@ -309,7 +340,7 @@ class CodexOAuthClient(
         redirectUri: String,
     ): CodexTokens =
         requestTokens(
-            "Sign-in could not be completed",
+            TokenOperation.EXCHANGE,
             Parameters.build {
                 append("grant_type", "authorization_code")
                 append("client_id", clientId)
@@ -322,7 +353,7 @@ class CodexOAuthClient(
     /** Refreshes an expired access token (pi's `refreshAccessToken`). */
     suspend fun refresh(refreshToken: String): CodexTokens =
         requestTokens(
-            "Sign-in could not be refreshed",
+            TokenOperation.REFRESH,
             Parameters.build {
                 append("grant_type", "refresh_token")
                 append("client_id", clientId)
@@ -330,36 +361,80 @@ class CodexOAuthClient(
             },
         )
 
-    private suspend fun requestTokens(step: String, form: Parameters): CodexTokens {
+    private suspend fun requestTokens(operation: TokenOperation, form: Parameters): CodexTokens {
+        Diagnostics.event(operation.startedEvent)
         val response = runCatching {
             httpClient.post(tokenUrl) {
                 header("Content-Type", "application/x-www-form-urlencoded")
                 setBody(FormDataContent(form))
             }
-        }.getOrElse { throw CodexOAuthException("$step.") }
-
-        if (response.status != HttpStatusCode.OK) {
-            throw CodexOAuthException("$step (HTTP ${response.status.value}).")
+        }.getOrElse { error ->
+            Diagnostics.failure(operation.transportFailedEvent, error)
+            throw CodexOAuthException("${operation.failureStep}.")
         }
 
-        val parsed = response.bodyAsText().parseJsonObjectOrNull()
-            ?: throw CodexOAuthException("$step: response was invalid.")
+        if (response.status != HttpStatusCode.OK) {
+            Diagnostics.httpFailure(operation.httpFailedEvent, response.status.value)
+            throw CodexOAuthException("${operation.failureStep} (HTTP ${response.status.value}).")
+        }
+
+        val responseText = runCatching { response.bodyAsText() }.getOrElse { error ->
+            Diagnostics.failure(operation.transportFailedEvent, error)
+            throw CodexOAuthException("${operation.failureStep}.")
+        }
+        val parsed = responseText.parseJsonObjectOrNull() ?: run {
+            Diagnostics.event(operation.responseInvalidEvent)
+            throw CodexOAuthException("${operation.failureStep}: response was invalid.")
+        }
         val accessToken = parsed.stringOrNull("access_token")
         val refreshToken = parsed.stringOrNull("refresh_token")
         val expiresInSeconds = parsed.get("expires_in")?.jsonPrimitive?.longOrNull
         if (accessToken == null || refreshToken == null || expiresInSeconds == null) {
-            throw CodexOAuthException("$step: response was invalid.")
+            Diagnostics.event(operation.responseInvalidEvent)
+            throw CodexOAuthException("${operation.failureStep}: response was invalid.")
         }
 
-        val accountId = accountIdFromJwt(accessToken)
-            ?: throw CodexOAuthException("Account information could not be read from the sign-in response.")
+        val accountId = accountIdFromJwt(accessToken) ?: run {
+            Diagnostics.event(operation.accountInvalidEvent)
+            throw CodexOAuthException("Account information could not be read from the sign-in response.")
+        }
 
+        Diagnostics.event(operation.succeededEvent)
         return CodexTokens(
             accessToken = accessToken,
             refreshToken = refreshToken,
             expiresAtEpochMillis = clock() + expiresInSeconds * 1000,
             accountId = accountId,
         )
+    }
+
+    private enum class TokenOperation(
+        val failureStep: String,
+        val startedEvent: DiagnosticEvent,
+        val transportFailedEvent: DiagnosticEvent,
+        val httpFailedEvent: DiagnosticEvent,
+        val responseInvalidEvent: DiagnosticEvent,
+        val accountInvalidEvent: DiagnosticEvent,
+        val succeededEvent: DiagnosticEvent,
+    ) {
+        EXCHANGE(
+            failureStep = "Sign-in could not be completed",
+            startedEvent = DiagnosticEvent.CODEX_TOKEN_EXCHANGE_STARTED,
+            transportFailedEvent = DiagnosticEvent.CODEX_TOKEN_EXCHANGE_TRANSPORT_FAILED,
+            httpFailedEvent = DiagnosticEvent.CODEX_TOKEN_EXCHANGE_HTTP_FAILED,
+            responseInvalidEvent = DiagnosticEvent.CODEX_TOKEN_EXCHANGE_RESPONSE_INVALID,
+            accountInvalidEvent = DiagnosticEvent.CODEX_TOKEN_EXCHANGE_ACCOUNT_INVALID,
+            succeededEvent = DiagnosticEvent.CODEX_TOKEN_EXCHANGE_SUCCEEDED,
+        ),
+        REFRESH(
+            failureStep = "Sign-in could not be refreshed",
+            startedEvent = DiagnosticEvent.CODEX_TOKEN_REFRESH_STARTED,
+            transportFailedEvent = DiagnosticEvent.CODEX_TOKEN_REFRESH_TRANSPORT_FAILED,
+            httpFailedEvent = DiagnosticEvent.CODEX_TOKEN_REFRESH_HTTP_FAILED,
+            responseInvalidEvent = DiagnosticEvent.CODEX_TOKEN_REFRESH_RESPONSE_INVALID,
+            accountInvalidEvent = DiagnosticEvent.CODEX_TOKEN_REFRESH_ACCOUNT_INVALID,
+            succeededEvent = DiagnosticEvent.CODEX_TOKEN_REFRESH_SUCCEEDED,
+        ),
     }
 
     /**

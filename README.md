@@ -69,10 +69,15 @@ The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 ## Security and diagnostics
 
 Provider API keys are stored behind Android Keystore-backed encryption. API
-keys, message content, tool data, and model responses must never be logged.
+keys, OAuth values, message content, tool data, model responses, URLs, provider
+payloads, and exception messages must never be logged.
 
-Operational lifecycle events use the `Pathfinder` Logcat tag:
+Debug APKs emit handled-failure and boundary lifecycle diagnostics under the
+`Pathfinder` Logcat tag. Entries use stable event identifiers and constrained
+metadata (HTTP status, exception type chain, and the first Pathfinder stack
+frame); raw `Throwable` values are never handed to Logcat. Non-debug APKs do
+not install a logging backend, and Pathfinder does not persist or upload logs.
 
 ```bash
-adb logcat -v time -s Pathfinder
+adb logcat -v time -s Pathfinder:I
 ```
