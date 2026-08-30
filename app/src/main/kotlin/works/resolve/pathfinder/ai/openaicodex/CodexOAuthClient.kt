@@ -182,7 +182,7 @@ class CodexOAuthClient(
 
         val errorCode = response.bodyAsText().parseJsonObjectOrNull()
             ?.get("error")
-            ?.let { if (it is JsonObject) it.stringOrNull("code") else it.jsonPrimitive.content }
+            ?.let { if (it is JsonObject) it.stringOrNull("code") else (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
         return when (errorCode) {
             "deviceauth_authorization_pending" -> DevicePollResult.Pending
             "slow_down" -> DevicePollResult.SlowDown
