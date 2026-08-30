@@ -8,6 +8,7 @@ import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -35,6 +36,8 @@ class CodexLLMClientsTest {
         val sseHeaders = mutableListOf<Map<String, String>>()
         val linesHeaders = mutableListOf<Map<String, String>>()
         val sseCalls = mutableListOf<Pair<String, String>>() // path to body
+        val linesCalls = mutableListOf<Pair<String, String>>() // path to body
+        var lineResponses: List<String> = emptyList()
 
         override suspend fun <R : Any> get(
             path: String,
@@ -81,7 +84,8 @@ class CodexLLMClientsTest {
             headers: Map<String, String>,
         ): Flow<String> {
             linesHeaders.add(headers)
-            return emptyFlow()
+            linesCalls.add(path to requestBody.toString())
+            return flowOf(*lineResponses.toTypedArray())
         }
 
         override fun close() {}
@@ -139,6 +143,35 @@ class CodexLLMClientsTest {
         assertEquals("override-me", recording.getHeaders.last()["originator"])
     }
 
+    @Test
+    fun codexSseUsesRawLinesAndParsesDataRecordsWithoutContentTypeValidation() = runTest {
+        val recording = RecordingHttpClient().apply {
+            lineResponses = listOf(
+                ": keep-alive",
+                "event: response.output_text.delta",
+                "data: one",
+                "data: skip",
+                "data: [DONE]",
+            )
+        }
+        val decorated = CodexLLMClients.ChatGPTBackendHeaderDecorator(recording, expectedExtras)
+
+        val values = decorated.sse(
+            path = "codex/responses",
+            requestBody = "body",
+            requestBodyType = String::class,
+            dataFilter = { it != "skip" },
+            decodeStreamingResponse = { it.uppercase() },
+            processStreamingChunk = { "<$it>" },
+        ).toList()
+
+        assertEquals(listOf("<ONE>"), values)
+        assertTrue(recording.sseCalls.isEmpty(), "Ktor-style SSE must be bypassed")
+        assertEquals(listOf("codex/responses" to "body"), recording.linesCalls)
+        assertEquals("text/event-stream", recording.linesHeaders.single()["Accept"])
+        assertEquals("application/json", recording.linesHeaders.single()["Content-Type"])
+    }
+
     // ------------------------------------------------------------------
     // 2. Wire-level request through OpenAILLMClient.executeStreaming
     // ------------------------------------------------------------------
@@ -171,12 +204,15 @@ class CodexLLMClientsTest {
         runCatching { client.executeStreaming(prompt, model).toList() }
 
         val http = factory.clients.single()
-        val headers = http.sseHeaders.single()
+        assertTrue(http.sseCalls.isEmpty(), "Codex must bypass strict Content-Type SSE validation")
+        val headers = http.linesHeaders.single()
         expectedExtras.forEach { (name, value) ->
-            assertEquals(value, headers[name], "missing $name in SSE headers")
+            assertEquals(value, headers[name], "missing $name in streaming headers")
         }
+        assertEquals("text/event-stream", headers["Accept"])
+        assertEquals("application/json", headers["Content-Type"])
 
-        val (path, body) = http.sseCalls.single()
+        val (path, body) = http.linesCalls.single()
         assertEquals("codex/responses", path)
         assertTrue(body.contains("\"store\":false"), "expected store:false in body: $body")
         assertTrue(body.contains("You are a helpful assistant."), "expected instructions in body")

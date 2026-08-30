@@ -9,6 +9,7 @@ import ai.koog.prompt.executor.clients.openai.OpenAIResponsesParams
 import ai.koog.prompt.executor.clients.openai.base.AbstractOpenAILLMClient
 import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.reflect.KClass
@@ -53,6 +54,11 @@ public object CodexLLMClients {
      * (Bearer token, base URL, timeouts, Koog Json) and wrapped in a decorator that adds
      * the ChatGPT-backend headers (`chatgpt-account-id`, `originator`, `OpenAI-Beta`)
      * to every request — mirroring pi's `buildBaseCodexHeaders`/`buildSSEHeaders`.
+     *
+     * Codex currently omits `Content-Type` from successful streaming responses.
+     * Ktor's SSE plugin rejects those responses before reading their valid SSE body,
+     * so [ChatGPTBackendHeaderDecorator] streams through [KoogHttpClient.lines]
+     * and decodes the `data:` records just as pi's fetch-based parser does.
      */
     public fun create(
         accessToken: String,
@@ -141,10 +147,26 @@ public object CodexLLMClients {
             processStreamingChunk: (R) -> O?,
             parameters: Map<String, String>,
             headers: Map<String, String>,
-        ): Flow<O> = delegate.sse(
-            path, requestBody, requestBodyType, dataFilter,
-            decodeStreamingResponse, processStreamingChunk, parameters, headers.withExtras(),
-        )
+        ): Flow<O> = delegate.lines(
+            path = path,
+            requestBody = requestBody,
+            requestBodyType = requestBodyType,
+            parameters = parameters,
+            headers = mapOf(
+                "Accept" to "text/event-stream",
+                "Content-Type" to "application/json",
+            ) + headers.withExtras(),
+        ).mapNotNull { line ->
+            // The Codex backend emits one JSON value per data line. Ignore SSE
+            // metadata/comments and the optional OpenAI stream terminator.
+            val data = line
+                .takeIf { it.startsWith("data:") }
+                ?.removePrefix("data:")
+                ?.trimStart()
+                ?: return@mapNotNull null
+            if (data == "[DONE]" || !dataFilter(data)) return@mapNotNull null
+            processStreamingChunk(decodeStreamingResponse(data))
+        }
 
         override fun <T : Any> lines(
             path: String,
