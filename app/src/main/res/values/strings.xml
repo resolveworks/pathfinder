@@ -20,6 +20,13 @@
     <string name="provider_status_configured">configured</string>
     <string name="provider_status_unconfigured">unconfigured</string>
     <string name="action_remove_provider">Forget provider</string>
+
+    <string name="signin_chatgpt_action">Sign in with ChatGPT</string>
+    <string name="signin_chatgpt_explanation">Sign in with your ChatGPT account to use this provider\'s models with your subscription.</string>
+    <string name="signin_chatgpt_code_label">Enter this code on the sign-in page:</string>
+    <string name="signin_chatgpt_open_page">Open sign-in page</string>
+    <string name="signin_chatgpt_waiting">Waiting for you to finish signing in…</string>
+    <string name="signin_chatgpt_signed_in">Signed in</string>
     <string name="remove_provider_confirm">Forget the stored credential for %1$s?</string>
     <string name="model_search_hint">Search models</string>
     <string name="model_selected">Selected</string>
