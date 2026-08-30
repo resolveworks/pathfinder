@@ -38,14 +38,14 @@ VIEWPORT = 108.0        # adaptive-icon viewport is 108x108
 CENTER = VIEWPORT / 2   # lattice center
 GRID = 24.0             # lattice spacing (row spacing = turn diameter)
 
-STROKE = 6.0            # serpentine dash and circle ring stroke width
+STROKE = 7.0            # serpentine dash stroke width
 GAP = 6.0               # exact visible gap between pill bodies (edge to edge)
-N_DASHES = 9            # dash count; dash length is derived
+N_DASHES = 7            # dash count; dash length is derived
 
 # Dashes use STROKE; the circle ring and X arms stay bolder (X_STROKE).
 CIRCLE_R = 8.0          # ring centerline radius
-X_HALF = 9.0            # half the X arm length
-X_STROKE = 8.0
+X_HALF = 8.0            # half the X arm length
+X_STROKE = 10.0
 
 COLOR = "#000000"       # GrapheneOS style: black glyph on white circle
 MONO_COLOR = "#000000"  # themed-icon paint
@@ -53,7 +53,7 @@ MONO_COLOR = "#000000"  # themed-icon paint
 # Uniform shrink about the viewport center: GrapheneOS glyphs occupy roughly
 # 60-65% of the launcher disc, so the whole logo (lattice, strokes, circle,
 # X) is scaled down from its design size.
-SCALE = 0.65
+SCALE = 0.6
 GRID *= SCALE
 STROKE *= SCALE
 GAP *= SCALE
