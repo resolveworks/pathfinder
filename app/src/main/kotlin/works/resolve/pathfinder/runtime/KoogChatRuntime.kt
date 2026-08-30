@@ -4,9 +4,12 @@ import ai.koog.http.client.KoogHttpClient
 import ai.koog.http.client.ktor.KtorKoogHttpClient
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClientAPI
+import ai.koog.prompt.executor.clients.anthropic.AnthropicClientSettings
 import ai.koog.prompt.executor.clients.anthropic.AnthropicLLMClient
+import ai.koog.prompt.executor.clients.deepseek.DeepSeekLLMClient
 import ai.koog.prompt.executor.clients.google.GoogleLLMClient
 import ai.koog.prompt.executor.clients.mistralai.MistralAILLMClient
+import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openrouter.OpenRouterLLMClient
 import ai.koog.prompt.llm.LLModel
@@ -173,11 +176,24 @@ class KoogChatRuntime(
 private const val REFRESH_MARGIN_MILLIS = 60_000L
 
 /**
- * Maps a Koog [LLMProvider] to its executor client — the five providers the
+ * Maps a Koog [LLMProvider] to its executor client — the providers the
  * product ships, and only those. Kept internal so tests can assert the full
  * mapping without going through the network.
+ *
+ * Three kinds of entry: first-party Koog clients (Anthropic, OpenAI, Google,
+ * OpenRouter, MistralAI, DeepSeek); and coding-plan endpoints without a Koog
+ * client module, executed by Koog's stock OpenAI/Anthropic clients against
+ * their coding base URLs (Z.AI is OpenAI chat-completions protocol; Kimi
+ * speaks the Anthropic Messages protocol, requiring a model version map —
+ * see [KimiModels]).
  */
 internal object KoogClients {
+
+    /** Base URL of the Z.AI coding plan (pi: `providers/zai.ts`). */
+    internal const val ZAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
+
+    /** Base URL of Kimi For Coding (pi: `providers/kimi-coding.ts`). */
+    internal const val KIMI_BASE_URL = "https://api.kimi.com/coding"
 
     /** Creates the Koog [LLMClientAPI] for [provider], authenticated with [apiKey]. */
     fun create(
@@ -190,6 +206,25 @@ internal object KoogClients {
         LLMProvider.Google -> GoogleLLMClient(apiKey, httpClientFactory = httpClientFactory)
         LLMProvider.OpenRouter -> OpenRouterLLMClient(apiKey, httpClientFactory = httpClientFactory)
         LLMProvider.MistralAI -> MistralAILLMClient(apiKey, httpClientFactory = httpClientFactory)
+        LLMProvider.DeepSeek -> DeepSeekLLMClient(apiKey, httpClientFactory = httpClientFactory)
+        LLMProvider.ZhipuAI -> OpenAILLMClient(
+            apiKey,
+            settings = OpenAIClientSettings(
+                baseUrl = ZAI_BASE_URL,
+                // The coding endpoint serves completions at its API root, not
+                // under "v1/" like api.openai.com.
+                chatCompletionsPath = "chat/completions",
+            ),
+            httpClientFactory = httpClientFactory,
+        )
+        KimiProvider -> AnthropicLLMClient(
+            apiKey,
+            settings = AnthropicClientSettings(
+                baseUrl = KIMI_BASE_URL,
+                modelVersionsMap = KimiModels.versionMap,
+            ),
+            httpClientFactory = httpClientFactory,
+        )
         else -> throw IllegalArgumentException("Unsupported provider: ${provider.id}")
     }
 }

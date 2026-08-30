@@ -77,10 +77,11 @@ data class CodexTokens(
  *   `packages/ai/src/auth/oauth/device-code.ts` pending/slow_down/timeout
  *   semantics);
  * - the browser flow (`loginOpenAICodex`: PKCE + `state` via
- *   `createAuthorizationFlow`). On Android the authorize URL is loaded in an
- *   in-app WebView that intercepts the fixed loopback redirect
- *   `http://localhost:1455/auth/callback` (pi instead runs a local HTTP
- *   server on that port); the intercepted URL is handed back to
+ *   `createAuthorizationFlow`). The authorize URL is opened in the user's
+ *   default browser, and the fixed loopback redirect
+ *   `http://localhost:1455/auth/callback` is caught by
+ *   [CodexLoopbackServer] — exactly the mechanism pi's CLI uses on desktop
+ *   (`startLocalOAuthServer`); the caught URL is handed back to
  *   [completeBrowserLogin], which validates it and exchanges the code.
  *
  * JWT account-id decode follows pi's `getAccountId`. Pure protocol component:
@@ -267,9 +268,8 @@ class CodexOAuthClient(
 
     /**
      * True when [url] is the browser flow's loopback redirect (scheme, host,
-     * port, and path of the registered `redirect_uri`). Used by the WebView
-     * layer to intercept the redirect instead of loading it; query contents
-     * are validated separately by [completeBrowserLogin].
+     * port, and path of the registered `redirect_uri`); query contents are
+     * validated separately by [completeBrowserLogin].
      */
     fun isBrowserRedirect(url: String): Boolean {
         val uri = runCatching { URI(url) }.getOrNull() ?: return false
@@ -280,11 +280,12 @@ class CodexOAuthClient(
     }
 
     /**
-     * Completes the browser flow with the intercepted [redirectUrl]:
-     * validates it is the loopback redirect, that it echoes [CodexBrowserAuth.state],
-     * and that it carries an authorization code (an OAuth `error` redirect
-     * fails with a user-safe message), then exchanges the code with the
-     * PKCE verifier (pi's `exchangeAuthorizationCode`).
+     * Completes the browser flow with the redirect URL caught by
+     * [CodexLoopbackServer]: validates it is the loopback redirect, that it
+     * echoes [CodexBrowserAuth.state], and that it carries an authorization
+     * code (an OAuth `error` redirect fails with a user-safe message), then
+     * exchanges the code with the PKCE verifier (pi's
+     * `exchangeAuthorizationCode`).
      */
     suspend fun completeBrowserLogin(auth: CodexBrowserAuth, redirectUrl: String): CodexTokens {
         if (!isBrowserRedirect(redirectUrl)) {

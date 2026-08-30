@@ -70,8 +70,12 @@ modifying one layer to impersonate another.
   ViewModels depend only on `ChatRuntime`.
 - Authentication is a per-provider API key stored in the Keystore-backed
   `data/credentials` store and supplied to Koog clients at prompt time.
-- Six providers are declared in `runtime/ProviderDescriptor.kt`; models
-  are enumerated from Koog `LLModelDefinitions`. App catalog data is
+- Nine providers are declared in `runtime/ProviderDescriptor.kt`; models
+  are enumerated from Koog `LLModelDefinitions` where Koog ships a client
+  (DeepSeek included), and hand-declared as Koog `LLModel`s from pi's
+  catalogs for coding-plan endpoints without a Koog client module (Z.AI,
+  Kimi — executed by Koog's stock OpenAI/Anthropic clients against their
+  coding base URLs, `runtime/CodingPlanModels.kt`). App catalog data is
   presentation metadata only, never a parallel protocol surface.
 - Tree-session behavior is a Pathfinder session layer around Koog history;
   branching semantics do not leak into Koog's runtime. Koog `Message` is

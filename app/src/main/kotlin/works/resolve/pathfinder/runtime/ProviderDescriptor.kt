@@ -2,6 +2,7 @@ package works.resolve.pathfinder.runtime
 
 import ai.koog.prompt.executor.clients.LLModelDefinitions
 import ai.koog.prompt.executor.clients.anthropic.AnthropicModels
+import ai.koog.prompt.executor.clients.deepseek.DeepSeekModels
 import ai.koog.prompt.executor.clients.google.GoogleModels
 import ai.koog.prompt.executor.clients.mistralai.MistralAIModels
 import ai.koog.prompt.executor.clients.openai.OpenAIModels
@@ -92,6 +93,28 @@ object ProviderDescriptors {
             authKind = ProviderAuthKind.ApiKey("Mistral API key"),
             definitions = MistralAIModels,
         ),
+        provider(
+            id = "deepseek",
+            displayName = "DeepSeek",
+            authKind = ProviderAuthKind.ApiKey("DeepSeek API key"),
+            definitions = DeepSeekModels,
+        ),
+        // Coding-plan providers without a dedicated Koog client module:
+        // OpenAI-/Anthropic-protocol endpoints executed by Koog's stock
+        // clients against their coding base URLs, with hand-declared Koog
+        // model catalogs (see `runtime/CodingPlanModels.kt`).
+        provider(
+            id = "zai",
+            displayName = "Z.AI",
+            authKind = ProviderAuthKind.ApiKey("Z.AI API key"),
+            models = ZaiModels.descriptors,
+        ),
+        provider(
+            id = "kimi",
+            displayName = "Kimi",
+            authKind = ProviderAuthKind.ApiKey("Kimi API key"),
+            models = KimiModels.descriptors,
+        ),
         // ChatGPT-subscription backend: same Responses API as OpenAI, but at
         // chatgpt.com with OAuth tokens (see `runtime/CodexLLMClients.kt`).
         // Models are the
@@ -107,32 +130,39 @@ object ProviderDescriptors {
                 OpenAIModels.Chat.GPT5_1CodexMax,
                 OpenAIModels.Chat.GPT5_2Codex,
                 OpenAIModels.Chat.GPT5_3Codex,
-            ),
+            ).toDescriptors(),
         ),
     )
 
     fun byId(providerId: String): ProviderDescriptor? = all.firstOrNull { it.id == providerId }
+
+    /** Koog model ids double as display names for enumerated providers. */
+    private fun List<LLModel>.toDescriptors(): List<ModelDescriptor> =
+        map { model -> ModelDescriptor(id = model.id, displayName = model.id, model = model) }
 
     private fun provider(
         id: String,
         displayName: String,
         authKind: ProviderAuthKind,
         definitions: LLModelDefinitions,
-    ): ProviderDescriptor = provider(id, displayName, authKind, definitions.models)
+    ): ProviderDescriptor = provider(
+        id,
+        displayName,
+        authKind,
+        definitions.models
+            .filter { it.supports(LLMCapability.Completion) }
+            .map { model -> ModelDescriptor(id = model.id, displayName = model.id, model = model) },
+    )
 
     private fun provider(
         id: String,
         displayName: String,
         authKind: ProviderAuthKind,
-        models: List<LLModel>,
+        models: List<ModelDescriptor>,
     ): ProviderDescriptor = ProviderDescriptor(
         id = id,
         displayName = displayName,
         authKind = authKind,
-        models = models
-            .filter { it.supports(LLMCapability.Completion) }
-            .map { model ->
-                ModelDescriptor(id = model.id, displayName = model.id, model = model)
-            },
+        models = models,
     )
 }

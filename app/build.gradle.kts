@@ -67,14 +67,16 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
 
     // Koog runtime: provider LLM clients (Anthropic, OpenAI, OpenRouter,
-    // Google, MistralAI), their shared contracts (prompt-llm, prompt-model,
-    // prompt-executor-clients arrive transitively), and the HTTP transport
-    // (Koog's Ktor client over an OkHttp engine shared with the app's stack).
+    // Google, MistralAI, DeepSeek), their shared contracts (prompt-llm,
+    // prompt-model, prompt-executor-clients arrive transitively), and the HTTP
+    // transport (Koog's Ktor client over an OkHttp engine shared with the
+    // app's stack).
     implementation(libs.koog.prompt.executor.anthropic.client)
     implementation(libs.koog.prompt.executor.openai.client)
     implementation(libs.koog.prompt.executor.openrouter.client)
     implementation(libs.koog.prompt.executor.google.client)
     implementation(libs.koog.prompt.executor.mistralai.client)
+    implementation(libs.koog.prompt.executor.deepseek.client)
     implementation(libs.koog.http.client.ktor)
     implementation(libs.ktor.client.okhttp)
 

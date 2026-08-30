@@ -42,6 +42,7 @@ koog-prompt-executor-openai-client = { module = "ai.koog:prompt-executor-openai-
 koog-prompt-executor-openrouter-client = { module = "ai.koog:prompt-executor-openrouter-client", version.ref = "koog" }
 koog-prompt-executor-google-client = { module = "ai.koog:prompt-executor-google-client", version.ref = "koogBeta" }
 koog-prompt-executor-mistralai-client = { module = "ai.koog:prompt-executor-mistralai-client", version.ref = "koogBeta" }
+koog-prompt-executor-deepseek-client = { module = "ai.koog:prompt-executor-deepseek-client", version.ref = "koogBeta" }
 # Koog HTTP transport: core contracts + Ktor implementation
 koog-http-client-ktor = { module = "ai.koog:http-client-ktor", version.ref = "koog" }
 ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }

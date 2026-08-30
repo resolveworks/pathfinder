@@ -3,6 +3,7 @@ package works.resolve.pathfinder.runtime
 import ai.koog.http.client.ktor.KtorKoogHttpClient
 import ai.koog.prompt.executor.clients.LLMClientAPI
 import ai.koog.prompt.executor.clients.anthropic.AnthropicLLMClient
+import ai.koog.prompt.executor.clients.deepseek.DeepSeekLLMClient
 import ai.koog.prompt.executor.clients.google.GoogleLLMClient
 import ai.koog.prompt.executor.clients.mistralai.MistralAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
@@ -34,7 +35,15 @@ class KoogClientsTest {
             LLMProvider.Google to GoogleLLMClient::class,
             LLMProvider.OpenRouter to OpenRouterLLMClient::class,
             LLMProvider.MistralAI to MistralAILLMClient::class,
+            LLMProvider.DeepSeek to DeepSeekLLMClient::class,
+            // Coding-plan endpoints: stock Koog clients over their base URLs.
+            LLMProvider.ZhipuAI to OpenAILLMClient::class,
+            KimiProvider to AnthropicLLMClient::class,
         )
+
+        // Coding-plan clients are stock OpenAI/Anthropic clients whose
+        // llmProvider() reports the protocol owner, not the product provider.
+        val selfReporting = expected.keys - setOf(LLMProvider.ZhipuAI, KimiProvider)
 
         // The catalog's Koog provider set (each model carries its provider) is
         // exactly the shipped client set: no provider without a client, no
@@ -47,8 +56,10 @@ class KoogClientsTest {
         for ((provider, clientClass) in expected) {
             val client = KoogClients.create(provider, API_KEY, factory)
             assertEquals(clientClass, client::class)
-            // Koog's own round-trip: the client knows its provider.
-            assertEquals(provider, client.llmProvider())
+            if (provider in selfReporting) {
+                // Koog's own round-trip: the client knows its provider.
+                assertEquals(provider, client.llmProvider())
+            }
             client.close()
         }
     }

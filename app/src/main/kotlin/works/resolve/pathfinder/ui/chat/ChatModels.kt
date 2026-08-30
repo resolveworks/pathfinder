@@ -50,10 +50,6 @@ data object ProvidersNavKey : NavKey
 @Serializable
 data class ProviderAuthNavKey(val providerId: String) : NavKey
 
-/** Navigation 3 destination key: the in-app WebView sign-in of one provider. */
-@Serializable
-data class CodexSignInNavKey(val providerId: String) : NavKey
-
 /** Outcome of initial load of settings, credentials, and sessions. */
 enum class ChatStatus {
     /** Initial load in progress. */
@@ -92,15 +88,16 @@ sealed interface CodexSignInState {
     ) : CodexSignInState
 
     /**
-     * Browser flow: the in-app WebView destination loads [authorizeUrl] and
-     * forwards intercepted loopback redirects back to the ViewModel. The
-     * exchange phase ([completing]) and the stored result ([completed]) render
-     * as native result pages; [error] shows a retryable failure.
+     * Browser flow: [authorizeUrl] is opened in the user's default browser
+     * (sharing the browser's login session) while a loopback listener waits
+     * for the redirect. The exchange phase ([completing]) renders inline;
+     * [error] shows a retryable failure. Success renders nothing here: the
+     * browser shows the listener's success page and the stored credential
+     * pops the form via the credential-success epoch.
      */
     data class Browser(
         val authorizeUrl: String,
         val completing: Boolean = false,
-        val completed: Boolean = false,
         val error: String? = null,
     ) : CodexSignInState
 }

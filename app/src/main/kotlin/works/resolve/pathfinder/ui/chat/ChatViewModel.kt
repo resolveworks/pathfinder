@@ -10,6 +10,7 @@ import works.resolve.pathfinder.runtime.ChatRuntimeState
 import works.resolve.pathfinder.runtime.ProviderAuthKind
 import works.resolve.pathfinder.runtime.ProviderDescriptors
 import works.resolve.pathfinder.runtime.CodexOAuthClient
+import works.resolve.pathfinder.runtime.CodexLoopbackServer
 import works.resolve.pathfinder.runtime.CodexOAuthException
 import works.resolve.pathfinder.data.credentials.Credential
 import works.resolve.pathfinder.data.credentials.CredentialStore
@@ -21,7 +22,6 @@ import works.resolve.pathfinder.data.sessions.Session
 import works.resolve.pathfinder.data.sessions.SessionRepository
 import works.resolve.pathfinder.data.sessions.SessionSummary
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -105,9 +105,6 @@ class ChatViewModel(
 
     /** In-flight ChatGPT sign-in (device-code poll or browser exchange), if any. */
     private var codexSignInJob: Job? = null
-
-    /** Redirect delivery point of the active browser sign-in, if any. */
-    private var codexBrowserRedirect: CompletableDeferred<String>? = null
 
     init {
         viewModelScope.launch { initialize() }
@@ -232,13 +229,15 @@ class ChatViewModel(
     }
 
     /**
-     * Starts the ChatGPT browser sign-in for a ChatGptSignIn provider: builds
-     * the PKCE authorize URL locally (no network yet), shows it in the in-app
-     * WebView destination, and waits for the loopback redirect forwarded by
-     * [onCodexBrowserRedirect], then exchanges the code, stores the token set,
-     * and reuses the shared credential-success path. The PKCE verifier lives
-     * only in this coroutine and is never logged. Cancellation (see
-     * [cancelCodexSignIn]) writes no credential.
+     * Starts the ChatGPT browser sign-in for a ChatGptSignIn provider (pi's
+     * `loginOpenAICodex`): builds the PKCE authorize URL locally (no network
+     * yet), binds the loopback redirect listener, and publishes the URL for
+     * the UI to open in the user's default browser — the browser shares the
+     * user's real login session, so an existing ChatGPT login carries over.
+     * The browser's redirect lands on the listener, the code is exchanged,
+     * the token set stored, and the shared credential-success path runs.
+     * The PKCE verifier lives only in this coroutine and is never logged.
+     * Cancellation (see [cancelCodexSignIn]) writes no credential.
      */
     fun beginCodexBrowserSignIn(providerId: String) {
         val provider = requireNotNull(ProviderDescriptors.byId(providerId)) { "Unknown provider: $providerId" }
@@ -250,20 +249,23 @@ class ChatViewModel(
         // Real race, not a wiring bug: a second tap can land while the first
         // sign-in is still active.
         if (codexSignInJob?.isActive == true) return
-        val auth = try {
-            codexOAuthClient.beginBrowserLogin()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            setError(ERROR_CODEX_SIGN_IN)
-            return
-        }
-        val redirect = CompletableDeferred<String>()
-        codexBrowserRedirect = redirect
-        updateState { it.copy(codexSignIn = CodexSignInState.Browser(auth.authorizeUrl)) }
         codexSignInJob = viewModelScope.launch {
+            val auth = try {
+                codexOAuthClient.beginBrowserLogin()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(ERROR_CODEX_SIGN_IN)
+                return@launch
+            }
+            val listener = CodexLoopbackServer(auth.state)
             try {
-                val redirectUrl = redirect.await()
+                // Bind before publishing the URL: the browser's redirect can
+                // then only ever arrive on a listening socket (pi binds its
+                // server before opening the browser, too).
+                listener.bind()
+                updateState { it.copy(codexSignIn = CodexSignInState.Browser(auth.authorizeUrl)) }
+                val redirectUrl = listener.awaitRedirect()
                 updateBrowserSignIn { it.copy(completing = true) }
                 val tokens = codexOAuthClient.completeBrowserLogin(auth, redirectUrl)
                 credentials.set(
@@ -275,7 +277,6 @@ class ChatViewModel(
                         accountId = tokens.accountId,
                     ),
                 )
-                updateBrowserSignIn { it.copy(completing = false, completed = true) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: CodexOAuthException) {
@@ -284,39 +285,21 @@ class ChatViewModel(
             } catch (e: Exception) {
                 updateBrowserSignIn { it.copy(completing = false, error = ERROR_CODEX_SIGN_IN) }
                 return@launch
+            } finally {
+                listener.close()
             }
+            updateState { it.copy(codexSignIn = null) }
             onCredentialStored()
         }
-    }
-
-    /**
-     * Hands a WebView navigation to the active browser sign-in. Returns true
-     * when [url] is the flow's loopback redirect and was consumed: the caller
-     * (the WebView client) must then abort loading the URL.
-     */
-    fun onCodexBrowserRedirect(url: String): Boolean {
-        val redirect = codexBrowserRedirect ?: return false
-        if (!codexOAuthClient.isBrowserRedirect(url)) return false
-        return redirect.complete(url)
     }
 
     /** Cancels an in-flight ChatGPT sign-in and clears its state; writes no credential. */
     fun cancelCodexSignIn() {
         codexSignInJob?.cancel()
         codexSignInJob = null
-        codexBrowserRedirect = null
         if (_uiState.value.codexSignIn != null) {
             updateState { it.copy(codexSignIn = null) }
         }
-    }
-
-    /**
-     * Cancels only a device-code sign-in. Used when the provider-auth screen
-     * is disposed: a browser sign-in is owned by its WebView destination on
-     * top of that screen and must survive the disposal.
-     */
-    fun cancelCodexDeviceSignIn() {
-        if (_uiState.value.codexSignIn is CodexSignInState.Device) cancelCodexSignIn()
     }
 
     /** Persists the show-thinking display preference; safe mid-stream (display-only). */
