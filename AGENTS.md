@@ -11,7 +11,7 @@ application layer thin.
   client modules the app needs rather than the `koog-agents` umbrella.
 - **Extend Koog; do not fork it inside the app.** Prefer released Koog APIs and
   narrow Pathfinder adapters over copied framework internals or parallel
-  runtime contracts. Consider upstreaming generally useful missing behavior.
+  runtime contracts.
 - **Android owns platform behavior.** Follow current Android guidance and use
   Jetpack Compose, Material 3, and stock platform interactions.
 - **Optimize for low maintenance.** Avoid speculative abstractions, bespoke UI
