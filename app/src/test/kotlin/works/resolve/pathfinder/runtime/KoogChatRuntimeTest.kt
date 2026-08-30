@@ -1,7 +1,9 @@
 package works.resolve.pathfinder.runtime
 
+import ai.koog.http.client.KoogHttpClientException
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClientAPI
+import ai.koog.prompt.executor.clients.LLMClientException
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.Message
@@ -18,11 +20,14 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.test.AfterTest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.awaitCancellation
@@ -32,6 +37,9 @@ import works.resolve.pathfinder.data.credentials.Credential
 import works.resolve.pathfinder.data.credentials.CredentialStore
 import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.settings.ModelSettings
+import works.resolve.pathfinder.diagnostics.DiagnosticEntry
+import works.resolve.pathfinder.diagnostics.DiagnosticEvent
+import works.resolve.pathfinder.diagnostics.Diagnostics
 
 /**
  * Fake Koog client: [executeStreaming] returns a caller-controlled
@@ -84,6 +92,18 @@ class KoogChatRuntimeTest {
     private val anthropic = ProviderDescriptors.byId("anthropic")!!
     private val modelId = anthropic.models.first().id
     private val settings = ModelSettings(providerId = "anthropic", modelId = modelId)
+
+    /** Recorded diagnostics entries; the sink is process-wide, so always restored. */
+    private val entries = mutableListOf<DiagnosticEntry>()
+
+    private fun installRecordingSink() {
+        Diagnostics.install { entries += it }
+    }
+
+    @AfterTest
+    fun restoreSink() {
+        Diagnostics.install(null)
+    }
 
     private fun runtime(
         keys: Map<String, String> = mapOf("anthropic" to "test-key"),
@@ -158,6 +178,7 @@ class KoogChatRuntimeTest {
 
     @Test
     fun streamFailureSurfacesFixedErrorWithoutProviderPayload() = runTest {
+        installRecordingSink()
         val runtime = runtime {
             streamFrameFlow {
                 emitTextDelta("par")
@@ -176,6 +197,92 @@ class KoogChatRuntimeTest {
         assertTrue(error.startsWith("The request to Anthropic failed")) // fixed text
         assertNull(state.streamingMessage) // partial discarded on failure
         assertEquals(1, session.conversation.entries.size) // user message stays
+    }
+
+    @Test
+    fun httpFailureRecordsRequestFailedEntryWithStatusOnly() = runTest {
+        installRecordingSink()
+        val runtime = runtime {
+            // Koog clients wrap transport failures in LLMClientException; the
+            // HTTP exception's message embeds the error body — only the type
+            // chain and status may reach the diagnostic entry.
+            flow {
+                throw LLMClientException(
+                    clientName = "anthropic",
+                    cause = KoogHttpClientException(
+                        clientName = "anthropic",
+                        statusCode = 401,
+                        errorBody = "SECRET-ERROR-BODY",
+                        message = "secret http message",
+                    ),
+                )
+            }
+        }
+        val session = newSession(runtime)
+
+        session.prompt("hi")
+        val state = session.state.value
+
+        // UI behavior unchanged: fixed, user-safe error string.
+        assertFalse(state.isStreaming)
+        val error = assertNotNull(state.error)
+        assertTrue(error.startsWith("The request to Anthropic failed"))
+
+        assertEquals(1, entries.size)
+        val entry = entries.single()
+        assertEquals(DiagnosticEvent.CHAT_REQUEST_FAILED, entry.event)
+        assertEquals(401, entry.httpStatus)
+        // The rendered entry is fully sanitized: no error-body or message text.
+        val rendered = entry.message()
+        assertFalse("SECRET-ERROR-BODY" in rendered)
+        assertFalse("secret http message" in rendered)
+        assertTrue("chat.request_failed" in rendered)
+    }
+
+    @Test
+    fun streamCompletingWithoutEndFrameRecordsStreamIncompleteEntry() = runTest {
+        installRecordingSink()
+        // A dropped connection: the flow completes normally, never emitting
+        // the terminal End frame. Koog's requireEndFrame() turns that into a
+        // failure; the runtime must not commit the truncated partial.
+        val runtime = runtime {
+            streamFrameFlow {
+                emitTextDelta("par")
+            }
+        }
+        val session = newSession(runtime)
+
+        session.prompt("hi")
+        val state = session.state.value
+
+        assertFalse(state.isStreaming)
+        val error = assertNotNull(state.error)
+        assertTrue(error.startsWith("The request to Anthropic failed"))
+        assertNull(state.streamingMessage) // truncated partial discarded
+        assertEquals(1, state.commitCount) // only the user message
+        assertEquals(1, session.conversation.entries.size)
+
+        assertEquals(1, entries.size)
+        assertSame(DiagnosticEvent.CHAT_STREAM_INCOMPLETE, entries.single().event)
+    }
+
+    @Test
+    fun abortRecordsNoDiagnostics() = runTest {
+        installRecordingSink()
+        val runtime = runtime {
+            streamFrameFlow {
+                emitTextDelta("par")
+                awaitCancellation()
+            }
+        }
+        val session = newSession(runtime)
+
+        session.prompt("hi")
+        session.abort()
+
+        assertNull(session.state.value.error)
+        assertEquals(2, session.conversation.entries.size) // user + committed partial
+        assertEquals(emptyList(), entries)
     }
 
     @Test

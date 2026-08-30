@@ -19,6 +19,7 @@ import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.message.ResponseMetaInfo
+import ai.koog.prompt.streaming.IncompleteStreamException
 import ai.koog.prompt.streaming.StreamFrame
 import ai.koog.prompt.streaming.requireEndFrame
 import io.ktor.client.HttpClient
@@ -39,6 +40,8 @@ import works.resolve.pathfinder.data.credentials.Credential
 import works.resolve.pathfinder.data.credentials.CredentialStore
 import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.settings.ModelSettings
+import works.resolve.pathfinder.diagnostics.DiagnosticEvent
+import works.resolve.pathfinder.diagnostics.Diagnostics
 
 /**
  * Production [ChatRuntime] on Koog executor clients.
@@ -72,7 +75,12 @@ import works.resolve.pathfinder.data.settings.ModelSettings
  *   every provider client turns into an error — which
  *   [requireEndFrame][ai.koog.prompt.streaming.requireEndFrame] converts to
  *   an exception. Provider payloads, exception messages, and
- *   credentials are never surfaced or logged.
+ *   credentials are never surfaced in the UI or logged verbatim; instead
+ *   every non-cancellation failure records a sanitized [Diagnostics]
+ *   entry (exception type chain plus HTTP status only) under
+ *   [DiagnosticEvent.CHAT_REQUEST_FAILED], with dropped streams
+ *   ([IncompleteStreamException]) distinguished as
+ *   [DiagnosticEvent.CHAT_STREAM_INCOMPLETE].
  *
  * Retry/timeout configuration: clients are built with each Koog client's own
  * default [ConnectionTimeoutConfig](ai.koog.prompt.executor.clients.ConnectionTimeoutConfig)
@@ -302,6 +310,17 @@ private class StreamingAssistantAccumulator {
     }
 }
 
+/**
+ * True when [IncompleteStreamException] appears anywhere in the cause chain.
+ * `requireEndFrame()` is applied in [KoogChatRuntime] itself, so the exception
+ * normally arrives unwrapped, but provider clients can wrap stream failures
+ * of their own — hence the defensive walk.
+ */
+private fun Throwable.hasIncompleteStreamCause(): Boolean =
+    generateSequence(this) { current -> current.cause }
+        .take(8)
+        .any { it is IncompleteStreamException }
+
 /** One live Koog-backed session; see [KoogChatRuntime] for the lifecycle contract. */
 private class KoogChatSession(
     override var conversation: Conversation,
@@ -408,12 +427,27 @@ private class KoogChatSession(
                 }
             commit(accumulator.finalMessage())
         } catch (error: CancellationException) {
-            // Abort: keep what the user saw. No error surfaced.
+            // Abort: keep what the user saw. No error surfaced, no diagnostics
+            // (cancellation is a user action, not a failure).
             if (accumulator.hasContent()) commit(accumulator.finalMessage())
             else clearStreaming()
             throw error
-        } catch (_: Exception) {
-            // Provider payload and exception text stay out of the UI.
+        } catch (error: Exception) {
+            // Provider payload and exception text stay out of the UI; the
+            // diagnostics entry carries only the sanitized type chain and
+            // HTTP status. A dropped connection — the stream completing
+            // without the terminal End frame — is classified separately so it
+            // can be told apart from other request failures; requireEndFrame
+            // is applied here rather than inside the Koog client, but the
+            // cause chain is walked defensively anyway.
+            Diagnostics.failure(
+                if (error.hasIncompleteStreamCause()) {
+                    DiagnosticEvent.CHAT_STREAM_INCOMPLETE
+                } else {
+                    DiagnosticEvent.CHAT_REQUEST_FAILED
+                },
+                error,
+            )
             clearStreaming()
             fail(requestFailedError())
         } finally {
