@@ -23,13 +23,13 @@ data class ModelDescriptor(
 
 /**
  * How a provider authenticates: an API-key form, or the ChatGPT OAuth
- * sign-in flow.
+ * sign-in flow driven by the UI and the runtime.
  */
 sealed interface ProviderAuthKind {
-    /** [prompt] labels the provider's API-key field. */
+    /** Labels the provider's API-key credential form field. */
     data class ApiKey(val prompt: String) : ProviderAuthKind
 
-    /** ChatGPT subscription sign-in (device-code OAuth, handled by the UI + runtime). */
+    /** ChatGPT subscription sign-in (device-code OAuth). */
     data object ChatGptSignIn : ProviderAuthKind
 }
 
@@ -40,7 +40,7 @@ sealed interface ProviderAuthKind {
 data class ProviderDescriptor(
     val id: String,
     val displayName: String,
-    /** How the user authenticates with this provider. */
+    /** Credential UX and runtime dispatch for this provider. */
     val authKind: ProviderAuthKind,
     val models: List<ModelDescriptor>,
 ) {
@@ -49,16 +49,15 @@ data class ProviderDescriptor(
 
 /**
  * The app-owned provider surface: presentation metadata plus Koog model
- * objects. Models are enumerated from Koog's own model-definition objects
- * (`ai.koog.prompt.executor.clients.<provider>`) rather than hand-copied, so
- * the catalog cannot drift from the Koog runtime that will execute against
- * these models — the five API-key providers from their `LLModelDefinitions`
- * singletons, and the ChatGPT-backed Codex provider from a pinned subset of
- * [OpenAIModels.Chat] entries (Koog ships no `LLModelDefinitions` family for
- * the codex-only models). Only models supporting [LLMCapability.Completion]
- * are offered — the runtime executes streaming chat completions, and Koog's
- * definition families also carry embedding/moderation models the product
- * cannot run. This file is permanent app architecture.
+ * objects. Model lists are enumerated from Koog's own `LLModelDefinitions`
+ * singletons (`ai.koog.prompt.executor.clients.<provider>`) rather than
+ * hand-copied, so the catalog cannot drift from the Koog runtime that will
+ * execute against these models (chunk 2 maps each provider's Koog
+ * [ai.koog.prompt.llm.LLMProvider] to its Koog executor client). Only models
+ * supporting [LLMCapability.Completion] are offered — the runtime executes
+ * streaming chat completions, and Koog's definition families also carry
+ * embedding/moderation models the product cannot run. This file is permanent
+ * app architecture.
  */
 object ProviderDescriptors {
 
@@ -66,36 +65,41 @@ object ProviderDescriptors {
         provider(
             id = "anthropic",
             displayName = "Anthropic",
-            apiKeyPrompt = "Anthropic API key",
+            authKind = ProviderAuthKind.ApiKey("Anthropic API key"),
             definitions = AnthropicModels,
         ),
         provider(
             id = "openai",
             displayName = "OpenAI",
-            apiKeyPrompt = "OpenAI API key",
+            authKind = ProviderAuthKind.ApiKey("OpenAI API key"),
             definitions = OpenAIModels,
         ),
         provider(
             id = "google",
             displayName = "Google",
-            apiKeyPrompt = "Google AI Studio API key",
+            authKind = ProviderAuthKind.ApiKey("Google AI Studio API key"),
             definitions = GoogleModels,
         ),
         provider(
             id = "openrouter",
             displayName = "OpenRouter",
-            apiKeyPrompt = "OpenRouter API key",
+            authKind = ProviderAuthKind.ApiKey("OpenRouter API key"),
             definitions = OpenRouterModels,
         ),
         provider(
             id = "mistral",
             displayName = "Mistral",
-            apiKeyPrompt = "Mistral API key",
+            authKind = ProviderAuthKind.ApiKey("Mistral API key"),
             definitions = MistralAIModels,
         ),
+        // ChatGPT-subscription backend: same Responses API as OpenAI, but at
+        // chatgpt.com with OAuth tokens (see ai/openaicodex/). Models are the
+        // codex entries of Koog's OpenAIModels — enumerated from Koog's own
+        // definitions, not hand-copied.
         provider(
             id = "openai-codex",
             displayName = "OpenAI Codex",
+            authKind = ProviderAuthKind.ChatGptSignIn,
             models = listOf(
                 OpenAIModels.Chat.GPT5Codex,
                 OpenAIModels.Chat.GPT5_1Codex,
@@ -111,34 +115,23 @@ object ProviderDescriptors {
     private fun provider(
         id: String,
         displayName: String,
-        apiKeyPrompt: String,
+        authKind: ProviderAuthKind,
         definitions: LLModelDefinitions,
-    ): ProviderDescriptor = ProviderDescriptor(
-        id = id,
-        displayName = displayName,
-        authKind = ProviderAuthKind.ApiKey(apiKeyPrompt),
-        models = definitionModels(definitions),
-    )
+    ): ProviderDescriptor = provider(id, displayName, authKind, definitions.models)
 
     private fun provider(
         id: String,
         displayName: String,
+        authKind: ProviderAuthKind,
         models: List<LLModel>,
     ): ProviderDescriptor = ProviderDescriptor(
         id = id,
         displayName = displayName,
-        authKind = ProviderAuthKind.ChatGptSignIn,
+        authKind = authKind,
         models = models
             .filter { it.supports(LLMCapability.Completion) }
             .map { model ->
                 ModelDescriptor(id = model.id, displayName = model.id, model = model)
             },
     )
-
-    private fun definitionModels(definitions: LLModelDefinitions): List<ModelDescriptor> =
-        definitions.models
-            .filter { it.supports(LLMCapability.Completion) }
-            .map { model ->
-                ModelDescriptor(id = model.id, displayName = model.id, model = model)
-            }
 }

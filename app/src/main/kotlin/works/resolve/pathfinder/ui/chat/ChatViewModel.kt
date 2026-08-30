@@ -696,6 +696,8 @@ class ChatViewModel(
                 ProviderOption(
                     id = provider.id,
                     name = provider.displayName,
+                    // Temporary projection until the sign-in UI lands: codex
+                    // providers have no API-key form.
                     apiKeyPrompt = (provider.authKind as? ProviderAuthKind.ApiKey)?.prompt.orEmpty(),
                     configured = provider.id in configuredIds,
                 )

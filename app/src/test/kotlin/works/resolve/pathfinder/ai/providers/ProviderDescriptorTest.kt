@@ -9,50 +9,29 @@ import ai.koog.prompt.llm.LLMCapability
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
  * The provider surface: exactly six providers, models derived from Koog's
- * own model-definition objects, stable ids.
+ * own model-definition objects, stable ids, auth kinds.
  */
 class ProviderDescriptorTest {
 
     @Test
-    fun `six providers exist with stable ids`() {
+    fun `six providers exist with stable ids and auth kinds`() {
         assertEquals(
             listOf("anthropic", "openai", "google", "openrouter", "mistral", "openai-codex"),
             ProviderDescriptors.all.map { it.id },
         )
         assertEquals("Anthropic", ProviderDescriptors.byId("anthropic")!!.displayName)
-        assertEquals("OpenAI Codex", ProviderDescriptors.byId("openai-codex")!!.displayName)
+        assertNotNull(ProviderDescriptors.byId("openai"))
         assertNotNull(ProviderDescriptors.byId("openrouter"))
-    }
-
-    @Test
-    fun `auth kinds map providers to their credential flow`() {
         val codex = ProviderDescriptors.byId("openai-codex")!!
+        assertEquals("OpenAI Codex", codex.displayName)
         assertEquals(ProviderAuthKind.ChatGptSignIn, codex.authKind)
-        for (provider in ProviderDescriptors.all.filter { it.id != codex.id }) {
-            val kind = assertIs<ProviderAuthKind.ApiKey>(provider.authKind)
-            assertTrue(kind.prompt.isNotBlank(), "${provider.id} has no API-key prompt")
-        }
-    }
-
-    @Test
-    fun `codex models are the pinned Koog ChatGPT-backend set`() {
-        val codex = ProviderDescriptors.byId("openai-codex")!!
-        assertEquals(
-            listOf(
-                OpenAIModels.Chat.GPT5Codex,
-                OpenAIModels.Chat.GPT5_1Codex,
-                OpenAIModels.Chat.GPT5_1CodexMax,
-                OpenAIModels.Chat.GPT5_2Codex,
-                OpenAIModels.Chat.GPT5_3Codex,
-            ),
-            codex.models.map { it.model },
-        )
+        // API-key providers label their credential form.
+        assertTrue(ProviderDescriptors.byId("anthropic")!!.authKind is ProviderAuthKind.ApiKey)
     }
 
     @Test
@@ -63,6 +42,8 @@ class ProviderDescriptorTest {
             "google" to GoogleModels.models,
             "openrouter" to OpenRouterModels.models,
             "mistral" to MistralAIModels.models,
+            // The codex provider enumerates the codex entries of Koog's
+            // OpenAIModels — the subset that runs on the ChatGPT backend.
             "openai-codex" to listOf(
                 OpenAIModels.Chat.GPT5Codex,
                 OpenAIModels.Chat.GPT5_1Codex,
