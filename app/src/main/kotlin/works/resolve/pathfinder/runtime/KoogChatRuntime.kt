@@ -279,7 +279,7 @@ private class StreamingAssistantAccumulator {
     }
 
     /** True when any rendered content accumulated. */
-    fun hasContent(): Boolean = text.isNotBlank() || reasoning.isNotBlank()
+    fun hasContent(): Boolean = text.isNotBlank() || reasoning.isNotBlank() || reasoningSummary.isNotBlank()
 
     /** Partial snapshot for [ChatRuntimeState.streamingMessage]. */
     fun snapshot(): Message.Assistant = assistant(ResponseMetaInfo.Empty, null)
@@ -289,10 +289,14 @@ private class StreamingAssistantAccumulator {
 
     private fun assistant(meta: ResponseMetaInfo, finish: String?): Message.Assistant {
         val parts = buildList {
-            if (reasoning.isNotBlank()) {
+            // Hosted reasoning models (the ChatGPT Codex backend among them)
+            // stream summaries only; raw content is the richer form some
+            // other providers supply. The message records both faithfully;
+            // display policy (summary fallback) lives in the UI projection.
+            if (reasoning.isNotBlank() || reasoningSummary.isNotBlank()) {
                 add(
                     MessagePart.Reasoning(
-                        content = listOf(reasoning.toString()),
+                        content = if (reasoning.isBlank()) emptyList() else listOf(reasoning.toString()),
                         summary = reasoningSummary.toString().takeIf { it.isNotBlank() }?.let(::listOf),
                         encrypted = reasoningEncrypted,
                         id = reasoningId,

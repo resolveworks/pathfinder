@@ -1083,8 +1083,11 @@ private fun projectStreaming(message: Message.Assistant): ChatMessage =
  * Projects message parts into ordered blocks: each non-blank
  * [MessagePart.Text] becomes its own [ChatBlock.Text]; runs of consecutive
  * [MessagePart.Reasoning] merge into one [ChatBlock.Thinking] joined with
- * "\n\n" and trimmed (dropped when the merged result is blank). Every other
- * part (attachments, tool calls/results) is omitted — no speculative UI.
+ * "\n\n" and trimmed (dropped when the merged result is blank). Raw content
+ * is preferred but hosted reasoning models (e.g. the ChatGPT Codex backend)
+ * stream summaries only, so a blank content falls back to the part's
+ * summary. Every other part (attachments, tool calls/results) is omitted —
+ * no speculative UI.
  */
 private fun List<ai.koog.prompt.message.MessagePart>.toChatBlocks(): List<ChatBlock> {
     val blocks = mutableListOf<ChatBlock>()
@@ -1099,7 +1102,10 @@ private fun List<ai.koog.prompt.message.MessagePart>.toChatBlocks(): List<ChatBl
     }
     for (part in this) {
         when (part) {
-            is MessagePart.Reasoning -> (thinkingRun ?: mutableListOf<String>().also { thinkingRun = it }).addAll(part.content)
+            is MessagePart.Reasoning -> {
+                val display = part.content.filter { it.isNotBlank() }.ifEmpty { part.summary.orEmpty() }
+                (thinkingRun ?: mutableListOf<String>().also { thinkingRun = it }).addAll(display)
+            }
             is MessagePart.Text -> {
                 flushThinking()
                 part.text.takeIf { it.isNotBlank() }?.let { blocks.add(ChatBlock.Text(it)) }

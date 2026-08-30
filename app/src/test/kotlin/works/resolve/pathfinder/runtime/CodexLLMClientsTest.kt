@@ -4,6 +4,7 @@ import ai.koog.http.client.KoogHttpClient
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.openai.models.OpenAIInclude
 import ai.koog.prompt.executor.clients.openai.OpenAIResponsesParams
+import ai.koog.prompt.executor.clients.openai.models.ReasoningSummary
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
 import kotlinx.coroutines.flow.Flow
@@ -17,6 +18,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlin.reflect.KClass
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CodexLLMClientsTest {
@@ -217,6 +219,7 @@ class CodexLLMClientsTest {
         assertTrue(body.contains("\"store\":false"), "expected store:false in body: $body")
         assertTrue(body.contains("You are a helpful assistant."), "expected instructions in body")
         assertTrue(body.contains("reasoning.encrypted_content"), "expected reasoning include in body")
+        assertTrue(body.contains("\"summary\":\"auto\""), "expected reasoning summary request in body: $body")
         assertTrue(body.contains("session-42"), "expected prompt cache key in body")
     }
 
@@ -230,6 +233,10 @@ class CodexLLMClientsTest {
 
         assertEquals(false, params.store)
         assertEquals(listOf(OpenAIInclude.REASONING_ENCRYPTED_CONTENT), params.include)
+        // Summaries are requested (AUTO) but effort is left to the backend
+        // default — Pathfinder has no thinking-level setting to map onto it.
+        assertNull(params.reasoning?.effort)
+        assertEquals(ReasoningSummary.AUTO, params.reasoning?.summary)
         assertEquals("s1", params.promptCacheKey)
         assertEquals(
             mapOf<String, JsonElement>("instructions" to JsonPrimitive("You are a helpful assistant.")),

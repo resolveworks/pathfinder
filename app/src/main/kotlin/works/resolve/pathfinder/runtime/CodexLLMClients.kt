@@ -6,6 +6,8 @@ import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.models.OpenAIInclude
 import ai.koog.prompt.executor.clients.openai.OpenAIResponsesParams
+import ai.koog.prompt.executor.clients.openai.models.ReasoningConfig
+import ai.koog.prompt.executor.clients.openai.models.ReasoningSummary
 import ai.koog.prompt.executor.clients.openai.base.AbstractOpenAILLMClient
 import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.flow.Flow
@@ -97,10 +99,17 @@ public object CodexLLMClients {
      * `additionalProperties` because Koog never populates the request's
      * `instructions` field from params; the responses request serializer
      * flattens additional properties into the top-level JSON.
+     *
+     * Hosted reasoning models never return their raw chain of thought over
+     * the Responses API — only summaries, and only when the request asks
+     * for them (pi sends `summary: "auto"` alongside the effort). Reasoning
+     * effort itself stays unset: the backend default applies and Pathfinder
+     * has no thinking-level setting to map onto it.
      */
     public fun promptParams(sessionId: String): LLMParams = OpenAIResponsesParams(
         store = false,
         include = listOf(OpenAIInclude.REASONING_ENCRYPTED_CONTENT),
+        reasoning = ReasoningConfig(summary = ReasoningSummary.AUTO),
         promptCacheKey = sessionId,
         additionalProperties = mapOf<String, JsonElement>(
             "instructions" to JsonPrimitive(INSTRUCTIONS),

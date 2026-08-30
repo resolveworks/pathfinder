@@ -11,6 +11,7 @@ import ai.koog.prompt.message.MessagePart
 import ai.koog.prompt.streaming.StreamFrame
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.prompt.streaming.emitEnd
+import ai.koog.prompt.streaming.emitReasoningComplete
 import ai.koog.prompt.streaming.emitReasoningDelta
 import ai.koog.prompt.streaming.emitTextDelta
 import ai.koog.prompt.streaming.streamFrameFlow
@@ -158,6 +159,33 @@ class KoogChatRuntimeTest {
         assertEquals("thinking", assistant.parts.filterIsInstance<MessagePart.Reasoning>().single().content.single())
         assertEquals("stop", assistant.finishReason)
         assertEquals(2, session.conversation.entries.size)
+    }
+
+    @Test
+    fun summaryOnlyReasoningStillProducesReasoningPart() = runTest {
+        // Hosted reasoning models (e.g. the ChatGPT Codex backend) stream
+        // summaries only: ReasoningDelta(summary=...) plus a ReasoningComplete
+        // whose content is empty. The reasoning part must survive with the
+        // summary intact — the UI projection renders it when content is blank.
+        val runtime = runtime {
+            streamFrameFlow {
+                emitReasoningDelta(id = "r", summary = "sum")
+                emitReasoningComplete(id = "r", text = "", summary = "summary text")
+                emitTextDelta("Answer")
+                emitEnd(finishReason = "stop")
+            }
+        }
+        val session = newSession(runtime)
+
+        session.prompt("hi")
+        val state = session.state.value
+
+        assertNull(state.error)
+        val assistant = state.committedMessages.last() as Message.Assistant
+        val reasoning = assistant.parts.filterIsInstance<MessagePart.Reasoning>().single()
+        assertTrue(reasoning.content.isEmpty(), "no raw reasoning for summary-only models")
+        assertEquals(listOf("summary text"), reasoning.summary)
+        assertEquals("Answer", assistant.textContent())
     }
 
     @Test
