@@ -3,7 +3,6 @@ package works.resolve.pathfinder.runtime
 import ai.koog.http.client.KoogHttpClient
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.openai.models.OpenAIInclude
-import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import ai.koog.prompt.executor.clients.openai.OpenAIResponsesParams
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
@@ -163,9 +162,13 @@ class CodexLLMClientsTest {
             params = CodexLLMClients.promptParams("session-42"),
         )
 
+        // A hand-declared catalog model (see CodingPlanModels.kt): its
+        // Responses capability is what routes the client to the codex path.
+        val model = CodexModels.descriptors.last().model
+
         // Collecting may throw on the canned empty stream; the wire arguments
         // are captured at flow construction inside executeStreaming.
-        runCatching { client.executeStreaming(prompt, OpenAIModels.Chat.GPT5_1Codex).toList() }
+        runCatching { client.executeStreaming(prompt, model).toList() }
 
         val http = factory.clients.single()
         val headers = http.sseHeaders.single()

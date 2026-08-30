@@ -121,3 +121,62 @@ internal object KimiModels {
      */
     val versionMap: Map<LLModel, String> = descriptors.associate { it.model to it.id }
 }
+
+/**
+ * Models of the ChatGPT subscription backend
+ * (`https://chatgpt.com/backend-api/codex/responses`).
+ *
+ * Koog's [OpenAIModels] tracks the OpenAI API catalog, which does not carry
+ * the subscription-only model line served by the ChatGPT backend (Codex
+ * Spark, Luna, Sol, Terra), so these models are declared by hand — as Koog
+ * [LLModel]s tagged [LLMProvider.OpenAI] — and executed by the stock OpenAI
+ * client that [CodexLLMClients] assembles against the codex Responses
+ * endpoint. The behavioral reference is pi's provider definition
+ * `packages/ai/src/providers/openai-codex.ts` + `providers/data/openai-codex.json`.
+ *
+ * Every model carries [LLMCapability.OpenAIEndpoint.Responses]: the ChatGPT
+ * backend speaks only the Responses API, and that capability is what routes
+ * Koog's OpenAI client to its Responses branch
+ * (`OpenAILLMClient.determineParams` plus its `requireCapability` guard).
+ * Capabilities otherwise mirror Koog's own codex entries, minus what pi's
+ * catalog does not declare for these models (document input, speculation).
+ */
+internal object CodexModels {
+
+    private val CAPABILITIES = listOf(
+        LLMCapability.Completion,
+        LLMCapability.Tools,
+        LLMCapability.ToolChoice,
+        LLMCapability.MultipleChoices,
+        LLMCapability.Thinking,
+        LLMCapability.OpenAIEndpoint.Responses,
+    )
+
+    private val IMAGE_CAPABILITIES = CAPABILITIES + LLMCapability.Vision.Image
+
+    private fun model(id: String, contextLength: Long, capabilities: List<LLMCapability>): LLModel = LLModel(
+        provider = LLMProvider.OpenAI,
+        id = id,
+        capabilities = capabilities,
+        contextLength = contextLength,
+        maxOutputTokens = CODEX_MAX_OUTPUT_TOKENS,
+    )
+
+    /** Display names, context windows, and inputs follow pi's `providers/data/openai-codex.json` catalog. */
+    val descriptors: List<ModelDescriptor> = listOf(
+        ModelDescriptor(
+            "gpt-5.3-codex-spark",
+            "GPT-5.3 Codex Spark",
+            model("gpt-5.3-codex-spark", 128_000, CAPABILITIES),
+        ),
+        ModelDescriptor("gpt-5.4", "GPT-5.4", model("gpt-5.4", 272_000, IMAGE_CAPABILITIES)),
+        ModelDescriptor("gpt-5.4-mini", "GPT-5.4 mini", model("gpt-5.4-mini", 272_000, IMAGE_CAPABILITIES)),
+        ModelDescriptor("gpt-5.5", "GPT-5.5", model("gpt-5.5", 272_000, IMAGE_CAPABILITIES)),
+        ModelDescriptor("gpt-5.6-luna", "GPT-5.6 Luna", model("gpt-5.6-luna", 272_000, IMAGE_CAPABILITIES)),
+        ModelDescriptor("gpt-5.6-sol", "GPT-5.6 Sol", model("gpt-5.6-sol", 272_000, IMAGE_CAPABILITIES)),
+        ModelDescriptor("gpt-5.6-terra", "GPT-5.6 Terra", model("gpt-5.6-terra", 272_000, IMAGE_CAPABILITIES)),
+    )
+}
+
+/** All ChatGPT-backend models share pi's catalog output cap of 128000 tokens. */
+private const val CODEX_MAX_OUTPUT_TOKENS = 128_000L

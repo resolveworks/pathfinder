@@ -55,11 +55,13 @@ data class ProviderDescriptor(
  * singletons (`ai.koog.prompt.executor.clients.<provider>`) rather than
  * hand-copied, so the catalog cannot drift from the Koog runtime that will
  * execute against these models (chunk 2 maps each provider's Koog
- * [ai.koog.prompt.llm.LLMProvider] to its Koog executor client). Only models
- * supporting [LLMCapability.Completion] are offered — the runtime executes
- * streaming chat completions, and Koog's definition families also carry
- * embedding/moderation models the product cannot run. This file is permanent
- * app architecture.
+ * [ai.koog.prompt.llm.LLMProvider] to its Koog executor client);
+ * subscription-backed coding-plan providers whose model line Koog does not
+ * track hand-declare catalogs instead (see `runtime/CodingPlanModels.kt`).
+ * Only models supporting [LLMCapability.Completion] are offered — the
+ * runtime executes streaming chat completions, and Koog's definition
+ * families also carry embedding/moderation models the product cannot run.
+ * This file is permanent app architecture.
  */
 object ProviderDescriptors {
 
@@ -124,28 +126,18 @@ object ProviderDescriptors {
         ),
         // ChatGPT-subscription backend: same Responses API as OpenAI, but at
         // chatgpt.com with OAuth tokens (see `runtime/CodexLLMClients.kt`).
-        // Models are the
-        // codex entries of Koog's OpenAIModels — enumerated from Koog's own
-        // definitions, not hand-copied.
+        // Koog's OpenAIModels tracks the API catalog, which lacks the
+        // subscription-only model line (Codex Spark, Luna, Sol, Terra), so
+        // the catalog is hand-declared (see `runtime/CodingPlanModels.kt`).
         provider(
             id = "openai-codex",
             displayName = "OpenAI Codex",
             authKind = ProviderAuthKind.ChatGptSignIn,
-            models = listOf(
-                OpenAIModels.Chat.GPT5Codex,
-                OpenAIModels.Chat.GPT5_1Codex,
-                OpenAIModels.Chat.GPT5_1CodexMax,
-                OpenAIModels.Chat.GPT5_2Codex,
-                OpenAIModels.Chat.GPT5_3Codex,
-            ).toDescriptors(),
+            models = CodexModels.descriptors,
         ),
     )
 
     fun byId(providerId: String): ProviderDescriptor? = all.firstOrNull { it.id == providerId }
-
-    /** Koog model ids double as display names for enumerated providers. */
-    private fun List<LLModel>.toDescriptors(): List<ModelDescriptor> =
-        map { model -> ModelDescriptor(id = model.id, displayName = model.id, model = model) }
 
     private fun provider(
         id: String,

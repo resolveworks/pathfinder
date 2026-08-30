@@ -54,15 +54,6 @@ class ProviderDescriptorTest {
             "mistral" to MistralAIModels.models,
             "deepseek" to DeepSeekModels.models,
             "dashscope" to DashscopeModels.models,
-            // The codex provider enumerates the codex entries of Koog's
-            // OpenAIModels — the subset that runs on the ChatGPT backend.
-            "openai-codex" to listOf(
-                OpenAIModels.Chat.GPT5Codex,
-                OpenAIModels.Chat.GPT5_1Codex,
-                OpenAIModels.Chat.GPT5_1CodexMax,
-                OpenAIModels.Chat.GPT5_2Codex,
-                OpenAIModels.Chat.GPT5_3Codex,
-            ),
         )
         for (provider in ProviderDescriptors.all) {
             // Hand-declared coding-plan catalogs are covered by their own test.
@@ -118,6 +109,15 @@ class ProviderDescriptorTest {
                 "kimi-for-coding" to "Kimi K2.7 Code",
                 "kimi-for-coding-highspeed" to "Kimi For Coding HighSpeed",
             ),
+            "openai-codex" to LLMProvider.OpenAI to listOf(
+                "gpt-5.3-codex-spark" to "GPT-5.3 Codex Spark",
+                "gpt-5.4" to "GPT-5.4",
+                "gpt-5.4-mini" to "GPT-5.4 mini",
+                "gpt-5.5" to "GPT-5.5",
+                "gpt-5.6-luna" to "GPT-5.6 Luna",
+                "gpt-5.6-sol" to "GPT-5.6 Sol",
+                "gpt-5.6-terra" to "GPT-5.6 Terra",
+            ),
         )
         for ((key, models) in expected) {
             val (providerId, expectedProvider) = key
@@ -128,6 +128,11 @@ class ProviderDescriptorTest {
                 // The runtime executes streaming completions; Kimi's client
                 // additionally resolves models through its version map.
                 assertTrue(descriptor.model.supports(LLMCapability.Completion), descriptor.id)
+                // Codex models run on the ChatGPT backend's Responses-only
+                // endpoint; the OpenAI client routes on this capability.
+                if (providerId == "openai-codex") {
+                    assertTrue(descriptor.model.supports(LLMCapability.OpenAIEndpoint.Responses), descriptor.id)
+                }
             }
         }
         // The Anthropic client rejects models missing from the version map.
