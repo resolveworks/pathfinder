@@ -1,5 +1,8 @@
 package works.resolve.pathfinder.data.sessions
 
+import works.resolve.pathfinder.diagnostics.DiagnosticEntry
+import works.resolve.pathfinder.diagnostics.DiagnosticEvent
+import works.resolve.pathfinder.diagnostics.Diagnostics
 import works.resolve.pathfinder.testing.FakeClock
 import java.io.File
 import kotlin.test.assertFailsWith
@@ -12,6 +15,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.junit.After
 import org.junit.rules.TemporaryFolder
 
 class SessionStoreTest {
@@ -22,6 +26,25 @@ class SessionStoreTest {
     private val clock = FakeClock(1_000)
     private var nextId = 0
     private lateinit var root: File
+
+    private val recordedEntries = mutableListOf<DiagnosticEntry>()
+
+    @After
+    fun tearDownDiagnosticsSink() {
+        Diagnostics.install(null)
+        recordedEntries.clear()
+    }
+
+    /** Installs a process-wide sink capturing entries for assertions. */
+    private fun recordDiagnostics() {
+        recordedEntries.clear()
+        Diagnostics.install { recordedEntries += it }
+    }
+
+    private fun assertSingleEvent(event: DiagnosticEvent): DiagnosticEntry {
+        assertEquals(listOf(event), recordedEntries.map { it.event })
+        return recordedEntries.single()
+    }
 
     private fun newStore(maxFileBytes: Long = SessionStore.MAX_FILE_BYTES): SessionStore {
         if (!::root.isInitialized) root = tmpFolder.newFolder("sessions")
@@ -154,6 +177,55 @@ class SessionStoreTest {
             thrown = true
         }
         assertTrue(thrown)
+    }
+
+    @Test
+    fun corruptFileLoadRecordsSingleLoadFailedEvent() = runTest {
+        recordDiagnostics()
+        val store = newStore()
+        val id = store.create().id
+        File(root, "$id.json").writeText("{\"format\":1,\"marker\":\"SECRET-TRANSCRIPT-MARKER\"}")
+        assertFailsWithSessionDataException { store.load(id) }
+        val entry = assertSingleEvent(DiagnosticEvent.SESSION_LOAD_FAILED)
+        assertFalse(entry.message().contains("SECRET-TRANSCRIPT-MARKER"))
+        assertFalse(entry.message().contains(root.absolutePath))
+    }
+
+    @Test
+    fun unreadableFileSummariesRecordsSingleSummarySkippedEvent() = runTest {
+        recordDiagnostics()
+        val store = newStore()
+        val good = store.create("good")
+        File(root, "corrupt.json").writeText("garbage MARKER-TOP-SECRET")
+        val summaries = store.summaries()
+        assertEquals(listOf(good.id), summaries.map { it.id })
+        val entry = assertSingleEvent(DiagnosticEvent.SESSION_SUMMARY_SKIPPED)
+        assertFalse(entry.message().contains("MARKER-TOP-SECRET"))
+        assertFalse(entry.message().contains(root.absolutePath))
+    }
+
+    @Test
+    fun saveFailureRecordsSingleSaveFailedEventAndRethrows() = runTest {
+        recordDiagnostics()
+        val store = newStore()
+        val created = store.create()
+        // Replace the root directory with a file so writes fail.
+        root.deleteRecursively()
+        root.writeText("not a directory")
+        assertFailsWithSessionDataException { store.save(created.copy(title = "x")) }
+        assertSingleEvent(DiagnosticEvent.SESSION_SAVE_FAILED)
+    }
+
+    @Test
+    fun happyPathRecordsNoDiagnosticEntries() = runTest {
+        recordDiagnostics()
+        val store = newStore()
+        val created = store.create("happy")
+        store.load(created.id)
+        store.summaries()
+        clock.advanceMillis(1)
+        store.save(created.copy(title = "happy2"))
+        assertTrue(recordedEntries.isEmpty())
     }
 
     @Test
