@@ -9,13 +9,10 @@ Every change should belong to one of these categories:
 
 1. **Koog integration:** use Koog public types and behavior directly. Read the
    relevant source, tests, and `Module.md` under `~/Projects/koog/` first.
-2. **Selected pi port:** currently only the tree-session semantics in
-   `data/sessions`. Read current source and tests under `~/Projects/pi/`,
-   preserve provenance, and adapt it to Koog at one boundary.
-3. **Pathfinder/Android code:** follow current idiomatic Kotlin and official
-   Android APIs without pretending the behavior comes from either upstream.
+2. **Pathfinder/Android code:** follow current idiomatic Kotlin and official
+   Android APIs without pretending the behavior comes from Koog.
 
-Do not introduce a fourth category for Pathfinder-owned runtime, provider, or
+Do not introduce a third category for Pathfinder-owned runtime, provider, or
 agent abstractions that Koog already supplies.
 
 ## Layout
@@ -26,13 +23,10 @@ agent abstractions that Koog already supplies.
 - `ai/providers/` — `ProviderDescriptor`, the app's curated provider list
   (five providers; models enumerated from Koog `LLModelDefinitions`).
   Presentation metadata only; no protocol behavior lives here.
-- `data/sessions/` — the pi-derived tree-session layer (`Conversation`,
+- `data/sessions/` — the tree-session layer (`Conversation`,
   `Session*`) and `SessionCodec` (format 3; old formats fail fast).
 - `data/credentials/` — Keystore-backed per-provider API-key storage.
 - `data/settings/`, `ui/` — Pathfinder-owned.
-
-There is no OAuth code; it was deleted with the old pi runtime and may be
-rebuilt from git history later if a product path needs it.
 
 ## Koog integration
 
@@ -50,15 +44,6 @@ rebuilt from git history later if a product path needs it.
   internals.
 - Cite the relevant Koog source path in KDoc for subtle behavior or a
   necessary Android adaptation.
-
-## Session-tree port
-
-Keep upstream exported names where that improves provenance and cite source in
-KDoc as `packages/<package>/src/<file>.ts`, with line numbers when
-stable/useful. Preserve data semantics, event ordering, cancellation, and
-errors; document Koog/Android divergence at the narrowest adaptation point.
-The conversion between stored tree entries and the Koog history projected for
-the selected branch stays centralized and tested.
 
 ## Data and JSON
 
@@ -103,11 +88,10 @@ the selected branch stays centralized and tested.
 - Branch selection determines the ancestry projected into Koog history. Koog
   remains unaware of the persisted tree.
 
-## Tests and provenance
+## Tests
 
 The suite is deliberately tiny: tree semantics, the credential boundary,
 `SessionCodec` v3, markdown parsers, provider descriptors, and runtime
 lifecycle/cancellation against an injected fake client. Do not duplicate
 Koog's own unit suite, add ViewModel choreography tests, or add per-provider
-protocol tests. Selected pi ports keep parity tests tied to named upstream
-behavior, with tests for every Koog/Android adaptation.
+protocol tests.

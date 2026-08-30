@@ -2,8 +2,7 @@
 
 A native Android AI client built on [Koog](https://github.com/JetBrains/koog).
 Pathfinder uses Koog as its Kotlin LLM runtime and keeps the Android
-application layer thin. The one selected port from [pi](https://pi.dev) is
-tree-based session semantics.
+application layer thin.
 
 ## Direction
 
@@ -17,12 +16,6 @@ tree-based session semantics.
   extension points. Fill product-specific gaps with narrow adapters. If a
   generally useful capability is missing, consider an upstream Koog
   contribution before copying framework internals into Pathfinder.
-- **Port from pi selectively.** The only surviving pi port is tree-based
-  session semantics (branching, ancestry, conversation tree) in
-  `data/sessions`, with pi provenance kept in KDoc and tests. Pi history is
-  also fair to scavenge for designs of future features. There is no OAuth
-  port; it was deleted wholesale and may be rebuilt from git history later if
-  a product path needs it.
 - **Android is the application source of truth.** Use current platform
   guidance, Jetpack Compose, Material 3, and stock Android components and
   interactions.
@@ -58,23 +51,11 @@ is the behavioral and API reference, not code to copy wholesale. When an
 Android constraint requires a divergence, keep it in a narrow platform adapter
 and test it.
 
-### pi
-
-The pi checkout at `~/Projects/pi/` is authoritative only for tree-based
-session semantics: conversation branching, ancestry, and session-tree behavior
-from `packages/coding-agent`. Before changing that layer, read its current
-source, package README, and tests. Keep symbol-level pi provenance in KDoc and
-tests for translated logic, and preserve event ordering, data semantics,
-cancellation, and error handling unless Android or Koog requires a documented
-boundary adaptation. Do not use pi as the default reference for capabilities
-Koog already owns; for anything else, mine its git history for design
-reference only.
-
 ### Precedence
 
-Koog owns runtime contracts; pi owns only the session-tree port; Android owns
-platform behavior; Pathfinder owns product policy and glue. Resolve conflicts
-at an adapter boundary instead of modifying one layer to impersonate another.
+Koog owns runtime contracts; Android owns platform behavior; Pathfinder owns
+product policy and glue. Resolve conflicts at an adapter boundary instead of
+modifying one layer to impersonate another.
 
 ## Implementation boundaries
 
@@ -100,17 +81,12 @@ at an adapter boundary instead of modifying one layer to impersonate another.
 
 ## Naming and style
 
-- Koog-backed code uses Koog concepts and types directly. Do not create
-  Pathfinder aliases or wrappers merely to preserve names from the old pi
-  port.
-- The session-tree port keeps upstream exported names where that improves
-  provenance. Translate TypeScript with the conventions in
-  `app/src/main/kotlin/works/resolve/pathfinder/AGENTS.md`.
+- Koog-backed code uses Koog concepts and types directly; do not wrap them in
+  Pathfinder aliases.
 - Pathfinder-owned and Android code follows current idiomatic Kotlin: data
   classes, sealed types, nullability, coroutines, and standard library APIs.
 - Public APIs and non-obvious boundary adaptations require KDoc. Cite Koog
-  symbols by repository path and pi ports as
-  `packages/<package>/src/<file>.ts` (with line numbers when stable/useful).
+  symbols by repository path.
 
 ## Architecture
 
@@ -139,7 +115,7 @@ Koog history is centralized and tested.
 The suite is intentionally tiny. Koog's own suite owns runtime behavior;
 Pathfinder tests only what it adds:
 
-- tree-session semantics (pi-parity where applicable);
+- tree-session semantics;
 - the credential boundary;
 - `SessionCodec` format 3 round-trips and old-format rejection;
 - markdown parsers and provider descriptors;

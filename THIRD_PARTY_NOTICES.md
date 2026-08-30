@@ -2,18 +2,10 @@
 
 ## pi
 
-The session-tree layer (under `app/src/main/kotlin/works/resolve/pathfinder/data/sessions/`),
-the markdown renderer (under
-`app/src/main/kotlin/works/resolve/pathfinder/ui/chat/markdown/`), and the
-telemetry contracts (under `app/src/main/kotlin/works/resolve/pathfinder/telemetry/`)
-are Kotlin ports of portions of [pi](https://pi.dev) (the local pi project at
-`~/Projects/pi`). Those portions are:
-
-Copyright (c) 2025 Mario Zechner
-
-Licensed under the MIT License reproduced below. The attribution here applies
-to the ported portions only; it does not place a license on pathfinder as a
-whole.
+This project contains Kotlin ports of portions of [pi](https://pi.dev),
+Copyright (c) 2025 Mario Zechner, licensed under the MIT License reproduced
+below. This attribution applies to the ported portions only; it does not
+place a license on pathfinder as a whole.
 
 ```
 MIT License
