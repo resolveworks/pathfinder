@@ -21,4 +21,10 @@ interface SettingsStore {
 
     /** Persists the compaction thresholds wholesale (pi's settings compaction object). */
     suspend fun setCompactionSettings(settings: works.resolve.pathfinder.agent.compaction.CompactionSettings)
+
+    /**
+     * Persists the scoped-model patterns wholesale (pi's `enabledModels`).
+     * `null` clears the scope so all models are available.
+     */
+    suspend fun setEnabledModels(models: List<String>?)
 }
