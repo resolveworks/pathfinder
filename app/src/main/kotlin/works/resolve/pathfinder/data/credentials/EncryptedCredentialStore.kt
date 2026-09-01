@@ -3,6 +3,7 @@ package works.resolve.pathfinder.data.credentials
 import android.content.Context
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -74,6 +75,12 @@ class EncryptedCredentialStore(
                 val raw = readRawSpanned(providerId)
                 span.setAttributes(mapOf(ATTR_OUTCOME to attr(if (raw == null) OUTCOME_ABSENT else OUTCOME_DECRYPTED)))
                 raw
+            } catch (error: CancellationException) {
+                // Cancellation is not a failure. The span must be settled ok
+                // explicitly: the contract's automatic status would otherwise
+                // record the CancellationException as an error.
+                span.setStatus(SpanStatus.Ok)
+                throw error
             } catch (error: Throwable) {
                 span.setStatus(typeOnlyError(error))
                 throw error
@@ -96,6 +103,11 @@ class EncryptedCredentialStore(
             try {
                 writeRawSpanned(providerId, encoded)
                 span.setAttributes(mapOf(ATTR_OUTCOME to attr(OUTCOME_PERSISTED)))
+            } catch (error: CancellationException) {
+                // Cancellation is not a failure; settle ok so the automatic
+                // status does not record a CancellationException error.
+                span.setStatus(SpanStatus.Ok)
+                throw error
             } catch (error: Throwable) {
                 span.setStatus(typeOnlyError(error))
                 throw error

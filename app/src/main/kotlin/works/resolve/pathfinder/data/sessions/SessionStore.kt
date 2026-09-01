@@ -144,6 +144,10 @@ class SessionStore(
                 writeSpanned(session)
                 span.setAttributes(mapOf(ATTR_OUTCOME to attr(OUTCOME_PERSISTED)))
             } catch (e: CancellationException) {
+                // Cancellation is not a failure. The span must be settled ok
+                // explicitly: the contract's automatic status would otherwise
+                // record the CancellationException as an error.
+                span.setStatus(SpanStatus.Ok)
                 throw e
             } catch (e: Exception) {
                 span.setStatus(typeOnlyError(e))
@@ -194,6 +198,8 @@ class SessionStore(
                 span.setAttributes(mapOf(ATTR_OUTCOME to attr(OUTCOME_LOADED)))
                 session
             } catch (e: CancellationException) {
+                // Cancellation is not a failure; settle ok (see write above).
+                span.setStatus(SpanStatus.Ok)
                 throw e
             } catch (e: Exception) {
                 span.setStatus(typeOnlyError(e))

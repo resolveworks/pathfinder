@@ -12,6 +12,7 @@ import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.CredentialType
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
 import works.resolve.pathfinder.telemetry.SpanStatus
 import works.resolve.pathfinder.telemetry.attr
@@ -239,6 +240,29 @@ class EncryptedCredentialStoreTest {
         assertEquals(attr("absent"), deletes[0].attributes["pf.credentials.outcome"])
         assertEquals(attr("deleted"), deletes[1].attributes["pf.credentials.outcome"])
         assertEquals(SpanStatus.Ok, deletes[0].status)
+    }
+
+    @Test
+    fun `cancelled read and write settle ok, never as error spans`() = runTest {
+        val telemetry = InMemoryTelemetryContext()
+        val cancelled = CancellationException("scope cancelled")
+        val dir = createTempDirectory()
+        val store = EncryptedCredentialStore(
+            dir = dir,
+            encrypt = { throw cancelled },
+            decrypt = { throw cancelled },
+            telemetryContext = telemetry,
+        )
+        writeRaw(dir, "openai", "{}")
+
+        assertFailsWith<CancellationException> { store.read("openai") }
+        assertFailsWith<CancellationException> { store.modify("zai") { ApiKeyCredential("k") } }
+
+        val reads = telemetry.spans().filter { it.name == "pf.credentials.read" }
+        val write = telemetry.spans().single { it.name == "pf.credentials.write" }
+        assertTrue(reads.isNotEmpty())
+        reads.forEach { assertEquals(SpanStatus.Ok, it.status) } // cancellation is not a failure
+        assertEquals(SpanStatus.Ok, write.status)
     }
 
     private fun createTempDirectory(): File = kotlin.io.path.createTempDirectory("credstore").toFile().apply { deleteOnExit() }
