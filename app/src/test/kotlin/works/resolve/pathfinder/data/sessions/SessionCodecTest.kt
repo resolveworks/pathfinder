@@ -65,9 +65,78 @@ class SessionCodecTest {
         assertEquals(minimal, decodedMinimal.entries.single())
     }
 
+    /**
+     * The format-3 entry kinds beyond message/compaction (pi's harness
+     * ENTRY_TYPES set) round-trip with pi's field names: model_change
+     * (provider/modelId), thinking_level_change (thinkingLevel),
+     * active_tools_change (activeToolNames), branch_summary
+     * (fromId/summary/details/usage), custom (customType/data).
+     */
+    @Test
+    fun configurationAndBookkeepingEntryKindsRoundTrip() {
+        val entries: List<SessionEntry> = listOf(
+            ModelChangeEntry("e1", null, 1L, provider = "zai", modelId = "glm-4.7"),
+            ThinkingLevelEntry("e2", "e1", 2L, thinkingLevel = "high"),
+            ActiveToolsEntry("e3", "e2", 3L, activeToolNames = listOf("read", "edit")),
+            BranchSummaryEntry(
+                id = "e4", parentId = "e3", timestamp = 4L,
+                fromId = "e1", summary = "branch summary",
+                details = Json.parseToJsonElement("{\"x\":1}"),
+                usage = Usage(input = 1, output = 1, totalTokens = 2, cost = Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
+            ),
+            CustomEntry("e5", "e4", 5L, customType = "ext.thing", data = Json.parseToJsonElement("[true]")),
+        )
+        val session = Session("sess-k", "t", 1, 2, entries, "e5")
+
+        val decoded = SessionCodec.decode(SessionCodec.encode(session))
+        assertEquals(entries, decoded.entries)
+
+        // Optional fields stay optional.
+        val stripped = listOf(
+            entries[3] as BranchSummaryEntry to BranchSummaryEntry("e4", "e3", 4L, fromId = "e1", summary = "s"),
+            entries[4] as CustomEntry to CustomEntry("e5", "e4", 5L, customType = "ext.thing"),
+        )
+        val minimal = SessionCodec.decode(
+            SessionCodec.encode(session.copy(entries = stripped.map { it.second })),
+        )
+        assertEquals(stripped.map { it.second }, minimal.entries)
+    }
+
+    @Test
+    fun newEntryKindsRejectMissingRequiredFields() {
+        fun payload(entry: String) =
+            """{"format":3,"id":"s","title":"t","createdAt":1,"updatedAt":1,"entries":[$entry],"leafId":null}"""
+        assertFailsWith<SessionDataException> {
+            SessionCodec.decode(payload("""{"type":"model_change","id":"e","timestamp":1,"modelId":"m"}"""))
+        }
+        assertFailsWith<SessionDataException> {
+            SessionCodec.decode(payload("""{"type":"thinking_level_change","id":"e","timestamp":1}"""))
+        }
+        assertFailsWith<SessionDataException> {
+            SessionCodec.decode(payload("""{"type":"active_tools_change","id":"e","timestamp":1,"activeToolNames":[1]}"""))
+        }
+        assertFailsWith<SessionDataException> {
+            SessionCodec.decode(payload("""{"type":"branch_summary","id":"e","timestamp":1,"summary":"s"}"""))
+        }
+        assertFailsWith<SessionDataException> {
+            SessionCodec.decode(payload("""{"type":"custom","id":"e","timestamp":1,"data":{}}"""))
+        }
+    }
+
+    /** Format 2 is a prior (disposable) format: rejected, never migrated. */
+    @Test
+    fun format2RejectedWithoutMigration() {
+        val e = assertFailsWith<SessionDataException> {
+            SessionCodec.decode(
+                """{"format":2,"id":"s","title":"t","createdAt":1,"updatedAt":1,"entries":[],"leafId":null}""",
+            )
+        }
+        assertEquals("Unsupported session format: 2", e.message)
+    }
+
     @Test
     fun compactionEntryRejectsMalformedPayloads() {
-        fun payload(entries: String) = """{"format":2,"id":"sess-3","title":"t","createdAt":1,"updatedAt":2,"entries":[$entries],"leafId":"c1"}"""
+        fun payload(entries: String) = """{"format":3,"id":"sess-3","title":"t","createdAt":1,"updatedAt":2,"entries":[$entries],"leafId":"c1"}"""
 
         // Missing required summary is rejected, nothing silently defaulted.
         assertFailsWith<SessionDataException> {
@@ -225,10 +294,10 @@ class SessionCodecTest {
     }
 
     @Test
-    fun toolResultDetailsAndUsageAbsentInOlderV2DecodeAsNull() {
+    fun toolResultDetailsAndUsageAbsentDecodeAsNull() {
         val legacy = SessionCodec.decode(
             """{
-              "format": 2, "id": "sess-old", "title": "t",
+              "format": 3, "id": "sess-old", "title": "t",
               "createdAt": 1, "updatedAt": 2,
               "entries": [{
                 "type": "message", "id": "m1", "timestamp": 3,
@@ -248,7 +317,7 @@ class SessionCodecTest {
     }
 
     @Test
-    fun v2RoundTripPreservesEntriesAndLeafId() {
+    fun v3RoundTripPreservesEntriesAndLeafId() {
         val session = branchedSession()
         val decoded = SessionCodec.decode(SessionCodec.encode(session))
         assertEquals(session, decoded)
@@ -267,7 +336,7 @@ class SessionCodecTest {
     @Test
     fun unknownVersionRejected() {
         assertFailsWith<SessionDataException> {
-            SessionCodec.decode("""{"format":3,"id":"s","title":"t","createdAt":1,"updatedAt":1,"entries":[],"leafId":null}""")
+            SessionCodec.decode("""{"format":4,"id":"s","title":"t","createdAt":1,"updatedAt":1,"entries":[],"leafId":null}""")
         }
         assertFailsWith<SessionDataException> {
             SessionCodec.decode("""{"format":0,"id":"s","title":"t","createdAt":1,"updatedAt":1,"entries":[],"leafId":null}""")
@@ -282,45 +351,45 @@ class SessionCodecTest {
         assertFailsWith<SessionDataException> { SessionCodec.decode("[1]") }
         // Missing entries.
         assertFailsWith<SessionDataException> {
-            SessionCodec.decode("""{"format":2,"id":"s","title":"t","createdAt":1,"updatedAt":1}""")
+            SessionCodec.decode("""{"format":3,"id":"s","title":"t","createdAt":1,"updatedAt":1}""")
         }
         // Unknown entry type.
         assertFailsWith<SessionDataException> {
-            SessionCodec.decode("""{"format":2,"id":"s","title":"t","createdAt":1,"updatedAt":1,
+            SessionCodec.decode("""{"format":3,"id":"s","title":"t","createdAt":1,"updatedAt":1,
                "entries":[{"type":"compaction","id":"c","timestamp":1}],"leafId":null}""")
         }
         // Entry missing id.
         assertFailsWith<SessionDataException> {
-            SessionCodec.decode("""{"format":2,"id":"s","title":"t","createdAt":1,"updatedAt":1,
+            SessionCodec.decode("""{"format":3,"id":"s","title":"t","createdAt":1,"updatedAt":1,
                "entries":[{"type":"message","timestamp":1,"message":{"role":"user","timestamp":0,"content":[]}}],"leafId":null}""")
         }
         // Entry missing timestamp.
         assertFailsWith<SessionDataException> {
-            SessionCodec.decode("""{"format":2,"id":"s","title":"t","createdAt":1,"updatedAt":1,
+            SessionCodec.decode("""{"format":3,"id":"s","title":"t","createdAt":1,"updatedAt":1,
                "entries":[{"type":"message","id":"m","message":{"role":"user","timestamp":0,"content":[]}}],"leafId":null}""")
         }
         // Entry missing message.
         assertFailsWith<SessionDataException> {
-            SessionCodec.decode("""{"format":2,"id":"s","title":"t","createdAt":1,"updatedAt":1,
+            SessionCodec.decode("""{"format":3,"id":"s","title":"t","createdAt":1,"updatedAt":1,
                "entries":[{"type":"message","id":"m","timestamp":1}],"leafId":null}""")
         }
         // Missing header fields.
         assertFailsWith<SessionDataException> {
-            SessionCodec.decode("""{"format":2,"id":"s","title":"t","createdAt":1,"entries":[],"leafId":null}""")
+            SessionCodec.decode("""{"format":3,"id":"s","title":"t","createdAt":1,"entries":[],"leafId":null}""")
         }
     }
 
     @Test
     fun parentIdNullAndMissingBothDecodeAsNull() {
         val withNull = SessionCodec.decode(
-            """{"format":2,"id":"s","title":"t","createdAt":1,"updatedAt":1,
+            """{"format":3,"id":"s","title":"t","createdAt":1,"updatedAt":1,
                "entries":[{"type":"message","id":"m","parentId":null,"timestamp":1,
                           "message":{"role":"user","timestamp":0,"content":[]}}],"leafId":null}""",
         )
         assertNull(withNull.entries.single().parentId)
 
         val without = SessionCodec.decode(
-            """{"format":2,"id":"s","title":"t","createdAt":1,"updatedAt":1,
+            """{"format":3,"id":"s","title":"t","createdAt":1,"updatedAt":1,
                "entries":[{"type":"message","id":"m","timestamp":1,
                           "message":{"role":"user","timestamp":0,"content":[]}}],"leafId":null}""",
         )
@@ -350,7 +419,7 @@ class SessionCodecTest {
     fun providerMetadataAbsentDecodesToDefaults() {
         // v2 session written before replay-metadata fields existed.
         val text = """
-            {"format":2,"id":"s","title":"t","createdAt":1,"updatedAt":1,
+            {"format":3,"id":"s","title":"t","createdAt":1,"updatedAt":1,
              "entries":[{"type":"message","id":"m0","timestamp":1,
                "message":{"role":"assistant","timestamp":1,
                 "content":[

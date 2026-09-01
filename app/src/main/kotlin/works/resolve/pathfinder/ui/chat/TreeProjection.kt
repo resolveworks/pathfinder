@@ -44,6 +44,9 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
     val leafId = conversation.leafId
 
     fun isVisible(entry: SessionEntry): Boolean = when (filter) {
+        // Non-message entries (compaction cuts, model_change and the other
+        // configuration/bookkeeping kinds) are elided in both filters, pi's
+        // "settings entries hidden in default view" rule (tree-selector.ts).
         TreeFilter.DEFAULT -> entry is MessageEntry
         TreeFilter.USER_ONLY -> entry is MessageEntry && entry.message is UserMessage
     }

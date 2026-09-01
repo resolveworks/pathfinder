@@ -2,6 +2,7 @@ package works.resolve.pathfinder.data.sessions
 
 import kotlin.time.Clock
 import works.resolve.pathfinder.agent.compaction.CompactionDetails
+import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.utils.uuidv7
@@ -69,6 +70,38 @@ class Conversation(
         return Conversation(entries + entry, entry.id, nextId, clock)
     }
 
+    /**
+     * Appends a model change as child of the current leaf and advances the
+     * leaf to it (pi's sessionManager.appendModelChange, session-manager.ts
+     * ~1084).
+     */
+    fun appendModelChange(provider: String, modelId: String): Conversation {
+        val entry = ModelChangeEntry(
+            id = nextId(),
+            parentId = leafId,
+            timestamp = clock.now().toEpochMilliseconds(),
+            provider = provider,
+            modelId = modelId,
+        )
+        return Conversation(entries + entry, entry.id, nextId, clock)
+    }
+
+    /**
+     * Appends a thinking-level change as child of the current leaf and
+     * advances the leaf to it (pi's sessionManager.appendThinkingLevelChange,
+     * session-manager.ts ~1071). No producer yet in pathfinder (no
+     * thinking-level selection point).
+     */
+    fun appendThinkingLevelChange(thinkingLevel: String): Conversation {
+        val entry = ThinkingLevelEntry(
+            id = nextId(),
+            parentId = leafId,
+            timestamp = clock.now().toEpochMilliseconds(),
+            thinkingLevel = thinkingLevel,
+        )
+        return Conversation(entries + entry, entry.id, nextId, clock)
+    }
+
     /** Moves the leaf to [entryId]; throws [IllegalArgumentException] when unknown. */
     fun branch(entryId: String): Conversation {
         require(entries.any { it.id == entryId }) { "Unknown entry id: $entryId" }
@@ -94,6 +127,51 @@ class Conversation(
     /** Messages along the active root→leaf path, in order. */
     fun activeMessages(): List<Message> =
         activeEntries().filterIsInstance<MessageEntry>().map { it.message }
+
+    /**
+     * The provider+model pair a configuration entry selects (pi's inline
+     * `{ provider, modelId }` in harness session types).
+     */
+    data class SessionModelSelection(val provider: String, val modelId: String)
+
+    /**
+     * Branch-effective session configuration, pi's deriveSessionContextState
+     * (harness/session/context.ts) — the same fold as the reducer's
+     * deriveEffectiveConfiguration (harness/reducer.ts ~398): scanning the
+     * root→leaf path in order, model_change / thinking_level_change /
+     * active_tools_change entries overwrite the corresponding field, and
+     * assistant message entries also update the model (their provider/model
+     * is what actually ran). Defaults mirror pi's: thinkingLevel "off",
+     * model and activeToolNames unset.
+     */
+    data class EffectiveConfiguration(
+        val model: SessionModelSelection? = null,
+        val thinkingLevel: String = "off",
+        val activeToolNames: List<String>? = null,
+    )
+
+    /** Folds the active root→leaf path into the branch's effective configuration. */
+    fun effectiveConfiguration(): EffectiveConfiguration {
+        var configuration = EffectiveConfiguration()
+        for (entry in activeEntries()) {
+            configuration = when (entry) {
+                is ModelChangeEntry -> configuration.copy(
+                    model = SessionModelSelection(entry.provider, entry.modelId),
+                )
+                is ThinkingLevelEntry -> configuration.copy(thinkingLevel = entry.thinkingLevel)
+                is ActiveToolsEntry -> configuration.copy(activeToolNames = entry.activeToolNames.toList())
+                is MessageEntry -> {
+                    val assistant = entry.message as? AssistantMessage ?: continue
+                    configuration.copy(
+                        model = SessionModelSelection(assistant.provider, assistant.model),
+                    )
+                }
+                else -> configuration
+            }
+        }
+        return configuration
+    }
+
 
     /** Entry lookup by id. */
     fun entry(id: String): SessionEntry? = entries.firstOrNull { it.id == id }

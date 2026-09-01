@@ -148,6 +148,87 @@ class ConversationTest {
         assertEquals(conversation.leafId, node.entry.id)
     }
 
+    /**
+     * pi's sessionManager.appendModelChange / appendThinkingLevelChange
+     * (session-manager.ts ~1071/~1084): the entry is a child of the current
+     * leaf and the leaf advances to it.
+     */
+    @Test
+    fun appendModelAndThinkingLevelChangesAdvanceTheLeaf() {
+        val c = newConversation()
+            .append(msg("a"))
+            .appendModelChange(provider = "zai", modelId = "glm-4.7")
+            .appendThinkingLevelChange("high")
+
+        assertEquals(listOf("e0", "e1", "e2"), c.entries.map { it.id })
+        val modelChange = c.entries[1] as ModelChangeEntry
+        assertEquals("zai" to "glm-4.7", modelChange.provider to modelChange.modelId)
+        assertEquals("e0", modelChange.parentId)
+        val thinking = c.entries[2] as ThinkingLevelEntry
+        assertEquals("high", thinking.thinkingLevel)
+        assertEquals("e2", c.leafId)
+    }
+
+    /**
+     * pi's deriveSessionContextState / deriveEffectiveConfiguration fold:
+     * configuration entries and assistant messages update the effective
+     * model, thinking level, and active tools root→leaf; defaults mirror pi
+     * (thinking "off", model and tools unset).
+     */
+    @Test
+    fun effectiveConfigurationFoldsRootToLeaf() {
+        val c = newConversation()
+
+        // Defaults on an empty branch.
+        assertEquals(Conversation.EffectiveConfiguration(), c.effectiveConfiguration())
+
+        val assistant = works.resolve.pathfinder.ai.core.AssistantMessage(
+            content = emptyList(),
+            api = "openai-completions",
+            provider = "zai",
+            model = "glm-4.6",
+            usage = works.resolve.pathfinder.ai.core.Usage(0, 0, 0, 0, 0, 0, 0, works.resolve.pathfinder.ai.core.Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
+            stopReason = works.resolve.pathfinder.ai.core.StopReason.STOP,
+            timestamp = 0L,
+        )
+
+        var conversation = c
+            .appendModelChange("zai", "glm-4.7")
+            .append(msg("hello"))
+            .appendModelChange("zai", "glm-5.3")
+            .appendThinkingLevelChange("high")
+        // Append the assistant message through a copy that keeps the test clock:
+        conversation = Conversation(conversation.entries, conversation.leafId, { "assistant" }, FakeClock())
+            .append(assistant)
+
+        val folded = conversation.effectiveConfiguration()
+        assertEquals("zai" to "glm-4.6", folded.model!!.provider to folded.model!!.modelId)
+        assertEquals("high", folded.thinkingLevel)
+        assertNull(folded.activeToolNames)
+
+        // Assistant messages carry the model that actually ran, so they win
+        // over an earlier model_change; a later model_change wins back.
+        val afterSwitch = conversation.appendModelChange("zai", "glm-4.7")
+        assertEquals("glm-4.7", afterSwitch.effectiveConfiguration().model!!.modelId)
+
+        // Active tools fold too, and branching away drops later entries.
+        val withTools = afterSwitch.appendActiveTools()
+        assertEquals(listOf("read"), withTools.effectiveConfiguration().activeToolNames)
+        val rewound = withTools.branch(afterSwitch.leafId!!)
+        assertNull(rewound.effectiveConfiguration().activeToolNames)
+        assertEquals("glm-4.7", rewound.effectiveConfiguration().model!!.modelId)
+    }
+
+    private fun Conversation.appendActiveTools(): Conversation {
+        val entry = ActiveToolsEntry(
+            id = "tools-${entries.size}",
+            parentId = leafId,
+            timestamp = entries.size.toLong(),
+            activeToolNames = listOf("read"),
+        )
+        return Conversation(entries + entry, entry.id)
+    }
+
     private fun List<works.resolve.pathfinder.ai.core.Message>.texts(): List<String> =
         map { (it as UserMessage).content.single().let { (it as works.resolve.pathfinder.ai.core.TextContent).text } }
 }

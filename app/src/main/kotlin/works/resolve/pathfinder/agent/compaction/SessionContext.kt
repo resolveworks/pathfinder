@@ -1,8 +1,13 @@
 package works.resolve.pathfinder.agent.compaction
 
+import works.resolve.pathfinder.data.sessions.ActiveToolsEntry
+import works.resolve.pathfinder.data.sessions.BranchSummaryEntry
 import works.resolve.pathfinder.data.sessions.CompactionEntry
+import works.resolve.pathfinder.data.sessions.CustomEntry
 import works.resolve.pathfinder.data.sessions.MessageEntry
+import works.resolve.pathfinder.data.sessions.ModelChangeEntry
 import works.resolve.pathfinder.data.sessions.SessionEntry
+import works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
 import works.resolve.pathfinder.ai.core.Message
 
 /**
@@ -56,6 +61,12 @@ private fun sessionEntryToContextMessages(entry: SessionEntry): List<Message> = 
     is MessageEntry -> listOf(entry.message)
     is CompactionEntry -> listOf(createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp)) +
         entry.retainedTail
+    // Configuration/bookkeeping kinds contribute no context messages
+    // (context.ts falls through to []). Divergence: upstream branch_summary
+    // synthesizes createBranchSummaryMessage and custom goes through entry
+    // projectors, but pathfinder has neither producer, so nothing projects.
+    is ModelChangeEntry, is ThinkingLevelEntry, is ActiveToolsEntry,
+    is BranchSummaryEntry, is CustomEntry -> emptyList()
 }
 
 /**
