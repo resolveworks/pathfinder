@@ -80,7 +80,12 @@ import kotlinx.coroutines.withContext
  * the session they belong to. The persisted unit is the conversation tree
  * itself (entries + leafId), so branch structure survives saves; snapshots
  * are taken from the immutable [Conversation] the ViewModel owns alongside
- * the active session. A failed save surfaces an error and blocks
+ * the active session. Saves are append-only (pi's JSONL v4 mutation log,
+ * P0-2): [SessionRepository.save] syncs the snapshot by appending the
+ * entries not yet in the log — a lane mutation first when the tree branched
+ * — then the lane's move to the snapshot leaf and the title fact, so
+ * re-syncing a snapshot is a no-op and a partially-failed save can simply
+ * be retried. A failed save surfaces an error and blocks
  * session/config switches; the blocked intent explicitly retries the latest
  * snapshot and only proceeds once it is saved, so an unsaved transcript is
  * never silently abandoned. Snapshot writes themselves are non-cancellable
@@ -148,7 +153,13 @@ class ChatViewModel(
     private val activeConversation: Conversation
         get() = agent?.conversation ?: Conversation(emptyList(), null)
 
-    /** Count of active-session entries already persisted. */
+    /**
+     * Watermark of active-session entries already appended to the session's
+     * mutation log (pi's seq watermark equivalent: entries are append-only
+     * and consume one consecutive seq each, so the persisted-entry count is
+     * the log's entry frontier). Tree growth beyond it schedules a persist;
+     * leaf-only moves (navigation) persist without moving it.
+     */
     private var persistedEntryCount: Int = 0
 
     /** Latest unsaved conversation snapshot for its owning session. */
@@ -705,9 +716,10 @@ class ChatViewModel(
     }
 
     /**
-     * Writes one snapshot. The file is always written (the transcript stays
-     * with its session even if the user switched away meanwhile); UI/active
-     * state is only updated when that session is still active.
+     * Writes one snapshot. The append-only sync always reaches the file (the
+     * transcript stays with its session even if the user switched away
+     * meanwhile); UI/active state is only updated when that session is still
+     * active.
      */
     private suspend fun persistSnapshot(session: Session, conversation: Conversation) {
         // Non-cancellable: an accepted snapshot must reach the file even when
@@ -722,9 +734,9 @@ class ChatViewModel(
                 } else {
                     session.title
                 }
-                // Persist the tree itself (entries + leafId): branch
-                // structure must survive saves; withMessages stays a
-                // flat-transcript bridge only.
+                // Persist the tree itself (entry appends + lane move): branch
+                // structure survives saves via the mutation log; withMessages
+                // stays a flat-transcript bridge only.
                 val saved = sessionStore.save(
                     session.copy(entries = conversation.entries, leafId = conversation.leafId, title = title),
                 )
