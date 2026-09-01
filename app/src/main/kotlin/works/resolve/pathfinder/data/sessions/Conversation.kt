@@ -236,8 +236,8 @@ class Conversation(
 
     companion object {
         /** Builds a linearly chained conversation from a flat transcript
-         * (each message parented to the previous, leaf = last); used by v1
-         * migration and callers that still hold flat transcripts. */
+         * (each message parented to the previous, leaf = last); used by
+         * callers that still hold flat transcripts. */
         fun fromMessages(messages: List<Message>): Conversation {
             var conversation = Conversation(emptyList(), null)
             for (message in messages) {
