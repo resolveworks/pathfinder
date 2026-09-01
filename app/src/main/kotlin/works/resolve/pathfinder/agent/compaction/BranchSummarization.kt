@@ -40,11 +40,12 @@ import works.resolve.pathfinder.data.sessions.CustomEntry
  * target branch so the exploration is preserved as context
  * (`createBranchSummaryMessage` projection in SessionContext.kt).
  *
- * Pathfinder has no navigation operation yet — the trigger is part of the
- * operation-record effort (mutation-log `operation_started`/`abort_requested`/
- * `operation_finished` records and the navigation intent that drives them).
- * This port therefore provides the core only: no producer exists and nothing
- * calls these functions yet. Port the trigger when operation records land.
+ * Pathfinder's navigation trigger is [AgentSession.navigateTree] (ported
+ * with the lane-state reducer / operation-record effort, audit P1-4/P1-5):
+ * the navigation operation appends a [BranchSummaryEntry] on the target
+ * branch via [collectEntriesForBranchSummary] + [generateBranchSummary], so
+ * the exploration is preserved as context (`createBranchSummaryMessage`
+ * projection in SessionContext.kt).
  *
  * Adaptation boundaries (documented per symbol below):
  * - pi's `AgentMessage` union maps to pathfinder's `ai.core.Message`

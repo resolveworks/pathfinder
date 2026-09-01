@@ -6,6 +6,7 @@ import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
+import works.resolve.pathfinder.agent.LaneRecovery
 import works.resolve.pathfinder.data.sessions.SessionSummary
 
 enum class ChatRole {
@@ -252,5 +253,13 @@ data class ChatUiState(
     val treeFilter: TreeFilter = TreeFilter.DEFAULT,
     /** The in-flight provider login flow, or null (see [ProviderAuthFlow]; never secrets). */
     val authFlow: ProviderAuthFlow? = null,
+    /**
+     * Load-time lane recovery classification (pi's findOpenOperations
+     * limit-2 contract, reduced by the lane-state reducer):
+     * [LaneRecovery.Suspended] marks an interrupted operation — its
+     * operation_finished never persisted — distinguishing an interrupted
+     * run from a finished one.
+     */
+    val laneRecovery: LaneRecovery = LaneRecovery.Idle,
     val error: String? = null,
 )

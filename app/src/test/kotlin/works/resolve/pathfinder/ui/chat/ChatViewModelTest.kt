@@ -54,6 +54,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -176,10 +179,17 @@ class ChatViewModelTest {
             private set
         var totalSaves = 0
             private set
+        /** Every record appended through the ViewModel's lifecycle recorder. */
+        val appendedRecords = ConcurrentLinkedQueue<works.resolve.pathfinder.data.sessions.LaneRecord>()
         /** When set, completed as each save is entered (before the gate). */
         var saveEntered: CompletableDeferred<Unit>? = null
         /** When set, every save suspends on it before delegating. */
         var saveGate: CompletableDeferred<Unit>? = null
+        override suspend fun appendRecord(sessionId: String, record: works.resolve.pathfinder.data.sessions.LaneRecord): works.resolve.pathfinder.data.sessions.LaneRecord {
+            appendedRecords.add(record)
+            return delegate.appendRecord(sessionId, record)
+        }
+
         override suspend fun save(session: works.resolve.pathfinder.data.sessions.Session): works.resolve.pathfinder.data.sessions.Session {
             totalSaves += 1
             if (failSave) {
@@ -271,6 +281,9 @@ class ChatViewModelTest {
             )
         }
 
+        /** When set, agents are built with auto-compaction disabled (isolates branch summarization). */
+        var disableCompaction = false
+
         /** Model ids rejected by the fake factory (validation-error path). */
         val rejectedModelIds = mutableSetOf<String>()
 
@@ -296,7 +309,7 @@ class ChatViewModelTest {
                 ),
                 conversation = conversation,
                 retrySettings = settings.retry,
-                compactionSettings = settings.compaction,
+                compactionSettings = if (disableCompaction) settings.compaction.copy(enabled = false) else settings.compaction,
                 models = compactionModels,
             ).also { session -> createdAgents += session }
         }
@@ -341,6 +354,19 @@ class ChatViewModelTest {
             (credentials.creds[providerId] as? ApiKeyCredential)?.key
     }
 
+    /**
+     * Waits in real time (off the test scheduler) until [condition] holds:
+     * the store's IO appends run on real Dispatchers.IO, which runTest's
+     * virtual clock cannot see (it would idle-advance into the timeout).
+     */
+    private suspend fun waitUntil(timeoutMs: Long = 5_000, condition: suspend () -> Boolean) {
+        withContext(Dispatchers.Default.limitedParallelism(1)) {
+            withTimeout(timeoutMs) {
+                while (!condition()) delay(10)
+            }
+        }
+    }
+
     /** Cancels the ViewModel scope and waits until all in-flight work has settled. */
     private suspend fun ChatViewModel.closeForTest() {
         val job = viewModelScope.coroutineContext[Job]!!
@@ -367,6 +393,9 @@ class ChatViewModelTest {
         )
 
     private fun stringArray(vararg ids: String): JsonArray = JsonArray(ids.map { JsonPrimitive(it) })
+
+    /** Primitive JSON payload value as a string (record intent assertions). */
+    private val JsonElement.jsonPrimitiveContent: String get() = (this as JsonPrimitive).content
 
     private fun ChatViewModel.copilotModelOptions(): List<String> =
         uiState.value.modelOptions.filter { it.providerId == "github-copilot" }.map { it.modelId }
@@ -2509,10 +2538,16 @@ class ChatViewModelTest {
         val after = sessionLogFile(sessionId).readText()
         assertTrue(after.length > before.length)
         assertTrue(after.startsWith(before))
-        // Exactly one appended line: the lane mutation back to the seed
-        // model_change entry (the re-edit target's parent).
-        assertEquals(before.count { it == '\n' } + 1, after.count { it == '\n' })
-        assertTrue(after.substring(before.length).contains("\"kind\":\"lane\""))
+        // Three appended lines: the navigation operation's durable record
+        // pair (operation_started navigation + operation_finished) plus the
+        // lane mutation back to the seed model_change entry (the re-edit
+        // target's parent).
+        assertEquals(before.count { it == '\n' } + 3, after.count { it == '\n' })
+        val appended = after.substring(before.length)
+        assertTrue(appended.contains("\"kind\":\"lane\""))
+        assertTrue(appended.contains("\"type\":\"operation_started\""))
+        assertTrue(appended.contains("\"kind\":\"navigation\""))
+        assertTrue(appended.contains("\"type\":\"operation_finished\""))
 
         // A fresh store (process restart) replays the lane move: same
         // entries, empty active transcript, leaf on the seed entry.
@@ -2520,6 +2555,100 @@ class ChatViewModelTest {
         assertEquals(3, reloaded.entries.size) // seed model_change + user + assistant
         assertEquals(reloaded.entries.first().id, reloaded.leafId)
         assertTrue(reloaded.messages.isEmpty())
+    }
+
+    // ---- navigation trigger: branch summarization (audit P1-4/P1-5) ----
+
+    @Test
+    fun navigateWithSummarize_appendsNavigationRecordAndBranchSummary() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        // The summarization stack must exist before the agent is created;
+        // auto-compaction is disabled so the queued response belongs to the
+        // navigation summarization alone.
+        h.disableCompaction = true
+        h.installCompactionModels()
+        h.summaryResponses.add(h.assistant("## Goal\nexplored the branch"))
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        vm.exchange(h, "Hello", "world")
+        vm.exchange(h, "Again", "fine")
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 4 }
+
+        // Navigate back to the first assistant answer, summarizing the
+        // abandoned second exchange.
+        val assistantEntryId = vm.uiState.value.treeRows[1].id
+        vm.navigateToTreeEntry(assistantEntryId, summarize = true)
+
+        // The branch summary entry lands on the target branch and persists.
+        waitUntil { h.sessionStore.load(sessionId)!!.entries.any { it is works.resolve.pathfinder.data.sessions.BranchSummaryEntry } }
+        val saved = h.sessionStore.load(sessionId)!!
+        val summary = saved.entries.filterIsInstance<works.resolve.pathfinder.data.sessions.BranchSummaryEntry>().single()
+        assertEquals(assistantEntryId, summary.parentId)
+        assertTrue(summary.summary.contains("explored the branch"))
+        assertEquals(summary.id, saved.leafId)
+
+        // The durable navigation operation: started (navigation intent with
+        // the summarize flag and pre-minted summaryEntryId) + finished
+        // completed.
+        waitUntil {
+            h.sessions.appendedRecords.count { it is works.resolve.pathfinder.data.sessions.LaneRecord.OperationFinishedRecord } >= 3
+        }
+        val records = h.sessions.appendedRecords.toList()
+        val navStart = records.filterIsInstance<works.resolve.pathfinder.data.sessions.LaneRecord.OperationStartedRecord>()
+            .last { it.intent.kind == works.resolve.pathfinder.data.sessions.OperationIntent.Kind.NAVIGATION }
+        assertEquals(assistantEntryId, navStart.intent.payload["targetId"]!!.jsonPrimitiveContent)
+        assertEquals("true", navStart.intent.payload["summarize"]!!.jsonPrimitiveContent)
+        assertEquals(summary.id, navStart.intent.payload["summaryEntryId"]!!.jsonPrimitiveContent)
+        val navFinish = records.filterIsInstance<works.resolve.pathfinder.data.sessions.LaneRecord.OperationFinishedRecord>().last()
+        assertEquals(navStart.id, navFinish.runId)
+        assertEquals(works.resolve.pathfinder.data.sessions.OperationOutcome.COMPLETED, navFinish.outcome)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun load_classifiesSuspendedVsFinishedOperations() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        // A finished exchange: its run operation closed. Drain the async
+        // record appends before reloading.
+        vm.exchange(h, "Hello", "world")
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+        waitUntil { h.sessionStore.openOperations(sessionId, "main", null).isEmpty() }
+        vm.closeForTest()
+
+        val vm2 = h.newViewModel()
+        val finished = vm2.uiState.first { it.status == ChatStatus.Ready && it.activeSessionId == sessionId }
+        assertEquals(works.resolve.pathfinder.agent.LaneRecovery.Idle, finished.laneRecovery)
+        vm2.closeForTest()
+
+        // An unfinished operation record makes the same session suspend:
+        // the run's operation_finished never persisted.
+        h.sessionStore.appendRecord(
+            sessionId,
+            works.resolve.pathfinder.data.sessions.LaneRecord.OperationStartedRecord(
+                id = "suspended-op",
+                lane = "main",
+                sourceLeafId = null,
+                intent = works.resolve.pathfinder.data.sessions.OperationIntent.run(),
+            ),
+        )
+        val vm3 = h.newViewModel()
+        val suspended = vm3.uiState.first { it.status == ChatStatus.Ready && it.activeSessionId == sessionId }
+        assertEquals(
+            works.resolve.pathfinder.agent.LaneRecovery.Suspended(works.resolve.pathfinder.data.sessions.OperationIntent.Kind.RUN),
+            suspended.laneRecovery,
+        )
+        vm3.closeForTest()
     }
 }
 
