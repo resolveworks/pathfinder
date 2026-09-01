@@ -207,8 +207,9 @@ class ChatViewModelTest {
     private inner class Harness {
         val credentials = FakeCredentialStore()
 
-        /** Records the ViewModel's telemetry spans for boundary assertions. */
+        /** Records the ViewModel's diagnostics spans for boundary assertions. */
         val telemetry = works.resolve.pathfinder.telemetry.InMemoryTelemetryContext()
+        val diagnostics = works.resolve.pathfinder.logging.PathfinderDiagnostics(telemetry)
 
         /** Registered OAuth flows: zai (also has API-key prompts → both methods) and the promptless oauth-only provider. */
         val oauthZai = FakeOAuthAuth()
@@ -227,7 +228,6 @@ class ChatViewModelTest {
                 mapOf("zai" to oauthZai, "oauth-only" to oauthOnly, "github-copilot" to oauthCopilot),
             ),
             credentials = credentials,
-            telemetryContext = telemetry,
         )
         val dataStoreScope = CoroutineScope(SupervisorJob() + mainDispatcherRule.testDispatcher)
         val settings = SettingsRepository(
@@ -321,7 +321,7 @@ class ChatViewModelTest {
             authService = authService,
             sessionStore = sessions,
             agentFactory = factory,
-            telemetryContext = telemetry,
+            diagnostics = diagnostics,
         )
 
         fun assistant(text: String, stopReason: StopReason = StopReason.STOP, error: String? = null) =
@@ -1833,7 +1833,8 @@ class ChatViewModelTest {
         vm.beginProviderAuthLogin("zai", oauthMethod)
         vm.uiState.first { it.authFlow == null && it.error != null }
 
-        // The login operation itself is one error span (from ProviderAuthService).
+        // The login operation itself is one error span (recorded by the
+        // ViewModel at the pf.auth.login app boundary).
         val loginSpan = h.telemetry.getSpans().single { it.name == "pf.auth.login" }
         assertEquals(
             works.resolve.pathfinder.telemetry.attr("zai"),
@@ -1853,9 +1854,29 @@ class ChatViewModelTest {
         )
         val status = errorSpan.status as works.resolve.pathfinder.telemetry.SpanStatus.Error
         // The UI boundary records the wrapped ModelsError (ProviderAuthService wraps
-        // flow failures); its message and cause chain carry the actual reason.
+        // flow failures) type-only: short class name, never the free-form message.
         assertEquals("ModelsError", status.error?.name)
-        assertTrue(status.error?.message!!.contains("token exchange failed (400)"))
+        assertEquals("", status.error?.message)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun apiKeyLogin_recordsPersistedLoginSpanAtAppBoundary() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+        vm.saveProviderCredential("zai", "k", emptyMap())
+        vm.uiState.first { it.credentialSuccessEpoch > 0 }
+
+        // The pf.auth.login span moved out of the ported ProviderAuthService
+        // to the caller boundary; the API-key save path records it too.
+        val span = h.telemetry.getSpans().single { it.name == "pf.auth.login" }
+        assertEquals(works.resolve.pathfinder.telemetry.attr("zai"), span.attributes["pf.auth.provider"])
+        assertEquals(works.resolve.pathfinder.telemetry.attr("api_key"), span.attributes["pf.auth.type"])
+        assertEquals(works.resolve.pathfinder.telemetry.attr("persisted"), span.attributes["pf.auth.outcome"])
+        assertTrue(span.status is works.resolve.pathfinder.telemetry.SpanStatus.Ok)
 
         vm.closeForTest()
     }

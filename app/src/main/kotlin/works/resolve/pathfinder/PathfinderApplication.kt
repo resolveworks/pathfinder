@@ -19,8 +19,8 @@ import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
 import works.resolve.pathfinder.data.sessions.SessionStore
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.logging.LogcatTelemetryContext
+import works.resolve.pathfinder.logging.PathfinderDiagnostics
 import works.resolve.pathfinder.ui.chat.ChatViewModel
-import works.resolve.pathfinder.telemetry.TelemetryContext
 import java.io.File
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
@@ -45,8 +45,12 @@ import okhttp3.OkHttpClient
  */
 class PathfinderApplication : Application() {
 
-    /** The app's single telemetry backend: spans rendered as structured Logcat lines. */
-    val telemetry: TelemetryContext by lazy { LogcatTelemetryContext() }
+    /**
+     * The app's single diagnostics facade over the Logcat telemetry backend
+     * (spans rendered as structured Logcat lines): the one owner of the
+     * `pf.*` span vocabulary and sanitization policy.
+     */
+    val diagnostics: PathfinderDiagnostics by lazy { PathfinderDiagnostics(LogcatTelemetryContext()) }
 
     private val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -69,7 +73,7 @@ class PathfinderApplication : Application() {
     }
 
     val credentials: CredentialStore by lazy {
-        EncryptedCredentialStore(this, KeystoreAeadCipher(), telemetryContext = telemetry)
+        EncryptedCredentialStore(this, KeystoreAeadCipher(), diagnostics = diagnostics)
     }
 
     /**
@@ -88,7 +92,6 @@ class PathfinderApplication : Application() {
             catalog = modelCatalog,
             registry = authRegistry,
             credentials = credentials,
-            telemetryContext = telemetry,
         )
     }
 
@@ -97,7 +100,7 @@ class PathfinderApplication : Application() {
     }
 
     val sessionStore: SessionStore by lazy {
-        SessionStore(File(filesDir, SESSIONS_DIRECTORY), telemetryContext = telemetry)
+        SessionStore(File(filesDir, SESSIONS_DIRECTORY), diagnostics = diagnostics)
     }
 
     /** Generated model catalog, parsed once from the bundled asset. */
@@ -128,7 +131,7 @@ class PathfinderApplication : Application() {
                 authService = authService,
                 sessionStore = sessionStore,
                 agentFactory = agentFactory,
-                telemetryContext = telemetry,
+                diagnostics = diagnostics,
                 appForegroundGate = appForegroundGate,
             )
         }

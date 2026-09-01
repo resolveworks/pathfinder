@@ -13,6 +13,7 @@ import works.resolve.pathfinder.ai.auth.CredentialType
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import works.resolve.pathfinder.logging.PathfinderDiagnostics
 import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
 import works.resolve.pathfinder.telemetry.SpanStatus
 import works.resolve.pathfinder.telemetry.attr
@@ -147,7 +148,7 @@ class EncryptedCredentialStoreTest {
             dir = createTempDirectory(),
             encrypt = { bytes -> bytes.map { (it + 1).toByte() }.toByteArray() },
             decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() },
-            telemetryContext = telemetry,
+            diagnostics = PathfinderDiagnostics(telemetry),
         )
         store.modify("openai") { ApiKeyCredential("sk") }
         assertEquals(ApiKeyCredential("sk"), store.read("openai"))
@@ -170,7 +171,7 @@ class EncryptedCredentialStoreTest {
             dir = dir,
             encrypt = { error("keystore failure") },
             decrypt = { error("keystore failure") },
-            telemetryContext = telemetry,
+            diagnostics = PathfinderDiagnostics(telemetry),
         )
 
         // Absent file: ok span with an absent outcome.
@@ -185,7 +186,7 @@ class EncryptedCredentialStoreTest {
         val readFailed = telemetry.getSpans().last()
         assertEquals("pf.credentials.read", readFailed.name)
         val readError = readFailed.status as SpanStatus.Error
-        assertEquals("java.lang.IllegalStateException", readError.error?.name)
+        assertEquals("IllegalStateException", readError.error?.name)
         assertEquals("", readError.error?.message)
     }
 
@@ -197,7 +198,7 @@ class EncryptedCredentialStoreTest {
             dir = dir,
             encrypt = { bytes -> bytes.map { (it + 1).toByte() }.toByteArray() },
             decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() },
-            telemetryContext = telemetry,
+            diagnostics = PathfinderDiagnostics(telemetry),
         )
 
         // Malformed stored credential: decode span rejects with the type only.
@@ -206,7 +207,7 @@ class EncryptedCredentialStoreTest {
         val decodeFailed = telemetry.getSpans().last()
         assertEquals("pf.credentials.decode", decodeFailed.name)
         val decodeError = decodeFailed.status as SpanStatus.Error
-        assertEquals("works.resolve.pathfinder.data.credentials.CredentialFormatException", decodeError.error?.name)
+        assertEquals("CredentialFormatException", decodeError.error?.name)
         assertEquals("", decodeError.error?.message)
 
         // Persist failure: write span rejects with the type only.
@@ -214,12 +215,12 @@ class EncryptedCredentialStoreTest {
             dir = dir,
             encrypt = { error("keystore failure") },
             decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() },
-            telemetryContext = telemetry,
+            diagnostics = PathfinderDiagnostics(telemetry),
         )
         assertFailsWith<IllegalStateException> { failingWrite.modify("zai") { ApiKeyCredential("k") } }
         val writeFailed = telemetry.getSpans().last()
         assertEquals("pf.credentials.write", writeFailed.name)
-        assertEquals("java.lang.IllegalStateException", (writeFailed.status as SpanStatus.Error).error?.name)
+        assertEquals("IllegalStateException", (writeFailed.status as SpanStatus.Error).error?.name)
     }
 
     @Test
@@ -229,7 +230,7 @@ class EncryptedCredentialStoreTest {
             dir = createTempDirectory(),
             encrypt = { bytes -> bytes.map { (it + 1).toByte() }.toByteArray() },
             decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() },
-            telemetryContext = telemetry,
+            diagnostics = PathfinderDiagnostics(telemetry),
         )
         store.delete("openai")
         store.modify("openai") { ApiKeyCredential("sk") }
@@ -251,7 +252,7 @@ class EncryptedCredentialStoreTest {
             dir = dir,
             encrypt = { throw cancelled },
             decrypt = { throw cancelled },
-            telemetryContext = telemetry,
+            diagnostics = PathfinderDiagnostics(telemetry),
         )
         writeRaw(dir, "openai", "{}")
 

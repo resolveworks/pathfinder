@@ -11,7 +11,6 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -132,13 +131,10 @@ class ProviderAuthServiceTest {
         catalog: ProviderCatalog,
         store: CredentialStore = InMemoryCredentialStore(),
         oauth: OAuthAuth? = null,
-        telemetryContext: works.resolve.pathfinder.telemetry.TelemetryContext =
-            works.resolve.pathfinder.telemetry.NOOP_TELEMETRY_CONTEXT,
     ) = ProviderAuthService(
         catalog,
         MapCatalogAuthRegistry(if (oauth != null) mapOf("acme" to oauth) else emptyMap()),
         store,
-        telemetryContext,
     )
 
     @Test
@@ -446,49 +442,6 @@ class ProviderAuthServiceTest {
         } catch (error: ModelsError) {
             assertEquals(ModelsErrorCode.AUTH, error.code)
         }
-    }
-
-    @Test
-    fun `login records a telemetry span with outcome or error`() = runTest {
-        val telemetry = works.resolve.pathfinder.telemetry.InMemoryTelemetryContext()
-        val failing = works.resolve.pathfinder.telemetry.InMemoryTelemetryContext()
-        val store = InMemoryCredentialStore()
-
-        // Success: start attributes carry provider and wire method type; the
-        // end attribute records the persisted outcome.
-        val service = service(
-            catalog = catalog(oauth = true),
-            store = store,
-            oauth = FakeOAuthAuth(),
-            telemetryContext = telemetry,
-        )
-        service.login("acme", AuthType.OAUTH, FakeInteraction(mutableListOf()))
-        val span = telemetry.getSpans().single()
-        assertEquals("pf.auth.login", span.name)
-        assertEquals(
-            mapOf(
-                "pf.auth.provider" to works.resolve.pathfinder.telemetry.attr("acme"),
-                "pf.auth.type" to works.resolve.pathfinder.telemetry.attr("oauth"),
-                "pf.auth.outcome" to works.resolve.pathfinder.telemetry.attr("persisted"),
-            ),
-            span.attributes,
-        )
-        assertEquals(works.resolve.pathfinder.telemetry.SpanStatus.Ok, span.status)
-
-        // Failure: the thrown (wrapped) error settles the span with error status.
-        val failingOauth = FakeOAuthAuth(onLogin = { throw IllegalStateException("exchange failed (400)") })
-        val failingService = service(catalog(oauth = true), store, failingOauth, failing)
-        try {
-            failingService.login("acme", AuthType.OAUTH, FakeInteraction(mutableListOf()))
-            fail("expected login failure")
-        } catch (_: ModelsError) {
-        }
-        val failure = failing.getSpans().single()
-        val status = failure.status as works.resolve.pathfinder.telemetry.SpanStatus.Error
-        assertEquals("ModelsError", status.error?.name)
-        assertTrue(status.error?.message!!.contains("Login failed for provider 'acme'"))
-        // No outcome was recorded for the failed login.
-        assertNull(failure.attributes["pf.auth.outcome"])
     }
 
     @Test
