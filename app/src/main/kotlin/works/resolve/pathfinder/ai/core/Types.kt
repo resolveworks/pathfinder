@@ -162,11 +162,14 @@ data class Cost(
 )
 
 /**
- * StopReason, pi's stop reasons (types.ts StopReason). Divergence: pi's
- * "deferred" value and DeferredHandle are excluded per the adapter-capability
- * scope in ai/AGENTS.md (no deferred-response support).
+ * StopReason, pi's stop reasons (types.ts StopReason). DEFERRED is ported
+ * for session-parity consumers (pi's sessionEntryToContextMessages drops
+ * deferred assistant messages from context, harness/session/context.ts:72;
+ * SessionStopReason in harness/session/types.ts:10 adds "deferred"); no
+ * pathfinder adapter produces it — deferred responses stay excluded per the
+ * adapter-capability scope in ai/AGENTS.md.
  */
-enum class StopReason { PENDING, STOP, LENGTH, TOOL_USE, ERROR, ABORTED }
+enum class StopReason { PENDING, STOP, LENGTH, TOOL_USE, ERROR, ABORTED, DEFERRED }
 
 sealed class Message {
     abstract val role: MessageRole

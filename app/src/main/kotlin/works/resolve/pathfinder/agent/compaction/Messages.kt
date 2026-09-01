@@ -33,6 +33,15 @@ const val COMPACTION_SUMMARY_SUFFIX =
     "\n" +
         "</summary>"
 
+/** Wrapping prefix for a branch summary in LLM context (messages.ts `BRANCH_SUMMARY_PREFIX`), verbatim. */
+const val BRANCH_SUMMARY_PREFIX =
+    "The following is a summary of a branch that this conversation came back from:\n" +
+        "\n" +
+        "<summary>\n"
+
+/** Wrapping suffix for a branch summary in LLM context (messages.ts `BRANCH_SUMMARY_SUFFIX`), verbatim. */
+const val BRANCH_SUMMARY_SUFFIX = "</summary>"
+
 /**
  * Build the context message a harness compaction entry contributes
  * (messages.ts `createCompactionSummaryMessage`, projected as its
@@ -44,5 +53,20 @@ fun createCompactionSummaryMessage(
     timestamp: Long,
 ): Message = UserMessage(
     content = listOf(TextContent(COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX)),
+    timestamp = timestamp,
+)
+
+/**
+ * Build the context message a harness branch-summary entry contributes
+ * (messages.ts `createBranchSummaryMessage`, projected as its convertToLlm
+ * form — see file docs). Upstream accepts a string timestamp and converts;
+ * pathfinder entries carry epoch millis already.
+ */
+fun createBranchSummaryMessage(
+    summary: String,
+    fromId: String,
+    timestamp: Long,
+): Message = UserMessage(
+    content = listOf(TextContent(BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX)),
     timestamp = timestamp,
 )

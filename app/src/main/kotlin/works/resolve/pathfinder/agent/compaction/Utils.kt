@@ -96,7 +96,7 @@ private fun truncateForSummary(text: String, maxChars: Int): String {
  * `contentText(content, separator)` (packages/ai/src/utils/text.ts) for the
  * array form; pathfinder's content is always structured.
  */
-private fun contentText(content: List<Content>, separator: String = "\n"): String =
+internal fun contentText(content: List<Content>, separator: String = "\n"): String =
     content.filter { it.type == ContentType.TEXT }.joinToString(separator) { (it as TextContent).text }
 
 /** Serialize LLM messages to plain text for summarization prompts (utils.ts `serializeConversation`). */

@@ -281,6 +281,8 @@ internal object JsonlCodec {
         when (entry) {
             is MessageEntry -> {
                 put("type", "message")
+                // pi's MessageEntry.terminate is `true`-only (harness/session/types.ts:27)
+                entry.terminate?.takeIf { it }?.let { put("terminate", it) }
                 put("message", encodeMessage(entry.message))
             }
             is CompactionEntry -> {
@@ -337,6 +339,7 @@ internal object JsonlCodec {
                 seq = seq,
                 parentId = parentId,
                 timestamp = timestamp(),
+                terminate = obj.strictBoolean("terminate"),
                 message = decodeMessage(obj["message"] ?: schema("entry missing message")),
             )
             "compaction" -> CompactionEntry(

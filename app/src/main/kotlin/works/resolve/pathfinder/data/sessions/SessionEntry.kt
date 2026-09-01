@@ -47,6 +47,13 @@ data class MessageEntry(
     override val parentId: String? = null,
     override val timestamp: Long,
     val message: Message,
+    /**
+     * Marks a terminal-of-session message (pi's MessageEntry
+     * `terminate?: true`, harness/session/types.ts:27; set by the reducer
+     * when a tool-batch result requests early termination). Upstream only
+     * ever persists `true`; null encodes to an absent field.
+     */
+    val terminate: Boolean? = null,
 ) : SessionEntry() {
     override fun withSeq(seq: Long) = copy(seq = seq)
 }

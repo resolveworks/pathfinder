@@ -8,7 +8,9 @@ import works.resolve.pathfinder.data.sessions.MessageEntry
 import works.resolve.pathfinder.data.sessions.ModelChangeEntry
 import works.resolve.pathfinder.data.sessions.SessionEntry
 import works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
+import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.Message
+import works.resolve.pathfinder.ai.core.StopReason
 
 /**
  * Reduced port of pi's session-context builder
@@ -23,6 +25,10 @@ import works.resolve.pathfinder.ai.core.Message
  * - Upstream `SessionContextBuildOptions` (entryTransforms/projectors for
  *   `custom` entries) has no counterpart; `custom` entries do not exist.
  */
+
+// Deferred assistant messages contribute no context messages (context.ts
+// `sessionEntryToContextMessages`, see below); StopReason.DEFERRED is the
+// ported union value they are recognized by.
 
 /**
  * Keep only the latest compaction entry and everything after it
@@ -58,15 +64,30 @@ fun getLatestCompactionEntry(entries: List<SessionEntry>): CompactionEntry? {
  * (context.ts `sessionEntryToContextMessages`, reduced).
  */
 private fun sessionEntryToContextMessages(entry: SessionEntry): List<Message> = when (entry) {
-    is MessageEntry -> listOf(entry.message)
+    is MessageEntry -> {
+        // Deferred assistant messages drop from context (context.ts:72): a
+        // deferred response is not final and its content is not authoritative.
+        val assistant = entry.message as? AssistantMessage
+        if (assistant != null && assistant.stopReason == StopReason.DEFERRED) {
+            emptyList()
+        } else {
+            listOf(entry.message)
+        }
+    }
     is CompactionEntry -> listOf(createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp)) +
         entry.retainedTail
+    // Upstream guards `entry.summary` truthiness (context.ts:81); summary is
+    // non-null here, so the guard reduces to empty-string exclusion.
+    is BranchSummaryEntry -> if (entry.summary.isNotEmpty()) {
+        listOf(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp))
+    } else {
+        emptyList()
+    }
     // Configuration/bookkeeping kinds contribute no context messages
-    // (context.ts falls through to []). Divergence: upstream branch_summary
-    // synthesizes createBranchSummaryMessage and custom goes through entry
-    // projectors, but pathfinder has neither producer, so nothing projects.
-    is ModelChangeEntry, is ThinkingLevelEntry, is ActiveToolsEntry,
-    is BranchSummaryEntry, is CustomEntry -> emptyList()
+    // (context.ts falls through to []). Divergence: upstream routes `custom`
+    // entries through entry projectors, but pathfinder has no producer, so
+    // nothing projects.
+    is ModelChangeEntry, is ThinkingLevelEntry, is ActiveToolsEntry, is CustomEntry -> emptyList()
 }
 
 /**

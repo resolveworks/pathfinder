@@ -53,11 +53,10 @@ import works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
  *   `branchSummary`, and `compactionSummary` have no pathfinder counterpart:
  *   compaction entries synthesize their summary as a wrapped user message
  *   instead (see `Messages.kt`).
- * - pi's harness `Entry` maps to pathfinder's `SessionEntry`, which has
- *   [MessageEntry] and [CompactionEntry]; other entry kinds (thinking/model
- *   changes, branch summaries) do not exist yet. The cut-point walk keeps
- *   pi's per-entry-type dispatch structure so those variants slot in
- *   without redesign.
+ * - pi's harness `Entry` maps to pathfinder's [SessionEntry]; the
+ *   message-bearing kinds beyond [MessageEntry] and [CompactionEntry]
+ *   ([BranchSummaryEntry], [CustomEntry]) are handled by the per-entry-type
+ *   message-synthesis dispatch below.
  *
  * Reuse decisions: `calculateContextTokens`, per-message token estimation,
  * and `ContextUsageEstimate` already exist in
@@ -190,7 +189,7 @@ fun shouldCompact(contextTokens: Int, contextWindow: Int, settings: CompactionSe
  * roles would also be cut points but do not exist here). Non-message entry
  * kinds (thinking/model/tools changes, compaction entries) contribute
  * nothing; `branch_summary` entries additionally push their own index
- * upstream — when that entry kind is added, mirror both branches here.
+ * upstream (compaction.ts findValidCutPoints) and do so here too.
  */
 private fun findValidCutPoints(entries: List<SessionEntry>, startIndex: Int, endIndex: Int): List<Int> {
     val cutPoints = mutableListOf<Int>()
@@ -201,6 +200,8 @@ private fun findValidCutPoints(entries: List<SessionEntry>, startIndex: Int, end
                 MessageRole.USER, MessageRole.ASSISTANT -> cutPoints.add(i)
                 MessageRole.TOOL_RESULT -> {}
             }
+        } else if (entry is BranchSummaryEntry) {
+            cutPoints.add(i)
         }
     }
     return cutPoints
@@ -210,13 +211,13 @@ private fun findValidCutPoints(entries: List<SessionEntry>, startIndex: Int, end
  * Find the user-visible message that starts the turn containing an entry
  * (compaction.ts `findTurnStartIndex`).
  *
- * Adaptation: `branch_summary` entries do not exist yet; when added, they
- * must return their index like upstream. `bashExecution` role is likewise
- * not present.
+ * Adaptation: `bashExecution` role is not present. A [BranchSummaryEntry]
+ * is a turn start like upstream (compaction.ts findTurnStartIndex).
  */
 fun findTurnStartIndex(entries: List<SessionEntry>, entryIndex: Int, startIndex: Int): Int {
     for (i in entryIndex downTo startIndex) {
         val entry = entries[i]
+        if (entry is BranchSummaryEntry) return i
         if (entry is MessageEntry && entry.message.role == MessageRole.USER) {
             return i
         }
@@ -325,17 +326,18 @@ fun extractFileOperations(
 
 private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
     is MessageEntry -> entry.message
+    // pi synthesizes a dedicated branchSummary agent message here
+    // (compaction.ts:72); the port projects it as its convertToLlm form —
+    // a wrapped user message (Messages.kt createBranchSummaryMessage).
+    is BranchSummaryEntry -> createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)
     // pi synthesizes a dedicated compactionSummary agent message here; the
     // port projects it as its convertToLlm form — a wrapped user message
     // (Messages.kt createCompactionSummaryMessage).
     is CompactionEntry -> createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp)
     // Configuration/bookkeeping kinds contribute no message (compaction.ts
-    // switch: model_change/thinking_level_change/active_tools_change/branch_summary/custom
-    // break). Divergence: upstream branch_summary entries synthesize a
-    // createBranchSummaryMessage here, but pathfinder has no branch-summary
-    // producer, so there is nothing to project yet.
-    is ModelChangeEntry, is ThinkingLevelEntry, is ActiveToolsEntry,
-    is BranchSummaryEntry, is CustomEntry -> null
+    // switch: model_change/thinking_level_change/active_tools_change/custom
+    // break).
+    is ModelChangeEntry, is ThinkingLevelEntry, is ActiveToolsEntry, is CustomEntry -> null
 }
 
 /**
