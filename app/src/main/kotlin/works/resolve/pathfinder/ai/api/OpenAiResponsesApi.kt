@@ -361,10 +361,12 @@ internal fun buildParams(
         }
         put("store", false)
 
-        options?.maxTokens?.let {
+        // pi b8b873b98 (#8941): max_output_tokens is gated on
+        // compat.supportsMaxOutputTokens; some gateways reject it with 400.
+        if (options?.maxTokens != null && compat.supportsMaxOutputTokens) {
             put(
                 "max_output_tokens",
-                maxOf(it, OpenAiResponsesShared.OPENAI_RESPONSES_MIN_OUTPUT_TOKENS),
+                maxOf(options.maxTokens, OpenAiResponsesShared.OPENAI_RESPONSES_MIN_OUTPUT_TOKENS),
             )
         }
         options?.temperature?.let { put("temperature", it) }

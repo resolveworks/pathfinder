@@ -147,6 +147,17 @@ class OpenAiResponsesApiTest {
     }
 
     @Test
+    fun `max output tokens are omitted when unsupported (pi b8b873b98, #8941)`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        val gated = model.copy(
+            responsesCompat = OpenAiResponsesCompat(supportsMaxOutputTokens = false),
+        )
+        api(transport).stream(gated, context, OpenAiResponsesOptions(apiKey = "k", maxTokens = 100)).toList()
+        assertNull(body(transport)["max_output_tokens"])
+    }
+
+    @Test
     fun `reasoning effort maps through the thinking level map`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completedChunk().toTypedArray()))

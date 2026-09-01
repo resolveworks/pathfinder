@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.providers
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -11,6 +12,7 @@ import works.resolve.pathfinder.ai.core.AnthropicAllowedFallbackModel
 import works.resolve.pathfinder.ai.core.AnthropicMessagesCompat
 import works.resolve.pathfinder.ai.core.CacheControlFormat
 import works.resolve.pathfinder.ai.core.ChatTemplateKwargValue
+import works.resolve.pathfinder.ai.core.DeferredToolsMode
 import works.resolve.pathfinder.ai.core.InputModality
 import works.resolve.pathfinder.ai.core.MaxTokensField
 import works.resolve.pathfinder.ai.core.Model
@@ -28,8 +30,11 @@ import works.resolve.pathfinder.ai.models.ResolvedAuth
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.boolean
+import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.string
 
 /**
@@ -162,10 +167,12 @@ class CatalogProvider(
 /**
  * The parsed models-catalog asset: Pathfinder's retained static pi providers,
  * with all supported model APIs for each provider (see [ChatApiRegistry]).
- * Parsing is lenient about unknown object fields and ignores compat fields the
- * runtime does not model yet,
- * but fails fast on unknown enum values — the asset ships inside the APK,
- * so a mismatch is a build bug, not a runtime condition to paper over.
+ * Parsing is lenient about unknown object fields, with one deliberate
+ * exception: unknown `compat` keys fail at parse (pi's compat surface grows
+ * flags over time — e.g. supportsMaxOutputTokens — and silently dropping
+ * them hides real behavioral gaps). Enum values also fail fast — the asset
+ * ships inside the APK, so a mismatch is a build bug, not a runtime
+ * condition to paper over.
  */
 class ProviderCatalog(val providers: List<CatalogProvider>) {
 
@@ -176,6 +183,7 @@ class ProviderCatalog(val providers: List<CatalogProvider>) {
 
     companion object {
         fun parse(text: String): ProviderCatalog = try {
+            rejectUnknownCompatKeys(text)
             ProviderCatalog(
                 json.decodeFromString<CatalogDto>(text).providers.map { it.toDomain() },
             )
@@ -183,7 +191,43 @@ class ProviderCatalog(val providers: List<CatalogProvider>) {
             throw IllegalArgumentException("Malformed model catalog: ${error.message}", error)
         }
 
+        /**
+         * Fails loudly when a model `compat` object carries a key the DTO
+         * does not model: pi's compat is an open surface that grows flags,
+         * and the generator (tools/generate-model-catalog.mjs) emits pi's
+         * compat verbatim, so an unknown key means upstream drift that would
+         * otherwise silently disable behavior. The allowed set is derived
+         * from [CompatDto]'s serializer so DTO and check cannot drift apart.
+         */
+        @OptIn(ExperimentalSerializationApi::class)
+        private fun rejectUnknownCompatKeys(text: String) {
+            val root = json.parseToJsonElement(text) as? JsonObject ?: return
+            for (provider in root.arr("providers") ?: return) {
+                val providerObj = provider as? JsonObject ?: continue
+                val providerId = providerObj.str("id") ?: "?"
+                for (model in providerObj.arr("models") ?: continue) {
+                    val modelObj = model as? JsonObject ?: continue
+                    val compat = modelObj.obj("compat") ?: continue
+                    val modelId = modelObj.str("id") ?: "?"
+                    for (key in compat.keys) {
+                        if (key !in COMPAT_KEYS) {
+                            throw IllegalArgumentException(
+                                "Unknown compat key \"$key\" for model $providerId/$modelId; " +
+                                    "port the flag (pi packages/ai/src/types.ts) and extend CompatDto",
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         private val json = lenientJson
+
+        /** Keys modeled by [CompatDto], derived from its serializer. */
+        @OptIn(ExperimentalSerializationApi::class)
+        private val COMPAT_KEYS = CompatDto.serializer().descriptor.let { d ->
+            (0 until d.elementsCount).map { d.getElementName(it) }.toSet()
+        }
     }
 }
 
@@ -384,12 +428,13 @@ private data class CompatDto(
     val supportsAdditionalTools: Boolean? = null,
     val supportsToolSearch: Boolean? = null,
     val supportsExplicitPromptCacheMode: Boolean? = null,
-    // Not modeled because the native core has no corresponding data shape
-    // yet: requiresReasoningContentOnAssistantMessages, deferredToolsMode,
-    // and supportsToolReferences.
-    // Unknown catalog fields are ignored; adapters must omit the corresponding
-    // request features. deferredToolsMode and supportsToolReferences are
-    // deferred until agent tool support lands.
+    // pi b8b873b98 (#8941): OpenAI Responses gate on max_output_tokens.
+    val supportsMaxOutputTokens: Boolean? = null,
+    // pi openai-completions.ts:1344-1349: replayed assistant messages carry
+    // reasoning_content: "" on DeepSeek-style reasoning models.
+    val requiresReasoningContentOnAssistantMessages: Boolean? = null,
+    // pi types.ts:620: deferred tool serialization mode ("kimi").
+    val deferredToolsMode: String? = null,
 ) {
     fun toDomain(where: String, detectedCacheControlFormat: CacheControlFormat?) = OpenAiCompletionsCompat(
         supportsStore = supportsStore ?: true,
@@ -416,6 +461,9 @@ private data class CompatDto(
         cacheControlFormat = cacheControlFormat
             ?.let { parseCacheControlFormat(it, where) }
             ?: detectedCacheControlFormat,
+        requiresReasoningContentOnAssistantMessages =
+            requiresReasoningContentOnAssistantMessages ?: false,
+        deferredToolsMode = deferredToolsMode?.let { parseDeferredToolsMode(it, where) },
     )
 
     /** pi's getCompat (openai-responses) defaults apply per field when absent. */
@@ -428,6 +476,7 @@ private data class CompatDto(
         supportsAdditionalTools = supportsAdditionalTools ?: false,
         supportsToolSearch = supportsToolSearch ?: false,
         supportsExplicitPromptCacheMode = supportsExplicitPromptCacheMode ?: false,
+        supportsMaxOutputTokens = supportsMaxOutputTokens ?: true,
     )
 
     /** pi's getAnthropicCompat defaults apply per field when absent. */
@@ -447,6 +496,11 @@ private data class CompatDto(
 private fun parseCacheControlFormat(value: String, where: String): CacheControlFormat = when (value) {
     "anthropic" -> CacheControlFormat.ANTHROPIC
     else -> throw IllegalArgumentException("Unknown cache control format '$value' for $where")
+}
+
+private fun parseDeferredToolsMode(value: String, where: String): DeferredToolsMode = when (value) {
+    "kimi" -> DeferredToolsMode.KIMI
+    else -> throw IllegalArgumentException("Unknown deferred tools mode '$value' for $where")
 }
 
 private fun parseSessionAffinityFormat(value: String, where: String): SessionAffinityFormat = when (value) {

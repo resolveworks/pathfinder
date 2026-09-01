@@ -4,6 +4,7 @@ import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.CacheControlFormat
 import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig
+import works.resolve.pathfinder.ai.core.DeferredToolsMode
 import works.resolve.pathfinder.ai.core.StrictJsonSchemaMode
 import kotlin.test.assertFailsWith
 import works.resolve.pathfinder.ai.core.Context
@@ -517,6 +518,140 @@ class OpenAiCompletionsPayloadTest {
         assertEquals("text", content[0].jsonObject["type"]!!.jsonPrimitive.content)
         val imageUrl = content[1].jsonObject["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content
         assertEquals("data:image/png;base64,aGVsbG8=", imageUrl)
+    }
+
+    @Test
+    fun `reasoning_content is sent empty on compat assistant replay without reasoning (pi 1344-1349)`() {
+        // requiresReasoningContentOnAssistantMessages + model.reasoning:
+        // a replayed assistant message with no reasoning field carries
+        // reasoning_content: "" (DeepSeek-style endpoints reject otherwise).
+        val deepseekModel = TestCatalogs.GLM_5_2.copy(
+            compat = TestCatalogs.GLM_5_2.compat.copy(requiresReasoningContentOnAssistantMessages = true),
+        )
+        val context = Context(
+            messages = listOf(
+                AssistantMessage(
+                    content = listOf(ToolCall("call_1", "read_file", "{}")),
+                    api = "openai-completions",
+                    provider = deepseekModel.provider,
+                    model = deepseekModel.id,
+                ),
+            ),
+        )
+        val assistant = body(context, model = deepseekModel)["messages"]!!.jsonArray[0].jsonObject
+        assertEquals("", assistant["reasoning_content"]!!.jsonPrimitive.content)
+
+        // Without the flag the field stays absent.
+        val plain = body(context, model = TestCatalogs.GLM_5_2)["messages"]!!.jsonArray[0].jsonObject
+        assertNull(plain["reasoning_content"])
+
+        // The flag does not apply to non-reasoning models (pi: model.reasoning gate).
+        val nonReasoning = deepseekModel.copy(reasoning = false)
+        val gated = body(context, model = nonReasoning)["messages"]!!.jsonArray[0].jsonObject
+        assertNull(gated["reasoning_content"])
+    }
+
+    @Test
+    fun `reasoning_content injection never overwrites a replayed reasoning field`() {
+        val deepseekModel = TestCatalogs.GLM_5_2.copy(
+            compat = TestCatalogs.GLM_5_2.compat.copy(requiresReasoningContentOnAssistantMessages = true),
+        )
+        val b = body(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent("let me think", thinkingSignature = "reasoning_content"),
+                            TextContent("answer"),
+                        ),
+                        api = "openai-completions",
+                        provider = deepseekModel.provider,
+                        model = deepseekModel.id,
+                    ),
+                ),
+            ),
+            model = deepseekModel,
+        )
+        assertEquals("let me think", b["messages"]!!.jsonArray[0].jsonObject["reasoning_content"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `deferredToolsMode kimi re-announces loaded tools as a bare tools system message (pi 834, 1396-1451)`() {
+        val kimiModel = TestCatalogs.GPT_4O.copy(
+            compat = TestCatalogs.GPT_4O.compat.copy(deferredToolsMode = DeferredToolsMode.KIMI),
+        )
+        fun deferredTool(name: String) = Tool(
+            name = name,
+            description = "$name tool",
+            parameters = schema,
+        )
+        val context = Context(
+            systemPrompt = "system",
+            tools = listOf(deferredTool("search"), deferredTool("read_file")),
+            messages = listOf(
+                UserMessage.ofText("hi"),
+                AssistantMessage(
+                    content = listOf(ToolCall("call_1", "search", "{}")),
+                    api = "openai-completions",
+                    provider = "moonshotai",
+                    model = kimiModel.id,
+                ),
+                ToolResultMessage(
+                    toolCallId = "call_1",
+                    toolName = "search",
+                    content = listOf(TextContent("results")),
+                    addedToolNames = listOf("search"),
+                ),
+            ),
+        )
+        val b = body(context, model = kimiModel)
+
+        // The standard tools param carries only the not-yet-loaded tool.
+        val tools = b["tools"]!!.jsonArray
+        assertEquals(1, tools.size)
+        assertEquals("read_file", tools[0].jsonObject["function"]!!.jsonObject["name"]!!.jsonPrimitive.content)
+
+        // messages: system, user, assistant, tool result, then the Kimi
+        // bare-tools system message (role + tools, no content).
+        val messages = b["messages"]!!.jsonArray
+        assertEquals(5, messages.size)
+        val kimiSystem = messages[4].jsonObject
+        assertEquals("system", kimiSystem["role"]!!.jsonPrimitive.content)
+        assertNull(kimiSystem["content"])
+        val kimiTools = kimiSystem["tools"]!!.jsonArray
+        assertEquals(1, kimiTools.size)
+        assertEquals("search", kimiTools[0].jsonObject["function"]!!.jsonObject["name"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `kimi mode sends an empty tools array when every tool is deferred`() {
+        val kimiModel = TestCatalogs.GPT_4O.copy(
+            compat = TestCatalogs.GPT_4O.compat.copy(deferredToolsMode = DeferredToolsMode.KIMI),
+        )
+        val tool = Tool(name = "search", description = "search tool", parameters = schema)
+        val context = Context(
+            tools = listOf(tool),
+            messages = listOf(
+                AssistantMessage(
+                    content = listOf(ToolCall("call_1", "search", "{}")),
+                    api = "openai-completions",
+                    provider = "moonshotai",
+                    model = kimiModel.id,
+                ),
+                ToolResultMessage(
+                    toolCallId = "call_1",
+                    toolName = "search",
+                    content = listOf(TextContent("results")),
+                    addedToolNames = listOf("search"),
+                ),
+            ),
+        )
+        val b = body(context, model = kimiModel)
+        assertEquals(0, b["tools"]!!.jsonArray.size)
+        // The deferred tool is still re-announced after the tool result.
+        val messages = b["messages"]!!.jsonArray
+        assertEquals("system", messages[2].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals(1, messages[2].jsonObject["tools"]!!.jsonArray.size)
     }
 
     @Test

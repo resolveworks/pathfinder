@@ -528,9 +528,12 @@ internal fun mapReasoningEffort(model: Model, level: ModelThinkingLevel): Mistra
 /**
  * Accumulates streamed Mistral content with pi's exact block semantics: one
  * open text/thinking block at a time, closed when a block of another type (or
- * a tool call) starts, tool blocks keyed by `id:index`, and toolcall_end
- * events emitted (in first-seen order) after the final text/thinking block
- * closes.
+ * a tool call) starts, tool blocks keyed by `index ?? callId` (pi commit
+ * 6c87d9a02, issue #8387: "fix(ai): merge indexed Mistral tool call
+ * chunks" — indexed fragments merge regardless of whether later chunks
+ * carry the same or any id, and id/name are set only at block creation),
+ * and toolcall_end events emitted (in first-seen order) after the final
+ * text/thinking block closes.
  */
 internal class MistralStreamingState(private val model: Model, private val timestampMs: Long) {
     private sealed interface Block {
@@ -545,7 +548,9 @@ internal class MistralStreamingState(private val model: Model, private val times
 
     private val blocks = mutableListOf<Block>()
     private var currentBlockIndex = -1 // index of the open text/thinking block, or -1
-    private val toolBlocksByKey = LinkedHashMap<String, Int>()
+    // Pi types this Map<string | number, number>; boxed Int vs String keys
+    // keep the same non-colliding number/string distinction.
+    private val toolBlocksByKey = LinkedHashMap<Any, Int>()
 
     var usage = works.resolve.pathfinder.ai.core.Usage()
 
@@ -606,13 +611,17 @@ internal class MistralStreamingState(private val model: Model, private val times
         events += closeCurrentBlock()
 
         val id = toolCall["id"].strOrNull()
-        val index = toolCall.long("index")?.toInt() ?: 0
+        val index = toolCall.long("index")?.toInt()
         val callId = if (!id.isNullOrEmpty() && id != "null") {
             id
         } else {
-            deriveMistralToolCallId("toolcall:$index", 0)
+            deriveMistralToolCallId("toolcall:${index ?: 0}", 0)
         }
-        val key = "$callId:$index"
+        // pi 6c87d9a02 (#8387): `const key = toolCall.index ?? callId` —
+        // indexed chunks merge even when later fragments carry no id. Id and
+        // name are only set at block creation (upstream), so a later chunk's
+        // derived id never overwrites the block's id.
+        val key: Any = index ?: callId
         val function = toolCall.obj("function")
         val name = function?.get("name").strOrNull() ?: ""
 
@@ -625,8 +634,6 @@ internal class MistralStreamingState(private val model: Model, private val times
         }
 
         val toolBlock = blocks[blockIndex] as Block.Tool
-        if (toolBlock.id.isEmpty()) toolBlock.id = callId
-        if (name.isNotEmpty() && toolBlock.name.isEmpty()) toolBlock.name = name
         val argsDelta = function?.get("arguments")?.let { arg ->
             when (arg) {
                 is JsonPrimitive -> arg.content

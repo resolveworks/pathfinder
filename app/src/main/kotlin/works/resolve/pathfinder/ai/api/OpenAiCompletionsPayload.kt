@@ -5,6 +5,7 @@ import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ChatTemplateKwargValue
 import works.resolve.pathfinder.ai.core.ContentType
+import works.resolve.pathfinder.ai.core.DeferredToolsMode
 import works.resolve.pathfinder.ai.core.InputModality
 import works.resolve.pathfinder.ai.core.MaxTokensField
 import works.resolve.pathfinder.ai.core.Message
@@ -104,10 +105,23 @@ object OpenAiCompletionsPayload {
         options.temperature?.let { body["temperature"] = JsonPrimitive(it) }
 
         val tools: MutableList<JsonObject>? = if (context.tools.isNotEmpty()) {
-            context.tools.map { convertTool(it, compat) }.toMutableList().also {
-                if (compat.zaiToolStream) {
-                    body["tool_stream"] = JsonPrimitive(true)
+            // pi openai-completions.ts:833-841 (deferredToolsMode "kimi"):
+            // tools already loaded via the Kimi bare-tools system message are
+            // excluded from the standard tools param.
+            val deferredToolNames =
+                if (compat.deferredToolsMode == DeferredToolsMode.KIMI) getDeferredToolNames(context.messages) else emptySet()
+            val activeTools = context.tools.filter { it.name !in deferredToolNames }
+            if (activeTools.isNotEmpty()) {
+                activeTools.map { convertTool(it, compat) }.toMutableList().also {
+                    if (compat.zaiToolStream) {
+                        body["tool_stream"] = JsonPrimitive(true)
+                    }
                 }
+            } else if (hasToolHistory(context.messages)) {
+                // Some proxies require the tools param when history has tool calls.
+                mutableListOf()
+            } else {
+                null
             }
         } else if (hasToolHistory(context.messages)) {
             // Some proxies require the tools param when history has tool calls.
@@ -484,6 +498,9 @@ object OpenAiCompletionsPayload {
         }
 
         val messages = transformMessages(context.messages, model) { id, _ -> normalizeToolCallId(id, model.provider) }
+        // pi openai-completions.ts:834/getDeferredToolNames + 1437-1454:
+        // names accumulated from tool-result addedToolNames in this loop.
+        val deferredToolNames = mutableSetOf<String>()
         var i = 0
         while (i < messages.size) {
             val msg = messages[i]
@@ -520,6 +537,13 @@ object OpenAiCompletionsPayload {
                             toolMessage["name"] = JsonPrimitive(toolMsg.toolName)
                         }
                         params.add(JsonObject(toolMessage))
+                        // pi openai-completions.ts:1396-1399: under
+                        // deferredToolsMode "kimi", tool results mark the
+                        // tools they loaded; those are re-announced as a bare
+                        // `tools` system message after the group.
+                        if (compat.deferredToolsMode == DeferredToolsMode.KIMI) {
+                            deferredToolNames.addAll(toolMsg.addedToolNames)
+                        }
                         if (supportsImage) {
                             toolMsg.content
                                 .filter { it.type == ContentType.IMAGE }
@@ -542,6 +566,20 @@ object OpenAiCompletionsPayload {
                                 )
                             },
                         )
+                    }
+                    if (deferredToolNames.isNotEmpty()) {
+                        // pi openai-completions.ts:1440-1451
+                        // (KimiToolSystemMessageParam): Kimi accepts a system
+                        // message with a bare `tools` array and no content.
+                        val deferredTools = getToolsByName(context.tools, deferredToolNames)
+                        if (deferredTools.isNotEmpty()) {
+                            params.add(
+                                buildJsonObject {
+                                    put("role", "system")
+                                    put("tools", JsonArray(deferredTools.map { convertTool(it, compat) }))
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -699,6 +737,17 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
         // details were preserved (even alongside requiresThinkingAsText).
         preservedReasoningDetails?.let { assistant["reasoning_details"] = it }
 
+        // pi openai-completions.ts:1347-1351: DeepSeek-style endpoints
+        // (requiresReasoningContentOnAssistantMessages) reject replayed
+        // assistant messages without a reasoning_content field when the
+        // model reasons, so send an empty string when none was set.
+        if (compat.requiresReasoningContentOnAssistantMessages &&
+            model.reasoning &&
+            !assistant.containsKey("reasoning_content")
+        ) {
+            assistant["reasoning_content"] = JsonPrimitive("")
+        }
+
         // Content here is always either a primitive string we set above or a
         // block array, never JSON null, so the lenient read is equivalent.
         val hasContent = assistant["content"].strOrNull()?.isNotEmpty() == true ||
@@ -733,6 +782,21 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
                 },
             )
         }
+    }
+
+    /**
+     * pi's getDeferredToolNames (openai-completions.ts:96-104): tool names
+     * made available by tool-result messages (addedToolNames), i.e. tools
+     * already loaded into the session under deferredToolsMode "kimi".
+     */
+    private fun getDeferredToolNames(messages: List<Message>): Set<String> =
+        messages.flatMap { (it as? works.resolve.pathfinder.ai.core.ToolResultMessage)?.addedToolNames.orEmpty() }
+            .toSet()
+
+    /** pi's getToolsByName (openai-completions.ts:106-113). */
+    private fun getToolsByName(tools: List<Tool>, names: Collection<String>): List<Tool> {
+        val byName = tools.associateBy { it.name }
+        return names.mapNotNull { byName[it] }
     }
 
     private fun hasToolHistory(messages: List<Message>): Boolean = messages.any { msg ->

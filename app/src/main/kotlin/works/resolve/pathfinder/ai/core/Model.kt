@@ -98,6 +98,12 @@ data class OpenAiResponsesCompat(
     val supportsAdditionalTools: Boolean = false,
     val supportsToolSearch: Boolean = false,
     val supportsExplicitPromptCacheMode: Boolean = false,
+    /**
+     * pi's supportsMaxOutputTokens (types.ts:646; commit b8b873b98, #8941):
+     * default true; some Codex-protocol gateways reject `max_output_tokens`
+     * with 400, so buildParams omits it when false.
+     */
+    val supportsMaxOutputTokens: Boolean = true,
 )
 
 /** How the provider expects the max output token limit to be spelled. */
@@ -155,7 +161,26 @@ data class OpenAiCompletionsCompat(
      * disables Anthropic-style cache_control emission.
      */
     val cacheControlFormat: CacheControlFormat? = null,
+    /**
+     * pi's requiresReasoningContentOnAssistantMessages (types.ts:577;
+     * openai-completions.ts:1344-1349): for DeepSeek-style reasoning models,
+     * replayed assistant messages carry `reasoning_content: ""` when no
+     * reasoning field was set; some providers reject assistant messages
+     * without it. Detected default is `isDeepSeek`; the catalog sets it
+     * explicitly for the affected models.
+     */
+    val requiresReasoningContentOnAssistantMessages: Boolean = false,
+    /**
+     * pi's deferredToolsMode (types.ts:620): provider-specific deferred tool
+     * serialization mode for the completions family. "kimi" emits the
+     * deferred tools as a bare `tools` system message after tool results
+     * instead of the standard `tools` param entry.
+     */
+    val deferredToolsMode: DeferredToolsMode? = null,
 )
+
+/** Pi's deferredToolsMode union: only "kimi" exists upstream. */
+enum class DeferredToolsMode { KIMI }
 
 /**
  * A chat-template kwarg value, mirroring pi's ChatTemplateKwargValue: either a

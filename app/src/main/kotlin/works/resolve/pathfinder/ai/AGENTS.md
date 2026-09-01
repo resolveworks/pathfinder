@@ -39,7 +39,10 @@ The generated catalog is the static, app-supported provider surface. Inclusion
 means that the provider's model protocols and authentication paths are intended
 to work end to end; do not list a provider merely because pi knows its models.
 Keep generation tied to current pi data and fail visibly when an exclusion or
-provider definition becomes stale.
+provider definition becomes stale. The decode side matches: [ProviderCatalog]
+rejects unknown `compat` keys at parse time, so a new pi compat flag that the
+runtime has not ported fails the catalog tests instead of silently dropping
+the behavior.
 
 Retain static providers that can be ported faithfully using ordinary HTTPS
 JSON/SSE transport and standard API-key, PKCE, manual-code, or device-code
