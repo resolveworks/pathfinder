@@ -7,7 +7,6 @@ import ai.koog.prompt.message.MessagePart
 import works.resolve.pathfinder.runtime.ChatRuntime
 import works.resolve.pathfinder.runtime.ChatRuntimeSession
 import works.resolve.pathfinder.runtime.ChatRuntimeState
-import works.resolve.pathfinder.runtime.ProviderAuthKind
 import works.resolve.pathfinder.runtime.ProviderDescriptors
 import works.resolve.pathfinder.runtime.CodexOAuthClient
 import works.resolve.pathfinder.runtime.CodexLoopbackServer
@@ -139,19 +138,19 @@ class ChatViewModel(
 
     /**
      * Persists the selected provider+model and (re)builds the runtime session.
-     * Requires a stored credential for [providerId].
+     * Requires a stored credential for the option's provider.
      */
-    fun saveModelSelection(providerId: String, modelId: String) {
-        viewModelScope.launch { saveModelSelectionInternal(providerId, modelId) }
+    fun saveModelSelection(option: ModelOption) {
+        viewModelScope.launch { saveModelSelectionInternal(option) }
     }
 
     /**
-     * Stores a fresh API key for [providerId]: replaces the stored credential
-     * wholesale; a blank key is rejected. The typed key lives only in
-     * ephemeral UI memory and is never logged.
+     * Stores a fresh API key for the given provider: replaces the stored
+     * credential wholesale; a blank key is rejected. The typed key lives only
+     * in ephemeral UI memory and is never logged.
      */
-    fun saveProviderCredential(providerId: String, apiKey: String) {
-        viewModelScope.launch { saveProviderCredentialInternal(providerId, apiKey) }
+    fun saveProviderCredential(option: ProviderOption, apiKey: String) {
+        viewModelScope.launch { saveProviderCredentialInternal(option, apiKey) }
     }
 
     /**
@@ -192,13 +191,7 @@ class ChatViewModel(
      * The user code lives only in ephemeral UI state and is never logged.
      * Cancellation (see [cancelCodexSignIn]) writes no credential.
      */
-    fun beginCodexDeviceSignIn(providerId: String) {
-        val provider = requireNotNull(ProviderDescriptors.byId(providerId)) { "Unknown provider: $providerId" }
-        // A sign-in request for a non-ChatGPT provider is a UI wiring bug;
-        // fail loud instead of silently doing nothing.
-        require(provider.authKind is ProviderAuthKind.ChatGptSignIn) {
-            "Provider $providerId does not sign in with ChatGPT"
-        }
+    fun beginCodexDeviceSignIn(provider: ProviderOption) {
         // Real race, not a wiring bug: a second tap can land while the first
         // sign-in is still between button press and codexSignIn state.
         if (codexSignInJob?.isActive == true) return
@@ -219,7 +212,7 @@ class ChatViewModel(
             try {
                 val tokens = codexOAuthClient.awaitDeviceAuthorization(device)
                 credentials.set(
-                    providerId,
+                    provider.id,
                     Credential.ChatGptOAuth(
                         accessToken = tokens.accessToken,
                         refreshToken = tokens.refreshToken,
@@ -257,13 +250,7 @@ class ChatViewModel(
      * The PKCE verifier lives only in this coroutine and is never logged.
      * Cancellation (see [cancelCodexSignIn]) writes no credential.
      */
-    fun beginCodexBrowserSignIn(providerId: String) {
-        val provider = requireNotNull(ProviderDescriptors.byId(providerId)) { "Unknown provider: $providerId" }
-        // A sign-in request for a non-ChatGPT provider is a UI wiring bug;
-        // fail loud instead of silently doing nothing.
-        require(provider.authKind is ProviderAuthKind.ChatGptSignIn) {
-            "Provider $providerId does not sign in with ChatGPT"
-        }
+    fun beginCodexBrowserSignIn(provider: ProviderOption) {
         // Real race, not a wiring bug: a second tap can land while the first
         // sign-in is still active.
         if (codexSignInJob?.isActive == true) return
@@ -295,7 +282,7 @@ class ChatViewModel(
                 appForegrounded.first { it }
                 val tokens = codexOAuthClient.completeBrowserLogin(auth, redirectUrl)
                 credentials.set(
-                    providerId,
+                    provider.id,
                     Credential.ChatGptOAuth(
                         accessToken = tokens.accessToken,
                         refreshToken = tokens.refreshToken,
@@ -696,19 +683,13 @@ class ChatViewModel(
 
     // ---- intent internals ----
 
-    private suspend fun saveModelSelectionInternal(providerId: String, modelId: String) {
-        val trimmedModelId = modelId.trim()
-        val provider = ProviderDescriptors.byId(providerId)
-        if (provider == null || provider.model(trimmedModelId) == null) {
-            setError(ERROR_UNKNOWN_MODEL)
-            return
-        }
+    private suspend fun saveModelSelectionInternal(option: ModelOption) {
         if (rejectWhileBusy()) return
 
         // Credential gate: a provider is configured only when a credential is
         // stored for it.
         val providerConfigured = try {
-            credentials.read(providerId) != null
+            credentials.read(option.providerId) != null
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -721,8 +702,8 @@ class ChatViewModel(
         }
 
         val candidate = ModelSettings(
-            providerId = providerId,
-            modelId = trimmedModelId,
+            providerId = option.providerId,
+            modelId = option.modelId,
             activeSessionId = activeSession?.id,
             // The display preference is owned by setShowThinking; preserve it
             // so session rebuilds never drift from what the user picked.
@@ -773,20 +754,14 @@ class ChatViewModel(
         }
     }
 
-    private suspend fun saveProviderCredentialInternal(providerId: String, apiKey: String) {
-        val provider = requireNotNull(ProviderDescriptors.byId(providerId)) { "Unknown provider: $providerId" }
-        // An API-key save for a ChatGPT provider is a UI wiring bug; storing it
-        // would poison the credential the runtime later rejects as missing.
-        require(provider.authKind is ProviderAuthKind.ApiKey) {
-            "Provider $providerId does not authenticate with an API key"
-        }
+    private suspend fun saveProviderCredentialInternal(provider: ProviderOption, apiKey: String) {
         val newKey = apiKey.trim()
         if (newKey.isEmpty()) {
             setError(ERROR_CREDENTIAL_INCOMPLETE)
             return
         }
         try {
-            credentials.set(providerId, Credential.ApiKey(newKey))
+            credentials.set(provider.id, Credential.ApiKey(newKey))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1004,7 +979,6 @@ class ChatViewModel(
 
         const val ERROR_INIT = "Could not load chat data"
         const val ERROR_CREDENTIAL_INCOMPLETE = "Enter this provider's API key before using its models"
-        const val ERROR_UNKNOWN_MODEL = "Unknown model"
         const val ERROR_CREDENTIAL_SAVE = "Could not store the API key"
         const val ERROR_SETTINGS_SAVE = "Could not save the configuration"
         const val ERROR_CONFIG_INVALID = "Invalid configuration"

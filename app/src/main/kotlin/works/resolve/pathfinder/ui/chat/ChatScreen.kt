@@ -165,11 +165,11 @@ fun ChatScreen(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
-    onSaveModelSelection: (providerId: String, modelId: String) -> Unit,
-    onSaveProviderCredential: (providerId: String, apiKey: String) -> Unit,
+    onSaveModelSelection: (ModelOption) -> Unit,
+    onSaveProviderCredential: (ProviderOption, String) -> Unit,
     onRemoveProviderCredential: (providerId: String) -> Unit,
-    onBeginCodexDeviceSignIn: (providerId: String) -> Unit,
-    onBeginCodexBrowserSignIn: (providerId: String) -> Unit,
+    onBeginCodexDeviceSignIn: (ProviderOption) -> Unit,
+    onBeginCodexBrowserSignIn: (ProviderOption) -> Unit,
     onCancelCodexSignIn: () -> Unit,
     onRefreshProviderStatus: () -> Unit,
     onNewSession: () -> Unit,
@@ -406,16 +406,16 @@ fun ChatScreen(
                                     provider = option,
                                     signIn = uiState.codexSignIn,
                                     onSave = { apiKey ->
-                                        onSaveProviderCredential(key.providerId, apiKey)
+                                        onSaveProviderCredential(option, apiKey)
                                     },
                                     onBeginBrowserSignIn = {
-                                        onBeginCodexBrowserSignIn(key.providerId)
+                                        onBeginCodexBrowserSignIn(option)
                                     },
                                     onRetryBrowserSignIn = {
                                         onCancelCodexSignIn()
-                                        onBeginCodexBrowserSignIn(key.providerId)
+                                        onBeginCodexBrowserSignIn(option)
                                     },
-                                    onBeginDeviceSignIn = { onBeginCodexDeviceSignIn(key.providerId) },
+                                    onBeginDeviceSignIn = { onBeginCodexDeviceSignIn(option) },
                                     onCancelSignIn = onCancelCodexSignIn,
                                     onRemove = { onRemoveProviderCredential(key.providerId) },
                                     onClose = popBackStack,
@@ -615,7 +615,7 @@ private fun SettingsContent(
 @Composable
 private fun ModelSettingsContent(
     uiState: ChatUiState,
-    onSave: (providerId: String, modelId: String) -> Unit,
+    onSave: (ModelOption) -> Unit,
     onOpenProviders: () -> Unit,
     onClose: (() -> Unit)?,
 ) {
@@ -691,7 +691,7 @@ private fun ModelSettingsContent(
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = { selection?.let { onSave(it.providerId, it.modelId) } },
+                onClick = { selection?.let(onSave) },
                 enabled = selection != null,
             ) {
                 Text(stringResource(R.string.action_save))
@@ -1413,7 +1413,7 @@ private fun PreviewChatScreen(
             onDraftChange = {},
             onSend = {},
             onStop = {},
-            onSaveModelSelection = { _, _ -> },
+            onSaveModelSelection = {},
             onSaveProviderCredential = { _, _ -> },
             onRemoveProviderCredential = { },
             onBeginCodexDeviceSignIn = { },
