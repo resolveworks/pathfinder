@@ -324,9 +324,7 @@ class ChatViewModel(
     fun cancelCodexSignIn() {
         codexSignInJob?.cancel()
         codexSignInJob = null
-        if (_uiState.value.codexSignIn != null) {
-            updateState { it.copy(codexSignIn = null) }
-        }
+        updateState { it.copy(codexSignIn = null) }
     }
 
     /** Persists the show-thinking display preference; safe mid-stream (display-only). */
@@ -383,7 +381,9 @@ class ChatViewModel(
                 conversation.branch(id)
             }
             val reeditText = userMessage?.textContent()
-            val currentSession = session ?: return@launch
+            val currentSession = requireNotNull(session) {
+                "Tree navigation requires a bound runtime session"
+            }
             currentSession.replaceConversation(updated)
             updateState {
                 it.copy(
@@ -660,7 +660,9 @@ class ChatViewModel(
                     persistedEntryCount = saved.entries.size
                 }
                 val summaries = sessionStore.summaries()
-                if (activeSession?.id == session.id || _uiState.value.activeSessionId == session.id) {
+                // activeSession and uiState.activeSessionId are set together
+                // in activateSession and never diverge, so one check suffices.
+                if (activeSession?.id == session.id) {
                     updateState { it.copy(sessionSummaries = summaries) }
                 }
             } catch (e: CancellationException) {
