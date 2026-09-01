@@ -13,6 +13,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import works.resolve.pathfinder.telemetry.NOOP_TELEMETRY_CONTEXT
+import works.resolve.pathfinder.telemetry.SpanOptions
+import works.resolve.pathfinder.telemetry.SpanStatus
+import works.resolve.pathfinder.telemetry.TelemetryContext
+import works.resolve.pathfinder.telemetry.TelemetryError
+import works.resolve.pathfinder.telemetry.attr
 
 /**
  * Simple file-backed store for persistent chat sessions. One bounded JSON file
@@ -27,6 +33,13 @@ import kotlinx.coroutines.withContext
  * move is unsupported the write falls back to a non-atomic replace: the
  * previous target either stays fully intact or is fully replaced, so no
  * partial target is ever left behind — the temp file is always cleaned up.
+ *
+ * Failures are additionally recorded as sanitized telemetry spans
+ * (`pf.session.*`) at the lowest layer, before the original exception is
+ * rethrown (or, for [summaries], before the entry is skipped): only the
+ * session id, operation outcome, and exception *type* are recorded — never
+ * exception messages (which can embed filesystem paths) or transcript
+ * content. UI-layer catches over the same operations do not duplicate them.
  */
 class SessionStore(
     private val root: File,
@@ -35,6 +48,7 @@ class SessionStore(
     private val idFactory: () -> String = ::uuidv7,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     maxFileBytes: Long = MAX_FILE_BYTES,
+    private val telemetryContext: TelemetryContext = NOOP_TELEMETRY_CONTEXT,
 ) : SessionRepository {
 
     /** Upper bound on a single session file to avoid reading unbounded/corrupt files. */
@@ -67,7 +81,8 @@ class SessionStore(
         withContext(ioDispatcher) {
             sessionFiles()
                 .mapNotNull { file ->
-                    runCatching { read(file) }.getOrNull()?.let { session ->
+                    readSpanned(file, spanName = SPAN_SUMMARY, skippedOutcome = OUTCOME_SKIPPED)
+                        ?.let { session ->
                         SessionSummary(
                             id = session.id,
                             title = session.title,
@@ -85,7 +100,7 @@ class SessionStore(
     override suspend fun load(id: String): Session? = mutex.withLock {
         withContext(ioDispatcher) {
             val file = fileFor(id)
-            if (!file.isFile) null else read(file).let(::defensiveCopy)
+            if (!file.isFile) null else readSpanned(file)?.let(::defensiveCopy)
         }
     }
 
@@ -118,33 +133,83 @@ class SessionStore(
         root.listFiles { file -> file.isFile && file.name.endsWith(".json") }?.sortedBy { it.name }
             ?: emptyList()
 
-    private fun write(session: Session) {
-        try {
-            if (!root.exists() && !root.mkdirs() && !root.isDirectory) {
-                throw IOException("Session directory is unavailable")
-            }
-            val target = fileFor(session.id)
-            // createTempFile requires a >=3-char prefix; pad short ids.
-            val temp = File.createTempFile(session.id.padStart(3, '_'), ".tmp", root)
+    private suspend fun write(session: Session) =
+        telemetryContext.startSpan(
+            SpanOptions(
+                name = SPAN_SAVE,
+                attributes = mapOf(ATTR_SESSION to attr(session.id)),
+            ),
+        ) { span ->
             try {
-                temp.writeText(SessionCodec.encode(session))
-                try {
-                    Files.move(
-                        temp.toPath(), target.toPath(),
-                        StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE,
-                    )
-                } catch (_: AtomicMoveNotSupportedException) {
-                    // Documented fallback: a plain replace still swaps whole
-                    // files only; no partial target is ever produced.
-                    Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                }
-            } finally {
-                temp.delete()
+                writeSpanned(session)
+                span.setAttributes(mapOf(ATTR_OUTCOME to attr(OUTCOME_PERSISTED)))
+            } catch (e: CancellationException) {
+                // Cancellation is not a failure. The span must be settled ok
+                // explicitly: the contract's automatic status would otherwise
+                // record the CancellationException as an error.
+                span.setStatus(SpanStatus.Ok)
+                throw e
+            } catch (e: Exception) {
+                span.setStatus(typeOnlyError(e))
+                throw SessionDataException("Failed to write session", e)
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            throw SessionDataException("Failed to write session", e)
+        }
+
+    private fun writeSpanned(session: Session) {
+        if (!root.exists() && !root.mkdirs() && !root.isDirectory) {
+            throw IOException("Session directory is unavailable")
+        }
+        val target = fileFor(session.id)
+        // createTempFile requires a >=3-char prefix; pad short ids.
+        val temp = File.createTempFile(session.id.padStart(3, '_'), ".tmp", root)
+        try {
+            temp.writeText(SessionCodec.encode(session))
+            try {
+                Files.move(
+                    temp.toPath(), target.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                // Documented fallback: a plain replace still swaps whole
+                // files only; no partial target is ever produced.
+                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            temp.delete()
+        }
+    }
+
+    /**
+     * Reads and decodes [file] under a load (or summary) telemetry span.
+     * [skippedOutcome] marks the summary path, where failures are recorded
+     * and the entry skipped instead of rethrown.
+     */
+    private suspend fun readSpanned(
+        file: File,
+        spanName: String = SPAN_LOAD,
+        skippedOutcome: String? = null,
+    ): Session? {
+        val id = file.name.removeSuffix(".json")
+        return telemetryContext.startSpan(
+            SpanOptions(name = spanName, attributes = mapOf(ATTR_SESSION to attr(id))),
+        ) { span ->
+            try {
+                val session = read(file)
+                span.setAttributes(mapOf(ATTR_OUTCOME to attr(OUTCOME_LOADED)))
+                session
+            } catch (e: CancellationException) {
+                // Cancellation is not a failure; settle ok (see write above).
+                span.setStatus(SpanStatus.Ok)
+                throw e
+            } catch (e: Exception) {
+                span.setStatus(typeOnlyError(e))
+                if (skippedOutcome != null) {
+                    span.setAttributes(mapOf(ATTR_OUTCOME to attr(skippedOutcome)))
+                    null
+                } else {
+                    throw e
+                }
+            }
         }
     }
 
@@ -172,5 +237,20 @@ class SessionStore(
 
     companion object {
         const val MAX_FILE_BYTES: Long = 16L * 1024 * 1024
+
+        /** App-owned span vocabulary (pi packages define `pi.*` schemas; Pathfinder's are `pf.*`). */
+        private const val SPAN_SAVE = "pf.session.save"
+        private const val SPAN_LOAD = "pf.session.load"
+        private const val SPAN_SUMMARY = "pf.session.summary"
+        private const val ATTR_SESSION = "pf.session.id"
+        private const val ATTR_OUTCOME = "pf.session.outcome"
+        private const val OUTCOME_PERSISTED = "persisted"
+        private const val OUTCOME_LOADED = "loaded"
+        private const val OUTCOME_SKIPPED = "skipped"
+
+        /** Exception messages can embed filesystem paths; record the type only. */
+        private fun typeOnlyError(error: Throwable): SpanStatus = SpanStatus.Error(
+            TelemetryError(name = error::class.qualifiedName ?: error::class.simpleName ?: "unknown", message = ""),
+        )
     }
 }

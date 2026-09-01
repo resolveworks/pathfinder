@@ -69,7 +69,7 @@ class PathfinderApplication : Application() {
     }
 
     val credentials: CredentialStore by lazy {
-        EncryptedCredentialStore(this, KeystoreAeadCipher())
+        EncryptedCredentialStore(this, KeystoreAeadCipher(), telemetryContext = telemetry)
     }
 
     /**
@@ -97,7 +97,7 @@ class PathfinderApplication : Application() {
     }
 
     val sessionStore: SessionStore by lazy {
-        SessionStore(File(filesDir, SESSIONS_DIRECTORY))
+        SessionStore(File(filesDir, SESSIONS_DIRECTORY), telemetryContext = telemetry)
     }
 
     /** Generated model catalog, parsed once from the bundled asset. */
