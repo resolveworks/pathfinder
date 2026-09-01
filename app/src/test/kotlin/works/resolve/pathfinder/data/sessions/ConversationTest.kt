@@ -83,8 +83,8 @@ class ConversationTest {
 
     @Test
     fun orphanBecomesRoot() {
-        val orphan = MessageEntry("orphan", "missing", 3L, msg("x"))
-        val root = MessageEntry("root", null, 1L, msg("y"))
+        val orphan = MessageEntry("orphan", 0L, "missing", 3L, msg("x"))
+        val root = MessageEntry("root", 0L, null, 1L, msg("y"))
         val c = Conversation(listOf(orphan, root), "orphan")
 
         assertEquals(listOf(root, orphan), c.tree().map { it.entry })
@@ -92,10 +92,10 @@ class ConversationTest {
 
     @Test
     fun treeChildrenSortedOldestFirst() {
-        val root = MessageEntry("root", null, 0L, msg("r"))
-        val young = MessageEntry("young", "root", 30L, msg("y"))
-        val old = MessageEntry("old", "root", 10L, msg("o"))
-        val middle = MessageEntry("middle", "root", 20L, msg("m"))
+        val root = MessageEntry("root", 0L, null, 0L, msg("r"))
+        val young = MessageEntry("young", 0L, "root", 30L, msg("y"))
+        val old = MessageEntry("old", 0L, "root", 10L, msg("o"))
+        val middle = MessageEntry("middle", 0L, "root", 20L, msg("m"))
         val c = Conversation(listOf(young, middle, root, old), "young")
 
         assertEquals(listOf("old", "middle", "young"), c.tree().single().children.map { it.entry.id })
@@ -103,7 +103,7 @@ class ConversationTest {
 
     @Test
     fun selfParentTreatedAsRoot() {
-        val weird = MessageEntry("weird", "weird", 1L, msg("w"))
+        val weird = MessageEntry("weird", 0L, "weird", 1L, msg("w"))
         val c = Conversation(listOf(weird), "weird")
         assertEquals(listOf(weird), c.tree().map { it.entry })
     }

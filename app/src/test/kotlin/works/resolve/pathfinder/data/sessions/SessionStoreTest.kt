@@ -27,6 +27,12 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
+/**
+ * Append-only behavior of the JSONL v4 [SessionStore]: per-mutation appends
+ * (no whole-file rewrites), replay with validation on load, torn-tail
+ * repair, summaries, and the retained snapshot-store disciplines (bounded
+ * reads, id/filename cross-check, defensive copies, type-only telemetry).
+ */
 class SessionStoreTest {
 
     @get:Rule
@@ -133,35 +139,80 @@ class SessionStoreTest {
     }
 
     @Test
-    fun roundTripPreservesEntriesAndLeafId() = runTest {
+    fun roundTripPreservesEntriesAndLeafIdWithLaneMutation() = runTest {
         val store = newStore()
         val created = store.create("branchy")
         clock.advanceMillis(5)
-        val root = MessageEntry("m0", null, 1L, UserMessage.ofText("a", 1L))
-        val left = MessageEntry("m1", "m0", 2L, UserMessage.ofText("b", 2L))
-        val right = MessageEntry("m2", "m0", 3L, UserMessage.ofText("c", 3L))
-        val saved = store.save(created.copy(entries = listOf(root, left, right), leafId = "m2"))
+        val rootEntry = MessageEntry("m0", 1, null, 1L, UserMessage.ofText("a", 1L))
+        val left = MessageEntry("m1", 2, "m0", 2L, UserMessage.ofText("b", 2L))
+        val right = MessageEntry("m2", 3, "m0", 3L, UserMessage.ofText("c", 3L))
+        val saved = store.save(created.copy(entries = listOf(rootEntry, left, right), leafId = "m2"))
 
         val reloaded = newStore().load(created.id)!!
         assertEquals(saved, reloaded)
-        assertEquals(listOf(root, left, right), reloaded.entries)
+        assertEquals(listOf(rootEntry, left, right).map { it.id }, reloaded.entries.map { it.id })
         assertEquals("m2", reloaded.leafId)
         assertEquals(listOf("a", "c"), reloaded.messages.map { (it as UserMessage).content.single().let { c -> (c as TextContent).text } })
+        // The sibling fork was persisted as a lane mutation (pi's
+        // moveLane-before-append event order).
+        val lines = File(root, "${created.id}.jsonl").readLines()
+        assertTrue(lines.any { it.contains("\"kind\":\"lane\"") && it.contains("\"leafId\":\"m0\"") })
     }
 
     @Test
-    fun saveBumpsUpdatedAtAndPersistsTitleAndTranscriptChanges() = runTest {
+    fun saveAppendsWithoutRewritingTheFile() = runTest {
         val store = newStore()
         val created = store.create()
-        clock.advanceMillis(100)
-        val saved = store.save(created.withMessages(listOf(UserMessage.ofText("hey", 7L))).copy(title = "renamed"))
-        assertEquals(clock.now().toEpochMilliseconds(), saved.updatedAt)
-        assertEquals(created.createdAt, saved.createdAt)
+        val file = File(root, "${created.id}.jsonl")
+        val headerLine = file.readLines().first()
+        var previousLength = file.length()
+
+        var conversation = Conversation(emptyList(), null)
+        repeat(5) { i ->
+            conversation = conversation.append(UserMessage.ofText("m$i", i.toLong()))
+            store.save(
+                Session(
+                    created.id, created.title, created.createdAt, created.updatedAt,
+                    entries = conversation.entries, leafId = conversation.leafId,
+                ),
+            )
+            // Append-only: the file only ever grows, and the header line is untouched.
+            assertTrue(file.length() > previousLength)
+            assertEquals(headerLine, file.readLines().first())
+            previousLength = file.length()
+        }
+        assertEquals(5, store.load(created.id)!!.messages.size)
+        // header + name fact + 5 entry mutations, one line each.
+        assertEquals(7, file.readLines().size)
+    }
+
+    @Test
+    fun repeatedSavesAreIdempotentAndKeepContentIntact() = runTest {
+        val store = newStore()
+        val created = store.create()
+        val conversation = created.withMessages(listOf(UserMessage.ofText("hey", 7L)))
+        val saved = store.save(conversation.copy(title = "renamed"))
+        val lengthAfterFirst = File(root, "${created.id}.jsonl").length()
+        // Re-saving the same snapshot appends nothing.
+        val again = store.save(saved)
+        assertEquals(lengthAfterFirst, File(root, "${created.id}.jsonl").length())
 
         val loaded = store.load(created.id)!!
         assertEquals("renamed", loaded.title)
         assertEquals(listOf(UserMessage.ofText("hey", 7L)), loaded.messages)
         assertEquals(1, store.summaries().single().messageCount)
+        assertEquals(saved.createdAt, loaded.createdAt)
+        assertTrue(loaded.updatedAt >= created.createdAt)
+    }
+
+    @Test
+    fun storageAssignsConsecutiveSeq() = runTest {
+        val store = newStore()
+        val created = store.create()
+        val saved = store.save(created.withMessages(fullTranscript()))
+        // seq 1 is the create-time name fact; entries start at 2 (pi's shared
+        // sequence spans every mutation kind).
+        assertEquals(List(4) { (it + 2).toLong() }, saved.entries.map { it.seq })
     }
 
     @Test
@@ -185,7 +236,6 @@ class SessionStoreTest {
 
         val loaded = store.load(id)!!
         assertEquals(1, loaded.messages.size)
-        // Mutating the returned list (when possible) must not affect persisted state.
         runCatching { (loaded.messages as? MutableList)?.clear() }
         assertEquals(1, store.load(id)!!.messages.size)
     }
@@ -226,41 +276,169 @@ class SessionStoreTest {
     }
 
     @Test
+    fun oldSnapshotFormatsAreIgnoredAndRejected() = runTest {
+        val store = newStore()
+        val id = store.create().id
+        // A legacy whole-file snapshot (format 3) is invisible: listing only
+        // reads .jsonl files, and its content is never migrated.
+        File(root, "$id.json").writeText(
+            """{"format":3,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[],"leafId":null}""",
+        )
+        assertTrue(store.summaries().all { it.id != "$id.json" })
+        // A v3 header inside a .jsonl file is rejected outright.
+        File(root, "old.jsonl").writeText(
+            """{"kind":"header","version":3,"id":"old","createdAt":1}""",
+        )
+        assertFailsWithSessionDataException { store.load("old") }
+        assertTrue(store.summaries().none { it.id == "old" })
+    }
+
+    @Test
     fun corruptJsonRejectedWithSessionDataException() = runTest {
         val store = newStore()
         val id = store.create().id
-        File(root, "$id.json").writeText("{ not json")
+        File(root, "$id.jsonl").writeText("{ not json")
         assertFailsWithSessionDataException { store.load(id) }
         assertTrue(store.summaries().isEmpty())
     }
 
     @Test
-    fun unknownRolesAndContentTypesRejected() = runTest {
+    fun unknownRolesContentTypesAndEntryKindsRejected() = runTest {
         val store = newStore()
         val id = store.create().id
 
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"system","timestamp":0}}],"leafId":"m0"}"""
+        fun writeMutationLine(payload: String) {
+            File(root, "$id.jsonl").writeText(
+                """{"kind":"header","version":4,"id":"$id","createdAt":0}
+                    |$payload
+                """.trimMargin(),
+            )
+        }
+
+        // Unknown message role.
+        writeMutationLine(
+            """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"system","timestamp":0}}""",
         )
         assertFailsWithSessionDataException { store.load(id) }
 
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"user","timestamp":0,"content":[{"type":"audio"}]}}],"leafId":"m0"}"""
+        // Unknown content type.
+        writeMutationLine(
+            """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":0,"content":[{"type":"audio"}]}}""",
         )
         assertFailsWithSessionDataException { store.load(id) }
 
-        // Unknown format version.
-        File(root, "$id.json").writeText(
-            """{"format":99,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[]}"""
+        // Unknown entry type.
+        writeMutationLine(
+            """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"mystery","parentId":null,"timestamp":0}""",
         )
         assertFailsWithSessionDataException { store.load(id) }
+
+        // Missing assistant usage.
+        writeMutationLine(
+            """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m","stopReason":"STOP"}}""",
+        )
+        assertFailsWithSessionDataException { store.load(id) }
+    }
+
+    @Test
+    fun replayValidationRejectsNonConsecutiveSeqAndDanglingParents() = runTest {
+        val store = newStore()
+        val id = store.create().id
+
+        // Non-consecutive seq on the second mutation.
+        File(root, "$id.jsonl").writeText(
+            """{"kind":"header","version":4,"id":"$id","createdAt":0}
+                {"kind":"fact","seq":1,"fact":"name","name":"t"}
+                {"kind":"entry","seq":3,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":0,"content":[]}}
+            """.trimIndent().trimMargin(),
+        )
+        assertFailsWithSessionDataException { store.load(id) }
+
+        // Dangling parent.
+        File(root, "$id.jsonl").writeText(
+            """{"kind":"header","version":4,"id":"$id","createdAt":0}
+                {"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":"ghost","timestamp":0,"message":{"role":"user","timestamp":0,"content":[]}}
+            """.trimIndent().trimMargin(),
+        )
+        assertFailsWithSessionDataException { store.load(id) }
+    }
+
+    @Test
+    fun tornTailTruncatedFinalLineDroppedAndPrefixIntact() = runTest {
+        val store = newStore()
+        val created = store.create()
+        store.save(created.withMessages(listOf(UserMessage.ofText("a", 1L))))
+        val file = File(root, "${created.id}.jsonl")
+        val valid = file.readText()
+        assertTrue(valid.endsWith("\n"))
+
+        // Simulate a torn append: a partial JSON line without a newline.
+        file.writeText(valid + """{"kind":"entry","seq":9,"lane":"main","id":"torn""")
+
+        // A fresh store (process restart) repairs by publishing the valid prefix.
+        val reloaded = newStore().load(created.id)
+        assertNotNull(reloaded)
+        assertEquals(1, reloaded!!.messages.size)
+        // The repaired file is the valid prefix and leaves no temp file behind.
+        assertEquals(valid, file.readText())
+        assertEquals(listOf("${created.id}.jsonl"), root.listFiles()!!.map { it.name })
+    }
+
+    @Test
+    fun tornTailSchemaErrorOnFinalLineIsNotRepaired() = runTest {
+        val store = newStore()
+        val created = store.create()
+        val file = File(root, "${created.id}.jsonl")
+        // Valid JSON but an unknown mutation kind: a schema error, not a torn append.
+        file.writeText(
+            """{"kind":"header","version":4,"id":"${created.id}","createdAt":0}
+                {"kind":"zzz","seq":1}
+            """.trimIndent().trimMargin() + "\n",
+        )
+        assertFailsWithSessionDataException { newStore().load(created.id) }
+    }
+
+    @Test
+    fun unterminatedTailRepairedWithNewline() = runTest {
+        val store = newStore()
+        val created = store.create()
+        val file = File(root, "${created.id}.jsonl")
+        val valid = file.readText()
+        // A complete final line whose newline never made it to disk.
+        val extra =
+            """{"kind":"entry","seq":2,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":0,"content":[]}}"""
+        file.writeText(valid + extra)
+
+        val reloaded = newStore().load(created.id)
+        assertNotNull(reloaded)
+        assertEquals(1, reloaded!!.messages.size)
+        // The repair appended the missing newline; the entry is intact and
+        // subsequent appends are well-formed lines.
+        val store3 = newStore()
+        val grown = Conversation(reloaded.entries, reloaded.leafId).append(UserMessage.ofText("b", 2L))
+        store3.save(reloaded.copy(entries = grown.entries, leafId = grown.leafId))
+        val reloaded2 = newStore().load(created.id)!!
+        assertEquals(2, reloaded2.messages.size)
+    }
+
+    @Test
+    fun tornTailInsideFileIsRejected() = runTest {
+        val store = newStore()
+        val created = store.create()
+        val file = File(root, "${created.id}.jsonl")
+        val valid = file.readText()
+        // A syntax error that is NOT the final line is corruption, not a torn tail.
+        val good =
+            """{"kind":"entry","seq":2,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":0,"content":[]}}"""
+        file.writeText(valid + """{"kind":"entry","seq":3,"lan""" + "\n" + good + "\n")
+        assertFailsWithSessionDataException { newStore().load(created.id) }
     }
 
     @Test
     fun oversizeFileRejected() = runTest {
         val store = newStore(maxFileBytes = 16)
         val id = store.create().id
-        File(root, "$id.json").writeText("x".repeat(64))
+        File(root, "$id.jsonl").writeText("x".repeat(64))
         assertFailsWithSessionDataException { store.load(id) }
     }
 
@@ -272,56 +450,13 @@ class SessionStoreTest {
     }
 
     @Test
-    fun atomicWriteLeavesNoTempFiles() = runTest {
-        val store = newStore()
-        val created = store.create()
-        store.save(created.copy(title = "again"))
-        val names = root.listFiles()!!.map { it.name }
-        assertEquals(listOf("${created.id}.json"), names)
-    }
-
-    @Test
-    fun repeatedSavesKeepPreviousContentIntact() = runTest {
-        val store = newStore()
-        val created = store.create()
-        store.save(created.copy(title = "good"))
-        store.save(created.copy(title = "good2"))
-        val names = root.listFiles()!!.map { it.name }
-        assertEquals(listOf("${created.id}.json"), names)
-        assertEquals("good2", store.load(created.id)!!.title)
-    }
-
-    @Test
-    fun sessionFilesContainNoCredentialMaterial() = runTest {
-        val store = newStore()
-        val id = store.create().id
-        val full = Conversation.fromMessages(fullTranscript())
-        store.save(Session(id, "t", 1, 1, entries = full.entries, leafId = full.leafId))
-        val text = File(root, "$id.json").readText()
-        assertFalse(text.contains("apiKey", ignoreCase = true))
-        assertFalse(text.contains("authorization"))
-        // Only the assistant's identity fields appear.
-        assertTrue(text.contains("glm-4.6"))
-    }
-
-    @Test
-    fun summaryIgnoresUnreadableCorruptFiles() = runTest {
-        val store = newStore()
-        val good = store.create("good")
-        store.save(good.copy(title = "good"))
-        File(root, "corrupt.json").writeText("garbage")
-        val summaries = store.summaries()
-        assertEquals(listOf(good.id), summaries.map { it.id })
-    }
-
-    @Test
     fun concurrentSavesAreSerialized() = runTest {
         val store = newStore()
         val created = store.create()
-        // Interleaved saves of different sizes must all land atomically.
+        // Interleaved saves appending one message each must all land as mutations.
         repeat(20) { i ->
             clock.advanceMillis(1)
-            store.save(created.withMessages((0..i).map { UserMessage.ofText("m$it") }).copy(title = "t$i"))
+            store.save(created.withMessages((0..i).map { UserMessage.ofText("m$it") }))
         }
         val loaded = store.load(created.id)!!
         assertEquals(20, loaded.messages.size)
@@ -342,42 +477,8 @@ class SessionStoreTest {
         assertEquals("0", created.id)
         store.save(created.withMessages(listOf(UserMessage.ofText("hi", 1L))))
         assertEquals(1, store.load("0")!!.messages.size)
-        // No stray temp files remain.
         val names = root.listFiles()!!.map { it.name }
-        assertEquals(listOf("0.json"), names)
-    }
-
-    @Test
-    fun missingRequiredFieldsRejected() = runTest {
-        val store = newStore()
-        val id = store.create().id
-
-        // Missing assistant usage.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m",
-               "stopReason":"STOP"}}],"leafId":"m0"}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-
-        // Missing usage cost component.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m",
-               "stopReason":"STOP","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":2,
-               "cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0}}}}],"leafId":"m0"}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-
-        // Missing message timestamp.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"user","content":[]}}],"leafId":"m0"}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-
-        // Missing tool-result isError.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"toolResult","timestamp":0,"toolCallId":"c","toolName":"n","content":[]}}],"leafId":"m0"}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
+        assertEquals(listOf("0.jsonl"), names)
     }
 
     @Test
@@ -385,47 +486,56 @@ class SessionStoreTest {
         val store = newStore()
         val id = store.create().id
 
-        // Quoted top-level format / timestamps.
-        File(root, "$id.json").writeText(
-            """{"format":"2","id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[]}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":"1","updatedAt":1,"entries":[]}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-
-        // Quoted message timestamp.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"user","timestamp":"7","content":[]}}],"leafId":"m0"}"""
+        // Quoted message timestamp inside an entry mutation.
+        File(root, "$id.jsonl").writeText(
+            """{"kind":"header","version":4,"id":"$id","createdAt":0}
+                {"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":"7","content":[]}}
+            """.trimIndent().trimMargin() + "\n",
         )
         assertFailsWithSessionDataException { store.load(id) }
 
-        // Quoted usage number.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m",
-               "stopReason":"STOP","usage":{"input":"1","output":1,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":2,
-               "cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}}}}],"leafId":"m0"}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-
-        // Quoted isError.
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"type":"message","id":"m0","timestamp":0,"message":{"role":"toolResult","timestamp":0,"toolCallId":"c","toolName":"n","content":[],"isError":"false"}}],"leafId":"m0"}"""
+        // Quoted entry seq.
+        File(root, "$id.jsonl").writeText(
+            """{"kind":"header","version":4,"id":"$id","createdAt":0}
+                {"kind":"entry","seq":"1","lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":0,"content":[]}}
+            """.trimIndent().trimMargin() + "\n",
         )
         assertFailsWithSessionDataException { store.load(id) }
     }
 
     @Test
-    fun idMismatchBetweenFilenameAndContentRejected() = runTest {
+    fun idMismatchBetweenFilenameAndHeaderRejected() = runTest {
         val store = newStore()
         val id = store.create().id
-        File(root, "$id.json").writeText(
-            """{"format":2,"id":"other","title":"t","createdAt":1,"updatedAt":1,"entries":[]}"""
+        File(root, "$id.jsonl").writeText(
+            """{"kind":"header","version":4,"id":"other","createdAt":0}""",
         )
         assertFailsWithSessionDataException { store.load(id) }
         // Corrupt entries are skipped by summaries.
         assertTrue(store.summaries().isEmpty())
+    }
+
+    @Test
+    fun sessionFilesContainNoCredentialMaterial() = runTest {
+        val store = newStore()
+        val id = store.create().id
+        val full = Conversation.fromMessages(fullTranscript())
+        store.save(Session(id, "t", 1, 1, entries = full.entries, leafId = full.leafId))
+        val text = File(root, "$id.jsonl").readText()
+        assertFalse(text.contains("apiKey", ignoreCase = true))
+        assertFalse(text.contains("authorization"))
+        // Only the assistant's identity fields appear.
+        assertTrue(text.contains("glm-4.6"))
+    }
+
+    @Test
+    fun summaryIgnoresUnreadableCorruptFiles() = runTest {
+        val store = newStore()
+        val good = store.create("good")
+        store.save(good.copy(title = "good"))
+        File(root, "corrupt.jsonl").writeText("garbage")
+        val summaries = store.summaries()
+        assertEquals(listOf(good.id), summaries.map { it.id })
     }
 
     @Test
@@ -461,7 +571,7 @@ class SessionStoreTest {
             telemetryContext = telemetry,
         )
         val id = store.create("t").id
-        File(rootFail, "$id.json").writeText("{corrupt")
+        File(rootFail, "$id.jsonl").writeText("{corrupt")
 
         assertFailsWithSessionDataException { store.load(id) }
         val loadFailed = telemetry.spans().last { it.name == "pf.session.load" }
@@ -492,8 +602,8 @@ class SessionStoreTest {
         val saveFailed = telemetry.spans().single()
         assertEquals("pf.session.save", saveFailed.name)
         val error = saveFailed.status as SpanStatus.Error
-        assertEquals("java.io.IOException", error.error?.name)
+        // The write failure is wrapped before the span records its type.
+        assertEquals("works.resolve.pathfinder.data.sessions.SessionDataException", error.error?.name)
         assertEquals("", error.error?.message)
     }
-
 }

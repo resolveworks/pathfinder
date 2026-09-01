@@ -4,9 +4,6 @@ import java.io.File
 import java.io.IOException
 import kotlin.time.Clock
 import works.resolve.pathfinder.ai.utils.uuidv7
-import java.nio.file.AtomicMoveNotSupportedException
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -21,25 +18,35 @@ import works.resolve.pathfinder.telemetry.TelemetryError
 import works.resolve.pathfinder.telemetry.attr
 
 /**
- * Simple file-backed store for persistent chat sessions. One bounded JSON file
- * per session under [root]; writes are atomic (temp file + replace). All
- * operations are serialized through a [Mutex] and performed on [ioDispatcher].
- * Credentials and request options never appear in session files.
+ * File-backed append-only session store over the JSONL v4 mutation-log
+ * format (pi's JsonlSessionRepo + JsonlSessionStorage,
+ * packages/agent/src/harness/session/jsonl/). One `<id>.jsonl` file per
+ * session under [root]: a header line plus one mutation line per append.
+ * Writes append to the file instead of rewriting it; all operations are
+ * serialized through a [Mutex] (pi's `tail` promise) and performed on
+ * [ioDispatcher]. Credentials and request options never appear in session
+ * files.
  *
- * Ordinary file-system failures (unwritable directory, failed temp write,
- * unsupported/failed atomic move) surface as generic [SessionDataException]s
- * without leaking paths or transcript content; coroutine cancellation
- * ([CancellationException]) is never swallowed. On filesystems where an atomic
- * move is unsupported the write falls back to a non-atomic replace: the
- * previous target either stays fully intact or is fully replaced, so no
- * partial target is ever left behind — the temp file is always cleaned up.
+ * Storage-assigned seq (P0-1): every appended mutation consumes the next
+ * consecutive seq; [save] syncs a conversation snapshot by appending the
+ * entries not yet in the log (emitting a lane mutation whenever the tree
+ * branched away from the lane leaf, mirroring pi's moveLane-before-append
+ * event order), then moving the lane to the snapshot's leaf and updating
+ * the name fact. Re-syncing an already-persisted snapshot is a no-op, so a
+ * partially-failed save can simply be retried.
  *
- * Failures are additionally recorded as sanitized telemetry spans
- * (`pf.session.*`) at the lowest layer, before the original exception is
- * rethrown (or, for [summaries], before the entry is skipped): only the
- * session id, operation outcome, and exception *type* are recorded — never
- * exception messages (which can embed filesystem paths) or transcript
- * content. UI-layer catches over the same operations do not duplicate them.
+ * Old snapshot formats (whole-file "format 3" and earlier) are rejected
+ * outright per the disposable-data policy: only `.jsonl` v4 files are
+ * listed, and anything else on disk is ignored. A torn final append (JSON
+ * syntax error on the last line) is repaired on load by atomically
+ * publishing the valid prefix; an unterminated tail gets its newline
+ * appended.
+ *
+ * Disciplines retained from the snapshot store: bounded reads
+ * ([maxFileBytes]), id/filename cross-check (the header id must match the
+ * file name), defensive copies, and type-only telemetry errors
+ * (`pf.session.*` spans record the session id, outcome, and exception type
+ * — never paths or transcript content).
  */
 class SessionStore(
     private val root: File,
@@ -61,19 +68,28 @@ class SessionStore(
 
     private val mutex = Mutex()
 
+    /**
+     * Open storages replayed from their files (pi keeps live JsonlSessionStorage
+     * instances per open Session; Pathfinder caches them per id so appends
+     * continue the in-memory [SessionState] without re-reading the log).
+     */
+    private val openStorages = HashMap<String, JsonlSessionStorage>()
+
     /** Creates and persists a new (initially empty) session. */
     override suspend fun create(title: String): Session = mutex.withLock {
-        val now = clock.now().toEpochMilliseconds()
-        val session = Session(
-            id = idFactory(),
-            title = title,
-            createdAt = now,
-            updatedAt = now,
-            entries = emptyList(),
-            leafId = null,
-        )
-        withContext(ioDispatcher) { write(session) }
-        session
+        withContext(ioDispatcher) {
+            val id = requireId(idFactory())
+            writeSpanned(id) {
+                ensureRoot()
+                val createdAt = clock.now().toEpochMilliseconds()
+                val storage = JsonlSessionStorage.create(fileFor(id), JsonlCodec.JsonlV4Header(id = id, createdAt = createdAt))
+                // The title rides as the name fact (pi's fact mutations; a
+                // session always carries one so summaries stay complete).
+                storage.setName(title)
+                openStorages[id] = storage
+                storage.toSession(fileFor(id).lastModified())
+            }
+        }
     }
 
     /** Lists session summaries, newest-updated first; unreadable entries are skipped. */
@@ -81,8 +97,7 @@ class SessionStore(
         withContext(ioDispatcher) {
             sessionFiles()
                 .mapNotNull { file ->
-                    readSpanned(file, spanName = SPAN_SUMMARY, skippedOutcome = OUTCOME_SKIPPED)
-                        ?.let { session ->
+                    summarySpanned(file)?.let { session ->
                         SessionSummary(
                             id = session.id,
                             title = session.title,
@@ -96,28 +111,50 @@ class SessionStore(
         }
     }
 
-    /** Loads a session by id, or null when it does not exist. */
+    /**
+     * Divergence from pi's listing (listJsonlSessionMetadata reads headers
+     * only): Pathfinder's summary surface needs the title (a name fact, not
+     * header data) and the message count, so summaries do a bounded full
+     * read + replay instead. Android session directories stay small enough
+     * that the extra read does not justify a parallel header-only shape.
+     */
     override suspend fun load(id: String): Session? = mutex.withLock {
         withContext(ioDispatcher) {
-            val file = fileFor(id)
-            if (!file.isFile) null else readSpanned(file)?.let(::defensiveCopy)
+            val safeId = requireId(id)
+            val file = fileFor(safeId)
+            if (!file.isFile) {
+                null
+            } else {
+                loadSpanned(file)?.let(::defensiveCopy)
+            }
         }
     }
 
     /**
-     * Persists [session] atomically, bumping [Session.updatedAt]. Returns the
-     * stored session (with the new timestamp and defensive copies).
+     * Appends [session]'s unpersisted state to the mutation log (see the
+     * class KDoc's sync algorithm) and returns the stored session — the
+     * storage-assigned entries, current leaf, and name, with
+     * [Session.updatedAt] from the file's modification time.
      */
     override suspend fun save(session: Session): Session = mutex.withLock {
-        val stored = defensiveCopy(session).copy(updatedAt = clock.now().toEpochMilliseconds())
-        withContext(ioDispatcher) { write(stored) }
-        stored
+        withContext(ioDispatcher) {
+            writeSpanned(session.id) {
+                syncSession(
+                    id = session.id,
+                    entries = session.entries.toList(),
+                    leafId = session.leafId,
+                    title = session.title,
+                )
+            }
+        }
     }
 
     /** Deletes a session; true when it existed. */
     suspend fun delete(id: String): Boolean = mutex.withLock {
         withContext(ioDispatcher) {
-            val file = fileFor(id)
+            val safeId = requireId(id)
+            openStorages.remove(safeId)
+            val file = fileFor(safeId)
             file.isFile && file.delete()
         }
     }
@@ -127,22 +164,59 @@ class SessionStore(
     private fun defensiveCopy(session: Session): Session =
         session.copy(entries = session.entries.toList())
 
-    private fun fileFor(id: String): File = File(root, requireId(id) + ".json")
+    private fun fileFor(id: String): File = File(root, "$id.jsonl")
 
     private fun sessionFiles(): List<File> =
-        root.listFiles { file -> file.isFile && file.name.endsWith(".json") }?.sortedBy { it.name }
+        root.listFiles { file -> file.isFile && file.name.endsWith(".jsonl") }?.sortedBy { it.name }
             ?: emptyList()
 
-    private suspend fun write(session: Session) =
+    private fun ensureRoot() {
+        if (!root.exists() && !root.mkdirs() && !root.isDirectory) {
+            throw IOException("Session directory is unavailable")
+        }
+    }
+
+    /** The session's open storage, replaying the file on first touch. Null when the file is gone. */
+    private fun storageFor(id: String, file: File): JsonlSessionStorage? {
+        openStorages[id]?.let { return it }
+        if (!file.isFile) return null
+        val storage = JsonlSessionStorage.load(file, id, maxFileBytes)
+        openStorages[id] = storage
+        return storage
+    }
+
+    /**
+     * Diffs [entries] against the log and appends what is missing: for each
+     * new entry in order, a lane mutation first when it parents elsewhere
+     * than the lane's current leaf (the persisted equivalent of the branch
+     * navigation that produced the sibling), then the entry mutation with
+     * its storage-assigned seq. Finally the lane moves to [leafId] and the
+     * name fact is updated to [title] when they changed.
+     */
+    private fun syncSession(id: String, entries: List<SessionEntry>, leafId: String?, title: String): Session {
+        val file = fileFor(id)
+        val storage = storageFor(id, file) ?: throw SessionDataException("Session not found: unknown")
+        for (entry in entries) {
+            if (storage.hasEntry(entry.id)) continue
+            if (entry.parentId != storage.leafId()) storage.moveLeaf(leafId = entry.parentId)
+            storage.appendEntry(entry)
+        }
+        if (storage.leafId() != leafId) storage.moveLeaf(leafId = leafId)
+        if (storage.name() != title) storage.setName(title)
+        return storage.toSession(file.lastModified())
+    }
+
+    private suspend fun writeSpanned(id: String, operation: () -> Session): Session =
         telemetryContext.startSpan(
             SpanOptions(
                 name = SPAN_SAVE,
-                attributes = mapOf(ATTR_SESSION to attr(session.id)),
+                attributes = mapOf(ATTR_SESSION to attr(id)),
             ),
         ) { span ->
             try {
-                writeSpanned(session)
+                val session = operation()
                 span.setAttributes(mapOf(ATTR_OUTCOME to attr(OUTCOME_PERSISTED)))
+                session
             } catch (e: CancellationException) {
                 // Cancellation is not a failure. The span must be settled ok
                 // explicitly: the contract's automatic status would otherwise
@@ -155,46 +229,22 @@ class SessionStore(
             }
         }
 
-    private fun writeSpanned(session: Session) {
-        if (!root.exists() && !root.mkdirs() && !root.isDirectory) {
-            throw IOException("Session directory is unavailable")
-        }
-        val target = fileFor(session.id)
-        // createTempFile requires a >=3-char prefix; pad short ids.
-        val temp = File.createTempFile(session.id.padStart(3, '_'), ".tmp", root)
-        try {
-            temp.writeText(SessionCodec.encode(session))
-            try {
-                Files.move(
-                    temp.toPath(), target.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE,
-                )
-            } catch (_: AtomicMoveNotSupportedException) {
-                // Documented fallback: a plain replace still swaps whole
-                // files only; no partial target is ever produced.
-                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
-        } finally {
-            temp.delete()
-        }
-    }
-
     /**
-     * Reads and decodes [file] under a load (or summary) telemetry span.
+     * Reads and replays [file] under a load (or summary) telemetry span.
      * [skippedOutcome] marks the summary path, where failures are recorded
      * and the entry skipped instead of rethrown.
      */
     private suspend fun readSpanned(
         file: File,
-        spanName: String = SPAN_LOAD,
-        skippedOutcome: String? = null,
+        spanName: String,
+        skippedOutcome: String?,
     ): Session? {
-        val id = file.name.removeSuffix(".json")
+        val id = file.name.removeSuffix(".jsonl")
         return telemetryContext.startSpan(
             SpanOptions(name = spanName, attributes = mapOf(ATTR_SESSION to attr(id))),
         ) { span ->
             try {
-                val session = read(file)
+                val session = replay(file, id)
                 span.setAttributes(mapOf(ATTR_OUTCOME to attr(OUTCOME_LOADED)))
                 session
             } catch (e: CancellationException) {
@@ -213,26 +263,14 @@ class SessionStore(
         }
     }
 
-    private fun read(file: File): Session {
-        if (file.length() > maxFileBytes) {
-            throw SessionDataException("Session file exceeds size limit")
-        }
-        val text = try {
-            file.readText()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: IOException) {
-            throw SessionDataException("Cannot read session file", e)
-        }
-        if (text.length > maxFileBytes) {
-            throw SessionDataException("Session file exceeds size limit")
-        }
-        val session = SessionCodec.decode(text)
-        val expectedId = file.name.removeSuffix(".json")
-        if (session.id != expectedId) {
-            throw SessionDataException("Session data does not match its file")
-        }
-        return session
+    private suspend fun loadSpanned(file: File): Session? = readSpanned(file, SPAN_LOAD, null)
+    private suspend fun summarySpanned(file: File): Session? = readSpanned(file, SPAN_SUMMARY, OUTCOME_SKIPPED)
+
+    /** Replays [file], caching the storage so later appends continue its state. */
+    private fun replay(file: File, id: String): Session {
+        val storage = JsonlSessionStorage.load(file, id, maxFileBytes)
+        openStorages[id] = storage
+        return storage.toSession(file.lastModified())
     }
 
     companion object {

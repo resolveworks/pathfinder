@@ -38,7 +38,7 @@ class TreeProjectionTest {
     )
 
     private fun entry(id: String, parent: String?, message: works.resolve.pathfinder.ai.core.Message) =
-        MessageEntry(id, parent, clock++, message)
+        MessageEntry(id, seq = 0L, parentId = parent, timestamp = clock++, message = message)
 
     private fun rows(conversation: Conversation, filter: TreeFilter = TreeFilter.DEFAULT) =
         buildTreeRows(conversation, filter)

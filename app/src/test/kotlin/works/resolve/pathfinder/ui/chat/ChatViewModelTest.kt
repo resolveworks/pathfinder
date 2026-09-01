@@ -2454,4 +2454,72 @@ class ChatViewModelTest {
 
         vm.closeForTest()
     }
+    // ---- append-only persistence (pi's JSONL v4 mutation log, P0-2) ----
+
+    /** Locates the session's .jsonl log file under the harness root. */
+    private fun sessionLogFile(sessionId: String): File =
+        tmpFolder.root.walkTopDown().filter { it.isFile && it.name == "$sessionId.jsonl" }.first()
+
+    @Test
+    fun persistFlow_isAppendOnly_snapshotsNeverRewriteTheFile() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        vm.exchange(h, "Hello", "world")
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+        val afterFirst = sessionLogFile(sessionId).readText()
+        assertTrue(afterFirst.startsWith("{\"kind\":\"header\",\"version\":4"))
+
+        vm.exchange(h, "Again", "fine")
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 4 }
+        val afterSecond = sessionLogFile(sessionId).readText()
+
+        // The second save only appended mutation lines: the first file's
+        // bytes are a strict prefix of the grown log.
+        assertTrue(afterSecond.length > afterFirst.length)
+        assertEquals(afterFirst, afterSecond.substring(0, afterFirst.length))
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun navigationOnly_persistsLaneMoveWithoutNewEntries() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        vm.exchange(h, "Hello", "world")
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+        val before = sessionLogFile(sessionId).readText()
+
+        // Re-edit the user message: the leaf resets to root (a lane move)
+        // without appending any entry.
+        val userEntryId = vm.uiState.value.treeRows.first { it.isOnActivePath }.id
+        vm.navigateToTreeEntry(userEntryId)
+        vm.uiState.first { it.messages.isEmpty() && it.draft == "Hello" }
+        vm.closeForTest()
+
+        val after = sessionLogFile(sessionId).readText()
+        assertTrue(after.length > before.length)
+        assertTrue(after.startsWith(before))
+        // Exactly one appended line: the lane mutation back to the seed
+        // model_change entry (the re-edit target's parent).
+        assertEquals(before.count { it == '\n' } + 1, after.count { it == '\n' })
+        assertTrue(after.substring(before.length).contains("\"kind\":\"lane\""))
+
+        // A fresh store (process restart) replays the lane move: same
+        // entries, empty active transcript, leaf on the seed entry.
+        val reloaded = h.sessionStore.load(sessionId)!!
+        assertEquals(3, reloaded.entries.size) // seed model_change + user + assistant
+        assertEquals(reloaded.entries.first().id, reloaded.leafId)
+        assertTrue(reloaded.messages.isEmpty())
+    }
 }
+
