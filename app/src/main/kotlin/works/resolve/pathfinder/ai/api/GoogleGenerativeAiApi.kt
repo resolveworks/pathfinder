@@ -11,6 +11,7 @@ import works.resolve.pathfinder.ai.core.mergeHeaders
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.telemetry.TelemetryContext
 import kotlin.time.Clock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
@@ -72,12 +73,22 @@ class GoogleGenerativeAiApi(
          * never invoked here. Never included in toString().
          */
         val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
+        /**
+         * pi's ProviderRequestOptions.telemetryContext (types.ts:126-127),
+         * inherited via StreamOptions (GoogleOptions extends StreamOptions,
+         * google-generative-ai.ts): explicit parent context for telemetry
+         * produced by this logical request. Dormant in this port — carried for
+         * shape fidelity, preserved through the streamSimple conversion
+         * (buildBaseOptions). Presence boolean only in toString().
+         */
+        val telemetryContext: TelemetryContext? = null,
     ) {
         override fun toString(): String = CommonOptions(
             apiKey, sessionId, temperature, maxTokens, timeoutMs, maxRetries, maxRetryDelayMs,
             env, headers, toolChoice, thinking,
         ).toString().dropLast(1) +
-            ", onPayload=${onPayload != null}, onResponse=${onResponse != null})"
+            ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
+            ", telemetryContext=${telemetryContext != null})"
 
         internal fun toCommon() = CommonOptions(
             apiKey, sessionId, temperature, maxTokens, timeoutMs, maxRetries, maxRetryDelayMs,
@@ -96,43 +107,8 @@ class GoogleGenerativeAiApi(
         model: Model,
         context: Context,
         options: SimpleStreamOptions,
-    ): Flow<works.resolve.pathfinder.ai.core.AssistantMessageEvent> {
-        val thinking = GoogleRequest.thinkingForSimpleStream(
-            model,
-            options.reasoning,
-            options.thinkingBudgets,
-            gemmaSupported = true,
-        )
-        return stream(
-            model,
-            context,
-            GoogleOptions(
-                apiKey = options.apiKey,
-                sessionId = options.sessionId,
-                temperature = options.temperature,
-                maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
-                    model,
-                    context,
-                    options.maxTokens ?: model.maxTokens,
-                ),
-                timeoutMs = options.timeoutMs,
-                maxRetries = options.maxRetries,
-                maxRetryDelayMs = options.maxRetryDelayMs,
-                env = options.env,
-                headers = options.headers,
-                onPayload = options.onPayload,
-                onResponse = options.onResponse,
-                // pi's google-generative-ai streamSimple forwards the narrow
-                // simple-API toolChoice ("auto" | "none", types.ts:82).
-                toolChoice = when (options.toolChoice) {
-                    null -> null
-                    SimpleToolChoice.Auto -> "auto"
-                    SimpleToolChoice.None -> "none"
-                },
-                thinking = thinking,
-            ),
-        )
-    }
+    ): Flow<works.resolve.pathfinder.ai.core.AssistantMessageEvent> =
+        stream(model, context, buildGoogleOptions(model, context, options))
 
     /** The pi `stream` entry point with full GoogleOptions. */
     fun stream(
@@ -204,3 +180,45 @@ class GoogleGenerativeAiApi(
         )
     }
 }
+
+/**
+ * pi's streamSimple options conversion for google-generative-ai:
+ * buildBaseOptions plus the resolved thinking config. Extracted as a named
+ * function so the conversion (including telemetryContext identity) is
+ * directly testable.
+ */
+internal fun buildGoogleOptions(
+    model: Model,
+    context: Context,
+    options: SimpleStreamOptions,
+): GoogleGenerativeAiApi.GoogleOptions = GoogleGenerativeAiApi.GoogleOptions(
+    apiKey = options.apiKey,
+    sessionId = options.sessionId,
+    temperature = options.temperature,
+    maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
+        model,
+        context,
+        options.maxTokens ?: model.maxTokens,
+    ),
+    timeoutMs = options.timeoutMs,
+    maxRetries = options.maxRetries,
+    maxRetryDelayMs = options.maxRetryDelayMs,
+    env = options.env,
+    headers = options.headers,
+    onPayload = options.onPayload,
+    onResponse = options.onResponse,
+    // pi's google-generative-ai streamSimple forwards the narrow
+    // simple-API toolChoice ("auto" | "none", types.ts:82).
+    toolChoice = when (options.toolChoice) {
+        null -> null
+        SimpleToolChoice.Auto -> "auto"
+        SimpleToolChoice.None -> "none"
+    },
+    thinking = GoogleRequest.thinkingForSimpleStream(
+        model,
+        options.reasoning,
+        options.thinkingBudgets,
+        gemmaSupported = true,
+    ),
+    telemetryContext = options.telemetryContext,
+)

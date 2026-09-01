@@ -34,6 +34,7 @@ import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.telemetry.TelemetryContext
 import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.truncateErrorText
 import works.resolve.pathfinder.ai.transport.SseEvent
@@ -96,6 +97,15 @@ data class MistralOptions(
      * status/headers). Never included in toString().
      */
     val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
+    /**
+     * pi's ProviderRequestOptions.telemetryContext (types.ts:126-127),
+     * inherited via StreamOptions (MistralOptions extends StreamOptions,
+     * mistral-conversations.ts): explicit parent context for telemetry
+     * produced by this logical request. Dormant in this port — carried for
+     * shape fidelity, preserved through the streamSimple conversion
+     * (buildBaseOptions). Presence boolean only in toString().
+     */
+    val telemetryContext: TelemetryContext? = null,
 ) {
     override fun toString(): String = optionsToString(
         "MistralOptions",
@@ -114,6 +124,84 @@ data class MistralOptions(
         "headers" to headers.keys,
         "onPayload" to (onPayload != null),
         "onResponse" to (onResponse != null),
+        "telemetryContext" to (telemetryContext != null),
+    )
+}
+
+/**
+ * pi's streamSimple options conversion for mistral-conversations:
+ * buildBaseOptions plus the clamped thinking level and per-model prompt-mode
+ * vs reasoning-effort selection. Extracted as a named function so the
+ * conversion (including telemetryContext identity) is directly testable.
+ */
+internal fun buildMistralOptions(
+    model: Model,
+    context: Context,
+    options: SimpleStreamOptions,
+): MistralOptions {
+    val clamped = options.reasoning?.let { clampThinkingLevel(model, it.toModelThinkingLevel()) }
+    val reasoning = if (clamped == ModelThinkingLevel.OFF) null else clamped
+    val useReasoning = model.reasoning && reasoning != null
+    val maxTokens = clampMaxTokensToContext(model, context, options.maxTokens ?: model.maxTokens)
+
+    return MistralOptions(
+        apiKey = options.apiKey,
+        sessionId = options.sessionId,
+        temperature = options.temperature,
+        maxTokens = maxTokens,
+        timeoutMs = options.timeoutMs,
+        maxRetries = options.maxRetries,
+        maxRetryDelayMs = options.maxRetryDelayMs,
+        env = options.env,
+        headers = options.headers,
+        toolChoice = options.toolChoice?.toToolChoice(),
+        cacheRetention = options.cacheRetention,
+        onPayload = options.onPayload,
+        onResponse = options.onResponse,
+        promptMode = if (useReasoning && usesPromptModeReasoning(model)) MistralPromptMode.REASONING else null,
+        reasoningEffort = if (useReasoning && usesReasoningEffort(model)) {
+            mapReasoningEffort(model, reasoning!!)
+        } else {
+            null
+        },
+        telemetryContext = options.telemetryContext,
+    )
+}
+
+/**
+ * pi's manual OpenAI-completions-style options conversion for the mistral
+ * adapter's `stream(model, context, OpenAiCompletionsOptions)` overload
+ * (mistral-conversations.ts accepts StreamOptions-shaped input): maps the
+ * shared surface plus per-model prompt-mode vs reasoning-effort selection
+ * onto [MistralOptions]. Extracted as a named function so the conversion
+ * (including telemetryContext identity) is directly testable.
+ */
+internal fun toMistralOptions(
+    model: Model,
+    options: OpenAiCompletionsOptions,
+): MistralOptions {
+    val useReasoning = model.reasoning && options.reasoningEffort != null
+    return MistralOptions(
+        apiKey = options.apiKey,
+        sessionId = options.sessionId,
+        temperature = options.temperature,
+        maxTokens = options.maxTokens,
+        timeoutMs = options.timeoutMs,
+        maxRetries = options.maxRetries,
+        maxRetryDelayMs = options.maxRetryDelayMs,
+        env = options.env,
+        headers = options.headers,
+        promptMode = if (useReasoning && usesPromptModeReasoning(model)) {
+            MistralPromptMode.REASONING
+        } else {
+            null
+        },
+        reasoningEffort = if (useReasoning && usesReasoningEffort(model)) {
+            mapReasoningEffort(model, options.reasoningEffort!!)
+        } else {
+            null
+        },
+        telemetryContext = options.telemetryContext,
     )
 }
 
@@ -146,34 +234,7 @@ class MistralConversationsApi(
         model: Model,
         context: Context,
         options: OpenAiCompletionsOptions,
-    ): Flow<AssistantMessageEvent> {
-        val useReasoning = model.reasoning && options.reasoningEffort != null
-        return stream(
-            model,
-            context,
-            MistralOptions(
-                apiKey = options.apiKey,
-                sessionId = options.sessionId,
-                temperature = options.temperature,
-                maxTokens = options.maxTokens,
-                timeoutMs = options.timeoutMs,
-                maxRetries = options.maxRetries,
-                maxRetryDelayMs = options.maxRetryDelayMs,
-                env = options.env,
-                headers = options.headers,
-                promptMode = if (useReasoning && usesPromptModeReasoning(model)) {
-                    MistralPromptMode.REASONING
-                } else {
-                    null
-                },
-                reasoningEffort = if (useReasoning && usesReasoningEffort(model)) {
-                    mapReasoningEffort(model, options.reasoningEffort!!)
-                } else {
-                    null
-                },
-            ),
-        )
-    }
+    ): Flow<AssistantMessageEvent> = stream(model, context, toMistralOptions(model, options))
 
     /**
      * Streams with native Mistral options, pi's `stream` entry point. The
@@ -274,35 +335,10 @@ class MistralConversationsApi(
         val apiKey = options.apiKey
             ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
 
-        val clamped = options.reasoning?.let { clampThinkingLevel(model, it.toModelThinkingLevel()) }
-        val reasoning = if (clamped == ModelThinkingLevel.OFF) null else clamped
-        val useReasoning = model.reasoning && reasoning != null
-        val maxTokens = clampMaxTokensToContext(model, context, options.maxTokens ?: model.maxTokens)
-
         return stream(
             model,
             context,
-            MistralOptions(
-                apiKey = apiKey,
-                sessionId = options.sessionId,
-                temperature = options.temperature,
-                maxTokens = maxTokens,
-                timeoutMs = options.timeoutMs,
-                maxRetries = options.maxRetries,
-                maxRetryDelayMs = options.maxRetryDelayMs,
-                env = options.env,
-                headers = options.headers,
-                toolChoice = options.toolChoice?.toToolChoice(),
-                cacheRetention = options.cacheRetention,
-                onPayload = options.onPayload,
-                onResponse = options.onResponse,
-                promptMode = if (useReasoning && usesPromptModeReasoning(model)) MistralPromptMode.REASONING else null,
-                reasoningEffort = if (useReasoning && usesReasoningEffort(model)) {
-                    mapReasoningEffort(model, reasoning!!)
-                } else {
-                    null
-                },
-            ),
+            buildMistralOptions(model, context, options).copy(apiKey = apiKey),
         )
     }
 
