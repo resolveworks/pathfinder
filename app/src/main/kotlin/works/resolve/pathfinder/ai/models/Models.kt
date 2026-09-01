@@ -103,6 +103,28 @@ class Models(
     fun getModel(providerId: String, modelId: String): Model? =
         getProvider(providerId)?.models?.firstOrNull { it.id == modelId }
 
+    /**
+     * Whether auth is configured for a provider, ported from pi's
+     * `Models.checkAuth` (packages/ai/src/models.ts:511) reduced to a
+     * boolean: an unregistered provider or one with no credential resolves
+     * to false, a resolvable credential (API key or OAuth) to true. Like
+     * upstream's `resolveProviderAuth` path, resolution reads the stored
+     * credential — lazily and per call, so a rotated key is observed on the
+     * next check. A resolver failure is an unconfigured provider (false),
+     * not an exception, so callers treat it as pi's `checkAuth → undefined`.
+     */
+    suspend fun checkAuth(providerId: String): Boolean {
+        val provider = byId[providerId] ?: return false
+        val resolver = provider.authResolver ?: return false
+        return try {
+            resolver(null, emptyMap()) != null
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            false
+        }
+    }
+
     companion object {
         /**
          * Port of pi's models.ts `modelsAreEqual` (packages/ai/src/models.ts,

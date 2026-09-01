@@ -56,6 +56,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -189,6 +191,16 @@ class AgentSession(
     @Volatile
     private var compactionInProgress = false
 
+    /**
+     * Serializes session-tree mutations that can race a live switch: pi's
+     * session manager is single-threaded JS, but here [setModel] may append a
+     * model_change from any coroutine while a prompt's message_end handler
+     * (or an embedded compaction/navigation) appends concurrently — a lost
+     * update would silently drop a tree entry. Narrow adaptation; appends
+     * remain order-of-acquisition, matching upstream's call order.
+     */
+    private val conversationMutex = Mutex()
+
     private val _events = MutableSharedFlow<AgentEvent>()
 
     /**
@@ -290,6 +302,43 @@ class AgentSession(
             )
         }
         promptJob?.cancel()
+    }
+
+    /**
+     * Select the model for subsequent prompts, ported from pi's
+     * `AgentSession.setModel` (agent-session.ts:1657): auth for the target
+     * provider is validated first (pi's `modelRuntime.checkAuth`, throwing
+     * "No API key for provider/id" when unconfigured), then the agent's
+     * model state is swapped and a `model_change` entry is appended to the
+     * session tree as a child of the current leaf, advancing the leaf — so a
+     * switch between two prompts splits the tree exactly like any other
+     * entry, and the active-path projection restores the model on reload.
+     *
+     * In-flight behavior follows pi: there is no idle guard. The active run
+     * keeps its start-of-run model (the agent snapshots it per prompt, see
+     * [Agent.setModel]); the model_change lands wherever the leaf is when
+     * the switch happens, and any later message_end appends beneath it. A
+     * switch during compaction is equally legal — the summarizer already
+     * captured its model argument.
+     *
+     * Exclusions (no surface here): pi's `options.persist` global-default
+     * write (settings persistence is out of scope), the `model_select`
+     * extension event and `cycleModel` (no extension runner / no model
+     * cycler), and thinking-level re-application (not ported). Auth checking
+     * goes through the injected [models] stack ([Models.checkAuth]); a
+     * session without one (previews) cannot switch and throws.
+     *
+     * @throws IllegalStateException when the provider is unregistered or
+     *   unauthenticated, mirroring pi's `No API key` error.
+     */
+    suspend fun setModel(model: Model) {
+        val models = this.models
+            ?: throw IllegalStateException("No model stack available for setModel")
+        if (!models.checkAuth(model.provider)) {
+            throw IllegalStateException("No API key for ${model.provider}/${model.id}")
+        }
+        agent.setModel(model)
+        updateConversation { it.appendModelChange(model.provider, model.id) }
     }
 
     /**
@@ -461,14 +510,14 @@ class AgentSession(
                     },
                     usage = summary.usage,
                 )
-                conversation = Conversation(conversation.entries + entry, entry.id)
+                updateConversation { Conversation(it.entries + entry, entry.id) }
                 summaryEntry = entry
             } else if (newLeafId == null) {
                 // No summary, navigating to root - reset leaf.
-                conversation = conversation.resetLeaf()
+                updateConversation { it.resetLeaf() }
             } else {
                 // No summary, navigating to a non-root entry.
-                conversation = conversation.branch(newLeafId)
+                updateConversation { it.branch(newLeafId) }
             }
 
             // Update agent state (the session-context projection includes
@@ -560,6 +609,11 @@ class AgentSession(
         operationRecorder?.append(record)
     }
 
+    /** Mutate the session tree under [conversationMutex] (see its KDoc). */
+    private suspend fun updateConversation(transform: (Conversation) -> Conversation) {
+        conversationMutex.withLock { conversation = transform(conversation) }
+    }
+
     /**
      * Reduce a loop event into session state, re-emit it to [events], and run
      * the session-level tracking pi does in `_handleAgentEvent`
@@ -579,7 +633,7 @@ class AgentSession(
                 // is the persistence unit and is append-only, so removed
                 // agent-state messages (auto-retry, overflow recovery) stay
                 // in history exactly like pi.
-                conversation = conversation.append(event.message)
+                updateConversation { it.append(event.message) }
                 val assistant = event.message as? AssistantMessage
                 if (assistant != null) {
                     lastAssistantMessage = assistant
@@ -847,14 +901,16 @@ class AgentSession(
 
             // Single append point: the tree either gains the compaction entry
             // or does not — an abort mid-summarization leaves it untouched.
-            conversation = conversation.appendCompaction(
-                summary = compactResult.summary,
-                retainedTail = compactResult.retainedTail,
-                tokensBefore = compactResult.tokensBefore,
-                details = compactResult.details,
-                usage = compactResult.usage,
-                id = resultEntryId,
-            )
+            updateConversation {
+                it.appendCompaction(
+                    summary = compactResult.summary,
+                    retainedTail = compactResult.retainedTail,
+                    tokensBefore = compactResult.tokensBefore,
+                    details = compactResult.details,
+                    usage = compactResult.usage,
+                    id = resultEntryId,
+                )
+            }
             val sessionContext = buildSessionContext(conversation.activeEntries())
             agent.replaceTranscript(sessionContext)
             val estimatedTokensAfter = sessionContext.sumOf { estimateMessageTokens(it) }

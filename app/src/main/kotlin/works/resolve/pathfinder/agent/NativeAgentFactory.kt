@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.agent
 
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
+import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.models.Models
 import works.resolve.pathfinder.ai.models.ResolvedAuth
@@ -73,13 +74,21 @@ class NativeAgentFactory(
         // the catalog model with its normalized base URL.
         val effectiveModel = model.copy(baseUrl = normalizeBaseUrl(model.baseUrl))
 
-        val provider = entry.toRuntimeProvider(
-            transport = transport,
-            retry = retry,
-            authResolver = catalogAuthResolver(entry, credentials, authContext, authRegistry),
-            webSocketTransport = webSocketTransport,
+        // Register EVERY catalog provider, not just the initial one: the
+        // models stack is what makes live model switching (AgentSession.setModel)
+        // work across providers — the next prompt resolves auth and the API
+        // from the same stack. Credential resolution stays lazy per request
+        // via each provider's resolver, exactly as for the initial provider.
+        val models = Models(
+            catalog.providers.map { entry ->
+                entry.toRuntimeProvider(
+                    transport = transport,
+                    retry = retry,
+                    authResolver = catalogAuthResolver(entry, credentials, authContext, authRegistry),
+                    webSocketTransport = webSocketTransport,
+                )
+            },
         )
-        val models = Models(listOf(provider))
 
         // Session facade over the single-run agent (pi's AgentSession over
         // Agent): retry budget from settings, tree ownership included.
@@ -101,6 +110,25 @@ class NativeAgentFactory(
             compactionSettings = settings.compaction,
             models = models,
         )
+    }
+
+    /**
+     * Resolve a catalog provider/model pair to the effective request model
+     * (pi's requestModel): validates provider, model, and API support with
+     * the same errors as [create], and stamps the normalized base URL. This
+     * is the seam for live switching — callers obtain the target model here
+     * and pass it to [AgentSession.setModel]; the created session's models
+     * stack serves any catalog provider, not just the initial one.
+     */
+    fun resolveModel(providerId: String, modelId: String): Model {
+        val entry = catalog.getProvider(providerId)
+            ?: throw IllegalArgumentException("Unsupported provider: $providerId")
+        val model = entry.model(modelId)
+            ?: throw IllegalArgumentException("Unknown model '$modelId' for provider '$providerId'")
+        require(ChatApiRegistry.isSupported(model.api)) {
+            "Unsupported API '${model.api}' for provider '$providerId' (model '$modelId')"
+        }
+        return model.copy(baseUrl = normalizeBaseUrl(model.baseUrl))
     }
 }
 

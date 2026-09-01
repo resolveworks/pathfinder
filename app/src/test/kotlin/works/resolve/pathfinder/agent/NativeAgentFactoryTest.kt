@@ -412,6 +412,67 @@ class NativeAgentFactoryTest {
         }
     }
 
+    // ---- live model switching (pi agent-session setModel) ----
+
+    @Test
+    fun `resolveModel validates and normalizes a catalog model for switching`() {
+        val factory = NativeAgentFactory(FakeCredentialStore(ApiKeyCredential("k")), catalog, RecordingTransport())
+        val resolved = factory.resolveModel("github-copilot", "gpt-4.1")
+        assertEquals("gpt-4.1", resolved.id)
+        assertEquals("github-copilot", resolved.provider)
+        assertEquals("https://api.individual.githubcopilot.com", resolved.baseUrl)
+
+        assertFailsWith<IllegalArgumentException> { factory.resolveModel("nope", "gpt-4.1") }
+        assertFailsWith<IllegalArgumentException> { factory.resolveModel("zai", "gpt-4.1") }
+    }
+
+    @Test
+    fun `switching to another catalog provider routes the next prompt cross-provider`() {
+        runBlocking {
+            // GitHub Copilot needs a token credential for the auth check.
+            val store = FakeCredentialStore(ApiKeyCredential("gh-factory-test-token"))
+            val transport = RecordingTransport()
+            val native = NativeAgentFactory(credentials = store, catalog = catalog, transport = transport)
+            val agent = native.create(settings(), "s1", emptyConversation())
+
+            agent.prompt("ping") // initial provider: zai/glm-4.7
+            assertEquals("https://api.z.ai/api/coding/paas/v4/chat/completions", transport.requests[0].url)
+
+            agent.setModel(native.resolveModel("github-copilot", "gpt-4.1"))
+            agent.prompt("pong")
+
+            assertEquals(2, transport.requests.size)
+            val switched = transport.requests[1]
+            assertEquals("https://api.individual.githubcopilot.com/chat/completions", switched.url)
+            assertEquals("gh-factory-test-token", switched.bearerToken)
+            val body = Json.parseToJsonElement(String(switched.body)).jsonObject
+            assertEquals("gpt-4.1", body["model"]!!.jsonPrimitive.content)
+
+            // Transcript preserved across the provider switch, and the tree
+            // recorded the model_change between the two turns.
+            val state = agent.state.value
+            assertEquals(4, state.messages.size)
+            val entries = agent.conversation.entries
+            assertTrue(entries[2] is works.resolve.pathfinder.data.sessions.ModelChangeEntry)
+            assertEquals("Hi", ((state.messages[1] as works.resolve.pathfinder.ai.core.AssistantMessage).content.single() as TextContent).text)
+        }
+    }
+
+    @Test
+    fun `setModel rejects a provider without a stored credential`() {
+        runBlocking {
+            // No credential stored at all; github-copilot is unconfigured.
+            val store = FakeCredentialStore(null)
+            val native = NativeAgentFactory(credentials = store, catalog = catalog, transport = RecordingTransport())
+            val agent = native.create(settings(), "s1", emptyConversation())
+
+            val error = runCatching { agent.setModel(native.resolveModel("github-copilot", "gpt-4.1")) }.exceptionOrNull()
+            assertTrue(error is IllegalStateException)
+            assertTrue((error as IllegalStateException).message!!.contains("No API key for github-copilot/gpt-4.1"))
+            assertEquals("glm-4.7", agent.model.id)
+        }
+    }
+
     @Test
     fun `an incomplete credential resolves to null and surfaces as a single error event`() {
         runBlocking {
