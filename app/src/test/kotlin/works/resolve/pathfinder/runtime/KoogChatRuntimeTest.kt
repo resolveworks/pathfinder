@@ -424,21 +424,33 @@ class KoogChatRuntimeTest {
     }
 
     @Test
-    fun selectModelAndSetThinkingAreRejectedWhileStreaming() = runTest {
-        val runtime = runtime(frames = { flow { awaitCancellation() } })
+    fun selectModelAndSetThinkingWhileStreamingApplyToTheNextPrompt() = runTest {
+        // pi's model-as-state semantics: a swap during an in-flight response
+        // is never rejected — the stream finishes on the model it started
+        // with, and the next prompt executes against the new selection.
+        val seenProviders = mutableListOf<LLMProvider>()
+        val openai = ProviderDescriptors.byId("openai")!!
+        val openaiModel = openai.models.first()
+        val runtime = runtime(
+            keys = mapOf("anthropic" to "test-key", "openai" to "test-key"),
+            seenProviders = seenProviders,
+            frames = { flow { awaitCancellation() } },
+        )
         val session = newSession(runtime)
         session.prompt("hi")
 
         assertTrue(session.state.value.isStreaming)
-        val anthropic = ProviderDescriptors.byId("anthropic")!!
-        assertFailsWith<IllegalStateException> {
-            session.selectModel(anthropic.models.first(), ThinkingOption.Default)
-        }
-        assertFailsWith<IllegalStateException> {
-            session.setThinking(ThinkingOption.Off)
-        }
+        // Neither call throws while streaming.
+        session.selectModel(openaiModel, ThinkingOption.Default)
+        session.setThinking(ThinkingOption.Off)
+        assertTrue(session.state.value.isStreaming) // in-flight response unaffected
 
         session.abort()
+        session.prompt("again")
+
+        // The first request went to the session's original provider (it was
+        // captured when the prompt started); the second to the swapped one.
+        assertEquals(listOf(LLMProvider.Anthropic, LLMProvider.OpenAI), seenProviders)
     }
 
     @Test

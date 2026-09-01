@@ -44,15 +44,16 @@ interface ChatRuntimeSession {
 
     /**
      * Swaps in a new [model] (with its [thinking] option) for subsequent
-     * prompts. The conversation tree is untouched: the next prompt simply
-     * executes against the new selection. Illegal while
-     * [ChatRuntimeState.isStreaming] is true.
+     * prompts. The conversation tree is untouched, and an in-flight
+     * response (if any) is unaffected — each prompt captures the current
+     * selection when it starts, so the next prompt executes against the
+     * new selection (pi's model-as-state semantics).
      */
     fun selectModel(model: ModelDescriptor, thinking: ThinkingOption)
 
     /**
-     * Applies [option] to the current model for subsequent prompts. Illegal
-     * while streaming (same rule as [selectModel]).
+     * Applies [option] to the current model for subsequent prompts. An
+     * in-flight response is unaffected (same rule as [selectModel]).
      */
     fun setThinking(option: ThinkingOption)
 

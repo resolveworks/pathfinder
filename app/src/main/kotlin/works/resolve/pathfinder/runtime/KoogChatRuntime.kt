@@ -364,7 +364,10 @@ private class KoogChatSession(
     private var currentThinking: ThinkingOption = thinking
 
     override fun selectModel(model: ModelDescriptor, thinking: ThinkingOption) {
-        check(!state.value.isStreaming) { "Cannot change the model while a response is streaming" }
+        // No streaming gate: [runPrompt] captures provider/model/thinking
+        // into locals before its first suspension, so an in-flight response
+        // is unaffected by a swap; the next prompt reads the new values
+        // (pi's model-as-state semantics — switching is never dropped).
         currentProvider = requireNotNull(ProviderDescriptors.byId(model.providerId)) {
             "Unknown provider: ${model.providerId}"
         }
@@ -373,7 +376,7 @@ private class KoogChatSession(
     }
 
     override fun setThinking(option: ThinkingOption) {
-        check(!state.value.isStreaming) { "Cannot change the thinking option while a response is streaming" }
+        // Same reasoning as [selectModel]: applies to the next prompt.
         currentThinking = option
     }
 

@@ -148,10 +148,10 @@ class ChatViewModel(
     }
 
     /**
-     * Swaps the chat's model: applied to the live session immediately (the
-     * transcript is untouched — the next prompt executes against the new
-     * model) and persisted as the startup default. Busy-rejected while
-     * streaming.
+     * Swaps the chat's model: applied to the live session immediately and
+     * persisted as the startup default. The transcript is untouched and an
+     * in-flight response is unaffected — the next prompt executes against
+     * the new model, so a pick while streaming is never dropped.
      */
     fun selectModel(option: ModelOption) {
         viewModelScope.launch { selectModelInternal(option) }
@@ -159,7 +159,8 @@ class ChatViewModel(
 
     /**
      * Applies a thinking option to the current model: live session plus a
-     * per-model persisted preference. Busy-rejected while streaming.
+     * per-model persisted preference. An in-flight response is unaffected
+     * (same rule as [selectModel]).
      */
     fun setThinking(option: ThinkingOption) {
         viewModelScope.launch { setThinkingInternal(option) }
@@ -739,7 +740,6 @@ class ChatViewModel(
      * launch falls back to the previously persisted model.
      */
     private suspend fun selectModelInternal(option: ModelOption) {
-        if (rejectWhileBusy()) return
         val currentSession = session ?: return
         val provider = ProviderDescriptors.byId(option.providerId) ?: return
         val model = provider.model(option.modelId) ?: return
@@ -749,12 +749,7 @@ class ChatViewModel(
             model.model,
             currentSettings.thinkingPrefs[modelRef],
         )
-        try {
-            currentSession.selectModel(model, thinking)
-        } catch (e: IllegalStateException) {
-            setError(ERROR_BUSY)
-            return
-        }
+        currentSession.selectModel(model, thinking)
         try {
             settingsRepository.setProviderId(option.providerId)
             settingsRepository.setModelId(option.modelId)
@@ -774,14 +769,8 @@ class ChatViewModel(
 
     /** Applies a thinking pick to the live session and persists it per model. */
     private suspend fun setThinkingInternal(option: ThinkingOption) {
-        if (rejectWhileBusy()) return
         val currentSession = session ?: return
-        try {
-            currentSession.setThinking(option)
-        } catch (e: IllegalStateException) {
-            setError(ERROR_BUSY)
-            return
-        }
+        currentSession.setThinking(option)
         val modelRef = "${currentSettings.providerId}/${currentSettings.modelId}"
         try {
             settingsRepository.setThinkingPref(modelRef, option.label)
