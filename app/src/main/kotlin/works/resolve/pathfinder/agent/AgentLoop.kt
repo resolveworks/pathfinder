@@ -146,6 +146,17 @@ sealed class AgentEvent {
     enum class CompactionReason { MANUAL, THRESHOLD, OVERFLOW }
 
     /**
+     * Summarization-retry sources, pi's `_summarizationRetryCallbacks`
+     * source parameter (agent-session.ts ~2858): a branch-summary
+     * summarization or a compaction summarization carrying its reason.
+     */
+    sealed interface SummarizationSource {
+        data object BranchSummary : SummarizationSource
+
+        data class Compaction(val reason: CompactionReason) : SummarizationSource
+    }
+
+    /**
      * Payload of [AgentEvent.CompactionEnd], pi's `CompactionResult`
      * (coding-agent core/compaction/compaction.ts) reduced to the fields of
      * the landed harness `CompactResult` plus `estimatedTokensAfter`:
@@ -201,12 +212,11 @@ sealed class AgentEvent {
 
     /**
      * A summarization retry attempt starts, pi's
-     * `summarization_retry_attempt_start` (agent-session.ts:177) reduced to
-     * the compaction source: the `branchSummary` source has no counterpart
-     * in pathfinder (branch summarization is not ported).
+     * `summarization_retry_attempt_start` (agent-session.ts:177): the
+     * summarization call's source — branch summary or a compaction run.
      */
     data class SummarizationRetryAttemptStart(
-        val reason: CompactionReason,
+        val source: SummarizationSource,
     ) : AgentEvent()
 
     /** A summarization retry sequence finished, pi's `summarization_retry_finished` (agent-session.ts:183). */

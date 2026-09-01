@@ -14,7 +14,9 @@ import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.agent.AgentFactory
+import works.resolve.pathfinder.agent.LaneRecovery
 import works.resolve.pathfinder.agent.OperationLifecycleRecorder
+import works.resolve.pathfinder.agent.classifyLaneRecovery
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
@@ -32,6 +34,7 @@ import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.sessions.LaneRecord
 import works.resolve.pathfinder.data.sessions.MessageEntry
 import works.resolve.pathfinder.data.sessions.Session
+import works.resolve.pathfinder.data.sessions.SessionState
 import works.resolve.pathfinder.data.sessions.SessionRepository
 import works.resolve.pathfinder.data.sessions.SessionSummary
 import works.resolve.pathfinder.telemetry.NOOP_TELEMETRY_CONTEXT
@@ -290,38 +293,45 @@ class ChatViewModel(
     }
 
     /**
-     * Navigates the conversation tree to [id] (pi's navigateTree, reduced:
-     * no summarization). Busy-rejected while streaming; selecting the
-     * current leaf is a no-op error; unknown ids are a safe error. A user
-     * message target re-edits: the leaf moves to its parent (or resets to
-     * root) and its text is restored into the draft, so the next send forks
-     * as a sibling. Any other target moves the leaf to that entry.
+     * Navigates the conversation tree to [id] (pi's navigateTree). 
+     * Busy-rejected while streaming; selecting the current leaf is a no-op
+     * error; unknown ids are a safe error. A user message target re-edits:
+     * the leaf moves to its parent (or resets to root) and its text is
+     * restored into the draft, so the next send forks as a sibling. Any
+     * other target moves the leaf to that entry.
      */
     fun navigateToTreeEntry(id: String) {
+        navigateToTreeEntry(id, summarize = false)
+    }
+
+    /**
+     * Navigation with branch summarization: when [summarize] is set (pi's
+     * tree-selector "Summarize" choice), the abandoned branch segment is
+     * summarized and a branch-summary entry is appended at the target
+     * position, both wrapped in a durable navigation operation record
+     * (see [AgentSession.navigateTree]).
+     */
+    fun navigateToTreeEntry(id: String, summarize: Boolean) {
         viewModelScope.launch {
             if (rejectWhileBusy()) return@launch
             if (id == activeConversation.leafId) {
                 setError(ERROR_ALREADY_AT_POINT)
                 return@launch
             }
-            val entry = activeConversation.entry(id)
-            if (entry == null) {
+            val session = agent ?: return@launch
+            val result = try {
+                session.navigateTree(id, AgentSession.NavigateTreeOptions(summarize = summarize))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IllegalStateException) {
+                setError(ERROR_BUSY)
+                return@launch
+            } catch (e: IllegalArgumentException) {
                 setError(ERROR_ENTRY_MISSING)
                 return@launch
             }
-            val userMessage = (entry as? MessageEntry)?.message as? UserMessage
-            val updated = if (userMessage != null) {
-                // Re-edit: the next append lands as a sibling of the target.
-                val parent = entry.parentId?.let { pid -> activeConversation.entry(pid) }
-                if (parent != null) activeConversation.branch(parent.id) else activeConversation.resetLeaf()
-            } else {
-                activeConversation.branch(id)
-            }
-            val reeditText = userMessage
-                ?.content
-                ?.filterIsInstance<TextContent>()
-                ?.joinToString("") { part -> part.text }
-            val session = agent ?: return@launch
+            if (result.cancelled) return@launch
+            val updated = session.conversation
             // pi's reducer folds branch configuration root→leaf; the agent
             // runs on the folded model. Divergence: an agent rebuild only
             // happens when the fold changes the model (pi swaps state
@@ -332,7 +342,6 @@ class ChatViewModel(
             val active: AgentSession = if (
                 session.model.provider == seeded.providerId && session.model.id == seeded.modelId
             ) {
-                session.replaceConversation(updated)
                 session
             } else {
                 val newAgent = tryCreateAgent(seeded, activeSession!!.id, updated) ?: return@launch
@@ -344,7 +353,7 @@ class ChatViewModel(
                     // pi's navigateTree loads the re-edit text into the
                     // editor only when it is empty; a typed draft is never
                     // clobbered by navigation.
-                    draft = if (it.draft.isBlank()) reeditText ?: it.draft else it.draft,
+                    draft = if (it.draft.isBlank()) result.editorText ?: it.draft else it.draft,
                     messages = projectCommitted(active.agent.state.value.messages, updated),
                     treeRows = buildTreeRows(updated, it.treeFilter),
                 )
@@ -535,6 +544,11 @@ class ChatViewModel(
         bindAgent(agent)
         val conversation = agent.conversation
         val summaries = sessionStore.summaries()
+        // Load-time lane recovery (pi's findOpenOperations limit-2 contract,
+        // reduced by the reducer's classification): an interrupted run —
+        // its operation_finished never persisted — stays distinguishable
+        // from a finished one in the UI state.
+        val laneRecovery = laneRecoveryFor(session.id)
         updateState {
             it.copy(
                 activeSessionId = session.id,
@@ -544,6 +558,7 @@ class ChatViewModel(
                 streamingMessage = null,
                 treeRows = buildTreeRows(conversation, it.treeFilter),
                 sessionSummaries = summaries,
+                laneRecovery = laneRecovery,
             )
         }
         // Initial-configuration seeding (pi's sdk.ts new-session path) may
@@ -552,6 +567,21 @@ class ChatViewModel(
         // entries, so this never saves on a plain load or switch.
         if (activeConversation.entries.size > persistedEntryCount) enqueuePersist()
         return true
+    }
+
+    /**
+     * Classifies the active session's open operations (the reducer's
+     * [classifyLaneRecovery] over the store's findOpenOperations seed). A
+     * failing read degrades to [LaneRecovery.Idle] — classification is
+     * advisory UI state, never a load blocker.
+     */
+    private suspend fun laneRecoveryFor(sessionId: String): LaneRecovery = try {
+        classifyLaneRecovery(sessionStore.openOperations(sessionId, SessionState.LANE_MAIN, limit = 2))
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        recordDegradation("lane_recovery", e)
+        LaneRecovery.Idle
     }
 
     /**

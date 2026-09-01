@@ -540,8 +540,8 @@ class AgentCompactionTest {
         assertEquals(2000L, scheduled.delayMs)
         assertEquals("terminated", scheduled.errorMessage)
         assertEquals(
-            listOf(AgentEvent.CompactionReason.THRESHOLD),
-            events.filterIsInstance<AgentEvent.SummarizationRetryAttemptStart>().map { it.reason },
+            listOf(AgentEvent.SummarizationSource.Compaction(AgentEvent.CompactionReason.THRESHOLD)),
+            events.filterIsInstance<AgentEvent.SummarizationRetryAttemptStart>().map { it.source },
         )
         assertEquals(1, events.filterIsInstance<AgentEvent.SummarizationRetryFinished>().size)
         // The retried summary succeeded, so compaction completed.

@@ -4,6 +4,7 @@ import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.StopReason
+import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.models.Models
 import works.resolve.pathfinder.ai.utils.Retry
@@ -13,17 +14,25 @@ import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.ai.utils.estimateMessageTokens
 import works.resolve.pathfinder.ai.utils.isContextOverflow
 import works.resolve.pathfinder.ai.utils.isRecoverableLength
+import works.resolve.pathfinder.agent.compaction.BranchSummaryCallResult
+import works.resolve.pathfinder.agent.compaction.BranchSummaryErrorCode
+import works.resolve.pathfinder.agent.compaction.BranchSummaryResult
 import works.resolve.pathfinder.agent.compaction.CompactionErrorCode
 import works.resolve.pathfinder.agent.compaction.CompactionSettings
 import works.resolve.pathfinder.agent.compaction.CompactionResult as CompactionOutcome
 import works.resolve.pathfinder.agent.compaction.DEFAULT_COMPACTION_SETTINGS
+import works.resolve.pathfinder.agent.compaction.GenerateBranchSummaryOptions
 import works.resolve.pathfinder.agent.compaction.buildSessionContext
+import works.resolve.pathfinder.agent.compaction.collectEntriesForBranchSummary
 import works.resolve.pathfinder.agent.compaction.compact
 import works.resolve.pathfinder.agent.compaction.estimateContextTokens
+import works.resolve.pathfinder.agent.compaction.generateBranchSummary
 import works.resolve.pathfinder.agent.compaction.getLatestCompactionEntry
 import works.resolve.pathfinder.agent.compaction.prepareCompaction
 import works.resolve.pathfinder.agent.compaction.shouldCompact
+import works.resolve.pathfinder.data.sessions.BranchSummaryEntry
 import works.resolve.pathfinder.data.sessions.Conversation
+import works.resolve.pathfinder.data.sessions.MessageEntry
 import works.resolve.pathfinder.data.sessions.LaneRecord
 import works.resolve.pathfinder.data.sessions.OperationIntent
 import works.resolve.pathfinder.data.sessions.OperationOutcome
@@ -31,6 +40,10 @@ import works.resolve.pathfinder.data.sessions.RecordError
 import works.resolve.pathfinder.data.sessions.SessionState
 import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.data.settings.RetrySettings
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -84,7 +97,7 @@ interface OperationLifecycleRecorder {
  * queues and queued-message continuation (`_queueSteer`/`_queueFollowUp`,
  * `agent.hasQueuedMessages()`), extension commands and hooks, prompt
  * templates/skills, manual compaction (`/compact` → `AgentSession.compact`),
- * branch summarization, and the `session_before_compact`/`session_compact`/
+ * and the `session_before_compact`/`session_compact`/
  * `session_compact_failed` extension events (pathfinder has no extension
  * runner; only the default summarization path is ported).
  */
@@ -298,6 +311,208 @@ class AgentSession(
             agent.replaceTranscript(updated.activeMessages())
         }
     }
+
+    // ---- tree navigation (pi agent-session.ts navigateTree ~3092) ----
+
+    /** Options of [navigateTree] (pi's navigateTree options object). */
+    data class NavigateTreeOptions(
+        /** Whether the user wants the abandoned branch summarized. */
+        val summarize: Boolean = false,
+        /** Custom instructions appended to (or replacing) the default prompt. */
+        val customInstructions: String? = null,
+        /** Replace the default prompt with [customInstructions] instead of appending. */
+        val replaceInstructions: Boolean = false,
+    )
+
+    /** Result of [navigateTree] (pi's navigateTree return shape). */
+    data class NavigationResult(
+        /** Re-edit text for a user-message target (goes to the editor only when empty). */
+        val editorText: String? = null,
+        val cancelled: Boolean = false,
+        val aborted: Boolean = false,
+        /** The appended branch-summary entry, when one was generated. */
+        val summaryEntry: BranchSummaryEntry? = null,
+    )
+
+    /**
+     * Navigate to a different node in the session tree, ported from pi's
+     * `navigateTree` (agent-session.ts ~3092): unlike fork, this stays in
+     * the same session. The navigation wraps in a durable navigation
+     * operation (operation_started with the navigation intent — targetId,
+     * summarize, customInstructions?, and the pre-minted summaryEntryId when
+     * summarizing — then operation_finished), honoring the
+     * single-open-operation-per-lane invariant by being idle-only.
+     *
+     * Flow (pi's, verbatim order): no-op when already at the target; the
+     * branch segment to abandon is collected
+     * ([collectEntriesForBranchSummary]), summarized when requested and the
+     * provider stack is available, and a [BranchSummaryEntry] is appended at
+     * the navigation target position (pi's `branchWithSummary`, whose fromId
+     * is the abandoned leaf); a user-message target re-edits instead — the
+     * leaf moves to the target's parent (or root) and the text is returned
+     * as [NavigationResult.editorText]. Finally the agent transcript is
+     * rebuilt from the session context (branch summaries project into
+     * context via [buildSessionContext]).
+     *
+     * Exclusions: pi's `session_before_tree`/`session_tree` extension hooks
+     * and extension-supplied summaries have no extension runner here; entry
+     * labels (pi's `label` option) have no fact surface yet. Aborts are
+     * coroutine cancellation (the established compaction divergence).
+     *
+     * @throws IllegalStateException when a prompt/compaction is running or
+     *   summarization was requested without a provider stack.
+     * @throws IllegalArgumentException when [targetId] does not exist.
+     */
+    suspend fun navigateTree(
+        targetId: String,
+        options: NavigateTreeOptions = NavigateTreeOptions(),
+    ): NavigationResult {
+        synchronized(lock) {
+            if (active || compactionInProgress) {
+                throw IllegalStateException(
+                    "Wait for the current response to finish before navigating the session tree.",
+                )
+            }
+        }
+
+        val oldLeafId = conversation.leafId
+        if (targetId == oldLeafId) {
+            return NavigationResult(cancelled = false)
+        }
+
+        val summarizationModels = models
+        if (options.summarize && summarizationModels == null) {
+            throw IllegalStateException("No model available for summarization")
+        }
+
+        val targetEntry = conversation.entry(targetId)
+            ?: throw IllegalArgumentException("Entry $targetId not found")
+
+        // Collect entries to summarize (from old leaf to common ancestor).
+        val collected = collectEntriesForBranchSummary(conversation, oldLeafId, targetId)
+
+        // The summary entry id is minted up front so the navigation intent
+        // can name its summaryEntryId (the compaction intent precedent).
+        val summaryEntryId = uuidv7().takeIf { options.summarize }
+        beginOperation(
+            navigationIntent(
+                targetId = targetId,
+                summarize = options.summarize,
+                customInstructions = options.customInstructions,
+                summaryEntryId = summaryEntryId,
+            ),
+        )
+        try {
+            // Run the default summarizer when needed (no extension runner;
+            // see method KDoc).
+            var summary: BranchSummaryResult? = null
+            if (options.summarize && collected.entries.isNotEmpty()) {
+                when (
+                    val outcome = generateBranchSummary(
+                        collected.entries,
+                        GenerateBranchSummaryOptions(
+                            models = summarizationModels!!,
+                            model = model,
+                            customInstructions = options.customInstructions,
+                            replaceInstructions = options.replaceInstructions,
+                            retry = RetryPolicy(
+                                enabled = retrySettings.enabled,
+                                maxRetries = retrySettings.maxRetries,
+                                baseDelayMs = retrySettings.baseDelayMs,
+                            ),
+                            callbacks = summarizationRetryCallbacks(AgentEvent.SummarizationSource.BranchSummary),
+                            clock = clock,
+                        ),
+                    )
+                ) {
+                    is BranchSummaryCallResult.Err -> {
+                        if (outcome.error.code == BranchSummaryErrorCode.ABORTED) {
+                            finishOperation(OperationOutcome.ABORTED)
+                            return NavigationResult(cancelled = true, aborted = true)
+                        }
+                        throw outcome.error
+                    }
+                    is BranchSummaryCallResult.Ok -> summary = outcome.value
+                }
+            }
+
+            // Determine the new leaf position based on target type.
+            val userMessage = (targetEntry as? MessageEntry)?.message as? UserMessage
+            val newLeafId: String? = if (userMessage != null) targetEntry.parentId else targetId
+            val editorText = userMessage
+                ?.content
+                ?.filterIsInstance<TextContent>()
+                ?.joinToString("") { it.text }
+
+            // Switch leaf (with or without summary): the summary is attached
+            // at the navigation target position, not the old branch (pi's
+            // branchWithSummary — fromId is the abandoned leaf, or "root").
+            var summaryEntry: BranchSummaryEntry? = null
+            if (summary != null) {
+                val entry = BranchSummaryEntry(
+                    id = summaryEntryId!!,
+                    parentId = newLeafId,
+                    timestamp = clock.now().toEpochMilliseconds(),
+                    fromId = oldLeafId ?: "root",
+                    summary = summary.summary,
+                    details = buildJsonObject {
+                        put("readFiles", JsonArray(summary.readFiles.map(::JsonPrimitive)))
+                        put("modifiedFiles", JsonArray(summary.modifiedFiles.map(::JsonPrimitive)))
+                    },
+                    usage = summary.usage,
+                )
+                conversation = Conversation(conversation.entries + entry, entry.id)
+                summaryEntry = entry
+            } else if (newLeafId == null) {
+                // No summary, navigating to root - reset leaf.
+                conversation = conversation.resetLeaf()
+            } else {
+                // No summary, navigating to a non-root entry.
+                conversation = conversation.branch(newLeafId)
+            }
+
+            // Update agent state (the session-context projection includes
+            // the branch summary; pi assigns sessionContext.messages).
+            agent.replaceTranscript(buildSessionContext(conversation.activeEntries()))
+
+            finishOperation(OperationOutcome.COMPLETED)
+            return NavigationResult(editorText = editorText, cancelled = false, summaryEntry = summaryEntry)
+        } catch (e: CancellationException) {
+            finishOperation(OperationOutcome.ABORTED)
+            throw e
+        } catch (e: Exception) {
+            finishOperation(
+                OperationOutcome.FAILED,
+                RecordError(
+                    code = e::class.simpleName ?: "error",
+                    message = e.message ?: "navigation failed",
+                ),
+            )
+            throw e
+        }
+    }
+
+    /**
+     * The navigation operation intent payload (pi's navigation intent,
+     * harness/session/types.ts:105: targetId, summarize, customInstructions?,
+     * label?, summaryEntryId?). [label] is omitted until entry-label facts
+     * are ported (audit P1-3).
+     */
+    private fun navigationIntent(
+        targetId: String,
+        summarize: Boolean,
+        customInstructions: String?,
+        summaryEntryId: String?,
+    ): OperationIntent = OperationIntent(
+        kind = OperationIntent.Kind.NAVIGATION,
+        payload = buildJsonObject {
+            put("kind", "navigation")
+            put("targetId", targetId)
+            put("summarize", summarize)
+            customInstructions?.let { put("customInstructions", it) }
+            summaryEntryId?.let { put("summaryEntryId", it) }
+        },
+    )
 
     // ---- operation lifecycle records (pi's LaneRecord trio; audit P0-3) ----
 
@@ -593,7 +808,9 @@ class AgentSession(
                         maxRetries = retrySettings.maxRetries,
                         baseDelayMs = retrySettings.baseDelayMs,
                     ),
-                    callbacks = summarizationRetryCallbacks(reason),
+                    callbacks = summarizationRetryCallbacks(
+                        AgentEvent.SummarizationSource.Compaction(reason),
+                    ),
                     clock = clock,
                 )
             ) {
@@ -711,10 +928,10 @@ class AgentSession(
 
     /**
      * Retry callbacks for the summary LLM calls, pi's
-     * `_summarizationRetryCallbacks` (agent-session.ts ~2837) reduced to the
-     * compaction source (branchSummary excluded).
+     * `_summarizationRetryCallbacks` (agent-session.ts ~2837): the shared
+     * schedule/finish reporting plus the per-source attempt-start event.
      */
-    private fun summarizationRetryCallbacks(reason: AgentEvent.CompactionReason): RetryCallbacks =
+    private fun summarizationRetryCallbacks(source: AgentEvent.SummarizationSource): RetryCallbacks =
         RetryCallbacks(
             onRetryScheduled = { attempt, maxAttempts, delayMs, errorMessage ->
                 _events.emit(
@@ -722,7 +939,7 @@ class AgentSession(
                 )
             },
             onRetryAttemptStart = {
-                _events.emit(AgentEvent.SummarizationRetryAttemptStart(reason))
+                _events.emit(AgentEvent.SummarizationRetryAttemptStart(source))
             },
             onRetryFinished = { _, _, _ ->
                 _events.emit(AgentEvent.SummarizationRetryFinished)
