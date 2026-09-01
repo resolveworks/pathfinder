@@ -61,7 +61,8 @@ data class AgentState(
  * class has no retry behavior.
  */
 class Agent(
-    val model: Model,
+    /** Initial model (pi's AgentOptions.initialState.model); mutable via [setModel]. */
+    model: Model,
     val systemPrompt: String? = null,
     val streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
     /** Tools available to every run (pi's AgentOptions.initialState.tools). Copied into state. */
@@ -97,6 +98,27 @@ class Agent(
 
     private val _state = MutableStateFlow(AgentState(model = model, tools = tools.toList()))
     val state: StateFlow<AgentState> = _state.asStateFlow()
+
+    /**
+     * The currently selected model — state, not identity (pi keeps `model`
+     * inside AgentState, agent.ts:76; coding-agent's setModel assigns
+     * `agent.state.model`, agent-session.ts:1671). Reassigned, never mutated.
+     */
+    val model: Model get() = _state.value.model
+
+    /**
+     * Select the model for subsequent runs (pi's harness `setModel`,
+     * agent-harness.ts:425, and coding-agent's state assignment). Safe during
+     * an in-flight run: [prompt] snapshots the model into its loop config at
+     * run start (pi's createLoopConfig reads `_state.model`, agent.ts:515),
+     * so the active run keeps streaming from its original model and the next
+     * prompt uses the new one. Pure state assignment — validation and the
+     * session-tree model_change record are [AgentSession.setModel]'s job,
+     * exactly like pi's layering.
+     */
+    fun setModel(model: Model) {
+        reduce { it.copy(model = model) }
+    }
 
     /**
      * Serializes [processEvent] critical sections. Pi's processEvents is
@@ -147,13 +169,18 @@ class Agent(
         sawAgentEnd = false
 
         try {
+            // Snapshot the selected model for this run (pi's createLoopConfig
+            // builds the loop config — including `this._state.model` — once
+            // per run, agent.ts:509-515): a setModel during the run changes
+            // only later runs.
+            val runModel = _state.value.model
             val contextSnapshot = AgentContext(
                 systemPrompt = systemPrompt,
                 messages = _state.value.messages.toList(),
                 tools = _state.value.tools.toList(),
             )
             val config = AgentLoopConfig(
-                model = model,
+                model = runModel,
                 options = streamOptions,
                 streamFn = streamFn,
                 toolExecution = toolExecution,
@@ -250,6 +277,11 @@ class Agent(
      * boundary: one ABORTED/ERROR assistant message carried through
      * message_start/end, turn_end, and agent_end. Skipped when the low-level
      * loop already terminated normally, so no final message is duplicated.
+     *
+     * The synthesized message carries the *live* selected model, exactly
+     * like pi's handleRunFailure reading `this._state.model` (agent.ts:515)
+     * — a mid-run switch relabels the failure even though the failed run
+     * itself used its start-of-run snapshot.
      */
     private suspend fun handleRunFailure(aborted: Boolean, cause: Throwable? = null) {
         if (sawAgentEnd) return
