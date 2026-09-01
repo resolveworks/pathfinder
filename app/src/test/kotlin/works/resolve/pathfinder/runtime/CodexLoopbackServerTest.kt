@@ -13,9 +13,10 @@ import kotlin.test.assertTrue
 
 /**
  * Real-socket round trips against [CodexLoopbackServer] on an ephemeral
- * loopback port: the happy path (pi's success page + the full callback URL),
- * the skip-and-answer paths pi's server handles (foreign route, state
- * mismatch, missing code), and lifecycle (bind conflict, cancellation).
+ * loopback port: the happy path (pi's success page + the validated
+ * redirect outcome), the skip-and-answer paths pi's server handles (foreign
+ * route, state mismatch, missing code), the OAuth error redirect, and
+ * lifecycle (bind conflict, cancellation).
  */
 class CodexLoopbackServerTest {
 
@@ -24,7 +25,7 @@ class CodexLoopbackServerTest {
     }
 
     @Test
-    fun servesSuccessPageAndReturnsCallbackUrl() = runTest {
+    fun servesSuccessPageAndReturnsValidatedCode() = runTest {
         val server = CodexLoopbackServer(STATE)
         try {
             server.bind(0)
@@ -32,10 +33,7 @@ class CodexLoopbackServerTest {
             val response = exchange(server.port, callbackRequest("code=abc&state=$STATE"))
             assertTrue(response.startsWith("HTTP/1.1 200"), response)
             assertTrue(response.contains("Authentication successful"), response)
-            assertEquals(
-                "http://localhost:${server.port}/auth/callback?code=abc&state=$STATE",
-                redirect.await(),
-            )
+            assertEquals(RedirectResult.Success("abc"), redirect.await())
         } finally {
             server.close()
         }
@@ -50,10 +48,7 @@ class CodexLoopbackServerTest {
             val notFound = exchange(server.port, "GET /favicon.ico HTTP/1.1\r\nHost: localhost\r\n\r\n")
             assertTrue(notFound.startsWith("HTTP/1.1 404"), notFound)
             exchange(server.port, callbackRequest("code=abc&state=$STATE"))
-            assertEquals(
-                "http://localhost:${server.port}/auth/callback?code=abc&state=$STATE",
-                redirect.await(),
-            )
+            assertEquals(RedirectResult.Success("abc"), redirect.await())
         } finally {
             server.close()
         }
@@ -69,10 +64,7 @@ class CodexLoopbackServerTest {
             assertTrue(mismatch.startsWith("HTTP/1.1 400"), mismatch)
             assertTrue(mismatch.contains("State mismatch."), mismatch)
             exchange(server.port, callbackRequest("code=abc&state=$STATE"))
-            assertEquals(
-                "http://localhost:${server.port}/auth/callback?code=abc&state=$STATE",
-                redirect.await(),
-            )
+            assertEquals(RedirectResult.Success("abc"), redirect.await())
         } finally {
             server.close()
         }
@@ -88,8 +80,26 @@ class CodexLoopbackServerTest {
             assertTrue(missing.startsWith("HTTP/1.1 400"), missing)
             assertTrue(missing.contains("Missing authorization code."), missing)
             exchange(server.port, callbackRequest("code=abc&state=$STATE"))
+            assertEquals(RedirectResult.Success("abc"), redirect.await())
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun returnsErrorResultForErrorRedirect() = runTest {
+        val server = CodexLoopbackServer(STATE)
+        try {
+            server.bind(0)
+            val redirect = async(Dispatchers.IO) { server.awaitRedirect() }
+            val denied = exchange(
+                server.port,
+                callbackRequest("error=access_denied&error_description=User+canceled&state=$STATE"),
+            )
+            assertTrue(denied.startsWith("HTTP/1.1 400"), denied)
+            assertTrue(denied.contains("Sign-in failed: User canceled."), denied)
             assertEquals(
-                "http://localhost:${server.port}/auth/callback?code=abc&state=$STATE",
+                RedirectResult.ErrorResponse("access_denied", "User canceled"),
                 redirect.await(),
             )
         } finally {

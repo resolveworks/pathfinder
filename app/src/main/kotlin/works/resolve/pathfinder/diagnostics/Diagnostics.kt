@@ -34,7 +34,6 @@ internal enum class DiagnosticEvent(
     CODEX_BROWSER_CALLBACK_STATE_INVALID("codex.browser.callback_state_invalid", DiagnosticLevel.WARN),
     CODEX_BROWSER_CALLBACK_CODE_MISSING("codex.browser.callback_code_missing", DiagnosticLevel.WARN),
     CODEX_BROWSER_CALLBACK_ACCEPTED("codex.browser.callback_accepted", DiagnosticLevel.INFO),
-    CODEX_BROWSER_REDIRECT_INVALID("codex.browser.redirect_invalid", DiagnosticLevel.ERROR),
     CODEX_BROWSER_AUTHORIZATION_DENIED("codex.browser.authorization_denied", DiagnosticLevel.WARN),
     CODEX_BROWSER_REDIRECT_PAYLOAD_INVALID("codex.browser.redirect_payload_invalid", DiagnosticLevel.ERROR),
     CODEX_TOKEN_EXCHANGE_STARTED("codex.token.exchange_started", DiagnosticLevel.INFO),

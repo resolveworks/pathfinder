@@ -11,7 +11,6 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.Parameters
 import io.ktor.http.contentType
 import io.ktor.http.formUrlEncode
-import io.ktor.http.parseQueryString
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -21,7 +20,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import works.resolve.pathfinder.diagnostics.DiagnosticEvent
 import works.resolve.pathfinder.diagnostics.Diagnostics
-import java.net.URI
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -83,8 +81,8 @@ data class CodexTokens(
  *   default browser, and the fixed loopback redirect
  *   `http://localhost:1455/auth/callback` is caught by
  *   [CodexLoopbackServer] — exactly the mechanism pi's CLI uses on desktop
- *   (`startLocalOAuthServer`); the caught URL is handed back to
- *   [completeBrowserLogin], which validates it and exchanges the code.
+ *   (`startLocalOAuthServer`); the server's validated outcome is handed back
+ *   to [completeBrowserLogin], which exchanges the code.
  *
  * JWT account-id decode follows pi's `getAccountId`. Pure protocol component:
  * the HTTP client and clock are injected so tests can drive it with Ktor's
@@ -295,43 +293,26 @@ class CodexOAuthClient(
     }
 
     /**
-     * True when [url] is the browser flow's loopback redirect (scheme, host,
-     * port, and path of the registered `redirect_uri`); query contents are
-     * validated separately by [completeBrowserLogin].
+     * Completes the browser flow with the outcome caught by
+     * [CodexLoopbackServer.awaitRedirect]: exchanges the validated
+     * authorization code with the PKCE verifier (pi's
+     * `exchangeAuthorizationCode`), or fails with a user-safe message when
+     * the provider redirected with an OAuth error. The redirect URL itself
+     * is validated by the loopback server, not here.
      */
-    fun isBrowserRedirect(url: String): Boolean {
-        val uri = runCatching { URI(url) }.getOrNull() ?: return false
-        return uri.scheme == "http" &&
-            uri.host == "localhost" &&
-            uri.port == 1455 &&
-            uri.path == "/auth/callback"
-    }
-
-    /**
-     * Completes the browser flow with the redirect URL caught by
-     * [CodexLoopbackServer]: validates it is the loopback redirect, that it
-     * echoes [CodexBrowserAuth.state], and that it carries an authorization
-     * code (an OAuth `error` redirect fails with a user-safe message), then
-     * exchanges the code with the PKCE verifier (pi's
-     * `exchangeAuthorizationCode`).
-     */
-    suspend fun completeBrowserLogin(auth: CodexBrowserAuth, redirectUrl: String): CodexTokens {
-        if (!isBrowserRedirect(redirectUrl)) {
-            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_REDIRECT_INVALID)
-            throw CodexOAuthException("Sign-in could not be completed.")
+    suspend fun completeBrowserLogin(auth: CodexBrowserAuth, result: RedirectResult): CodexTokens =
+        when (result) {
+            is RedirectResult.Success ->
+                exchangeAuthorizationCode(result.code, auth.codeVerifier, browserRedirectUri)
+            is RedirectResult.ErrorResponse -> {
+                Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_AUTHORIZATION_DENIED)
+                throw CodexOAuthException(
+                    "Sign-in was not completed (${result.error}${
+                        result.description?.let { ": $it" } ?: ""
+                    }).",
+                )
+            }
         }
-        val query = parseQueryString(URI(redirectUrl).rawQuery ?: "")
-        if (query["error"] != null) {
-            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_AUTHORIZATION_DENIED)
-            throw CodexOAuthException("Sign-in was not completed.")
-        }
-        val code = query["code"]
-        if (query["state"] != auth.state || code == null) {
-            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_REDIRECT_PAYLOAD_INVALID)
-            throw CodexOAuthException("Sign-in could not be completed.")
-        }
-        return exchangeAuthorizationCode(code, auth.codeVerifier, browserRedirectUri)
-    }
 
     /** Exchanges the device flow's authorization code for tokens (pi's `exchangeAuthorizationCode`). */
     private suspend fun exchangeAuthorizationCode(

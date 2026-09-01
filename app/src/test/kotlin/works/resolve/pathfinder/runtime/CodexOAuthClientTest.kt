@@ -20,7 +20,6 @@ import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -65,9 +64,6 @@ class CodexOAuthClientTest {
 
     private fun device(intervalSeconds: Long = 1) =
         CodexDeviceAuth("dav-1", "ABCD-EFGH", "https://auth.openai.com/codex/device", intervalSeconds)
-
-    private fun browserRedirectUrl(state: String, code: String = "ac-9") =
-        "http://localhost:1455/auth/callback?code=$code&state=$state"
 
     // --- beginDeviceLogin ---
 
@@ -254,19 +250,6 @@ class CodexOAuthClientTest {
     }
 
     @Test
-    fun `isBrowserRedirect matches only the loopback callback`() {
-        val oauth = CodexOAuthClient(mockClient())
-        assertTrue(oauth.isBrowserRedirect("http://localhost:1455/auth/callback"))
-        assertTrue(oauth.isBrowserRedirect(browserRedirectUrl("s")))
-        assertFalse(oauth.isBrowserRedirect("https://auth.openai.com/oauth/authorize?code=x"))
-        assertFalse(oauth.isBrowserRedirect("http://localhost:1455/auth/callback/extra"))
-        assertFalse(oauth.isBrowserRedirect("http://127.0.0.1:1455/auth/callback"))
-        assertFalse(oauth.isBrowserRedirect("http://localhost:1456/auth/callback"))
-        assertFalse(oauth.isBrowserRedirect("https://localhost:1455/auth/callback"))
-        assertFalse(oauth.isBrowserRedirect("not a url"))
-    }
-
-    @Test
     fun `browser complete exchanges the code with the browser redirect uri`() = runTest {
         var exchangedPath = ""
         var exchangedForm: Parameters? = null
@@ -278,7 +261,7 @@ class CodexOAuthClientTest {
         val oauth = CodexOAuthClient(client, clock = { testScheduler.currentTime })
         val auth = oauth.beginBrowserLogin()
 
-        val tokens = oauth.completeBrowserLogin(auth, browserRedirectUrl(auth.state, code = "ac-9"))
+        val tokens = oauth.completeBrowserLogin(auth, RedirectResult.Success("ac-9"))
 
         assertEquals("acct-42", tokens.accountId)
         assertEquals(testScheduler.currentTime + 3_600_000, tokens.expiresAtEpochMillis)
@@ -294,39 +277,17 @@ class CodexOAuthClientTest {
     }
 
     @Test
-    fun `browser complete rejects a state mismatch`() = runTest {
-        val oauth = CodexOAuthClient(mockClient())
-        val auth = oauth.beginBrowserLogin()
-        assertFailsWith<CodexOAuthException> {
-            oauth.completeBrowserLogin(auth, browserRedirectUrl(state = "forged"))
-        }
-    }
-
-    @Test
     fun `browser complete rejects an error redirect`() = runTest {
         val oauth = CodexOAuthClient(mockClient())
         val auth = oauth.beginBrowserLogin()
-        val url = "http://localhost:1455/auth/callback?error=access_denied&state=${auth.state}"
-        val failure = assertFailsWith<CodexOAuthException> { oauth.completeBrowserLogin(auth, url) }
+        val failure = assertFailsWith<CodexOAuthException> {
+            oauth.completeBrowserLogin(
+                auth,
+                RedirectResult.ErrorResponse("access_denied", "The user denied the request"),
+            )
+        }
         assertTrue(failure.message!!.contains("was not completed", ignoreCase = true))
-    }
-
-    @Test
-    fun `browser complete rejects a redirect without a code`() = runTest {
-        val oauth = CodexOAuthClient(mockClient())
-        val auth = oauth.beginBrowserLogin()
-        assertFailsWith<CodexOAuthException> {
-            oauth.completeBrowserLogin(auth, "http://localhost:1455/auth/callback?state=${auth.state}")
-        }
-    }
-
-    @Test
-    fun `browser complete rejects a foreign url`() = runTest {
-        val oauth = CodexOAuthClient(mockClient())
-        val auth = oauth.beginBrowserLogin()
-        assertFailsWith<CodexOAuthException> {
-            oauth.completeBrowserLogin(auth, "https://evil.example.com/callback?code=ac&state=${auth.state}")
-        }
+        assertTrue(failure.message!!.contains("access_denied"), failure.message)
     }
 
     // --- refresh ---

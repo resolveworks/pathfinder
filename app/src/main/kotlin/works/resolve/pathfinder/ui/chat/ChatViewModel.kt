@@ -271,7 +271,7 @@ class ChatViewModel(
                 // server before opening the browser, too).
                 listener.bind()
                 updateState { it.copy(codexSignIn = CodexSignInState.Browser(auth.authorizeUrl)) }
-                val redirectUrl = listener.awaitRedirect()
+                val redirect = listener.awaitRedirect()
                 updateBrowserSignIn { it.copy(completing = true) }
                 // A full-screen Custom Tab stops Pathfinder's activity. Modern
                 // Android can then block this UID's public network access even
@@ -280,7 +280,7 @@ class ChatViewModel(
                 // restored; the short-lived authorization code remains solely
                 // in this coroutine meanwhile.
                 appForegrounded.first { it }
-                val tokens = codexOAuthClient.completeBrowserLogin(auth, redirectUrl)
+                val tokens = codexOAuthClient.completeBrowserLogin(auth, redirect)
                 credentials.set(
                     provider.id,
                     Credential.ChatGptOAuth(
