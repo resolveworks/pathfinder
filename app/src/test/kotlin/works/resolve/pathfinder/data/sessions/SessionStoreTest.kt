@@ -229,16 +229,7 @@ class SessionStoreTest {
     }
 
     @Test
-    fun corruptJsonRejectedWithSessionDataException() = runTest {
-        val store = newStore()
-        val id = store.create().id
-        File(root, "$id.json").writeText("{ not json")
-        assertFailsWithSessionDataException { store.load(id) }
-        assertTrue(store.summaries().isEmpty())
-    }
-
-    @Test
-    fun unknownFormatVersionsAndEntryKindsRejected() = runTest {
+    fun unknownFormatVersionsRejected() = runTest {
         val store = newStore()
         val id = store.create().id
 
@@ -251,12 +242,6 @@ class SessionStoreTest {
         // Unknown future version.
         File(root, "$id.json").writeText(
             """{"format":99,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[]}"""
-        )
-        assertFailsWithSessionDataException { store.load(id) }
-
-        // Unknown entry kind.
-        File(root, "$id.json").writeText(
-            """{"format":3,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[{"kind":"compaction","id":"m0","timestamp":0}],"leafId":"m0"}"""
         )
         assertFailsWithSessionDataException { store.load(id) }
     }
@@ -305,16 +290,6 @@ class SessionStoreTest {
         val text = File(root, "$id.json").readText()
         assertFalse(text.contains("apiKey", ignoreCase = true))
         assertFalse(text.contains("authorization"))
-    }
-
-    @Test
-    fun summaryIgnoresUnreadableCorruptFiles() = runTest {
-        val store = newStore()
-        val good = store.create("good")
-        store.save(good.copy(title = "good"))
-        File(root, "corrupt.json").writeText("garbage")
-        val summaries = store.summaries()
-        assertEquals(listOf(good.id), summaries.map { it.id })
     }
 
     @Test

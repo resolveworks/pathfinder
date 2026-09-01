@@ -38,11 +38,13 @@ import works.resolve.pathfinder.runtime.ProviderDescriptors
 import works.resolve.pathfinder.runtime.ThinkingOption
 
 /**
- * ViewModel-level regression tests for model switching in an active chat,
- * through the real [KoogChatRuntime] with a recording client factory, so
- * the whole ViewModel⇄runtime seam is exercised.
+ * ViewModel-level tests through the real [KoogChatRuntime] with a recording
+ * client factory, so the whole ViewModel⇄runtime seam is exercised: model
+ * switching in an active chat (including while streaming), model selection
+ * recorded as session-tree history, first-run completion, and rejection of
+ * stale persisted settings.
  */
-class ChatViewModelModelSwitchTest {
+class ChatViewModelTest {
 
     private class FakeSettings(var settings: ModelSettings = ModelSettings()) : SettingsStore {
         override suspend fun currentSettings(): ModelSettings = settings
@@ -138,7 +140,11 @@ class ChatViewModelModelSwitchTest {
         credentials = credentials,
         sessionStore = sessions,
         runtime = runtime,
-        codexOAuthClient = CodexOAuthClient(io.ktor.client.HttpClient(io.ktor.client.engine.okhttp.OkHttp)),
+        codexOAuthClient = CodexOAuthClient(
+            io.ktor.client.HttpClient(
+                io.ktor.client.engine.mock.MockEngine { error("No OAuth request expected in these tests") },
+            ),
+        ),
     ) to sessions
 
     private fun awaitReady(viewModel: ChatViewModel) {

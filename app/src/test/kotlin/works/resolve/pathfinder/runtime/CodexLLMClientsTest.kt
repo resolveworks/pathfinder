@@ -4,6 +4,7 @@ import ai.koog.http.client.KoogHttpClient
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.openai.models.OpenAIInclude
 import ai.koog.prompt.executor.clients.openai.OpenAIResponsesParams
+import ai.koog.prompt.executor.clients.openai.base.models.ReasoningEffort
 import ai.koog.prompt.executor.clients.openai.models.ReasoningSummary
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
@@ -228,13 +229,13 @@ class CodexLLMClientsTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun promptParamsCarriesStoreIncludeCacheKeyAndInstructions() {
+    fun promptParamsCarriesStoreIncludeCacheKeyInstructionsAndEffort() {
         val params = CodexLLMClients.promptParams("s1") as OpenAIResponsesParams
 
         assertEquals(false, params.store)
         assertEquals(listOf(OpenAIInclude.REASONING_ENCRYPTED_CONTENT), params.include)
-        // Summaries are requested (AUTO) but effort is left to the backend
-        // default — Pathfinder has no thinking-level setting to map onto it.
+        // Without a thinking selection, effort is left to the backend
+        // default; summaries are always requested (AUTO).
         assertNull(params.reasoning?.effort)
         assertEquals(ReasoningSummary.AUTO, params.reasoning?.summary)
         assertEquals("s1", params.promptCacheKey)
@@ -242,5 +243,11 @@ class CodexLLMClientsTest {
             mapOf<String, JsonElement>("instructions" to JsonPrimitive("You are a helpful assistant.")),
             params.additionalProperties,
         )
+
+        // A ThinkingOption.Effort rides the Responses params verbatim
+        // (KoogChatRuntime passes the picker's selection through).
+        val withEffort = CodexLLMClients.promptParams("s2", ReasoningEffort.MEDIUM) as OpenAIResponsesParams
+        assertEquals(ReasoningEffort.MEDIUM, withEffort.reasoning?.effort)
+        assertEquals(ReasoningSummary.AUTO, withEffort.reasoning?.summary)
     }
 }

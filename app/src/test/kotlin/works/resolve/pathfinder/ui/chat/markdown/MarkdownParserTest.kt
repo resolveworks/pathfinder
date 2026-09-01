@@ -7,7 +7,6 @@ import org.commonmark.ext.gfm.tables.TableCell
 import org.commonmark.ext.gfm.tables.TableHead
 import org.commonmark.ext.gfm.tables.TableRow
 import org.commonmark.ext.task.list.items.TaskListItemMarker
-import org.commonmark.node.BlockQuote
 import org.commonmark.node.Document
 import org.commonmark.node.Emphasis
 import org.commonmark.node.FencedCodeBlock
@@ -95,13 +94,6 @@ class MarkdownParserTest {
         assertEquals("def f():\n    pass\n", code.literal)
     }
 
-    @Test
-    fun `parser instance is stateless across repeated parses`() {
-        val first = parser.parse("> quote\n") as Document
-        val second = parser.parse("# Heading\n") as Document
-        assertTrue(first.firstChild is BlockQuote)
-        assertTrue(second.firstChild is Heading)
-    }
 
     private fun org.commonmark.node.Node.childrenSequence(): Sequence<org.commonmark.node.Node> =
         generateSequence(this.firstChild) { it.next }

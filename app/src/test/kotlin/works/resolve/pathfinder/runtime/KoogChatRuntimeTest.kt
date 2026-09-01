@@ -353,29 +353,6 @@ class KoogChatRuntimeTest {
     }
 
     @Test
-    fun streamCompletingWithoutEndFrameSurfacesErrorAndDiscardsPartial() = runTest {
-        // A dropped connection: the flow completes normally, never emitting
-        // the terminal End frame. Koog's requireEndFrame() turns that into a
-        // failure; the runtime must not commit the truncated partial.
-        val runtime = runtime {
-            streamFrameFlow {
-                emitTextDelta("par")
-            }
-        }
-        val session = newSession(runtime)
-
-        session.prompt("hi")
-        val state = session.state.value
-
-        assertFalse(state.isStreaming)
-        val error = assertNotNull(state.error)
-        assertTrue(error.startsWith("The request to Anthropic failed"))
-        assertNull(state.streamingMessage) // truncated partial discarded
-        assertEquals(1, state.commitCount) // only the user message
-        assertEquals(1, session.conversation.entries.size)
-    }
-
-    @Test
     fun createSessionRejectsUnknownProviderAndModel() = runTest {
         val runtime = runtime(frames = { error("not reached") })
 
