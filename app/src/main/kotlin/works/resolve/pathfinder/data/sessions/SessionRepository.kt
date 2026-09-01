@@ -14,6 +14,9 @@ package works.resolve.pathfinder.data.sessions
  * append operation-lifecycle records immediately — a record's seq may
  * precede the entries it references (see [LaneRecord]) — and recovery
  * reads unfinished operations with the `limit: 2` contract.
+ *
+ * [fork] is pi's SessionRepo.fork: a new session whose log is the source's
+ * fork mutation batch, with the source id as its parent (lineage).
  */
 interface SessionRepository {
     suspend fun create(title: String = "New chat"): Session
@@ -36,4 +39,7 @@ interface SessionRepository {
 
     /** pi's getStats: the incremental message/usage fold of the log. */
     suspend fun stats(sessionId: String): SessionStats
+
+    /** pi's SessionRepo.fork: forks the source session; see [SessionStore.fork]. */
+    suspend fun fork(sourceId: String, options: ForkOptions): Session
 }
