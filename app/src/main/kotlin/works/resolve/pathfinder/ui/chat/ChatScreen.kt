@@ -184,7 +184,7 @@ fun ChatScreen(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val pagerState = rememberPagerState { ChatPagerPageCount }
-    // Reading currentPage keeps the top bar and composer in sync with swipes.
+    // Reading currentPage keeps the top bar in sync with swipes.
     val onTreePage = pagerState.currentPage == TreePageIndex
 
     // Back handling: while the pager shows the tree page, the system back
@@ -266,10 +266,7 @@ fun ChatScreen(
         },
         modifier = modifier,
     ) {
-        val showConversation = uiState.status != ChatStatus.Loading &&
-            uiState.status != ChatStatus.Failed &&
-            topKey == ChatNavKey
-        val showPager = showConversation && uiState.status == ChatStatus.Ready
+        val showPager = topKey == ChatNavKey && uiState.status == ChatStatus.Ready
 
         Scaffold(
             topBar = {
@@ -320,24 +317,6 @@ fun ChatScreen(
                     )
                 }
             },
-            bottomBar = {
-                if (showConversation && !onTreePage) {
-                    Column(
-                        modifier = Modifier
-                            .navigationBarsPadding()
-                            .imePadding(),
-                    ) {
-                        Composer(
-                            draft = uiState.draft,
-                            onDraftChange = onDraftChange,
-                            onSend = onSend,
-                            onStop = onStop,
-                            canSend = uiState.canSend,
-                            isStreaming = uiState.isStreaming,
-                        )
-                    }
-                }
-            },
             snackbarHost = { SnackbarHost(snackbarHostState) },
         ) { contentPadding ->
             Box(
@@ -362,11 +341,19 @@ fun ChatScreen(
                                     ConversationPager(
                                         uiState = uiState,
                                         pagerState = pagerState,
+                                        onDraftChange = onDraftChange,
+                                        onSend = onSend,
+                                        onStop = onStop,
                                         onNavigateTreeEntry = onNavigateTreeEntry,
                                         onTreeFilterChange = onTreeFilterChange,
                                     )
                                 } else {
-                                    ConversationContent(uiState = uiState)
+                                    ChatSurface(
+                                        uiState = uiState,
+                                        onDraftChange = onDraftChange,
+                                        onSend = onSend,
+                                        onStop = onStop,
+                                    )
                                 }
                             }
                             entry<SettingsNavKey> {
@@ -1088,15 +1075,20 @@ private fun ChatGptSignInContent(
 // ---- conversation ----
 
 /**
- * Two-page swipeable chat surface: page 0 is the conversation, page 1 the
- * session-tree panel ([TreePanel] over [ChatUiState.treeRows]). The drawer
- * keeps its stock behavior (built-in edge-swipe-to-open + menu button); only
- * the pager's own gestures handle page swiping.
+ * Two-page swipeable chat surface: page 0 is the chat page ([ChatSurface]:
+ * transcript plus composer), page 1 the session-tree panel ([TreePanel] over
+ * [ChatUiState.treeRows]). Each page owns its bottom edge, so the composer
+ * swipes away with the conversation and the tree gets the full height. The
+ * drawer keeps its stock behavior (built-in edge-swipe-to-open + menu
+ * button); only the pager's own gestures handle page swiping.
  */
 @Composable
 private fun ConversationPager(
     uiState: ChatUiState,
     pagerState: PagerState,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onStop: () -> Unit,
     onNavigateTreeEntry: (entryId: String) -> Unit,
     onTreeFilterChange: (TreeFilter) -> Unit,
 ) {
@@ -1109,8 +1101,45 @@ private fun ConversationPager(
                 onNavigate = onNavigateTreeEntry,
                 modifier = Modifier.fillMaxSize(),
             )
-            else -> ConversationContent(uiState = uiState)
+            else -> ChatSurface(
+                uiState = uiState,
+                onDraftChange = onDraftChange,
+                onSend = onSend,
+                onStop = onStop,
+            )
         }
+    }
+}
+
+/**
+ * The conversation page: [ConversationContent] above the [Composer]. The
+ * composer is page content, not scaffold chrome — it moves with the chat
+ * page when swiping to the tree — and owns its own navigation-bar and IME
+ * padding.
+ */
+@Composable
+private fun ChatSurface(
+    uiState: ChatUiState,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        ConversationContent(
+            uiState = uiState,
+            modifier = Modifier.weight(1f),
+        )
+        Composer(
+            draft = uiState.draft,
+            onDraftChange = onDraftChange,
+            onSend = onSend,
+            onStop = onStop,
+            canSend = uiState.canSend,
+            isStreaming = uiState.isStreaming,
+            modifier = Modifier
+                .navigationBarsPadding()
+                .imePadding(),
+        )
     }
 }
 
@@ -1146,6 +1175,7 @@ private fun thinkingOverridesSaver() = listSaver<MutableMap<String, Boolean>, An
 @Composable
 private fun ConversationContent(
     uiState: ChatUiState,
+    modifier: Modifier = Modifier,
     initialThinkingOverrides: Map<String, Boolean> = emptyMap(),
 ) {
     val listState = rememberLazyListState()
@@ -1176,7 +1206,7 @@ private fun ConversationContent(
         mutableStateMapOf<String, Boolean>().apply { putAll(initialThinkingOverrides) }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = modifier.fillMaxSize()) {
         if (messageCount == 0 && streamingId == null) {
             Text(
                 text = stringResource(R.string.chat_empty),
