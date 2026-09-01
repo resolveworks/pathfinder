@@ -6,6 +6,9 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import kotlin.time.Clock
+import works.resolve.pathfinder.ai.core.Message
+import works.resolve.pathfinder.ai.utils.uuidv7
+import kotlinx.serialization.json.JsonElement
 
 /**
  * Append-only storage for one JSONL v4 session file, porting pi's
@@ -25,8 +28,9 @@ import kotlin.time.Clock
  *   chaining to the appending lane's leaf) are preserved; the parentId check
  *   replaces pi's assignment because the value is identical.
  * - appendRecord/fork/getLog/queries are not ported beyond
- *   [appendRecord] and [findOpenOperations]: fork is P1-2, and Pathfinder
- *   reads the replayed state instead of queries.
+ *   [appendRecord], [findOpenOperations], the query passthroughs, and
+ *   [fork]: getLog is P2-5, and Pathfinder reads the replayed state
+ *   instead of queries.
  * - timestamp on entry append is the caller's (Conversation-minted) value,
  *   not Date.now() assigned here; record appends assign [clock] time like
  *   pi's appendRecord (records have no producer-minted timestamp).
@@ -42,6 +46,35 @@ internal class JsonlSessionStorage private constructor(
 
     /** The main lane's current leaf (Pathfinder's single-lane projection). */
     fun leafId(): String? = state.requireLane(SessionState.LANE_MAIN)
+
+    /** The [lane]'s current leaf; throws when the lane does not exist. */
+    fun leafId(lane: String): String? = state.requireLane(lane)
+
+    /** Throws when [lane] does not exist; returns its leaf. */
+    fun requireLane(lane: String): String? = state.requireLane(lane)
+
+    /** Entry lookup by id. */
+    fun entry(id: String): SessionEntry? = state.entry(id)
+
+    /** Entry label fact by id. */
+    fun label(id: String): String? = state.label(id)
+
+    /** pi's getLanes. */
+    fun getLanes(): List<LanePointer> = state.getLanes()
+
+    /** pi's createLane: registers [lane] at [at]; the lane must not exist. */
+    fun createLane(lane: String, at: String?) {
+        state.validateNewLane(lane)
+        state.validateTarget(at)
+        appendAndApply(SessionMutation.Lane(state.nextSequence, lane, at))
+    }
+
+    /** pi's moveLane: moves an existing [lane] to [to]. */
+    fun moveLane(lane: String = SessionState.LANE_MAIN, to: String?) {
+        state.requireLane(lane)
+        state.validateTarget(to)
+        appendAndApply(SessionMutation.Lane(state.nextSequence, lane, to))
+    }
 
     /** Whether an entry with [id] is already in the log (sync diff). */
     fun hasEntry(id: String): Boolean = state.entry(id) != null
@@ -60,6 +93,15 @@ internal class JsonlSessionStorage private constructor(
     fun findOpenOperations(lane: String = SessionState.LANE_MAIN, limit: Int? = null): List<LaneRecord.OperationStartedRecord> =
         state.findOpenOperations(lane, limit)
 
+    /** pi's findEntries (see [SessionState.findEntries]). */
+    fun findEntries(query: EntryQuery = EntryQuery()): List<SessionEntry> = state.findEntries(query)
+
+    /** pi's findEntriesOnBranch, storage-level signature ([start] required). */
+    fun findEntriesOnBranch(query: BranchEntryQuery): List<SessionEntry> = state.findEntriesOnBranch(query)
+
+    /** pi's findRecords (see [SessionState.findRecords]). */
+    fun findRecords(query: RecordQuery = RecordQuery()): List<LaneRecord> = state.findRecords(query)
+
     /** Latest-wins session name fact; Pathfinder's title carrier. */
     fun name(): String? = state.name
 
@@ -74,13 +116,13 @@ internal class JsonlSessionStorage private constructor(
     )
 
     /**
-     * Appends [entry] to the "main" lane, assigning the storage seq. Throws
-     * [SessionDataException] when the id is used or the entry does not chain
-     * to the lane's current leaf (pi's appendEntry invariant; callers emit a
-     * lane mutation first when the tree branched).
+     * Appends [entry] to [lane], assigning the storage seq (pi's
+     * appendEntry(entry, lane)). Throws [SessionDataException] when the id
+     * is used or the entry does not chain to the lane's current leaf (pi's
+     * appendEntry invariant; callers emit a lane mutation first when the
+     * tree branched).
      */
-    fun appendEntry(entry: SessionEntry): SessionEntry {
-        val lane = SessionState.LANE_MAIN
+    fun appendEntry(entry: SessionEntry, lane: String = SessionState.LANE_MAIN): SessionEntry {
         val leaf = state.requireLane(lane)
         state.validateUnusedId(entry.id)
         if (entry.parentId != leaf) {
@@ -89,13 +131,6 @@ internal class JsonlSessionStorage private constructor(
         val stored = entry.withSeq(state.nextSequence)
         appendAndApply(SessionMutation.Entry(lane, stored))
         return stored
-    }
-
-    /** Appends a lane-pointer mutation (pi's moveLane/createLane write path). */
-    fun moveLeaf(lane: String = SessionState.LANE_MAIN, leafId: String?) {
-        state.requireLane(lane)
-        state.validateTarget(leafId)
-        appendAndApply(SessionMutation.Lane(state.nextSequence, lane, leafId))
     }
 
     /**
@@ -130,6 +165,54 @@ internal class JsonlSessionStorage private constructor(
     fun setLabel(targetId: String, label: String?) {
         state.validateTarget(targetId)
         appendAndApply(SessionMutation.Fact.Label(state.nextSequence, targetId, label))
+    }
+
+    /**
+     * pi's Session.appendMessageToLane: mints the entry id and timestamp
+     * here (pi's idGenerator + storage assignment) and appends it to
+     * [lane], returning the entry id.
+     */
+    fun appendMessage(message: Message, lane: String = SessionState.LANE_MAIN): String {
+        val entry = MessageEntry(
+            id = uuidv7(),
+            parentId = state.requireLane(lane),
+            timestamp = clock.now().toEpochMilliseconds(),
+            message = message,
+        )
+        appendEntry(entry, lane)
+        return entry.id
+    }
+
+    /** pi's Session.appendCustomEntryToLane; returns the entry id. */
+    fun appendCustomEntry(customType: String, data: JsonElement? = null, lane: String = SessionState.LANE_MAIN): String {
+        val entry = CustomEntry(
+            id = uuidv7(),
+            parentId = state.requireLane(lane),
+            timestamp = clock.now().toEpochMilliseconds(),
+            customType = customType,
+            data = data,
+        )
+        appendEntry(entry, lane)
+        return entry.id
+    }
+
+    /**
+     * pi's JsonlSessionStorage.fork: builds [options]' mutation batch via
+     * [SessionState.createForkMutations], publishes the forked file
+     * atomically (header line + one mutation line each — the same bytes pi
+     * writes through a temp storage), then loads it with full validation.
+     */
+    fun fork(
+        destination: File,
+        header: JsonlCodec.JsonlV4Header,
+        options: ForkOptions,
+        maxFileBytes: Long,
+    ): JsonlSessionStorage {
+        val mutations = state.createForkMutations(options)
+        publishFileAtomically(destination) { temp ->
+            temp.writeText(JsonlCodec.encodeHeader(header) + mutations.joinToString("") { JsonlCodec.encodeMutation(it) })
+        }
+        return load(destination, header.id, maxFileBytes, clock)
     }
 
     private fun appendAndApply(mutation: SessionMutation) {

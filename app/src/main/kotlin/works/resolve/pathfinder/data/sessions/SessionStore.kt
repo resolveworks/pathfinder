@@ -204,6 +204,96 @@ class SessionStore(
         }
     }
 
+    /**
+     * pi's SessionRepo.fork (jsonl/repo.ts:142): creates a new session whose
+     * log is [options]' mutation batch over this session's replayed state
+     * (see [SessionState.createForkMutations]). The new header's
+     * [parentSessionId] defaults to the source session's id (lineage), and
+     * the new file is published atomically. The id defaults to
+     * [idFactory]; supplying an existing id throws (pi's already_exists).
+     */
+    override suspend fun fork(sourceId: String, options: ForkOptions): Session =
+        fork(sourceId, options, id = null, parentSessionId = null)
+
+    suspend fun fork(
+        sourceId: String,
+        options: ForkOptions,
+        id: String? = null,
+        parentSessionId: String? = null,
+    ): Session = mutex.withLock {
+        withContext(ioDispatcher) {
+            val source = requireId(sourceId)
+            writeSpanned(source, SPAN_FORK) {
+                ensureRoot()
+                val sourceStorage = storageFor(source, fileFor(source))
+                    ?: throw SessionDataException("Session not found: unknown")
+                val newId = requireId(id ?: idFactory())
+                val destination = fileFor(newId)
+                if (destination.isFile) {
+                    throw SessionDataException("Session already exists: unknown")
+                }
+                val forked = sourceStorage.fork(
+                    destination = destination,
+                    header = JsonlCodec.JsonlV4Header(
+                        id = newId,
+                        createdAt = clock.now().toEpochMilliseconds(),
+                        parentSessionId = parentSessionId ?: source,
+                    ),
+                    options = options,
+                    maxFileBytes = maxFileBytes,
+                )
+                openStorages[newId] = forked
+                forked.toSession(destination.lastModified())
+            }
+        }
+    }
+
+    /**
+     * pi's Session.view(lane) ([LaneView]): a lane-scoped projection whose
+     * writes are serialized through this store's mutex + dispatcher.
+     */
+    suspend fun view(sessionId: String, lane: String = SessionState.LANE_MAIN): LaneView = mutex.withLock {
+        withContext(ioDispatcher) {
+            val id = requireId(sessionId)
+            val storage = storageFor(id, fileFor(id))
+                ?: throw SessionDataException("Session not found: unknown")
+            storage.requireLane(lane)
+            LaneView(lane, storage, object : LaneView.Writer {
+                override suspend fun <T> write(block: (JsonlSessionStorage) -> T): T = withOpenStorage(sessionId, block)
+            })
+        }
+    }
+
+    /** pi's createLane over the open storage, store-serialized. */
+    suspend fun createLane(sessionId: String, lane: String, at: String?) = withOpenStorage(sessionId) {
+        it.createLane(lane, at)
+    }
+
+    /** pi's moveLane over the open storage, store-serialized. */
+    suspend fun moveLane(sessionId: String, lane: String, to: String?) = withOpenStorage(sessionId) {
+        it.moveLane(lane, to)
+    }
+
+    /** pi's Session.findRecords: the session-layer check for operationKind, then the state query. */
+    suspend fun findRecords(sessionId: String, query: RecordQuery = RecordQuery()): List<LaneRecord> =
+        withOpenStorage(sessionId) {
+            if (query.operationKind != null && query.type != RecordType.OPERATION_STARTED) {
+                throw SessionDataException("operationKind requires type \"operation_started\"")
+            }
+            it.findRecords(query)
+        }
+
+    /** Lineage read: the header's parentSessionId, when the session has one. */
+    suspend fun parentSessionId(sessionId: String): String? = withOpenStorage(sessionId) { it.header.parentSessionId }
+
+    /** Opens (or reuses) the session's storage under the store lock on the IO dispatcher. */
+    private suspend fun <T> withOpenStorage(sessionId: String, block: (JsonlSessionStorage) -> T): T = mutex.withLock {
+        withContext(ioDispatcher) {
+            val id = requireId(sessionId)
+            block(storageFor(id, fileFor(id)) ?: throw SessionDataException("Session not found: unknown"))
+        }
+    }
+
     // ---- internals ----
 
     private fun defensiveCopy(session: Session): Session =
@@ -243,15 +333,15 @@ class SessionStore(
         val storage = storageFor(id, file) ?: throw SessionDataException("Session not found: unknown")
         for (entry in entries) {
             if (storage.hasEntry(entry.id)) continue
-            if (entry.parentId != storage.leafId()) storage.moveLeaf(leafId = entry.parentId)
+            if (entry.parentId != storage.leafId()) storage.moveLane(to = entry.parentId)
             storage.appendEntry(entry)
         }
-        if (storage.leafId() != leafId) storage.moveLeaf(leafId = leafId)
+        if (storage.leafId() != leafId) storage.moveLane(to = leafId)
         if (storage.name() != title) storage.setName(title)
         return storage.toSession(file.lastModified())
     }
 
-    private suspend fun writeSpanned(id: String, operation: () -> Session): Session =
+    private suspend fun writeSpanned(id: String, spanName: String = SPAN_SAVE, operation: () -> Session): Session =
         telemetryContext.startSpan(
             SpanOptions(
                 name = SPAN_SAVE,
@@ -325,6 +415,7 @@ class SessionStore(
         private const val SPAN_SAVE = "pf.session.save"
         private const val SPAN_LOAD = "pf.session.load"
         private const val SPAN_SUMMARY = "pf.session.summary"
+        private const val SPAN_FORK = "pf.session.fork"
         private const val ATTR_SESSION = "pf.session.id"
         private const val ATTR_OUTCOME = "pf.session.outcome"
         private const val OUTCOME_PERSISTED = "persisted"

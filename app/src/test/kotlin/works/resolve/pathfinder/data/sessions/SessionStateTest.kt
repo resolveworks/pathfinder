@@ -84,7 +84,7 @@ class SessionStateTest {
         }
         // A new lane can be created at null (pi's createLane).
         state.applyMutation(SessionMutation.Lane(seq = 3, lane = "side", leafId = null))
-        assertEquals(mapOf("main" to "a", "side" to null), state.lanes())
+        assertEquals(listOf(LanePointer("main", "a"), LanePointer("side", null)), state.getLanes())
     }
 
     @Test

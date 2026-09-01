@@ -11,10 +11,12 @@ package works.resolve.pathfinder.data.sessions
  * Divergences (scope of this port, per the session-parity audit P0-1/P0-2):
  * - pi throws SessionError("invalid_entry", "Invalid session mutation: …");
  *   Pathfinder's module exception is [SessionDataException] with the same
- *   message text (invalid_query → the same exception on findOpenOperations).
- * - Entry/record queries (findEntries/EntryQuery cursors, RecordQuery,
- *   getLog) and createForkMutations are not ported; Pathfinder reads the
- *   whole replayed state instead (P1-2/P1-5 riders build on this).
+ *   message text. The same holds for the query validation (invalid_query)
+ *   and fork (invalid_fork_target) messages below — typed error codes are
+ *   audit P2-4.
+ * - pi's getLog is not ported (P2-5, incremental observer reads).
+ * - createForkMutations copies entries by rebinding seq only (Kotlin's
+ *   entry payloads are immutable values); pi structuredClones them.
  * - Records are validated exactly as far as upstream validates them: the
  *   lane must exist and the id must be unused; payload references (e.g.
  *   sourceLeafId) are never validated, and records may precede the entries
@@ -47,7 +49,7 @@ internal class SessionState {
     fun records(): List<LaneRecord> = recordList.toList()
 
     /** Lane pointers in insertion order (pi's getLanes). */
-    fun lanes(): Map<String, String?> = LinkedHashMap(lanes)
+    fun getLanes(): List<LanePointer> = lanes.map { (lane, leafId) -> LanePointer(lane, leafId) }
 
     fun entry(id: String): SessionEntry? = entriesById[id]
 
@@ -83,6 +85,11 @@ internal class SessionState {
     /** Throws when [id] is already used by an entry or record (pi's validateUnusedId). */
     fun validateUnusedId(id: String) {
         if (id in usedIds) throw SessionDataException("Session id already exists: $id")
+    }
+
+    /** Throws when [lane] already exists (pi's validateNewLane). */
+    fun validateNewLane(lane: String) {
+        if (lanes.containsKey(lane)) throw SessionDataException("Lane already exists: $lane")
     }
 
     /** Throws when [targetId] is not an existing entry (pi's validateTarget). */
@@ -190,9 +197,192 @@ internal class SessionState {
     private fun invalid(message: String): Nothing =
         throw SessionDataException("Invalid session mutation: $message")
 
+    // ---- queries (pi's state.ts findEntries/findEntriesOnBranch/findRecords) ----
+
+    /** pi's findEntries: filters, order (default newestFirst), limit, cursor. */
+    fun findEntries(query: EntryQuery = EntryQuery()): List<SessionEntry> {
+        assertValidLimit(query.limit)
+        assertValidCursor(query.cursor?.afterSeq)
+        val results = ArrayList<SessionEntry>()
+        for (entry in ordered(entryList, query.order)) {
+            if (!matchesEntryQuery(entry, query)) continue
+            results.add(entry)
+            if (results.size == query.limit) break
+        }
+        return results
+    }
+
+    /**
+     * pi's findEntriesOnBranch (storage-level signature,
+     * `EntryQuery & BranchBounds & { start: string }`): walks from
+     * [BranchEntryQuery.start] toward the root, honoring stopAtId /
+     * stopAtType (inclusive), filters, order, limit, and cursor.
+     * oldestFirst returns root→start; newestFirst (default) start→root.
+     */
+    fun findEntriesOnBranch(query: BranchEntryQuery): List<SessionEntry> {
+        assertValidLimit(query.limit)
+        assertValidCursor(query.cursor?.afterSeq)
+        val entryQuery = query.toEntryQuery()
+        val results = ArrayList<SessionEntry>()
+        if (query.order == EntryOrder.OLDEST_FIRST) {
+            // Like pi: the oldestFirst scan walks the whole path unbounded;
+            // bounds apply as an inclusive break after each entry.
+            for (entry in walkToRoot(query.start).toList().asReversed()) {
+                val reachedBound = entry.id == query.stopAtId || entry.entryType == query.stopAtType
+                if (matchesEntryQuery(entry, entryQuery)) results.add(entry)
+                if (reachedBound || results.size == query.limit) break
+            }
+        } else {
+            for (entry in walkToRoot(query.start, query.stopAtId, query.stopAtType)) {
+                if (matchesEntryQuery(entry, entryQuery)) results.add(entry)
+                if (results.size == query.limit) break
+            }
+        }
+        return results
+    }
+
+    /** pi's findRecords: lane/type/runId/operationKind filters, afterSeq, order, limit. */
+    fun findRecords(query: RecordQuery = RecordQuery()): List<LaneRecord> {
+        assertValidLimit(query.limit)
+        assertValidCursor(query.afterSeq)
+        val results = ArrayList<LaneRecord>()
+        for (record in ordered(recordList, query.order)) {
+            if (!matchesRecordQuery(record, query)) continue
+            results.add(record)
+            if (results.size == query.limit) break
+        }
+        return results
+    }
+
+    // ---- fork (pi's state.ts createForkMutations) ----
+
+    /**
+     * pi's createForkMutations: the mutation batch that seeds a forked
+     * session's log, seq'd from 1. Tree scope copies every entry (oldest
+     * first) plus all lane pointers; branch scope copies the root→target
+     * path for a message-entry target ([ForkOptions.Branch.entryId]
+     * defaults to the "main" lane leaf; position defaults to "at" when
+     * entryId is omitted, "before" otherwise) and forks only the "main"
+     * lane at the target. The name fact and the copied entries' label
+     * facts follow. Entries are copied with rebound seq only — the payloads
+     * are immutable values, so pi's structuredClone has no Kotlin
+     * counterpart (documented divergence).
+     *
+     * @throws SessionDataException (pi: invalid_fork_target) when a branch
+     * scope targets an entry that is not a message entry.
+     */
+    fun createForkMutations(options: ForkOptions): List<SessionMutation> {
+        val copiedEntries: List<SessionEntry>
+        val forkLanes: List<LanePointer>
+        when (options) {
+            is ForkOptions.Tree -> {
+                copiedEntries = findEntries(EntryQuery(order = EntryOrder.OLDEST_FIRST))
+                forkLanes = getLanes()
+            }
+            is ForkOptions.Branch -> {
+                val selectedEntryId = options.entryId ?: requireLane(LANE_MAIN)
+                var targetId: String? = null
+                if (selectedEntryId != null) {
+                    val entry = entry(selectedEntryId)
+                        ?: throw SessionDataException("Fork target is not a message entry: $selectedEntryId")
+                    if (entry !is MessageEntry) {
+                        throw SessionDataException("Fork target is not a message entry: $selectedEntryId")
+                    }
+                    val position = options.position
+                        ?: if (options.entryId == null) ForkOptions.Branch.Position.AT else ForkOptions.Branch.Position.BEFORE
+                    targetId = if (position == ForkOptions.Branch.Position.AT) entry.id else entry.parentId
+                }
+                copiedEntries = if (targetId == null) {
+                    emptyList()
+                } else {
+                    findEntriesOnBranch(BranchEntryQuery(start = targetId, order = EntryOrder.OLDEST_FIRST))
+                }
+                forkLanes = listOf(LanePointer(LANE_MAIN, targetId))
+            }
+        }
+
+        val mutations = ArrayList<SessionMutation>()
+        var sequence = 1L
+        for (sourceEntry in copiedEntries) {
+            mutations.add(SessionMutation.Entry(lane = null, entry = sourceEntry.withSeq(sequence++)))
+        }
+        for (pointer in forkLanes) {
+            mutations.add(SessionMutation.Lane(sequence++, pointer.lane, pointer.leafId))
+        }
+        if (name != null) {
+            mutations.add(SessionMutation.Fact.Name(sequence++, name))
+        }
+        for (entry in copiedEntries) {
+            val label = labels[entry.id]
+            if (label != null) {
+                mutations.add(SessionMutation.Fact.Label(sequence++, entry.id, label))
+            }
+        }
+        return mutations
+    }
+
+    /** pi's walkToRoot: leaf→root walk with a cycle guard and inclusive bounds. */
+    private fun walkToRoot(start: String, stopAtId: String? = null, stopAtType: EntryType? = null): Sequence<SessionEntry> = sequence {
+        val visited = HashSet<String>()
+        var current = entriesById[start]
+            ?: throw SessionDataException("Entry not found: $start")
+        while (true) {
+            if (!visited.add(current.id)) {
+                throw SessionDataException("Session branch contains a cycle at ${current.id}")
+            }
+            yield(current)
+            if (current.id == stopAtId || current.entryType == stopAtType || current.parentId == null) break
+            val parentId = current.parentId ?: return@sequence
+            current = entriesById[parentId]
+                ?: throw SessionDataException("Entry not found: $parentId")
+        }
+    }
+
+    private fun <T> ordered(items: List<T>, order: EntryOrder?): Iterable<T> =
+        if (order == EntryOrder.OLDEST_FIRST) items else items.asReversed()
+
+    private fun matchesEntryQuery(entry: SessionEntry, query: EntryQuery): Boolean {
+        val typeMatches = query.type == null || entry.entryType == query.type
+        val customTypeMatches = query.customType == null ||
+            (entry is CustomEntry && entry.customType == query.customType)
+        val cursorMatches = query.cursor == null ||
+            (if (query.order == EntryOrder.OLDEST_FIRST) entry.seq > query.cursor.afterSeq else entry.seq < query.cursor.afterSeq)
+        return typeMatches && customTypeMatches && cursorMatches
+    }
+
+    private fun matchesRecordQuery(record: LaneRecord, query: RecordQuery): Boolean {
+        val laneMatches = query.lane == null || record.lane == query.lane
+        val typeMatches = query.type == null || record.recordType == query.type
+        val runIdMatches = query.runId == null || when (record) {
+            is LaneRecord.OperationStartedRecord -> record.id == query.runId
+            is LaneRecord.AbortRequestedRecord -> record.runId == query.runId
+            is LaneRecord.OperationFinishedRecord -> record.runId == query.runId
+            // Records without an operation identity do not match (pi's `"runId" in record`).
+            else -> false
+        }
+        val operationKindMatches = query.operationKind == null ||
+            (record is LaneRecord.OperationStartedRecord && record.intent.kind == query.operationKind)
+        val afterSeqMatches = query.afterSeq == null || record.seq > query.afterSeq
+        return laneMatches && typeMatches && runIdMatches && operationKindMatches && afterSeqMatches
+    }
+
     companion object {
         /** pi's default lane (state.ts lanes map seeded with `main`). */
         const val LANE_MAIN = "main"
+
+        /** pi's assertValidLimit (invalid_query: limit must be a positive integer). */
+        private fun assertValidLimit(limit: Int?) {
+            if (limit != null && limit <= 0) {
+                throw SessionDataException("limit must be a positive integer")
+            }
+        }
+
+        /** pi's assertValidCursor (invalid_query: cursor sequence must be a non-negative integer). */
+        private fun assertValidCursor(afterSeq: Long?) {
+            if (afterSeq != null && afterSeq < 0) {
+                throw SessionDataException("cursor sequence must be a non-negative integer")
+            }
+        }
     }
 }
 
