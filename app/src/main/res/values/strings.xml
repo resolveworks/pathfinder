@@ -13,7 +13,8 @@
 
     <string name="action_new_chat">New chat</string>
     <string name="settings_title">Settings</string>
-    <string name="settings_model">Model settings</string>
+    <string name="settings_model">Models</string>
+    <string name="settings_model_scope_hint">Choose which models the chat offers</string>
     <string name="settings_show_thinking">Show thinking</string>
     <string name="settings_show_thinking_hint">Show the model\'s reasoning as it thinks</string>
     <string name="thinking_label">thinking</string>
@@ -26,6 +27,12 @@
     <string name="remove_provider_confirm">Forget the stored credential for %1$s?</string>
     <string name="model_search_hint">Search models</string>
     <string name="model_selected">Selected</string>
+    <string name="model_picker_empty">Pick a model</string>
+    <string name="model_picker_scoped">Scoped</string>
+    <string name="model_picker_all">All</string>
+    <string name="models_scope_hint">Checked models appear in the chat picker — the running model never changes here</string>
+    <string name="models_scope_empty">No models are in scope — switch to All to see every available model</string>
+    <string name="action_set_default">Set as startup default</string>
     <string name="models_empty_configured_hint">Only showing models from configured providers</string>
     <string name="action_set_up_providers">Set up providers</string>
     <string name="action_configure">Configure</string>
