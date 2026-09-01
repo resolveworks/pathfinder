@@ -6,13 +6,30 @@ import works.resolve.pathfinder.ai.core.Usage
 import kotlinx.serialization.json.JsonElement
 
 /**
- * A node in a session's conversation tree, mirroring pi's SessionEntry.
- * Every entry has an [id], an optional [parentId] (null for roots), and a
- * [timestamp] used to order siblings. Later variants (compaction, label
- * entries, ...) can be added alongside [MessageEntry].
+ * A node in a session's conversation tree, porting pi's harness EntryBase
+ * (packages/agent/src/harness/session/types.ts): every entry carries an
+ * [id], the storage-assigned shared [seq], a [parentId] (null for roots),
+ * and a [timestamp].
  */
 sealed class SessionEntry {
     abstract val id: String
+
+    /**
+     * Shared, 1-based, storage-assigned sequence number (pi's EntryBase.seq,
+     * "shared sequence; read-side, storage-assigned"), one seq per persisted
+     * mutation.
+     *
+     * Divergence from pi's ProvisionedEntry split: pi's callers hand storage
+     * entries *without* seq/parentId/timestamp and storage assigns all three
+     * on append. Pathfinder's [Conversation] is the live in-memory tree and
+     * mints id/parentId/timestamp itself, so entries circulate before they
+     * are persisted; `seq = 0` marks a not-yet-persisted entry (pi omits the
+     * field instead), and [SessionStore] assigns the real consecutive seq
+     * when appending the entry to the mutation log. Replay rejects
+     * non-consecutive or non-positive seq.
+     */
+    abstract val seq: Long
+
     abstract val parentId: String?
     abstract val timestamp: Long
 }
@@ -20,6 +37,7 @@ sealed class SessionEntry {
 /** An entry carrying a chat [message]. */
 data class MessageEntry(
     override val id: String,
+    override val seq: Long = 0L,
     override val parentId: String?,
     override val timestamp: Long,
     val message: Message,
@@ -30,11 +48,11 @@ data class MessageEntry(
  * (packages/agent/src/harness/session/types.ts): the summary replacing the
  * compacted history, the retained recent tail, and compaction metadata.
  * Divergence: upstream's `details?: unknown` is typed as
- * [CompactionDetails] (the only producer), and upstream's `seq` is not
- * ported (pathfinder entries carry no shared sequence number).
+ * [CompactionDetails] (the only producer).
  */
 data class CompactionEntry(
     override val id: String,
+    override val seq: Long = 0L,
     override val parentId: String?,
     override val timestamp: Long,
     /** Summary text that replaces the compacted history in future context. */
@@ -59,6 +77,7 @@ data class CompactionEntry(
  */
 data class ModelChangeEntry(
     override val id: String,
+    override val seq: Long = 0L,
     override val parentId: String?,
     override val timestamp: Long,
     /** Provider id of the newly selected model. */
@@ -76,6 +95,7 @@ data class ModelChangeEntry(
  */
 data class ThinkingLevelEntry(
     override val id: String,
+    override val seq: Long = 0L,
     override val parentId: String?,
     override val timestamp: Long,
     /** Selected thinking level (pi's ThinkingLevel string, e.g. "off", "high"). */
@@ -91,6 +111,7 @@ data class ThinkingLevelEntry(
  */
 data class ActiveToolsEntry(
     override val id: String,
+    override val seq: Long = 0L,
     override val parentId: String?,
     override val timestamp: Long,
     /** Tool names active from this entry onward (empty set = all defaults off). */
@@ -105,6 +126,7 @@ data class ActiveToolsEntry(
  */
 data class BranchSummaryEntry(
     override val id: String,
+    override val seq: Long = 0L,
     override val parentId: String?,
     override val timestamp: Long,
     /** Entry id the summary starts from. */
@@ -125,6 +147,7 @@ data class BranchSummaryEntry(
  */
 data class CustomEntry(
     override val id: String,
+    override val seq: Long = 0L,
     override val parentId: String?,
     override val timestamp: Long,
     /** Discriminator for the custom entry kind. */

@@ -137,9 +137,9 @@ class SessionStoreTest {
         val store = newStore()
         val created = store.create("branchy")
         clock.advanceMillis(5)
-        val root = MessageEntry("m0", null, 1L, UserMessage.ofText("a", 1L))
-        val left = MessageEntry("m1", "m0", 2L, UserMessage.ofText("b", 2L))
-        val right = MessageEntry("m2", "m0", 3L, UserMessage.ofText("c", 3L))
+        val root = MessageEntry("m0", 0L, null, 1L, UserMessage.ofText("a", 1L))
+        val left = MessageEntry("m1", 0L, "m0", 2L, UserMessage.ofText("b", 2L))
+        val right = MessageEntry("m2", 0L, "m0", 3L, UserMessage.ofText("c", 3L))
         val saved = store.save(created.copy(entries = listOf(root, left, right), leafId = "m2"))
 
         val reloaded = newStore().load(created.id)!!

@@ -28,9 +28,9 @@ class SessionCodecTest {
     )
 
     private fun branchedSession(): Session {
-        val root = MessageEntry("m0", null, 1L, UserMessage.ofText("a", 1L))
-        val left = MessageEntry("m1", "m0", 2L, assistant("left", 2L))
-        val right = MessageEntry("m2", "m0", 3L, assistant("right", 3L))
+        val root = MessageEntry("m0", 0L, null, 1L, UserMessage.ofText("a", 1L))
+        val left = MessageEntry("m1", 0L, "m0", 2L, assistant("left", 2L))
+        val right = MessageEntry("m2", 0L, "m0", 3L, assistant("right", 3L))
         return Session("sess-1", "t", 1, 2, listOf(root, left, right), "m2")
     }
 
@@ -75,16 +75,16 @@ class SessionCodecTest {
     @Test
     fun configurationAndBookkeepingEntryKindsRoundTrip() {
         val entries: List<SessionEntry> = listOf(
-            ModelChangeEntry("e1", null, 1L, provider = "zai", modelId = "glm-4.7"),
-            ThinkingLevelEntry("e2", "e1", 2L, thinkingLevel = "high"),
-            ActiveToolsEntry("e3", "e2", 3L, activeToolNames = listOf("read", "edit")),
+            ModelChangeEntry("e1", parentId = null, timestamp = 1L, provider = "zai", modelId = "glm-4.7"),
+            ThinkingLevelEntry("e2", parentId = "e1", timestamp = 2L, thinkingLevel = "high"),
+            ActiveToolsEntry("e3", parentId = "e2", timestamp = 3L, activeToolNames = listOf("read", "edit")),
             BranchSummaryEntry(
                 id = "e4", parentId = "e3", timestamp = 4L,
                 fromId = "e1", summary = "branch summary",
                 details = Json.parseToJsonElement("{\"x\":1}"),
                 usage = Usage(input = 1, output = 1, totalTokens = 2, cost = Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
             ),
-            CustomEntry("e5", "e4", 5L, customType = "ext.thing", data = Json.parseToJsonElement("[true]")),
+            CustomEntry("e5", parentId = "e4", timestamp = 5L, customType = "ext.thing", data = Json.parseToJsonElement("[true]")),
         )
         val session = Session("sess-k", "t", 1, 2, entries, "e5")
 
@@ -93,8 +93,8 @@ class SessionCodecTest {
 
         // Optional fields stay optional.
         val stripped = listOf(
-            entries[3] as BranchSummaryEntry to BranchSummaryEntry("e4", "e3", 4L, fromId = "e1", summary = "s"),
-            entries[4] as CustomEntry to CustomEntry("e5", "e4", 5L, customType = "ext.thing"),
+            entries[3] as BranchSummaryEntry to BranchSummaryEntry("e4", parentId = "e3", timestamp = 4L, fromId = "e1", summary = "s"),
+            entries[4] as CustomEntry to CustomEntry("e5", parentId = "e4", timestamp = 5L, customType = "ext.thing"),
         )
         val minimal = SessionCodec.decode(
             SessionCodec.encode(session.copy(entries = stripped.map { it.second })),
@@ -188,7 +188,7 @@ class SessionCodecTest {
             ),
         )
         val session = branchedSession().copy(
-            entries = listOf(MessageEntry("m1", null, 2L, message)),
+            entries = listOf(MessageEntry("m1", 0L, null, 2L, message)),
             leafId = "m1",
         )
         val decoded = SessionCodec.decode(SessionCodec.encode(session))
@@ -216,7 +216,7 @@ class SessionCodecTest {
             addedToolNames = listOf("search", "edit"),
         )
         val session = branchedSession().copy(
-            entries = listOf(MessageEntry("m1", null, 2L, result)),
+            entries = listOf(MessageEntry("m1", 0L, null, 2L, result)),
             leafId = "m1",
         )
         val encoded = SessionCodec.encode(session)
@@ -238,7 +238,7 @@ class SessionCodecTest {
             addedToolNames = listOf("search"),
         )
         val session = branchedSession().copy(
-            entries = listOf(MessageEntry("m1", null, 2L, result)),
+            entries = listOf(MessageEntry("m1", 0L, null, 2L, result)),
             leafId = "m1",
         )
         val encoded = SessionCodec.encode(session)
@@ -258,7 +258,7 @@ class SessionCodecTest {
             content = listOf(TextContent("ok")),
         )
         val session = branchedSession().copy(
-            entries = listOf(MessageEntry("m1", null, 2L, result)),
+            entries = listOf(MessageEntry("m1", 0L, null, 2L, result)),
             leafId = "m1",
         )
         val encoded = SessionCodec.encode(session)
@@ -282,7 +282,7 @@ class SessionCodecTest {
             isError = true,
         )
         val session = branchedSession().copy(
-            entries = listOf(MessageEntry("m1", null, 2L, result)),
+            entries = listOf(MessageEntry("m1", 0L, null, 2L, result)),
             leafId = "m1",
         )
         val decoded = SessionCodec.decode(SessionCodec.encode(session))
@@ -411,7 +411,7 @@ class SessionCodecTest {
             stopReason = StopReason.STOP,
             timestamp = 1L,
         )
-        val session = Session("s", "t", 1, 1, listOf(MessageEntry("m0", null, 1L, message)), "m0")
+        val session = Session("s", "t", 1, 1, listOf(MessageEntry("m0", 0L, null, 1L, message)), "m0")
         assertEquals(session, SessionCodec.decode(SessionCodec.encode(session)))
     }
 
@@ -452,7 +452,7 @@ class SessionCodecTest {
             stopReason = StopReason.STOP,
             timestamp = 1L,
         )
-        val session = Session("s", "t", 1, 1, listOf(MessageEntry("m0", null, 1L, message)), "m0")
+        val session = Session("s", "t", 1, 1, listOf(MessageEntry("m0", 0L, null, 1L, message)), "m0")
         val encoded = SessionCodec.encode(session)
         assertEquals(0, Regex("\"textSignature\"").findAll(encoded).count())
         assertEquals(0, Regex("\"thinkingSignature\"").findAll(encoded).count())

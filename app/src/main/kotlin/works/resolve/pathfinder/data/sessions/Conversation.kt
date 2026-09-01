@@ -20,6 +20,16 @@ data class SessionTreeNode(
  * advances the leaf to the new entry. Entry ids default to time-ordered
  * UUIDv7, pi's Session idGenerator default `{ next: () => uuidv7() }`
  * (agent/src/harness/session/session.ts).
+ *
+ * Seq-assignment seam (pi's storage split, packages/agent/src/harness/
+ * session/jsonl/storage.ts appendEntry): pi's storage assigns an entry's
+ * parentId (the appending lane's leaf), seq, and timestamp on append. Here
+ * the [Conversation] is the live tree and mints id/parentId/timestamp at
+ * append time (its leaf is the single "main" lane's leaf, so parentId
+ * matches what pi's storage would assign); the storage-assigned seq stays
+ * 0 until [SessionStore] persists the entry. The store validates the same
+ * invariants pi's storage enforces (unused id, parent existence, chaining
+ * to the lane leaf).
  */
 class Conversation(
     val entries: List<SessionEntry>,
