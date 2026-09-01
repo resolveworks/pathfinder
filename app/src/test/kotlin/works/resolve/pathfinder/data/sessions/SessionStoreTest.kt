@@ -11,6 +11,9 @@ import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
+import works.resolve.pathfinder.telemetry.SpanStatus
+import works.resolve.pathfinder.telemetry.attr
 import java.io.File
 import kotlin.test.assertFailsWith
 import kotlinx.coroutines.test.runTest
@@ -423,6 +426,74 @@ class SessionStoreTest {
         assertFailsWithSessionDataException { store.load(id) }
         // Corrupt entries are skipped by summaries.
         assertTrue(store.summaries().isEmpty())
+    }
+
+    @Test
+    fun `telemetry records save and load spans on success`() = runTest {
+        val telemetry = InMemoryTelemetryContext()
+        val store = SessionStore(
+            root = tmpFolder.newFolder("telemetry-ok"),
+            clock = clock,
+            idFactory = { "sess-t" },
+            telemetryContext = telemetry,
+        )
+        val created = store.create("t")
+        assertNotNull(store.load(created.id))
+
+        val saves = telemetry.spans().filter { it.name == "pf.session.save" }
+        val loads = telemetry.spans().filter { it.name == "pf.session.load" }
+        assertTrue(saves.isNotEmpty() && loads.isNotEmpty())
+        assertEquals(SpanStatus.Ok, saves.single().status)
+        assertEquals(SpanStatus.Ok, loads.single().status)
+        assertEquals(attr("sess-t"), saves.single().attributes["pf.session.id"])
+        assertEquals(attr("persisted"), saves.single().attributes["pf.session.outcome"])
+        assertEquals(attr("loaded"), loads.single().attributes["pf.session.outcome"])
+    }
+
+    @Test
+    fun `telemetry records load failure and summary skip with type only`() = runTest {
+        val telemetry = InMemoryTelemetryContext()
+        val rootFail = tmpFolder.newFolder("telemetry-fail")
+        val store = SessionStore(
+            root = rootFail,
+            clock = clock,
+            idFactory = { "sess-f" },
+            telemetryContext = telemetry,
+        )
+        val id = store.create("t").id
+        File(rootFail, "$id.json").writeText("{corrupt")
+
+        assertFailsWithSessionDataException { store.load(id) }
+        val loadFailed = telemetry.spans().last { it.name == "pf.session.load" }
+        assertEquals(SpanStatus.Ok, telemetry.spans().first { it.name == "pf.session.save" }.status)
+        val error = loadFailed.status as SpanStatus.Error
+        assertEquals("works.resolve.pathfinder.data.sessions.SessionDataException", error.error?.name)
+        assertEquals("", error.error?.message) // never exception text, paths, or content
+
+        // Summaries skip the corrupt entry and record it as a summary skip.
+        assertTrue(store.summaries().isEmpty())
+        val skipped = telemetry.spans().single { it.name == "pf.session.summary" }
+        assertEquals(attr("skipped"), skipped.attributes["pf.session.outcome"])
+        assertTrue(skipped.status is SpanStatus.Error)
+    }
+
+    @Test
+    fun `telemetry records save failure with type only`() = runTest {
+        val telemetry = InMemoryTelemetryContext()
+        // A regular file as root: the directory is unavailable, so writes fail.
+        val rootAsFile = tmpFolder.newFile("telemetry-not-a-dir")
+        val store = SessionStore(
+            root = rootAsFile,
+            clock = clock,
+            idFactory = { "sess-w" },
+            telemetryContext = telemetry,
+        )
+        assertFailsWithSessionDataException { store.create("t") }
+        val saveFailed = telemetry.spans().single()
+        assertEquals("pf.session.save", saveFailed.name)
+        val error = saveFailed.status as SpanStatus.Error
+        assertEquals("java.io.IOException", error.error?.name)
+        assertEquals("", error.error?.message)
     }
 
 }
