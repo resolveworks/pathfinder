@@ -101,6 +101,76 @@ class SettingsRepositoryTest {
     }
 
     @Test
+    fun enabledModels_defaultNull_andRoundTripsPreservingOrder() = runTest {
+        assertNull(repository.settings.first().enabledModels)
+
+        repository.setEnabledModels(listOf("anthropic/claude-opus-4-8", "gpt-5.5", "gemini-3.1-pro-preview"))
+
+        assertEquals(
+            listOf("anthropic/claude-opus-4-8", "gpt-5.5", "gemini-3.1-pro-preview"),
+            repository.settings.first().enabledModels,
+        )
+        // Order survives a reorder, not just persistence.
+        repository.setEnabledModels(listOf("gpt-5.5", "anthropic/claude-opus-4-8"))
+        assertEquals(
+            listOf("gpt-5.5", "anthropic/claude-opus-4-8"),
+            repository.settings.first().enabledModels,
+        )
+    }
+
+    @Test
+    fun enabledModels_emptyList_roundTripsAsEmpty() = runTest {
+        repository.setEnabledModels(emptyList())
+
+        assertEquals(emptyList<String>(), repository.settings.first().enabledModels)
+    }
+
+    @Test
+    fun enabledModels_nullClearsScope_andDoesNotTouchOtherFields() = runTest {
+        repository.setProviderId("anthropic")
+        repository.setEnabledModels(listOf("anthropic/claude-opus-4-8"))
+
+        repository.setEnabledModels(null)
+
+        val settings = repository.settings.first()
+        assertNull(settings.enabledModels)
+        assertEquals("anthropic", settings.providerId)
+    }
+
+    @Test
+    fun enabledModels_malformedStoredData_isRejected() = runTest {
+        // Current-format-only storage: malformed payloads are rejected, not degraded.
+        for (malformed in listOf("{not json", "[\"a\",42]", "{\"k\":\"v\"}", "\"just a string\"", "")) {
+            try {
+                repository.decodeEnabledModels(malformed)
+                org.junit.Assert.fail("Expected rejection of malformed enabled_models: $malformed")
+            } catch (expected: IllegalArgumentException) {
+                // rejected
+            }
+        }
+    }
+
+    @Test
+    fun enabledModels_survivesRestart() = runTest {
+        repository.setEnabledModels(listOf("b", "a"))
+        val file = java.io.File(tmpFolder.root, "settings.preferences_pb")
+        scope.coroutineContext[Job]!!.cancelAndJoin()
+
+        val secondScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        try {
+            val second = SettingsRepository(
+                PreferenceDataStoreFactory.create(
+                    scope = secondScope,
+                    produceFile = { file },
+                ),
+            )
+            assertEquals(listOf("b", "a"), second.settings.first().enabledModels)
+        } finally {
+            secondScope.cancel()
+        }
+    }
+
+    @Test
     fun survivesRestart() = runTest {
         repository.setProviderId("openai")
         val file = File(tmpFolder.root, "settings.preferences_pb")

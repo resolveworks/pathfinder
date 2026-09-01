@@ -10,6 +10,9 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import works.resolve.pathfinder.ai.utils.lenientJson
 
 /** Persistence boundary for model settings, backed by Preferences DataStore. */
 class SettingsRepository(
@@ -27,6 +30,13 @@ class SettingsRepository(
         val COMPACTION_ENABLED = booleanPreferencesKey("compaction_enabled")
         val COMPACTION_RESERVE_TOKENS = intPreferencesKey("compaction_reserve_tokens")
         val COMPACTION_KEEP_RECENT_TOKENS = intPreferencesKey("compaction_keep_recent_tokens")
+
+        /**
+         * `enabledModels` as a JSON array string; Preferences DataStore has no
+         * ordered collection type, so `stringSetPreferencesKey` would lose the
+         * order pi relies on for Ctrl+P cycling.
+         */
+        val ENABLED_MODELS = stringPreferencesKey("enabled_models")
     }
 
     val settings: Flow<ModelSettings> = dataStore.data.map { prefs ->
@@ -45,6 +55,7 @@ class SettingsRepository(
                 reserveTokens = prefs[Keys.COMPACTION_RESERVE_TOKENS] ?: 16384,
                 keepRecentTokens = prefs[Keys.COMPACTION_KEEP_RECENT_TOKENS] ?: 20000,
             ),
+            enabledModels = prefs[Keys.ENABLED_MODELS]?.let(::decodeEnabledModels),
         )
     }
 
@@ -61,6 +72,35 @@ class SettingsRepository(
             prefs[Keys.COMPACTION_ENABLED] = settings.enabled
             prefs[Keys.COMPACTION_RESERVE_TOKENS] = settings.reserveTokens
             prefs[Keys.COMPACTION_KEEP_RECENT_TOKENS] = settings.keepRecentTokens
+        }
+    }
+
+    /**
+     * Decodes the stored `enabledModels` JSON array of string primitives.
+     * The stored format is current-only (no legacy migrations): malformed
+     * JSON, a non-array value, or a non-string element is rejected with
+     * [IllegalArgumentException] rather than degraded. An absent preference
+     * key yields no configured scope.
+     */
+    internal fun decodeEnabledModels(encoded: String): List<String> {
+        val array = lenientJson.parseToJsonElement(encoded) as? JsonArray
+            ?: throw IllegalArgumentException(
+                "Malformed enabled_models setting: expected a JSON array of strings, got: $encoded",
+            )
+        return array.map { element ->
+            (element as? JsonPrimitive)
+                ?.takeIf { it.isString }
+                ?.content
+                ?: throw IllegalArgumentException(
+                    "Malformed enabled_models setting: expected string elements, got: $encoded",
+                )
+        }
+    }
+
+    override suspend fun setEnabledModels(models: List<String>?) {
+        dataStore.edit { prefs ->
+            if (models == null) prefs.remove(Keys.ENABLED_MODELS)
+            else prefs[Keys.ENABLED_MODELS] = JsonArray(models.map { JsonPrimitive(it) }).toString()
         }
     }
 

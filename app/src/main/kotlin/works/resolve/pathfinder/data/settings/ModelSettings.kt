@@ -18,6 +18,16 @@ data class ModelSettings(
     val showThinking: Boolean = false,
     /** Auto-retry of failed agent runs (pi's settings.retry; see [RetrySettings]). */
     val retry: RetrySettings = RetrySettings(),
+    /**
+     * Ordered scoped-model references, ported from pi's `enabledModels`
+     * setting (coding-agent settings-manager.ts). Pathfinder currently
+     * writes ordered canonical `"provider/modelId"` references; null means
+     * no configured scope — every available model is usable. An empty list
+     * is preserved as written but, as in pi (`!enabledModels?.length`),
+     * behaves as no scope downstream. Order is significant (pi's Ctrl+P
+     * cycling).
+     */
+    val enabledModels: List<String>? = null,
     /** Automatic compaction thresholds (pi's settings compaction object). */
     val compaction: CompactionSettings = DEFAULT_COMPACTION_SETTINGS,
 )
