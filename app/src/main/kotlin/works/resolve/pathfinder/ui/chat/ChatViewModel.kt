@@ -457,12 +457,20 @@ class ChatViewModel(
                         setError(ERROR_SESSION_SAVE)
                         return@launch
                     }
+                    val loadedConversation = Conversation(loaded.entries, loaded.leafId)
+                    val settings = modelSettingsFor(currentSettings, loadedConversation)
+                    val modelChanged = settings != currentSettings
+                    if (modelChanged) {
+                        currentSettings = settings
+                        syncThinkingFromSettings()
+                    }
                     val newSession = tryCreateSession(
-                        currentSettings,
+                        settings,
                         loaded.id,
-                        Conversation(loaded.entries, loaded.leafId),
+                        loadedConversation,
                     ) ?: return@launch
                     if (!activateSession(loaded, newSession)) return@launch
+                    if (modelChanged) refreshOptions()
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -514,15 +522,20 @@ class ChatViewModel(
                 }
             }
 
+            val resolved = resolveSession(settings, summaries)
+            // The restored branch's recorded model (last ModelChangeEntry on
+            // the root→leaf path) wins over the device default; the fold is
+            // conversation state, so the startup default is not rewritten.
+            val conversation = Conversation(resolved.entries, resolved.leafId)
+            settings = modelSettingsFor(settings, conversation)
             currentSettings = settings
             syncThinkingFromSettings()
-            val resolved = resolveSession(settings, summaries)
             // Build the runtime session before committing any state: a
             // failure must never leave a Ready UI or persisted active id.
             val newSession = tryCreateSession(
                 settings,
                 resolved.id,
-                Conversation(resolved.entries, resolved.leafId),
+                conversation,
             )
             if (newSession == null) {
                 updateState {
@@ -765,6 +778,36 @@ class ChatViewModel(
         )
         currentThinking = thinking
         refreshOptions()
+        if (_uiState.value.isStreaming) {
+            // Tree mutation is illegal while streaming (the in-flight
+            // response owns the leaf); the pick is captured in
+            // [currentSettings] now and the entry is appended at the next
+            // prompt, after the current response commits.
+            return
+        }
+        recordModelChange(option.providerId, option.modelId)
+    }
+
+    /** Appends the effective model switch to the tree and persists it. */
+    private fun recordModelChange(providerId: String, modelId: String) {
+        val currentSession = session ?: return
+        val updated = currentSession.conversation.appendModelChange(providerId, modelId)
+        currentSession.replaceConversation(updated)
+        enqueuePersist()
+    }
+
+    /**
+     * Makes the session self-describing before a prompt: when the active
+     * path records no model yet (or a different one, e.g. a pick deferred
+     * while streaming), the effective initial model is appended first.
+     */
+    private fun recordModelChangeForPrompt() {
+        val providerId = currentSettings.providerId
+        val modelId = currentSettings.modelId
+        if (providerId.isEmpty() || modelId.isEmpty()) return
+        val ref = Conversation.ModelRef(providerId, modelId)
+        if (activeConversation.activeModelRef() == ref) return
+        recordModelChange(providerId, modelId)
     }
 
     /** Applies a thinking pick to the live session and persists it per model. */
@@ -873,6 +916,20 @@ class ChatViewModel(
         if (!activateSession(resolved, newSession)) return
         // activateSession already reset navigation to the chat surface.
         updateState { it.copy(status = ChatStatus.Ready) }
+    }
+
+    /**
+     * Settings with the session branch's recorded model folded in: the last
+     * [works.resolve.pathfinder.data.sessions.ModelChangeEntry] on the active
+     * root→leaf path wins over the device default when it still names a
+     * catalog provider+model; absence keeps the default (not defensive
+     * logic — a fold with no entries is simply a default-model session).
+     */
+    private fun modelSettingsFor(settings: ModelSettings, conversation: Conversation): ModelSettings {
+        val ref = conversation.activeModelRef() ?: return settings
+        val provider = ProviderDescriptors.byId(ref.providerId) ?: return settings
+        if (provider.model(ref.modelId) == null) return settings
+        return settings.copy(providerId = ref.providerId, modelId = ref.modelId)
     }
 
     /**
@@ -1025,6 +1082,7 @@ class ChatViewModel(
 
         updateState { it.copy(draft = "") }
         try {
+            recordModelChangeForPrompt()
             currentSession.prompt(text)
         } catch (e: CancellationException) {
             // Abort (or ViewModel teardown): the runtime already committed its

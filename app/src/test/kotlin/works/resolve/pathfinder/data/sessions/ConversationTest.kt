@@ -93,6 +93,43 @@ class ConversationTest {
     }
 
     @Test
+    fun appendModelChangeAdvancesLeafAndFoldsToLastEntry() {
+        val c = newConversation()
+            .appendModelChange("anthropic", "claude-a")
+            .append(msg("a"))
+            .appendModelChange("openai", "gpt-b")
+
+        val change = c.entries.last()
+        assertEquals("gpt-b", (change as ModelChangeEntry).modelId)
+        assertEquals(c.leafId, change.id)
+        // Fold: last ModelChangeEntry on the active path wins; messages skip it.
+        assertEquals(Conversation.ModelRef("openai", "gpt-b"), c.activeModelRef())
+        assertEquals(listOf("a"), c.activeMessages().texts())
+    }
+
+    @Test
+    fun foldRespectsBranchMoves() {
+        val withChange = newConversation().appendModelChange("openai", "gpt-b")
+        val base = withChange.append(msg("a"))
+        val branched = base.appendModelChange("anthropic", "claude-a").append(msg("b"))
+
+        assertEquals(Conversation.ModelRef("anthropic", "claude-a"), branched.activeModelRef())
+
+        // Rewind to the first model-change entry's child: that branch's fold
+        // is the older entry.
+        val rewound = branched.branch(base.leafId!!)
+        assertEquals(Conversation.ModelRef("openai", "gpt-b"), rewound.activeModelRef())
+        // Rewind to the root's parent chain without any entry: fold is null.
+        assertNull(withChange.resetLeaf().activeModelRef())
+    }
+
+    @Test
+    fun foldIsNullWhenPathHasNoModelChange() {
+        assertNull(newConversation().activeModelRef())
+        assertNull(newConversation().append(msg("a")).activeModelRef())
+    }
+
+    @Test
     fun entryLookupAndUnknownBranchRejected() {
         val c = newConversation().append(msg("a"))
         assertEquals("e0", c.entry("e0")!!.id)

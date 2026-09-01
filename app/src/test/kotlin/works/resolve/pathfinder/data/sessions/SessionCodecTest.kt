@@ -45,6 +45,46 @@ class SessionCodecTest {
     }
 
     @Test
+    fun roundTripsModelChangeEntries() {
+        val root = MessageEntry("m0", null, 1L, userMessage("a", 1L))
+        val change = ModelChangeEntry("c0", "m0", 2L, providerId = "openai", modelId = "gpt-5")
+        val reply = MessageEntry("m1", "c0", 3L, userMessage("b", 3L))
+        val session = Session("sess-1", "t", 1, 3, entries = listOf(root, change, reply), leafId = "m1")
+
+        val decoded = SessionCodec.decode(SessionCodec.encode(session))
+
+        assertEquals(session, decoded)
+        // Message projection skips the model-change entry; the fold reads it.
+        assertEquals(listOf("a", "b"), decoded.messages.map { (it as ai.koog.prompt.message.Message.User).textContent() })
+        val decodedChange = decoded.entries[1] as ModelChangeEntry
+        assertEquals("openai", decodedChange.providerId)
+        assertEquals("gpt-5", decodedChange.modelId)
+    }
+
+    @Test
+    fun rejectsFormat3AndUnknownEntryKinds() {
+        // Format 3 (pre-model-change) is old data; no migration, per policy.
+        assertFailsWith<SessionDataException> {
+            SessionCodec.decode(
+                """{"format":3,"id":"s","title":"t","createdAt":1,"updatedAt":1,"entries":[],"leafId":null}""",
+            )
+        }
+        assertFailsWith<SessionDataException> {
+            SessionCodec.decode(
+                """{"format":4,"id":"s","title":"t","createdAt":1,"updatedAt":1,""" +
+                    """"entries":[{"kind":"summary","id":"m0","timestamp":0}],"leafId":"m0"}""",
+            )
+        }
+        // A model-change entry missing its model fields is malformed.
+        assertFailsWith<SessionDataException> {
+            SessionCodec.decode(
+                """{"format":4,"id":"s","title":"t","createdAt":1,"updatedAt":1,""" +
+                    """"entries":[{"kind":"modelChange","id":"c0","timestamp":0,"providerId":"openai"}],"leafId":"c0"}""",
+            )
+        }
+    }
+
+    @Test
     fun rejectsOldOrUnknownFormatsAndMalformedData() {
         // Old (pre-Koog) format.
         assertFailsWith<SessionDataException> {
@@ -65,7 +105,7 @@ class SessionCodecTest {
         // Malformed message payload.
         assertFailsWith<SessionDataException> {
             SessionCodec.decode(
-                """{"format":3,"id":"s","title":"t","createdAt":1,"updatedAt":1,""" +
+                """{"format":4,"id":"s","title":"t","createdAt":1,"updatedAt":1,""" +
                     """"entries":[{"kind":"message","id":"m0","timestamp":0,"message":{"type":"nonsense"}}],"leafId":"m0"}""",
             )
         }

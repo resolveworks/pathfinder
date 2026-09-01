@@ -41,6 +41,21 @@ class Conversation(
         return Conversation(entries + entry, entry.id, nextId, clock)
     }
 
+    /** The provider+model pair named by a [ModelChangeEntry]. */
+    data class ModelRef(val providerId: String, val modelId: String)
+
+    /** Appends a model switch as a first-class entry, mirroring [append]. */
+    fun appendModelChange(providerId: String, modelId: String): Conversation {
+        val entry = ModelChangeEntry(
+            id = nextId(),
+            parentId = leafId,
+            timestamp = clock.now().toEpochMilliseconds(),
+            providerId = providerId,
+            modelId = modelId,
+        )
+        return Conversation(entries + entry, entry.id, nextId, clock)
+    }
+
     /** Moves the leaf to [entryId]; throws [IllegalArgumentException] when unknown. */
     fun branch(entryId: String): Conversation {
         require(entries.any { it.id == entryId }) { "Unknown entry id: $entryId" }
@@ -67,6 +82,15 @@ class Conversation(
     /** Messages along the active root→leaf path, in order. */
     fun activeMessages(): List<Message> =
         activeEntries().filterIsInstance<MessageEntry>().map { it.message }
+
+    /**
+     * Folds the active root→leaf path to the branch's effective model: the
+     * last [ModelChangeEntry] on the path wins (pi's
+     * getSessionContextSettings), null when the path records none.
+     */
+    fun activeModelRef(): ModelRef? =
+        activeEntries().filterIsInstance<ModelChangeEntry>().lastOrNull()
+            ?.let { ModelRef(it.providerId, it.modelId) }
 
     /** Entry lookup by id. */
     fun entry(id: String): SessionEntry? = entries.firstOrNull { it.id == id }
