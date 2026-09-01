@@ -59,7 +59,7 @@ wins: keep the local shape and document it in KDoc rather than generalizing.
   from network input with an exhaustive `when` plus default — never
   `valueOf` on untrusted input. `valueOf` is acceptable only on catalog-
   or config-derived names where fail-fast is intended.
-- Persisted codecs (SessionCodec, CredentialCodec) stay strict: throw the
+- Persisted codecs (JsonlCodec, CredentialCodec) stay strict: throw the
   module exception on anything malformed or unknown, omit null optional
   fields on encode, and reject old formats rather than migrating.
 - Conversions between parallel pi enums (ThinkingLevel ↔

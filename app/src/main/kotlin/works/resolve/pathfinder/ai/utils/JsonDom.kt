@@ -105,7 +105,7 @@ private inline fun <N> JsonObject?.strictNumeric(key: String, parse: (JsonPrimit
 
 // --- Codec reads: strict, throw on missing/malformed ---
 // [error] receives the field name and returns the codec's own exception, so
-// SessionCodec/CredentialCodec keep their exception types without the shared
+// JsonlCodec/CredentialCodec keep their exception types without the shared
 // surface depending on them.
 
 /** Strict string field; throws [error]'s result when absent or not a string primitive. */
