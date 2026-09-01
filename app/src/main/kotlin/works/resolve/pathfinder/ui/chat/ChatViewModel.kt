@@ -43,12 +43,17 @@ import kotlinx.coroutines.withContext
  *
  * The chat's model is chosen from a picker above the composer over the
  * scoped model set (pi's scoped models): every model of configured
- * providers until curated in Settings, then the explicit set. Selecting a
- * model swaps it on the live session (transcript untouched) and persists
- * it as the startup default; an explicit pick is the only way persisted
- * model settings are ever written. When no usable default exists, the
- * first model of a configured provider is derived for the session.
- * Thinking is configured
+ * providers until curated in Settings, then the explicit set — which
+ * cannot be emptied by editing and degrades to the uncurated default
+ * when credential loss leaves it without a usable model. The selection
+ * is an invariant of that set: the chat always runs one of the scoped
+ * models. Selecting a model swaps it on the live session (transcript
+ * untouched) and persists it as the startup default; an explicit pick is
+ * the only way persisted model settings are ever written. Every other
+ * choice (startup default, session branch fold, scope edit removing the
+ * selected model) is derived as the first scoped model — applied to the
+ * live session and recorded in the tree like a pick, but never
+ * persisted. Thinking is configured
  * per model with Koog's own provider parameter values (see
  * [works.resolve.pathfinder.runtime.ThinkingOptions]) and the last choice
  * is persisted per model. Credentials are per-provider API keys stored in
@@ -173,8 +178,11 @@ class ChatViewModel(
     /**
      * Adds/removes one model in the scoped picker set. The uncurated default
      * (all configured models shown) materializes into an explicit set on
-     * the first edit. Scope edits never touch the live session and are
-     * allowed while streaming.
+     * the first edit; the set must keep at least one usable model, so
+     * unchecking the last one is rejected. The selection is kept inside the
+     * set: removing the selected model re-derives it as the first remaining
+     * scoped model, swapped on the live session like a pick (allowed while
+     * streaming; the tree entry defers to the next prompt).
      */
     fun toggleModelScope(option: ModelOption, enabled: Boolean) {
         viewModelScope.launch { toggleModelScopeInternal(option, enabled) }
@@ -462,14 +470,24 @@ class ChatViewModel(
                         return@launch
                     }
                     val loadedConversation = Conversation(loaded.entries, loaded.leafId)
-                    val settings = modelSettingsFor(currentSettings, loadedConversation)
-                    if (settings == null) {
+                    val folded = modelSettingsFor(currentSettings, loadedConversation)
+                    if (folded == null) {
                         // The branch records a model the current catalog no
                         // longer offers; the chat stays closed rather than
                         // silently continuing on the device default.
                         setError(ERROR_CONFIG_INVALID)
                         return@launch
                     }
+                    // Scope policy, same as startup: a branch model outside
+                    // the scoped set is constrained to the first scoped
+                    // model (recorded with the next prompt), never run.
+                    val settings = constrainToScope(
+                        folded,
+                        resolveScopedModels(
+                            currentSettings.enabledModels,
+                            modelOptionsFor(credentials.list().toSet()),
+                        ),
+                    )
                     val modelChanged = settings != currentSettings
                     if (modelChanged) {
                         currentSettings = settings
@@ -495,11 +513,12 @@ class ChatViewModel(
 
     /**
      * The single configuration/session establishment flow: validates
-     * persisted refs, derives a usable model when the stored default has
-     * none to run, resolves and activates the session (restoring its
-     * recorded model via the branch fold), and enters the chat. Runs at
-     * startup and is replayed by [onCredentialStored] whenever a stored
-     * credential unblocks configuration.
+     * persisted refs, derives a usable model when the stored or
+     * branch-folded default names one outside the scoped set, resolves and
+     * activates the session (restoring its recorded model via the branch
+     * fold), and enters the chat. Runs at startup and is replayed by
+     * [onCredentialStored] whenever a stored credential unblocks
+     * configuration.
      */
     private suspend fun initialize() {
         try {
@@ -522,30 +541,22 @@ class ChatViewModel(
                 updateState { it.copy(status = ChatStatus.Failed, sessionSummaries = summaries) }
                 return
             }
-            // With no usable stored model (never chosen, or its provider lost
-            // its credential), the first model of a configured provider is
-            // derived for this session only — never written back, so a stale
-            // stored default is not silently rewritten. Only a
-            // credential-less install stays unconfigured, pinned to the
-            // providers step.
-            if (!hasUsableModel(settings, configuredIds)) {
-                val option = modelOptionsFor(configuredIds).firstOrNull()
-                if (option == null) {
-                    // No configured provider has any catalog model: the
-                    // first-run providers step is the only useful surface.
-                    currentSettings = stored
-                    refreshOptions(configuredIds)
-                    updateState {
-                        it.copy(
-                            status = ChatStatus.NeedsConfiguration,
-                            startKey = ProvidersNavKey,
-                            showThinking = stored.showThinking,
-                            sessionSummaries = summaries,
-                        )
-                    }
-                    return
+            // The scoped set drives model usability: with no scoped model at
+            // all (no configured provider has a catalog model), the
+            // first-run providers step is the only useful surface.
+            val scopedOptions = resolveScopedModels(stored.enabledModels, modelOptionsFor(configuredIds))
+            if (scopedOptions.isEmpty()) {
+                currentSettings = stored
+                refreshOptions(configuredIds)
+                updateState {
+                    it.copy(
+                        status = ChatStatus.NeedsConfiguration,
+                        startKey = ProvidersNavKey,
+                        showThinking = stored.showThinking,
+                        sessionSummaries = summaries,
+                    )
                 }
-                settings = stored.copy(providerId = option.providerId, modelId = option.modelId)
+                return
             }
 
             val resolved = resolveSession(settings, summaries)
@@ -562,7 +573,12 @@ class ChatViewModel(
                 updateState { it.copy(status = ChatStatus.Failed, sessionSummaries = summaries) }
                 return
             }
-            settings = folded
+            // Scope policy: a default (stored or branch-folded) naming a
+            // model outside the scoped set is constrained to the first
+            // scoped model — derived for this session only and never
+            // written back, so a stale stored default is not silently
+            // rewritten.
+            settings = constrainToScope(folded, scopedOptions)
             currentSettings = settings
             syncThinkingFromSettings()
             // Build the runtime session before committing any state: a
@@ -845,6 +861,32 @@ class ChatViewModel(
         recordModelChange(providerId, modelId)
     }
 
+    /**
+     * Applies a derived (not user-picked) model choice: swapped on the live
+     * session and recorded in the tree exactly like an explicit pick
+     * (deferred to the next prompt while streaming), but — per the
+     * settings-write policy — never written to persisted model settings;
+     * the next derivation (startup, session switch) reproduces it.
+     */
+    private suspend fun applyDerivedModel(option: ModelOption) {
+        val provider = ProviderDescriptors.byId(option.providerId) ?: return
+        val model = provider.model(option.modelId) ?: return
+        val modelRef = "${option.providerId}/${option.modelId}"
+        val thinking = ThinkingOptions.parse(provider.id, model.model, currentSettings.thinkingPrefs[modelRef])
+        session?.selectModel(model, thinking)
+        currentSettings = currentSettings.copy(providerId = option.providerId, modelId = option.modelId)
+        currentThinking = thinking
+        refreshOptions()
+        if (_uiState.value.isStreaming) {
+            // Tree mutation is illegal while streaming (the in-flight
+            // response owns the leaf); the derived choice is captured in
+            // [currentSettings] now and the entry is appended at the next
+            // prompt, after the current response commits.
+            return
+        }
+        recordModelChange(option.providerId, option.modelId)
+    }
+
     /** Applies a thinking pick to the live session and persists it per model. */
     private suspend fun setThinkingInternal(option: ThinkingOption) {
         val currentSession = session ?: return
@@ -868,12 +910,20 @@ class ChatViewModel(
     /**
      * Adds/removes one model in the scoped picker set, materializing the
      * uncurated "all models" default into an explicit set on first edit.
+     * Unchecking the last usable model is rejected (the picker must never
+     * go empty), and removing the selected model re-derives the selection
+     * as the first remaining scoped model via [applyDerivedModel].
      */
     private suspend fun toggleModelScopeInternal(option: ModelOption, enabled: Boolean) {
         val current = currentSettings.enabledModels
             ?: _uiState.value.modelOptions.map { "${it.providerId}/${it.modelId}" }.toSet()
         val modelRef = "${option.providerId}/${option.modelId}"
         val next = if (enabled) current + modelRef else current - modelRef
+        val nextScoped = _uiState.value.modelOptions.filter { "${it.providerId}/${it.modelId}" in next }
+        if (nextScoped.isEmpty()) {
+            setError(ERROR_SCOPE_EMPTY)
+            return
+        }
         try {
             settingsRepository.setEnabledModels(next)
         } catch (e: CancellationException) {
@@ -884,12 +934,12 @@ class ChatViewModel(
             return
         }
         currentSettings = currentSettings.copy(enabledModels = next)
-        updateState {
-            it.copy(
-                modelScope = next,
-                scopedModels = it.modelOptions.filter { m -> "${m.providerId}/${m.modelId}" in next },
-            )
+        val selectionRef = "${currentSettings.providerId}/${currentSettings.modelId}"
+        if (nextScoped.any { "${it.providerId}/${it.modelId}" == selectionRef }) {
+            updateState { it.copy(modelScope = next, scopedModels = nextScoped) }
+            return
         }
+        applyDerivedModel(nextScoped.first())
     }
 
     private suspend fun saveProviderCredentialInternal(provider: ProviderOption, apiKey: String) {
@@ -947,6 +997,21 @@ class ChatViewModel(
     }
 
     /**
+     * The scope policy applied to derived choices (stored default or
+     * session branch fold): a model outside the scoped set never runs; the
+     * first scoped model is derived instead (see [applyDerivedModel] for
+     * the live-session and write policy). An empty scoped set (no
+     * configured provider has a catalog model) constrains nothing.
+     */
+    private fun constrainToScope(settings: ModelSettings, scopedModels: List<ModelOption>): ModelSettings {
+        if (scopedModels.any { it.providerId == settings.providerId && it.modelId == settings.modelId }) {
+            return settings
+        }
+        val derived = scopedModels.firstOrNull() ?: return settings
+        return settings.copy(providerId = derived.providerId, modelId = derived.modelId)
+    }
+
+    /**
      * True iff every persisted provider/model ref names a current catalog
      * model: the curated scope ([ModelSettings.enabledModels]) and the
      * [ModelSettings.thinkingPrefs] keys, each with a label still offered
@@ -975,16 +1040,6 @@ class ChatViewModel(
         return provider.model(ref.removePrefix("${provider.id}/"))
     }
 
-    /**
-     * True iff settings name a descriptor provider+model of a provider in
-     * [configuredIds].
-     */
-    private fun hasUsableModel(settings: ModelSettings, configuredIds: Set<String>): Boolean {
-        val provider = ProviderDescriptors.byId(settings.providerId) ?: return false
-        if (provider.model(settings.modelId) == null) return false
-        return provider.id in configuredIds
-    }
-
     /** Every model of the configured providers, provider-then-model sorted. */
     private fun modelOptionsFor(configuredIds: Set<String>): List<ModelOption> =
         ProviderDescriptors.all
@@ -1004,15 +1059,20 @@ class ChatViewModel(
     /**
      * The model picker's list: the explicit scope when curated (refs whose
      * provider lost its credential drop out via [modelOptionsFor]), else
-     * every model of configured providers (pi's "all enabled" default).
+     * every model of configured providers (pi's "all enabled" default). A
+     * curated scope left effectively empty by credential loss degrades to
+     * that same default — the picker is never empty while any configured
+     * provider has a catalog model (and editing cannot empty it either,
+     * see [toggleModelScopeInternal]).
      */
     private fun resolveScopedModels(
         enabledModels: Set<String>?,
         modelOptions: List<ModelOption>,
     ): List<ModelOption> =
-        enabledModels?.let { refs ->
-            modelOptions.filter { "${it.providerId}/${it.modelId}" in refs }
-        } ?: modelOptions
+        enabledModels
+            ?.let { refs -> modelOptions.filter { "${it.providerId}/${it.modelId}" in refs } }
+            ?.takeIf { it.isNotEmpty() }
+            ?: modelOptions
 
     /** Thinking options for the current model, plus the applied option. */
     private fun thinkingProjection(): Pair<List<ThinkingOption>, ThinkingOption> {
@@ -1181,6 +1241,7 @@ class ChatViewModel(
         const val ERROR_CREDENTIAL_INCOMPLETE = "Enter this provider's API key before using its models"
         const val ERROR_CREDENTIAL_SAVE = "Could not store the API key"
         const val ERROR_SETTINGS_SAVE = "Could not save the configuration"
+        const val ERROR_SCOPE_EMPTY = "Keep at least one model in the set"
         const val ERROR_CONFIG_INVALID = "Invalid configuration"
         const val ERROR_SESSION_CREATE = "Could not create a new chat"
         const val ERROR_SESSION_LOAD = "Could not open the chat"

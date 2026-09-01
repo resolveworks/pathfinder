@@ -14,7 +14,10 @@ data class ModelSettings(
      * The scoped model set for the chat model picker, as `provider/model`
      * refs. Null (never curated) means every model of every configured
      * provider is offered; an explicit set is offered as-is, minus refs
-     * whose provider no longer has a credential.
+     * whose provider no longer has a credential. A set left effectively
+     * empty by credential loss degrades to the uncurated default, and
+     * editing can never empty it (the last usable model stays in), so the
+     * picker is never empty while a configured model exists.
      */
     val enabledModels: Set<String>? = null,
     /**

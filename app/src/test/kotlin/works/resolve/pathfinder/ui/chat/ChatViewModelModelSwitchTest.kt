@@ -171,6 +171,21 @@ class ChatViewModelModelSwitchTest {
         )
     }
 
+    /** Catalog options of one provider, name-sorted like the picker list. */
+    private fun providerOptions(providerId: String): List<ModelOption> {
+        val provider = ProviderDescriptors.byId(providerId)!!
+        return provider.models
+            .map { model ->
+                ModelOption(
+                    providerId = provider.id,
+                    providerName = provider.displayName,
+                    modelId = model.id,
+                    name = model.displayName,
+                )
+            }
+            .sortedBy { it.name }
+    }
+
     @Test
     fun switchingModelBetweenPromptsRoutesNextPromptToNewProvider() {
         Dispatchers.setMain(Dispatchers.Unconfined)
@@ -417,6 +432,276 @@ class ChatViewModelModelSwitchTest {
         }
     }
 
+    /**
+     * The scope-selection invariant, as a scope edit: unchecking every
+     * model of the selected model's provider re-derives the selection as
+     * the first remaining scoped model — swapped on the live session and
+     * recorded in the tree like a pick, but (a derived, not picked, model)
+     * never written to persisted model settings.
+     */
+    @Test
+    fun removingSelectedModelFromScopeReSelectsFirstScopedModel() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val anthropic = ProviderDescriptors.byId("anthropic")!!
+            val settings = FakeSettings(
+                ModelSettings(providerId = "anthropic", modelId = anthropic.models.first().id),
+            )
+            val credentials = FakeCredentials(setOf("anthropic", "openai"))
+            val runtime = RecordingRuntime(credentials, mutableListOf(), ArrayDeque())
+            val sessions = FakeSessions()
+            val (viewModel, _) = viewModel(runtime, credentials, settings, sessions)
+
+            awaitReady(viewModel)
+            assertEquals("anthropic", viewModel.uiState.value.selectedModel?.providerId)
+
+            // The user scopes the picker down to OpenAI only; the first edit
+            // materializes the uncurated default into an explicit set.
+            providerOptions("anthropic").forEach { option ->
+                viewModel.toggleModelScope(option, enabled = false)
+            }
+
+            val expected = providerOptions("openai").first()
+            assertEquals(expected.providerId, viewModel.uiState.value.selectedModel?.providerId)
+            assertEquals(expected.modelId, viewModel.uiState.value.selectedModel?.modelId)
+            assertTrue(viewModel.uiState.value.scopedModels.none { it.providerId == "anthropic" })
+            assertEquals(
+                providerOptions("openai").map { "${it.providerId}/${it.modelId}" }.toSet(),
+                settings.settings.enabledModels,
+            )
+
+            // The swap is conversation state…
+            awaitCondition("scoped model change recorded") {
+                sessions.sessions.singleOrNull()?.entries
+                    ?.filterIsInstance<ModelChangeEntry>()
+                    ?.any { it.providerId == expected.providerId && it.modelId == expected.modelId } == true
+            }
+            // …but only an explicit pick persists model settings.
+            assertEquals("anthropic", settings.settings.providerId)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    /**
+     * The picker can never be emptied by editing: unchecking the last
+     * scoped model is rejected with an error, leaving the scope and the
+     * selection untouched.
+     */
+    @Test
+    fun uncheckingTheLastScopedModelIsRejected() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val anthropic = ProviderDescriptors.byId("anthropic")!!
+            val settings = FakeSettings(
+                ModelSettings(providerId = "anthropic", modelId = anthropic.models.first().id),
+            )
+            val credentials = FakeCredentials(setOf("anthropic"))
+            val runtime = RecordingRuntime(credentials, mutableListOf(), ArrayDeque())
+            val (viewModel, _) = viewModel(runtime, credentials, settings)
+
+            awaitReady(viewModel)
+
+            // Scope down to a single model; the invariant forces the
+            // selection onto it.
+            val survivor = providerOptions("anthropic").first()
+            providerOptions("anthropic").filter { it.modelId != survivor.modelId }.forEach { option ->
+                viewModel.toggleModelScope(option, enabled = false)
+            }
+            awaitCondition("scoped to one model") { viewModel.uiState.value.scopedModels.size == 1 }
+            assertEquals(survivor.modelId, viewModel.uiState.value.selectedModel?.modelId)
+
+            viewModel.toggleModelScope(survivor, enabled = false)
+            Thread.sleep(100)
+
+            kotlin.test.assertNotNull(viewModel.uiState.value.error)
+            assertEquals(survivor.modelId, viewModel.uiState.value.selectedModel?.modelId)
+            assertEquals(setOf("anthropic/${survivor.modelId}"), settings.settings.enabledModels)
+            assertEquals(listOf(survivor.modelId), viewModel.uiState.value.scopedModels.map { it.modelId })
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    /**
+     * A scope edit while streaming follows the pick-while-streaming rule:
+     * the re-derived selection applies immediately (the in-flight response
+     * is unaffected) and the tree entry defers to the next prompt.
+     */
+    @Test
+    fun removingSelectedModelFromScopeWhileStreamingAppliesToNextPrompt() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val anthropic = ProviderDescriptors.byId("anthropic")!!
+            val seenProviders = mutableListOf<LLMProvider>()
+            val settings = FakeSettings(
+                ModelSettings(providerId = "anthropic", modelId = anthropic.models.first().id),
+            )
+            val credentials = FakeCredentials(setOf("anthropic", "openai"))
+            val framesQueue = ArrayDeque<() -> Flow<StreamFrame>>()
+            framesQueue.add(::neverEndingFrames) // prompt 1: streams until stopped
+            framesQueue.add(::completedFrames)   // prompt 2: after the swap
+            val runtime = RecordingRuntime(credentials, seenProviders, framesQueue)
+            val sessions = FakeSessions()
+            val (viewModel, _) = viewModel(runtime, credentials, settings, sessions)
+
+            awaitReady(viewModel)
+            viewModel.onDraftChange("first message")
+            viewModel.send()
+            assertTrue(viewModel.uiState.value.isStreaming)
+
+            providerOptions("anthropic").forEach { option ->
+                viewModel.toggleModelScope(option, enabled = false)
+            }
+
+            val expected = providerOptions("openai").first()
+            assertEquals(expected.providerId, viewModel.uiState.value.selectedModel?.providerId)
+            assertTrue(viewModel.uiState.value.isStreaming) // in-flight response unaffected
+            // The tree entry defers while streaming.
+            assertTrue(
+                sessions.sessions.singleOrNull()?.entries
+                    ?.filterIsInstance<ModelChangeEntry>()
+                    ?.none { it.providerId == "openai" } == true,
+            )
+
+            viewModel.stop()
+            awaitIdle(viewModel, "after stop")
+            viewModel.onDraftChange("second message")
+            viewModel.send()
+            awaitIdle(viewModel, "after send2")
+
+            assertEquals(listOf<LLMProvider>(LLMProvider.Anthropic, LLMProvider.OpenAI), seenProviders)
+            awaitCondition("deferred model change recorded") {
+                sessions.sessions.singleOrNull()?.entries
+                    ?.filterIsInstance<ModelChangeEntry>()
+                    ?.any { it.providerId == "openai" } == true
+            }
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    /**
+     * Scope policy at startup: a stored default outside the curated scope
+     * is constrained to the first scoped model (derived, never persisted).
+     */
+    @Test
+    fun outOfScopeStoredDefaultIsConstrainedToScopeAtStartup() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val anthropic = ProviderDescriptors.byId("anthropic")!!
+            val scoped = providerOptions("openai").first()
+            val settings = FakeSettings(
+                ModelSettings(
+                    providerId = "anthropic",
+                    modelId = anthropic.models.first().id,
+                    enabledModels = setOf("${scoped.providerId}/${scoped.modelId}"),
+                ),
+            )
+            val credentials = FakeCredentials(setOf("anthropic", "openai"))
+            val runtime = RecordingRuntime(credentials, mutableListOf(), ArrayDeque())
+            val (viewModel, _) = viewModel(runtime, credentials, settings)
+
+            awaitReady(viewModel)
+            assertEquals(scoped.providerId, viewModel.uiState.value.selectedModel?.providerId)
+            assertEquals(scoped.modelId, viewModel.uiState.value.selectedModel?.modelId)
+            assertEquals(listOf(scoped.modelId), viewModel.uiState.value.scopedModels.map { it.modelId })
+            // Derived, not picked: the stored default is untouched.
+            assertEquals("anthropic", settings.settings.providerId)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    /**
+     * Scope policy on session switch: a branch that recorded a model
+     * outside the curated scope is constrained to the first scoped model
+     * (recorded and routed with the next prompt) instead of silently
+     * running the out-of-scope model.
+     */
+    @Test
+    fun switchingToSessionWithOutOfScopeRecordedModelConstrainsToScope() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val anthropic = ProviderDescriptors.byId("anthropic")!!
+            val scoped = providerOptions("openai").first()
+            val settings = FakeSettings(
+                ModelSettings(
+                    providerId = "anthropic",
+                    modelId = anthropic.models.first().id,
+                    enabledModels = setOf("${scoped.providerId}/${scoped.modelId}"),
+                ),
+            )
+            val credentials = FakeCredentials(setOf("anthropic", "openai"))
+            val framesQueue = ArrayDeque<() -> Flow<StreamFrame>>()
+            framesQueue.add(::completedFrames)
+            val seenProviders = mutableListOf<LLMProvider>()
+            val runtime = RecordingRuntime(credentials, seenProviders, framesQueue)
+            val sessions = FakeSessions()
+            val (viewModel, _) = viewModel(runtime, credentials, settings, sessions)
+
+            awaitReady(viewModel)
+
+            val recordedId = kotlinx.coroutines.runBlocking {
+                val stored = sessions.create("recorded")
+                val user = MessageEntry("m0", null, 1L, userMessage("hello"))
+                val change = ModelChangeEntry("c0", "m0", 2L, "anthropic", anthropic.models.first().id)
+                sessions.save(stored.copy(entries = listOf(user, change), leafId = change.id))
+                stored.id
+            }
+
+            viewModel.switchSession(recordedId)
+            awaitCondition("switched") { viewModel.uiState.value.activeSessionId == recordedId }
+            assertEquals(ChatStatus.Ready, viewModel.uiState.value.status)
+            kotlin.test.assertNull(viewModel.uiState.value.error)
+            assertEquals(scoped.providerId, viewModel.uiState.value.selectedModel?.providerId)
+            assertEquals(scoped.modelId, viewModel.uiState.value.selectedModel?.modelId)
+
+            viewModel.onDraftChange("continue")
+            viewModel.send()
+            awaitIdle(viewModel, "after send")
+            assertEquals(listOf<LLMProvider>(LLMProvider.OpenAI), seenProviders)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    /**
+     * A curated scope whose providers all lost their credentials degrades
+     * to the uncurated default: every configured provider's models are
+     * offered and the selection is derived from them — never left on a
+     * model whose provider cannot run.
+     */
+    @Test
+    fun scopeLeftUnusableByCredentialLossDegradesToAllConfiguredModels() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val anthropic = ProviderDescriptors.byId("anthropic")!!
+            val settings = FakeSettings(
+                ModelSettings(
+                    providerId = "anthropic",
+                    modelId = anthropic.models.first().id,
+                    enabledModels = providerOptions("anthropic")
+                        .map { "${it.providerId}/${it.modelId}" }
+                        .toSet(),
+                ),
+            )
+            // Anthropic's credential is gone; only OpenAI is configured.
+            val credentials = FakeCredentials(setOf("openai"))
+            val runtime = RecordingRuntime(credentials, mutableListOf(), ArrayDeque())
+            val (viewModel, _) = viewModel(runtime, credentials, settings)
+
+            awaitReady(viewModel)
+            val expected = providerOptions("openai").first()
+            assertEquals(expected.providerId, viewModel.uiState.value.selectedModel?.providerId)
+            assertEquals(expected.modelId, viewModel.uiState.value.selectedModel?.modelId)
+            assertTrue(viewModel.uiState.value.scopedModels.isNotEmpty())
+            assertTrue(viewModel.uiState.value.scopedModels.all { it.providerId == "openai" })
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
     /** Persisted refs from an older catalog reject initialization. */
     @Test
     fun stalePersistedScopeRefFailsInitialization() {
@@ -505,19 +790,20 @@ class ChatViewModelModelSwitchTest {
     /**
      * First-run completion restores a pre-existing session's recorded model
      * via the same branch fold as startup — no bespoke first-run model
-     * choice bypassing the session's own history.
+     * choice bypassing the session's own history. The recorded model must
+     * be scoped (its provider credentialed): the stored default is empty,
+     * so only the fold can produce the selection.
      */
     @Test
     fun firstRunCompletionRestoresTheSessionRecordedModel() {
         Dispatchers.setMain(Dispatchers.Unconfined)
         try {
-            val openai = ProviderDescriptors.byId("openai")!!
-            val openaiModel = openai.models.first()
+            val recorded = providerOptions("anthropic").first()
             val sessions = FakeSessions()
             val storedId = kotlinx.coroutines.runBlocking {
                 val stored = sessions.create("saved")
                 val user = MessageEntry("m0", null, 1L, userMessage("hello"))
-                val change = ModelChangeEntry("c0", "m0", 2L, openai.id, openaiModel.id)
+                val change = ModelChangeEntry("c0", "m0", 2L, recorded.providerId, recorded.modelId)
                 sessions.save(stored.copy(entries = listOf(user, change), leafId = change.id))
                 stored.id
             }
@@ -543,8 +829,8 @@ class ChatViewModelModelSwitchTest {
             )
 
             awaitReady(viewModel)
-            assertEquals(openai.id, viewModel.uiState.value.selectedModel?.providerId)
-            assertEquals(openaiModel.id, viewModel.uiState.value.selectedModel?.modelId)
+            assertEquals(recorded.providerId, viewModel.uiState.value.selectedModel?.providerId)
+            assertEquals(recorded.modelId, viewModel.uiState.value.selectedModel?.modelId)
         } finally {
             Dispatchers.resetMain()
         }

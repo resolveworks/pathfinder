@@ -166,7 +166,12 @@ data class ChatUiState(
      * [modelOptions] entry is in the picker).
      */
     val modelScope: Set<String>? = null,
-    /** The model picker's list above the composer (scope-resolved). */
+    /**
+     * The model picker's list above the composer: the curated scope (or
+     * every model) resolved against configured providers; never empty
+     * while configured models exist. [selectedModel] is always one of
+     * these.
+     */
     val scopedModels: List<ModelOption> = emptyList(),
     /** The committed selection projected from settings, or null when unset/invalid. */
     val selectedModel: SelectedModel? = null,
