@@ -54,8 +54,14 @@ internal object SessionCodec {
     }
 
     private fun decodeV3(obj: JsonObject): Session {
-        val entries = (obj["entries"] as? JsonArray)
+        val entryArray = (obj["entries"] as? JsonArray)
             ?: throw SessionDataException("Malformed session data: missing entries")
+        val entries = entryArray.map(::decodeEntry)
+        validateGraph(entries)
+        val leafId = obj.stringField("leafId")
+        if (leafId != null && entries.none { it.id == leafId }) {
+            throw SessionDataException("Malformed session data: leafId not in entries: $leafId")
+        }
         return Session(
             id = requireId(obj.stringField("id") ?: throw SessionDataException("Malformed session data: missing id")),
             title = obj.stringField("title") ?: throw SessionDataException("Malformed session data: missing title"),
@@ -63,9 +69,47 @@ internal object SessionCodec {
                 ?: throw SessionDataException("Malformed session data: missing createdAt"),
             updatedAt = obj.longField("updatedAt")
                 ?: throw SessionDataException("Malformed session data: missing updatedAt"),
-            entries = entries.map(::decodeEntry),
-            leafId = obj.stringField("leafId"),
+            entries = entries,
+            leafId = leafId,
         )
+    }
+
+    /**
+     * Graph invariants enforced at the decode boundary: unique entry ids and
+     * parent references that exist and never loop (self-parents included).
+     * With these guaranteed, [Conversation] never needs runtime cycle/orphan
+     * guards. A null `leafId` stays legal (brand-new/empty session).
+     */
+    private fun validateGraph(entries: List<SessionEntry>) {
+        val byId = HashMap<String, SessionEntry>(entries.size)
+        for (entry in entries) {
+            if (byId.put(entry.id, entry) != null) {
+                throw SessionDataException("Malformed session data: duplicate entry id: ${entry.id}")
+            }
+        }
+        for (entry in entries) {
+            val pid = entry.parentId ?: continue
+            if (pid == entry.id) {
+                throw SessionDataException("Malformed session data: entry ${entry.id} parents itself")
+            }
+            if (pid !in byId) {
+                throw SessionDataException("Malformed session data: entry ${entry.id} references unknown parentId: $pid")
+            }
+        }
+        // Parent chains must terminate at a root. `resolved` marks entries
+        // already proven acyclic so the whole pass stays linear.
+        val resolved = HashSet<String>()
+        for (entry in entries) {
+            val onPath = LinkedHashSet<String>()
+            var current: SessionEntry? = entry
+            while (current != null && current.id !in resolved) {
+                if (!onPath.add(current.id)) {
+                    throw SessionDataException("Malformed session data: cycle in parent chain at entry ${current.id}")
+                }
+                current = current.parentId?.let(byId::get)
+            }
+            resolved += onPath
+        }
     }
 
     // ---- Entries ----

@@ -50,13 +50,14 @@ class Conversation(
     /** Clears the leaf; the next append starts a new root. */
     fun resetLeaf(): Conversation = Conversation(entries, null, nextId, clock)
 
-    /** Root→leaf path (pi's getBranch), in conversation order. */
+    /** Root→leaf path (pi's getBranch), in conversation order. Graph
+     * invariants (existing parents, no cycles) are enforced at the decode
+     * boundary, so the walk needs no cycle guard. */
     fun activeEntries(): List<SessionEntry> {
         val byId = entries.associateBy { it.id }
         val path = ArrayDeque<SessionEntry>()
         var current = leafId?.let(byId::get)
-        val seen = HashSet<String>()
-        while (current != null && seen.add(current.id)) {
+        while (current != null) {
             path.addFirst(current)
             current = current.parentId?.let(byId::get)
         }
@@ -71,8 +72,9 @@ class Conversation(
     fun entry(id: String): SessionEntry? = entries.firstOrNull { it.id == id }
 
     /**
-     * Tree over all entries. Roots are entries with null or self parentId, or
-     * whose parent is missing (orphans get promoted to roots, like pi).
+     * Tree over all entries. Roots are entries with a null parentId — the
+     * codec's decode-time graph validation rules out orphans and self-parents
+     * for persisted sessions, and the in-memory operations preserve that.
      * Children are sorted oldest-first by timestamp.
      *
      * Built iteratively (leaves-first) rather than with recursion: a linear
@@ -82,10 +84,7 @@ class Conversation(
     fun tree(): List<SessionTreeNode> {
         val byId = entries.associateBy { it.id }
 
-        fun isRoot(entry: SessionEntry): Boolean {
-            val pid = entry.parentId
-            return pid == null || pid == entry.id || byId[pid] == null
-        }
+        fun isRoot(entry: SessionEntry): Boolean = entry.parentId == null
 
         // Children grouped by (existing) parent id.
         val childrenOf = HashMap<String?, MutableList<SessionEntry>>()
