@@ -17,6 +17,21 @@ import java.net.URI
 import java.nio.charset.StandardCharsets
 
 /**
+ * Validated outcome of the browser redirect received by [CodexLoopbackServer.awaitRedirect]:
+ * the authorization `code` for a valid callback, or the OAuth `error`
+ * (with optional `error_description`) when the provider redirected with an
+ * error. The server has already validated the state echo and the code, so
+ * callers can trust these values without re-parsing the redirect URL.
+ */
+sealed interface RedirectResult {
+    /** Valid callback carrying authorization [code]. */
+    data class Success(val code: String) : RedirectResult
+
+    /** Provider error redirect: [error] code and optional [description]. */
+    data class ErrorResponse(val error: String, val description: String?) : RedirectResult
+}
+
+/**
  * One-shot loopback HTTP listener that completes the Codex browser sign-in
  * on-device the way pi's CLI does on desktop (`startLocalOAuthServer` in
  * `packages/ai/src/auth/oauth/openai-codex.ts`): the authorize URL is opened
@@ -26,11 +41,11 @@ import java.nio.charset.StandardCharsets
  * listener instead of a dead port.
  *
  * Responses mirror pi's server so the browser shows the flow's outcome: 404
- * for foreign paths, 400 with an error page for a `state` mismatch or a
- * missing code, and the success page ("OpenAI authentication completed. You
- * can close this window.") for the valid callback. The valid callback's full
- * URL is returned from [awaitRedirect] and validated again (defense in
- * depth) plus exchanged by [CodexOAuthClient.completeBrowserLogin].
+ * for foreign paths, 400 with an error page for a `state` mismatch, a
+ * missing code, or an OAuth `error` redirect, and the success page ("OpenAI
+ * authentication completed. You can close this window.") for the valid
+ * callback. The already-validated outcome is returned from [awaitRedirect]
+ * and exchanged by [CodexOAuthClient.completeBrowserLogin].
  *
  * Pure socket component: no HTTP client and no Android dependencies, bound
  * to the loopback interface only (the fixed registered port; overridable so
@@ -78,14 +93,15 @@ class CodexLoopbackServer(private val state: String) : AutoCloseable {
     }
 
     /**
-     * Accepts requests until the valid callback arrives and returns its full
-     * URL (origin-form targets are reconstructed against the bound port).
+     * Accepts requests until the valid callback (or an OAuth error redirect)
+     * arrives and returns the validated [RedirectResult] (origin-form
+     * targets are reconstructed against the bound port for parsing).
      * Suspends while waiting — there is deliberately no timeout, matching
      * pi's server; cancellation is the exit. Foreign or invalid requests are
      * answered and skipped, so stray connections (favicons, preconnects)
      * cannot consume the listener.
      */
-    suspend fun awaitRedirect(): String {
+    suspend fun awaitRedirect(): RedirectResult {
         val server = requireBound()
         while (true) {
             val socket = runInterruptible(Dispatchers.IO) { server.accept() }
@@ -110,11 +126,11 @@ class CodexLoopbackServer(private val state: String) : AutoCloseable {
         serverSocket ?: throw CodexOAuthException("Sign-in could not be started.")
 
     /**
-     * Answers one request: returns the full callback URL for the valid
-     * redirect, or null when the request must be skipped (the accept loop
-     * then continues waiting).
+     * Answers one request: returns the validated [RedirectResult] for the
+     * redirect that ends the flow, or null when the request must be skipped
+     * (the accept loop then continues waiting).
      */
-    private fun serve(socket: Socket): String? {
+    private fun serve(socket: Socket): RedirectResult? {
         socket.soTimeout = headerTimeoutMillis
         val head = readRequestHead(socket) ?: run {
             Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_REQUEST_UNREADABLE)
@@ -139,14 +155,22 @@ class CodexLoopbackServer(private val state: String) : AutoCloseable {
             respond(socket, 400, "Bad Request", errorPage("State mismatch."))
             return null
         }
-        if (query["code"].isNullOrEmpty()) {
+        val error = query["error"]
+        if (error != null) {
+            val description = query["error_description"]
+            Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_AUTHORIZATION_DENIED)
+            respond(socket, 400, "Bad Request", errorPage("Sign-in failed: ${htmlEscape(description ?: error)}."))
+            return RedirectResult.ErrorResponse(error, description)
+        }
+        val code = query["code"]
+        if (code.isNullOrEmpty()) {
             Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_CALLBACK_CODE_MISSING)
             respond(socket, 400, "Bad Request", errorPage("Missing authorization code."))
             return null
         }
         respond(socket, 200, "OK", successPage())
         Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_CALLBACK_ACCEPTED)
-        return url
+        return RedirectResult.Success(code)
     }
 
     /** Reads up to the end of the request head; null when unreadable or truncated. */
@@ -190,6 +214,10 @@ class CodexLoopbackServer(private val state: String) : AutoCloseable {
 
     /** pi's oauthErrorHtml, reduced to the message the user needs. */
     private fun errorPage(message: String): String = page("Authentication failed", message)
+
+    /** The description comes from the redirect's query string; escape it for the page. */
+    private fun htmlEscape(text: String): String =
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     private fun page(heading: String, message: String): String = buildString {
         append("<!doctype html>\n<html lang=\"en\">\n<head>\n")
