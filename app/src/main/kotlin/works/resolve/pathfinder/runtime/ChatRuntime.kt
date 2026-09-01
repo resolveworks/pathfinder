@@ -43,6 +43,20 @@ interface ChatRuntimeSession {
     fun abort()
 
     /**
+     * Swaps in a new [model] (with its [thinking] option) for subsequent
+     * prompts. The conversation tree is untouched: the next prompt simply
+     * executes against the new selection. Illegal while
+     * [ChatRuntimeState.isStreaming] is true.
+     */
+    fun selectModel(model: ModelDescriptor, thinking: ThinkingOption)
+
+    /**
+     * Applies [option] to the current model for subsequent prompts. Illegal
+     * while streaming (same rule as [selectModel]).
+     */
+    fun setThinking(option: ThinkingOption)
+
+    /**
      * Swaps in a new tree (tree navigation/re-edit): subsequent prompts
      * continue from [conversation]'s leaf. Illegal while streaming.
      */

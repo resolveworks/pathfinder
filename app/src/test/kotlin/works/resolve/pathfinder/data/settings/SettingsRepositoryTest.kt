@@ -101,6 +101,43 @@ class SettingsRepositoryTest {
     }
 
     @Test
+    fun enabledModels_defaultNull_andRoundTrips() = runTest {
+        assertNull(repository.settings.first().enabledModels)
+
+        repository.setEnabledModels(setOf("anthropic/claude-haiku-4-5", "openai/gpt-5.5"))
+
+        assertEquals(
+            setOf("anthropic/claude-haiku-4-5", "openai/gpt-5.5"),
+            repository.settings.first().enabledModels,
+        )
+
+        // Null restores the uncurated default (every configured model).
+        repository.setEnabledModels(null)
+        assertNull(repository.settings.first().enabledModels)
+    }
+
+    @Test
+    fun thinkingPrefs_replacePerModelRef_andRoundTrip() = runTest {
+        assertEquals(emptyMap<String, String>(), repository.settings.first().thinkingPrefs)
+
+        repository.setThinkingPref("anthropic/claude-haiku-4-5", "off")
+        repository.setThinkingPref("openai/gpt-5.5", "medium")
+
+        assertEquals(
+            mapOf("anthropic/claude-haiku-4-5" to "off", "openai/gpt-5.5" to "medium"),
+            repository.settings.first().thinkingPrefs,
+        )
+
+        // Re-setting the same ref replaces, never duplicates.
+        repository.setThinkingPref("openai/gpt-5.5", "high")
+
+        assertEquals(
+            mapOf("anthropic/claude-haiku-4-5" to "off", "openai/gpt-5.5" to "high"),
+            repository.settings.first().thinkingPrefs,
+        )
+    }
+
+    @Test
     fun survivesRestart() = runTest {
         repository.setProviderId("openai")
         val file = File(tmpFolder.root, "settings.preferences_pb")

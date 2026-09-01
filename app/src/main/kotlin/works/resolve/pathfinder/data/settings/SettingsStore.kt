@@ -15,4 +15,13 @@ interface SettingsStore {
     suspend fun setActiveSessionId(sessionId: String?)
 
     suspend fun setShowThinking(showThinking: Boolean)
+
+    /**
+     * Persists the scoped model set. `null` restores the uncurated default
+     * (every model of configured providers).
+     */
+    suspend fun setEnabledModels(models: Set<String>?)
+
+    /** Persists the thinking preference of one `provider/model` ref. */
+    suspend fun setThinkingPref(modelRef: String, label: String)
 }

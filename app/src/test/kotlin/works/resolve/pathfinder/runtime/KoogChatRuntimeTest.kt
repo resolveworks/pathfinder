@@ -4,6 +4,10 @@ import ai.koog.http.client.KoogHttpClientException
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.executor.clients.LLMClientAPI
 import ai.koog.prompt.executor.clients.LLMClientException
+import ai.koog.prompt.executor.clients.anthropic.AnthropicParams
+import ai.koog.prompt.executor.clients.anthropic.models.AnthropicThinking
+import ai.koog.prompt.executor.clients.openai.OpenAIChatParams
+import ai.koog.prompt.executor.clients.openai.base.models.ReasoningEffort
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.Message
@@ -29,10 +33,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.awaitCancellation
-import works.resolve.pathfinder.runtime.ProviderDescriptor
 import works.resolve.pathfinder.runtime.ProviderDescriptors
 import works.resolve.pathfinder.data.credentials.Credential
 import works.resolve.pathfinder.data.credentials.CredentialStore
@@ -44,10 +46,12 @@ import works.resolve.pathfinder.diagnostics.Diagnostics
 
 /**
  * Fake Koog client: [executeStreaming] returns a caller-controlled
- * [Flow] of [StreamFrame]s; nothing else is implemented.
+ * [Flow] of [StreamFrame]s and records every prompt; nothing else is
+ * implemented.
  */
 private class FakeStreamingClient(
     private val frames: Flow<StreamFrame>,
+    private val seenPrompts: MutableList<Prompt> = mutableListOf(),
 ) : LLMClientAPI {
 
     var closed = false
@@ -59,7 +63,10 @@ private class FakeStreamingClient(
         tools: List<ToolDescriptor>,
     ): Message.Assistant = error("unused")
 
-    override fun executeStreaming(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Flow<StreamFrame> = frames
+    override fun executeStreaming(prompt: Prompt, model: LLModel, tools: List<ToolDescriptor>): Flow<StreamFrame> {
+        seenPrompts += prompt
+        return frames
+    }
 
     override suspend fun moderate(prompt: Prompt, model: LLModel): Nothing = error("unused")
 
@@ -110,6 +117,7 @@ class KoogChatRuntimeTest {
         keys: Map<String, String> = mapOf("anthropic" to "test-key"),
         seenKeys: MutableList<String> = mutableListOf(),
         seenProviders: MutableList<LLMProvider> = mutableListOf(),
+        seenPrompts: MutableList<Prompt> = mutableListOf(),
         frames: () -> Flow<StreamFrame>,
     ): KoogChatRuntime {
         val store = FakeCredentialStore(keys.mapValues { (_, key) -> Credential.ApiKey(key) })
@@ -119,7 +127,7 @@ class KoogChatRuntimeTest {
             clientFactory = { provider, apiKey ->
                 seenKeys += apiKey
                 seenProviders += provider
-                FakeStreamingClient(frames())
+                FakeStreamingClient(frames(), seenPrompts)
             },
             oauthRefresher = { error("not reached") },
             codexClientFactory = { _, _ -> error("not reached") },
@@ -378,6 +386,100 @@ class KoogChatRuntimeTest {
                 conversation = Conversation(emptyList(), null),
             )
         }
+    }
+
+    // --- live model and thinking selection (picker above the composer) ---
+
+    @Test
+    fun selectModelSwapsModelAndAppliesThinkingToTheNextPrompt() = runTest {
+        val seenProviders = mutableListOf<LLMProvider>()
+        val seenPrompts = mutableListOf<Prompt>()
+        val openai = ProviderDescriptors.byId("openai")!!
+        val openaiModel = openai.models.first {
+            it.model.supports(ai.koog.prompt.llm.LLMCapability.Thinking)
+        }
+        val runtime = runtime(
+            keys = mapOf("anthropic" to "test-key", "openai" to "test-key"),
+            seenProviders = seenProviders,
+            seenPrompts = seenPrompts,
+            frames = {
+                streamFrameFlow {
+                    emitTextDelta("ok")
+                    emitEnd(finishReason = "stop")
+                }
+            },
+        )
+        val session = newSession(runtime)
+
+        session.selectModel(openaiModel, ThinkingOption.Effort(ReasoningEffort.MEDIUM))
+        session.prompt("hi")
+
+        // Client dispatch follows the swapped model's Koog provider; the
+        // thinking option rides the prompt params verbatim.
+        assertEquals(LLMProvider.OpenAI, seenProviders.single())
+        val params = assertNotNull(seenPrompts.single().params as? OpenAIChatParams)
+        assertEquals(ReasoningEffort.MEDIUM, params.reasoningEffort)
+        // The transcript is untouched by the swap: only this prompt's tree.
+        assertEquals(2, session.conversation.entries.size)
+    }
+
+    @Test
+    fun selectModelAndSetThinkingAreRejectedWhileStreaming() = runTest {
+        val runtime = runtime(frames = { flow { awaitCancellation() } })
+        val session = newSession(runtime)
+        session.prompt("hi")
+
+        assertTrue(session.state.value.isStreaming)
+        val anthropic = ProviderDescriptors.byId("anthropic")!!
+        assertFailsWith<IllegalStateException> {
+            session.selectModel(anthropic.models.first(), ThinkingOption.Default)
+        }
+        assertFailsWith<IllegalStateException> {
+            session.setThinking(ThinkingOption.Off)
+        }
+
+        session.abort()
+    }
+
+    @Test
+    fun setThinkingAppliesToTheNextPrompt() = runTest {
+        val seenPrompts = mutableListOf<Prompt>()
+        val runtime = runtime(seenPrompts = seenPrompts, frames = {
+            streamFrameFlow {
+                emitEnd(finishReason = "stop")
+            }
+        })
+        val session = newSession(runtime)
+
+        session.setThinking(ThinkingOption.Off)
+        session.prompt("hi")
+
+        val params = assertNotNull(seenPrompts.single().params as? AnthropicParams)
+        assertNotNull(params.thinking as? AnthropicThinking.Disabled)
+    }
+
+    @Test
+    fun createSessionResolvesPersistedThinkingPreference() = runTest {
+        val seenPrompts = mutableListOf<Prompt>()
+        val runtime = runtime(seenPrompts = seenPrompts, frames = {
+            streamFrameFlow {
+                emitEnd(finishReason = "stop")
+            }
+        })
+        val session = runtime.createSession(
+            ModelSettings(
+                providerId = "anthropic",
+                modelId = modelId,
+                thinkingPrefs = mapOf("anthropic/$modelId" to "off"),
+            ),
+            sessionId = "s1",
+            conversation = Conversation(emptyList(), null),
+        )
+
+        session.prompt("hi")
+
+        val params = assertNotNull(seenPrompts.single().params as? AnthropicParams)
+        assertNotNull(params.thinking as? AnthropicThinking.Disabled)
     }
 
     // --- ChatGPT Codex provider (OAuth dispatch) ---

@@ -6,6 +6,7 @@ import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.models.OpenAIInclude
 import ai.koog.prompt.executor.clients.openai.OpenAIResponsesParams
+import ai.koog.prompt.executor.clients.openai.base.models.ReasoningEffort
 import ai.koog.prompt.executor.clients.openai.models.ReasoningConfig
 import ai.koog.prompt.executor.clients.openai.models.ReasoningSummary
 import ai.koog.prompt.executor.clients.openai.base.AbstractOpenAILLMClient
@@ -102,14 +103,15 @@ public object CodexLLMClients {
      *
      * Hosted reasoning models never return their raw chain of thought over
      * the Responses API — only summaries, and only when the request asks
-     * for them (pi sends `summary: "auto"` alongside the effort). Reasoning
-     * effort itself stays unset: the backend default applies and Pathfinder
-     * has no thinking-level setting to map onto it.
+     * for them (pi sends `summary: "auto"` alongside the effort). A null
+     * [effort] leaves the reasoning effort to the backend default; a
+     * [ThinkingOption.Effort][works.resolve.pathfinder.runtime.ThinkingOption.Effort]
+     * passes Koog's [ReasoningEffort] through verbatim.
      */
-    public fun promptParams(sessionId: String): LLMParams = OpenAIResponsesParams(
+    public fun promptParams(sessionId: String, effort: ReasoningEffort? = null): LLMParams = OpenAIResponsesParams(
         store = false,
         include = listOf(OpenAIInclude.REASONING_ENCRYPTED_CONTENT),
-        reasoning = ReasoningConfig(summary = ReasoningSummary.AUTO),
+        reasoning = ReasoningConfig(effort = effort, summary = ReasoningSummary.AUTO),
         promptCacheKey = sessionId,
         additionalProperties = mapOf<String, JsonElement>(
             "instructions" to JsonPrimitive(INSTRUCTIONS),

@@ -10,4 +10,17 @@ data class ModelSettings(
     val activeSessionId: String? = null,
     /** Display-only preference: show the model's reasoning while it thinks. */
     val showThinking: Boolean = false,
+    /**
+     * The scoped model set for the chat model picker, as `provider/model`
+     * refs. Null (never curated) means every model of every configured
+     * provider is offered; an explicit set is offered as-is, minus refs
+     * whose provider no longer has a credential.
+     */
+    val enabledModels: Set<String>? = null,
+    /**
+     * Last thinking option chosen per model, keyed `provider/model` with a
+     * Koog-native [works.resolve.pathfinder.runtime.ThinkingOption.label]
+     * value; absent entries use the provider default.
+     */
+    val thinkingPrefs: Map<String, String> = emptyMap(),
 )

@@ -54,11 +54,11 @@ internal object ZaiModels {
 
     /** Display names and context windows follow pi's `providers/data/zai.json` catalog. */
     val descriptors: List<ModelDescriptor> = listOf(
-        ModelDescriptor("glm-4.7", "GLM-4.7", model("glm-4.7", 204_800)),
-        ModelDescriptor("glm-5-turbo", "GLM-5-Turbo", model("glm-5-turbo", 200_000)),
-        ModelDescriptor("glm-5.2", "GLM-5.2", model("glm-5.2", 1_000_000)),
-        ModelDescriptor("glm-5.2-highspeed", "GLM-5.2 Highspeed", model("glm-5.2-highspeed", 1_000_000)),
-        ModelDescriptor("glm-5.3", "GLM-5.3", model("glm-5.3", 1_000_000)),
+        ModelDescriptor(providerId = "zai", id = "glm-4.7", displayName = "GLM-4.7", model = model("glm-4.7", 204_800)),
+        ModelDescriptor(providerId = "zai", id = "glm-5-turbo", displayName = "GLM-5-Turbo", model = model("glm-5-turbo", 200_000)),
+        ModelDescriptor(providerId = "zai", id = "glm-5.2", displayName = "GLM-5.2", model = model("glm-5.2", 1_000_000)),
+        ModelDescriptor(providerId = "zai", id = "glm-5.2-highspeed", displayName = "GLM-5.2 Highspeed", model = model("glm-5.2-highspeed", 1_000_000)),
+        ModelDescriptor(providerId = "zai", id = "glm-5.3", displayName = "GLM-5.3", model = model("glm-5.3", 1_000_000)),
     )
 }
 
@@ -104,13 +104,14 @@ internal object KimiModels {
 
     /** Display names follow pi's `providers/data/kimi-coding.json` catalog. */
     val descriptors: List<ModelDescriptor> = listOf(
-        ModelDescriptor("k3", "Kimi K3", model("k3", 1_048_576L, 131_072L)),
-        ModelDescriptor("k3-256k", "Kimi K3-256K", model("k3-256k", 262_144L, 131_072L)),
-        ModelDescriptor("kimi-for-coding", "Kimi K2.7 Code", model("kimi-for-coding", 262_144L, 32_768L)),
+        ModelDescriptor(providerId = "kimi", id = "k3", displayName = "Kimi K3", model = model("k3", 1_048_576L, 131_072L)),
+        ModelDescriptor(providerId = "kimi", id = "k3-256k", displayName = "Kimi K3-256K", model = model("k3-256k", 262_144L, 131_072L)),
+        ModelDescriptor(providerId = "kimi", id = "kimi-for-coding", displayName = "Kimi K2.7 Code", model = model("kimi-for-coding", 262_144L, 32_768L)),
         ModelDescriptor(
-            "kimi-for-coding-highspeed",
-            "Kimi For Coding HighSpeed",
-            model("kimi-for-coding-highspeed", 262_144L, 32_768L),
+            providerId = "kimi",
+            id = "kimi-for-coding-highspeed",
+            displayName = "Kimi For Coding HighSpeed",
+            model = model("kimi-for-coding-highspeed", 262_144L, 32_768L),
         ),
     )
 
@@ -165,16 +166,17 @@ internal object CodexModels {
     /** Display names, context windows, and inputs follow pi's `providers/data/openai-codex.json` catalog. */
     val descriptors: List<ModelDescriptor> = listOf(
         ModelDescriptor(
-            "gpt-5.3-codex-spark",
-            "GPT-5.3 Codex Spark",
-            model("gpt-5.3-codex-spark", 128_000, CAPABILITIES),
+            providerId = "openai-codex",
+            id = "gpt-5.3-codex-spark",
+            displayName = "GPT-5.3 Codex Spark",
+            model = model("gpt-5.3-codex-spark", 128_000, CAPABILITIES),
         ),
-        ModelDescriptor("gpt-5.4", "GPT-5.4", model("gpt-5.4", 272_000, IMAGE_CAPABILITIES)),
-        ModelDescriptor("gpt-5.4-mini", "GPT-5.4 mini", model("gpt-5.4-mini", 272_000, IMAGE_CAPABILITIES)),
-        ModelDescriptor("gpt-5.5", "GPT-5.5", model("gpt-5.5", 272_000, IMAGE_CAPABILITIES)),
-        ModelDescriptor("gpt-5.6-luna", "GPT-5.6 Luna", model("gpt-5.6-luna", 272_000, IMAGE_CAPABILITIES)),
-        ModelDescriptor("gpt-5.6-sol", "GPT-5.6 Sol", model("gpt-5.6-sol", 272_000, IMAGE_CAPABILITIES)),
-        ModelDescriptor("gpt-5.6-terra", "GPT-5.6 Terra", model("gpt-5.6-terra", 272_000, IMAGE_CAPABILITIES)),
+        ModelDescriptor(providerId = "openai-codex", id = "gpt-5.4", displayName = "GPT-5.4", model = model("gpt-5.4", 272_000, IMAGE_CAPABILITIES)),
+        ModelDescriptor(providerId = "openai-codex", id = "gpt-5.4-mini", displayName = "GPT-5.4 mini", model = model("gpt-5.4-mini", 272_000, IMAGE_CAPABILITIES)),
+        ModelDescriptor(providerId = "openai-codex", id = "gpt-5.5", displayName = "GPT-5.5", model = model("gpt-5.5", 272_000, IMAGE_CAPABILITIES)),
+        ModelDescriptor(providerId = "openai-codex", id = "gpt-5.6-luna", displayName = "GPT-5.6 Luna", model = model("gpt-5.6-luna", 272_000, IMAGE_CAPABILITIES)),
+        ModelDescriptor(providerId = "openai-codex", id = "gpt-5.6-sol", displayName = "GPT-5.6 Sol", model = model("gpt-5.6-sol", 272_000, IMAGE_CAPABILITIES)),
+        ModelDescriptor(providerId = "openai-codex", id = "gpt-5.6-terra", displayName = "GPT-5.6 Terra", model = model("gpt-5.6-terra", 272_000, IMAGE_CAPABILITIES)),
     )
 }
 

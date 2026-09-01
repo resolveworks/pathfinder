@@ -13,6 +13,8 @@ import ai.koog.prompt.llm.LLModel
 
 /** One selectable model of a provider, backed by its Koog [LLModel]. */
 data class ModelDescriptor(
+    /** The owning provider's Pathfinder id (see [ProviderDescriptors]). */
+    val providerId: String,
     val id: String,
     /**
      * Display name. Koog model ids (e.g. "claude-haiku-4-5") are already
@@ -150,7 +152,14 @@ object ProviderDescriptors {
         authKind,
         definitions.models
             .filter { it.supports(LLMCapability.Completion) }
-            .map { model -> ModelDescriptor(id = model.id, displayName = model.id, model = model) },
+            .map { model ->
+                ModelDescriptor(
+                    providerId = id,
+                    id = model.id,
+                    displayName = model.id,
+                    model = model,
+                )
+            },
     )
 
     private fun provider(

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -39,7 +40,11 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -48,6 +53,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
@@ -78,7 +84,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -93,6 +98,7 @@ import works.resolve.pathfinder.R
 import android.content.Intent
 import android.net.Uri
 import works.resolve.pathfinder.runtime.ProviderAuthKind
+import works.resolve.pathfinder.runtime.ThinkingOption
 import works.resolve.pathfinder.data.sessions.SessionSummary
 import works.resolve.pathfinder.ui.chat.markdown.MarkdownText
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
@@ -122,7 +128,9 @@ fun ChatRoute(
         onDraftChange = viewModel::onDraftChange,
         onSend = viewModel::send,
         onStop = viewModel::stop,
-        onSaveModelSelection = viewModel::saveModelSelection,
+        onSelectModel = viewModel::selectModel,
+        onThinkingSelect = viewModel::setThinking,
+        onToggleModelScope = viewModel::toggleModelScope,
         onSaveProviderCredential = viewModel::saveProviderCredential,
         onRemoveProviderCredential = viewModel::removeProviderCredential,
         onBeginCodexDeviceSignIn = viewModel::beginCodexDeviceSignIn,
@@ -165,7 +173,9 @@ fun ChatScreen(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
-    onSaveModelSelection: (ModelOption) -> Unit,
+    onSelectModel: (ModelOption) -> Unit,
+    onThinkingSelect: (ThinkingOption) -> Unit,
+    onToggleModelScope: (ModelOption, Boolean) -> Unit,
     onSaveProviderCredential: (ProviderOption, String) -> Unit,
     onRemoveProviderCredential: (providerId: String) -> Unit,
     onBeginCodexDeviceSignIn: (ProviderOption) -> Unit,
@@ -220,10 +230,10 @@ fun ChatScreen(
     // (state-driven — no ViewModel navigation callback). Guarded so it
     // composes safely with the reset above, which runs first: first-run
     // saves bump both epochs and the reset already rebuilt the stack to a
-    // single-entry root (ModelSettings/Chat), which is never popped; a
-    // Ready-state save bumps only this epoch, returning the user from
-    // ProviderAuth to Providers. A failed or incomplete save never bumps
-    // this epoch, so the form and its typed input stay intact.
+    // single-entry root (Chat), which is never popped; a Ready-state save
+    // bumps only this epoch, returning the user from ProviderAuth to
+    // Providers. A failed or incomplete save never bumps this epoch, so
+    // the form and its typed input stay intact.
     LaunchedEffect(uiState.credentialSuccessEpoch) {
         if (backStack.size > 1 && backStack.lastOrNull() is ProviderAuthNavKey) {
             backStack.removeAt(backStack.lastIndex)
@@ -231,7 +241,7 @@ fun ChatScreen(
     }
 
     val pushSettings: () -> Unit = { backStack.add(SettingsNavKey) }
-    val pushModelSettings: () -> Unit = { backStack.add(ModelSettingsNavKey) }
+    val pushModels: () -> Unit = { backStack.add(ModelsNavKey) }
     val pushProviders: () -> Unit = { backStack.add(ProvidersNavKey) }
     val pushProviderAuth: (String) -> Unit = { backStack.add(ProviderAuthNavKey(it)) }
     val popBackStack: () -> Unit = {
@@ -276,7 +286,7 @@ fun ChatScreen(
                     ChatTopBar(
                         title = when (topKey) {
                             SettingsNavKey -> stringResource(R.string.settings_title)
-                            ModelSettingsNavKey -> stringResource(R.string.settings_model)
+                            ModelsNavKey -> stringResource(R.string.settings_model)
                             ProvidersNavKey -> stringResource(R.string.providers_title)
                             is ProviderAuthNavKey -> uiState.providerOptions
                                 .first { it.id == topKey.providerId }.name
@@ -330,7 +340,7 @@ fun ChatScreen(
                     // failed init replaces the error surface; popping returns.
                     uiState.status == ChatStatus.Failed && topKey == ChatNavKey -> FailedContent(
                         error = uiState.error ?: stringResource(R.string.error_generic),
-                        onOpenSettings = pushModelSettings,
+                        onOpenProviders = pushProviders,
                     )
                     else -> NavDisplay(
                         backStack = backStack,
@@ -344,6 +354,8 @@ fun ChatScreen(
                                         onDraftChange = onDraftChange,
                                         onSend = onSend,
                                         onStop = onStop,
+                                        onSelectModel = onSelectModel,
+                                        onThinkingSelect = onThinkingSelect,
                                         onNavigateTreeEntry = onNavigateTreeEntry,
                                         onTreeFilterChange = onTreeFilterChange,
                                     )
@@ -353,27 +365,25 @@ fun ChatScreen(
                                         onDraftChange = onDraftChange,
                                         onSend = onSend,
                                         onStop = onStop,
+                                        onSelectModel = onSelectModel,
+                                        onThinkingSelect = onThinkingSelect,
                                     )
                                 }
                             }
                             entry<SettingsNavKey> {
                                 SettingsContent(
                                     showThinking = uiState.showThinking,
-                                    onOpenModelSettings = pushModelSettings,
+                                    onOpenModels = pushModels,
                                     onOpenProviders = pushProviders,
                                     onToggleShowThinking = onToggleShowThinking,
                                 )
                             }
-                            entry<ModelSettingsNavKey> {
-                                ModelSettingsContent(
-                                    uiState = uiState,
-                                    onSave = onSaveModelSelection,
+                            entry<ModelsNavKey> {
+                                ModelsContent(
+                                    modelOptions = uiState.modelOptions,
+                                    modelScope = uiState.modelScope,
+                                    onToggleScope = onToggleModelScope,
                                     onOpenProviders = pushProviders,
-                                    onClose = if (uiState.status == ChatStatus.NeedsConfiguration) {
-                                        null
-                                    } else {
-                                        popBackStack
-                                    },
                                 )
                             }
                             entry<ProvidersNavKey> {
@@ -529,7 +539,7 @@ private fun LoadingContent() {
 }
 
 @Composable
-private fun FailedContent(error: String, onOpenSettings: () -> Unit) {
+private fun FailedContent(error: String, onOpenProviders: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -544,7 +554,7 @@ private fun FailedContent(error: String, onOpenSettings: () -> Unit) {
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.padding(top = 16.dp))
-        Button(onClick = onOpenSettings) {
+        Button(onClick = onOpenProviders) {
             Text(stringResource(R.string.action_configure))
         }
     }
@@ -557,7 +567,7 @@ private fun FailedContent(error: String, onOpenSettings: () -> Unit) {
 @Composable
 private fun SettingsContent(
     showThinking: Boolean,
-    onOpenModelSettings: () -> Unit,
+    onOpenModels: () -> Unit,
     onOpenProviders: () -> Unit,
     onToggleShowThinking: (Boolean) -> Unit,
 ) {
@@ -571,7 +581,7 @@ private fun SettingsContent(
             trailingContent = {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },
-            modifier = Modifier.clickable(onClick = onOpenModelSettings),
+            modifier = Modifier.clickable(onClick = onOpenModels),
         )
         ListItem(
             headlineContent = { Text(stringResource(R.string.providers_title)) },
@@ -595,37 +605,24 @@ private fun SettingsContent(
 }
 
 /**
- * Model settings screen: a searchable picker over models of configured
- * providers only. Picking a row only changes local state; Save commits it.
+ * Models screen: the scoped-models curator (pi's scoped models selector).
+ * Rows are every model of configured providers with a checkbox; an absent
+ * scope (never curated) shows everything checked. Toggles persist
+ * immediately and only affect which models the chat picker offers.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ModelSettingsContent(
-    uiState: ChatUiState,
-    onSave: (ModelOption) -> Unit,
+private fun ModelsContent(
+    modelOptions: List<ModelOption>,
+    modelScope: Set<String>?,
+    onToggleScope: (ModelOption, Boolean) -> Unit,
     onOpenProviders: () -> Unit,
-    onClose: (() -> Unit)?,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
-    val preselected = uiState.modelOptions.firstOrNull { option ->
-        uiState.selectedModel?.let { option.providerId == it.providerId && option.modelId == it.modelId } == true
-    }
-    var selection by remember(uiState.selectedModel, uiState.modelOptions) {
-        mutableStateOf(preselected)
-    }
-    val filteredOptions = uiState.modelOptions.filter { option ->
+    val filteredOptions = modelOptions.filter { option ->
         val q = query.trim()
         q.isEmpty() || option.name.contains(q, ignoreCase = true) ||
             option.modelId.contains(q, ignoreCase = true) ||
             option.providerName.contains(q, ignoreCase = true)
-    }
-    val listState = rememberLazyListState()
-    LaunchedEffect(Unit) {
-        preselected?.let { selected ->
-            filteredOptions.indexOfFirst { it.modelId == selected.modelId && it.providerId == selected.providerId }
-                .takeIf { it >= 0 }
-                ?.let { listState.scrollToItem(it) }
-        }
     }
 
     Column(
@@ -642,31 +639,7 @@ private fun ModelSettingsContent(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
-            items(filteredOptions, key = { "${it.providerId}/${it.modelId}" }) { option ->
-                val isSelected = selection?.providerId == option.providerId &&
-                    selection?.modelId == option.modelId
-                ListItem(
-                    headlineContent = { Text(option.name) },
-                    supportingContent = { Text(option.providerName) },
-                    trailingContent = if (isSelected) {
-                        {
-                            // The model selector marks the current model with a check.
-                            Icon(
-                                Icons.Default.Check,
-                                contentDescription = stringResource(R.string.model_selected),
-                                tint = MaterialTheme.colorScheme.secondary,
-                            )
-                        }
-                    } else {
-                        null
-                    },
-                    modifier = Modifier.clickable { selection = option },
-                )
-                HorizontalDivider()
-            }
-        }
-        if (uiState.modelOptions.isEmpty()) {
+        if (modelOptions.isEmpty()) {
             Text(
                 text = stringResource(R.string.models_empty_configured_hint),
                 style = MaterialTheme.typography.bodySmall,
@@ -675,16 +648,29 @@ private fun ModelSettingsContent(
             TextButton(onClick = onOpenProviders) {
                 Text(stringResource(R.string.action_set_up_providers))
             }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = { selection?.let(onSave) },
-                enabled = selection != null,
-            ) {
-                Text(stringResource(R.string.action_save))
-            }
-            onClose?.let { close ->
-                TextButton(onClick = close) { Text(stringResource(R.string.action_cancel)) }
+        } else {
+            Text(
+                text = stringResource(R.string.models_scope_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                items(filteredOptions, key = { "${it.providerId}/${it.modelId}" }) { option ->
+                    val modelRef = "${option.providerId}/${option.modelId}"
+                    val checked = modelScope?.contains(modelRef) ?: true
+                    ListItem(
+                        headlineContent = { Text(option.name) },
+                        supportingContent = { Text(option.providerName) },
+                        trailingContent = {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = { onToggleScope(option, it) },
+                            )
+                        },
+                        modifier = Modifier.clickable { onToggleScope(option, !checked) },
+                    )
+                    HorizontalDivider()
+                }
             }
         }
     }
@@ -1089,6 +1075,8 @@ private fun ConversationPager(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    onSelectModel: (ModelOption) -> Unit,
+    onThinkingSelect: (ThinkingOption) -> Unit,
     onNavigateTreeEntry: (entryId: String) -> Unit,
     onTreeFilterChange: (TreeFilter) -> Unit,
 ) {
@@ -1106,16 +1094,18 @@ private fun ConversationPager(
                 onDraftChange = onDraftChange,
                 onSend = onSend,
                 onStop = onStop,
+                onSelectModel = onSelectModel,
+                onThinkingSelect = onThinkingSelect,
             )
         }
     }
 }
 
 /**
- * The conversation page: [ConversationContent] above the [Composer]. The
- * composer is page content, not scaffold chrome — it moves with the chat
- * page when swiping to the tree — and owns its own navigation-bar and IME
- * padding.
+ * The conversation page: [ConversationContent] above the [SelectionBar]
+ * above the [Composer]. The bars are page content, not scaffold chrome —
+ * they move with the chat page when swiping to the tree — and own their
+ * own navigation-bar and IME padding.
  */
 @Composable
 private fun ChatSurface(
@@ -1123,23 +1113,196 @@ private fun ChatSurface(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    onSelectModel: (ModelOption) -> Unit,
+    onThinkingSelect: (ThinkingOption) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ConversationContent(
             uiState = uiState,
             modifier = Modifier.weight(1f),
         )
-        Composer(
-            draft = uiState.draft,
-            onDraftChange = onDraftChange,
-            onSend = onSend,
-            onStop = onStop,
-            canSend = uiState.canSend,
-            isStreaming = uiState.isStreaming,
+        Column(
             modifier = Modifier
                 .navigationBarsPadding()
                 .imePadding(),
+        ) {
+            SelectionBar(
+                selectedModel = uiState.selectedModel,
+                scopedModels = uiState.scopedModels,
+                thinkingOptions = uiState.thinkingOptions,
+                thinkingOption = uiState.thinkingOption,
+                onSelectModel = onSelectModel,
+                onThinkingSelect = onThinkingSelect,
+            )
+            Composer(
+                draft = uiState.draft,
+                onDraftChange = onDraftChange,
+                onSend = onSend,
+                onStop = onStop,
+                canSend = uiState.canSend,
+                isStreaming = uiState.isStreaming,
+            )
+        }
+    }
+}
+
+/**
+ * The model and thinking selectors above the composer. The model chip opens
+ * a searchable bottom sheet over the scoped models; the thinking chip is a
+ * dropdown of Koog's own option values for the current model's provider,
+ * shown only when there is more than the provider default to choose.
+ */
+@Composable
+private fun SelectionBar(
+    selectedModel: SelectedModel?,
+    scopedModels: List<ModelOption>,
+    thinkingOptions: List<ThinkingOption>,
+    thinkingOption: ThinkingOption,
+    onSelectModel: (ModelOption) -> Unit,
+    onThinkingSelect: (ThinkingOption) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var modelSheetOpen by rememberSaveable { mutableStateOf(false) }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AssistChip(
+            onClick = { modelSheetOpen = true },
+            label = {
+                Text(
+                    text = selectedModel?.modelName ?: stringResource(R.string.model_picker_empty),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
         )
+        if (thinkingOptions.size > 1) {
+            var thinkingMenuOpen by remember { mutableStateOf(false) }
+            Box {
+                AssistChip(
+                    onClick = { thinkingMenuOpen = true },
+                    label = {
+                        Text(
+                            text = thinkingOption.label.replaceFirstChar { it.uppercase() },
+                            maxLines = 1,
+                        )
+                    },
+                )
+                DropdownMenu(
+                    expanded = thinkingMenuOpen,
+                    onDismissRequest = { thinkingMenuOpen = false },
+                ) {
+                    thinkingOptions.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.label.replaceFirstChar { it.uppercase() }) },
+                            onClick = {
+                                thinkingMenuOpen = false
+                                onThinkingSelect(option)
+                            },
+                            trailingIcon = if (option == thinkingOption) {
+                                {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = stringResource(R.string.model_selected),
+                                    )
+                                }
+                            } else {
+                                null
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+    if (modelSheetOpen) {
+        ModelPickerSheet(
+            options = scopedModels,
+            selectedModel = selectedModel,
+            onSelect = { option ->
+                modelSheetOpen = false
+                onSelectModel(option)
+            },
+            onDismiss = { modelSheetOpen = false },
+        )
+    }
+}
+
+/**
+ * The model picker sheet: searchable list of the scoped models with the
+ * current selection marked. One tap selects; there is no confirm step —
+ * the selection applies to the live session immediately.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ModelPickerSheet(
+    options: List<ModelOption>,
+    selectedModel: SelectedModel?,
+    onSelect: (ModelOption) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val filtered = options.filter { option ->
+        val q = query.trim()
+        q.isEmpty() || option.name.contains(q, ignoreCase = true) ||
+            option.modelId.contains(q, ignoreCase = true) ||
+            option.providerName.contains(q, ignoreCase = true)
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .navigationBarsPadding(),
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text(stringResource(R.string.model_search_hint)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (options.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.models_scope_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 24.dp),
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .heightIn(max = 480.dp),
+                ) {
+                    items(filtered, key = { "${it.providerId}/${it.modelId}" }) { option ->
+                        val isSelected = selectedModel?.let {
+                            option.providerId == it.providerId && option.modelId == it.modelId
+                        } == true
+                        ListItem(
+                            headlineContent = { Text(option.name) },
+                            supportingContent = { Text(option.providerName) },
+                            trailingContent = if (isSelected) {
+                                {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = stringResource(R.string.model_selected),
+                                        tint = MaterialTheme.colorScheme.secondary,
+                                    )
+                                }
+                            } else {
+                                null
+                            },
+                            modifier = Modifier.clickable { onSelect(option) },
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1443,7 +1606,9 @@ private fun PreviewChatScreen(
             onDraftChange = {},
             onSend = {},
             onStop = {},
-            onSaveModelSelection = {},
+            onSelectModel = {},
+            onThinkingSelect = {},
+            onToggleModelScope = { _, _ -> },
             onSaveProviderCredential = { _, _ -> },
             onRemoveProviderCredential = { },
             onBeginCodexDeviceSignIn = { },
@@ -1485,7 +1650,6 @@ private fun ChatScreenSettingsPreview() {
             startKey = SettingsNavKey,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
         ),
     )
 }
@@ -1497,8 +1661,10 @@ private fun ChatScreenSettingsRootPreview() {
         uiState = ChatUiState(
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
+            scopedModels = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
+            thinkingOptions = listOf(ThinkingOption.Default, ThinkingOption.Off),
+            thinkingOption = ThinkingOption.Default,
         ),
         extraKeys = listOf(SettingsNavKey),
     )
@@ -1506,28 +1672,30 @@ private fun ChatScreenSettingsRootPreview() {
 
 @Preview(showBackground = true)
 @Composable
-private fun ChatScreenModelSettingsPreview() {
+private fun ChatScreenModelsPreview() {
     PreviewChatScreen(
         uiState = ChatUiState(
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
+            modelScope = setOf("anthropic/claude-haiku-4-5"),
+            scopedModels = PREVIEW_MODEL_OPTIONS.take(1),
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
+            thinkingOptions = listOf(ThinkingOption.Default, ThinkingOption.Off),
+            thinkingOption = ThinkingOption.Default,
         ),
-        extraKeys = listOf(SettingsNavKey, ModelSettingsNavKey),
+        extraKeys = listOf(SettingsNavKey, ModelsNavKey),
     )
 }
 
 @Preview(showBackground = true)
 @Composable
-private fun ChatScreenModelSettingsEmptyPreview() {
+private fun ChatScreenModelsEmptyPreview() {
     PreviewChatScreen(
         uiState = ChatUiState(
-            status = ChatStatus.NeedsConfiguration,
-            startKey = ModelSettingsNavKey,
+            status = ChatStatus.Ready,
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
-            modelOptions = PREVIEW_MODEL_OPTIONS,
         ),
+        extraKeys = listOf(SettingsNavKey, ModelsNavKey),
     )
 }
 
@@ -1539,8 +1707,10 @@ private fun ChatScreenProvidersPreview() {
             status = ChatStatus.Ready,
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
+            scopedModels = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
+            thinkingOptions = listOf(ThinkingOption.Default, ThinkingOption.Off),
+            thinkingOption = ThinkingOption.Default,
         ),
         extraKeys = listOf(SettingsNavKey, ProvidersNavKey),
     )
@@ -1554,8 +1724,10 @@ private fun ChatScreenProviderAuthPreview() {
             status = ChatStatus.Ready,
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
+            scopedModels = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
+            thinkingOptions = listOf(ThinkingOption.Default, ThinkingOption.Off),
+            thinkingOption = ThinkingOption.Default,
         ),
         extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("anthropic")),
     )
@@ -1569,8 +1741,10 @@ private fun ChatScreenCodexSignInAwaitingPreview() {
             status = ChatStatus.Ready,
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
+            scopedModels = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
+            thinkingOptions = listOf(ThinkingOption.Default, ThinkingOption.Off),
+            thinkingOption = ThinkingOption.Default,
             codexSignIn = CodexSignInState.Device(
                 userCode = "ABCD-1234",
                 verificationUri = "https://auth.openai.com/codex/device",
@@ -1588,8 +1762,10 @@ private fun ChatScreenCodexSignInErrorPreview() {
             status = ChatStatus.Ready,
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
+            scopedModels = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
+            thinkingOptions = listOf(ThinkingOption.Default, ThinkingOption.Off),
+            thinkingOption = ThinkingOption.Default,
             codexSignIn = CodexSignInState.Device(
                 userCode = "ABCD-1234",
                 verificationUri = "https://auth.openai.com/codex/device",
@@ -1608,8 +1784,10 @@ private fun ChatScreenCodexBrowserSignInPreview() {
             status = ChatStatus.Ready,
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
+            scopedModels = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
+            thinkingOptions = listOf(ThinkingOption.Default, ThinkingOption.Off),
+            thinkingOption = ThinkingOption.Default,
             codexSignIn = CodexSignInState.Browser(
                 authorizeUrl = "https://auth.openai.com/oauth/authorize?…",
             ),
@@ -1630,8 +1808,10 @@ private fun ChatScreenCodexBrowserErrorPreview() {
             status = ChatStatus.Ready,
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
+            scopedModels = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
+            thinkingOptions = listOf(ThinkingOption.Default, ThinkingOption.Off),
+            thinkingOption = ThinkingOption.Default,
             codexSignIn = CodexSignInState.Browser(
                 authorizeUrl = "https://auth.openai.com/oauth/authorize?…",
                 error = "Sign-in could not be completed.",
@@ -1656,7 +1836,6 @@ private fun ChatScreenCodexSignedInPreview() {
             },
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
         ),
         extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("openai-codex")),
     )
@@ -1701,8 +1880,10 @@ private fun ChatScreenPagerPreview() {
         ChatUiState(
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
+            scopedModels = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
+            thinkingOptions = listOf(ThinkingOption.Default, ThinkingOption.Off),
+            thinkingOption = ThinkingOption.Default,
             activeSessionId = "s1",
             sessionSummaries = listOf(
                 SessionSummary(id = "s1", title = "Preview chat", createdAt = 0L, updatedAt = 0L, messageCount = 1),
@@ -1721,8 +1902,10 @@ private fun ChatScreenReadyStreamingPreview() {
         ChatUiState(
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
+            scopedModels = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
+            thinkingOptions = listOf(ThinkingOption.Default, ThinkingOption.Off),
+            thinkingOption = ThinkingOption.Default,
             activeSessionId = "s1",
             sessionSummaries = listOf(
                 SessionSummary(

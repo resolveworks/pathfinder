@@ -158,10 +158,18 @@ class KoogChatRuntime(
         val model = requireNotNull(provider.model(settings.modelId)) {
             "Unknown model ${settings.modelId} for provider ${settings.providerId}"
         }
+        // The persisted thinking preference for this model, if any, rides
+        // along; anything unknown resolves to the provider default.
+        val thinking = ThinkingOptions.parse(
+            provider.id,
+            model.model,
+            settings.thinkingPrefs["${provider.id}/${model.id}"],
+        )
         return KoogChatSession(
             conversation = Conversation(conversation.entries, conversation.leafId),
             provider = provider,
-            model = model.model,
+            model = model,
+            thinking = thinking,
             promptId = sessionId,
             credentials = credentials,
             scope = scope,
@@ -330,7 +338,8 @@ private fun Throwable.hasIncompleteStreamCause(): Boolean =
 private class KoogChatSession(
     override var conversation: Conversation,
     private val provider: ProviderDescriptor,
-    private val model: LLModel,
+    private val model: ModelDescriptor,
+    private val thinking: ThinkingOption,
     private val promptId: String,
     private val credentials: CredentialStore,
     private val scope: CoroutineScope,
@@ -346,6 +355,27 @@ private class KoogChatSession(
     override val state: StateFlow<ChatRuntimeState> = _state.asStateFlow()
 
     private var streamJob: Job? = null
+
+    // Mutable prompt configuration, swapped by [selectModel]/[setThinking]
+    // between prompts: each prompt builds its Koog Prompt from whatever is
+    // current, so a swap needs no runtime state migration.
+    private var currentProvider: ProviderDescriptor = provider
+    private var currentModel: ModelDescriptor = model
+    private var currentThinking: ThinkingOption = thinking
+
+    override fun selectModel(model: ModelDescriptor, thinking: ThinkingOption) {
+        check(!state.value.isStreaming) { "Cannot change the model while a response is streaming" }
+        currentProvider = requireNotNull(ProviderDescriptors.byId(model.providerId)) {
+            "Unknown provider: ${model.providerId}"
+        }
+        currentModel = model
+        currentThinking = thinking
+    }
+
+    override fun setThinking(option: ThinkingOption) {
+        check(!state.value.isStreaming) { "Cannot change the thinking option while a response is streaming" }
+        currentThinking = option
+    }
 
     override fun prompt(text: String) {
         check(!state.value.isStreaming) { "A response is already streaming" }
@@ -371,6 +401,9 @@ private class KoogChatSession(
     }
 
     private suspend fun runPrompt() {
+        val provider = currentProvider
+        val model = currentModel.model
+        val thinking = currentThinking
         val credential = try {
             credentials.read(provider.id)
         } catch (error: CancellationException) {
@@ -388,7 +421,11 @@ private class KoogChatSession(
                     return
                 }
                 client = clientFactory(model.provider, apiKey)
-                Prompt(messages = conversation.activeMessages(), id = promptId)
+                Prompt(
+                    messages = conversation.activeMessages(),
+                    id = promptId,
+                    params = ThinkingOptions.params(provider.id, thinking),
+                )
             }
 
             ProviderAuthKind.ChatGptSignIn -> {
@@ -415,7 +452,10 @@ private class KoogChatSession(
                 Prompt(
                     messages = conversation.activeMessages(),
                     id = promptId,
-                    params = CodexLLMClients.promptParams(promptId),
+                    params = CodexLLMClients.promptParams(
+                        promptId,
+                        (thinking as? ThinkingOption.Effort)?.effort,
+                    ),
                 )
             }
         }

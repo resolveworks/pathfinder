@@ -3,6 +3,7 @@ package works.resolve.pathfinder.ui.chat
 import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable
 import works.resolve.pathfinder.runtime.ProviderAuthKind
+import works.resolve.pathfinder.runtime.ThinkingOption
 import works.resolve.pathfinder.data.sessions.SessionSummary
 
 enum class ChatRole {
@@ -38,9 +39,9 @@ data object ChatNavKey : NavKey
 @Serializable
 data object SettingsNavKey : NavKey
 
-/** Navigation 3 destination key: the model configuration form. */
+/** Navigation 3 destination key: the model scope editor (Settings ▸ Models). */
 @Serializable
-data object ModelSettingsNavKey : NavKey
+data object ModelsNavKey : NavKey
 
 /** Navigation 3 destination key: the provider credential list. */
 @Serializable
@@ -102,7 +103,9 @@ sealed interface CodexSignInState {
     ) : CodexSignInState
 }
 
-/** Row of the model picker: one per model of a configured provider. */
+/**
+ * Row of the model picker: one per model of a configured provider.
+ */
 data class ModelOption(
     val providerId: String,
     val providerName: String,
@@ -124,21 +127,18 @@ data class SelectedModel(
  * Koog message objects.
  *
  * Navigation is signaled from this state rather than commanded: an
- * unconfigured app sets [startKey] to [ProvidersNavKey] when no provider
- * credential exists (fresh install), or directly to [ModelSettingsNavKey]
- * when one already exists (restoration), and the UI layer honors this by
- * rebuilding its Nav3 back stack to exactly that root (a dead end: back
- * cannot leave it). After a successful credential save that does not
- * complete configuration, [startKey] moves to [ModelSettingsNavKey] with a
- * [navigationEpoch] bump so configured models are immediately selectable;
- * every success that should return the user to the chat instead sets
+ * unconfigured app (no provider credential) sets [startKey] to
+ * [ProvidersNavKey], and the UI layer honors this by rebuilding its Nav3
+ * back stack to exactly that root (a dead end: back cannot leave it).
+ * Storing the first credential auto-selects a model and returns the user to
+ * the chat: every success that should return the user to the chat sets
  * [startKey] to [ChatNavKey] and bumps the monotonic [navigationEpoch],
  * which the UI layer reads as a reset-to-[startKey] signal, atomically with
  * the rest of the state. A successful provider-credential save additionally
  * bumps the monotonic [credentialSuccessEpoch]; the UI layer reacts by
  * popping one credential form off the stack when one is still on top.
- * The invariant `NeedsConfiguration implies startKey == ProvidersNavKey ||
- * startKey == ModelSettingsNavKey` holds by construction.
+ * The invariant `NeedsConfiguration implies startKey == ProvidersNavKey`
+ * holds by construction.
  */
 data class ChatUiState(
     val status: ChatStatus = ChatStatus.Loading,
@@ -156,12 +156,24 @@ data class ChatUiState(
     val credentialSuccessEpoch: Long = 0,
     /** Every provider with live credential status; name-sorted (providers screen). */
     val providerOptions: List<ProviderOption> = emptyList(),
-    /** Models of configured providers only; provider-name-then-model-name sorted. */
+    /**
+     * Every model of the configured providers; provider-name-then-model-name
+     * sorted (scope editor source).
+     */
     val modelOptions: List<ModelOption> = emptyList(),
+    /**
+     * The curated scope as persisted refs, or null while uncurated (every
+     * [modelOptions] entry is in the picker).
+     */
+    val modelScope: Set<String>? = null,
+    /** The model picker's list above the composer (scope-resolved). */
+    val scopedModels: List<ModelOption> = emptyList(),
     /** The committed selection projected from settings, or null when unset/invalid. */
     val selectedModel: SelectedModel? = null,
-    /** True iff the selection is descriptor-valid AND a key exists for its provider. */
-    val configured: Boolean = false,
+    /** Koog-native thinking options of the current model (see [thinkingOption]). */
+    val thinkingOptions: List<ThinkingOption> = emptyList(),
+    /** The thinking option applied to the current model. */
+    val thinkingOption: ThinkingOption = ThinkingOption.Default,
     val activeSessionId: String? = null,
     val sessionSummaries: List<SessionSummary> = emptyList(),
     val messages: List<ChatMessage> = emptyList(),
