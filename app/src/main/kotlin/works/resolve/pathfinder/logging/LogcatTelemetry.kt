@@ -24,11 +24,6 @@ import java.util.concurrent.atomic.AtomicInteger
  * E Pathfinder: < pf.auth.login id=2 status=error duration_ms=1837 error_name=java.lang.IllegalStateException error_message="OpenAI Codex token exchange failed (400): error=..." outcome=...
  * ```
  *
- * Error-status spans pass their throwable to `Log.e` so the stack trace (and
- * any `Caused by` chain) lands right under the end line; the
- * [TelemetryError.throwable] transport field exists for exactly this
- * (see [works.resolve.pathfinder.telemetry.AttributeValue] divergences).
- *
  * Semantics mirror the contract and [works.resolve.pathfinder.telemetry.InMemoryTelemetryContext]:
  * a callback throw settles the span with an automatic error status unless the
  * callback set one explicitly, the exception propagates unchanged, and
@@ -122,7 +117,7 @@ class LogcatTelemetryContext(
         emit(
             level = if (error == null) INFO else ERROR,
             line = renderEnd(id, name, status, attributes, durationMs),
-            throwable = error?.throwable,
+            throwable = null,
         )
     }
 
@@ -198,6 +193,9 @@ private fun AttributeValue.render(): String = when (this) {
     is AttributeValue.Str -> value.asLogValue()
     is AttributeValue.Num -> value.toString()
     is AttributeValue.Bool -> value.toString()
+    is AttributeValue.Strs -> values.joinToString(",", "[", "]") { it.asLogValue() }
+    is AttributeValue.Nums -> values.joinToString(",", "[", "]")
+    is AttributeValue.Bools -> values.joinToString(",", "[", "]")
 }
 
 /**

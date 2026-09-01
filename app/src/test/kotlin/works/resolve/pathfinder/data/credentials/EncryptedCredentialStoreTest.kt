@@ -152,7 +152,7 @@ class EncryptedCredentialStoreTest {
         store.modify("openai") { ApiKeyCredential("sk") }
         assertEquals(ApiKeyCredential("sk"), store.read("openai"))
 
-        val byName = telemetry.spans().associateBy { it.name }
+        val byName = telemetry.getSpans().associateBy { it.name }
         assertEquals(setOf("pf.credentials.write", "pf.credentials.read", "pf.credentials.decode"), byName.keys)
         assertEquals(attr("openai"), byName.getValue("pf.credentials.write").attributes["pf.credentials.provider"])
         assertEquals(attr("persisted"), byName.getValue("pf.credentials.write").attributes["pf.credentials.outcome"])
@@ -175,14 +175,14 @@ class EncryptedCredentialStoreTest {
 
         // Absent file: ok span with an absent outcome.
         assertNull(failing.read("openai"))
-        val absent = telemetry.spans().single()
+        val absent = telemetry.getSpans().single()
         assertEquals("pf.credentials.read", absent.name)
         assertEquals(attr("absent"), absent.attributes["pf.credentials.outcome"])
 
         // Decrypt failure: error status with the exception type only, never the message.
         writeRaw(dir, "zai", "{}")
         assertFailsWith<IllegalStateException> { failing.read("zai") }
-        val readFailed = telemetry.spans().last()
+        val readFailed = telemetry.getSpans().last()
         assertEquals("pf.credentials.read", readFailed.name)
         val readError = readFailed.status as SpanStatus.Error
         assertEquals("java.lang.IllegalStateException", readError.error?.name)
@@ -203,7 +203,7 @@ class EncryptedCredentialStoreTest {
         // Malformed stored credential: decode span rejects with the type only.
         writeRaw(dir, "openai", "sk-legacy")
         assertFailsWith<CredentialFormatException> { store.read("openai") }
-        val decodeFailed = telemetry.spans().last()
+        val decodeFailed = telemetry.getSpans().last()
         assertEquals("pf.credentials.decode", decodeFailed.name)
         val decodeError = decodeFailed.status as SpanStatus.Error
         assertEquals("works.resolve.pathfinder.data.credentials.CredentialFormatException", decodeError.error?.name)
@@ -217,7 +217,7 @@ class EncryptedCredentialStoreTest {
             telemetryContext = telemetry,
         )
         assertFailsWith<IllegalStateException> { failingWrite.modify("zai") { ApiKeyCredential("k") } }
-        val writeFailed = telemetry.spans().last()
+        val writeFailed = telemetry.getSpans().last()
         assertEquals("pf.credentials.write", writeFailed.name)
         assertEquals("java.lang.IllegalStateException", (writeFailed.status as SpanStatus.Error).error?.name)
     }
@@ -235,7 +235,7 @@ class EncryptedCredentialStoreTest {
         store.modify("openai") { ApiKeyCredential("sk") }
         store.delete("openai")
 
-        val deletes = telemetry.spans().filter { it.name == "pf.credentials.delete" }
+        val deletes = telemetry.getSpans().filter { it.name == "pf.credentials.delete" }
         assertEquals(2, deletes.size)
         assertEquals(attr("absent"), deletes[0].attributes["pf.credentials.outcome"])
         assertEquals(attr("deleted"), deletes[1].attributes["pf.credentials.outcome"])
@@ -258,8 +258,8 @@ class EncryptedCredentialStoreTest {
         assertFailsWith<CancellationException> { store.read("openai") }
         assertFailsWith<CancellationException> { store.modify("zai") { ApiKeyCredential("k") } }
 
-        val reads = telemetry.spans().filter { it.name == "pf.credentials.read" }
-        val write = telemetry.spans().single { it.name == "pf.credentials.write" }
+        val reads = telemetry.getSpans().filter { it.name == "pf.credentials.read" }
+        val write = telemetry.getSpans().single { it.name == "pf.credentials.write" }
         assertTrue(reads.isNotEmpty())
         reads.forEach { assertEquals(SpanStatus.Ok, it.status) } // cancellation is not a failure
         assertEquals(SpanStatus.Ok, write.status)
