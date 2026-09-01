@@ -220,7 +220,7 @@ class TelemetryContractTest {
                 }
             }
             val second = launch {
-                parent.startSpan(SpanOptions("pf.second-child")) { "done" }
+                parent.startSpan(SpanOptions("pf.second-child")) { }
             }
             second.join()
             first.join()
@@ -234,8 +234,10 @@ class TelemetryContractTest {
         assertEquals(parent.id, first.parentId)
         assertEquals(parent.id, second.parentId)
         // Second settles before first; the parent settles last.
-        assertTrue(second.endSequence!! < first.endSequence!!)
-        assertTrue(first.endSequence!! < parent.endSequence!!)
+        val secondEnd = requireNotNull(second.endSequence)
+        val firstEnd = requireNotNull(first.endSequence)
+        val parentEnd = requireNotNull(parent.endSequence)
+        assertTrue(secondEnd < firstEnd && firstEnd < parentEnd)
         assertEquals(mapOf("order" to attr("first")), first.attributes)
     }
 
