@@ -142,6 +142,45 @@ class JsonlCodecTest {
     }
 
     @Test
+    fun `message entry terminate flag and deferred stop reason roundtrip`() {
+        // pi's MessageEntry.terminate is `true`-only (harness/session/types.ts:27).
+        val terminated = MessageEntry(
+            id = "t0",
+            seq = 1,
+            parentId = null,
+            timestamp = 7,
+            message = UserMessage.ofText("bye", 1L),
+            terminate = true,
+        )
+        val line = JsonlCodec.encodeMutation(SessionMutation.Entry(lane = "main", entry = terminated)).trimEnd()
+        assertTrue("\"terminate\":true" in line)
+        assertEquals(terminated, roundtripEntry(terminated))
+
+        // Absent terminate stays absent (null encodes to no field).
+        val plain = MessageEntry(
+            id = "t1",
+            seq = 2,
+            parentId = "t0",
+            timestamp = 8,
+            message = UserMessage.ofText("hi", 1L),
+        )
+        val plainLine = JsonlCodec.encodeMutation(SessionMutation.Entry(lane = "main", entry = plain)).trimEnd()
+        assertTrue("terminate" !in plainLine)
+        assertEquals(plain.copy(terminate = null), roundtripEntry(plain))
+
+        // Deferred stop reason survives the wire (context.ts drops deferred
+        // assistant messages from context; the value must stay persistable).
+        val deferred = MessageEntry(
+            id = "d0",
+            seq = 3,
+            parentId = "t1",
+            timestamp = 9,
+            message = assistant("later", 1L).copy(stopReason = StopReason.DEFERRED),
+        )
+        assertEquals(deferred, roundtripEntry(deferred))
+    }
+
+    @Test
     fun `configuration and compaction entry kinds roundtrip`() {
         val entries = listOf(
             ModelChangeEntry("e1", 1, null, 1, provider = "zai", modelId = "glm-4.7"),
