@@ -320,7 +320,7 @@ class CodexOAuthClient(
             Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_REDIRECT_INVALID)
             throw CodexOAuthException("Sign-in could not be completed.")
         }
-        val query = parseQueryString(runCatching { URI(redirectUrl).rawQuery }.getOrNull() ?: "")
+        val query = parseQueryString(URI(redirectUrl).rawQuery ?: "")
         if (query["error"] != null) {
             Diagnostics.event(DiagnosticEvent.CODEX_BROWSER_AUTHORIZATION_DENIED)
             throw CodexOAuthException("Sign-in was not completed.")

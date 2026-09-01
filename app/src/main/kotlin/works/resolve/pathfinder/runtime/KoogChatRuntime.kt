@@ -274,7 +274,8 @@ private class StreamingAssistantAccumulator {
                 metaInfo = frame.metaInfo
             }
             // Tool-call frames are not rendered by the product; ignored.
-            else -> {}
+            is StreamFrame.ToolCallDelta -> {}
+            is StreamFrame.ToolCallComplete -> {}
         }
     }
 
