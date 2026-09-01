@@ -49,9 +49,9 @@ data object ChatNavKey : NavKey
 @Serializable
 data object SettingsNavKey : NavKey
 
-/** Navigation 3 destination key: the model configuration form. */
+/** Navigation 3 destination key: the scoped-models curator (pi's /scoped-models). */
 @Serializable
-data object ModelSettingsNavKey : NavKey
+data object ModelsNavKey : NavKey
 
 /** Navigation 3 destination key: the provider credential list (pi's /login). */
 @Serializable
@@ -87,7 +87,7 @@ data class ProviderOption(
     val configured: Boolean,
 )
 
-/** Row of the model picker: one per model of a configured provider. */
+/** Row of the model scope curator / picker: one per model of a configured provider. */
 data class ModelOption(
     val providerId: String,
     val providerName: String,
@@ -174,7 +174,10 @@ internal fun providerAuthScreenMode(methods: List<AuthMethodInfo>): ProviderAuth
     else -> ProviderAuthScreenMode.NO_METHODS
 }
 
-/** The committed provider+model selection (from settings), projected for display. */
+/**
+ * The live model projection (pi's "what runs"): the model of the bound
+ * [works.resolve.pathfinder.agent.AgentSession], or null while unbound.
+ */
 data class SelectedModel(
     val providerId: String,
     val providerName: String,
@@ -188,29 +191,20 @@ data class SelectedModel(
  * message objects.
  *
  * Navigation is signaled from this state rather than commanded: an
- * unconfigured app sets [startKey] to [ProvidersNavKey] when no provider
- * credential is complete (fresh install), or directly to
- * [ModelSettingsNavKey] when one already is (restoration), and the UI layer
- * honors this by rebuilding its Nav3 back stack to exactly that root (a dead
- * end: back cannot leave it). After a successful credential save that does
- * not complete configuration, [startKey] moves to [ModelSettingsNavKey] with a
- * [navigationEpoch] bump so configured models are immediately selectable;
- * every success that should return the user to the chat (adopting a session,
- * saving configuration) instead sets [startKey] to [ChatNavKey] and bumps the
- * monotonic [navigationEpoch], which the UI layer reads as a
- * reset-to-[startKey] signal, atomically with the rest of the state. A
- * successful provider-credential save additionally bumps the monotonic
- * [credentialSuccessEpoch]; the UI layer reacts by popping one credential
- * form off the stack when one is still on top — composed safely with the
- * reset above because first-run saves already rebuild the stack to a
- * single-entry root that cannot be popped. A failed or incomplete save
- * leaves [credentialSuccessEpoch] unchanged so the form and its typed
- * inputs stay intact for correction.
- * The invariant `NeedsConfiguration implies startKey == ProvidersNavKey ||
- * startKey == ModelSettingsNavKey` holds by construction: the model-settings
- * step only appears after a successful credential save during the forced
- * first-run flow (back is a no-op there too, since the reset rebuilds the
- * stack to exactly that root).
+ * unconfigured app (no configured provider at all) pins
+ * [ChatUiState.startKey] to [ProvidersNavKey] (first-run step: pick a
+ * provider and sign in). Every intent that should return the user to the
+ * chat (adopting a session, a credential save completing configuration)
+ * sets [ChatUiState.startKey] to [ChatNavKey] and bumps
+ * [ChatUiState.navigationEpoch] atomically with the rest of the state.
+ * The UI layer owns the Nav3 back stack and resets it to
+ * [ChatUiState.startKey] whenever either field changes, so the forced
+ * first-run step is a single-entry dead end until configuration completes.
+ * A successful provider-credential save additionally bumps the monotonic
+ * [ChatUiState.credentialSuccessEpoch]; the UI pops exactly one
+ * [ProviderAuthNavKey] entry when this changes while one is on top. A failed
+ * or incomplete save leaves it unchanged so the form and its typed inputs
+ * stay intact for correction.
  */
 data class ChatUiState(
     val status: ChatStatus = ChatStatus.Loading,
@@ -228,12 +222,27 @@ data class ChatUiState(
     val credentialSuccessEpoch: Long = 0,
     /** Every catalog provider with live auth status; name-sorted (providers screen). */
     val providerOptions: List<ProviderOption> = emptyList(),
-    /** Models of configured providers only; provider-name-then-model-name sorted. */
+    /**
+     * Models of configured providers only; provider-name-then-model-name
+     * sorted (pi's getAvailable: the credential-filtered set). The scope
+     * curator's universe (pi's /scoped-models list).
+     */
     val modelOptions: List<ModelOption> = emptyList(),
-    /** The committed selection projected from settings, or null when unset/invalid. */
+    /**
+     * Mirror of the stored `enabledModels` scope (pi's setting; null = no
+     * curated scope = everything checked). An empty list is preserved as
+     * written and behaves as no scope downstream, exactly like pi's
+     * `!enabledModels?.length`.
+     */
+    val enabledModels: List<String>? = null,
+    /**
+     * The picker's Scoped view (pi's selector scoped list): the model
+     * options narrowed to the configured scope in display order, or all
+     * model options when no (non-empty) scope is configured.
+     */
+    val scopedModelOptions: List<ModelOption> = emptyList(),
+    /** The live model of the bound session, or null when unbound/unknown. */
     val selectedModel: SelectedModel? = null,
-    /** True iff the selection is catalog-valid AND a key exists for its provider. */
-    val configured: Boolean = false,
     val activeSessionId: String? = null,
     val sessionSummaries: List<SessionSummary> = emptyList(),
     val messages: List<ChatMessage> = emptyList(),

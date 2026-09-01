@@ -8,6 +8,7 @@ import works.resolve.pathfinder.agent.AgentState
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.Content
 import works.resolve.pathfinder.ai.core.Message
+import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
 import works.resolve.pathfinder.ai.core.UserMessage
@@ -60,18 +61,27 @@ import kotlinx.coroutines.withContext
  *
  * The provider/model pair is user-selectable from the injected generated
  * catalog; credentials are managed per provider (pi's /login semantics:
- * one credential per provider, removed per provider), while model settings
- * persist the selected provider+model+base-URL override.
+ * one credential per provider, removed per provider), while the startup
+ * default model persists in settings only through the explicit "set as
+ * startup default" action (pi's Ctrl+S in the picker — never on every
+ * pick).
  *
  * Provider auth status (`configured`/`unconfigured`) is derived live from
- * the credential store — never persisted in settings — and the model picker
- * only lists models of configured providers (pi's model-selector rule),
- * narrowed per provider by pi's credential-based `filterModels` (GitHub
- * Copilot's `availableModelIds` extra; pi's getAvailable).
- * A persisted selection that the credential's filtered set no longer
- * contains is never treated as runnable: initialization projects a
- * re-selection state (forced model-settings step plus a safe error),
- * matching pi dropping the model from getAvailable.
+ * the credential store — never persisted in settings — and the model
+ * surfaces only list models of configured providers (pi's
+ * model-selector rule), narrowed per provider by pi's credential-based
+ * `filterModels` (GitHub Copilot's `availableModelIds` extra; pi's
+ * getAvailable).
+ *
+ * Model selection is split exactly like pi: Settings ▸ Models curates the
+ * scoped models (pi's /scoped-models — which models are *offered*),
+ * persisted as the ordered `enabledModels` setting, while the chat's model
+ * chip switches the model that *runs* on the live session (pi's /model):
+ * `selectModel` resolves the target through the factory seam and calls
+ * [AgentSession.setModel] — no agent rebuild, no navigation reset, and no
+ * busy rejection (a mid-stream pick applies to the next prompt). A scope
+ * is not a hard constraint: the picker keeps an All view over every
+ * available model.
  *
  * The agent itself is created through the injected [AgentFactory]
  * (see [works.resolve.pathfinder.agent]); the production implementation wires the native
@@ -105,13 +115,12 @@ import kotlinx.coroutines.withContext
  * to the entry's parent (or resets to root) and the message text lands in
  * the draft, so the next send appends a sibling of the original message.
  *
- * Navigation is state, not effects: an unconfigured app pins
- * [ChatUiState.startKey] to [ProvidersNavKey] (first-run step 1: pick a
- * provider and sign in), or directly to [ModelSettingsNavKey] when a
- * complete provider credential already exists (restoration); after a
- * credential save that does not complete configuration it moves to
- * [ModelSettingsNavKey] with an epoch bump (step 2: pick a model —
- * configured models are immediately selectable). Every
+ * Navigation is state, not effects: an unconfigured app (no configured
+ * provider at all) pins [ChatUiState.startKey] to [ProvidersNavKey]
+ * (first-run: pick a provider and sign in); with a stored credential the
+ * initial model is derived (pi's findInitialModel reduced: the saved
+ * default when usable, else the first available model of a configured
+ * provider) and the app enters the chat directly. Every
  * intent that should return the user to the chat (adopting a session, saving
  * configuration) sets [ChatUiState.startKey] to [ChatNavKey] and bumps
  * [ChatUiState.navigationEpoch] atomically with the rest of the state.
@@ -125,6 +134,13 @@ class ChatViewModel(
     private val authService: ProviderAuthService,
     private val sessionStore: SessionRepository,
     private val agentFactory: AgentFactory,
+    /**
+     * Resolves a provider/model pair to the effective request model (the
+     * [works.resolve.pathfinder.agent.NativeAgentFactory.resolveModel] seam:
+     * validates catalog existence and API support, stamps the normalized
+     * base URL). Throwing input is surfaced as a safe unknown-model error.
+     */
+    private val modelResolver: (providerId: String, modelId: String) -> Model,
     /** App-owned diagnostics boundary for the UI error/degradation spans. */
     private val diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP,
     /**
@@ -191,11 +207,43 @@ class ChatViewModel(
     }
 
     /**
-     * Persists the selected provider+model and (re)builds the agent.
-     * Requires a stored credential for [providerId].
+     * Switches the live session's model (pi's /model picker pick). Resolves
+     * the pair through the factory seam and calls [AgentSession.setModel]:
+     * the same [AgentSession] stays bound — no agent rebuild, no navigation
+     * reset — and the model_change entry lands on the session tree (child of
+     * the current leaf), so the grown tree is re-projected and persisted.
+     *
+     * Not busy-rejected: like pi, a mid-stream pick is safe — the active run
+     * keeps its start-of-run model and the switch applies to the next
+     * prompt. This does NOT persist the startup default (pi's Ctrl+S is a
+     * separate action, [saveStartupDefault]).
      */
-    fun saveModelSelection(providerId: String, modelId: String) {
-        viewModelScope.launch { saveModelSelectionInternal(providerId, modelId) }
+    fun selectModel(providerId: String, modelId: String) {
+        viewModelScope.launch { selectModelInternal(providerId, modelId) }
+    }
+
+    /**
+     * Persists the startup default provider+model (pi's picker Ctrl+S), as
+     * an explicit action separate from picking. Applies pi's
+     * `_addPersistedDefaultToNonEmptyScope`: when a non-empty scope exists
+     * and the default is not in it, the default is appended to the scope
+     * too (order-preserving).
+     */
+    fun saveStartupDefault(providerId: String, modelId: String) {
+        viewModelScope.launch { saveStartupDefaultInternal(providerId, modelId) }
+    }
+
+    /**
+     * Curates the scoped models (pi's /scoped-models): checks/unchecks one
+     * model and persists the resulting curated list in display order via
+     * [SettingsStore.setEnabledModels]. A null scope (nothing curated yet)
+     * is materialized as an explicit list on the first edit. Curating never
+     * touches the running model — the scope only narrows what the picker
+     * offers, and the picker keeps an All view (pi's scope is not a hard
+     * constraint).
+     */
+    fun toggleModelScope(providerId: String, modelId: String, checked: Boolean) {
+        viewModelScope.launch { toggleModelScopeInternal(providerId, modelId, checked) }
     }
 
     /**
@@ -204,11 +252,11 @@ class ChatViewModel(
      * stored credential wholesale — pi's logins (e.g. `envApiKeyAuth`,
      * `cloudflareAIGatewayAuth`) re-prompt everything and never merge with
      * stored values. Blank/missing required values are rejected with an
-     * error naming the missing prompts.
-     *
-     * Note the deliberate divergence from pi's
-     * `completeProviderAuthentication`, which also auto-selects a default
-     * model after login: pathfinder instead forces the model picker step.
+     * error naming the missing prompts. A completed save re-runs
+     * configuration ([onCredentialStored]): when it completes the last
+     * first-run step, the initial model is derived (pi's
+     * `completeProviderAuthentication` auto-select, findInitialModel
+     * reduced) and the app enters the chat directly.
      *
      * Not busy-rejected: the agent resolves the credential once per request
      * (inside its stream flow), so changing it mid-stream is safe — like pi's
@@ -428,48 +476,47 @@ class ChatViewModel(
         try {
             val settings = settingsRepository.currentSettings()
             val summaries = sessionStore.summaries()
+            currentSettings = settings
+            refreshOptions()
 
-            if (!isConfigured(settings)) {
-                currentSettings = settings
-                refreshOptions()
-                // First-run vs restoration: when at least one provider
-                // credential is already complete, the model form is the
-                // useful forced root (the user can pick a model right away);
-                // only a fresh install forces the providers step first.
-                val hasConfiguredProvider = _uiState.value.modelOptions.isNotEmpty()
-                // Re-selection projection: the persisted model exists in the
-                // static provider catalog but is not in its credential-filtered
-                // set (pi's getAvailable would drop it) — surface a safe error
-                // instead of running or sending with it; the forced
-                // model-settings step collects the replacement. A corrupt or
-                // unknown model id is NOT "no longer available for this
-                // account": no error is added for it.
-                val providerConfigured = try {
-                    catalog.getProvider(settings.providerId)
-                        ?.model(settings.modelId) != null &&
-                        authService.isConfigured(settings.providerId)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    recordDegradation("init_provider_configured", e)
-                    false
-                }
+            // NeedsConfiguration is exactly "no configured provider at all":
+            // pi's first-run flow reduced — once any provider credential
+            // resolves, the initial model is derived and the app enters the
+            // chat directly (no forced model-settings step).
+            if (_uiState.value.modelOptions.isEmpty()) {
                 updateState {
                     it.copy(
                         status = ChatStatus.NeedsConfiguration,
-                        startKey = if (hasConfiguredProvider) ModelSettingsNavKey else ProvidersNavKey,
+                        startKey = ProvidersNavKey,
                         showThinking = settings.showThinking,
                         sessionSummaries = summaries,
-                        error = if (providerConfigured) ERROR_MODEL_UNAVAILABLE else it.error,
                     )
                 }
                 return
             }
 
-            val session = resolveSession(settings, summaries)
+            // findInitialModel reduced (sdk.ts): the saved default when
+            // usable, else the first available model of a configured
+            // provider. A saved model that exists in the catalog but is no
+            // longer in the credential-filtered set (pi's getAvailable would
+            // drop it) surfaces a safe error — the derived replacement runs.
+            // A corrupt/unknown model id is NOT "no longer available": no
+            // error is added for it.
+            val dbgConfigured = isConfigured(settings)
+            val candidate = if (dbgConfigured) {
+                settings
+            } else {
+                val savedKnown = catalog.getProvider(settings.providerId)
+                    ?.model(settings.modelId) != null
+                val first = _uiState.value.modelOptions.first()
+                if (savedKnown) setError(ERROR_MODEL_UNAVAILABLE)
+                settings.copy(providerId = first.providerId, modelId = first.modelId)
+            }
+
+            val session = resolveSession(candidate, summaries)
             // Build the agent before committing any state: a factory failure
             // must never leave a Ready UI or persisted active-session id.
-            val (seeded, conversation) = seededSettingsFor(session, settings)
+            val (seeded, conversation) = seededSettingsFor(session, candidate)
             val newAgent = tryCreateAgent(
                 seeded,
                 session.id,
@@ -485,13 +532,16 @@ class ChatViewModel(
                 }
                 return
             }
-            currentSettings = settings
             if (!activateSession(session, newAgent)) {
                 // The active-id write failed: a safe settings error is already
                 // surfaced; never report Ready with nothing bound.
                 updateState { it.copy(status = ChatStatus.Failed) }
                 return
             }
+            // The in-memory mirror follows the effective running model (the
+            // derivation and/or branch fold may differ from the stored
+            // default); persistence keeps the stored default untouched.
+            currentSettings = seeded
             // activateSession already projected the session and fresh
             // summaries; only the configuration surfaces remain.
             refreshOptions()
@@ -898,21 +948,27 @@ class ChatViewModel(
 
     // ---- intent internals ----
 
-    private suspend fun saveModelSelectionInternal(providerId: String, modelId: String) {
-        val trimmedModelId = modelId.trim()
-        val provider = catalog.getProvider(providerId)
-        // Static catalog existence first: an unknown provider or an id the
-        // catalog has never carried is always ERROR_UNKNOWN_MODEL, never a
-        // credential error or an availability message.
-        if (provider == null || provider.model(trimmedModelId) == null) {
-            setError(ERROR_UNKNOWN_MODEL)
+    private suspend fun selectModelInternal(providerId: String, modelId: String) {
+        val session = agent
+        if (session == null) {
+            setError(ERROR_CONFIG_INVALID)
             return
         }
-        // Then the credential-filtered set (pi's getAvailable / filterModels
-        // rule): a GitHub Copilot OAuth credential can narrow the selectable
-        // models to its availableModelIds, so a static catalog id the account
-        // cannot use is rejected exactly like an unknown one.
-        val selectable = try {
+        // Factory seam first: an unknown provider/model or an unsupported
+        // API is rejected exactly like pi's unknown-model pick.
+        val model = try {
+            modelResolver(providerId, modelId.trim())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            setError(ERROR_UNKNOWN_MODEL, e)
+            return
+        }
+        // Credential-filtered availability (pi's getAvailable rule the
+        // selector lists): a catalog model the account cannot use — e.g. a
+        // Copilot credential's availableModelIds — is rejected exactly like
+        // an unknown one.
+        val available = try {
             authService.availableModels(providerId)
         } catch (e: CancellationException) {
             throw e
@@ -920,71 +976,85 @@ class ChatViewModel(
             setError(ERROR_CREDENTIAL_SAVE, e)
             return
         }
-        if (selectable.none { it.id == trimmedModelId }) {
+        if (available.none { it.id == model.id }) {
             setError(ERROR_UNKNOWN_MODEL)
             return
         }
-        if (rejectWhileBusy()) return
-
-        // Credential-completeness gate (pi's rule: a provider is configured
-        // only when its stored credential resolves — every API-key prompt
-        // has a value, or a stored OAuth credential has a registered flow).
-        val providerConfigured = try {
-            provider != null && authService.isConfigured(providerId)
+        // Live switch: auth is validated by the session (pi's checkAuth →
+        // "No API key for provider/id"), then the agent's model state is
+        // swapped and the model_change entry appended to the tree.
+        try {
+            session.setModel(model)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE, e)
+            setError(ERROR_MODEL_SWITCH, e)
             return
         }
-        if (!providerConfigured) {
-            setError(ERROR_CREDENTIAL_INCOMPLETE)
-            return
-        }
-
-        val candidate = ModelSettings(
-            providerId = providerId,
-            modelId = trimmedModelId,
-            activeSessionId = activeSession?.id,
-            // The display preference is owned by setShowThinking; preserve it
-            // so agent rebuilds never drift from what the user picked.
-            showThinking = currentSettings.showThinking,
-        )
-
-        val wasReady = _uiState.value.status == ChatStatus.Ready && activeSession != null
-        if (wasReady) {
-            // Any failure (factory, settings write, or an unsaved transcript)
-            // keeps the previous agent, session, and persisted settings.
-            if (!awaitPersistence()) {
-                setError(ERROR_SESSION_SAVE)
-                return
-            }
-            // pi's setModel records the switch on the session tree before
-            // persisting defaults (agent-session.ts ~1665).
-            val updated = activeConversation.appendModelChange(providerId, trimmedModelId)
-            val newAgent = tryCreateAgent(candidate, activeSession!!.id, updated) ?: return
-            if (!persistSettings(candidate)) return
-            bindAgent(newAgent)
-            currentSettings = candidate
-            enqueuePersist()
-        } else {
-            // Initial configuration: validate the session and agent first,
-            // then persist the settings, then activate. A failure at any step
-            // leaves the ViewModel unconfigured (never falsely Ready).
-            val prepared = prepareAdoption(candidate) ?: return
-            if (!persistSettings(candidate)) return
-            if (!activateSession(prepared.first, prepared.second)) return
-            currentSettings = candidate
-        }
-
-        refreshOptions()
         updateState {
             it.copy(
-                status = ChatStatus.Ready,
-                startKey = ChatNavKey,
-                navigationEpoch = it.navigationEpoch + 1,
+                selectedModel = selectedModelProjection(model),
+                treeRows = buildTreeRows(session.conversation, it.treeFilter),
             )
         }
+        // The model_change grew the conversation: persist it.
+        enqueuePersist()
+    }
+
+    private suspend fun saveStartupDefaultInternal(providerId: String, modelId: String) {
+        val trimmed = modelId.trim()
+        val candidate = currentSettings.copy(
+            providerId = providerId,
+            modelId = trimmed,
+            activeSessionId = activeSession?.id,
+        )
+        if (!persistSettings(candidate)) return
+        currentSettings = candidate
+
+        // pi's _addPersistedDefaultToNonEmptyScope: a non-empty scope gains
+        // the default when missing (order-preserving append; case-insensitive
+        // reference match, pi's pattern comparison).
+        val scope = currentSettings.enabledModels.orEmpty().filter { it.isNotBlank() }
+        if (scope.isNotEmpty()) {
+            val reference = "$providerId/$trimmed"
+            if (scope.none { it.equals(reference, ignoreCase = true) }) {
+                val grown = scope + reference
+                try {
+                    settingsRepository.setEnabledModels(grown)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    setError(ERROR_SETTINGS_SAVE, e)
+                    return
+                }
+                currentSettings = currentSettings.copy(enabledModels = grown)
+            }
+        }
+        refreshOptions()
+    }
+
+    private suspend fun toggleModelScopeInternal(providerId: String, modelId: String, checked: Boolean) {
+        val state = _uiState.value
+        val reference = "$providerId/$modelId"
+        // The curated list is written in display order; an absent scope
+        // materializes as "everything currently offered" on first edit.
+        val displayOrder = state.modelOptions.map { "${it.providerId}/${it.modelId}" }
+        val current = state.enabledModels?.toSet() ?: displayOrder.toSet()
+        val next = if (checked) current + reference else current - reference
+        val stored = state.enabledModels.orEmpty()
+        // Preserve stored references not currently displayed (e.g. of a
+        // provider whose credential was removed) in their stored order.
+        val ordered = displayOrder.filter { it in next } + stored.filter { it !in displayOrder && it in next }
+        try {
+            settingsRepository.setEnabledModels(ordered)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            setError(ERROR_SETTINGS_SAVE, e)
+            return
+        }
+        currentSettings = currentSettings.copy(enabledModels = ordered)
+        projectScope(state.modelOptions)
     }
 
     private suspend fun saveProviderCredentialInternal(
@@ -1049,9 +1119,9 @@ class ChatViewModel(
      * Shared post-login success path (pi's `completeProviderAuthentication`):
      * bumps the credential-success epoch so the UI closes the auth screen
      * only after confirmed persistence, refreshes every credential-derived
-     * surface, and — while still in the forced first-run flow — completes
-     * configuration when the persisted model settings are now usable, else
-     * advances to the model-settings step.
+     * surface, and — while still unconfigured — completes configuration
+     * with the derived initial model (pi's findInitialModel reduced) and
+     * enters the chat directly.
      */
     private suspend fun onCredentialStored() {
         // Success signal for the UI layer: only a confirmed persistence
@@ -1060,17 +1130,27 @@ class ChatViewModel(
         // without bumping it, so the form and its typed inputs survive.
         updateState { it.copy(credentialSuccessEpoch = it.credentialSuccessEpoch + 1) }
 
-        val nowConfigured = isConfigured(currentSettings)
-        refreshOptions(nowConfigured)
-        if (_uiState.value.status == ChatStatus.NeedsConfiguration) {
-            if (nowConfigured) {
-                val prepared = prepareAdoption(currentSettings) ?: return
-                if (!activateSession(prepared.first, prepared.second)) return
+        refreshOptions()
+        if (_uiState.value.status == ChatStatus.NeedsConfiguration &&
+            _uiState.value.modelOptions.isNotEmpty()
+        ) {
+            val candidate = if (isConfigured(currentSettings)) {
+                currentSettings
+            } else {
+                val first = _uiState.value.modelOptions.first()
+                currentSettings.copy(providerId = first.providerId, modelId = first.modelId)
             }
+            val prepared = prepareAdoption(candidate) ?: return
+            if (!activateSession(prepared.first, prepared.second)) return
+            currentSettings = candidate
+            // The derivation changed provider/model after the pre-bind
+            // refreshOptions above; re-project now that the agent is bound
+            // (selectedModel projects the live session model).
+            refreshOptions()
             updateState {
                 it.copy(
-                    status = if (nowConfigured) ChatStatus.Ready else it.status,
-                    startKey = if (nowConfigured) ChatNavKey else ModelSettingsNavKey,
+                    status = ChatStatus.Ready,
+                    startKey = ChatNavKey,
                     navigationEpoch = it.navigationEpoch + 1,
                 )
             }
@@ -1245,10 +1325,12 @@ class ChatViewModel(
 
     /**
      * Recomputes every credential-derived surface (providers screen rows,
-     * model picker options, selection projection, `configured`). Called on
-     * init, after every credential mutation, and from [refreshProviderStatus].
+     * model-scope curator options, the picker's scoped list, selection
+     * projection). Called on init, after every credential mutation, and
+     * from [refreshProviderStatus]. The live session model — not the
+     * persisted settings — projects [ChatUiState.selectedModel].
      */
-    private suspend fun refreshOptions(configuredOverride: Boolean? = null) {
+    private suspend fun refreshOptions() {
         val providerOptions = try {
             catalog.providers
                 .map { provider ->
@@ -1262,14 +1344,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE, e)
-            return
-        }
-        val configured = configuredOverride ?: try {
-            isConfigured(currentSettings)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
+            recordDegradation("provider_status", e)
             setError(ERROR_CREDENTIAL_SAVE, e)
             return
         }
@@ -1286,6 +1361,7 @@ class ChatViewModel(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    recordDegradation("available_models", e)
                     setError(ERROR_CREDENTIAL_SAVE, e)
                     return
                 }
@@ -1299,30 +1375,39 @@ class ChatViewModel(
                 }
             }
             .sortedWith(compareBy({ it.providerName }, { it.name }))
-        val selectedModel = selectedModelProjection(currentSettings)
+        val selectedModel = agent?.let { selectedModelProjection(it.model) }
+            ?: selectedModelProjection(currentSettings.providerId, currentSettings.modelId)
         updateState {
             it.copy(
                 providerOptions = providerOptions,
                 modelOptions = modelOptions,
                 selectedModel = selectedModel,
-                configured = configured,
             )
         }
+        projectScope(modelOptions)
     }
 
-    private suspend fun selectedModelProjection(settings: ModelSettings): SelectedModel? {
-        val provider = catalog.getProvider(settings.providerId) ?: return null
-        // Same credential-filtered set as the picker (pi's getAvailable): a
-        // persisted selection the account can no longer use projects away.
-        val available = try {
-            authService.availableModels(provider.id)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            recordDegradation("selected_model", e)
-            null
+    /**
+     * Projects the scope-derived surfaces: the mirror of the stored scope and
+     * the picker's scoped list (pi's `!enabledModels?.length` = no scope).
+     */
+    private fun projectScope(modelOptions: List<ModelOption>) {
+        val scope = currentSettings.enabledModels
+        val scoped = if (scope.isNullOrEmpty()) {
+            modelOptions
+        } else {
+            // Case-insensitive reference match, pi's enabledModels comparison.
+            val enabled = scope.mapTo(mutableSetOf()) { it.lowercase() }
+            modelOptions.filter { "${it.providerId}/${it.modelId}".lowercase() in enabled }
         }
-        val model = available?.firstOrNull { it.id == settings.modelId } ?: return null
+        updateState { it.copy(enabledModels = scope, scopedModelOptions = scoped) }
+    }
+
+    /** Catalog display projection of a provider/model pair; null when unknown. */
+    private fun selectedModelProjection(providerId: String, modelId: String): SelectedModel? {
+        val provider = catalog.getProvider(providerId) ?: return null
+        if (modelId.isBlank()) return null
+        val model = provider.model(modelId) ?: return null
         return SelectedModel(
             providerId = provider.id,
             providerName = provider.name,
@@ -1330,6 +1415,9 @@ class ChatViewModel(
             modelName = model.name,
         )
     }
+
+    private fun selectedModelProjection(model: Model): SelectedModel? =
+        selectedModelProjection(model.provider, model.id)
 
     /** Persists the validated configuration; false (with a safe error) on failure. */
     private suspend fun persistSettings(settings: ModelSettings): Boolean {
@@ -1416,11 +1504,11 @@ class ChatViewModel(
         const val TITLE_MAX_LENGTH = 48
 
         const val ERROR_INIT = "Could not load chat data"
-        const val ERROR_CREDENTIAL_INCOMPLETE =
-            "Complete this provider's sign-in values before using its models"
         const val ERROR_UNKNOWN_MODEL = "Unknown model"
         const val ERROR_MODEL_UNAVAILABLE =
             "That model is no longer available for this account — pick another model"
+        const val ERROR_MODEL_SWITCH =
+            "Could not switch to that model — check the provider sign-in"
         const val ERROR_UNKNOWN_PROVIDER = "Unknown provider"
         const val ERROR_CREDENTIAL_SAVE = "Could not store the API key"
         const val ERROR_SETTINGS_SAVE = "Could not save the configuration"

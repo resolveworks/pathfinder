@@ -131,6 +131,7 @@ class PathfinderApplication : Application() {
                 authService = authService,
                 sessionStore = sessionStore,
                 agentFactory = agentFactory,
+                modelResolver = agentFactory::resolveModel,
                 diagnostics = diagnostics,
                 appForegroundGate = appForegroundGate,
             )

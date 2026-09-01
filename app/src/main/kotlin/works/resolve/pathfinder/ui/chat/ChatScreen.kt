@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -38,13 +39,17 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -123,7 +128,9 @@ fun ChatRoute(
         onDraftChange = viewModel::onDraftChange,
         onSend = viewModel::send,
         onStop = viewModel::stop,
-        onSaveModelSelection = viewModel::saveModelSelection,
+        onSelectModel = viewModel::selectModel,
+        onSetStartupDefault = viewModel::saveStartupDefault,
+        onToggleModelScope = viewModel::toggleModelScope,
         onSaveProviderCredential = viewModel::saveProviderCredential,
         onRemoveProviderCredential = viewModel::removeProviderCredential,
         authPrompts = viewModel::providerAuthPrompts,
@@ -168,7 +175,9 @@ fun ChatScreen(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
-    onSaveModelSelection: (providerId: String, modelId: String) -> Unit,
+    onSelectModel: (providerId: String, modelId: String) -> Unit,
+    onSetStartupDefault: (providerId: String, modelId: String) -> Unit,
+    onToggleModelScope: (providerId: String, modelId: String, checked: Boolean) -> Unit,
     onSaveProviderCredential: (providerId: String, apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
     onRemoveProviderCredential: (providerId: String) -> Unit,
     authPrompts: (providerId: String) -> List<ProviderAuthPrompt>,
@@ -225,7 +234,7 @@ fun ChatScreen(
     // (state-driven — no ViewModel navigation callback). Guarded so it
     // composes safely with the reset above, which runs first: first-run
     // saves bump both epochs and the reset already rebuilt the stack to a
-    // single-entry root (ModelSettings/Chat), which is never popped; a
+    // single-entry root, which is never popped; a
     // Ready-state save bumps only this epoch, returning the user from
     // ProviderAuth to Providers. A failed or incomplete save never bumps
     // this epoch, so the form and its typed inputs stay intact.
@@ -236,7 +245,7 @@ fun ChatScreen(
     }
 
     val pushSettings: () -> Unit = { backStack.add(SettingsNavKey) }
-    val pushModelSettings: () -> Unit = { backStack.add(ModelSettingsNavKey) }
+    val pushModels: () -> Unit = { backStack.add(ModelsNavKey) }
     val pushProviders: () -> Unit = { backStack.add(ProvidersNavKey) }
     val pushProviderAuth: (String) -> Unit = { backStack.add(ProviderAuthNavKey(it)) }
     val popBackStack: () -> Unit = {
@@ -281,7 +290,7 @@ fun ChatScreen(
                     ChatTopBar(
                         title = when (topKey) {
                             SettingsNavKey -> stringResource(R.string.settings_title)
-                            ModelSettingsNavKey -> stringResource(R.string.settings_model)
+                            ModelsNavKey -> stringResource(R.string.settings_model)
                             ProvidersNavKey -> stringResource(R.string.providers_title)
                             is ProviderAuthNavKey -> uiState.providerOptions
                                 .firstOrNull { it.id == topKey.providerId }?.name
@@ -336,7 +345,7 @@ fun ChatScreen(
                     // failed init replaces the error surface; popping returns.
                     uiState.status == ChatStatus.Failed && topKey == ChatNavKey -> FailedContent(
                         error = uiState.error ?: stringResource(R.string.error_generic),
-                        onOpenSettings = pushModelSettings,
+                        onOpenProviders = pushProviders,
                     )
                     else -> NavDisplay(
                         backStack = backStack,
@@ -350,6 +359,8 @@ fun ChatScreen(
                                         onDraftChange = onDraftChange,
                                         onSend = onSend,
                                         onStop = onStop,
+                                        onSelectModel = onSelectModel,
+                                        onSetStartupDefault = onSetStartupDefault,
                                         onNavigateTreeEntry = onNavigateTreeEntry,
                                         onTreeFilterChange = onTreeFilterChange,
                                     )
@@ -359,27 +370,25 @@ fun ChatScreen(
                                         onDraftChange = onDraftChange,
                                         onSend = onSend,
                                         onStop = onStop,
+                                        onSelectModel = onSelectModel,
+                                        onSetStartupDefault = onSetStartupDefault,
                                     )
                                 }
                             }
                             entry<SettingsNavKey> {
                                 SettingsContent(
                                     showThinking = uiState.showThinking,
-                                    onOpenModelSettings = pushModelSettings,
+                                    onOpenModels = pushModels,
                                     onOpenProviders = pushProviders,
                                     onToggleShowThinking = onToggleShowThinking,
                                 )
                             }
-                            entry<ModelSettingsNavKey> {
-                                ModelSettingsContent(
-                                    uiState = uiState,
-                                    onSave = onSaveModelSelection,
+                            entry<ModelsNavKey> {
+                                ModelsContent(
+                                    modelOptions = uiState.modelOptions,
+                                    enabledModels = uiState.enabledModels,
+                                    onToggleScope = onToggleModelScope,
                                     onOpenProviders = pushProviders,
-                                    onClose = if (uiState.status == ChatStatus.NeedsConfiguration) {
-                                        null
-                                    } else {
-                                        popBackStack
-                                    },
                                 )
                             }
                             entry<ProvidersNavKey> {
@@ -532,7 +541,7 @@ private fun LoadingContent() {
 }
 
 @Composable
-private fun FailedContent(error: String, onOpenSettings: () -> Unit) {
+private fun FailedContent(error: String, onOpenProviders: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -547,20 +556,20 @@ private fun FailedContent(error: String, onOpenSettings: () -> Unit) {
             textAlign = TextAlign.Center,
         )
         Spacer(modifier = Modifier.padding(top = 16.dp))
-        Button(onClick = onOpenSettings) {
+        Button(onClick = onOpenProviders) {
             Text(stringResource(R.string.action_configure))
         }
     }
 }
 
 /**
- * Settings root: a submenu listing. Rows push the model configuration form,
+ * Settings root: a submenu listing. Rows push the scoped-models curator,
  * the provider credential list, or toggle display preferences directly.
  */
 @Composable
 private fun SettingsContent(
     showThinking: Boolean,
-    onOpenModelSettings: () -> Unit,
+    onOpenModels: () -> Unit,
     onOpenProviders: () -> Unit,
     onToggleShowThinking: (Boolean) -> Unit,
 ) {
@@ -571,10 +580,11 @@ private fun SettingsContent(
     ) {
         ListItem(
             headlineContent = { Text(stringResource(R.string.settings_model)) },
+            supportingContent = { Text(stringResource(R.string.settings_model_scope_hint)) },
             trailingContent = {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },
-            modifier = Modifier.clickable(onClick = onOpenModelSettings),
+            modifier = Modifier.clickable(onClick = onOpenModels),
         )
         ListItem(
             headlineContent = { Text(stringResource(R.string.providers_title)) },
@@ -598,38 +608,25 @@ private fun SettingsContent(
 }
 
 /**
- * Model settings screen (pi's /model): a searchable picker over models of
- * configured providers only. Picking a row only changes local state; Save
- * commits it.
+ * Models screen: the scoped-models curator (pi's /scoped-models). Rows are
+ * every model of configured providers with a checkbox; an absent scope
+ * (never curated) shows everything checked. Toggles persist immediately
+ * as the ordered `enabledModels` list and only affect which models the
+ * chat picker offers — never the running model.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ModelSettingsContent(
-    uiState: ChatUiState,
-    onSave: (providerId: String, modelId: String) -> Unit,
+private fun ModelsContent(
+    modelOptions: List<ModelOption>,
+    enabledModels: List<String>?,
+    onToggleScope: (providerId: String, modelId: String, checked: Boolean) -> Unit,
     onOpenProviders: () -> Unit,
-    onClose: (() -> Unit)?,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
-    val preselected = uiState.modelOptions.firstOrNull { option ->
-        uiState.selectedModel?.let { option.providerId == it.providerId && option.modelId == it.modelId } == true
-    }
-    var selection by remember(uiState.selectedModel, uiState.modelOptions) {
-        mutableStateOf(preselected)
-    }
-    val filteredOptions = uiState.modelOptions.filter { option ->
+    val filteredOptions = modelOptions.filter { option ->
         val q = query.trim()
         q.isEmpty() || option.name.contains(q, ignoreCase = true) ||
             option.modelId.contains(q, ignoreCase = true) ||
             option.providerName.contains(q, ignoreCase = true)
-    }
-    val listState = rememberLazyListState()
-    LaunchedEffect(Unit) {
-        preselected?.let { selected ->
-            filteredOptions.indexOfFirst { it.modelId == selected.modelId && it.providerId == selected.providerId }
-                .takeIf { it >= 0 }
-                ?.let { listState.scrollToItem(it) }
-        }
     }
 
     Column(
@@ -646,31 +643,7 @@ private fun ModelSettingsContent(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
-            items(filteredOptions, key = { "${it.providerId}/${it.modelId}" }) { option ->
-                val isSelected = selection?.providerId == option.providerId &&
-                    selection?.modelId == option.modelId
-                ListItem(
-                    headlineContent = { Text(option.name) },
-                    supportingContent = { Text(option.providerName) },
-                    trailingContent = if (isSelected) {
-                        {
-                            // pi's model selector marks the current model with a check.
-                            Icon(
-                                Icons.Default.Check,
-                                contentDescription = stringResource(R.string.model_selected),
-                                tint = MaterialTheme.colorScheme.secondary,
-                            )
-                        }
-                    } else {
-                        null
-                    },
-                    modifier = Modifier.clickable { selection = option },
-                )
-                HorizontalDivider()
-            }
-        }
-        if (uiState.modelOptions.isEmpty()) {
+        if (modelOptions.isEmpty()) {
             Text(
                 text = stringResource(R.string.models_empty_configured_hint),
                 style = MaterialTheme.typography.bodySmall,
@@ -679,16 +652,31 @@ private fun ModelSettingsContent(
             TextButton(onClick = onOpenProviders) {
                 Text(stringResource(R.string.action_set_up_providers))
             }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = { selection?.let { onSave(it.providerId, it.modelId) } },
-                enabled = selection != null,
-            ) {
-                Text(stringResource(R.string.action_save))
-            }
-            onClose?.let { close ->
-                TextButton(onClick = close) { Text(stringResource(R.string.action_cancel)) }
+        } else {
+            Text(
+                text = stringResource(R.string.models_scope_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                items(filteredOptions, key = { "${it.providerId}/${it.modelId}" }) { option ->
+                    val modelRef = "${option.providerId}/${option.modelId}"
+                    val checked = enabledModels?.contains(modelRef) ?: true
+                    ListItem(
+                        headlineContent = { Text(option.name) },
+                        supportingContent = { Text(option.providerName) },
+                        trailingContent = {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = { onToggleScope(option.providerId, option.modelId, it) },
+                            )
+                        },
+                        modifier = Modifier.clickable {
+                            onToggleScope(option.providerId, option.modelId, !checked)
+                        },
+                    )
+                    HorizontalDivider()
+                }
             }
         }
     }
@@ -1180,6 +1168,8 @@ private fun ConversationPager(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    onSelectModel: (providerId: String, modelId: String) -> Unit,
+    onSetStartupDefault: (providerId: String, modelId: String) -> Unit,
     onNavigateTreeEntry: (entryId: String) -> Unit,
     onTreeFilterChange: (TreeFilter) -> Unit,
 ) {
@@ -1197,6 +1187,8 @@ private fun ConversationPager(
                 onDraftChange = onDraftChange,
                 onSend = onSend,
                 onStop = onStop,
+                onSelectModel = onSelectModel,
+                onSetStartupDefault = onSetStartupDefault,
             )
         }
     }
@@ -1204,10 +1196,10 @@ private fun ConversationPager(
 
 /**
  * The conversation page: [ConversationContent] above the composer column
- * (transient [RetryStatusRow]/[CompactingStatusRow] rows plus the
- * [Composer]). The composer is page content, not scaffold chrome — it moves
- * with the chat page when swiping to the tree — and owns its own
- * navigation-bar and IME padding.
+ * (the model [SelectionBar], transient [RetryStatusRow]/[CompactingStatusRow]
+ * rows, and the [Composer]). The composer column is page content, not
+ * scaffold chrome — it moves with the chat page when swiping to the tree —
+ * and owns its own navigation-bar and IME padding.
  */
 @Composable
 private fun ChatSurface(
@@ -1215,6 +1207,8 @@ private fun ChatSurface(
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    onSelectModel: (providerId: String, modelId: String) -> Unit,
+    onSetStartupDefault: (providerId: String, modelId: String) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ConversationContent(
@@ -1226,6 +1220,14 @@ private fun ChatSurface(
                 .navigationBarsPadding()
                 .imePadding(),
         ) {
+            SelectionBar(
+                selectedModel = uiState.selectedModel,
+                allOptions = uiState.modelOptions,
+                scopedOptions = uiState.scopedModelOptions,
+                scopeConfigured = !uiState.enabledModels.isNullOrEmpty(),
+                onSelectModel = onSelectModel,
+                onSetStartupDefault = onSetStartupDefault,
+            )
             uiState.retryStatus?.let { retry ->
                 RetryStatusRow(
                     attempt = retry.attempt,
@@ -1243,6 +1245,170 @@ private fun ChatSurface(
                 canSend = uiState.canSend,
                 isStreaming = uiState.isStreaming,
             )
+        }
+    }
+}
+
+/**
+ * The model selector row between the transcript and the composer (pi's /model
+ * bar). The chip shows the live session model and opens the searchable
+ * [ModelPickerSheet]: rows over the scoped models by default (All view when
+ * no scope is configured) with an All/Scoped toggle — pi's selector scope
+ * toggle; the scope is what's offered, never a hard constraint. One tap
+ * selects; "Set as startup default" is the separate persistence action
+ * (pi's Ctrl+S), not part of the pick.
+ */
+@Composable
+private fun SelectionBar(
+    selectedModel: SelectedModel?,
+    allOptions: List<ModelOption>,
+    scopedOptions: List<ModelOption>,
+    scopeConfigured: Boolean,
+    onSelectModel: (providerId: String, modelId: String) -> Unit,
+    onSetStartupDefault: (providerId: String, modelId: String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var sheetOpen by rememberSaveable { mutableStateOf(false) }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AssistChip(
+            onClick = { sheetOpen = true },
+            label = {
+                Text(
+                    text = selectedModel?.modelName ?: stringResource(R.string.model_picker_empty),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+        )
+    }
+    if (sheetOpen) {
+        ModelPickerSheet(
+            allOptions = allOptions,
+            scopedOptions = scopedOptions,
+            scopeConfigured = scopeConfigured,
+            selectedModel = selectedModel,
+            onSelect = { option ->
+                sheetOpen = false
+                onSelectModel(option.providerId, option.modelId)
+            },
+            onSetStartupDefault = { providerId, modelId ->
+                sheetOpen = false
+                onSetStartupDefault(providerId, modelId)
+            },
+            onDismiss = { sheetOpen = false },
+        )
+    }
+}
+
+/**
+ * The model picker sheet (pi's /model selector): a searchable list with the
+ * current selection marked by a check. Shows the Scoped view when a scope is
+ * configured (All otherwise), with an All/Scoped toggle — pi's scope toggle;
+ * the All view keeps the scope a soft constraint. The bottom action persists
+ * the current selection as the startup default (pi's Ctrl+S), separately
+ * from picking.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ModelPickerSheet(
+    allOptions: List<ModelOption>,
+    scopedOptions: List<ModelOption>,
+    scopeConfigured: Boolean,
+    selectedModel: SelectedModel?,
+    onSelect: (ModelOption) -> Unit,
+    onSetStartupDefault: (providerId: String, modelId: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var allView by rememberSaveable { mutableStateOf(!scopeConfigured) }
+    val options = if (allView) allOptions else scopedOptions
+    val filtered = options.filter { option ->
+        val q = query.trim()
+        q.isEmpty() || option.name.contains(q, ignoreCase = true) ||
+            option.modelId.contains(q, ignoreCase = true) ||
+            option.providerName.contains(q, ignoreCase = true)
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .navigationBarsPadding(),
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text(stringResource(R.string.model_search_hint)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (scopeConfigured) {
+                Row(
+                    modifier = Modifier.padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = !allView,
+                        onClick = { allView = false },
+                        label = { Text(stringResource(R.string.model_picker_scoped)) },
+                    )
+                    FilterChip(
+                        selected = allView,
+                        onClick = { allView = true },
+                        label = { Text(stringResource(R.string.model_picker_all)) },
+                    )
+                }
+            }
+            if (options.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.models_scope_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 24.dp),
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .heightIn(max = 480.dp),
+                ) {
+                    items(filtered, key = { "${it.providerId}/${it.modelId}" }) { option ->
+                        val isSelected = selectedModel?.let {
+                            option.providerId == it.providerId && option.modelId == it.modelId
+                        } == true
+                        ListItem(
+                            headlineContent = { Text(option.name) },
+                            supportingContent = { Text(option.providerName) },
+                            trailingContent = if (isSelected) {
+                                {
+                                    // pi's model selector marks the current model with a check.
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = stringResource(R.string.model_selected),
+                                        tint = MaterialTheme.colorScheme.secondary,
+                                    )
+                                }
+                            } else {
+                                null
+                            },
+                            modifier = Modifier.clickable { onSelect(option) },
+                        )
+                    }
+                }
+            }
+            selectedModel?.let { selected ->
+                TextButton(
+                    onClick = { onSetStartupDefault(selected.providerId, selected.modelId) },
+                    modifier = Modifier.padding(vertical = 8.dp),
+                ) {
+                    Text(stringResource(R.string.action_set_default))
+                }
+            }
         }
     }
 }
@@ -1613,7 +1779,9 @@ private fun PreviewChatScreen(
             onDraftChange = {},
             onSend = {},
             onStop = {},
-            onSaveModelSelection = { _, _ -> },
+            onSelectModel = { _, _ -> },
+            onSetStartupDefault = { _, _ -> },
+            onToggleModelScope = { _, _, _ -> },
             onSaveProviderCredential = { _, _, _ -> },
             onRemoveProviderCredential = { },
             authPrompts = authPrompts,
@@ -1657,7 +1825,6 @@ private fun ChatScreenSettingsPreview() {
             startKey = SettingsNavKey,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
         ),
     )
 }
@@ -1670,36 +1837,8 @@ private fun ChatScreenSettingsRootPreview() {
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
         ),
         extraKeys = listOf(SettingsNavKey),
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-private fun ChatScreenModelSettingsPreview() {
-    PreviewChatScreen(
-        uiState = ChatUiState(
-            status = ChatStatus.Ready,
-            modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
-        ),
-        extraKeys = listOf(SettingsNavKey, ModelSettingsNavKey),
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-private fun ChatScreenModelSettingsEmptyPreview() {
-    PreviewChatScreen(
-        uiState = ChatUiState(
-            status = ChatStatus.NeedsConfiguration,
-            startKey = ModelSettingsNavKey,
-            providerOptions = PREVIEW_PROVIDER_OPTIONS,
-            modelOptions = PREVIEW_MODEL_OPTIONS,
-        ),
     )
 }
 
@@ -1712,7 +1851,6 @@ private fun ChatScreenProvidersPreview() {
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
         ),
         extraKeys = listOf(SettingsNavKey, ProvidersNavKey),
     )
@@ -1727,7 +1865,6 @@ private fun ChatScreenProviderAuthPreview() {
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
         ),
         extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("cloudflare-ai-gateway")),
         authPrompts = { providerId ->
@@ -1752,7 +1889,6 @@ private fun ChatScreenAuthMethodChoicePreview() {
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
         ),
         extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("zai")),
         authPrompts = { providerId ->
@@ -1775,7 +1911,6 @@ private fun ChatScreenAuthFlowPreview() {
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
             authFlow = ProviderAuthFlow(
                 providerId = "zai",
                 method = PREVIEW_AUTH_METHODS.first(),
@@ -1836,7 +1971,6 @@ private fun ChatScreenPagerPreview() {
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
             activeSessionId = "s1",
             sessionSummaries = listOf(
                 SessionSummary(id = "s1", title = "Preview chat", createdAt = 0L, updatedAt = 0L, messageCount = 1),
@@ -1856,7 +1990,6 @@ private fun ChatScreenReadyStreamingPreview() {
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            configured = true,
             activeSessionId = "s1",
             sessionSummaries = listOf(
                 SessionSummary(
