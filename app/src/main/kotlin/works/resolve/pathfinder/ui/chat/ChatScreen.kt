@@ -1029,12 +1029,12 @@ private fun AuthMethodSelectorContent(
 }
 
 /**
- * Interactive login flow (pi's login dialog): ordered progress/info events
- * and the pending prompt, when one is suspended. Links, auth URLs, and the
- * device verification URI open only through explicit user-triggered
- * buttons — nothing auto-launches. Text/Secret/
- * ManualCode answers live in ephemeral `remember` state only (never
- * `rememberSaveable`) and cross straight back into the suspended prompt.
+ * Android projection of pi's login dialog. Provider events and prompts keep
+ * their upstream shapes and ordering, but the phone UI presents only the
+ * current action: an explicit browser button, a provider-required device
+ * code, or a real choice/text prompt. Terminal-oriented raw URLs, progress
+ * transcripts, and the raced manual-code fallback are intentionally not
+ * rendered here.
  */
 @Composable
 private fun AuthFlowContent(
@@ -1043,6 +1043,12 @@ private fun AuthFlowContent(
     onCancel: () -> Unit,
 ) {
     val context = LocalContext.current
+    val browserEvent = flow.events.lastOrNull {
+        it is AuthEvent.AuthUrl || it is AuthEvent.DeviceCode
+    }
+    val infoEvent = flow.events.filterIsInstance<AuthEvent.Info>().lastOrNull()
+    val prompt = flow.pendingPrompt?.takeUnless { it.kind == AuthPromptKind.MANUAL_CODE }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1051,27 +1057,17 @@ private fun AuthFlowContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        if (flow.pendingPrompt == null) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                CircularProgressIndicator(
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.size(18.dp),
-                )
-                Text(
-                    text = stringResource(R.string.auth_waiting),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        when {
+            browserEvent != null -> {
+                AuthEventItem(event = browserEvent, onOpenUri = context::openInCustomTab)
+                AuthWaitingIndicator()
             }
-        }
-        flow.events.forEach { event ->
-            AuthEventItem(event = event, onOpenUri = context::openInCustomTab)
-        }
-        flow.pendingPrompt?.let { prompt ->
-            AuthPromptItem(prompt = prompt, onSubmit = onSubmit, onCancel = onCancel)
+            prompt != null -> AuthPromptItem(prompt = prompt, onSubmit = onSubmit)
+            infoEvent != null -> {
+                AuthEventItem(event = infoEvent, onOpenUri = context::openInCustomTab)
+                AuthWaitingIndicator()
+            }
+            else -> AuthWaitingIndicator()
         }
         TextButton(onClick = onCancel) {
             Text(stringResource(R.string.action_cancel_sign_in))
@@ -1079,7 +1075,25 @@ private fun AuthFlowContent(
     }
 }
 
-/** One login event: info text with links, auth URL, device code, or progress. */
+@Composable
+private fun AuthWaitingIndicator() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        CircularProgressIndicator(
+            strokeWidth = 2.dp,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            text = stringResource(R.string.auth_waiting),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** One actionable login event, without exposing its raw URL. */
 @Composable
 private fun AuthEventItem(
     event: AuthEvent,
@@ -1091,7 +1105,7 @@ private fun AuthEventItem(
                 Text(event.message, style = MaterialTheme.typography.bodyMedium)
                 event.links.forEach { link ->
                     FilledTonalButton(onClick = { onOpenUri(link.url) }) {
-                        Text(link.label ?: link.url)
+                        Text(link.label ?: stringResource(R.string.auth_more_info))
                     }
                 }
             }
@@ -1099,63 +1113,46 @@ private fun AuthEventItem(
         is AuthEvent.AuthUrl -> {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = event.url,
+                    text = stringResource(R.string.auth_continue_browser),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.secondary,
                 )
-                event.instructions?.let {
-                    Text(it, style = MaterialTheme.typography.bodyMedium)
-                }
                 Button(onClick = { onOpenUri(event.url) }) {
-                    Text(stringResource(R.string.auth_open_url))
+                    Text(stringResource(R.string.auth_open_browser))
                 }
             }
         }
         is AuthEvent.DeviceCode -> {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = event.verificationUri,
+                    text = stringResource(R.string.auth_continue_browser),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.secondary,
                 )
                 Text(
                     text = stringResource(R.string.auth_user_code, event.userCode),
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Button(onClick = { onOpenUri(event.verificationUri) }) {
-                    Text(stringResource(R.string.auth_open_url))
+                    Text(stringResource(R.string.auth_open_browser))
                 }
             }
         }
-        is AuthEvent.Progress -> Text(
-            text = event.message,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        is AuthEvent.Progress -> Unit
     }
 }
 
 /**
- * The pending prompt: a selection list (submitting an option id) or an
- * ephemeral single-line input (Text/Secret/ManualCode). The answer never
- * enters saved or hoisted state — it is passed straight to [onSubmit].
+ * A real login prompt: a selection list or an ephemeral single-line input.
+ * ManualCode is a pi fallback for remote browsers and is filtered by
+ * [AuthFlowContent] because Pathfinder's browser runs on the same device.
  */
 @Composable
 private fun AuthPromptItem(
     prompt: PendingAuthPrompt,
     onSubmit: (answer: String) -> Unit,
-    onCancel: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(prompt.message, style = MaterialTheme.typography.bodyLarge)
-        prompt.placeholder?.let {
-            Text(
-                text = stringResource(R.string.auth_prompt_placeholder, it),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
         if (prompt.kind == AuthPromptKind.SELECT) {
+            Text(prompt.message, style = MaterialTheme.typography.bodyLarge)
             prompt.options.forEach { option ->
                 ListItem(
                     headlineContent = { Text(option.label) },
@@ -1173,19 +1170,15 @@ private fun AuthPromptItem(
                 value = answer,
                 onValueChange = { answer = it },
                 label = { Text(prompt.message) },
+                placeholder = { prompt.placeholder?.let { Text(it) } },
                 visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { onSubmit(answer) }),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { onSubmit(answer) }) {
-                    Text(stringResource(R.string.action_submit))
-                }
-                TextButton(onClick = onCancel) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+            Button(onClick = { onSubmit(answer) }) {
+                Text(stringResource(R.string.action_submit))
             }
         }
     }
