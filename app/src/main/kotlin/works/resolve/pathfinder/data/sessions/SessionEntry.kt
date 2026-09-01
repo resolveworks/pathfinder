@@ -32,16 +32,24 @@ sealed class SessionEntry {
 
     abstract val parentId: String?
     abstract val timestamp: Long
+
+    /**
+     * The same entry with the storage-assigned [SessionEntry.seq]
+     * (pi's storage fills in the provisioned entry's seq on append).
+     */
+    abstract fun withSeq(seq: Long): SessionEntry
 }
 
 /** An entry carrying a chat [message]. */
 data class MessageEntry(
     override val id: String,
     override val seq: Long = 0L,
-    override val parentId: String?,
+    override val parentId: String? = null,
     override val timestamp: Long,
     val message: Message,
-) : SessionEntry()
+) : SessionEntry() {
+    override fun withSeq(seq: Long) = copy(seq = seq)
+}
 
 /**
  * A compaction cut in the conversation tree, pi's harness CompactionEntry
@@ -65,7 +73,9 @@ data class CompactionEntry(
     val details: CompactionDetails? = null,
     /** Usage from the LLM call(s) that generated the summary. */
     val usage: Usage? = null,
-) : SessionEntry()
+) : SessionEntry() {
+    override fun withSeq(seq: Long) = copy(seq = seq)
+}
 
 /**
  * A recorded model switch, pi's harness ModelChangeEntry
@@ -84,7 +94,9 @@ data class ModelChangeEntry(
     val provider: String,
     /** Model id within [provider]. */
     val modelId: String,
-) : SessionEntry()
+) : SessionEntry() {
+    override fun withSeq(seq: Long) = copy(seq = seq)
+}
 
 /**
  * A recorded thinking-level switch, pi's harness ThinkingLevelEntry
@@ -100,7 +112,9 @@ data class ThinkingLevelEntry(
     override val timestamp: Long,
     /** Selected thinking level (pi's ThinkingLevel string, e.g. "off", "high"). */
     val thinkingLevel: String,
-) : SessionEntry()
+) : SessionEntry() {
+    override fun withSeq(seq: Long) = copy(seq = seq)
+}
 
 /**
  * A recorded active-tools set change, pi's harness ActiveToolsEntry
@@ -116,7 +130,9 @@ data class ActiveToolsEntry(
     override val timestamp: Long,
     /** Tool names active from this entry onward (empty set = all defaults off). */
     val activeToolNames: List<String>,
-) : SessionEntry()
+) : SessionEntry() {
+    override fun withSeq(seq: Long) = copy(seq = seq)
+}
 
 /**
  * A branch summarization cut, pi's harness BranchSummaryEntry
@@ -137,7 +153,9 @@ data class BranchSummaryEntry(
     val details: JsonElement? = null,
     /** Usage from the LLM call(s) that generated the summary. */
     val usage: Usage? = null,
-) : SessionEntry()
+) : SessionEntry() {
+    override fun withSeq(seq: Long) = copy(seq = seq)
+}
 
 /**
  * An extension-owned entry, pi's harness CustomEntry
@@ -154,4 +172,6 @@ data class CustomEntry(
     val customType: String,
     /** Upstream `data?: unknown`. */
     val data: JsonElement? = null,
-) : SessionEntry()
+) : SessionEntry() {
+    override fun withSeq(seq: Long) = copy(seq = seq)
+}
