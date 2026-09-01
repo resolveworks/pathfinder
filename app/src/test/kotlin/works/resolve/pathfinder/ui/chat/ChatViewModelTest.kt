@@ -9,6 +9,11 @@ import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.models.Models
 import works.resolve.pathfinder.ai.models.Provider
+import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
+import works.resolve.pathfinder.ai.transport.TransportRequest
+import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.agent.NativeAgentFactory
+import works.resolve.pathfinder.agent.catalogAuthResolver
 import works.resolve.pathfinder.ai.models.ResolvedAuth
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentFactory
@@ -33,6 +38,7 @@ import works.resolve.pathfinder.ai.auth.CredentialStore
 import works.resolve.pathfinder.ai.auth.CredentialType
 import works.resolve.pathfinder.ai.auth.MapCatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.ModelAuth
+import works.resolve.pathfinder.ai.auth.NoopAuthContext
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
@@ -51,6 +57,8 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -69,6 +77,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.test.TestDispatcher
 import org.junit.runner.Description
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -88,6 +97,36 @@ class MainDispatcherRule : org.junit.rules.TestWatcher() {
 }
 
 class ChatViewModelTest {
+
+    /**
+     * Live harnesses (pi's `harnesses[]` array in
+     * packages/coding-agent/test/suite/harness.ts): every [Harness] registers
+     * itself on construction, and [disposeHarnesses] tears them all down even
+     * when a test failed mid-body — so a still-alive ViewModel scope can never
+     * leak into a later test (the Dispatchers.Main /
+     * UncaughtExceptionsBeforeTest cascade).
+     */
+    private val harnesses = CopyOnWriteArrayList<Harness>()
+
+    /**
+     * pi's `cleanup`/afterEach discipline: cancel AND join every ViewModel
+     * scope the harnesses created, then dispose their store scopes. Passing
+     * tests already joined deterministically via [closeForTest]; this rule is
+     * the safety net for tests that failed before reaching it.
+     */
+    @After
+    fun disposeHarnesses() {
+        for (harness in harnesses) {
+            for (vm in harness.viewModels) {
+                val job = vm.viewModelScope.coroutineContext[Job]!!
+                if (!job.isCancelled) {
+                    runBlocking { withTimeout(10_000) { job.cancelAndJoin() } }
+                }
+            }
+            harness.dataStoreScope.cancel()
+        }
+        harnesses.clear()
+    }
 
     @get:Rule
     val tmpFolder = TemporaryFolder()
@@ -204,8 +243,32 @@ class ChatViewModelTest {
         }
     }
 
-    /** Test harness wiring real repositories/stores and scripted real Agents. */
+    /**
+     * Test harness wiring real repositories/stores and scripted real Agents.
+     *
+     * Follows pi's test architecture
+     * (packages/coding-agent/test/model-runtime-test-utils.ts and
+     * packages/coding-agent/test/suite/harness.ts): real implementations run
+     * above the storage boundaries, and substitution happens ONLY there —
+     * [FakeCredentialStore] mirrors pi's `AuthStorage.inMemory()`, the
+     * DataStore/SessionStore live on real files in a tempdir
+     * (`SessionManager.inMemory`-adjacent), and the Models stack + model
+     * resolver are the real production code paths
+     * ([CatalogProvider.toRuntimeProvider] + [catalogAuthResolver], real
+     * [NativeAgentFactory.resolveModel]) over those in-memory stores, like
+     * pi running a real ModelRuntime over `AuthStorage.inMemory`. The two
+     * remaining seams — the scripted [factory] ([AgentFactory] standing in
+     * for pi's `registerFauxProvider`) and [rejectedModelIds] — keep
+     * signature fidelity and are the only behavior fakes.
+     */
     private inner class Harness {
+        init {
+            harnesses += this
+        }
+
+        /** Every ViewModel this harness created; joined by [disposeHarnesses]. */
+        val viewModels = CopyOnWriteArrayList<ChatViewModel>()
+
         val credentials = FakeCredentialStore()
 
         /** Records the ViewModel's diagnostics spans for boundary assertions. */
@@ -223,11 +286,17 @@ class ChatViewModelTest {
             loginLabel = "Sign in with GitHub",
             isSubscription = true,
         )
+        /**
+         * Shared auth registry, wired through BOTH [ProviderAuthService] and
+         * the runtime [catalogAuthResolver] exactly like PathfinderApplication
+         * shares `authRegistry` between them.
+         */
+        val authRegistry = MapCatalogAuthRegistry(
+            mapOf("zai" to oauthZai, "oauth-only" to oauthOnly, "github-copilot" to oauthCopilot),
+        )
         val authService = ProviderAuthService(
             catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
-            registry = MapCatalogAuthRegistry(
-                mapOf("zai" to oauthZai, "oauth-only" to oauthOnly, "github-copilot" to oauthCopilot),
-            ),
+            registry = authRegistry,
             credentials = credentials,
         )
         val dataStoreScope = CoroutineScope(SupervisorJob() + mainDispatcherRule.testDispatcher)
@@ -299,40 +368,55 @@ class ChatViewModelTest {
         /** The request model of every scripted stream invocation (live-switch assertions). */
         val streamedModels = CopyOnWriteArrayList<Model>()
 
-        /** The live-switch model stack: every catalog provider, auth resolved from the fake store. */
+        /**
+         * Network-boundary seam (pi's harnesses never touch the network): the
+         * real provider APIs in [switchModels] are constructed over this
+         * transport, which must never be reached — agent streams are scripted
+         * at the [factory] seam, so only [Models.checkAuth] resolution runs
+         * against the stack. This is a boundary fake, not a behavior fake.
+         */
+        val transport = object : HttpStreamingTransport {
+            override suspend fun post(request: TransportRequest): TransportResponse =
+                error("network transport reached: scripted streams must bypass it")
+        }
+
+        /**
+         * The live-switch model stack, built through the REAL production path
+         * (pi's harness runs a real ModelRuntime over `AuthStorage.inMemory`):
+         * every catalog provider via [CatalogProvider.toRuntimeProvider] with
+         * the factory's [catalogAuthResolver] over the in-memory credential
+         * store and shared auth registry — so setModel's checkAuth resolves
+         * stored credentials (completeness, OAuth flows, everything) exactly
+         * like production.
+         */
         val switchModels = Models(
-            works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG.providers.map { provider ->
-                Provider(
-                    id = provider.id,
-                    name = provider.name,
-                    baseUrl = provider.baseUrl,
-                    // The resolver's first parameter is pi's explicit apiKey
-                    // (null from checkAuth), not a provider id — capture the
-                    // provider from the enclosing map. Real resolution
-                    // validates credential completeness; the fake mirrors
-                    // authService.isConfigured.
-                    authResolver = { _, _ ->
-                        try {
-                            if (authService.isConfigured(provider.id)) {
-                                ResolvedAuth(apiKey = "resolved")
-                            } else {
-                                null
-                            }
-                        } catch (e: Exception) {
-                            null
-                        }
-                    },
-                    models = provider.models,
-                    apis = emptyMap(), // streams are scripted; the stack only serves setModel's checkAuth
+            works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG.providers.map { entry ->
+                entry.toRuntimeProvider(
+                    transport = transport,
+                    authResolver = catalogAuthResolver(entry, credentials, NoopAuthContext, authRegistry),
                 )
             },
         )
 
-        /** The factory-seam resolver (NativeAgentFactory.resolveModel fake). */
+        /**
+         * The production resolver seam: a REAL [NativeAgentFactory] over the
+         * test catalog, in-memory credential store, and shared auth registry —
+         * [modelResolver] is `nativeFactory::resolveModel` composed with the
+         * [rejectedModelIds] injection, exactly the function
+         * PathfinderApplication passes as ChatViewModel's `modelResolver`.
+         */
+        private val nativeFactory = NativeAgentFactory(
+            credentials = credentials,
+            catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
+            transport = transport,
+            authRegistry = authRegistry,
+        )
+
         val modelResolver: (String, String) -> Model = { providerId, modelId ->
-            val model = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG.getProvider(providerId)?.model(modelId)
-            require(model != null && modelId !in rejectedModelIds) { "model rejected" }
-            model
+            if (modelId in rejectedModelIds) {
+                throw IllegalArgumentException("model rejected (harness-injected validation failure)")
+            }
+            nativeFactory.resolveModel(providerId, modelId)
         }
 
         val factory = AgentFactory { settings, _, conversation ->
@@ -364,7 +448,7 @@ class ChatViewModelTest {
             agentFactory = factory,
             modelResolver = modelResolver,
             diagnostics = diagnostics,
-        )
+        ).also { viewModels += it }
 
         fun assistant(text: String, stopReason: StopReason = StopReason.STOP, error: String? = null) =
             AssistantMessage(
@@ -723,14 +807,7 @@ class ChatViewModelTest {
         val sessionId = state.activeSessionId!!
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         vm.closeForTest()
-        val vm2 = ChatViewModel(
-            settingsRepository = h.settingsStore,
-            catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
-            authService = h.authService,
-            sessionStore = h.sessions,
-            agentFactory = h.factory,
-            modelResolver = h.modelResolver,
-        )
+        val vm2 = h.newViewModel()
         val restored = vm2.uiState.first { it.status == ChatStatus.Ready }
         assertTrue(restored.messages.any { it.isCompactionMarker })
         val loaded = h.sessionStore.load(sessionId)!!
