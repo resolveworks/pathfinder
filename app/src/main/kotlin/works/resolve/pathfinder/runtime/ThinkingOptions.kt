@@ -53,9 +53,9 @@ sealed interface ThinkingOption {
  * The thinking surface of the provider catalog, as a thin wrapper over
  * Koog: which options a model offers (its provider's Koog params values,
  * gated on the model's [LLMCapability.Thinking] capability), how a
- * persisted option is read back, and how an option becomes the provider's
- * Koog [LLMParams]. This dispatch mirrors [KoogClients] — the same
- * per-provider knowledge, applied to params rather than clients.
+ * persisted option is validated and read back, and how an option becomes
+ * the provider's Koog [LLMParams]. This dispatch mirrors [KoogClients] —
+ * the same per-provider knowledge, applied to params rather than clients.
  *
  * Providers whose Koog params type models no thinking configuration
  * (deepseek, mistral, dashscope, openrouter) offer only
@@ -82,14 +82,27 @@ object ThinkingOptions {
     }
 
     /**
+     * True iff [label] is one of the options [forModel] offers. The
+     * validation half of reading a persisted option back; [parse] is its
+     * strict counterpart.
+     */
+    fun isValidLabel(providerId: String, model: LLModel, label: String): Boolean =
+        forModel(providerId, model).any { it.label == label }
+
+    /**
      * Reads back a persisted [label] (see [ThinkingOption.label]) for
-     * [model]; anything unknown — including a label persisted for a
-     * different provider's parameter space — resolves to
-     * [ThinkingOption.Default] rather than failing.
+     * [model]. A null label is no preference: [ThinkingOption.Default]. A
+     * non-null label must be one of [forModel]'s current options — a label
+     * from an older catalog (or another provider's parameter space) is
+     * stale persisted data and throws [IllegalArgumentException] instead
+     * of silently defaulting. Persisted settings are validated upfront
+     * (see `ChatViewModel.hasResolvableRefs`), so in production this throw
+     * is an invariant violation, not an input state.
      */
     fun parse(providerId: String, model: LLModel, label: String?): ThinkingOption {
         if (label == null) return ThinkingOption.Default
-        return forModel(providerId, model).firstOrNull { it.label == label } ?: ThinkingOption.Default
+        return forModel(providerId, model).firstOrNull { it.label == label }
+            ?: throw IllegalArgumentException("Unknown thinking option for $providerId/${model.id}")
     }
 
     /**

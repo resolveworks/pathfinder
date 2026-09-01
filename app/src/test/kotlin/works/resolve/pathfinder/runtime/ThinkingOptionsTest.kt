@@ -10,6 +10,8 @@ import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.params.LLMParams
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -93,20 +95,29 @@ class ThinkingOptionsTest {
     }
 
     @Test
-    fun `parse reads back labels and falls back to default`() {
+    fun `parse reads back labels and null is the provider default`() {
         val openai = model("openai", thinking = true)
         assertEquals(
             ThinkingOption.Effort(ReasoningEffort.MEDIUM),
             ThinkingOptions.parse("openai", openai, "medium"),
         )
         assertEquals(ThinkingOption.Default, ThinkingOptions.parse("openai", openai, null))
-        // Unknown labels (and labels from another provider's space) never fail.
-        assertEquals(ThinkingOption.Default, ThinkingOptions.parse("openai", openai, "bogus"))
-        assertEquals(ThinkingOption.Default, ThinkingOptions.parse("openai", openai, "off"))
         assertEquals(
             ThinkingOption.Off,
             ThinkingOptions.parse("anthropic", model("anthropic", thinking = true), "off"),
         )
+    }
+
+    @Test
+    fun `parse rejects labels outside the model's current options`() {
+        val openai = model("openai", thinking = true)
+        // Unknown labels, and labels from another provider's parameter space,
+        // are stale persisted data and reject instead of defaulting.
+        assertFailsWith<IllegalArgumentException> { ThinkingOptions.parse("openai", openai, "bogus") }
+        assertFailsWith<IllegalArgumentException> { ThinkingOptions.parse("openai", openai, "off") }
+        assertTrue(ThinkingOptions.isValidLabel("openai", openai, "medium"))
+        assertFalse(ThinkingOptions.isValidLabel("openai", openai, "off"))
+        assertFalse(ThinkingOptions.isValidLabel("openai", openai, "bogus"))
     }
 
     @Test

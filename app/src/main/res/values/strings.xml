@@ -51,8 +51,6 @@
     <string name="role_user">You</string>
     <string name="role_assistant">Assistant</string>
 
-    <string name="error_generic">Something went wrong</string>
-
     <string name="tree_search_hint">Search conversation</string>
     <string name="tree_clear_search">Clear search</string>
     <string name="tree_filter_all">All</string>

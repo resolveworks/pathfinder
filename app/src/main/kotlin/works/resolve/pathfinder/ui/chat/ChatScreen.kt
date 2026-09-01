@@ -339,7 +339,11 @@ fun ChatScreen(
                     // Any settings-family destination pushed on top of a
                     // failed init replaces the error surface; popping returns.
                     uiState.status == ChatStatus.Failed && topKey == ChatNavKey -> FailedContent(
-                        error = uiState.error ?: stringResource(R.string.error_generic),
+                        // Every Failed transition sets a fixed error before
+                        // the status change; there is no error-less Failed.
+                        error = requireNotNull(uiState.error) {
+                            "Failed status must carry an error"
+                        },
                         onOpenProviders = pushProviders,
                     )
                     else -> NavDisplay(

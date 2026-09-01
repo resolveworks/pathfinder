@@ -33,6 +33,7 @@ import works.resolve.pathfinder.runtime.ChatRuntimeSession
 import works.resolve.pathfinder.runtime.ChatRuntimeState
 import works.resolve.pathfinder.runtime.CodexOAuthClient
 import works.resolve.pathfinder.runtime.KoogChatRuntime
+import works.resolve.pathfinder.runtime.ProviderAuthKind
 import works.resolve.pathfinder.runtime.ProviderDescriptors
 import works.resolve.pathfinder.runtime.ThinkingOption
 
@@ -345,6 +346,205 @@ class ChatViewModelModelSwitchTest {
             viewModel.send()
             awaitIdle(viewModel, "after send")
             assertEquals(listOf<LLMProvider>(LLMProvider.OpenAI), seenProviders)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    /**
+     * A branch that records a model the current catalog no longer offers is
+     * stale session data: switching to it is rejected with an error instead
+     * of silently continuing on the device default.
+     */
+    @Test
+    fun switchingToSessionWithUnresolvableRecordedModelIsRejected() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val anthropic = ProviderDescriptors.byId("anthropic")!!
+            val seenProviders = mutableListOf<LLMProvider>()
+            val settings = FakeSettings(
+                ModelSettings(providerId = "anthropic", modelId = anthropic.models.first().id),
+            )
+            val credentials = FakeCredentials(setOf("anthropic", "openai"))
+            val framesQueue = ArrayDeque<() -> Flow<StreamFrame>>()
+            val runtime = RecordingRuntime(credentials, seenProviders, framesQueue)
+            val sessions = FakeSessions()
+            val (viewModel, _) = viewModel(runtime, credentials, settings, sessions)
+            awaitReady(viewModel)
+            val activeSession = viewModel.uiState.value.activeSessionId!!
+
+            val staleId = kotlinx.coroutines.runBlocking {
+                val stored = sessions.create("stale")
+                val change = ModelChangeEntry("c0", null, 1L, "ghost-provider", "ghost-model")
+                sessions.save(stored.copy(entries = listOf(change), leafId = change.id))
+                stored.id
+            }
+
+            viewModel.switchSession(staleId)
+            awaitCondition("rejection error") { viewModel.uiState.value.error != null }
+            assertEquals(activeSession, viewModel.uiState.value.activeSessionId)
+            assertEquals(ChatStatus.Ready, viewModel.uiState.value.status)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    /**
+     * A stored default naming no current catalog model is derived around for
+     * the session (first model of a configured provider) but never silently
+     * rewritten in persisted settings.
+     */
+    @Test
+    fun unusableStoredDefaultIsDerivedWithoutPersisting() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val seenProviders = mutableListOf<LLMProvider>()
+            val settings = FakeSettings(
+                ModelSettings(providerId = "ghost-provider", modelId = "ghost-model"),
+            )
+            val credentials = FakeCredentials(setOf("anthropic", "openai"))
+            val framesQueue = ArrayDeque<() -> Flow<StreamFrame>>()
+            val runtime = RecordingRuntime(credentials, seenProviders, framesQueue)
+            val (viewModel, _) = viewModel(runtime, credentials, settings)
+
+            awaitReady(viewModel)
+            assertEquals("anthropic", viewModel.uiState.value.selectedModel?.providerId)
+            // The stored default is untouched; only an explicit pick writes it.
+            assertEquals("ghost-provider", settings.settings.providerId)
+            assertEquals("ghost-model", settings.settings.modelId)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    /** Persisted refs from an older catalog reject initialization. */
+    @Test
+    fun stalePersistedScopeRefFailsInitialization() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val seenProviders = mutableListOf<LLMProvider>()
+            val settings = FakeSettings(
+                ModelSettings(enabledModels = setOf("ghost-provider/ghost-model")),
+            )
+            val credentials = FakeCredentials(setOf("anthropic"))
+            val runtime = RecordingRuntime(credentials, seenProviders, ArrayDeque())
+            val (viewModel, _) = viewModel(runtime, credentials, settings)
+
+            awaitCondition("Failed") { viewModel.uiState.value.status == ChatStatus.Failed }
+            kotlin.test.assertNotNull(viewModel.uiState.value.error)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    /** A persisted thinking label no longer offered rejects initialization. */
+    @Test
+    fun stalePersistedThinkingPrefFailsInitialization() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val anthropic = ProviderDescriptors.byId("anthropic")!!
+            val seenProviders = mutableListOf<LLMProvider>()
+            val settings = FakeSettings(
+                ModelSettings(
+                    providerId = "anthropic",
+                    modelId = anthropic.models.first().id,
+                    thinkingPrefs = mapOf("anthropic/${anthropic.models.first().id}" to "bogus"),
+                ),
+            )
+            val credentials = FakeCredentials(setOf("anthropic"))
+            val runtime = RecordingRuntime(credentials, seenProviders, ArrayDeque())
+            val (viewModel, _) = viewModel(runtime, credentials, settings)
+
+            awaitCondition("Failed") { viewModel.uiState.value.status == ChatStatus.Failed }
+            kotlin.test.assertNotNull(viewModel.uiState.value.error)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    /**
+     * First-run completion runs through initialization itself: storing the
+     * first credential derives the model, enters the chat, and — per the
+     * settings-write policy — persists nothing until the user picks.
+     */
+    @Test
+    fun storingFirstCredentialCompletesFirstRunThroughInitialization() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val seenProviders = mutableListOf<LLMProvider>()
+            val settings = FakeSettings(ModelSettings())
+            val credentials = FakeCredentials(emptySet())
+            val runtime = RecordingRuntime(credentials, seenProviders, ArrayDeque())
+            val (viewModel, _) = viewModel(runtime, credentials, settings)
+
+            awaitCondition("NeedsConfiguration") {
+                viewModel.uiState.value.status == ChatStatus.NeedsConfiguration
+            }
+
+            viewModel.saveProviderCredential(
+                ProviderOption(
+                    id = "anthropic",
+                    name = "Anthropic",
+                    authKind = ProviderAuthKind.ApiKey("Anthropic API key"),
+                    configured = false,
+                ),
+                apiKey = "sk-test",
+            )
+
+            awaitReady(viewModel)
+            assertEquals("anthropic", viewModel.uiState.value.selectedModel?.providerId)
+            assertEquals(1, viewModel.uiState.value.credentialSuccessEpoch)
+            // The derived default is not written; only an explicit pick is.
+            assertEquals("", settings.settings.providerId)
+            assertEquals("", settings.settings.modelId)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    /**
+     * First-run completion restores a pre-existing session's recorded model
+     * via the same branch fold as startup — no bespoke first-run model
+     * choice bypassing the session's own history.
+     */
+    @Test
+    fun firstRunCompletionRestoresTheSessionRecordedModel() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val openai = ProviderDescriptors.byId("openai")!!
+            val openaiModel = openai.models.first()
+            val sessions = FakeSessions()
+            val storedId = kotlinx.coroutines.runBlocking {
+                val stored = sessions.create("saved")
+                val user = MessageEntry("m0", null, 1L, userMessage("hello"))
+                val change = ModelChangeEntry("c0", "m0", 2L, openai.id, openaiModel.id)
+                sessions.save(stored.copy(entries = listOf(user, change), leafId = change.id))
+                stored.id
+            }
+
+            val seenProviders = mutableListOf<LLMProvider>()
+            val settings = FakeSettings(ModelSettings(activeSessionId = storedId))
+            val credentials = FakeCredentials(emptySet())
+            val runtime = RecordingRuntime(credentials, seenProviders, ArrayDeque())
+            val (viewModel, _) = viewModel(runtime, credentials, settings, sessions)
+
+            awaitCondition("NeedsConfiguration") {
+                viewModel.uiState.value.status == ChatStatus.NeedsConfiguration
+            }
+
+            viewModel.saveProviderCredential(
+                ProviderOption(
+                    id = "anthropic",
+                    name = "Anthropic",
+                    authKind = ProviderAuthKind.ApiKey("Anthropic API key"),
+                    configured = false,
+                ),
+                apiKey = "sk-test",
+            )
+
+            awaitReady(viewModel)
+            assertEquals(openai.id, viewModel.uiState.value.selectedModel?.providerId)
+            assertEquals(openaiModel.id, viewModel.uiState.value.selectedModel?.modelId)
         } finally {
             Dispatchers.resetMain()
         }

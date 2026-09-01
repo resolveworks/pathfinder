@@ -7,6 +7,7 @@ import ai.koog.prompt.message.MessagePart
 import works.resolve.pathfinder.runtime.ChatRuntime
 import works.resolve.pathfinder.runtime.ChatRuntimeSession
 import works.resolve.pathfinder.runtime.ChatRuntimeState
+import works.resolve.pathfinder.runtime.ModelDescriptor
 import works.resolve.pathfinder.runtime.ProviderDescriptors
 import works.resolve.pathfinder.runtime.ThinkingOption
 import works.resolve.pathfinder.runtime.ThinkingOptions
@@ -44,8 +45,10 @@ import kotlinx.coroutines.withContext
  * scoped model set (pi's scoped models): every model of configured
  * providers until curated in Settings, then the explicit set. Selecting a
  * model swaps it on the live session (transcript untouched) and persists
- * it as the startup default; when no usable default exists, the first
- * model of a configured provider is auto-selected. Thinking is configured
+ * it as the startup default; an explicit pick is the only way persisted
+ * model settings are ever written. When no usable default exists, the
+ * first model of a configured provider is derived for the session.
+ * Thinking is configured
  * per model with Koog's own provider parameter values (see
  * [works.resolve.pathfinder.runtime.ThinkingOptions]) and the last choice
  * is persisted per model. Credentials are per-provider API keys stored in
@@ -72,8 +75,9 @@ import kotlinx.coroutines.withContext
  *
  * Navigation is state, not effects: an unconfigured app pins
  * [ChatUiState.startKey] to [ProvidersNavKey] (pick a provider and complete
- * its credential); storing the first credential auto-selects a model and
- * enters the chat. Every intent that should return the user to the chat
+ * its credential); storing the first credential replays initialization,
+ * which derives a model and enters the chat. Every intent that should
+ * return the user to the chat
  * sets [ChatUiState.startKey] to [ChatNavKey] and bumps
  * [ChatUiState.navigationEpoch] atomically with the rest of the state.
  */
@@ -459,6 +463,13 @@ class ChatViewModel(
                     }
                     val loadedConversation = Conversation(loaded.entries, loaded.leafId)
                     val settings = modelSettingsFor(currentSettings, loadedConversation)
+                    if (settings == null) {
+                        // The branch records a model the current catalog no
+                        // longer offers; the chat stays closed rather than
+                        // silently continuing on the device default.
+                        setError(ERROR_CONFIG_INVALID)
+                        return@launch
+                    }
                     val modelChanged = settings != currentSettings
                     if (modelChanged) {
                         currentSettings = settings
@@ -482,22 +493,41 @@ class ChatViewModel(
 
     // ---- initialization ----
 
+    /**
+     * The single configuration/session establishment flow: validates
+     * persisted refs, derives a usable model when the stored default has
+     * none to run, resolves and activates the session (restoring its
+     * recorded model via the branch fold), and enters the chat. Runs at
+     * startup and is replayed by [onCredentialStored] whenever a stored
+     * credential unblocks configuration.
+     */
     private suspend fun initialize() {
         try {
             val stored = settingsRepository.currentSettings()
             val summaries = sessionStore.summaries()
             val configuredIds = configuredProviderIds()
 
-            // With no usable stored model, the first model of a configured
-            // provider is auto-selected (the picker above the composer
-            // corrects it in one tap); only a credential-less install stays
-            // unconfigured, pinned to the providers step.
             var settings = stored
             if (configuredIds == null) {
                 setError(ERROR_INIT)
                 updateState { it.copy(status = ChatStatus.Failed, sessionSummaries = summaries) }
                 return
             }
+            // Persisted refs must name current catalog entries: a scope ref or
+            // thinking preference from an older catalog is legacy data and
+            // rejects here instead of silently dropping out of the picker or
+            // defaulting.
+            if (!hasResolvableRefs(stored)) {
+                setError(ERROR_CONFIG_INVALID)
+                updateState { it.copy(status = ChatStatus.Failed, sessionSummaries = summaries) }
+                return
+            }
+            // With no usable stored model (never chosen, or its provider lost
+            // its credential), the first model of a configured provider is
+            // derived for this session only — never written back, so a stale
+            // stored default is not silently rewritten. Only a
+            // credential-less install stays unconfigured, pinned to the
+            // providers step.
             if (!hasUsableModel(settings, configuredIds)) {
                 val option = modelOptionsFor(configuredIds).firstOrNull()
                 if (option == null) {
@@ -516,10 +546,6 @@ class ChatViewModel(
                     return
                 }
                 settings = stored.copy(providerId = option.providerId, modelId = option.modelId)
-                if (!persistSettings(settings)) {
-                    updateState { it.copy(status = ChatStatus.Failed, sessionSummaries = summaries) }
-                    return
-                }
             }
 
             val resolved = resolveSession(settings, summaries)
@@ -527,7 +553,16 @@ class ChatViewModel(
             // the root→leaf path) wins over the device default; the fold is
             // conversation state, so the startup default is not rewritten.
             val conversation = Conversation(resolved.entries, resolved.leafId)
-            settings = modelSettingsFor(settings, conversation)
+            val folded = modelSettingsFor(settings, conversation)
+            if (folded == null) {
+                // The branch records a model the current catalog no longer
+                // offers; stale session data rejects rather than silently
+                // continuing on the device default.
+                setError(ERROR_CONFIG_INVALID)
+                updateState { it.copy(status = ChatStatus.Failed, sessionSummaries = summaries) }
+                return
+            }
+            settings = folded
             currentSettings = settings
             syncThinkingFromSettings()
             // Build the runtime session before committing any state: a
@@ -875,61 +910,69 @@ class ChatViewModel(
     }
 
     /**
-     * Post-save success path: bumps the credential-success epoch so the UI
-     * closes the credential form only after confirmed persistence, refreshes
-     * every credential-derived surface, and — while still in the forced
-     * first-run flow — auto-selects the first model of the now-configured
-     * providers and enters the chat.
+     * Post-save success path, shared by every credential store: bumps the
+     * credential-success epoch so the UI closes the credential form only
+     * after confirmed persistence. Once the chat is live it only refreshes
+     * the credential-derived surfaces — credentials are read per request,
+     * so a live session (including one mid-stream) is never touched.
+     * Before that, [initialize] is replayed: it owns the single
+     * NeedsConfiguration→Ready transition, so first-run completion runs
+     * the same model derivation, session resolution, and branch-fold
+     * restore as startup (Failed and NeedsConfiguration never have a
+     * bound session, making the replay a fresh start).
      */
     private suspend fun onCredentialStored() {
         updateState { it.copy(credentialSuccessEpoch = it.credentialSuccessEpoch + 1) }
-
-        val configuredIds = try {
-            credentials.list().toSet()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE)
+        if (_uiState.value.status == ChatStatus.Ready) {
+            refreshOptions()
             return
         }
-        refreshOptions(configuredIds)
-        if (_uiState.value.status != ChatStatus.NeedsConfiguration) return
-
-        val option = modelOptionsFor(configuredIds).firstOrNull() ?: return
-        val candidate = currentSettings.copy(providerId = option.providerId, modelId = option.modelId)
-        if (!persistSettings(candidate)) return
-        currentSettings = candidate
-        syncThinkingFromSettings()
-        val resolved = try {
-            resolveSession(candidate, sessionStore.summaries())
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            setError(ERROR_SESSION_CREATE)
-            return
-        }
-        val newSession = tryCreateSession(
-            candidate,
-            resolved.id,
-            Conversation(resolved.entries, resolved.leafId),
-        ) ?: return
-        if (!activateSession(resolved, newSession)) return
-        // activateSession already reset navigation to the chat surface.
-        updateState { it.copy(status = ChatStatus.Ready) }
+        initialize()
     }
 
     /**
      * Settings with the session branch's recorded model folded in: the last
      * [works.resolve.pathfinder.data.sessions.ModelChangeEntry] on the active
-     * root→leaf path wins over the device default when it still names a
-     * catalog provider+model; absence keeps the default (not defensive
-     * logic — a fold with no entries is simply a default-model session).
+     * root→leaf path names the model the session continues with, and must
+     * still resolve in the current catalog — a ref that no longer does is
+     * stale session data and yields null. A path that records no model
+     * change keeps the device default (not a fallback: a fold over no
+     * entries is simply a default-model session).
      */
-    private fun modelSettingsFor(settings: ModelSettings, conversation: Conversation): ModelSettings {
+    private fun modelSettingsFor(settings: ModelSettings, conversation: Conversation): ModelSettings? {
         val ref = conversation.activeModelRef() ?: return settings
-        val provider = ProviderDescriptors.byId(ref.providerId) ?: return settings
-        if (provider.model(ref.modelId) == null) return settings
+        val provider = ProviderDescriptors.byId(ref.providerId) ?: return null
+        if (provider.model(ref.modelId) == null) return null
         return settings.copy(providerId = ref.providerId, modelId = ref.modelId)
+    }
+
+    /**
+     * True iff every persisted provider/model ref names a current catalog
+     * model: the curated scope ([ModelSettings.enabledModels]) and the
+     * [ModelSettings.thinkingPrefs] keys, each with a label still offered
+     * for its model. Refs written against an older catalog are legacy data
+     * and reject initialization instead of silently degrading.
+     */
+    private fun hasResolvableRefs(settings: ModelSettings): Boolean {
+        settings.enabledModels?.forEach { ref ->
+            if (catalogModel(ref) == null) return false
+        }
+        settings.thinkingPrefs.forEach { (ref, label) ->
+            val model = catalogModel(ref) ?: return false
+            if (!ThinkingOptions.isValidLabel(model.providerId, model.model, label)) return false
+        }
+        return true
+    }
+
+    /**
+     * The catalog model named by a `provider/model` ref (model ids may
+     * themselves contain '/'), or null when the ref names no current
+     * catalog entry.
+     */
+    private fun catalogModel(ref: String): ModelDescriptor? {
+        val provider = ProviderDescriptors.all.firstOrNull { p -> ref.startsWith("${p.id}/") }
+            ?: return null
+        return provider.model(ref.removePrefix("${provider.id}/"))
     }
 
     /**
@@ -978,7 +1021,9 @@ class ChatViewModel(
         val model = provider.model(currentSettings.modelId)
             ?: return listOf(ThinkingOption.Default) to ThinkingOption.Default
         val options = ThinkingOptions.forModel(provider.id, model.model)
-        return options to (options.firstOrNull { it == currentThinking } ?: ThinkingOption.Default)
+        // currentThinking is always set for the current model (every
+        // settings change re-syncs it), so it must be among the options.
+        return options to options.first { it == currentThinking }
     }
 
     /** Mirrors the persisted thinking preference of the current model. */
@@ -1056,21 +1101,6 @@ class ChatViewModel(
             modelId = model.id,
             modelName = model.displayName,
         )
-    }
-
-    /** Persists the validated configuration; false (with a safe error) on failure. */
-    private suspend fun persistSettings(settings: ModelSettings): Boolean {
-        try {
-            settingsRepository.setProviderId(settings.providerId)
-            settingsRepository.setModelId(settings.modelId)
-            return true
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Diagnostics.failure(DiagnosticEvent.UI_SETTINGS_WRITE_FAILED, e)
-            setError(ERROR_SETTINGS_SAVE)
-            return false
-        }
     }
 
     private suspend fun sendInternal() {

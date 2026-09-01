@@ -54,8 +54,10 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
         var ancestorId = entry.parentId
         var attachedTo: String? = null
         while (ancestorId != null) {
-            val ancestor = byId[ancestorId]
-            if (ancestor == null) break // orphan: promoted to a root
+            // Graph invariants (parents exist, no cycles) are enforced at
+            // the decode boundary and preserved by the in-memory tree
+            // operations, so a parent id always resolves; a miss is a bug.
+            val ancestor = byId.getValue(ancestorId)
             if (isVisible(ancestor)) {
                 attachedTo = ancestor.id
                 break
