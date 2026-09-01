@@ -170,7 +170,7 @@ class ProviderAuthServiceTest {
         )
         val methods = ProviderAuthService(
             ProviderCatalog(listOf(provider)),
-            ProductionCatalogAuthRegistry,
+            ProductionCatalogAuthRegistry(),
             InMemoryCredentialStore(),
         ).authMethods("openrouter")
 
@@ -198,7 +198,7 @@ class ProviderAuthServiceTest {
         )
         val methods = ProviderAuthService(
             ProviderCatalog(listOf(provider)),
-            ProductionCatalogAuthRegistry,
+            ProductionCatalogAuthRegistry(),
             InMemoryCredentialStore(),
         ).authMethods("anthropic")
 

@@ -152,7 +152,7 @@ class OpenAiCodexOAuthRuntimeTest {
         )
         val authService = works.resolve.pathfinder.ai.auth.ProviderAuthService(
             catalog,
-            works.resolve.pathfinder.ai.auth.ProductionCatalogAuthRegistry,
+            works.resolve.pathfinder.ai.auth.ProductionCatalogAuthRegistry(),
             InMemoryCredentialStore(),
         )
         val methods = authService.authMethods("openai-codex")

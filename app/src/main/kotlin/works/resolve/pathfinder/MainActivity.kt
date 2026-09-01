@@ -15,6 +15,16 @@ class MainActivity : ComponentActivity() {
         (application as PathfinderApplication).chatViewModelFactory
     }
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.onAppForegrounded()
+    }
+
+    override fun onPause() {
+        viewModel.onAppBackgrounded()
+        super.onPause()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

@@ -99,6 +99,8 @@ class AnthropicOAuthAuth(
      * so they never race the fixed port.
      */
     private val callbackPort: Int = CALLBACK_PORT,
+    /** Android foreground gate for the loopback wait; `null` = pi parity. */
+    private val gate: OAuthForegroundGate? = null,
 ) : OAuthAuth {
 
     /** pi `name: "Anthropic (Claude Pro/Max)"`. */
@@ -164,7 +166,7 @@ class AnthropicOAuthAuth(
         val verifier = challenge.verifier
 
         // pi's `server.on("error")` rejects and the login fails outright.
-        val handle = LoopbackOAuthServer(port = callbackPort, host = CALLBACK_HOST) { request, settle ->
+        val handle = LoopbackOAuthServer(port = callbackPort, host = CALLBACK_HOST, gate = gate) { request, settle ->
             callbackResponse(request, settle, verifier)
         }.start()
             ?: throw IllegalStateException(

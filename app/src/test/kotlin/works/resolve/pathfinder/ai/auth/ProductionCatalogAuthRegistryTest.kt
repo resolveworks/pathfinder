@@ -19,16 +19,16 @@ class ProductionCatalogAuthRegistryTest {
 
     @Test
     fun `production registry exposes only the implemented OAuth flows`() {
-        assertIs<AnthropicOAuthAuth>(ProductionCatalogAuthRegistry.oauthAuth(provider("anthropic")))
-        assertIs<OpenRouterOAuthAuth>(ProductionCatalogAuthRegistry.oauthAuth(provider("openrouter")))
-        assertIs<KimiCodingOAuthAuth>(ProductionCatalogAuthRegistry.oauthAuth(provider("kimi-coding")))
-        assertIs<XaiOAuthAuth>(ProductionCatalogAuthRegistry.oauthAuth(provider("xai")))
-        assertIs<OpenAiCodexOAuthAuth>(ProductionCatalogAuthRegistry.oauthAuth(provider("openai-codex")))
+        assertIs<AnthropicOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(provider("anthropic")))
+        assertIs<OpenRouterOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(provider("openrouter")))
+        assertIs<KimiCodingOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(provider("kimi-coding")))
+        assertIs<XaiOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(provider("xai")))
+        assertIs<OpenAiCodexOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(provider("openai-codex")))
 
         // The Copilot flow receives the catalog entry's model ids as pi's
         // GITHUB_COPILOT_MODELS equivalent.
         val copilot = assertIs<GitHubCopilotOAuthAuth>(
-            ProductionCatalogAuthRegistry.oauthAuth(
+            ProductionCatalogAuthRegistry().oauthAuth(
                 provider("github-copilot", listOf(model("gpt-4.1"), model("claude-sonnet-5"))),
             ),
         )
@@ -43,13 +43,13 @@ class ProductionCatalogAuthRegistryTest {
     @Test
     fun `generated catalog copilot entry projects API key and OAuth login methods`() {
         val catalog = ProviderCatalog.parse(File("src/main/assets/models-catalog.json").readText())
-        val copilot = assertIs<GitHubCopilotOAuthAuth>(ProductionCatalogAuthRegistry.oauthAuth(catalog.getProvider("github-copilot")!!))
+        val copilot = assertIs<GitHubCopilotOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(catalog.getProvider("github-copilot")!!))
         assertEquals(
             catalog.getProvider("github-copilot")!!.models.map { it.id }.toSet(),
             copilot.knownModelIdsForTest(),
         )
 
-        val service = ProviderAuthService(catalog, ProductionCatalogAuthRegistry, InMemoryCredentialStore())
+        val service = ProviderAuthService(catalog, ProductionCatalogAuthRegistry(), InMemoryCredentialStore())
         val methods = service.authMethods("github-copilot")
         assertEquals(2, methods.size)
         assertContains(methods.map { it.type }, AuthType.API_KEY)

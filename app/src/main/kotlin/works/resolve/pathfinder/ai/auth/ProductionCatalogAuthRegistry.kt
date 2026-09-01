@@ -1,10 +1,13 @@
 package works.resolve.pathfinder.ai.auth
 
 import works.resolve.pathfinder.ai.auth.oauth.AnthropicOAuthAuth
+import works.resolve.pathfinder.ai.auth.oauth.ForegroundGatedOAuthHttpClient
 import works.resolve.pathfinder.ai.auth.oauth.GitHubCopilotOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.KimiCodingOAuthAuth
+import works.resolve.pathfinder.ai.auth.oauth.OAuthForegroundGate
 import works.resolve.pathfinder.ai.auth.oauth.OpenAiCodexOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.OpenRouterOAuthAuth
+import works.resolve.pathfinder.ai.auth.oauth.OAuthHttpClient
 import works.resolve.pathfinder.ai.auth.oauth.UrlConnectionOAuthHttpClient
 import works.resolve.pathfinder.ai.auth.oauth.XaiOAuthAuth
 
@@ -22,15 +25,27 @@ import works.resolve.pathfinder.ai.auth.oauth.XaiOAuthAuth
  * [oauthAuth], the same generated asset), all over the JDK
  * [UrlConnectionOAuthHttpClient]. New flows are added by extending the map
  * — never by leaking provider knowledge into the catalog bridge.
+ *
+ * Android foreground gating (deliberate divergence, see
+ * [OAuthForegroundGate]): every flow's HTTP client is wrapped in
+ * [ForegroundGatedOAuthHttpClient] and the three loopback flows pass [gate]
+ * to their callback server, so no OAuth network work runs while the app is
+ * backgrounded. [OAuthForegroundGate.NONE] (the default) restores pi parity
+ * exactly.
  */
-object ProductionCatalogAuthRegistry : CatalogAuthRegistry {
+class ProductionCatalogAuthRegistry(
+    private val gate: OAuthForegroundGate = OAuthForegroundGate.NONE,
+) : CatalogAuthRegistry {
+    private fun client(): OAuthHttpClient =
+        ForegroundGatedOAuthHttpClient(UrlConnectionOAuthHttpClient(), gate)
+
     private val delegate = MapCatalogAuthRegistry(
         mapOf(
-            "anthropic" to AnthropicOAuthAuth(UrlConnectionOAuthHttpClient()),
-            "openrouter" to OpenRouterOAuthAuth(UrlConnectionOAuthHttpClient()),
-            "kimi-coding" to KimiCodingOAuthAuth(UrlConnectionOAuthHttpClient()),
-            "xai" to XaiOAuthAuth(UrlConnectionOAuthHttpClient()),
-            "openai-codex" to OpenAiCodexOAuthAuth(UrlConnectionOAuthHttpClient()),
+            "anthropic" to AnthropicOAuthAuth(client(), gate = gate),
+            "openrouter" to OpenRouterOAuthAuth(client(), gate = gate),
+            "kimi-coding" to KimiCodingOAuthAuth(client()),
+            "xai" to XaiOAuthAuth(client()),
+            "openai-codex" to OpenAiCodexOAuthAuth(client(), gate = gate),
         ),
     )
 
@@ -41,7 +56,7 @@ object ProductionCatalogAuthRegistry : CatalogAuthRegistry {
         // are read straight from it.
         if (provider.id == "github-copilot") {
             return GitHubCopilotOAuthAuth(
-                http = UrlConnectionOAuthHttpClient(),
+                http = client(),
                 knownModelIds = provider.models.map { it.id }.toSet(),
             )
         }

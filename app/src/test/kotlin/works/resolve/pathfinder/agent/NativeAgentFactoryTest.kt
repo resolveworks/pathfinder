@@ -396,7 +396,7 @@ class NativeAgentFactoryTest {
                 credentials = store,
                 catalog = openRouterCatalog,
                 transport = transport,
-                authRegistry = ProductionCatalogAuthRegistry,
+                authRegistry = ProductionCatalogAuthRegistry(),
             ).create(
                 ModelSettings(providerId = "openrouter", modelId = model.id, compaction = COMPACT_OFF),
                 "s1",

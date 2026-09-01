@@ -13,6 +13,7 @@ import works.resolve.pathfinder.ai.auth.CatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.CredentialStore
 import works.resolve.pathfinder.ai.auth.ProductionCatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
+import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
 import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
 import works.resolve.pathfinder.data.sessions.SessionStore
@@ -71,8 +72,15 @@ class PathfinderApplication : Application() {
         EncryptedCredentialStore(this, KeystoreAeadCipher())
     }
 
+    /**
+     * Process-wide app foreground state, fed from MainActivity's
+     * onResume/onPause through the ChatViewModel; the OAuth registry gates
+     * loopback waits and all OAuth network work on it (see AppForegroundGate).
+     */
+    val appForegroundGate: AppForegroundGate by lazy { AppForegroundGate() }
+
     /** Concrete OAuth flows shared by login UI and runtime auth resolution. */
-    val authRegistry: CatalogAuthRegistry by lazy { ProductionCatalogAuthRegistry }
+    val authRegistry: CatalogAuthRegistry by lazy { ProductionCatalogAuthRegistry(appForegroundGate) }
 
     /** Login/logout orchestration over the catalog, registry, and credential store. */
     val authService: ProviderAuthService by lazy {
@@ -121,6 +129,7 @@ class PathfinderApplication : Application() {
                 sessionStore = sessionStore,
                 agentFactory = agentFactory,
                 telemetryContext = telemetry,
+                appForegroundGate = appForegroundGate,
             )
         }
     }
