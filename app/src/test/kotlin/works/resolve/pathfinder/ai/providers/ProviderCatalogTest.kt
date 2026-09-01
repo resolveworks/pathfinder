@@ -7,6 +7,7 @@ import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.CacheControlFormat
 import works.resolve.pathfinder.ai.core.ChatTemplateKwargValue
 import works.resolve.pathfinder.ai.core.InputModality
+import works.resolve.pathfinder.ai.core.DeferredToolsMode
 import works.resolve.pathfinder.ai.core.MaxTokensField
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
@@ -247,6 +248,97 @@ class ProviderCatalogTest {
         }
         assertEquals(CacheControlFormat.ANTHROPIC, catalog.getModel("openrouter", "anthropic/claude-sonnet-4")!!.compat.cacheControlFormat)
         assertNull(catalog.getModel("openrouter", "aion-labs/aion-2.0")!!.compat.cacheControlFormat)
+    }
+
+    @Test
+    fun `supportsMaxOutputTokens defaults true and parses false for responses models (pi b8b873b98, #8941)`() {
+        val catalog = ProviderCatalog.parse(
+            """
+            {
+              "providers": [{
+                "id": "p", "name": "P", "baseUrl": "https://p.test/v1",
+                "models": [
+                  {"id": "a", "name": "A", "api": "openai-responses",
+                   "compat": {"supportsMaxOutputTokens": false}},
+                  {"id": "b", "name": "B", "api": "openai-responses"},
+                  {"id": "c", "name": "C",
+                   "compat": {"requiresReasoningContentOnAssistantMessages": true,
+                               "deferredToolsMode": "kimi"}}
+                ]
+              }]
+            }
+            """,
+        )
+        assertEquals(false, catalog.getModel("p", "a")!!.responsesCompat?.supportsMaxOutputTokens)
+        assertEquals(true, catalog.getModel("p", "b")!!.responsesCompat?.supportsMaxOutputTokens)
+        assertTrue(catalog.getModel("p", "c")!!.compat.requiresReasoningContentOnAssistantMessages)
+        assertEquals(DeferredToolsMode.KIMI, catalog.getModel("p", "c")!!.compat.deferredToolsMode)
+        assertNull(catalog.getModel("p", "a")!!.compat.deferredToolsMode)
+    }
+
+    @Test
+    fun `unknown deferredToolsMode value fails fast with context`() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            ProviderCatalog.parse(
+                """
+                {
+                  "providers": [{
+                    "id": "p", "name": "P", "baseUrl": "https://p.test/v1",
+                    "models": [{"id": "a", "name": "A", "compat": {"deferredToolsMode": "anthropic"}}]
+                  }]
+                }
+                """,
+            )
+        }
+        assertTrue("deferred tools mode" in (error.message ?: ""))
+    }
+
+    @Test
+    fun `unknown compat keys fail at parse instead of being dropped silently`() {
+        // pi's compat surface grows flags over time (supportsMaxOutputTokens
+        // being the latest); the generator emits pi's compat verbatim, so an
+        // unknown key means upstream drift that must fail loudly, not
+        // silently disable the behavior (this is what hid the responses
+        // max_output_tokens gate).
+        val error = assertFailsWith<IllegalArgumentException> {
+            ProviderCatalog.parse(
+                """
+                {
+                  "providers": [{
+                    "id": "p", "name": "P", "baseUrl": "https://p.test/v1",
+                    "models": [
+                      {"id": "a", "name": "A"},
+                      {"id": "b", "name": "B", "compat": {"supportsToolReferences": true}}
+                    ]
+                  }]
+                }
+                """,
+            )
+        }
+        assertTrue("supportsToolReferences" in (error.message ?: ""))
+        assertTrue("p/b" in (error.message ?: ""))
+    }
+
+    @Test
+    fun `real asset compat keys are all modeled by CompatDto`() {
+        // Guards the generator/DTO lockstep: every compat key the current
+        // bundled catalog carries parses without the unknown-key rejection
+        // firing (and every deferredToolsMode/reasoning-content model is
+        // plumbed).
+        val catalog = realAsset()
+        var deferred = 0
+        var requiresReasoningContent = 0
+        var supportsMaxOutputTokensFalse = 0
+        for (provider in catalog.providers) {
+            for (model in provider.models) {
+                if (model.compat.deferredToolsMode == DeferredToolsMode.KIMI) deferred++
+                if (model.compat.requiresReasoningContentOnAssistantMessages) requiresReasoningContent++
+                if (model.responsesCompat?.supportsMaxOutputTokens == false) supportsMaxOutputTokensFalse++
+            }
+        }
+        assertTrue(deferred > 0, "expected kimi deferredToolsMode models in the asset")
+        assertTrue(requiresReasoningContent > 0, "expected requiresReasoningContentOnAssistantMessages models")
+        assertEquals(0, supportsMaxOutputTokensFalse)
     }
 
     @Test
@@ -605,7 +697,7 @@ class ProviderCatalogTest {
                 sendSessionAffinityHeaders = true,
                 supportsCacheControlOnTools = false,
             ),
-            catalog.getModel("fireworks", "accounts/fireworks/models/deepseek-v4-flash")!!.anthropicCompat,
+            catalog.getModel("fireworks", "accounts/fireworks/models/glm-5p3")!!.anthropicCompat,
         )
     }
 

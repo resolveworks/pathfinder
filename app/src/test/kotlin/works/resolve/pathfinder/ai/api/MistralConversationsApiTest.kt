@@ -283,6 +283,71 @@ class MistralConversationsApiTest {
     }
 
     @Test
+    fun `indexed tool call chunks merge even when later fragments carry no id (pi 6c87d9a02, #8387)`() = runTest {
+        // The #8387 gateway shape: only the first indexed chunk carries the
+        // id; continuation chunks carry index alone. They must merge into a
+        // single tool call whose id and name come from the first chunk.
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"id":"response-1","choices":[{"index":0,"finish_reason":null,
+                   "delta":{"tool_calls":[{"id":"abc123456","index":0,
+                   "function":{"name":"lookup","arguments":"{\"query\":"}}]}}]}""",
+                """{"id":"response-1","choices":[{"index":0,"finish_reason":null,
+                   "delta":{"tool_calls":[{"index":0,
+                   "function":{"name":"","arguments":"\"pi\"}"}}]}}]}""",
+                terminalEvent(finishReason = "tool_calls"),
+            ),
+        )
+
+        val events = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(
+            listOf(ToolCall("abc123456", "lookup", """{"query":"pi"}""")),
+            done.message.content,
+        )
+        // One tool block: exactly one start and one end event.
+        assertEquals(1, events.count { it is AssistantMessageEvent.ToolCallStart })
+        assertEquals(1, events.count { it is AssistantMessageEvent.ToolCallEnd })
+    }
+
+    @Test
+    fun `indexed chunks sharing an id stay distinct tool calls`() = runTest {
+        // pi keys by `toolCall.index ?? callId`, so the index dominates: a
+        // shared id across two indexes is two tool calls, while fragments of
+        // the same index merge (previous test).
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"id":"response-1","choices":[{"index":0,"finish_reason":null,
+                   "delta":{"tool_calls":[{"id":"shared1","index":0,
+                   "function":{"name":"lookup","arguments":"{\"q\":"}}]}}]}""",
+                """{"id":"response-1","choices":[{"index":0,"finish_reason":"tool_calls",
+                   "delta":{"tool_calls":[{"id":"shared1","index":1,
+                   "function":{"name":"lookup","arguments":"\"x\""}}]}}]}""",
+                terminalEvent(finishReason = "tool_calls"),
+            ),
+        )
+
+        val events = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        // Different indexes are distinct tool calls even with a shared id.
+        assertEquals(
+            listOf(
+                ToolCall("shared1", "lookup", "{\"q\":"),
+                ToolCall("shared1", "lookup", "\"x\""),
+            ),
+            done.message.content,
+        )
+    }
+
+    @Test
     fun `parses plain string content deltas`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(

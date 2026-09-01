@@ -969,6 +969,7 @@ object OpenAiResponsesShared {
             supportsAdditionalTools = compat?.supportsAdditionalTools ?: false,
             supportsToolSearch = compat?.supportsToolSearch ?: false,
             supportsExplicitPromptCacheMode = compat?.supportsExplicitPromptCacheMode ?: false,
+            supportsMaxOutputTokens = compat?.supportsMaxOutputTokens ?: true,
         )
     }
 
@@ -981,6 +982,8 @@ object OpenAiResponsesShared {
         val supportsAdditionalTools: Boolean,
         val supportsToolSearch: Boolean,
         val supportsExplicitPromptCacheMode: Boolean,
+        /** pi b8b873b98 (#8941): default true; gate on `max_output_tokens`. */
+        val supportsMaxOutputTokens: Boolean,
     )
 
     /** Pi's resolveCacheRetention: explicit > PI_CACHE_RETENTION=long > short. */
