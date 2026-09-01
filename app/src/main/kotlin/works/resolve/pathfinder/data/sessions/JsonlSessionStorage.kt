@@ -5,6 +5,7 @@ import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import kotlin.time.Clock
 
 /**
  * Append-only storage for one JSONL v4 session file, porting pi's
@@ -23,16 +24,18 @@ import java.nio.file.StandardCopyOption
  *   and the same append-time validation (unused id, parent existence,
  *   chaining to the appending lane's leaf) are preserved; the parentId check
  *   replaces pi's assignment because the value is identical.
- * - appendRecord/fork/getLog/queries are not ported: records have no
- *   producers yet (P0-3), fork is P1-2, and Pathfinder reads the replayed
- *   state instead of queries.
- * - timestamp on append is the caller's (Conversation-minted) value, not
- *   Date.now() assigned here.
+ * - appendRecord/fork/getLog/queries are not ported beyond
+ *   [appendRecord] and [findOpenOperations]: fork is P1-2, and Pathfinder
+ *   reads the replayed state instead of queries.
+ * - timestamp on entry append is the caller's (Conversation-minted) value,
+ *   not Date.now() assigned here; record appends assign [clock] time like
+ *   pi's appendRecord (records have no producer-minted timestamp).
  */
 internal class JsonlSessionStorage private constructor(
     val file: File,
     val header: JsonlCodec.JsonlV4Header,
     private val state: SessionState,
+    private val clock: Clock = Clock.System,
 ) {
     val nextSequence: Long
         get() = state.nextSequence
@@ -46,6 +49,16 @@ internal class JsonlSessionStorage private constructor(
     fun entries(): List<SessionEntry> = state.entries()
 
     fun messageCount(): Int = state.messageCount()
+
+    /** Records in append (seq) order (pi's findRecords without queries). */
+    fun records(): List<LaneRecord> = state.records()
+
+    /** pi's getStats(): the incremental message/usage fold of the replayed log. */
+    fun stats(): SessionStats = state.stats()
+
+    /** pi's findOpenOperations (see [SessionState.findOpenOperations]). */
+    fun findOpenOperations(lane: String = SessionState.LANE_MAIN, limit: Int? = null): List<LaneRecord.OperationStartedRecord> =
+        state.findOpenOperations(lane, limit)
 
     /** Latest-wins session name fact; Pathfinder's title carrier. */
     fun name(): String? = state.name
@@ -85,6 +98,29 @@ internal class JsonlSessionStorage private constructor(
         appendAndApply(SessionMutation.Lane(state.nextSequence, lane, leafId))
     }
 
+    /**
+     * Appends a record mutation, porting pi's appendRecord (storage.ts):
+     * the lane must exist, the id must be unused, and a lane may not open a
+     * second operation while one is open (pi throws SessionError
+     * "storage", `Lane <lane> already has an open operation <id>`). The
+     * storage assigns seq and timestamp and returns the stored record.
+     *
+     * No flush of buffered entries is required or performed: pi's
+     * applyMutation validates no payload references, and records may
+     * precede the entries they reference in seq order (see [LaneRecord]).
+     */
+    fun appendRecord(record: LaneRecord): LaneRecord {
+        state.requireLane(record.lane)
+        state.validateUnusedId(record.id)
+        val currentOpenOperationId = state.findOpenOperations(record.lane, limit = 1).firstOrNull()?.id
+        if (record is LaneRecord.OperationStartedRecord && currentOpenOperationId != null) {
+            throw SessionDataException("Lane ${record.lane} already has an open operation $currentOpenOperationId")
+        }
+        val stored = record.withAssigned(state.nextSequence, clock.now().toEpochMilliseconds())
+        appendAndApply(SessionMutation.Record(stored))
+        return stored
+    }
+
     /** Appends a name fact mutation (pi's setName). */
     fun setName(name: String?) {
         appendAndApply(SessionMutation.Fact.Name(state.nextSequence, name))
@@ -108,13 +144,13 @@ internal class JsonlSessionStorage private constructor(
 
     companion object {
         /** pi's JsonlSessionStorage.create: writes the header line and returns an empty storage. */
-        fun create(file: File, header: JsonlCodec.JsonlV4Header): JsonlSessionStorage {
+        fun create(file: File, header: JsonlCodec.JsonlV4Header, clock: Clock = Clock.System): JsonlSessionStorage {
             try {
                 file.writeText(JsonlCodec.encodeHeader(header))
             } catch (e: IOException) {
                 throw SessionDataException("Failed to initialize session", e)
             }
-            return JsonlSessionStorage(file, header, SessionState())
+            return JsonlSessionStorage(file, header, SessionState(), clock)
         }
 
         /**
@@ -128,7 +164,7 @@ internal class JsonlSessionStorage private constructor(
          * files; the header id must match [expectedId] (the store's
          * id/filename cross-check).
          */
-        fun load(file: File, expectedId: String, maxFileBytes: Long): JsonlSessionStorage {
+        fun load(file: File, expectedId: String, maxFileBytes: Long, clock: Clock = Clock.System): JsonlSessionStorage {
             if (file.length() > maxFileBytes) {
                 throw SessionDataException("Session file exceeds size limit")
             }
@@ -164,7 +200,7 @@ internal class JsonlSessionStorage private constructor(
                         // Drop the unacknowledged partial append by atomically publishing the valid prefix.
                         val validPrefix = physicalLines.subList(0, index).joinToString("\n") + "\n"
                         publishFileAtomically(file) { temp -> temp.writeText(validPrefix) }
-                        return JsonlSessionStorage(file, header, state)
+                        return JsonlSessionStorage(file, header, state, clock)
                     }
                     throw invalidFile(file, index + 1, e.message ?: "invalid mutation")
                 }
@@ -181,7 +217,7 @@ internal class JsonlSessionStorage private constructor(
                     throw SessionDataException("Failed to repair unterminated session tail", e)
                 }
             }
-            return JsonlSessionStorage(file, header, state)
+            return JsonlSessionStorage(file, header, state, clock)
         }
 
         /**

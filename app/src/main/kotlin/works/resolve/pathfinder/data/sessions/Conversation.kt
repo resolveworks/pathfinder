@@ -66,9 +66,11 @@ class Conversation(
         tokensBefore: Int,
         details: CompactionDetails? = null,
         usage: Usage? = null,
+        /** Pre-minted entry id, for producers that record it up front (pi's compaction operation intent names its resultEntryId before the work runs). */
+        id: String? = null,
     ): Conversation {
         val entry = CompactionEntry(
-            id = nextId(),
+            id = id ?: nextId(),
             parentId = leafId,
             timestamp = clock.now().toEpochMilliseconds(),
             summary = summary,

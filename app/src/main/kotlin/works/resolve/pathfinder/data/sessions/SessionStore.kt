@@ -159,6 +159,51 @@ class SessionStore(
         }
     }
 
+    /**
+     * Appends a lane record to the session's log (pi's Session.appendRecord
+     * over JsonlSessionStorage.appendRecord): storage assigns seq and
+     * timestamp; the single-open-operation invariant is enforced. Records
+     * append immediately — a record may precede the buffered entries it
+     * references in seq order (see [LaneRecord]).
+     *
+     * @throws SessionDataException when the session does not exist or the
+     * record violates the log invariants.
+     */
+    override suspend fun appendRecord(sessionId: String, record: LaneRecord): LaneRecord = mutex.withLock {
+        withContext(ioDispatcher) {
+            val id = requireId(sessionId)
+            val storage = storageFor(id, fileFor(id))
+                ?: throw SessionDataException("Session not found: unknown")
+            try {
+                storage.appendRecord(record)
+            } catch (e: IOException) {
+                throw SessionDataException("Failed to append session", e)
+            }
+        }
+    }
+
+    /** pi's findOpenOperations (see [SessionState.findOpenOperations]). */
+    override suspend fun openOperations(
+        sessionId: String,
+        lane: String,
+        limit: Int?,
+    ): List<LaneRecord.OperationStartedRecord> = mutex.withLock {
+        withContext(ioDispatcher) {
+            val id = requireId(sessionId)
+            storageFor(id, fileFor(id))?.findOpenOperations(lane, limit)
+                ?: throw SessionDataException("Session not found: unknown")
+        }
+    }
+
+    /** pi's getStats: the incremental message/usage fold of the session's log. */
+    override suspend fun stats(sessionId: String): SessionStats = mutex.withLock {
+        withContext(ioDispatcher) {
+            val id = requireId(sessionId)
+            storageFor(id, fileFor(id))?.stats()
+                ?: throw SessionDataException("Session not found: unknown")
+        }
+    }
+
     // ---- internals ----
 
     private fun defensiveCopy(session: Session): Session =

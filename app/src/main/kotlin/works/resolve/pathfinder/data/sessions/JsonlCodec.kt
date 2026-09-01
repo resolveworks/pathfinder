@@ -82,9 +82,6 @@ internal object JsonlCodec {
         "tool_started", "queue_enqueued", "queue_cancelled", "write_deferred", "usage",
     )
 
-    /** pi's OPERATION_KINDS (codec.ts). */
-    private val OPERATION_KINDS = setOf("run", "compaction", "navigation")
-
     // ---- header ----
 
     /** pi's encodeHeader: the JSON header line, newline-terminated. */
@@ -136,12 +133,7 @@ internal object JsonlCodec {
         is SessionMutation.Record ->
             buildJsonObject {
                 put("kind", "record")
-                put("id", mutation.record.id)
-                put("seq", mutation.record.seq)
-                put("lane", mutation.record.lane)
-                put("type", mutation.record.type)
-                put("timestamp", mutation.record.timestamp)
-                mutation.record.fields.forEach { (key, field) -> put(key, field) }
+                putRecordFields(mutation.record)
             }.toString() + "\n"
         is SessionMutation.Lane ->
             buildJsonObject {
@@ -198,21 +190,119 @@ internal object JsonlCodec {
         return SessionMutation.Entry(lane, entry)
     }
 
-    private fun decodeRecordMutation(value: JsonObject, seq: Long): SessionRecord {
+    private fun decodeRecordMutation(value: JsonObject, seq: Long): LaneRecord {
         val id = value.string("id") ?: schema("has invalid id")
         val lane = value.string("lane") ?: schema("has invalid lane")
         val type = value.string("type") ?: schema("has invalid record type")
         if (type !in RECORD_TYPES) schema("has unknown record type $type")
         val timestamp = requireTimestamp(value["timestamp"]) { schema("has invalid timestamp") }
-        if (type == "operation_started") {
-            val intent = value["intent"]
-            if (intent !is JsonObject) schema("has invalid intent")
-            val operationKind = intent.string("kind") ?: schema("has invalid operation kind")
-            if (operationKind !in OPERATION_KINDS) schema("has unknown operation kind $operationKind")
+        val base = RecordLineFields(id, lane, seq, timestamp)
+        return when (type) {
+            "operation_started" -> {
+                val intentElement = value["intent"]
+                if (intentElement !is JsonObject) schema("has invalid intent")
+                val operationKind = intentElement.string("kind") ?: schema("has invalid operation kind")
+                val kind = OperationIntent.Kind.entries.firstOrNull { it.wire == operationKind }
+                    ?: schema("has unknown operation kind $operationKind")
+                LaneRecord.OperationStartedRecord(
+                    id = base.id,
+                    lane = base.lane,
+                    seq = base.seq,
+                    timestamp = base.timestamp,
+                    // Absent sourceLeafId decodes as null (pi's codec does not
+                    // require it; pi producers always write it).
+                    sourceLeafId = if ("sourceLeafId" in value) requireNullableId(value, "sourceLeafId") else null,
+                    intent = OperationIntent(kind, intentElement),
+                )
+            }
+            "abort_requested" -> LaneRecord.AbortRequestedRecord(
+                id = base.id,
+                lane = base.lane,
+                seq = base.seq,
+                timestamp = base.timestamp,
+                runId = value.string("runId") ?: schema("has invalid runId"),
+            )
+            "operation_finished" -> {
+                val outcomeName = value.string("outcome") ?: schema("has invalid outcome")
+                val outcome = OperationOutcome.entries.firstOrNull { it.wire == outcomeName }
+                    ?: schema("has unknown outcome $outcomeName")
+                val error = value.obj("error")?.let { e ->
+                    RecordError(
+                        code = e.string("code") ?: schema("has invalid error code"),
+                        message = e.string("message") ?: schema("has invalid error message"),
+                    )
+                }
+                LaneRecord.OperationFinishedRecord(
+                    id = base.id,
+                    lane = base.lane,
+                    seq = base.seq,
+                    timestamp = base.timestamp,
+                    runId = value.string("runId") ?: schema("has invalid runId"),
+                    outcome = outcome,
+                    error = error,
+                )
+            }
+            "usage" -> LaneRecord.UsageRecord(
+                id = base.id,
+                lane = base.lane,
+                seq = base.seq,
+                timestamp = base.timestamp,
+                usage = decodeUsage(value["usage"]),
+                fields = JsonObject(value.filterKeys { it !in RECORD_BASE_FIELDS && it != "kind" && it != "usage" }),
+            )
+            else -> LaneRecord.DeferredRecord(
+                id = base.id,
+                lane = base.lane,
+                seq = base.seq,
+                timestamp = base.timestamp,
+                type = type,
+                fields = JsonObject(value.filterKeys { it != "kind" && it !in RECORD_BASE_FIELDS }),
+            )
         }
-        if (type == "operation_finished" && value.string("runId") == null) schema("has invalid runId")
-        val fields = JsonObject(value.filterKeys { it != "kind" })
-        return SessionRecord(id = id, seq = seq, lane = lane, timestamp = timestamp, type = type, fields = fields)
+    }
+
+    /** The shared RecordBase members every record line carries. */
+    private val RECORD_BASE_FIELDS = setOf("id", "seq", "lane", "timestamp", "type")
+
+    private data class RecordLineFields(val id: String, val lane: String, val seq: Long, val timestamp: Long)
+
+    /** Encodes a typed record's RecordBase members plus its payload fields. */
+    private fun kotlinx.serialization.json.JsonObjectBuilder.putRecordFields(record: LaneRecord) {
+        put("id", record.id)
+        put("seq", record.seq)
+        put("lane", record.lane)
+        put("timestamp", record.timestamp)
+        when (record) {
+            is LaneRecord.OperationStartedRecord -> {
+                put("type", "operation_started")
+                put("sourceLeafId", record.sourceLeafId)
+                put("intent", record.intent.payload)
+            }
+            is LaneRecord.AbortRequestedRecord -> {
+                put("type", "abort_requested")
+                put("runId", record.runId)
+            }
+            is LaneRecord.OperationFinishedRecord -> {
+                put("type", "operation_finished")
+                put("runId", record.runId)
+                put("outcome", record.outcome.wire)
+                record.error?.let {
+                    putJsonObject("error") {
+                        put("code", it.code)
+                        put("message", it.message)
+                    }
+                }
+            }
+            is LaneRecord.UsageRecord -> {
+                put("type", "usage")
+                putJsonObject("usage") { putUsage(record.usage) }
+                record.fields.forEach { (key, field) -> put(key, field) }
+            }
+            is LaneRecord.DeferredRecord -> {
+                put("type", record.type)
+                record.fields.forEach { (key, field) -> put(key, field) }
+            }
+        }
     }
 
     private fun decodeFactMutation(value: JsonObject, seq: Long): SessionMutation.Fact = when (value.string("fact")) {
