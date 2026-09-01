@@ -10,12 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import works.resolve.pathfinder.telemetry.NOOP_TELEMETRY_CONTEXT
-import works.resolve.pathfinder.telemetry.SpanOptions
-import works.resolve.pathfinder.telemetry.SpanStatus
-import works.resolve.pathfinder.telemetry.TelemetryContext
-import works.resolve.pathfinder.telemetry.TelemetryError
-import works.resolve.pathfinder.telemetry.attr
+import works.resolve.pathfinder.logging.PathfinderDiagnostics
 
 /**
  * File-backed append-only session store over the JSONL v4 mutation-log
@@ -44,9 +39,10 @@ import works.resolve.pathfinder.telemetry.attr
  *
  * Disciplines retained from the snapshot store: bounded reads
  * ([maxFileBytes]), id/filename cross-check (the header id must match the
- * file name), defensive copies, and type-only telemetry errors
- * (`pf.session.*` spans record the session id, outcome, and exception type
- * — never paths or transcript content).
+ * file name), defensive copies, and type-only telemetry errors through the
+ * app-owned [PathfinderDiagnostics] boundary (`pf.session.*` spans record
+ * the session id, outcome, and exception type — never paths or transcript
+ * content; the vocabulary and policy live in the facade).
  */
 class SessionStore(
     private val root: File,
@@ -55,7 +51,7 @@ class SessionStore(
     private val idFactory: () -> String = ::uuidv7,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     maxFileBytes: Long = MAX_FILE_BYTES,
-    private val telemetryContext: TelemetryContext = NOOP_TELEMETRY_CONTEXT,
+    private val diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP,
 ) : SessionRepository {
 
     /** Upper bound on a single session file to avoid reading unbounded/corrupt files. */
@@ -223,7 +219,7 @@ class SessionStore(
     ): Session = mutex.withLock {
         withContext(ioDispatcher) {
             val source = requireId(sourceId)
-            writeSpanned(source, SPAN_FORK) {
+            writeSpanned(source, PathfinderDiagnostics.SessionWrite.FORK) {
                 ensureRoot()
                 val sourceStorage = storageFor(source, fileFor(source))
                     ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
@@ -348,65 +344,16 @@ class SessionStore(
         return storage.toSession(file.lastModified())
     }
 
-    private suspend fun writeSpanned(id: String, spanName: String = SPAN_SAVE, operation: () -> Session): Session =
-        telemetryContext.startSpan(
-            SpanOptions(
-                name = SPAN_SAVE,
-                attributes = mapOf(ATTR_SESSION to attr(id)),
-            ),
-        ) { span ->
-            try {
-                val session = operation()
-                span.setAttributes(mapOf(ATTR_OUTCOME to attr(OUTCOME_PERSISTED)))
-                session
-            } catch (e: CancellationException) {
-                // Cancellation is not a failure. The span must be settled ok
-                // explicitly: the contract's automatic status would otherwise
-                // record the CancellationException as an error.
-                span.setStatus(SpanStatus.Ok)
-                throw e
-            } catch (e: Exception) {
-                span.setStatus(typeOnlyError(e))
-                throw SessionError(SessionErrorCode.STORAGE, "Failed to write session", e)
-            }
+    private suspend fun writeSpanned(id: String, kind: PathfinderDiagnostics.SessionWrite = PathfinderDiagnostics.SessionWrite.SAVE, operation: () -> Session): Session =
+        try {
+            // The span records the original failure type; the rewrap below is
+            // business behavior and stays outside the recorded boundary.
+            diagnostics.sessionWrite(kind, id) { operation() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw SessionError(SessionErrorCode.STORAGE, "Failed to write session", e)
         }
-
-    /**
-     * Reads and replays [file] under a load (or summary) telemetry span.
-     * [skippedOutcome] marks the summary path, where failures are recorded
-     * and the entry skipped instead of rethrown.
-     */
-    private suspend fun readSpanned(
-        file: File,
-        spanName: String,
-        skippedOutcome: String?,
-    ): Session? {
-        val id = file.name.removeSuffix(".jsonl")
-        return telemetryContext.startSpan(
-            SpanOptions(name = spanName, attributes = mapOf(ATTR_SESSION to attr(id))),
-        ) { span ->
-            try {
-                val session = replay(file, id)
-                span.setAttributes(mapOf(ATTR_OUTCOME to attr(OUTCOME_LOADED)))
-                session
-            } catch (e: CancellationException) {
-                // Cancellation is not a failure; settle ok (see write above).
-                span.setStatus(SpanStatus.Ok)
-                throw e
-            } catch (e: Exception) {
-                span.setStatus(typeOnlyError(e))
-                if (skippedOutcome != null) {
-                    span.setAttributes(mapOf(ATTR_OUTCOME to attr(skippedOutcome)))
-                    null
-                } else {
-                    throw e
-                }
-            }
-        }
-    }
-
-    private suspend fun loadSpanned(file: File): Session? = readSpanned(file, SPAN_LOAD, null)
-    private suspend fun summarySpanned(file: File): Session? = readSpanned(file, SPAN_SUMMARY, OUTCOME_SKIPPED)
 
     /** Replays [file], caching the storage so later appends continue its state. */
     private fun replay(file: File, id: String): Session {
@@ -415,23 +362,19 @@ class SessionStore(
         return storage.toSession(file.lastModified())
     }
 
+    private fun sessionIdOf(file: File): String = file.name.removeSuffix(".jsonl")
+
+    private suspend fun loadSpanned(file: File): Session? =
+        diagnostics.sessionLoad(sessionIdOf(file)) { replay(file, sessionIdOf(file)) }
+
+    /**
+     * Summary read under a `pf.session.summary` span, where failures are
+     * recorded and the entry skipped instead of failing the listing.
+     */
+    private suspend fun summarySpanned(file: File): Session? =
+        diagnostics.sessionSummary(sessionIdOf(file)) { replay(file, sessionIdOf(file)) }
+
     companion object {
         const val MAX_FILE_BYTES: Long = 16L * 1024 * 1024
-
-        /** App-owned span vocabulary (pi packages define `pi.*` schemas; Pathfinder's are `pf.*`). */
-        private const val SPAN_SAVE = "pf.session.save"
-        private const val SPAN_LOAD = "pf.session.load"
-        private const val SPAN_SUMMARY = "pf.session.summary"
-        private const val SPAN_FORK = "pf.session.fork"
-        private const val ATTR_SESSION = "pf.session.id"
-        private const val ATTR_OUTCOME = "pf.session.outcome"
-        private const val OUTCOME_PERSISTED = "persisted"
-        private const val OUTCOME_LOADED = "loaded"
-        private const val OUTCOME_SKIPPED = "skipped"
-
-        /** Exception messages can embed filesystem paths; record the type only. */
-        private fun typeOnlyError(error: Throwable): SpanStatus = SpanStatus.Error(
-            TelemetryError(name = error::class.qualifiedName ?: error::class.simpleName ?: "unknown", message = ""),
-        )
     }
 }

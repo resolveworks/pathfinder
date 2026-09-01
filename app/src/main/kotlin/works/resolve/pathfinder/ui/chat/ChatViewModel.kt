@@ -42,11 +42,7 @@ import works.resolve.pathfinder.data.sessions.SessionEntry
 import works.resolve.pathfinder.data.sessions.SessionState
 import works.resolve.pathfinder.data.sessions.SessionRepository
 import works.resolve.pathfinder.data.sessions.SessionSummary
-import works.resolve.pathfinder.telemetry.NOOP_TELEMETRY_CONTEXT
-import works.resolve.pathfinder.telemetry.SpanOptions
-import works.resolve.pathfinder.telemetry.TelemetryContext
-import works.resolve.pathfinder.telemetry.attr
-import works.resolve.pathfinder.telemetry.automaticErrorStatus
+import works.resolve.pathfinder.logging.PathfinderDiagnostics
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -129,8 +125,8 @@ class ChatViewModel(
     private val authService: ProviderAuthService,
     private val sessionStore: SessionRepository,
     private val agentFactory: AgentFactory,
-    /** Diagnostic span backend for the UI error boundary (pi threads TelemetryContext the same way). */
-    private val telemetryContext: TelemetryContext = NOOP_TELEMETRY_CONTEXT,
+    /** App-owned diagnostics boundary for the UI error/degradation spans. */
+    private val diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP,
     /**
      * Process-wide foreground state (Android platform glue; pi has no
      * foreground concept). MainActivity's onResume/onPause drive this via
@@ -1037,7 +1033,9 @@ class ChatViewModel(
             }
         }
         try {
-            authService.login(providerId, AuthType.API_KEY, FormAuthInteraction(answers))
+            diagnostics.authLogin(providerId, AuthType.API_KEY.wire) {
+                authService.login(providerId, AuthType.API_KEY, FormAuthInteraction(answers))
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1122,7 +1120,9 @@ class ChatViewModel(
         authJob = viewModelScope.launch {
             updateState { it.copy(authFlow = ProviderAuthFlow(providerId, method)) }
             try {
-                authService.login(providerId, method.type, UiAuthInteraction())
+                diagnostics.authLogin(providerId, method.type.wire) {
+                    authService.login(providerId, method.type, UiAuthInteraction())
+                }
             } catch (e: CancellationException) {
                 // User cancel or ViewModel teardown: no credential was
                 // mutated (login persists only on success); clear and stop.
@@ -1383,31 +1383,23 @@ class ChatViewModel(
      * read must be distinguishable from an actually-missing credential).
      */
     private suspend fun recordDegradation(operation: String, cause: Throwable) {
-        telemetryContext.startSpan(
-            SpanOptions(name = SPAN_DEGRADED, attributes = mapOf(ATTR_OPERATION to attr(operation))),
-        ) { span ->
-            span.setStatus(automaticErrorStatus(cause))
-        }
+        diagnostics.chatDegraded(operation, cause)
     }
 
     /**
      * Surfaces [message] as the UI error. This is the UI's single error
      * boundary, so when a [cause] exception is available it is also recorded
      * as a `pf.chat.error` telemetry span — the only place otherwise-invisible
-     * failures become diagnosable on-device (the ported OAuth flows build
-     * redacted exception messages by construction, which is what makes the
-     * detail safe to record). The generic [message] itself is a static UI
-     * string and carries no secrets.
+     * failures become diagnosable on-device. Only the cause's exception
+     * type is recorded (app diagnostics policy: exception messages are not
+     * a guaranteed-safe free-form surface). The generic [message] itself is
+     * a static UI string and carries no secrets.
      */
     private fun setError(message: String, cause: Throwable? = null) {
         updateState { it.copy(error = message) }
         if (cause == null) return
         viewModelScope.launch {
-            telemetryContext.startSpan(
-                SpanOptions(name = SPAN_ERROR, attributes = mapOf(ATTR_UI_ERROR to attr(message))),
-            ) { span ->
-                span.setStatus(automaticErrorStatus(cause))
-            }
+            diagnostics.chatError(message, cause)
         }
     }
 
@@ -1421,11 +1413,6 @@ class ChatViewModel(
     private companion object {
         const val DEFAULT_SESSION_TITLE = "New chat"
 
-        /** App-owned span vocabulary (pi packages define `pi.*` schemas; Pathfinder's are `pf.*`). */
-        const val SPAN_ERROR = "pf.chat.error"
-        const val ATTR_UI_ERROR = "pf.error.ui_message"
-        const val SPAN_DEGRADED = "pf.chat.degraded"
-        const val ATTR_OPERATION = "pf.degraded.operation"
         const val TITLE_MAX_LENGTH = 48
 
         const val ERROR_INIT = "Could not load chat data"

@@ -11,6 +11,7 @@ import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.logging.PathfinderDiagnostics
 import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
 import works.resolve.pathfinder.telemetry.SpanStatus
 import works.resolve.pathfinder.telemetry.attr
@@ -545,7 +546,7 @@ class SessionStoreTest {
             root = tmpFolder.newFolder("telemetry-ok"),
             clock = clock,
             idFactory = { "sess-t" },
-            telemetryContext = telemetry,
+            diagnostics = PathfinderDiagnostics(telemetry),
         )
         val created = store.create("t")
         assertNotNull(store.load(created.id))
@@ -568,7 +569,7 @@ class SessionStoreTest {
             root = rootFail,
             clock = clock,
             idFactory = { "sess-f" },
-            telemetryContext = telemetry,
+            diagnostics = PathfinderDiagnostics(telemetry),
         )
         val id = store.create("t").id
         File(rootFail, "$id.jsonl").writeText("{corrupt")
@@ -577,7 +578,7 @@ class SessionStoreTest {
         val loadFailed = telemetry.spans().last { it.name == "pf.session.load" }
         assertEquals(SpanStatus.Ok, telemetry.spans().first { it.name == "pf.session.save" }.status)
         val error = loadFailed.status as SpanStatus.Error
-        assertEquals("works.resolve.pathfinder.data.sessions.SessionError", error.error?.name)
+        assertEquals("SessionError", error.error?.name) // short type name only
         assertEquals("", error.error?.message) // never exception text, paths, or content
 
         // Summaries skip the corrupt entry and record it as a summary skip.
@@ -585,6 +586,25 @@ class SessionStoreTest {
         val skipped = telemetry.spans().single { it.name == "pf.session.summary" }
         assertEquals(attr("skipped"), skipped.attributes["pf.session.outcome"])
         assertTrue(skipped.status is SpanStatus.Error)
+    }
+
+    @Test
+    fun `telemetry records fork under its own span name`() = runTest {
+        val telemetry = InMemoryTelemetryContext()
+        val store = SessionStore(
+            root = tmpFolder.newFolder("telemetry-fork"),
+            clock = clock,
+            idFactory = { "sess-fork" },
+            diagnostics = PathfinderDiagnostics(telemetry),
+        )
+        val created = store.create("t")
+        store.fork(created.id, ForkOptions.Tree, id = "sess-forked")
+
+        // Forks are session writes, but under their own span name (the
+        // pf.session.fork distinction was previously lost to pf.session.save).
+        val forkSpan = telemetry.spans().single { it.name == "pf.session.fork" }
+        assertEquals(attr("persisted"), forkSpan.attributes["pf.session.outcome"])
+        assertEquals(SpanStatus.Ok, forkSpan.status)
     }
 
     @Test
@@ -596,14 +616,14 @@ class SessionStoreTest {
             root = rootAsFile,
             clock = clock,
             idFactory = { "sess-w" },
-            telemetryContext = telemetry,
+            diagnostics = PathfinderDiagnostics(telemetry),
         )
         assertFailsWithSessionError { store.create("t") }
         val saveFailed = telemetry.spans().single()
         assertEquals("pf.session.save", saveFailed.name)
         val error = saveFailed.status as SpanStatus.Error
         // The write failure is wrapped before the span records its type.
-        assertEquals("works.resolve.pathfinder.data.sessions.SessionError", error.error?.name)
+        assertEquals("SessionError", error.error?.name) // short type name only
         assertEquals("", error.error?.message)
     }
 }
