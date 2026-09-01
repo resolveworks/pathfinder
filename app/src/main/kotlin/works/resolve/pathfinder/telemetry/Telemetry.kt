@@ -122,7 +122,7 @@ fun attr(vararg values: Boolean): AttributeValue = AttributeValue.Bools(values.t
  */
 internal fun automaticErrorStatus(error: Throwable): SpanStatus = try {
     val name = error::class.simpleName
-        ?: generateSequence(error::class.java.superclass) { it.superclass }
+        ?: generateSequence<Class<*>>(error::class.java.superclass) { it.superclass }
             .firstNotNullOfOrNull { it.simpleName }
         ?: "Throwable"
     SpanStatus.Error(TelemetryError(name, error.message.orEmpty()))

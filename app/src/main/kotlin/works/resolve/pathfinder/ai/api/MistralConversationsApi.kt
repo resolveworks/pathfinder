@@ -160,7 +160,7 @@ internal fun buildMistralOptions(
         onResponse = options.onResponse,
         promptMode = if (useReasoning && usesPromptModeReasoning(model)) MistralPromptMode.REASONING else null,
         reasoningEffort = if (useReasoning && usesReasoningEffort(model)) {
-            mapReasoningEffort(model, reasoning!!)
+            mapReasoningEffort(model, reasoning)
         } else {
             null
         },
@@ -197,7 +197,7 @@ internal fun toMistralOptions(
             null
         },
         reasoningEffort = if (useReasoning && usesReasoningEffort(model)) {
-            mapReasoningEffort(model, options.reasoningEffort!!)
+            mapReasoningEffort(model, options.reasoningEffort)
         } else {
             null
         },

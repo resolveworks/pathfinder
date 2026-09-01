@@ -94,9 +94,9 @@ class InMemoryTelemetryContext : TelemetryContext {
 
         val span: TelemetrySpan = object : TelemetrySpan {
             override suspend fun <R> startSpan(
-                childOptions: SpanOptions,
-                childCallback: suspend (TelemetrySpan) -> R,
-            ): R = this@InMemoryTelemetryContext.startSpan(recorded, childOptions, childCallback)
+                options: SpanOptions,
+                callback: suspend (TelemetrySpan) -> R,
+            ): R = this@InMemoryTelemetryContext.startSpan(recorded, options, callback)
 
             override fun addEvent(name: String, attributes: SpanAttributes) {
                 synchronized(lock) {
