@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
  * Stream event protocol ported from pi's AssistantMessageEvent. A successful
@@ -102,6 +103,16 @@ data class StreamOptions(
     val maxRetries: Int = 0,
     /** Cap on server-requested retry delays; delays above this fail immediately. 0 disables. */
     val maxRetryDelayMs: Long = DEFAULT_MAX_RETRY_DELAY_MS,
+    /**
+     * pi's ProviderRequestOptions.telemetryContext (types.ts:126-127):
+     * explicit parent context for telemetry produced by this logical request.
+     * Upstream `undefined` maps to null. Upstream's packages/ai only declares
+     * and copies this option through its option surfaces and conversions; it
+     * has no consumer of its own. The port matches: the field is dormant,
+     * carried for shape fidelity through the conversion paths, and never
+     * rendered in toString() beyond presence.
+     */
+    val telemetryContext: TelemetryContext? = null,
 ) {
     override fun toString(): String = optionsToString(
         "StreamOptions",
@@ -112,6 +123,7 @@ data class StreamOptions(
         "timeoutMs" to timeoutMs,
         "maxRetries" to maxRetries,
         "maxRetryDelayMs" to maxRetryDelayMs,
+        "telemetryContext" to (telemetryContext != null),
     )
 
     companion object {
@@ -185,6 +197,15 @@ data class SimpleStreamOptions(
      * timeout. Only the Codex adapter consumes it; other APIs ignore it.
      */
     val websocketConnectTimeoutMs: Long? = null,
+    /**
+     * pi's ProviderRequestOptions.telemetryContext (types.ts:126-127),
+     * inherited via StreamOptions: explicit parent context for telemetry
+     * produced by this logical request. Dormant in this port — carried for
+     * shape fidelity and preserved (same object) through every conversion
+     * equivalent to upstream buildBaseOptions. Presence boolean only in
+     * toString().
+     */
+    val telemetryContext: TelemetryContext? = null,
 ) {
     override fun toString(): String = optionsToString(
         "SimpleStreamOptions",
@@ -205,6 +226,7 @@ data class SimpleStreamOptions(
         "samplingParams" to samplingParams?.keys,
         "transport" to transport,
         "websocketConnectTimeoutMs" to websocketConnectTimeoutMs,
+        "telemetryContext" to (telemetryContext != null),
     )
 
     fun toStreamOptions(reasoningEffort: ModelThinkingLevel?): OpenAiCompletionsOptions =
@@ -225,6 +247,7 @@ data class SimpleStreamOptions(
             onPayload = onPayload,
             onResponse = onResponse,
             samplingParams = samplingParams,
+            telemetryContext = telemetryContext,
         )
 }
 
@@ -289,6 +312,15 @@ data class OpenAiCompletionsOptions(
      * toString().
      */
     val samplingParams: Map<String, JsonElement>? = null,
+    /**
+     * pi's ProviderRequestOptions.telemetryContext (types.ts:126-127),
+     * inherited via StreamOptions (OpenAICompletionsOptions extends
+     * StreamOptions, openai-completions.ts:163): explicit parent context for
+     * telemetry produced by this logical request. Dormant in this port —
+     * carried for shape fidelity, preserved through the streamSimple
+     * conversion (buildBaseOptions). Presence boolean only in toString().
+     */
+    val telemetryContext: TelemetryContext? = null,
 ) {
     override fun toString(): String = optionsToString(
         "OpenAiCompletionsOptions",
@@ -307,6 +339,7 @@ data class OpenAiCompletionsOptions(
         "onPayload" to (onPayload != null),
         "onResponse" to (onResponse != null),
         "samplingParams" to samplingParams?.keys,
+        "telemetryContext" to (telemetryContext != null),
     )
 }
 

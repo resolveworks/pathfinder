@@ -38,6 +38,7 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
  * Streaming adapters for the OpenAI Responses API family, ported from pi's
@@ -98,6 +99,15 @@ data class OpenAiResponsesOptions(
      * toString().
      */
     val samplingParams: Map<String, JsonElement>? = null,
+    /**
+     * pi's ProviderRequestOptions.telemetryContext (types.ts:126-127),
+     * inherited via StreamOptions (OpenAIResponsesOptions extends
+     * StreamOptions, openai-responses.ts:92): explicit parent context for
+     * telemetry produced by this logical request. Dormant in this port —
+     * carried for shape fidelity, preserved through the streamSimple
+     * conversion (buildBaseOptions). Presence boolean only in toString().
+     */
+    val telemetryContext: TelemetryContext? = null,
 ) {
     override fun toString(): String = optionsToString(
         "OpenAiResponsesOptions",
@@ -118,6 +128,7 @@ data class OpenAiResponsesOptions(
         "onPayload" to (onPayload != null),
         "onResponse" to (onResponse != null),
         "samplingParams" to samplingParams?.keys,
+        "telemetryContext" to (telemetryContext != null),
     )
 }
 
@@ -156,6 +167,42 @@ fun splitDeferredTools(context: Context, enabled: Boolean): DeferredToolPlacemen
 }
 
 /**
+ * pi's streamSimple options conversion for openai-responses: buildBaseOptions
+ * (simple-options.ts:20-56) plus the clamped reasoning level and tool choice.
+ * Extracted as a named function like upstream's buildBaseOptions so the
+ * conversion (including telemetryContext identity) is directly testable.
+ */
+internal fun buildOpenAiResponsesOptions(
+    model: Model,
+    context: Context,
+    options: SimpleStreamOptions,
+    reasoningEffort: ModelThinkingLevel?,
+): OpenAiResponsesOptions = OpenAiResponsesOptions(
+    apiKey = options.apiKey,
+    sessionId = options.sessionId,
+    temperature = options.temperature,
+    maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
+        model,
+        context,
+        options.maxTokens ?: model.maxTokens,
+    ),
+    reasoningEffort = reasoningEffort,
+    // Narrow simple-API choice widened to the Responses wire union,
+    // pi's streamSimple pass-through (types.ts:82 → responses options).
+    toolChoice = options.toolChoice?.toToolChoice()?.let(::mapResponsesToolChoice),
+    cacheRetention = options.cacheRetention,
+    timeoutMs = options.timeoutMs,
+    maxRetries = options.maxRetries,
+    maxRetryDelayMs = options.maxRetryDelayMs,
+    env = options.env,
+    headers = options.headers,
+    onPayload = options.onPayload,
+    onResponse = options.onResponse,
+    samplingParams = mergeSamplingParams(model, options),
+    telemetryContext = options.telemetryContext,
+)
+
+/**
  * OpenAI Responses streaming adapter (openai-responses.ts). POSTs
  * `{baseUrl}/responses` with `stream: true`, `store: false`, session affinity
  * headers, and pi's cache-retention/prompt-cache-key policy.
@@ -183,29 +230,7 @@ class OpenAiResponsesApi(
         return stream(
             model,
             context,
-            OpenAiResponsesOptions(
-                apiKey = apiKey,
-                sessionId = options.sessionId,
-                temperature = options.temperature,
-                maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
-                    model,
-                    context,
-                    options.maxTokens ?: model.maxTokens,
-                ),
-                reasoningEffort = reasoningEffort,
-                // Narrow simple-API choice widened to the Responses wire union,
-                // pi's streamSimple pass-through (types.ts:82 → responses options).
-                toolChoice = options.toolChoice?.toToolChoice()?.let(::mapResponsesToolChoice),
-                cacheRetention = options.cacheRetention,
-                timeoutMs = options.timeoutMs,
-                maxRetries = options.maxRetries,
-                maxRetryDelayMs = options.maxRetryDelayMs,
-                env = options.env,
-                headers = options.headers,
-                onPayload = options.onPayload,
-                onResponse = options.onResponse,
-                samplingParams = mergeSamplingParams(model, options),
-            ),
+            buildOpenAiResponsesOptions(model, context, options, reasoningEffort),
         )
     }
     fun stream(
@@ -478,6 +503,15 @@ data class AzureOpenAiResponsesOptions(
      * toString().
      */
     val samplingParams: Map<String, JsonElement>? = null,
+    /**
+     * pi's ProviderRequestOptions.telemetryContext (types.ts:126-127),
+     * inherited via StreamOptions (AzureOpenAIResponsesOptions extends
+     * StreamOptions, azure-openai-responses.ts:57): explicit parent context
+     * for telemetry produced by this logical request. Dormant in this port —
+     * carried for shape fidelity, preserved through the streamSimple
+     * conversion (buildBaseOptions). Presence boolean only in toString().
+     */
+    val telemetryContext: TelemetryContext? = null,
 ) {
     override fun toString(): String = optionsToString(
         "AzureOpenAiResponsesOptions",
@@ -500,8 +534,42 @@ data class AzureOpenAiResponsesOptions(
         "onPayload" to (onPayload != null),
         "onResponse" to (onResponse != null),
         "samplingParams" to samplingParams?.keys,
+        "telemetryContext" to (telemetryContext != null),
     )
 }
+
+/**
+ * pi's streamSimple options conversion for azure-openai-responses:
+ * buildBaseOptions plus the clamped reasoning level and tool choice. Extracted
+ * as a named function so the conversion (including telemetryContext identity)
+ * is directly testable.
+ */
+internal fun buildAzureOpenAiResponsesOptions(
+    model: Model,
+    context: Context,
+    options: SimpleStreamOptions,
+    reasoningEffort: ModelThinkingLevel?,
+): AzureOpenAiResponsesOptions = AzureOpenAiResponsesOptions(
+    apiKey = options.apiKey,
+    sessionId = options.sessionId,
+    temperature = options.temperature,
+    maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
+        model,
+        context,
+        options.maxTokens ?: model.maxTokens,
+    ),
+    reasoningEffort = reasoningEffort,
+    toolChoice = options.toolChoice?.toToolChoice()?.let(::mapResponsesToolChoice),
+    timeoutMs = options.timeoutMs,
+    maxRetries = options.maxRetries,
+    maxRetryDelayMs = options.maxRetryDelayMs,
+    env = options.env,
+    headers = options.headers,
+    onPayload = options.onPayload,
+    onResponse = options.onResponse,
+    samplingParams = mergeSamplingParams(model, options),
+    telemetryContext = options.telemetryContext,
+)
 
 private const val DEFAULT_AZURE_API_VERSION = "v1"
 
@@ -614,26 +682,7 @@ class AzureOpenAiResponsesApi(
         return stream(
             model,
             context,
-            AzureOpenAiResponsesOptions(
-                apiKey = apiKey,
-                sessionId = options.sessionId,
-                temperature = options.temperature,
-                maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
-                    model,
-                    context,
-                    options.maxTokens ?: model.maxTokens,
-                ),
-                reasoningEffort = reasoningEffort,
-                toolChoice = options.toolChoice?.toToolChoice()?.let(::mapResponsesToolChoice),
-                timeoutMs = options.timeoutMs,
-                maxRetries = options.maxRetries,
-                maxRetryDelayMs = options.maxRetryDelayMs,
-                env = options.env,
-                headers = options.headers,
-                onPayload = options.onPayload,
-                onResponse = options.onResponse,
-                samplingParams = mergeSamplingParams(model, options),
-            ),
+            buildAzureOpenAiResponsesOptions(model, context, options, reasoningEffort),
         )
     }
     fun stream(

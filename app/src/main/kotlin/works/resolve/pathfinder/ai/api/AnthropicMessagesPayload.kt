@@ -20,6 +20,7 @@ import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.telemetry.TelemetryContext
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.core.toModelThinkingLevel
@@ -104,6 +105,15 @@ data class AnthropicMessagesOptions(
      * invoked after 2xx response headers arrive. Never included in toString().
      */
     val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
+    /**
+     * pi's ProviderRequestOptions.telemetryContext (types.ts:126-127),
+     * inherited via StreamOptions (AnthropicOptions extends StreamOptions,
+     * anthropic-messages.ts): explicit parent context for telemetry produced
+     * by this logical request. Dormant in this port — carried for shape
+     * fidelity, preserved through the streamSimple conversion
+     * (buildBaseOptions). Presence boolean only in toString().
+     */
+    val telemetryContext: TelemetryContext? = null,
 ) {
     override fun toString(): String = optionsToString(
         "AnthropicMessagesOptions",
@@ -125,6 +135,7 @@ data class AnthropicMessagesOptions(
         "headers" to headers.keys,
         "onPayload" to (onPayload != null),
         "onResponse" to (onResponse != null),
+        "telemetryContext" to (telemetryContext != null),
     )
 }
 
@@ -692,4 +703,5 @@ internal fun buildBaseOptions(
         headers = options.headers,
         onPayload = options.onPayload,
         onResponse = options.onResponse,
+        telemetryContext = options.telemetryContext,
     )

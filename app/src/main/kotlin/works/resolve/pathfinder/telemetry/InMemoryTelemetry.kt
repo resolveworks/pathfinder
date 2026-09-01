@@ -165,7 +165,7 @@ class InMemoryTelemetryContext : TelemetryContext {
     }
 
     /** Returns detached snapshots in span-start order (pi `getSpans`). */
-    fun spans(): List<RecordedTelemetrySpan> = try {
+    fun getSpans(): List<RecordedTelemetrySpan> = try {
         spans.map { span ->
             RecordedTelemetrySpan(
                 id = span.id,

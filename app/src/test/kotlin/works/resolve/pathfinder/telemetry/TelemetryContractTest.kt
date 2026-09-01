@@ -43,7 +43,7 @@ class TelemetryContractTest {
                 inner.addEvent("happened", mapOf("detail" to attr(true)))
             }
         }
-        val spans = context.spans()
+        val spans = context.getSpans()
         assertEquals(listOf("pf.outer", "pf.inner"), spans.map { it.name })
         assertEquals(1, spans[1].parentId)
         assertEquals(mapOf("a" to attr("1")), spans[0].attributes)
@@ -64,7 +64,7 @@ class TelemetryContractTest {
         } catch (error: IllegalStateException) {
             assertSame(thrown, error)
         }
-        val span = context.spans().single()
+        val span = context.getSpans().single()
         val status = span.status as SpanStatus.Error
         assertEquals("java.lang.IllegalStateException", status.error?.name)
         assertEquals("redacted-by-construction detail", status.error?.message)
@@ -82,7 +82,7 @@ class TelemetryContractTest {
             }
         } catch (_: RuntimeException) {
         }
-        val status = context.spans().single().status as SpanStatus.Error
+        val status = context.getSpans().single().status as SpanStatus.Error
         assertEquals("Custom", status.error?.name)
         assertEquals("expected failure", status.error?.message)
     }
@@ -97,7 +97,7 @@ class TelemetryContractTest {
         span.setAttributes(mapOf("late" to attr("dropped")))
         span.addEvent("late")
         span.setStatus(SpanStatus.Error())
-        val recorded = context.spans().single()
+        val recorded = context.getSpans().single()
         assertEquals(mapOf("start" to attr("kept")), recorded.attributes)
         assertTrue(recorded.events.isEmpty())
         assertEquals(SpanStatus.Ok, recorded.status)
@@ -111,7 +111,7 @@ class TelemetryContractTest {
             span = captured
         }
         span.startSpan(SpanOptions("pf.late-child")) { }
-        assertEquals(listOf("pf.outer"), context.spans().map { it.name })
+        assertEquals(listOf("pf.outer"), context.getSpans().map { it.name })
     }
 
     @Test
@@ -122,7 +122,7 @@ class TelemetryContractTest {
         }
         assertEquals(
             mapOf("a" to attr(1), "b" to attr("new"), "c" to attr(false)),
-            context.spans().single().attributes,
+            context.getSpans().single().attributes,
         )
     }
 
@@ -130,17 +130,17 @@ class TelemetryContractTest {
     fun `snapshots are detached from later recording`() = runTest {
         val context = InMemoryTelemetryContext()
         context.startSpan(SpanOptions("pf.snapshot", mapOf("a" to attr("1")))) { }
-        val snapshot = context.spans().single()
+        val snapshot = context.getSpans().single()
         (snapshot.attributes as MutableMap<String, AttributeValue>)["a"] = attr("mutated")
-        assertFalse(context.spans().single().attributes.isEmpty())
-        assertEquals(attr("1"), context.spans().single().attributes["a"])
+        assertFalse(context.getSpans().single().attributes.isEmpty())
+        assertEquals(attr("1"), context.getSpans().single().attributes["a"])
     }
 
     @Test
     fun `unsettled spans carry no end sequence`() = runTest {
         val context = InMemoryTelemetryContext()
         context.startSpan(SpanOptions("pf.unsettled")) { span ->
-            val recorded = context.spans().single()
+            val recorded = context.getSpans().single()
             assertFalse(recorded.settled)
             assertNull(recorded.endSequence)
             span.setStatus(SpanStatus.Ok)

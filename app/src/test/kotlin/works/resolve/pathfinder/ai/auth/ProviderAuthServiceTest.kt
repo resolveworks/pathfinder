@@ -463,7 +463,7 @@ class ProviderAuthServiceTest {
             telemetryContext = telemetry,
         )
         service.login("acme", AuthType.OAUTH, FakeInteraction(mutableListOf()))
-        val span = telemetry.spans().single()
+        val span = telemetry.getSpans().single()
         assertEquals("pf.auth.login", span.name)
         assertEquals(
             mapOf(
@@ -483,7 +483,7 @@ class ProviderAuthServiceTest {
             fail("expected login failure")
         } catch (_: ModelsError) {
         }
-        val failure = failing.spans().single()
+        val failure = failing.getSpans().single()
         val status = failure.status as works.resolve.pathfinder.telemetry.SpanStatus.Error
         assertEquals("works.resolve.pathfinder.ai.auth.ModelsError", status.error?.name)
         assertTrue(status.error?.message!!.contains("Login failed for provider 'acme'"))

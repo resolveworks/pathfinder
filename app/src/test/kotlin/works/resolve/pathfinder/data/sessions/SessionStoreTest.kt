@@ -550,8 +550,8 @@ class SessionStoreTest {
         val created = store.create("t")
         assertNotNull(store.load(created.id))
 
-        val saves = telemetry.spans().filter { it.name == "pf.session.save" }
-        val loads = telemetry.spans().filter { it.name == "pf.session.load" }
+        val saves = telemetry.getSpans().filter { it.name == "pf.session.save" }
+        val loads = telemetry.getSpans().filter { it.name == "pf.session.load" }
         assertTrue(saves.isNotEmpty() && loads.isNotEmpty())
         assertEquals(SpanStatus.Ok, saves.single().status)
         assertEquals(SpanStatus.Ok, loads.single().status)
@@ -574,15 +574,15 @@ class SessionStoreTest {
         File(rootFail, "$id.jsonl").writeText("{corrupt")
 
         assertFailsWithSessionError { store.load(id) }
-        val loadFailed = telemetry.spans().last { it.name == "pf.session.load" }
-        assertEquals(SpanStatus.Ok, telemetry.spans().first { it.name == "pf.session.save" }.status)
+        val loadFailed = telemetry.getSpans().last { it.name == "pf.session.load" }
+        assertEquals(SpanStatus.Ok, telemetry.getSpans().first { it.name == "pf.session.save" }.status)
         val error = loadFailed.status as SpanStatus.Error
         assertEquals("works.resolve.pathfinder.data.sessions.SessionError", error.error?.name)
         assertEquals("", error.error?.message) // never exception text, paths, or content
 
         // Summaries skip the corrupt entry and record it as a summary skip.
         assertTrue(store.summaries().isEmpty())
-        val skipped = telemetry.spans().single { it.name == "pf.session.summary" }
+        val skipped = telemetry.getSpans().single { it.name == "pf.session.summary" }
         assertEquals(attr("skipped"), skipped.attributes["pf.session.outcome"])
         assertTrue(skipped.status is SpanStatus.Error)
     }
@@ -599,7 +599,7 @@ class SessionStoreTest {
             telemetryContext = telemetry,
         )
         assertFailsWithSessionError { store.create("t") }
-        val saveFailed = telemetry.spans().single()
+        val saveFailed = telemetry.getSpans().single()
         assertEquals("pf.session.save", saveFailed.name)
         val error = saveFailed.status as SpanStatus.Error
         // The write failure is wrapped before the span records its type.

@@ -47,6 +47,7 @@ import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.telemetry.TelemetryContext
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strictBoolean
 import works.resolve.pathfinder.ai.utils.strictDouble
@@ -125,6 +126,15 @@ data class OpenAICodexResponsesOptions(
     val transport: Transport? = null,
     /** pi's websocketConnectTimeoutMs (types.ts:216): WS handshake timeout. */
     val websocketConnectTimeoutMs: Long? = null,
+    /**
+     * pi's ProviderRequestOptions.telemetryContext (types.ts:126-127),
+     * inherited via StreamOptions (OpenAICodexResponsesOptions extends
+     * StreamOptions, openai-codex-responses.ts:73): explicit parent context
+     * for telemetry produced by this logical request. Dormant in this port —
+     * carried for shape fidelity, preserved through the streamSimple
+     * conversion (buildBaseOptions). Presence boolean only in toString().
+     */
+    val telemetryContext: TelemetryContext? = null,
 ) {
     override fun toString(): String =
         optionsToString(
@@ -148,8 +158,46 @@ data class OpenAICodexResponsesOptions(
             "onResponse" to (onResponse != null),
             "transport" to transport,
             "websocketConnectTimeoutMs" to websocketConnectTimeoutMs,
+            "telemetryContext" to (telemetryContext != null),
         )
 }
+
+/**
+ * pi's streamSimple options conversion for openai-codex-responses:
+ * buildBaseOptions plus the clamped reasoning level and tool choice. Extracted
+ * as a named function so the conversion (including telemetryContext identity)
+ * is directly testable.
+ */
+internal fun buildOpenAICodexResponsesOptions(
+    model: Model,
+    context: Context,
+    options: works.resolve.pathfinder.ai.core.SimpleStreamOptions,
+    reasoningEffort: ModelThinkingLevel?,
+): OpenAICodexResponsesOptions = OpenAICodexResponsesOptions(
+    apiKey = options.apiKey,
+    sessionId = options.sessionId,
+    temperature = options.temperature,
+    maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
+        model,
+        context,
+        options.maxTokens ?: model.maxTokens,
+    ),
+    reasoningEffort = reasoningEffort,
+    // Narrow simple-API choice widened to the Responses wire union
+    // (types.ts:82), pi's streamSimple pass-through.
+    toolChoice = options.toolChoice?.toToolChoice()?.let(::mapResponsesToolChoice),
+    cacheRetention = options.cacheRetention,
+    timeoutMs = options.timeoutMs,
+    maxRetries = options.maxRetries,
+    maxRetryDelayMs = options.maxRetryDelayMs,
+    env = options.env,
+    headers = options.headers,
+    onPayload = options.onPayload,
+    onResponse = options.onResponse,
+    transport = options.transport,
+    websocketConnectTimeoutMs = options.websocketConnectTimeoutMs,
+    telemetryContext = options.telemetryContext,
+)
 
 internal const val DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
 private const val JWT_CLAIM_PATH = "https://api.openai.com/auth"
@@ -577,30 +625,7 @@ class OpenAICodexResponsesApi(
         return stream(
             model,
             context,
-            OpenAICodexResponsesOptions(
-                apiKey = apiKey,
-                sessionId = options.sessionId,
-                temperature = options.temperature,
-                maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
-                    model,
-                    context,
-                    options.maxTokens ?: model.maxTokens,
-                ),
-                reasoningEffort = reasoningEffort,
-                // Narrow simple-API choice widened to the Responses wire union
-                // (types.ts:82), pi's streamSimple pass-through.
-                toolChoice = options.toolChoice?.toToolChoice()?.let(::mapResponsesToolChoice),
-                cacheRetention = options.cacheRetention,
-                timeoutMs = options.timeoutMs,
-                maxRetries = options.maxRetries,
-                maxRetryDelayMs = options.maxRetryDelayMs,
-                env = options.env,
-                headers = options.headers,
-                onPayload = options.onPayload,
-                onResponse = options.onResponse,
-                transport = options.transport,
-                websocketConnectTimeoutMs = options.websocketConnectTimeoutMs,
-            ),
+            buildOpenAICodexResponsesOptions(model, context, options, reasoningEffort),
         )
     }
     fun stream(

@@ -1834,7 +1834,7 @@ class ChatViewModelTest {
         vm.uiState.first { it.authFlow == null && it.error != null }
 
         // The login operation itself is one error span (from ProviderAuthService).
-        val loginSpan = h.telemetry.spans().single { it.name == "pf.auth.login" }
+        val loginSpan = h.telemetry.getSpans().single { it.name == "pf.auth.login" }
         assertEquals(
             works.resolve.pathfinder.telemetry.attr("zai"),
             loginSpan.attributes["pf.auth.provider"],
@@ -1844,9 +1844,9 @@ class ChatViewModelTest {
         // The UI error boundary records the swallowed exception with the
         // generic UI message — the only trace of what actually failed.
         vm.uiState.first { _ ->
-            h.telemetry.spans().any { it.name == "pf.chat.error" }
+            h.telemetry.getSpans().any { it.name == "pf.chat.error" }
         }
-        val errorSpan = h.telemetry.spans().single { it.name == "pf.chat.error" }
+        val errorSpan = h.telemetry.getSpans().single { it.name == "pf.chat.error" }
         assertEquals(
             works.resolve.pathfinder.telemetry.attr("Could not complete sign-in"),
             errorSpan.attributes["pf.error.ui_message"],
@@ -1873,7 +1873,7 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        val degraded = h.telemetry.spans().filter { it.name == "pf.chat.degraded" }
+        val degraded = h.telemetry.getSpans().filter { it.name == "pf.chat.degraded" }
         assertTrue(degraded.isNotEmpty())
         assertTrue(degraded.all { it.status is works.resolve.pathfinder.telemetry.SpanStatus.Error })
         // The credential-read failure is named, not silently absorbed into

@@ -44,12 +44,12 @@ class SecretRedactionTest {
         // "<redacted>", maps render as keys only, hooks as booleans.
         assertEquals(
             "StreamOptions(apiKey=<redacted>, sessionId=s1, temperature=0.5, maxTokens=null, " +
-                "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000)",
+                "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, telemetryContext=false)",
             StreamOptions(apiKey = secret, sessionId = "s1", temperature = 0.5).toString(),
         )
         assertEquals(
             "StreamOptions(apiKey=null, sessionId=null, temperature=null, maxTokens=null, " +
-                "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000)",
+                "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, telemetryContext=false)",
             StreamOptions().toString(),
         )
 
@@ -58,7 +58,7 @@ class SecretRedactionTest {
                 "reasoning=MINIMAL, toolChoice=Auto, cacheRetention=null, timeoutMs=null, maxRetries=1, " +
                 "maxRetryDelayMs=60000, env=[PI_ENV_A], headers=[Authorization], " +
                 "onPayload=true, onResponse=false, samplingParams=[top_k], transport=null, " +
-                "websocketConnectTimeoutMs=null)",
+                "websocketConnectTimeoutMs=null, telemetryContext=false)",
             SimpleStreamOptions(
                 apiKey = secret,
                 sessionId = "s1",
@@ -77,7 +77,7 @@ class SecretRedactionTest {
             "SimpleStreamOptions(apiKey=null, sessionId=null, temperature=null, maxTokens=null, " +
                 "reasoning=null, toolChoice=null, cacheRetention=null, timeoutMs=null, maxRetries=0, " +
                 "maxRetryDelayMs=60000, env=[], headers=[], onPayload=false, onResponse=false, " +
-                "samplingParams=null, transport=null, websocketConnectTimeoutMs=null)",
+                "samplingParams=null, transport=null, websocketConnectTimeoutMs=null, telemetryContext=false)",
             SimpleStreamOptions().toString(),
         )
 
@@ -85,7 +85,7 @@ class SecretRedactionTest {
             "OpenAiCompletionsOptions(apiKey=<redacted>, sessionId=null, temperature=null, " +
                 "maxTokens=null, reasoningEffort=null, toolChoice=null, cacheRetention=null, " +
                 "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, env=[PI_ENV_A], " +
-                "headers=[Authorization], onPayload=false, onResponse=true, samplingParams=[top_k])",
+                "headers=[Authorization], onPayload=false, onResponse=true, samplingParams=[top_k], telemetryContext=false)",
             OpenAiCompletionsOptions(
                 apiKey = secret,
                 env = mapOf("PI_ENV_A" to secret),
@@ -100,7 +100,7 @@ class SecretRedactionTest {
                 "maxTokens=null, reasoningEffort=null, reasoningSummary=null, serviceTier=null, " +
                 "toolChoice=null, cacheRetention=null, timeoutMs=null, maxRetries=0, " +
                 "maxRetryDelayMs=60000, env=[PI_ENV_A], headers=[Authorization], " +
-                "onPayload=false, onResponse=false, samplingParams=null)",
+                "onPayload=false, onResponse=false, samplingParams=null, telemetryContext=false)",
             OpenAiResponsesOptions(
                 apiKey = secret,
                 env = mapOf("PI_ENV_A" to secret),
@@ -114,7 +114,7 @@ class SecretRedactionTest {
                 "azureApiVersion=v1, azureResourceName=null, azureBaseUrl=null, " +
                 "azureDeploymentName=null, timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, " +
                 "env=[PI_ENV_A], headers=[Authorization], onPayload=false, onResponse=false, " +
-                "samplingParams=null)",
+                "samplingParams=null, telemetryContext=false)",
             AzureOpenAiResponsesOptions(
                 azureApiVersion = "v1",
                 env = mapOf("PI_ENV_A" to secret),
