@@ -237,7 +237,7 @@ fun ChatScreen(
     val popBackStack: () -> Unit = {
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
-    val topKey = backStack.lastOrNull() ?: ChatNavKey
+    val topKey = backStack.last()
     // Pager navigation helpers, explicitly () -> Unit (launch returns a Job).
     val openTreePage: () -> Unit = { scope.launch { pagerState.animateScrollToPage(TreePageIndex) } }
     val backToChatPage: () -> Unit = { scope.launch { pagerState.animateScrollToPage(ChatPageIndex) } }
@@ -282,8 +282,7 @@ fun ChatScreen(
                             ModelSettingsNavKey -> stringResource(R.string.settings_model)
                             ProvidersNavKey -> stringResource(R.string.providers_title)
                             is ProviderAuthNavKey -> uiState.providerOptions
-                                .firstOrNull { it.id == topKey.providerId }?.name
-                                ?: stringResource(R.string.providers_title)
+                                .first { it.id == topKey.providerId }.name
                             else -> stringResource(
                                 if (onTreePage) R.string.tree_title else R.string.chat_title,
                             )
@@ -398,28 +397,29 @@ fun ChatScreen(
                                 )
                             }
                             entry<ProviderAuthNavKey> { key ->
+                                // The nav key is only pushed from providerOptions
+                                // rows of the static ProviderDescriptors catalog;
+                                // a miss is an impossible wiring bug, so fail fast.
                                 val option = uiState.providerOptions
-                                    .firstOrNull { it.id == key.providerId }
-                                if (option != null) {
-                                    ProviderAuthContent(
-                                        provider = option,
-                                        signIn = uiState.codexSignIn,
-                                        onSave = { apiKey ->
-                                            onSaveProviderCredential(key.providerId, apiKey)
-                                        },
-                                        onBeginBrowserSignIn = {
-                                            onBeginCodexBrowserSignIn(key.providerId)
-                                        },
-                                        onRetryBrowserSignIn = {
-                                            onCancelCodexSignIn()
-                                            onBeginCodexBrowserSignIn(key.providerId)
-                                        },
-                                        onBeginDeviceSignIn = { onBeginCodexDeviceSignIn(key.providerId) },
-                                        onCancelSignIn = onCancelCodexSignIn,
-                                        onRemove = { onRemoveProviderCredential(key.providerId) },
-                                        onClose = popBackStack,
-                                    )
-                                }
+                                    .first { it.id == key.providerId }
+                                ProviderAuthContent(
+                                    provider = option,
+                                    signIn = uiState.codexSignIn,
+                                    onSave = { apiKey ->
+                                        onSaveProviderCredential(key.providerId, apiKey)
+                                    },
+                                    onBeginBrowserSignIn = {
+                                        onBeginCodexBrowserSignIn(key.providerId)
+                                    },
+                                    onRetryBrowserSignIn = {
+                                        onCancelCodexSignIn()
+                                        onBeginCodexBrowserSignIn(key.providerId)
+                                    },
+                                    onBeginDeviceSignIn = { onBeginCodexDeviceSignIn(key.providerId) },
+                                    onCancelSignIn = onCancelCodexSignIn,
+                                    onRemove = { onRemoveProviderCredential(key.providerId) },
+                                    onClose = popBackStack,
+                                )
                             }
                         },
                     )
