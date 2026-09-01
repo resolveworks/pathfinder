@@ -20,7 +20,7 @@ import kotlinx.serialization.json.put
  */
 internal object SessionCodec {
 
-    private const val FORMAT_VERSION = 3
+    private const val FORMAT_VERSION = 4
 
     private val json: Json = Json {
         ignoreUnknownKeys = false
@@ -50,10 +50,10 @@ internal object SessionCodec {
         if (version != FORMAT_VERSION.toLong()) {
             throw SessionDataException("Unsupported session format: $version")
         }
-        return decodeV3(obj)
+        return decodeV4(obj)
     }
 
-    private fun decodeV3(obj: JsonObject): Session {
+    private fun decodeV4(obj: JsonObject): Session {
         val entryArray = (obj["entries"] as? JsonArray)
             ?: throw SessionDataException("Malformed session data: missing entries")
         val entries = entryArray.map(::decodeEntry)
@@ -122,6 +122,14 @@ internal object SessionCodec {
             put("timestamp", entry.timestamp)
             put("message", json.encodeToJsonElement(Message.serializer(), entry.message))
         }
+        is ModelChangeEntry -> buildJsonObject {
+            put("kind", "modelChange")
+            put("id", entry.id)
+            entry.parentId?.let { put("parentId", it) }
+            put("timestamp", entry.timestamp)
+            put("providerId", entry.providerId)
+            put("modelId", entry.modelId)
+        }
     }
 
     private fun decodeEntry(element: kotlinx.serialization.json.JsonElement): SessionEntry {
@@ -144,6 +152,17 @@ internal object SessionCodec {
                     },
                 )
             }
+
+            "modelChange" -> ModelChangeEntry(
+                id = id,
+                parentId = obj.stringField("parentId"),
+                timestamp = obj.longField("timestamp")
+                    ?: throw SessionDataException("Malformed session data: missing timestamp"),
+                providerId = obj.stringField("providerId")
+                    ?: throw SessionDataException("Malformed session data: missing providerId"),
+                modelId = obj.stringField("modelId")
+                    ?: throw SessionDataException("Malformed session data: missing modelId"),
+            )
 
             else -> throw SessionDataException("Unknown entry kind: $kind")
         }

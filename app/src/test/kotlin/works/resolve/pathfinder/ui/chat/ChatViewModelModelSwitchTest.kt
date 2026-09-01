@@ -22,8 +22,11 @@ import works.resolve.pathfinder.data.credentials.Credential
 import works.resolve.pathfinder.data.credentials.CredentialStore
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsStore
+import works.resolve.pathfinder.data.sessions.MessageEntry
+import works.resolve.pathfinder.data.sessions.ModelChangeEntry
 import works.resolve.pathfinder.data.sessions.Session
 import works.resolve.pathfinder.data.sessions.SessionRepository
+import works.resolve.pathfinder.data.sessions.userMessage
 import works.resolve.pathfinder.data.sessions.SessionSummary
 import works.resolve.pathfinder.runtime.ChatRuntime
 import works.resolve.pathfinder.runtime.ChatRuntimeSession
@@ -124,14 +127,18 @@ class ChatViewModelModelSwitchTest {
     private fun neverEndingFrames(): Flow<StreamFrame> =
         kotlinx.coroutines.flow.flow<StreamFrame> { awaitCancellation() }
 
-    private fun viewModel(runtime: ChatRuntime, credentials: CredentialStore, settings: SettingsStore) =
-        ChatViewModel(
-            settingsRepository = settings,
-            credentials = credentials,
-            sessionStore = FakeSessions(),
-            runtime = runtime,
-            codexOAuthClient = CodexOAuthClient(io.ktor.client.HttpClient(io.ktor.client.engine.okhttp.OkHttp)),
-        )
+    private fun viewModel(
+        runtime: ChatRuntime,
+        credentials: CredentialStore,
+        settings: SettingsStore,
+        sessions: SessionRepository = FakeSessions(),
+    ) = ChatViewModel(
+        settingsRepository = settings,
+        credentials = credentials,
+        sessionStore = sessions,
+        runtime = runtime,
+        codexOAuthClient = CodexOAuthClient(io.ktor.client.HttpClient(io.ktor.client.engine.okhttp.OkHttp)),
+    ) to sessions
 
     private fun awaitReady(viewModel: ChatViewModel) {
         awaitCondition("Ready") { viewModel.uiState.value.status == ChatStatus.Ready }
@@ -176,7 +183,7 @@ class ChatViewModelModelSwitchTest {
             val framesQueue = ArrayDeque<() -> Flow<StreamFrame>>()
             repeat(2) { framesQueue.add(::completedFrames) }
             val runtime = RecordingRuntime(credentials, seenProviders, framesQueue)
-            val viewModel = viewModel(runtime, credentials, settings)
+            val (viewModel, _) = viewModel(runtime, credentials, settings)
 
             awaitReady(viewModel)
             viewModel.onDraftChange("first message")
@@ -219,7 +226,7 @@ class ChatViewModelModelSwitchTest {
             framesQueue.add(::neverEndingFrames) // prompt 1: streams until stopped
             framesQueue.add(::completedFrames)   // prompt 2: after the swap
             val runtime = RecordingRuntime(credentials, seenProviders, framesQueue)
-            val viewModel = viewModel(runtime, credentials, settings)
+            val (viewModel, _) = viewModel(runtime, credentials, settings)
 
             awaitReady(viewModel)
             viewModel.onDraftChange("first message")
@@ -239,6 +246,105 @@ class ChatViewModelModelSwitchTest {
             awaitIdle(viewModel, "after send2")
 
             assertEquals(listOf<LLMProvider>(LLMProvider.Anthropic, LLMProvider.OpenAI), seenProviders)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    /**
+     * Model choice is conversation state: the first prompt records the
+     * effective initial model as a tree entry, and an idle pick appends (and
+     * persists) a ModelChangeEntry for the new model.
+     */
+    @Test
+    fun modelSelectionIsRecordedInTheSessionTree() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val anthropic = ProviderDescriptors.byId("anthropic")!!
+            val anthropicModel = anthropic.models.first()
+            val seenProviders = mutableListOf<LLMProvider>()
+            val settings = FakeSettings(
+                ModelSettings(providerId = "anthropic", modelId = anthropicModel.id),
+            )
+            val credentials = FakeCredentials(setOf("anthropic", "openai"))
+            val framesQueue = ArrayDeque<() -> Flow<StreamFrame>>()
+            framesQueue.add(::completedFrames)
+            val runtime = RecordingRuntime(credentials, seenProviders, framesQueue)
+            val sessions = FakeSessions()
+            val (viewModel, _) = viewModel(runtime, credentials, settings, sessions)
+
+            awaitReady(viewModel)
+            viewModel.onDraftChange("first message")
+            viewModel.send()
+            awaitIdle(viewModel, "after send")
+
+            // The first prompt made the session self-describing.
+            awaitCondition("initial model entry persisted") {
+                sessions.sessions.singleOrNull()?.entries
+                    ?.filterIsInstance<ModelChangeEntry>()
+                    ?.any { it.providerId == "anthropic" && it.modelId == anthropicModel.id } == true
+            }
+
+            // An idle pick appends the new model as conversation state.
+            viewModel.selectModel(openAiOption())
+            awaitCondition("picked model entry persisted") {
+                sessions.sessions.singleOrNull()?.entries
+                    ?.filterIsInstance<ModelChangeEntry>()
+                    ?.any { it.providerId == "openai" } == true
+            }
+
+            assertEquals(
+                listOf<LLMProvider>(LLMProvider.Anthropic),
+                seenProviders,
+                "no second prompt ran; only the initial model should have executed",
+            )
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    /**
+     * Restoring a session seeds the picker (and next request) from the
+     * branch's last ModelChangeEntry instead of the device default.
+     */
+    @Test
+    fun restoringSessionSeedsModelFromBranchFold() {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            val anthropic = ProviderDescriptors.byId("anthropic")!!
+            val openai = ProviderDescriptors.byId("openai")!!
+            val openaiModel = openai.models.first()
+            val sessions = FakeSessions()
+            val storedId = kotlinx.coroutines.runBlocking {
+                val stored = sessions.create("saved")
+                val user = MessageEntry("m0", null, 1L, userMessage("hello"))
+                val change = ModelChangeEntry("c0", "m0", 2L, openai.id, openaiModel.id)
+                sessions.save(stored.copy(entries = listOf(user, change), leafId = change.id))
+                stored.id
+            }
+
+            val seenProviders = mutableListOf<LLMProvider>()
+            val settings = FakeSettings(
+                ModelSettings(
+                    providerId = "anthropic",
+                    modelId = anthropic.models.first().id,
+                    activeSessionId = storedId,
+                ),
+            )
+            val credentials = FakeCredentials(setOf("anthropic", "openai"))
+            val framesQueue = ArrayDeque<() -> Flow<StreamFrame>>()
+            framesQueue.add(::completedFrames)
+            val runtime = RecordingRuntime(credentials, seenProviders, framesQueue)
+            val (viewModel, _) = viewModel(runtime, credentials, settings, sessions)
+
+            awaitReady(viewModel)
+            assertEquals(openai.id, viewModel.uiState.value.selectedModel?.providerId)
+            assertEquals(openaiModel.id, viewModel.uiState.value.selectedModel?.modelId)
+
+            viewModel.onDraftChange("continue")
+            viewModel.send()
+            awaitIdle(viewModel, "after send")
+            assertEquals(listOf<LLMProvider>(LLMProvider.OpenAI), seenProviders)
         } finally {
             Dispatchers.resetMain()
         }
