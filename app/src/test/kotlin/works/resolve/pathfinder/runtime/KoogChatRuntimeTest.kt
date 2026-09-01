@@ -166,6 +166,8 @@ class KoogChatRuntimeTest {
         assertEquals("Hello", assistant.textContent())
         assertEquals("thinking", assistant.parts.filterIsInstance<MessagePart.Reasoning>().single().content.single())
         assertEquals("stop", assistant.finishReason)
+        // Attribution: the committed message carries the requested model id.
+        assertEquals(modelId, assistant.metaInfo.modelId)
         assertEquals(2, session.conversation.entries.size)
     }
 
@@ -342,6 +344,11 @@ class KoogChatRuntimeTest {
         assertNull(state.error)
         assertEquals(2, state.commitCount) // user + committed partial
         assertEquals("par", (state.committedMessages.last() as Message.Assistant).textContent())
+        // Aborted partials get attribution for free via the same commit path.
+        assertEquals(
+            modelId,
+            (state.committedMessages.last() as Message.Assistant).metaInfo.modelId,
+        )
         assertEquals(2, session.conversation.entries.size)
     }
 

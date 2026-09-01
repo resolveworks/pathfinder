@@ -253,7 +253,10 @@ internal object KoogClients {
  * surfaces, so part interleaving is not preserved. `*Complete` frames
  * replace the accumulated delta text (some providers send both).
  */
-private class StreamingAssistantAccumulator {
+private class StreamingAssistantAccumulator(
+    /** The model id Pathfinder requested for this run. */
+    private val requestedModelId: String,
+) {
 
     private val text = StringBuilder()
     private val reasoning = StringBuilder()
@@ -293,8 +296,18 @@ private class StreamingAssistantAccumulator {
     /** Partial snapshot for [ChatRuntimeState.streamingMessage]. */
     fun snapshot(): Message.Assistant = assistant(ResponseMetaInfo.Empty, null)
 
-    /** Final message with the terminal [StreamFrame.End] metadata applied. */
-    fun finalMessage(): Message.Assistant = assistant(metaInfo, finishReason)
+    /**
+     * Final message with the terminal [StreamFrame.End] metadata applied.
+     *
+     * `modelId` is stamped fill-if-absent with the *requested* model id;
+     * provider-resolved answers (fallbacks, router models) can differ, and a
+     * provider-populated value (once Koog clients set one) always wins.
+     */
+    fun finalMessage(): Message.Assistant =
+        assistant(
+            metaInfo.copy(modelId = metaInfo.modelId ?: requestedModelId),
+            finishReason,
+        )
 
     private fun assistant(meta: ResponseMetaInfo, finish: String?): Message.Assistant {
         val parts = buildList {
@@ -463,7 +476,7 @@ private class KoogChatSession(
             }
         }
 
-        val accumulator = StreamingAssistantAccumulator()
+        val accumulator = StreamingAssistantAccumulator(model.id)
         try {
             client.executeStreaming(prompt, model)
                 // Not every provider client applies this itself; a stream that
