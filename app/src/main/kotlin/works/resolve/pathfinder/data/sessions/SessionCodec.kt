@@ -44,7 +44,7 @@ import works.resolve.pathfinder.ai.utils.stringOrNull
  */
 internal object SessionCodec {
 
-    private const val FORMAT_VERSION = 2
+    private const val FORMAT_VERSION = 3
 
     fun encode(session: Session): String = buildJsonObject {
         put("format", FORMAT_VERSION)
@@ -66,10 +66,10 @@ internal object SessionCodec {
             ?: throw SessionDataException("Malformed session data: expected object")
         val version = obj.strictInt("format") ?: throw SessionDataException("Unsupported session format")
         if (version != FORMAT_VERSION) throw SessionDataException("Unsupported session format: $version")
-        return decodeV2(obj)
+        return decodeSession(obj)
     }
 
-    private fun decodeV2(obj: JsonObject): Session {
+    private fun decodeSession(obj: JsonObject): Session {
         val entries = obj.arr("entries")
             ?: throw SessionDataException("Malformed session data: missing entries")
         return Session(
@@ -81,7 +81,6 @@ internal object SessionCodec {
             leafId = obj.string("leafId"),
         )
     }
-
     // ---- Entries ----
 
     private fun encodeEntry(entry: SessionEntry): JsonObject = when (entry) {
@@ -94,11 +93,7 @@ internal object SessionCodec {
         }
 
         // pi harness CompactionEntry (session/types.ts): summary + retained
-        // tail + compaction metadata. Added to format 2 as a strict superset
-        // (existing v2 files contain no compaction entries, so they remain
-        // decodable; files containing compaction entries are rejected by
-        // older readers via the unknown-entry-type rule — no migration path,
-        // per repo policy).
+        // tail + compaction metadata.
         is CompactionEntry -> buildJsonObject {
             put("type", "compaction")
             put("id", entry.id)
@@ -114,6 +109,55 @@ internal object SessionCodec {
                 }
             }
             entry.usage?.let { put("usage", buildJsonObject { putUsage(it) }) }
+        }
+
+        // pi harness entry kinds (session/jsonl/codec.ts ENTRY_TYPES). Format
+        // 3 adds model_change, thinking_level_change, active_tools_change,
+        // branch_summary, and custom; format 2 and older are rejected outright
+        // (disposable-data policy, no migration path).
+        is ModelChangeEntry -> buildJsonObject {
+            put("type", "model_change")
+            put("id", entry.id)
+            entry.parentId?.let { put("parentId", it) }
+            put("timestamp", entry.timestamp)
+            put("provider", entry.provider)
+            put("modelId", entry.modelId)
+        }
+
+        is ThinkingLevelEntry -> buildJsonObject {
+            put("type", "thinking_level_change")
+            put("id", entry.id)
+            entry.parentId?.let { put("parentId", it) }
+            put("timestamp", entry.timestamp)
+            put("thinkingLevel", entry.thinkingLevel)
+        }
+
+        is ActiveToolsEntry -> buildJsonObject {
+            put("type", "active_tools_change")
+            put("id", entry.id)
+            entry.parentId?.let { put("parentId", it) }
+            put("timestamp", entry.timestamp)
+            put("activeToolNames", JsonArray(entry.activeToolNames.map(::JsonPrimitive)))
+        }
+
+        is BranchSummaryEntry -> buildJsonObject {
+            put("type", "branch_summary")
+            put("id", entry.id)
+            entry.parentId?.let { put("parentId", it) }
+            put("timestamp", entry.timestamp)
+            put("fromId", entry.fromId)
+            put("summary", entry.summary)
+            entry.details?.let { put("details", it) }
+            entry.usage?.let { put("usage", buildJsonObject { putUsage(it) }) }
+        }
+
+        is CustomEntry -> buildJsonObject {
+            put("type", "custom")
+            put("id", entry.id)
+            entry.parentId?.let { put("parentId", it) }
+            put("timestamp", entry.timestamp)
+            put("customType", entry.customType)
+            entry.data?.let { put("data", it) }
         }
     }
 
@@ -151,6 +195,62 @@ internal object SessionCodec {
                     )
                 },
                 usage = obj["usage"]?.let(::decodeUsage),
+            )
+
+            "model_change" -> ModelChangeEntry(
+                id = id,
+                parentId = obj.string("parentId"),
+                timestamp = obj.requireLong("timestamp") {
+                    SessionDataException("Malformed session data: entry missing timestamp")
+                },
+                provider = obj.string("provider")
+                    ?: throw SessionDataException("Malformed session data: model_change entry missing provider"),
+                modelId = obj.string("modelId")
+                    ?: throw SessionDataException("Malformed session data: model_change entry missing modelId"),
+            )
+
+            "thinking_level_change" -> ThinkingLevelEntry(
+                id = id,
+                parentId = obj.string("parentId"),
+                timestamp = obj.requireLong("timestamp") {
+                    SessionDataException("Malformed session data: entry missing timestamp")
+                },
+                thinkingLevel = obj.string("thinkingLevel")
+                    ?: throw SessionDataException("Malformed session data: thinking_level_change entry missing thinkingLevel"),
+            )
+
+            "active_tools_change" -> ActiveToolsEntry(
+                id = id,
+                parentId = obj.string("parentId"),
+                timestamp = obj.requireLong("timestamp") {
+                    SessionDataException("Malformed session data: entry missing timestamp")
+                },
+                activeToolNames = obj.stringList("activeToolNames"),
+            )
+
+            "branch_summary" -> BranchSummaryEntry(
+                id = id,
+                parentId = obj.string("parentId"),
+                timestamp = obj.requireLong("timestamp") {
+                    SessionDataException("Malformed session data: entry missing timestamp")
+                },
+                fromId = obj.string("fromId")
+                    ?: throw SessionDataException("Malformed session data: branch_summary entry missing fromId"),
+                summary = obj.string("summary")
+                    ?: throw SessionDataException("Malformed session data: branch_summary entry missing summary"),
+                details = obj["details"],
+                usage = obj["usage"]?.let(::decodeUsage),
+            )
+
+            "custom" -> CustomEntry(
+                id = id,
+                parentId = obj.string("parentId"),
+                timestamp = obj.requireLong("timestamp") {
+                    SessionDataException("Malformed session data: entry missing timestamp")
+                },
+                customType = obj.string("customType")
+                    ?: throw SessionDataException("Malformed session data: custom entry missing customType"),
+                data = obj["data"],
             )
 
             else -> throw SessionDataException("Unknown entry type: $type")

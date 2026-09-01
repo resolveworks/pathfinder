@@ -14,6 +14,7 @@ import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.agent.AgentFactory
+import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
@@ -308,14 +309,30 @@ class ChatViewModel(
                 ?.filterIsInstance<TextContent>()
                 ?.joinToString("") { part -> part.text }
             val session = agent ?: return@launch
-            session.replaceConversation(updated)
+            // pi's reducer folds branch configuration root→leaf; the agent
+            // runs on the folded model. Divergence: an agent rebuild only
+            // happens when the fold changes the model (pi swaps state
+            // in-place on the live agent, which pathfinder's factory-built
+            // agents do not support), and unknown folded models keep the
+            // running agent rather than failing navigation.
+            val seeded = settingsSeededFromFold(currentSettings, updated)
+            val active: AgentSession = if (
+                session.model.provider == seeded.providerId && session.model.id == seeded.modelId
+            ) {
+                session.replaceConversation(updated)
+                session
+            } else {
+                val newAgent = tryCreateAgent(seeded, activeSession!!.id, updated) ?: return@launch
+                bindAgent(newAgent)
+                newAgent
+            }
             updateState {
                 it.copy(
                     // pi's navigateTree loads the re-edit text into the
                     // editor only when it is empty; a typed draft is never
                     // clobbered by navigation.
                     draft = if (it.draft.isBlank()) reeditText ?: it.draft else it.draft,
-                    messages = projectCommitted(session.agent.state.value.messages, updated),
+                    messages = projectCommitted(active.agent.state.value.messages, updated),
                     treeRows = buildTreeRows(updated, it.treeFilter),
                 )
             }
@@ -339,7 +356,12 @@ class ChatViewModel(
                     return@launch
                 }
                 val session = sessionStore.create(DEFAULT_SESSION_TITLE)
-                val newAgent = tryCreateAgent(currentSettings, session.id, Conversation(emptyList(), null)) ?: return@launch
+                // pi seeds every new session with the initial model selection
+                // (coding-agent sdk.ts: appendModelChange before first use),
+                // so the branch's configuration fold restores it on resume.
+                val conversation = Conversation(emptyList(), null)
+                    .appendModelChange(currentSettings.providerId, currentSettings.modelId)
+                val newAgent = tryCreateAgent(currentSettings, session.id, conversation) ?: return@launch
                 if (!activateSession(session, newAgent)) return@launch
             } catch (e: CancellationException) {
                 throw e
@@ -361,10 +383,11 @@ class ChatViewModel(
                         setError(ERROR_SESSION_SAVE)
                         return@launch
                     }
+                    val conversation = Conversation(session.entries, session.leafId)
                     val newAgent = tryCreateAgent(
-                        currentSettings,
+                        settingsSeededFromFold(currentSettings, conversation),
                         session.id,
-                        Conversation(session.entries, session.leafId),
+                        conversation,
                     ) ?: return@launch
                     if (!activateSession(session, newAgent)) return@launch
                 }
@@ -423,10 +446,11 @@ class ChatViewModel(
             val session = resolveSession(settings, summaries)
             // Build the agent before committing any state: a factory failure
             // must never leave a Ready UI or persisted active-session id.
+            val (seeded, conversation) = seededSettingsFor(session, settings)
             val newAgent = tryCreateAgent(
-                settings,
+                seeded,
                 session.id,
-                Conversation(session.entries, session.leafId),
+                conversation,
             )
             if (newAgent == null) {
                 updateState {
@@ -509,6 +533,11 @@ class ChatViewModel(
                 sessionSummaries = summaries,
             )
         }
+        // Initial-configuration seeding (pi's sdk.ts new-session path) may
+        // have appended a model_change to an entry-less session; flush it
+        // like any other appended entry. Loaded sessions carry no new
+        // entries, so this never saves on a plain load or switch.
+        if (activeConversation.entries.size > persistedEntryCount) enqueuePersist()
         return true
     }
 
@@ -525,12 +554,52 @@ class ChatViewModel(
             setError(ERROR_SESSION_CREATE, e)
             return null
         }
+        val (seeded, conversation) = seededSettingsFor(session, settings)
         val newAgent = tryCreateAgent(
-            settings,
+            seeded,
             session.id,
-            Conversation(session.entries, session.leafId),
+            conversation,
         ) ?: return null
         return session to newAgent
+    }
+
+    /**
+     * Adopts [session] with fold-seeded settings: the active branch's
+     * configuration fold ([Conversation.effectiveConfiguration], pi's
+     * deriveSessionContextState) overrides the provider/model when it
+     * recorded one; new (entry-less) sessions are seeded with the initial
+     * model selection (pi's sdk.ts new-session path) so the fold can
+     * restore it on resume. Non-empty sessions record nothing on load,
+     * matching pi (which only appends a missing thinking level, a concept
+     * pathfinder has no selection point for).
+     */
+    private fun seededSettingsFor(session: Session, settings: ModelSettings): Pair<ModelSettings, Conversation> {
+        var conversation = Conversation(session.entries, session.leafId)
+        if (conversation.entries.isEmpty() && settings.providerId.isNotBlank() && settings.modelId.isNotBlank()) {
+            conversation = conversation.appendModelChange(settings.providerId, settings.modelId)
+        }
+        return settingsSeededFromFold(settings, conversation) to conversation
+    }
+
+    /**
+     * Seeds the provider/model from the conversation's configuration fold
+     * (pi's deriveSessionContextState / reducer deriveEffectiveConfiguration):
+     * a branch that recorded a different model via model_change or its
+     * assistant messages runs on that model, overriding the global
+     * defaults. Divergence: pi resolves any recorded pair, while pathfinder's
+     * agent factory only builds generated-catalog models, so a pair missing
+     * from the catalog (or with an unsupported API) falls back to [settings].
+     */
+    private fun settingsSeededFromFold(settings: ModelSettings, conversation: Conversation): ModelSettings {
+        val model = conversation.effectiveConfiguration().model ?: return settings
+        if (model.provider == settings.providerId && model.modelId == settings.modelId) return settings
+        val catalogModel = catalog.getProvider(model.provider)?.model(model.modelId)
+            ?: return settings
+        return if (ChatApiRegistry.isSupported(catalogModel.api)) {
+            settings.copy(providerId = model.provider, modelId = model.modelId)
+        } else {
+            settings
+        }
     }
 
     /** Builds an agent or null (with a safe error surfaced) when the factory rejects the settings. */
@@ -759,10 +828,14 @@ class ChatViewModel(
                 setError(ERROR_SESSION_SAVE)
                 return
             }
-            val newAgent = tryCreateAgent(candidate, activeSession!!.id, activeConversation) ?: return
+            // pi's setModel records the switch on the session tree before
+            // persisting defaults (agent-session.ts ~1665).
+            val updated = activeConversation.appendModelChange(providerId, trimmedModelId)
+            val newAgent = tryCreateAgent(candidate, activeSession!!.id, updated) ?: return
             if (!persistSettings(candidate)) return
             bindAgent(newAgent)
             currentSettings = candidate
+            enqueuePersist()
         } else {
             // Initial configuration: validate the session and agent first,
             // then persist the settings, then activate. A failure at any step

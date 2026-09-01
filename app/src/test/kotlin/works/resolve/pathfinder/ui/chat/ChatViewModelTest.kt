@@ -36,8 +36,11 @@ import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
+import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
+import works.resolve.pathfinder.data.sessions.MessageEntry
+import works.resolve.pathfinder.data.sessions.ModelChangeEntry
 import works.resolve.pathfinder.data.sessions.SessionRepository
 import works.resolve.pathfinder.data.sessions.SessionStore
 import java.io.File
@@ -275,12 +278,18 @@ class ChatViewModelTest {
         var rejectAll = false
         val createdAgents = mutableListOf<AgentSession>()
 
+        /** The settings each created agent was built from (fold-seed assertions). */
+        val createdSettings = mutableListOf<ModelSettings>()
+
         val factory = AgentFactory { settings, _, conversation ->
             check(!rejectAll) { "factory unavailable" }
             require(settings.modelId !in rejectedModelIds) { "model rejected" }
+            createdSettings += settings
             AgentSession(
+                // The bound agent mirrors the selected model id so
+                // fold-seed rebuilds are observable via agent.model.
                 agent = Agent(
-                    model = testModel,
+                    model = testModel.copy(id = settings.modelId),
                     streamFn = StreamFn { _, _, _ ->
                         scriptedStreams.poll() ?: flow { kotlinx.coroutines.awaitCancellation() }
                     },
@@ -1254,6 +1263,9 @@ class ChatViewModelTest {
         vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
         val sessionId = vm.uiState.value.activeSessionId!!
+        // Let the initial seed model_change save settle before gating, so the
+        // gated save is deterministically the user-message snapshot.
+        vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.isNotEmpty() }
 
         // The first save (user message) suspends inside the gate; the final
         // snapshot (user + assistant) is accepted while that save is in flight.
@@ -1277,10 +1289,11 @@ class ChatViewModelTest {
         val session = h.sessionStore.load(sessionId)!!
         assertEquals(2, session.messages.size)
         assertEquals("Hello", session.title)
-        // Both saves happened: the gated user-message snapshot drained *and* the
+        // Three saves happened: the seed model_change snapshot settled at
+        // configuration, the gated user-message snapshot drained, and the
         // coalesced final snapshot was then dequeued and written — proving the
         // loop drains accepted pendings rather than skipping to the last one.
-        assertEquals(2, h.sessions.totalSaves)
+        assertEquals(3, h.sessions.totalSaves)
     }
 
     @Test
@@ -1961,10 +1974,11 @@ class ChatViewModelTest {
         assertFalse(truncated.treeRows[3].isOnActivePath)
         assertEquals("world", truncated.messages[1].singleText())
 
-        // Entries + leafId persist (branch structure survives the save).
+        // Entries + leafId persist (branch structure survives the save); the
+        // seed model_change entry rides along as a fifth (elided) entry.
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         val saved = h.sessionStore.load(sessionId)!!
-        assertEquals(4, saved.entries.size)
+        assertEquals(5, saved.entries.size)
         assertEquals(assistantEntryId, saved.leafId)
 
         // A new exchange from here forks: the second user message becomes a
@@ -1972,7 +1986,7 @@ class ChatViewModelTest {
         vm.exchange(h, "Third", "forked")
         vm.uiState.first { it.messages.size == 4 && it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 4 }
         val forked = h.sessionStore.load(sessionId)!!
-        assertEquals(6, forked.entries.size)
+        assertEquals(7, forked.entries.size)
         assertEquals(4, forked.messages.size)
         val childrenOfTarget = forked.entries.filter { it.parentId == assistantEntryId }
         assertEquals(2, childrenOfTarget.map { it.id }.toSet().size)
@@ -1984,8 +1998,7 @@ class ChatViewModelTest {
         assertEquals(4, restored.messages.size)
         assertEquals("Third", restored.messages[2].singleText())
         assertEquals(6, restored.treeRows.size)
-        val forkParent = restored.treeRows.first { it.id == assistantEntryId }
-        // Active branch reads first among the fork's children.
+        val forkParent = restored.treeRows.first { it.id == assistantEntryId }        // Active branch reads first among the fork's children.
         val thirdId = (forked.entries.first { e ->
             e is works.resolve.pathfinder.data.sessions.MessageEntry &&
                 e.message is works.resolve.pathfinder.ai.core.UserMessage &&
@@ -2022,10 +2035,15 @@ class ChatViewModelTest {
         vm.exchange(h, "Hello edited", "rewritten")
         vm.uiState.first { it.messages.size == 2 && it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         val saved = h.sessionStore.load(sessionId)!!
-        assertEquals(4, saved.entries.size)
+        // Five entries: the seed model_change root, the original pair, and
+        // the re-sent sibling pair (its user message a second root).
+        assertEquals(5, saved.entries.size)
+        // The seed model_change is the only root: the re-edited user message
+        // forks as a sibling of the original under it (re-edit branches to
+        // the target's parent, which now exists).
+        val seedChange = saved.entries.filterIsInstance<ModelChangeEntry>().single()
         val roots = saved.entries.filter { it.parentId == null }
-        assertEquals(setOf(userEntryId), roots.dropLast(1).map { it.id }.toSet())
-        assertEquals(2, roots.size)
+        assertEquals(listOf(seedChange.id), roots.map { it.id })
         assertEquals("Hello edited", (saved.messages[0] as works.resolve.pathfinder.ai.core.UserMessage).content.filterIsInstance<TextContent>().first().text)
 
         // Tree rows show both roots, active one first.
@@ -2058,6 +2076,88 @@ class ChatViewModelTest {
         assertEquals("half-typed draft", state.draft)
 
         vm.closeForTest()
+    }
+
+    /**
+     * pi's setModel records every model selection as a model_change entry on
+     * the session tree (agent-session.ts ~1665), and sdk.ts seeds new
+     * sessions with the initial selection. Both must persist: the seed entry
+     * on first configuration, and a recorded switch appended to the active
+     * leaf when the user re-selects while Ready.
+     */
+    @Test
+    fun modelSelection_recordsModelChangeEntries_andPersistsThem() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        // Initial configuration seeds the new session with the selection.
+        vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.isNotEmpty() }
+        val seeded = h.sessionStore.load(sessionId)!!
+        val seedChange = seeded.entries.filterIsInstance<ModelChangeEntry>().single()
+        assertEquals("zai", seedChange.provider)
+        assertEquals("glm-4.7", seedChange.modelId)
+        assertNull(seedChange.parentId)
+
+        vm.exchange(h, "Hello", "world")
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+        val agentsBefore = h.createdAgents.size
+
+        // A Ready re-selection appends a model_change after the transcript leaf.
+        vm.saveModelSelection("zai", "glm-5.3")
+        vm.uiState.first { h.createdAgents.size == agentsBefore + 1 }
+        vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 4 }
+        val saved = h.sessionStore.load(sessionId)!!
+        val switch = saved.entries.last() as ModelChangeEntry
+        assertEquals("zai", switch.provider)
+        assertEquals("glm-5.3", switch.modelId)
+        assertEquals(saved.entries[2].id, switch.parentId)
+        assertEquals(switch.id, saved.leafId)
+
+        vm.closeForTest()
+    }
+
+    /**
+     * The branch's configuration fold (pi's deriveSessionContextState)
+     * decides the running model: navigating back before a model_change makes
+     * the older selection effective again (agent rebuilt on it), and a fresh
+     * ViewModel restores the same folded model on session load even though
+     * the persisted global default differs.
+     */
+    @Test
+    fun effectiveModel_isSeededFromBranchFold_onNavigationAndRestore() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        vm.exchange(h, "Hello", "world")
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+        // Switch the model (records model_change glm-5.3 after the leaf).
+        vm.saveModelSelection("zai", "glm-5.3")
+        vm.uiState.first { h.createdSettings.last().modelId == "glm-5.3" }
+
+        // Navigate back to the first assistant answer: the branch fold is
+        // seed(glm-4.7) + assistant(glm-4.7), so the agent rebuilds on 4.7.
+        val assistantEntryId = vm.uiState.value.treeRows[1].id
+        vm.navigateToTreeEntry(assistantEntryId)
+        vm.uiState.first { h.createdSettings.last().modelId == "glm-4.7" }
+        vm.uiState.first { h.sessionStore.load(sessionId)!!.leafId == assistantEntryId }
+
+        // Restore: persisted global default stays glm-5.3, but the loaded
+        // branch's fold seeds the running agent on glm-4.7.
+        vm.closeForTest()
+        val vm2 = h.newViewModel()
+        vm2.uiState.first { it.status == ChatStatus.Ready && it.activeSessionId == sessionId }
+        assertEquals("glm-5.3", h.settings.currentSettings().modelId)
+        assertEquals("glm-4.7", h.createdSettings.last().modelId)
+
+        vm2.closeForTest()
     }
 
     @Test

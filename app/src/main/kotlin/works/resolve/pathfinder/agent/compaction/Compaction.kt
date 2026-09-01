@@ -26,9 +26,14 @@ import works.resolve.pathfinder.ai.utils.RetryPolicy
 import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.ai.utils.estimateMessageTokens
 import works.resolve.pathfinder.ai.utils.uuidv7
+import works.resolve.pathfinder.data.sessions.ActiveToolsEntry
+import works.resolve.pathfinder.data.sessions.BranchSummaryEntry
 import works.resolve.pathfinder.data.sessions.CompactionEntry
+import works.resolve.pathfinder.data.sessions.CustomEntry
 import works.resolve.pathfinder.data.sessions.MessageEntry
+import works.resolve.pathfinder.data.sessions.ModelChangeEntry
 import works.resolve.pathfinder.data.sessions.SessionEntry
+import works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
 
 /**
  * Pure core of pi's harness compaction module, ported from
@@ -324,6 +329,13 @@ private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
     // port projects it as its convertToLlm form — a wrapped user message
     // (Messages.kt createCompactionSummaryMessage).
     is CompactionEntry -> createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp)
+    // Configuration/bookkeeping kinds contribute no message (compaction.ts
+    // switch: model_change/thinking_level_change/active_tools_change/branch_summary/custom
+    // break). Divergence: upstream branch_summary entries synthesize a
+    // createBranchSummaryMessage here, but pathfinder has no branch-summary
+    // producer, so there is nothing to project yet.
+    is ModelChangeEntry, is ThinkingLevelEntry, is ActiveToolsEntry,
+    is BranchSummaryEntry, is CustomEntry -> null
 }
 
 /**
