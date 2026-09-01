@@ -41,6 +41,26 @@ sealed class SessionMutation {
 }
 
 /**
+ * pi's LogItem (session/types.ts): one replayed log item per mutation —
+ * the shape returned by [SessionState.getLog] for incremental tail reads.
+ */
+sealed class LogItem {
+    abstract val seq: Long
+
+    data class Entry(override val seq: Long, val entry: SessionEntry) : LogItem()
+
+    data class Record(override val seq: Long, val record: LaneRecord) : LogItem()
+
+    data class Lane(override val seq: Long, val lane: String, val leafId: String?) : LogItem()
+
+    /** pi's `fact: "name"` log item; null clears the name. */
+    data class FactName(override val seq: Long, val name: String?) : LogItem()
+
+    /** pi's `fact: "label"` log item; null clears the label. */
+    data class FactLabel(override val seq: Long, val targetId: String, val label: String?) : LogItem()
+}
+
+/**
  * A lane record, porting pi's LaneRecord union
  * (packages/agent/src/harness/session/types.ts RecordBase + union): the
  * operation lifecycle trio ([OperationStartedRecord], [AbortRequestedRecord],

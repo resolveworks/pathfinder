@@ -21,15 +21,15 @@ class SessionStateTest {
     fun `seq must start at one and stay consecutive`() {
         val state = SessionState()
         // seq 0 (unassigned) is invalid on replay, as is skipping 1.
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(0, "a")))
         }
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(2, "a")))
         }
         state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(1, "a")))
         assertEquals(2L, state.nextSequence)
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(3, "b")))
         }
         assertEquals(listOf("a"), state.entries().map { it.id })
@@ -39,7 +39,7 @@ class SessionStateTest {
     fun `duplicate entry ids rejected`() {
         val state = SessionState()
         state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(1, "a")))
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(2, "a")))
         }
     }
@@ -47,7 +47,7 @@ class SessionStateTest {
     @Test
     fun `dangling parent rejected`() {
         val state = SessionState()
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(1, "a", parentId = "ghost")))
         }
     }
@@ -57,7 +57,7 @@ class SessionStateTest {
         val state = SessionState()
         state.applyMutation(SessionMutation.Entry(lane = "main", entry = entry(1, "a")))
         state.applyMutation(SessionMutation.Entry(lane = "main", entry = entry(2, "b", parentId = "a")))
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Entry(lane = "main", entry = entry(3, "c", parentId = "a")))
         }
         // Non-lane-addressed entries skip the chaining check (pi's lane === undefined).
@@ -67,7 +67,7 @@ class SessionStateTest {
     @Test
     fun `entry on missing lane rejected`() {
         val state = SessionState()
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Entry(lane = "other", entry = entry(1, "a")))
         }
     }
@@ -79,7 +79,7 @@ class SessionStateTest {
         state.applyMutation(SessionMutation.Lane(seq = 2, lane = "main", leafId = "a"))
         assertEquals("a", state.requireLane("main"))
         // Pointer to a missing entry is rejected.
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Lane(seq = 3, lane = "main", leafId = "ghost"))
         }
         // A new lane can be created at null (pi's createLane).
@@ -97,7 +97,7 @@ class SessionStateTest {
         assertNull(state.name)
 
         // The rejected label does not consume its seq.
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Fact.Label(seq = 4, targetId = "ghost", label = "l"))
         }
         state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(4, "a")))
@@ -111,11 +111,11 @@ class SessionStateTest {
     fun `record on missing lane and duplicate record id rejected`() {
         val state = SessionState()
         val empty = kotlinx.serialization.json.JsonObject(mapOf())
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Record(LaneRecord.DeferredRecord("r0", "ghost", 1, 1L, "usage", empty)))
         }
         state.applyMutation(SessionMutation.Record(LaneRecord.DeferredRecord("r1", "main", 1, 1L, "usage", empty)))
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Record(LaneRecord.DeferredRecord("r1", "main", 2, 2L, "usage", empty)))
         }
         assertEquals(1, state.records().size)
@@ -130,5 +130,55 @@ class SessionStateTest {
         )
         assertEquals(1, state.messageCount())
         assertTrue(state.entry("m") is ModelChangeEntry)
+    }
+
+    @Test
+    fun `getLog returns items since a seq with a limit`() {
+        val state = SessionState()
+        state.applyMutation(SessionMutation.Entry(lane = "main", entry = entry(1, "a")))
+        state.applyMutation(SessionMutation.Lane(seq = 2, lane = "main", leafId = "a"))
+        state.applyMutation(SessionMutation.Fact.Name(seq = 3, name = "renamed"))
+        state.applyMutation(SessionMutation.Fact.Label(seq = 4, targetId = "a", label = "l"))
+        state.applyMutation(SessionMutation.Entry(lane = "main", entry = entry(5, "b", parentId = "a")))
+
+        val full = state.getLog()
+        assertEquals(
+            listOf(
+                LogItem.Entry::class,
+                LogItem.Lane::class,
+                LogItem.FactName::class,
+                LogItem.FactLabel::class,
+                LogItem.Entry::class,
+            ),
+            full.map { it::class },
+        )
+        assertEquals(1L..5L, full.map { it.seq }.let { it.first()..it.last() })
+        assertEquals(3, state.getLog(afterSeq = 2).size)
+        assertEquals(listOf(1L, 2L, 3L), state.getLog(limit = 3).map { it.seq })
+        assertEquals(listOf(4L, 5L), state.getLog(afterSeq = 3, limit = 5).map { it.seq })
+
+        assertFailsWith<SessionError> { state.getLog(limit = 0) }
+        assertFailsWith<SessionError> { state.getLog(afterSeq = -1) }
+    }
+
+    @Test
+    fun `errors carry pi's typed codes`() {
+        val state = SessionState()
+        state.applyMutation(SessionMutation.Entry(lane = "main", entry = entry(1, "a")))
+        assertEquals(SessionErrorCode.INVALID_LANE, assertFailsWith<SessionError> { state.requireLane("ghost") }.code)
+        assertEquals(SessionErrorCode.ALREADY_EXISTS, assertFailsWith<SessionError> { state.validateUnusedId("a") }.code)
+        assertEquals(SessionErrorCode.NOT_FOUND, assertFailsWith<SessionError> { state.validateTarget("ghost") }.code)
+        assertEquals(SessionErrorCode.INVALID_QUERY, assertFailsWith<SessionError> { state.findEntries(EntryQuery(limit = 0)) }.code)
+        assertEquals(
+            SessionErrorCode.INVALID_FORK_TARGET,
+            assertFailsWith<SessionError> {
+                // A non-message entry cannot be a branch fork target.
+                state.applyMutation(SessionMutation.Entry(lane = "main", entry = works.resolve.pathfinder.data.sessions.CompactionEntry(
+                    id = "c", seq = 2, parentId = "a", timestamp = 2, summary = "s",
+                    retainedTail = emptyList(), tokensBefore = 0,
+                )))
+                state.createForkMutations(ForkOptions.Branch(entryId = "c"))
+            }.code,
+        )
     }
 }

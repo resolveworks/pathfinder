@@ -98,7 +98,7 @@ class SessionStoreRecordsTest {
             session.id,
             LaneRecord.OperationStartedRecord(id = "op1", lane = "main", sourceLeafId = null, intent = OperationIntent.run()),
         )
-        val error = assertFailsWith<SessionDataException> {
+        val error = assertFailsWith<SessionError> {
             store.appendRecord(
                 session.id,
                 LaneRecord.OperationStartedRecord(id = "op2", lane = "main", sourceLeafId = null, intent = OperationIntent.run()),
@@ -166,5 +166,65 @@ class SessionStoreRecordsTest {
         assertEquals(135L, stats.totalTokens)
         assertEquals(0.3, stats.costTotal, 1e-9)
         assertNotNull(reopened.load(session.id))
+    }
+
+    @Test
+    fun `getLog returns stored mutations incrementally`() = runTest {
+        val store = newStore()
+        val session = store.create("t")
+
+        val log = store.getLog(session.id)
+        assertEquals(1, log.size)
+        assertEquals(LogItem.FactName::class, log.single()::class)
+        assertEquals("t", (log.single() as LogItem.FactName).name)
+
+        store.appendRecord(
+            session.id,
+            LaneRecord.OperationStartedRecord(id = "op1", lane = "main", sourceLeafId = null, intent = OperationIntent.run()),
+        )
+        assertEquals(2L, store.getLog(session.id, afterSeq = 1).single().seq)
+        assertEquals(1, store.getLog(session.id, limit = 1).size)
+        assertFailsWith<SessionError> { store.getLog(session.id, limit = 0) }
+        assertFailsWith<SessionError> { store.getLog(session.id, afterSeq = -1) }
+    }
+
+    @Test
+    fun `non-JSON-safe record payloads are rejected before write`() = runTest {
+        val store = newStore()
+        val session = store.create("t")
+        val error = assertFailsWith<SessionError> {
+            store.appendRecord(
+                session.id,
+                LaneRecord.DeferredRecord(
+                    id = "d1",
+                    lane = "main",
+                    type = "step_attempt",
+                    fields = kotlinx.serialization.json.buildJsonObject {
+                        put("cost", kotlinx.serialization.json.JsonPrimitive(Double.NaN))
+                    },
+                ),
+            )
+        }
+        assertEquals(SessionErrorCode.INVALID_PAYLOAD, error.code)
+        assertEquals("Durable payload contains a non-finite number", error.message)
+        // Nothing was appended for the rejected mutation.
+        assertEquals(1, store.getLog(session.id).size)
+    }
+
+    @Test
+    fun `second open operation carries the storage code`() = runTest {
+        val store = newStore()
+        val session = store.create("t")
+        store.appendRecord(
+            session.id,
+            LaneRecord.OperationStartedRecord(id = "op1", lane = "main", sourceLeafId = null, intent = OperationIntent.run()),
+        )
+        val error = assertFailsWith<SessionError> {
+            store.appendRecord(
+                session.id,
+                LaneRecord.OperationStartedRecord(id = "op2", lane = "main", sourceLeafId = null, intent = OperationIntent.run()),
+            )
+        }
+        assertEquals(SessionErrorCode.STORAGE, error.code)
     }
 }

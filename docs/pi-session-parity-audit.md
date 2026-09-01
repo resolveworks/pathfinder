@@ -1,6 +1,8 @@
 # pi session/harness parity audit — Pathfinder session layer vs upstream
 
-Read-only audit, 2026-09. Compares:
+Audit, 2026-09 — now a **living ledger**: every item below carries a Status
+line (`landed in <commit>`, `deliberately excluded`, or `remaining`) and is
+refreshed as work lands. Compares:
 
 - **Pathfinder**: `app/src/main/kotlin/works/resolve/pathfinder/data/sessions/`
   (`SessionEntry.kt`, `Conversation.kt`, `SessionCodec.kt`, `Session.kt`,
@@ -62,6 +64,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
 
 ### P0-1. Shared storage-assigned sequence number (`seq`)
 
+**Status:** landed — storage-assigned consecutive `seq` + replay validation (42de290).
+
 - **pi**: `session/types.ts:17` (`EntryBase.seq`, "shared sequence;
   read-side, storage-assigned"); enforced consecutive in
   `session/state.ts:118` `applyMutation` (`has non-consecutive seq`).
@@ -78,6 +82,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
   (the writer that mints it). ~1–2 days including tests.
 
 ### P0-2. JSONL v4 mutation-log storage format (header + entry/record/lane/fact mutations, append-only)
+
+**Status:** landed — JsonlCodec header/mutation lines (d4fe543), append-only JsonlSessionStorage/SessionStore with torn-tail repair (6b497c5).
 
 - **pi**: `jsonl/codec.ts` — `decodeHeader` (version 4, `id`, `createdAt`,
   `cwd`, `parentSessionId`, `legacyParentSessionPath` — mutually exclusive —
@@ -104,6 +110,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
 
 ### P0-3. Lane records: operation lifecycle durability
 
+**Status:** landed — operation lifecycle trio + usage records (3407524).
+
 - **pi**: `session/types.ts` `RecordBase` + `LaneRecord` union — at minimum
   `operation_started` (with `sourceLeafId` and `intent`:
   run/compaction/navigation), `abort_requested` (runId), `operation_finished`
@@ -127,6 +135,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
 
 ### P1-1. Lanes
 
+**Status:** landed — lanes map, LaneView projection, createLane/moveLane (6689c67). UI stays single-lane by product decision.
+
 - **pi**: multiple named lanes each holding a leaf pointer
   (`types.ts` `LanePointer`, `state.ts` lanes map seeded with `main`);
   `Session.view(lane)` (`session/session.ts:66`) projects a lane-scoped
@@ -142,6 +152,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
 - **Size**: M (~3 days), rides on P0-2.
 
 ### P1-2. Session lineage and fork
+
+**Status:** landed — parentSessionId lineage + fork with branch/tree scopes (6689c67).
 
 - **pi**: `parentSessionId` in the v4 header (with `legacyParentSessionPath`
   compat read); `SessionRepo.create/open/list/delete/fork`
@@ -159,6 +171,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
 
 ### P1-3. Global facts: session name and entry labels
 
+**Status:** mostly landed — name-as-fact replaced `title` in the v4 port; label facts (decode/apply, `storage.setLabel`, fork fact copy) landed with the codec/state ports. **Remaining (deliberate):** label producers — upstream writers are coding-agent extensions (tree-view labeling) and pathfinder has no extension runner; the UI boundary is documented in `AgentSession.navigationIntent`'s KDoc.
+
 - **pi**: `fact` mutations (`fact:"name"` / `fact:"label"` with `targetId`),
   latest-wins, persisted in the log; labels validated against existing
   entries (`state.ts` fact case). Session "name" is distinct from any entry.
@@ -169,6 +183,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
 - **Size**: S (~1 day) once P0-2 exists.
 
 ### P1-4. Branch summarization
+
+**Status:** landed — entry kind + collect/prepare/generate core (a80c222), navigation `summarize` trigger (fe14700).
 
 - **pi**: `compaction/branch-summarization.ts` — `collectEntriesForBranchSummary`
   (common-ancestor walk), `prepareBranchEntries` (token budget, file-ops
@@ -188,6 +204,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
 
 ### P1-5. Durable recovery: the reducer
 
+**Status:** landed — validateRecordLog/reduceLaneState/classifyLaneRecovery with all 12 corruption reasons (fe14700); the restore path now runs the full reduction at session load (agent/session-p2-sweep).
+
 - **pi**: `harness/reducer.ts` — `reduceLaneState` folds a lane's
   `RecordLogSlice` (open operations + records + referenced entries) into
   lane state, classifying corruption via `RecordLogCorruptionReason`
@@ -205,6 +223,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
 
 ### P1-6. `terminate` flag and deferred-assistant filtering in context
 
+**Status:** landed — terminate flag + deferred-assistant filtering (a80c222).
+
 - **pi**: `MessageEntry.terminate?: true` (`types.ts:27`) marks
   terminal-of-session messages; `context.ts` `sessionEntryToContextMessages`
   drops assistant messages with `stopReason === "deferred"`.
@@ -220,6 +240,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
 
 ### P2-1. Query API (EntryQuery / RecordQuery / BranchBounds / cursors)
 
+**Status:** landed — EntryQuery/RecordQuery/BranchBounds with cursors and orderings; findEntries/findEntriesOnBranch/findRecords/findOpenOperations (6689c67).
+
 - **pi**: `state.ts` `findEntries` / `findEntriesOnBranch` / `findRecords`
   with type filters, `newestFirst`/`oldestFirst`, limits, seq cursors, and
   branch bounds (`stopAtId`/`stopAtType`); `findOpenOperations`.
@@ -229,6 +251,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
   sessions grow and the UI wants paging. **Size**: M (~3 days).
 
 ### P2-2. `custom` entries and projectors
+
+**Status:** landed for the codec — `CustomEntry` decodes/encodes and `appendCustomEntry` exists (v4 codec port, d4fe543/6b497c5); `CustomEntryContextMessageProjector` deliberately excluded with the extension runner.
 
 - **pi**: `CustomEntry` (`customType`, `data`), `appendCustomEntry`,
   `CustomEntryContextMessageProjector` in `SessionContextBuildOptions`
@@ -240,6 +264,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
 
 ### P2-3. `usage` records and `SessionStats`
 
+**Status:** landed — `usage` records fold into `SessionStats`; `stats()` reads the fold (3407524). Summaries still do a bounded full read (documented divergence in `SessionStore`).
+
 - **pi**: `usage` lane records accumulate `SessionStats`
   (messageCount, cached/uncached/total tokens, costTotal) incrementally in
   `state.ts`; `getStats()` is a storage read, no message replay.
@@ -247,6 +273,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
   walking every session file. **Size**: S (~1 day) once records exist.
 
 ### P2-4. Error taxonomy and payload validation
+
+**Status:** landed — `SessionError`/`SessionErrorCode` replaces `SessionDataException` at every storage-boundary throw site with upstream message text; `assertJsonSerializable` rejects non-JSON-safe payloads before write (agent/session-p2-sweep).
 
 - **pi**: `SessionError` with `SessionErrorCode`
   (`not_found | already_exists | invalid_entry | invalid_payload |
@@ -259,12 +287,16 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
 
 ### P2-5. Incremental log reads (`getLog`)
 
+**Status:** landed — `getLog(afterSeq, limit)` over `LogItem`s: state fold, storage + store passthrough (agent/session-p2-sweep).
+
 - **pi**: `getLog({afterSeq, limit})` returns `LogItem`s since a seq —
   incremental tail reads for observers.
 - **Pathfinder**: full snapshot load. Only relevant after P0-2; useful if a
   sync/observer feature ever lands. **Size**: S (~half a day).
 
 ### P2-6. SQLite backend
+
+**Status:** deliberately excluded — no Node/SQLite backend on Android; JSONL on local storage is the faithful equivalent. Revisit only if search-over-sessions becomes a feature.
 
 - **pi**: `packages/session-backends/sqlite-node` (repository, migrations,
   materialized views, FTS search) as an alternative `SessionStorage`.
@@ -275,6 +307,8 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
 
 ### P2-7. Stale provenance references
 
+**Status:** done — citations refreshed (agent/session-p2-sweep). `Conversation`/`AgentSession` citations to coding-agent `session-manager.ts` were verified against current upstream (the file still exists there) and stand.
+
 - Several Pathfinder KDocs cite pi's *old* locations
   (`Conversation.kt` → "pi's SessionManager / session-manager.ts",
   `Conversation.appendCompaction` → session-manager.ts:1098,
@@ -284,7 +318,7 @@ JSONL-v4 mutation format, not in Pathfinder's current whole-file format 2.
 
 ---
 
-## Suggested sequencing
+## Sequencing (historical; superseded by the ledger above)
 
 1. **P0-1 + P0-2 together** (seq + JSONL v4 codec/state/storage) — the
    parallel entry-type effort should land on top of this, not format 2.

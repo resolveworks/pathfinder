@@ -495,8 +495,11 @@ class AgentSession(
     /**
      * The navigation operation intent payload (pi's navigation intent,
      * harness/session/types.ts:105: targetId, summarize, customInstructions?,
-     * label?, summaryEntryId?). [label] is omitted until entry-label facts
-     * are ported (audit P1-3).
+     * label?, summaryEntryId?). [label] is a deliberate omission: entry-label
+     * facts are ported (decode/apply/setLabel and fork's fact copy), but
+     * their only upstream producers are coding-agent extensions' tree-view
+     * labeling — pathfinder has no extension runner, so no surface produces
+     * them (audit P1-3 boundary).
      */
     private fun navigationIntent(
         targetId: String,

@@ -42,6 +42,7 @@ import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.data.sessions.MessageEntry
 import works.resolve.pathfinder.data.sessions.ModelChangeEntry
 import works.resolve.pathfinder.data.sessions.SessionRepository
+import works.resolve.pathfinder.data.sessions.SessionErrorCode
 import works.resolve.pathfinder.data.sessions.SessionStore
 import java.io.File
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -194,7 +195,7 @@ class ChatViewModelTest {
             totalSaves += 1
             if (failSave) {
                 failedSaves += 1
-                throw works.resolve.pathfinder.data.sessions.SessionDataException("save failed")
+                throw works.resolve.pathfinder.data.sessions.SessionError(SessionErrorCode.STORAGE, "save failed")
             }
             saveEntered?.complete(Unit)
             saveGate?.await()
@@ -2649,6 +2650,39 @@ class ChatViewModelTest {
             suspended.laneRecovery,
         )
         vm3.closeForTest()
+    }
+
+    @Test
+    fun load_classifiesCorruptRecordLogsViaReducer() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        vm.exchange(h, "Hello", "world")
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+        waitUntil { h.sessionStore.openOperations(sessionId, "main", null).isEmpty() }
+        vm.closeForTest()
+
+        // A record referencing an operation the log never opened: only the
+        // reducer's full validation classifies this as corruption.
+        h.sessionStore.appendRecord(
+            sessionId,
+            works.resolve.pathfinder.data.sessions.LaneRecord.AbortRequestedRecord(
+                id = "ghost-abort",
+                lane = "main",
+                runId = "no-such-operation",
+            ),
+        )
+        val vm2 = h.newViewModel()
+        val corrupt = vm2.uiState.first { it.status == ChatStatus.Ready && it.activeSessionId == sessionId }
+        assertEquals(
+            works.resolve.pathfinder.agent.LaneRecovery.Corrupt(works.resolve.pathfinder.agent.RecordLogCorruptionReason.UNKNOWN_OPERATION),
+            corrupt.laneRecovery,
+        )
+        vm2.closeForTest()
     }
 }
 
