@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.telemetry
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,9 +12,12 @@ import org.junit.Test
 
 /**
  * Tests for the ported telemetry contract
- * (`packages/telemetry/src/index.ts` + `memory.ts`): no-op passthrough,
+ * (`packages/telemetry/src/index.ts` + `memory.ts` and the adapter
+ * conformance semantics of `src/testing/conformance.ts`): no-op passthrough,
  * in-memory recording (ids, parents, settle order, snapshots), automatic
- * error statuses, explicit-status precedence, and post-settle passivity.
+ * error statuses, explicit-status precedence and last-write-wins, attribute
+ * merging with defensive array copies, event ordering, nested and concurrent
+ * child parentage, post-settle passivity, and callback exception identity.
  */
 class TelemetryContractTest {
 
@@ -43,7 +48,7 @@ class TelemetryContractTest {
                 inner.addEvent("happened", mapOf("detail" to attr(true)))
             }
         }
-        val spans = context.spans()
+        val spans = context.getSpans()
         assertEquals(listOf("pf.outer", "pf.inner"), spans.map { it.name })
         assertEquals(1, spans[1].parentId)
         assertEquals(mapOf("a" to attr("1")), spans[0].attributes)
@@ -64,12 +69,11 @@ class TelemetryContractTest {
         } catch (error: IllegalStateException) {
             assertSame(thrown, error)
         }
-        val span = context.spans().single()
+        val span = context.getSpans().single()
         val status = span.status as SpanStatus.Error
-        assertEquals("java.lang.IllegalStateException", status.error?.name)
+        // JS Error.name is the error class's short name; Kotlin mirrors it with simpleName.
+        assertEquals("IllegalStateException", status.error?.name)
         assertEquals("redacted-by-construction detail", status.error?.message)
-        // The recorded snapshot drops the throwable transport field (pi's serializable shape).
-        assertNull(status.error?.throwable)
     }
 
     @Test
@@ -82,7 +86,7 @@ class TelemetryContractTest {
             }
         } catch (_: RuntimeException) {
         }
-        val status = context.spans().single().status as SpanStatus.Error
+        val status = context.getSpans().single().status as SpanStatus.Error
         assertEquals("Custom", status.error?.name)
         assertEquals("expected failure", status.error?.message)
     }
@@ -97,7 +101,7 @@ class TelemetryContractTest {
         span.setAttributes(mapOf("late" to attr("dropped")))
         span.addEvent("late")
         span.setStatus(SpanStatus.Error())
-        val recorded = context.spans().single()
+        val recorded = context.getSpans().single()
         assertEquals(mapOf("start" to attr("kept")), recorded.attributes)
         assertTrue(recorded.events.isEmpty())
         assertEquals(SpanStatus.Ok, recorded.status)
@@ -111,7 +115,7 @@ class TelemetryContractTest {
             span = captured
         }
         span.startSpan(SpanOptions("pf.late-child")) { }
-        assertEquals(listOf("pf.outer"), context.spans().map { it.name })
+        assertEquals(listOf("pf.outer"), context.getSpans().map { it.name })
     }
 
     @Test
@@ -122,25 +126,134 @@ class TelemetryContractTest {
         }
         assertEquals(
             mapOf("a" to attr(1), "b" to attr("new"), "c" to attr(false)),
-            context.spans().single().attributes,
+            context.getSpans().single().attributes,
         )
+    }
+
+    @Test
+    fun `anonymous exception class falls back to the nearest named superclass`() = runTest {
+        val context = InMemoryTelemetryContext()
+        val thrown = object : RuntimeException("named by superclass") {}
+        try {
+            context.startSpan(SpanOptions("pf.anonymous")) { throw thrown }
+            throw AssertionError("expected rethrow")
+        } catch (error: RuntimeException) {
+            assertSame(thrown, error)
+        }
+        val status = context.getSpans().single().status as SpanStatus.Error
+        // An anonymous Kotlin exception is still an Error instance to pi, never a non-Error rejection.
+        assertEquals("RuntimeException", status.error?.name)
+        assertEquals("named by superclass", status.error?.message)
+    }
+
+    @Test
+    fun `repeated setStatus calls are last-write-wins and suppress the automatic status`() = runTest {
+        val context = InMemoryTelemetryContext()
+        context.startSpan(SpanOptions("pf.last-status")) { span ->
+            span.setStatus(SpanStatus.Error(TelemetryError("Expected", "first")))
+            span.setStatus(SpanStatus.Ok)
+        }
+        assertEquals(SpanStatus.Ok, context.getSpans().single().status)
+
+        try {
+            context.startSpan(SpanOptions("pf.explicit-before-throw")) { span ->
+                span.setStatus(SpanStatus.Ok)
+                throw IllegalStateException("suppressed")
+            }
+        } catch (_: IllegalStateException) {
+        }
+        assertEquals(SpanStatus.Ok, context.getSpans().last().status)
+    }
+
+    @Test
+    fun `array attributes are recorded as defensive copies`() = runTest {
+        val context = InMemoryTelemetryContext()
+        val startModels = mutableListOf("gpt-4o")
+        val eventIds = mutableListOf<Number>(1)
+        context.startSpan(SpanOptions("pf.arrays", mapOf("models" to attr(*startModels.toTypedArray())))) { span ->
+            startModels.add("o3") // later caller mutation must not leak in
+            span.setAttributes(mapOf("codes" to attr(*arrayOf<Number>(4, 2))))
+            span.addEvent("listed", mapOf("ids" to attr(*eventIds.toTypedArray())))
+            eventIds.add(2)
+            span.setAttributes(mapOf("flags" to attr(*booleanArrayOf(true, false))))
+        }
+        val recorded = context.getSpans().single()
+        assertEquals(
+            mapOf(
+                "models" to attr(*arrayOf<String>("gpt-4o")),
+                "codes" to attr(*arrayOf<Number>(4, 2)),
+                "flags" to attr(*booleanArrayOf(true, false)),
+            ),
+            recorded.attributes,
+        )
+        assertEquals(
+            listOf(InMemoryTelemetryContext.RecordedTelemetryEvent("listed", mapOf("ids" to attr(*arrayOf<Number>(1))))),
+            recorded.events,
+        )
+        // Snapshots are detached: mutating a recorded array does not affect later snapshots.
+        val array = recorded.attributes["codes"] as AttributeValue.Nums
+        (array.values as MutableList<Number>).add(99)
+        assertEquals(attr(*arrayOf<Number>(4, 2)), context.getSpans().single().attributes["codes"])
+    }
+
+    @Test
+    fun `later setAttributes replace earlier array values for the same key`() = runTest {
+        val context = InMemoryTelemetryContext()
+        context.startSpan(SpanOptions("pf.replace")) { span ->
+            span.setAttributes(mapOf("attempted" to attr(*arrayOf<String>("a"))))
+            span.setAttributes(mapOf("attempted" to attr(*arrayOf<String>("a", "b"))))
+        }
+        assertEquals(
+            mapOf("attempted" to attr(*arrayOf<String>("a", "b"))),
+            context.getSpans().single().attributes,
+        )
+    }
+
+    @Test
+    fun `concurrent children record parentage and settle order`() = runTest {
+        val context = InMemoryTelemetryContext()
+        context.startSpan(SpanOptions("pf.parent")) { parent ->
+            val first = launch {
+                parent.startSpan(SpanOptions("pf.first-child")) { child ->
+                    delay(10)
+                    child.setAttributes(mapOf("order" to attr("first")))
+                }
+            }
+            val second = launch {
+                parent.startSpan(SpanOptions("pf.second-child")) { "done" }
+            }
+            second.join()
+            first.join()
+        }
+        val spans = context.getSpans()
+        assertEquals(listOf("pf.parent", "pf.first-child", "pf.second-child"), spans.map { it.name })
+        val parent = spans.first { it.name == "pf.parent" }
+        val first = spans.first { it.name == "pf.first-child" }
+        val second = spans.first { it.name == "pf.second-child" }
+        assertNull(parent.parentId)
+        assertEquals(parent.id, first.parentId)
+        assertEquals(parent.id, second.parentId)
+        // Second settles before first; the parent settles last.
+        assertTrue(second.endSequence!! < first.endSequence!!)
+        assertTrue(first.endSequence!! < parent.endSequence!!)
+        assertEquals(mapOf("order" to attr("first")), first.attributes)
     }
 
     @Test
     fun `snapshots are detached from later recording`() = runTest {
         val context = InMemoryTelemetryContext()
         context.startSpan(SpanOptions("pf.snapshot", mapOf("a" to attr("1")))) { }
-        val snapshot = context.spans().single()
+        val snapshot = context.getSpans().single()
         (snapshot.attributes as MutableMap<String, AttributeValue>)["a"] = attr("mutated")
-        assertFalse(context.spans().single().attributes.isEmpty())
-        assertEquals(attr("1"), context.spans().single().attributes["a"])
+        assertFalse(context.getSpans().single().attributes.isEmpty())
+        assertEquals(attr("1"), context.getSpans().single().attributes["a"])
     }
 
     @Test
     fun `unsettled spans carry no end sequence`() = runTest {
         val context = InMemoryTelemetryContext()
         context.startSpan(SpanOptions("pf.unsettled")) { span ->
-            val recorded = context.spans().single()
+            val recorded = context.getSpans().single()
             assertFalse(recorded.settled)
             assertNull(recorded.endSequence)
             span.setStatus(SpanStatus.Ok)

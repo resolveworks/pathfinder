@@ -19,21 +19,15 @@ package works.resolve.pathfinder.telemetry
  * Divergences from pi (documented per AGENTS.md, each as narrow as possible):
  * - **Promises → coroutines.** pi's `startSpan` callback returns `T |
  *   Promise<T>`; this port's callback is `suspend (TelemetrySpan) -> T`, so
- *   async operations await naturally inside the span.
- * - **Attribute values.** pi's `AttributeValue` union is
- *   `string | number | boolean | readonly arrays`; this port keeps the three
- *   scalar shapes ([Str], [Num], [Bool]) and drops the array shapes until a
- *   span vocabulary needs them. Numbers box as [Number] so [Num] renders
- *   integral and fractional values without a second case.
- * - **Throwable on error statuses.** pi's serializable status shape carries
- *   `{ name, message }` only; [TelemetryError] additionally keeps the
- *   throwable so log-style backends can print stack traces. It is transport
- *   for the backend, not recorded data: [InMemoryTelemetryContext] snapshots
- *   drop it, matching pi's recording shape.
+ *   async operations await naturally inside the span. Kotlin exceptions are
+ *   always `Throwable`, so pi's non-`Error` rejection values have no
+ *   counterpart; [automaticErrorStatus] keeps pi's passivity.
  * - The typed-schema layer (`TelemetrySchemaDefinition` and friends) is a
- *   TypeScript compile-time-only facility ("no runtime schema validation is
- *   performed" upstream); it has no Kotlin port. Span vocabularies are
- *   documented constants next to their producers instead.
+ *   deliberate selective omission: pi's schema values are ordinary
+ *   runtime-serializable data (upstream `defineTelemetrySchema` "returns
+ *   ordinary JSON-serializable data"), while the exact-type inference that
+ *   consumes them is TypeScript-only. Span vocabularies are documented
+ *   constants next to their producers instead.
  *
  * Security: telemetry is operational metadata. Credentials, message text,
  * and model responses must never be passed as attributes or error messages.
@@ -43,13 +37,22 @@ sealed interface AttributeValue {
     @JvmInline
     value class Str(val value: String) : AttributeValue
 
-    /** pi `number`. */
+    /** pi `number`. Numbers box as [Number] so both integral and fractional values fit one case. */
     @JvmInline
     value class Num(val value: Number) : AttributeValue
 
     /** pi `boolean`. */
     @JvmInline
     value class Bool(val value: Boolean) : AttributeValue
+
+    /** pi `readonly string[]`. */
+    data class Strs(val values: List<String>) : AttributeValue
+
+    /** pi `readonly number[]`. */
+    data class Nums(val values: List<Number>) : AttributeValue
+
+    /** pi `readonly boolean[]`. */
+    data class Bools(val values: List<Boolean>) : AttributeValue
 }
 
 /** pi `SpanAttributes`: a name → value map; iteration order is producer order. */
@@ -61,14 +64,10 @@ data class SpanOptions(
     val attributes: SpanAttributes = emptyMap(),
 )
 
-/**
- * pi `SpanStatus`'s error detail (`{ name, message }`), plus the originating
- * throwable for backend adapters (see the divergences note on [AttributeValue]).
- */
+/** pi `SpanStatus`'s error detail (`{ name, message }`). */
 data class TelemetryError(
     val name: String,
     val message: String,
-    val throwable: Throwable? = null,
 )
 
 /** pi `SpanStatus`: `{ status: "ok" } | { status: "error"; error?: {...} }`. */
@@ -108,11 +107,26 @@ fun attr(value: String): AttributeValue = AttributeValue.Str(value)
 fun attr(value: Number): AttributeValue = AttributeValue.Num(value)
 fun attr(value: Boolean): AttributeValue = AttributeValue.Bool(value)
 
-/** pi `automaticErrorStatus`: an error status whose detail is read passively. */
+/** Array conversions defensively copy the caller's values, mirroring pi's `copyAttributeValue`. */
+fun attr(vararg values: String): AttributeValue = AttributeValue.Strs(values.toList())
+fun attr(vararg values: Number): AttributeValue = AttributeValue.Nums(values.toList())
+fun attr(vararg values: Boolean): AttributeValue = AttributeValue.Bools(values.toList())
+
+/**
+ * Port of pi `automaticErrorStatus`: an error status whose detail is read
+ * passively. pi reads JS `error.name`, which for `Error` and its subclasses
+ * is the class's short name; the closest Kotlin mirror is the exception
+ * class's [simpleName][Class.getSimpleName], falling back to the nearest
+ * named superclass (an anonymous Kotlin exception is still an `Error`
+ * instance as far as pi is concerned, never a non-`Error` rejection).
+ */
 internal fun automaticErrorStatus(error: Throwable): SpanStatus = try {
-    val name = error::class.qualifiedName ?: error::class.simpleName ?: "unknown"
-    SpanStatus.Error(TelemetryError(name, error.message.orEmpty(), error))
-} catch (_: Exception) {
+    val name = error::class.simpleName
+        ?: generateSequence(error::class.java.superclass) { it.superclass }
+            .firstNotNullOfOrNull { it.simpleName }
+        ?: "Throwable"
+    SpanStatus.Error(TelemetryError(name, error.message.orEmpty()))
+} catch (_: Throwable) {
     // Error inspection is passive. Fall through to an error status without details.
     SpanStatus.Error()
 }
