@@ -85,22 +85,21 @@ internal object SessionCodec {
             ?: throw SessionDataException("Malformed session data: entry must be an object")
         val id = obj.stringField("id") ?: throw SessionDataException("Malformed session data: entry missing id")
         return when (val kind = obj.stringField("kind")) {
-            "message" -> MessageEntry(
-                id = id,
-                parentId = obj.stringField("parentId"),
-                timestamp = obj.longField("timestamp")
-                    ?: throw SessionDataException("Malformed session data: missing message timestamp"),
-                message = try {
-                    json.decodeFromJsonElement(
-                        Message.serializer(),
-                        obj["message"] ?: throw SessionDataException("Malformed session data: entry missing message"),
-                    )
-                } catch (e: SessionDataException) {
-                    throw e
-                } catch (e: Exception) {
-                    throw SessionDataException("Malformed session data: undecodable message", e)
-                },
-            )
+            "message" -> {
+                val messageElement = obj["message"]
+                    ?: throw SessionDataException("Malformed session data: entry missing message")
+                MessageEntry(
+                    id = id,
+                    parentId = obj.stringField("parentId"),
+                    timestamp = obj.longField("timestamp")
+                        ?: throw SessionDataException("Malformed session data: missing message timestamp"),
+                    message = try {
+                        json.decodeFromJsonElement(Message.serializer(), messageElement)
+                    } catch (e: Exception) {
+                        throw SessionDataException("Malformed session data: undecodable message", e)
+                    },
+                )
+            }
 
             else -> throw SessionDataException("Unknown entry kind: $kind")
         }

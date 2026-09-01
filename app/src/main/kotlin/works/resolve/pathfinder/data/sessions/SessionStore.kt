@@ -189,9 +189,6 @@ class SessionStore(
         } catch (e: IOException) {
             throw SessionDataException("Cannot read session file", e)
         }
-        if (text.length > maxFileBytes) {
-            throw SessionDataException("Session file exceeds size limit")
-        }
         val session = SessionCodec.decode(text)
         val expectedId = file.name.removeSuffix(".json")
         if (session.id != expectedId) {

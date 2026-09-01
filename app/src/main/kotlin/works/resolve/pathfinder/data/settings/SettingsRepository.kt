@@ -25,7 +25,7 @@ class SettingsRepository(
         ModelSettings(
             providerId = prefs[Keys.PROVIDER_ID] ?: "",
             modelId = prefs[Keys.MODEL_ID] ?: "",
-            activeSessionId = prefs[Keys.ACTIVE_SESSION_ID]?.takeIf { it.isNotBlank() },
+            activeSessionId = prefs[Keys.ACTIVE_SESSION_ID],
             showThinking = prefs[Keys.SHOW_THINKING] ?: false,
         )
     }

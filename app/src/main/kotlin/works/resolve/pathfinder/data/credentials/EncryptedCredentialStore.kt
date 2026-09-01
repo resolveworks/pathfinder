@@ -49,7 +49,7 @@ class EncryptedCredentialStore(
         if (!file.exists()) return@withContext null
         try {
             String(decrypt(file.readBytes()), Charsets.UTF_8)
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             if (error !is CancellationException) {
                 Diagnostics.failure(DiagnosticEvent.CREDENTIAL_READ_FAILED, error)
             }
@@ -59,7 +59,7 @@ class EncryptedCredentialStore(
 
     private suspend fun writeRaw(providerId: String, encoded: String) = withContext(Dispatchers.IO) {
         val file = fileFor(providerId)
-        file.parentFile?.mkdirs()
+        dir.mkdirs()
         try {
             val tmp = File(file.parentFile, "${file.name}.tmp")
             tmp.writeBytes(encrypt(encoded.toByteArray(Charsets.UTF_8)))
@@ -67,7 +67,7 @@ class EncryptedCredentialStore(
                 file.delete()
                 check(tmp.renameTo(file)) { "Could not persist credential" }
             }
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             if (error !is CancellationException) {
                 Diagnostics.failure(DiagnosticEvent.CREDENTIAL_WRITE_FAILED, error)
             }
