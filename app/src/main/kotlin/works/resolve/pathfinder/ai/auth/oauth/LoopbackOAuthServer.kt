@@ -84,12 +84,22 @@ internal interface LoopbackCallbackHandle<R> {
  * This class is provider-neutral and secret-free: nothing from a request is
  * echoed into a response except through the flow handler's decision, and it
  * performs no logging of any kind.
+ *
+ * - **Foreground gate** (Android-only divergence from pi, documented per
+ *   AGENTS.md): an optional [OAuthForegroundGate] defers [LoopbackCallbackHandle.waitForResult]
+ *   until the app is foregrounded. The server itself keeps serving while
+ *   backgrounded — the on-device browser must still be able to deliver the
+ *   redirect — but the flow does not proceed (into a token exchange that
+ *   background-restricted Android would kill) until Pathfinder is back in
+ *   the foreground. `null` (the default) is pi parity.
  */
 internal class LoopbackOAuthServer<R>(
     /** Fixed port (1455 / 53692) or 0 for an ephemeral port (OpenRouter). */
     val port: Int,
     /** pi `getCallbackHost()` — loopback by default. */
     val host: String = "127.0.0.1",
+    /** Optional Android foreground gate for `waitForResult`; `null` = pi parity. */
+    val gate: OAuthForegroundGate? = null,
     /**
      * Invoked per request. May call [settle] at most once, from any coroutine
      * (OpenRouter settles only after an in-handler token exchange completes);
@@ -148,7 +158,10 @@ internal class LoopbackOAuthServer<R>(
         val handle = object : LoopbackCallbackHandle<R> {
             override val port: Int = serverSocket.localPort
 
-            override suspend fun waitForResult(): R? = result.await()
+            override suspend fun waitForResult(): R? {
+                gate?.awaitForeground()
+                return result.await()
+            }
 
             override fun cancelWait() = settle(null)
 

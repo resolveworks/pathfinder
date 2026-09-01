@@ -100,6 +100,8 @@ class OpenAiCodexOAuthAuth(
     private val pkce: PkceGenerator = PkceGenerator(),
     /** pi hardcodes port 1455; injectable so tests never race the fixed port. */
     private val callbackPort: Int = CALLBACK_PORT,
+    /** Android foreground gate for the loopback wait; `null` = pi parity. */
+    private val gate: OAuthForegroundGate? = null,
 ) : OAuthAuth {
 
     override val name: String = "OpenAI (ChatGPT Plus/Pro)"
@@ -281,6 +283,7 @@ class OpenAiCodexOAuthAuth(
         val server = LoopbackOAuthServer(
             port = callbackPort,
             host = CALLBACK_HOST,
+            gate = gate,
             handler = { request, settle ->
                 if (request.path != CALLBACK_PATH) {
                     LoopbackCallbackResponse(404, oauthErrorHtml("Callback route not found."))

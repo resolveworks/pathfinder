@@ -66,6 +66,8 @@ class OpenRouterOAuthAuth(
     private val pkce: PkceGenerator = PkceGenerator(),
     /** pi `LOGIN_TIMEOUT_MS`; injectable seam so tests can exercise the timeout race quickly. */
     private val loginTimeoutMs: Long = LOGIN_TIMEOUT_MS,
+    /** Android foreground gate for the loopback wait; `null` = pi parity. */
+    private val gate: OAuthForegroundGate? = null,
 ) : OAuthAuth {
 
     /**
@@ -93,6 +95,7 @@ class OpenRouterOAuthAuth(
 
         val handle = LoopbackOAuthServer<CallbackResult>(
             port = 0,
+            gate = gate,
             handler = { request, settle ->
                 handleCallback(request, { result ->
                     settled.set(true)

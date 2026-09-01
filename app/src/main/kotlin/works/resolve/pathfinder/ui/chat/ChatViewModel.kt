@@ -21,6 +21,7 @@ import works.resolve.pathfinder.ai.auth.AuthPrompt as AuthInteractionPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.ai.auth.ModelsError
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
+import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.data.settings.SettingsRepository
@@ -114,6 +115,13 @@ class ChatViewModel(
     private val agentFactory: AgentFactory,
     /** Diagnostic span backend for the UI error boundary (pi threads TelemetryContext the same way). */
     private val telemetryContext: TelemetryContext = NOOP_TELEMETRY_CONTEXT,
+    /**
+     * Process-wide foreground state (Android platform glue; pi has no
+     * foreground concept). MainActivity's onResume/onPause drive this via
+     * [onAppForegrounded]/[onAppBackgrounded]; the OAuth flows gate loopback
+     * waits and network work on it while the app is backgrounded.
+     */
+    private val appForegroundGate: AppForegroundGate = AppForegroundGate(),
 ) : ViewModel() {
 
     // Catalog-driven provider/model surface: option lists are computed from
@@ -862,6 +870,17 @@ class ChatViewModel(
             }
         }
     }
+
+    // ---- app foreground tracking (Android platform glue for OAuth gating) ----
+
+    /** Whether the app's activity is currently resumed. */
+    val appForegrounded: StateFlow<Boolean> get() = appForegroundGate.foreground
+
+    /** Forwarded from MainActivity.onResume. */
+    fun onAppForegrounded() = appForegroundGate.onAppForegrounded()
+
+    /** Forwarded from MainActivity.onPause. */
+    fun onAppBackgrounded() = appForegroundGate.onAppBackgrounded()
 
     // ---- interactive provider login (OAuth/account flows) ----
 
