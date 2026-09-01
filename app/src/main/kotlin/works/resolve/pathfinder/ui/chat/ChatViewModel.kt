@@ -14,6 +14,7 @@ import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.agent.AgentFactory
+import works.resolve.pathfinder.agent.OperationLifecycleRecorder
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
@@ -28,6 +29,7 @@ import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.sessions.CompactionEntry
 import works.resolve.pathfinder.data.sessions.Conversation
+import works.resolve.pathfinder.data.sessions.LaneRecord
 import works.resolve.pathfinder.data.sessions.MessageEntry
 import works.resolve.pathfinder.data.sessions.Session
 import works.resolve.pathfinder.data.sessions.SessionRepository
@@ -633,6 +635,9 @@ class ChatViewModel(
         agentEventsJob?.cancel()
         agent = newAgent
         lastAgentError = null
+        // Durable operation-lifecycle records (P0-3): the recorder resolves
+        // the session at call time (mid-run session switches are blocked).
+        newAgent.operationRecorder = operationRecorder
         agentStateJob = viewModelScope.launch { newAgent.state.collect { state -> onAgentState(state) } }
         // Session-level status (retry, and later compaction) and persistence
         // points are event-driven (pi's auto_retry_start/end and message_end
@@ -692,6 +697,42 @@ class ChatViewModel(
     }
 
     // ---- persistence pipeline ----
+
+    /**
+     * Bridge from [AgentSession]'s operation lifecycle to the session's
+     * mutation log (pi's Session.appendRecord; audit P0-3 producers).
+     *
+     * Appends dispatch asynchronously onto [viewModelScope] (Main.immediate)
+     * in call order and serialize through the store's mutex: the run loop
+     * never blocks on record durability, and abort_requested still lands
+     * before the cancellation handler's operation_finished (the recorder
+     * call order). Record appends never flush buffered conversation entries
+     * — pi's log invariant permits records to precede the entries they
+     * reference (see [LaneRecord]). A failed append degrades durability
+     * only: the error surfaces, the run continues.
+     */
+    private val operationRecorder = object : OperationLifecycleRecorder {
+        override suspend fun append(record: LaneRecord) {
+            dispatchAppend(record)
+        }
+
+        override fun appendBestEffort(record: LaneRecord) {
+            dispatchAppend(record)
+        }
+
+        private fun dispatchAppend(record: LaneRecord) {
+            val sessionId = activeSession?.id ?: return
+            viewModelScope.launch {
+                try {
+                    sessionStore.appendRecord(sessionId, record)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    setError(ERROR_SESSION_SAVE, e)
+                }
+            }
+        }
+    }
 
     /**
      * Schedules the current conversation snapshot for persistence against

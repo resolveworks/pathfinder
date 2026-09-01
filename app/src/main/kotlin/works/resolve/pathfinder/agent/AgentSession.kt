@@ -24,6 +24,12 @@ import works.resolve.pathfinder.agent.compaction.getLatestCompactionEntry
 import works.resolve.pathfinder.agent.compaction.prepareCompaction
 import works.resolve.pathfinder.agent.compaction.shouldCompact
 import works.resolve.pathfinder.data.sessions.Conversation
+import works.resolve.pathfinder.data.sessions.LaneRecord
+import works.resolve.pathfinder.data.sessions.OperationIntent
+import works.resolve.pathfinder.data.sessions.OperationOutcome
+import works.resolve.pathfinder.data.sessions.RecordError
+import works.resolve.pathfinder.data.sessions.SessionState
+import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.data.settings.RetrySettings
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
@@ -38,6 +44,26 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * Durable sink for operation-lifecycle lane records (pi's
+ * Session.appendRecord; audit P0-3). [AgentSession] produces the lifecycle
+ * trio — operation_started (run/compaction intent), abort_requested,
+ * operation_finished — and the owning app layer persists them.
+ *
+ * Ordering contract: implementations serialize appends in call order —
+ * abort_requested precedes the cancellation handler's operation_finished —
+ * but may dispatch them asynchronously (durability must not block the run
+ * loop), and must not throw: a failed record append degrades durability,
+ * never the run.
+ */
+interface OperationLifecycleRecorder {
+    /** Enqueues the record; suspends only if the implementation chooses to await durability. */
+    suspend fun append(record: LaneRecord)
+
+    /** Enqueues the record from a non-suspending caller (the abort path). */
+    fun appendBestEffort(record: LaneRecord)
+}
 
 /**
  * Prompt-orchestration facade over [Agent], ported from pi's AgentSession
@@ -83,6 +109,23 @@ class AgentSession(
     /** Wall clock for minting message timestamps (TS→Kotlin timing rule). */
     private val clock: Clock = Clock.System,
 ) {
+    /**
+     * Durable operation-lifecycle recorder (pi's session record appenders,
+     * first landed here — upstream defines the LaneRecord shapes and the
+     * recovery contract but its run loop does not append records yet). Set
+     * before the first prompt; null disables recording (tests, previews).
+     *
+     * One open operation per lane (pi's appendRecord invariant) drives the
+     * sequencing: the prompt's run operation spans its whole loop; an
+     * embedded auto-compaction finishes the run operation first, opens a
+     * compaction operation naming its pre-minted resultEntryId, and a
+     * compact-and-retry continuation opens a fresh run operation.
+     */
+    var operationRecorder: OperationLifecycleRecorder? = null
+
+    /** Id of the lane's open operation (pi's openOperationsByLane mirror); null while idle. */
+    @Volatile
+    private var currentOperationId: String? = null
     /** The session tree; only this class appends to it during prompts. */
     var conversation: Conversation = conversation
         private set
@@ -185,6 +228,7 @@ class AgentSession(
 
         try {
             val promptMessage = UserMessage.ofText(text, clock.now().toEpochMilliseconds())
+            beginOperation(OperationIntent.run())
             coroutineScope {
                 // Lazily started so promptJob is published before the job can
                 // run anything, mirroring Agent.prompt's abort guarantee.
@@ -202,6 +246,19 @@ class AgentSession(
                     throw CancellationException("Prompt aborted")
                 }
             }
+            finishOperation(OperationOutcome.COMPLETED)
+        } catch (e: CancellationException) {
+            finishOperation(OperationOutcome.ABORTED)
+            throw e
+        } catch (e: Exception) {
+            finishOperation(
+                OperationOutcome.FAILED,
+                RecordError(
+                    code = e::class.simpleName ?: "error",
+                    message = e.message ?: "operation failed",
+                ),
+            )
+            throw e
         } finally {
             promptJob = null
             synchronized(lock) { active = false }
@@ -210,6 +267,15 @@ class AgentSession(
 
     /** Abort the active prompt, if any. May be called from any coroutine. */
     fun abort() {
+        // abort_requested first, in call order, so the serialized recorder
+        // persists it before the cancellation handler's operation_finished
+        // (recovery distinguishes a requested abort from a crash that way).
+        val operationId = currentOperationId
+        if (operationId != null) {
+            operationRecorder?.appendBestEffort(
+                LaneRecord.AbortRequestedRecord(id = uuidv7(), lane = SessionState.LANE_MAIN, runId = operationId),
+            )
+        }
         promptJob?.cancel()
     }
 
@@ -231,6 +297,49 @@ class AgentSession(
             conversation = updated
             agent.replaceTranscript(updated.activeMessages())
         }
+    }
+
+    // ---- operation lifecycle records (pi's LaneRecord trio; audit P0-3) ----
+
+    /**
+     * Opens the lane's operation: appends operation_started with the current
+     * leaf as sourceLeafId. The sourceLeafId may name an entry that is still
+     * buffered (unpersisted) — legal per pi's invariants (see
+     * [LaneRecord]).
+     */
+    private suspend fun beginOperation(intent: OperationIntent): String {
+        val id = uuidv7()
+        recordAppend(
+            LaneRecord.OperationStartedRecord(
+                id = id,
+                lane = SessionState.LANE_MAIN,
+                sourceLeafId = conversation.leafId,
+                intent = intent,
+            ),
+        )
+        currentOperationId = id
+        return id
+    }
+
+    /** Closes the open operation (no-op when none is open) with [outcome]. */
+    private suspend fun finishOperation(outcome: OperationOutcome, error: RecordError? = null) {
+        val id = currentOperationId ?: return
+        currentOperationId = null
+        withContext(NonCancellable) {
+            recordAppend(
+                LaneRecord.OperationFinishedRecord(
+                    id = uuidv7(),
+                    lane = SessionState.LANE_MAIN,
+                    runId = id,
+                    outcome = outcome,
+                    error = error,
+                ),
+            )
+        }
+    }
+
+    private suspend fun recordAppend(record: LaneRecord) {
+        operationRecorder?.append(record)
     }
 
     /**
@@ -455,6 +564,9 @@ class AgentSession(
         var started = false
         compactionInProgress = true
         try {
+            // The triggering run's operation ends before compaction opens its
+            // own (one open operation per lane, pi's appendRecord invariant).
+            finishOperation(OperationOutcome.COMPLETED)
             val pathEntries = conversation.activeEntries()
             val preparation = when (
                 val outcome = prepareCompaction(pathEntries, compactionSettings)
@@ -462,6 +574,11 @@ class AgentSession(
                 is CompactionOutcome.Err -> return false
                 is CompactionOutcome.Ok -> outcome.value ?: return false
             }
+
+            // The compaction entry id is minted up front so the operation
+            // record can name its resultEntryId (pi's compaction intent).
+            val resultEntryId = uuidv7()
+            beginOperation(OperationIntent.compaction(resultEntryId))
 
             _events.emit(AgentEvent.CompactionStart(reason))
             started = true
@@ -485,6 +602,7 @@ class AgentSession(
                         _events.emit(
                             AgentEvent.CompactionEnd(reason = reason, aborted = true, willRetry = false),
                         )
+                        finishOperation(OperationOutcome.ABORTED)
                         return false
                     }
                     _events.emit(
@@ -493,6 +611,13 @@ class AgentSession(
                             aborted = false,
                             willRetry = false,
                             errorMessage = compactionFailureMessage(reason, outcome.error.message ?: "compaction failed"),
+                        ),
+                    )
+                    finishOperation(
+                        OperationOutcome.FAILED,
+                        RecordError(
+                            code = outcome.error.code.name,
+                            message = outcome.error.message ?: "compaction failed",
                         ),
                     )
                     return false
@@ -508,6 +633,7 @@ class AgentSession(
                 tokensBefore = compactResult.tokensBefore,
                 details = compactResult.details,
                 usage = compactResult.usage,
+                id = resultEntryId,
             )
             val sessionContext = buildSessionContext(conversation.activeEntries())
             agent.replaceTranscript(sessionContext)
@@ -528,7 +654,12 @@ class AgentSession(
                 ),
             )
 
+            finishOperation(OperationOutcome.COMPLETED)
+
             if (willRetry) {
+                // The overflow retry continues as a fresh run operation (the
+                // pre-compaction one finished above).
+                beginOperation(OperationIntent.run())
                 // The overflow response was persisted on message_end before
                 // checkCompaction removed it from agent state; rebuilding
                 // from the new compaction can restore that kept entry as the
@@ -555,6 +686,7 @@ class AgentSession(
                     _events.emit(AgentEvent.CompactionEnd(reason = reason, aborted = true, willRetry = false))
                 }
             }
+            finishOperation(OperationOutcome.ABORTED)
             throw e
         } catch (e: Exception) {
             if (started) {
@@ -567,6 +699,10 @@ class AgentSession(
                     ),
                 )
             }
+            finishOperation(
+                OperationOutcome.FAILED,
+                RecordError(code = e::class.simpleName ?: "error", message = e.message ?: "compaction failed"),
+            )
             return false
         } finally {
             compactionInProgress = false

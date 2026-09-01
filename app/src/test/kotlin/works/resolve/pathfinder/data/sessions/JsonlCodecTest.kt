@@ -175,16 +175,23 @@ class JsonlCodecTest {
         assertMutationSchemaError("""{"kind":"zzz","seq":1}""")
     }
 
-    // ---- record, lane, and fact mutations decode (no producers yet) ----
+    // ---- record, lane, and fact mutations decode ----
 
     @Test
     fun `record mutation decodes every record type`() {
-        for (type in listOf("abort_requested", "step_attempt", "tool_started", "queue_enqueued", "queue_cancelled", "write_deferred", "usage")) {
-            val line = """{"kind":"record","seq":1,"id":"r1","lane":"main","type":"$type","timestamp":1}"""
+        // Deferred kinds stay opaque; abort_requested carries its runId.
+        for (type in listOf("step_attempt", "tool_started", "queue_enqueued", "queue_cancelled", "write_deferred")) {
+            val line = """{"kind":"record","seq":1,"id":"r1","lane":"main","type":"$type","timestamp":1,"step":"assistant"}"""
             val record = assertIs<SessionMutation.Record>(JsonlCodec.decodeMutation(line)).record
-            assertEquals(type, record.type)
-            assertEquals("main", record.lane)
+            val deferred = assertIs<LaneRecord.DeferredRecord>(record)
+            assertEquals(type, deferred.type)
+            assertEquals("main", deferred.lane)
+            assertEquals(deferred, JsonlCodec.decodeMutation(JsonlCodec.encodeMutation(SessionMutation.Record(deferred)).trimEnd()).let { (it as SessionMutation.Record).record })
         }
+        val abort = assertIs<SessionMutation.Record>(
+            JsonlCodec.decodeMutation("""{"kind":"record","seq":1,"id":"r1","lane":"main","type":"abort_requested","timestamp":1,"runId":"op1"}"""),
+        ).record
+        assertEquals("op1", assertIs<LaneRecord.AbortRequestedRecord>(abort).runId)
     }
 
     @Test
@@ -196,16 +203,71 @@ class JsonlCodecTest {
         assertMutationSchemaError(
             """{"kind":"record","seq":1,"id":"r","lane":"main","type":"operation_started","timestamp":1,"intent":{"kind":"zzz"}}""",
         )
-        // operation_finished requires a runId.
+        // operation_finished requires a runId and a known outcome.
         assertMutationSchemaError(
-            """{"kind":"record","seq":1,"id":"r","lane":"main","type":"operation_finished","timestamp":1}""",
+            """{"kind":"record","seq":1,"id":"r","lane":"main","type":"operation_finished","timestamp":1,"outcome":"completed"}""",
         )
-        // A valid operation_started roundtrips its payload fields.
-        val line = """{"kind":"record","seq":1,"id":"r","lane":"main","type":"operation_started","timestamp":1,"intent":{"kind":"run"}}"""
-        val record = assertIs<SessionMutation.Record>(JsonlCodec.decodeMutation(line)).record
-        assertEquals("run", record.fields["intent"]!!.jsonObject["kind"]!!.jsonPrimitive.content)
-        val reencoded = JsonlCodec.encodeMutation(SessionMutation.Record(record)).trimEnd()
-        assertEquals(JsonlCodec.decodeMutation(line), JsonlCodec.decodeMutation(reencoded))
+        assertMutationSchemaError(
+            """{"kind":"record","seq":1,"id":"r","lane":"main","type":"operation_finished","timestamp":1,"runId":"op1","outcome":"zzz"}""",
+        )
+        // usage requires a usage payload.
+        assertMutationSchemaError("""{"kind":"record","seq":1,"id":"r","lane":"main","type":"usage","timestamp":1}""")
+    }
+
+    @Test
+    fun `operation records roundtrip typed payloads`() {
+        // Absent sourceLeafId decodes as null and re-encodes explicitly.
+        val started = assertIs<LaneRecord.OperationStartedRecord>(
+            assertIs<SessionMutation.Record>(
+                JsonlCodec.decodeMutation(
+                    """{"kind":"record","seq":1,"id":"op1","lane":"main","type":"operation_started","timestamp":1,"intent":{"kind":"run","originalPrompt":[]}}""",
+                ),
+            ).record,
+        )
+        assertNull(started.sourceLeafId)
+        assertEquals(OperationIntent.Kind.RUN, started.intent.kind)
+        assertEquals("run", started.intent.payload["kind"]!!.jsonPrimitive.content)
+        assertEquals(started, JsonlCodec.decodeMutation(JsonlCodec.encodeMutation(SessionMutation.Record(started)).trimEnd()).let { (it as SessionMutation.Record).record })
+
+        val finished = LaneRecord.OperationFinishedRecord(
+            id = "f1", lane = "main", seq = 2, timestamp = 2,
+            runId = "op1", outcome = OperationOutcome.FAILED, error = RecordError("provider", "boom"),
+        )
+        assertEquals(
+            finished,
+            assertIs<SessionMutation.Record>(
+                JsonlCodec.decodeMutation(
+                    """{"kind":"record","seq":2,"id":"f1","lane":"main","type":"operation_finished","timestamp":2,"runId":"op1","outcome":"failed","error":{"code":"provider","message":"boom"}}""",
+                ),
+            ).record,
+        )
+        assertEquals(finished, JsonlCodec.decodeMutation(JsonlCodec.encodeMutation(SessionMutation.Record(finished)).trimEnd()).let { (it as SessionMutation.Record).record })
+
+        val compaction = LaneRecord.OperationStartedRecord(
+            id = "op2", lane = "main", seq = 3, timestamp = 3,
+            sourceLeafId = "e1", intent = OperationIntent.compaction("e9"),
+        )
+        assertEquals(
+            compaction,
+            assertIs<SessionMutation.Record>(
+                JsonlCodec.decodeMutation(
+                    """{"kind":"record","seq":3,"id":"op2","lane":"main","type":"operation_started","timestamp":3,"sourceLeafId":"e1","intent":{"kind":"compaction","resultEntryId":"e9"}}""",
+                ),
+            ).record,
+        )
+    }
+
+    @Test
+    fun `usage record roundtrips its usage payload and opaque cause fields`() {
+        val usage = Usage(input = 10, output = 5, cacheRead = 100, cacheWrite = 20, reasoning = 1, totalTokens = 136, cost = Cost(0.1, 0.2, 0.0, 0.0, 0.3))
+        val record = LaneRecord.UsageRecord(
+            id = "u1", lane = "main", seq = 1, timestamp = 1, usage = usage,
+            fields = kotlinx.serialization.json.JsonObject(
+                mapOf("cause" to kotlinx.serialization.json.JsonPrimitive("assistant"), "runId" to kotlinx.serialization.json.JsonPrimitive("op1")),
+            ),
+        )
+        val decoded = JsonlCodec.decodeMutation(JsonlCodec.encodeMutation(SessionMutation.Record(record)).trimEnd())
+        assertEquals(record, (decoded as SessionMutation.Record).record)
     }
 
     @Test

@@ -112,11 +112,11 @@ class SessionStateTest {
         val state = SessionState()
         val empty = kotlinx.serialization.json.JsonObject(mapOf())
         assertFailsWith<SessionDataException> {
-            state.applyMutation(SessionMutation.Record(SessionRecord("r0", 1, "ghost", 1L, "usage", empty)))
+            state.applyMutation(SessionMutation.Record(LaneRecord.DeferredRecord("r0", "ghost", 1, 1L, "usage", empty)))
         }
-        state.applyMutation(SessionMutation.Record(SessionRecord("r1", 1, "main", 1L, "usage", empty)))
+        state.applyMutation(SessionMutation.Record(LaneRecord.DeferredRecord("r1", "main", 1, 1L, "usage", empty)))
         assertFailsWith<SessionDataException> {
-            state.applyMutation(SessionMutation.Record(SessionRecord("r1", 2, "main", 2L, "usage", empty)))
+            state.applyMutation(SessionMutation.Record(LaneRecord.DeferredRecord("r1", "main", 2, 2L, "usage", empty)))
         }
         assertEquals(1, state.records().size)
     }

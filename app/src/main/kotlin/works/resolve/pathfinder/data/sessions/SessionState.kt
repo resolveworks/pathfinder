@@ -5,27 +5,36 @@ package works.resolve.pathfinder.data.sessions
  * (packages/agent/src/harness/session/state.ts): folds mutations in order,
  * enforcing the log invariants — consecutive 1-based seq, unused ids,
  * existing parents/lanes/label targets, and lane chaining for lane-addressed
- * entry mutations.
+ * entry mutations. Record mutations additionally fold pi's
+ * openOperationsByLane map and SessionStats accumulation.
  *
  * Divergences (scope of this port, per the session-parity audit P0-1/P0-2):
  * - pi throws SessionError("invalid_entry", "Invalid session mutation: …");
  *   Pathfinder's module exception is [SessionDataException] with the same
- *   message text.
- * - Records are structurally applied (seq, id, lane validation) and kept in
- *   a list, but the open-operations map and usage-stats fold are not ported
- *   yet (no record producers; P0-3 rider).
- * - Queries (findEntries/EntryQuery cursors, RecordQuery, getLog) and
- *   createForkMutations are not ported; Pathfinder reads the whole replayed
- *   state instead (P1-2/P1-5 riders build on this).
+ *   message text (invalid_query → the same exception on findOpenOperations).
+ * - Entry/record queries (findEntries/EntryQuery cursors, RecordQuery,
+ *   getLog) and createForkMutations are not ported; Pathfinder reads the
+ *   whole replayed state instead (P1-2/P1-5 riders build on this).
+ * - Records are validated exactly as far as upstream validates them: the
+ *   lane must exist and the id must be unused; payload references (e.g.
+ *   sourceLeafId) are never validated, and records may precede the entries
+ *   they reference in seq order (see [LaneRecord]'s KDoc).
  */
 internal class SessionState {
     private var sequence = 0L
     private val usedIds = HashSet<String>()
     private val entryList = ArrayList<SessionEntry>()
     private val entriesById = HashMap<String, SessionEntry>()
-    private val recordList = ArrayList<SessionRecord>()
+    private val recordList = ArrayList<LaneRecord>()
+    private val openOperationsByLane = HashMap<String, LinkedHashMap<String, LaneRecord.OperationStartedRecord>>()
     private val lanes = LinkedHashMap<String, String?>().apply { put(LANE_MAIN, null) }
     private val labels = HashMap<String, String>()
+
+    private var statsMessageCount = 0
+    private var statsCachedTokens = 0L
+    private var statsUncachedTokens = 0L
+    private var statsTotalTokens = 0L
+    private var statsCostTotal = 0.0
 
     /** Latest-wins session name fact (pi's `name` state). */
     var name: String? = null
@@ -35,7 +44,7 @@ internal class SessionState {
     fun entries(): List<SessionEntry> = entryList.toList()
 
     /** Records in append (seq) order; defensive copy. */
-    fun records(): List<SessionRecord> = recordList.toList()
+    fun records(): List<LaneRecord> = recordList.toList()
 
     /** Lane pointers in insertion order (pi's getLanes). */
     fun lanes(): Map<String, String?> = LinkedHashMap(lanes)
@@ -44,11 +53,24 @@ internal class SessionState {
 
     fun label(id: String): String? = labels[id]
 
-    /** Number of message entries (pi's SessionStats.messageCount). */
-    fun messageCount(): Int = entryList.count { it is MessageEntry }
-
     val nextSequence: Long
         get() = sequence + 1
+
+    /**
+     * pi's getStats(): the incremental fold of message entries and usage
+     * records (state.ts's applyMutation accumulation). messageCount counts
+     * message entries; the token/cost fields sum usage records.
+     */
+    fun stats(): SessionStats = SessionStats(
+        messageCount = statsMessageCount,
+        cachedTokens = statsCachedTokens,
+        uncachedTokens = statsUncachedTokens,
+        totalTokens = statsTotalTokens,
+        costTotal = statsCostTotal,
+    )
+
+    /** Number of message entries (pi's SessionStats.messageCount fold). */
+    fun messageCount(): Int = statsMessageCount
 
     /** The lane's current leaf; throws when the lane does not exist (pi's requireLane). */
     fun requireLane(lane: String): String? =
@@ -74,7 +96,10 @@ internal class SessionState {
      * Folds [mutation] into the state, enforcing pi's applyMutation
      * validation order: seq must be exactly the next consecutive number,
      * then per-kind checks (duplicate ids, lane existence, lane chaining,
-     * parent/label-target existence).
+     * parent/label-target existence). Record mutations track
+     * openOperationsByLane (operation_started opens, operation_finished
+     * closes by runId — abort_requested does not close) and accumulate
+     * usage records into the stats fold.
      */
     fun applyMutation(mutation: SessionMutation) {
         val seq = when (mutation) {
@@ -99,15 +124,30 @@ internal class SessionState {
                 entryList.add(mutation.entry)
                 entriesById[mutation.entry.id] = mutation.entry
                 if (mutation.lane != null) lanes[mutation.lane] = mutation.entry.id
+                if (mutation.entry is MessageEntry) statsMessageCount += 1
             }
             is SessionMutation.Record -> {
-                if (!lanes.containsKey(mutation.record.lane)) {
-                    invalid("references missing lane ${mutation.record.lane}")
-                }
-                if (mutation.record.id in usedIds) invalid("contains duplicate id ${mutation.record.id}")
+                val record = mutation.record
+                if (!lanes.containsKey(record.lane)) invalid("references missing lane ${record.lane}")
+                if (record.id in usedIds) invalid("contains duplicate id ${record.id}")
                 sequence = seq
-                usedIds.add(mutation.record.id)
-                recordList.add(mutation.record)
+                usedIds.add(record.id)
+                recordList.add(record)
+                when (record) {
+                    is LaneRecord.OperationStartedRecord ->
+                        openOperationsByLane.getOrPut(record.lane) { LinkedHashMap() }[record.id] = record
+                    is LaneRecord.OperationFinishedRecord ->
+                        openOperationsByLane[record.lane]?.remove(record.runId)
+                    is LaneRecord.UsageRecord -> {
+                        // pi's applyMutation usage fold: cacheRead is cached;
+                        // input + cacheWrite is uncached; costTotal sums cost.total.
+                        statsCachedTokens += record.usage.cacheRead
+                        statsUncachedTokens += record.usage.input + record.usage.cacheWrite
+                        statsTotalTokens += record.usage.totalTokens
+                        statsCostTotal += record.usage.cost.total
+                    }
+                    is LaneRecord.AbortRequestedRecord, is LaneRecord.DeferredRecord -> Unit
+                }
             }
             is SessionMutation.Lane -> {
                 if (mutation.leafId != null && !entriesById.containsKey(mutation.leafId)) {
@@ -132,6 +172,21 @@ internal class SessionState {
         }
     }
 
+    /**
+     * pi's findOpenOperations: the lane's unfinished operation starts,
+     * newest first. Recovery uses `limit: 2` — zero results mean the lane is
+     * idle, one means it is suspended, and two mean at least two operations
+     * are open, which is corruption; further results provide no additional
+     * recovery state.
+     */
+    fun findOpenOperations(lane: String, limit: Int? = null): List<LaneRecord.OperationStartedRecord> {
+        if (limit != null && limit <= 0) {
+            throw SessionDataException("limit must be a positive integer")
+        }
+        val openOperations = openOperationsByLane[lane]?.values?.toList()?.asReversed() ?: emptyList()
+        return if (limit == null) openOperations else openOperations.take(limit)
+    }
+
     private fun invalid(message: String): Nothing =
         throw SessionDataException("Invalid session mutation: $message")
 
@@ -140,3 +195,12 @@ internal class SessionState {
         const val LANE_MAIN = "main"
     }
 }
+
+/** pi's SessionStats (session/types.ts), folded incrementally by [SessionState]. */
+data class SessionStats(
+    val messageCount: Int,
+    val cachedTokens: Long,
+    val uncachedTokens: Long,
+    val totalTokens: Long,
+    val costTotal: Double,
+)
