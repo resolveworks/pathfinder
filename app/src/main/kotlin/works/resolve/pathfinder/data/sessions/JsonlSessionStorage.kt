@@ -7,6 +7,7 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import kotlin.time.Clock
 import works.resolve.pathfinder.ai.core.Message
+import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.uuidv7
 import kotlinx.serialization.json.JsonElement
 
@@ -27,10 +28,9 @@ import kotlinx.serialization.json.JsonElement
  *   and the same append-time validation (unused id, parent existence,
  *   chaining to the appending lane's leaf) are preserved; the parentId check
  *   replaces pi's assignment because the value is identical.
- * - appendRecord/fork/getLog/queries are not ported beyond
- *   [appendRecord], [findOpenOperations], the query passthroughs, and
- *   [fork]: getLog is P2-5, and Pathfinder reads the replayed state
- *   instead of queries.
+ * - appendRecord/fork/getLog/queries are ported as far as the store's
+ *   surfaces need them ([appendRecord], [findOpenOperations], [getLog],
+ *   the query passthroughs, and [fork]).
  * - timestamp on entry append is the caller's (Conversation-minted) value,
  *   not Date.now() assigned here; record appends assign [clock] time like
  *   pi's appendRecord (records have no producer-minted timestamp).
@@ -102,6 +102,9 @@ internal class JsonlSessionStorage private constructor(
     /** pi's findRecords (see [SessionState.findRecords]). */
     fun findRecords(query: RecordQuery = RecordQuery()): List<LaneRecord> = state.findRecords(query)
 
+    /** pi's getLog (see [SessionState.getLog]): incremental tail reads. */
+    fun getLog(afterSeq: Long? = null, limit: Int? = null): List<LogItem> = state.getLog(afterSeq, limit)
+
     /** Latest-wins session name fact; Pathfinder's title carrier. */
     fun name(): String? = state.name
 
@@ -117,18 +120,24 @@ internal class JsonlSessionStorage private constructor(
 
     /**
      * Appends [entry] to [lane], assigning the storage seq (pi's
-     * appendEntry(entry, lane)). Throws [SessionDataException] when the id
-     * is used or the entry does not chain to the lane's current leaf (pi's
-     * appendEntry invariant; callers emit a lane mutation first when the
-     * tree branched).
+     * appendEntry(entry, lane)). Throws [SessionError]
+     * (invalid_entry) when the id is used or the entry does not chain to
+     * the lane's current leaf (pi's appendEntry invariant; callers emit a
+     * lane mutation first when the tree branched), and (invalid_payload)
+     * when the encoded mutation is not JSON-safe (pi's commitEntry runs
+     * assertJsonSerializable before the storage write).
      */
     fun appendEntry(entry: SessionEntry, lane: String = SessionState.LANE_MAIN): SessionEntry {
         val leaf = state.requireLane(lane)
         state.validateUnusedId(entry.id)
         if (entry.parentId != leaf) {
-            throw SessionDataException("Invalid session mutation: does not chain to the lane leaf")
+            throw SessionError(
+                SessionErrorCode.INVALID_ENTRY,
+                "Invalid session mutation: does not chain to the lane leaf",
+            )
         }
         val stored = entry.withSeq(state.nextSequence)
+        assertJsonSerializable(lenientJson.parseToJsonElement(JsonlCodec.encodeMutation(SessionMutation.Entry(lane, stored))))
         appendAndApply(SessionMutation.Entry(lane, stored))
         return stored
     }
@@ -149,9 +158,13 @@ internal class JsonlSessionStorage private constructor(
         state.validateUnusedId(record.id)
         val currentOpenOperationId = state.findOpenOperations(record.lane, limit = 1).firstOrNull()?.id
         if (record is LaneRecord.OperationStartedRecord && currentOpenOperationId != null) {
-            throw SessionDataException("Lane ${record.lane} already has an open operation $currentOpenOperationId")
+            throw SessionError(
+                SessionErrorCode.STORAGE,
+                "Lane ${record.lane} already has an open operation $currentOpenOperationId",
+            )
         }
         val stored = record.withAssigned(state.nextSequence, clock.now().toEpochMilliseconds())
+        assertJsonSerializable(lenientJson.parseToJsonElement(JsonlCodec.encodeMutation(SessionMutation.Record(stored))))
         appendAndApply(SessionMutation.Record(stored))
         return stored
     }
@@ -219,7 +232,7 @@ internal class JsonlSessionStorage private constructor(
         try {
             file.appendText(JsonlCodec.encodeMutation(mutation))
         } catch (e: IOException) {
-            throw SessionDataException("Failed to append session", e)
+            throw SessionError(SessionErrorCode.STORAGE, "Failed to append session", e)
         }
         // Apply after the durable write, like pi's appendMutation/applyMutation order.
         state.applyMutation(mutation)
@@ -231,7 +244,7 @@ internal class JsonlSessionStorage private constructor(
             try {
                 file.writeText(JsonlCodec.encodeHeader(header))
             } catch (e: IOException) {
-                throw SessionDataException("Failed to initialize session", e)
+                throw SessionError(SessionErrorCode.STORAGE, "Failed to initialize session", e)
             }
             return JsonlSessionStorage(file, header, SessionState(), clock)
         }
@@ -243,21 +256,21 @@ internal class JsonlSessionStorage private constructor(
          * atomically publishing the valid prefix), and repairs an
          * unterminated tail by appending the missing newline.
          *
-         * @throws SessionDataException on unreadable, oversized, or invalid
-         * files; the header id must match [expectedId] (the store's
-         * id/filename cross-check).
+         * @throws SessionError on unreadable (storage), oversized (storage),
+         * or invalid (invalid_entry) files; the header id must match
+         * [expectedId] (the store's id/filename cross-check).
          */
         fun load(file: File, expectedId: String, maxFileBytes: Long, clock: Clock = Clock.System): JsonlSessionStorage {
             if (file.length() > maxFileBytes) {
-                throw SessionDataException("Session file exceeds size limit")
+                throw SessionError(SessionErrorCode.STORAGE, "Session file exceeds size limit")
             }
             val content = try {
                 file.readText()
             } catch (e: IOException) {
-                throw SessionDataException("Cannot read session file", e)
+                throw SessionError(SessionErrorCode.STORAGE, "Cannot read session file", e)
             }
             if (content.length > maxFileBytes) {
-                throw SessionDataException("Session file exceeds size limit")
+                throw SessionError(SessionErrorCode.STORAGE, "Session file exceeds size limit")
             }
             val physicalLines = content.split("\n").toMutableList()
             if (physicalLines.isNotEmpty() && physicalLines.last() == "") physicalLines.removeAt(physicalLines.size - 1)
@@ -270,7 +283,7 @@ internal class JsonlSessionStorage private constructor(
                 throw invalidFile(file, 1, e.message ?: "invalid header")
             }
             if (header.id != expectedId) {
-                throw SessionDataException("Session data does not match its file")
+                throw SessionError(SessionErrorCode.INVALID_ENTRY, "Session id does not match header: $expectedId")
             }
             val state = SessionState()
             for (index in 1 until physicalLines.size) {
@@ -289,7 +302,7 @@ internal class JsonlSessionStorage private constructor(
                 }
                 try {
                     state.applyMutation(mutation)
-                } catch (e: SessionDataException) {
+                } catch (e: SessionError) {
                     throw invalidFile(file, index + 1, e.message ?: "invalid mutation")
                 }
             }
@@ -297,7 +310,7 @@ internal class JsonlSessionStorage private constructor(
                 try {
                     file.appendText("\n")
                 } catch (e: IOException) {
-                    throw SessionDataException("Failed to repair unterminated session tail", e)
+                    throw SessionError(SessionErrorCode.STORAGE, "Failed to repair unterminated session tail", e)
                 }
             }
             return JsonlSessionStorage(file, header, state, clock)
@@ -324,12 +337,12 @@ internal class JsonlSessionStorage private constructor(
                 }
             } catch (e: IOException) {
                 temp.delete()
-                throw SessionDataException("Failed to stage torn-tail repair", e)
+                throw SessionError(SessionErrorCode.STORAGE, "Failed to stage torn-tail repair", e)
             }
         }
 
         /** pi's invalidFile (jsonl/errors.ts): line-addressed invalid-session error. */
-        private fun invalidFile(file: File, line: Int, cause: String): SessionDataException =
-            SessionDataException("Invalid JSONL v4 session: line $line $cause")
+        private fun invalidFile(file: File, line: Int, cause: String): SessionError =
+            SessionError(SessionErrorCode.INVALID_ENTRY, "Invalid JSONL v4 session: line $line $cause")
     }
 }

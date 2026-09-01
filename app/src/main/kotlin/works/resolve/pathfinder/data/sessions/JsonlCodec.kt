@@ -10,6 +10,7 @@ import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.UserMessage
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -682,3 +683,28 @@ internal object JsonlCodec {
         }
     }
 }
+
+/**
+ * pi's assertJsonSerializable (session/session.ts:42): rejects non-JSON-safe
+ * payloads before write. Adaptation: pi validates the provisioned (plain
+ * JSON) value; pathfinder's entries and records are typed values that are
+ * JSON-safe by construction, so the port walks the encoded mutation's
+ * [JsonElement] tree — the only remaining hazard is a non-finite number
+ * primitive (kotlinx would emit invalid JSON for it), which pi rejects with
+ * the same `Durable payload …` message.
+ */
+internal fun assertJsonSerializable(value: JsonElement) {
+    when (value) {
+        is JsonPrimitive ->
+            if (!value.isString) {
+                value.doubleOrNull?.let { double ->
+                    if (!double.isFinite()) invalidPayload("contains a non-finite number")
+                }
+            }
+        is JsonArray -> value.forEach(::assertJsonSerializable)
+        is JsonObject -> value.forEach { (_, child) -> assertJsonSerializable(child) }
+    }
+}
+
+private fun invalidPayload(reason: String): Nothing =
+    throw SessionError(SessionErrorCode.INVALID_PAYLOAD, "Durable payload $reason")

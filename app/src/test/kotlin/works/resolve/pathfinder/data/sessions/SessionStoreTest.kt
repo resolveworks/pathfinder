@@ -252,24 +252,24 @@ class SessionStoreTest {
 
     @Test
     fun rejectsIdsWithTraversal() {
-        assertFailsWith<SessionDataException> { Session("../evil", "t", 1, 1, emptyList(), null) }
-        assertFailsWith<SessionDataException> { Session("a/b", "t", 1, 1, emptyList(), null) }
-        assertFailsWith<SessionDataException> { Session("a\\b", "t", 1, 1, emptyList(), null) }
-        assertFailsWith<SessionDataException> { Session("", "t", 1, 1, emptyList(), null) }
-        assertFailsWith<SessionDataException> { Session("a.b", "t", 1, 1, emptyList(), null) }
-        assertFailsWith<SessionDataException> { Session("x".repeat(65), "t", 1, 1, emptyList(), null) }
+        assertFailsWith<SessionError> { Session("../evil", "t", 1, 1, emptyList(), null) }
+        assertFailsWith<SessionError> { Session("a/b", "t", 1, 1, emptyList(), null) }
+        assertFailsWith<SessionError> { Session("a\\b", "t", 1, 1, emptyList(), null) }
+        assertFailsWith<SessionError> { Session("", "t", 1, 1, emptyList(), null) }
+        assertFailsWith<SessionError> { Session("a.b", "t", 1, 1, emptyList(), null) }
+        assertFailsWith<SessionError> { Session("x".repeat(65), "t", 1, 1, emptyList(), null) }
         runTest {
             val store = newStore()
-            assertFailsWithSessionDataException { store.load("../secrets") }
-            assertFailsWithSessionDataException { store.delete("../../keys") }
+            assertFailsWithSessionError { store.load("../secrets") }
+            assertFailsWithSessionError { store.delete("../../keys") }
         }
     }
 
-    private suspend fun assertFailsWithSessionDataException(block: suspend () -> Unit) {
+    private suspend fun assertFailsWithSessionError(block: suspend () -> Unit) {
         var thrown = false
         try {
             block()
-        } catch (e: SessionDataException) {
+        } catch (e: SessionError) {
             thrown = true
         }
         assertTrue(thrown)
@@ -289,16 +289,16 @@ class SessionStoreTest {
         File(root, "old.jsonl").writeText(
             """{"kind":"header","version":3,"id":"old","createdAt":1}""",
         )
-        assertFailsWithSessionDataException { store.load("old") }
+        assertFailsWithSessionError { store.load("old") }
         assertTrue(store.summaries().none { it.id == "old" })
     }
 
     @Test
-    fun corruptJsonRejectedWithSessionDataException() = runTest {
+    fun corruptJsonRejectedWithSessionError() = runTest {
         val store = newStore()
         val id = store.create().id
         File(root, "$id.jsonl").writeText("{ not json")
-        assertFailsWithSessionDataException { store.load(id) }
+        assertFailsWithSessionError { store.load(id) }
         assertTrue(store.summaries().isEmpty())
     }
 
@@ -319,25 +319,25 @@ class SessionStoreTest {
         writeMutationLine(
             """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"system","timestamp":0}}""",
         )
-        assertFailsWithSessionDataException { store.load(id) }
+        assertFailsWithSessionError { store.load(id) }
 
         // Unknown content type.
         writeMutationLine(
             """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":0,"content":[{"type":"audio"}]}}""",
         )
-        assertFailsWithSessionDataException { store.load(id) }
+        assertFailsWithSessionError { store.load(id) }
 
         // Unknown entry type.
         writeMutationLine(
             """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"mystery","parentId":null,"timestamp":0}""",
         )
-        assertFailsWithSessionDataException { store.load(id) }
+        assertFailsWithSessionError { store.load(id) }
 
         // Missing assistant usage.
         writeMutationLine(
             """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m","stopReason":"STOP"}}""",
         )
-        assertFailsWithSessionDataException { store.load(id) }
+        assertFailsWithSessionError { store.load(id) }
     }
 
     @Test
@@ -352,7 +352,7 @@ class SessionStoreTest {
                 {"kind":"entry","seq":3,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":0,"content":[]}}
             """.trimIndent().trimMargin(),
         )
-        assertFailsWithSessionDataException { store.load(id) }
+        assertFailsWithSessionError { store.load(id) }
 
         // Dangling parent.
         File(root, "$id.jsonl").writeText(
@@ -360,7 +360,7 @@ class SessionStoreTest {
                 {"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":"ghost","timestamp":0,"message":{"role":"user","timestamp":0,"content":[]}}
             """.trimIndent().trimMargin(),
         )
-        assertFailsWithSessionDataException { store.load(id) }
+        assertFailsWithSessionError { store.load(id) }
     }
 
     @Test
@@ -395,7 +395,7 @@ class SessionStoreTest {
                 {"kind":"zzz","seq":1}
             """.trimIndent().trimMargin() + "\n",
         )
-        assertFailsWithSessionDataException { newStore().load(created.id) }
+        assertFailsWithSessionError { newStore().load(created.id) }
     }
 
     @Test
@@ -431,7 +431,7 @@ class SessionStoreTest {
         val good =
             """{"kind":"entry","seq":2,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":0,"content":[]}}"""
         file.writeText(valid + """{"kind":"entry","seq":3,"lan""" + "\n" + good + "\n")
-        assertFailsWithSessionDataException { newStore().load(created.id) }
+        assertFailsWithSessionError { newStore().load(created.id) }
     }
 
     @Test
@@ -439,7 +439,7 @@ class SessionStoreTest {
         val store = newStore(maxFileBytes = 16)
         val id = store.create().id
         File(root, "$id.jsonl").writeText("x".repeat(64))
-        assertFailsWithSessionDataException { store.load(id) }
+        assertFailsWithSessionError { store.load(id) }
     }
 
     @Test
@@ -492,7 +492,7 @@ class SessionStoreTest {
                 {"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":"7","content":[]}}
             """.trimIndent().trimMargin() + "\n",
         )
-        assertFailsWithSessionDataException { store.load(id) }
+        assertFailsWithSessionError { store.load(id) }
 
         // Quoted entry seq.
         File(root, "$id.jsonl").writeText(
@@ -500,7 +500,7 @@ class SessionStoreTest {
                 {"kind":"entry","seq":"1","lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":0,"content":[]}}
             """.trimIndent().trimMargin() + "\n",
         )
-        assertFailsWithSessionDataException { store.load(id) }
+        assertFailsWithSessionError { store.load(id) }
     }
 
     @Test
@@ -510,7 +510,7 @@ class SessionStoreTest {
         File(root, "$id.jsonl").writeText(
             """{"kind":"header","version":4,"id":"other","createdAt":0}""",
         )
-        assertFailsWithSessionDataException { store.load(id) }
+        assertFailsWithSessionError { store.load(id) }
         // Corrupt entries are skipped by summaries.
         assertTrue(store.summaries().isEmpty())
     }
@@ -573,11 +573,11 @@ class SessionStoreTest {
         val id = store.create("t").id
         File(rootFail, "$id.jsonl").writeText("{corrupt")
 
-        assertFailsWithSessionDataException { store.load(id) }
+        assertFailsWithSessionError { store.load(id) }
         val loadFailed = telemetry.spans().last { it.name == "pf.session.load" }
         assertEquals(SpanStatus.Ok, telemetry.spans().first { it.name == "pf.session.save" }.status)
         val error = loadFailed.status as SpanStatus.Error
-        assertEquals("works.resolve.pathfinder.data.sessions.SessionDataException", error.error?.name)
+        assertEquals("works.resolve.pathfinder.data.sessions.SessionError", error.error?.name)
         assertEquals("", error.error?.message) // never exception text, paths, or content
 
         // Summaries skip the corrupt entry and record it as a summary skip.
@@ -598,12 +598,12 @@ class SessionStoreTest {
             idFactory = { "sess-w" },
             telemetryContext = telemetry,
         )
-        assertFailsWithSessionDataException { store.create("t") }
+        assertFailsWithSessionError { store.create("t") }
         val saveFailed = telemetry.spans().single()
         assertEquals("pf.session.save", saveFailed.name)
         val error = saveFailed.status as SpanStatus.Error
         // The write failure is wrapped before the span records its type.
-        assertEquals("works.resolve.pathfinder.data.sessions.SessionDataException", error.error?.name)
+        assertEquals("works.resolve.pathfinder.data.sessions.SessionError", error.error?.name)
         assertEquals("", error.error?.message)
     }
 }

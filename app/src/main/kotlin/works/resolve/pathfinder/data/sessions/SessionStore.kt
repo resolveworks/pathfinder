@@ -51,7 +51,7 @@ import works.resolve.pathfinder.telemetry.attr
 class SessionStore(
     private val root: File,
     private val clock: Clock = Clock.System,
-    /** Session ids default to pi's `options.id ?? uuidv7()` (agent jsonl repo). */
+    /** Session ids default to pi's `options.id ?? uuidv7()` (harness/session/jsonl/repo.ts). */
     private val idFactory: () -> String = ::uuidv7,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     maxFileBytes: Long = MAX_FILE_BYTES,
@@ -166,18 +166,18 @@ class SessionStore(
      * append immediately — a record may precede the buffered entries it
      * references in seq order (see [LaneRecord]).
      *
-     * @throws SessionDataException when the session does not exist or the
-     * record violates the log invariants.
+     * @throws SessionError when the session does not exist (not_found) or
+     * the record violates the log invariants.
      */
     override suspend fun appendRecord(sessionId: String, record: LaneRecord): LaneRecord = mutex.withLock {
         withContext(ioDispatcher) {
             val id = requireId(sessionId)
             val storage = storageFor(id, fileFor(id))
-                ?: throw SessionDataException("Session not found: unknown")
+                ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
             try {
                 storage.appendRecord(record)
             } catch (e: IOException) {
-                throw SessionDataException("Failed to append session", e)
+                throw SessionError(SessionErrorCode.STORAGE, "Failed to append session", e)
             }
         }
     }
@@ -191,7 +191,7 @@ class SessionStore(
         withContext(ioDispatcher) {
             val id = requireId(sessionId)
             storageFor(id, fileFor(id))?.findOpenOperations(lane, limit)
-                ?: throw SessionDataException("Session not found: unknown")
+                ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
         }
     }
 
@@ -200,7 +200,7 @@ class SessionStore(
         withContext(ioDispatcher) {
             val id = requireId(sessionId)
             storageFor(id, fileFor(id))?.stats()
-                ?: throw SessionDataException("Session not found: unknown")
+                ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
         }
     }
 
@@ -226,11 +226,11 @@ class SessionStore(
             writeSpanned(source, SPAN_FORK) {
                 ensureRoot()
                 val sourceStorage = storageFor(source, fileFor(source))
-                    ?: throw SessionDataException("Session not found: unknown")
+                    ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
                 val newId = requireId(id ?: idFactory())
                 val destination = fileFor(newId)
                 if (destination.isFile) {
-                    throw SessionDataException("Session already exists: unknown")
+                    throw SessionError(SessionErrorCode.ALREADY_EXISTS, "Session already exists: $newId")
                 }
                 val forked = sourceStorage.fork(
                     destination = destination,
@@ -256,7 +256,7 @@ class SessionStore(
         withContext(ioDispatcher) {
             val id = requireId(sessionId)
             val storage = storageFor(id, fileFor(id))
-                ?: throw SessionDataException("Session not found: unknown")
+                ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
             storage.requireLane(lane)
             LaneView(lane, storage, object : LaneView.Writer {
                 override suspend fun <T> write(block: (JsonlSessionStorage) -> T): T = withOpenStorage(sessionId, block)
@@ -275,13 +275,20 @@ class SessionStore(
     }
 
     /** pi's Session.findRecords: the session-layer check for operationKind, then the state query. */
-    suspend fun findRecords(sessionId: String, query: RecordQuery = RecordQuery()): List<LaneRecord> =
+    override suspend fun findRecords(sessionId: String, query: RecordQuery): List<LaneRecord> =
         withOpenStorage(sessionId) {
             if (query.operationKind != null && query.type != RecordType.OPERATION_STARTED) {
-                throw SessionDataException("operationKind requires type \"operation_started\"")
+                throw SessionError(
+                    SessionErrorCode.INVALID_QUERY,
+                    "operationKind requires type \"operation_started\"",
+                )
             }
             it.findRecords(query)
         }
+
+    /** pi's getLog (session/session.ts): the log items after [afterSeq] (exclusive), oldest first, up to [limit]. */
+    suspend fun getLog(sessionId: String, afterSeq: Long? = null, limit: Int? = null): List<LogItem> =
+        withOpenStorage(sessionId) { it.getLog(afterSeq, limit) }
 
     /** Lineage read: the header's parentSessionId, when the session has one. */
     suspend fun parentSessionId(sessionId: String): String? = withOpenStorage(sessionId) { it.header.parentSessionId }
@@ -290,7 +297,7 @@ class SessionStore(
     private suspend fun <T> withOpenStorage(sessionId: String, block: (JsonlSessionStorage) -> T): T = mutex.withLock {
         withContext(ioDispatcher) {
             val id = requireId(sessionId)
-            block(storageFor(id, fileFor(id)) ?: throw SessionDataException("Session not found: unknown"))
+            block(storageFor(id, fileFor(id)) ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id"))
         }
     }
 
@@ -330,7 +337,7 @@ class SessionStore(
      */
     private fun syncSession(id: String, entries: List<SessionEntry>, leafId: String?, title: String): Session {
         val file = fileFor(id)
-        val storage = storageFor(id, file) ?: throw SessionDataException("Session not found: unknown")
+        val storage = storageFor(id, file) ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
         for (entry in entries) {
             if (storage.hasEntry(entry.id)) continue
             if (entry.parentId != storage.leafId()) storage.moveLane(to = entry.parentId)
@@ -360,7 +367,7 @@ class SessionStore(
                 throw e
             } catch (e: Exception) {
                 span.setStatus(typeOnlyError(e))
-                throw SessionDataException("Failed to write session", e)
+                throw SessionError(SessionErrorCode.STORAGE, "Failed to write session", e)
             }
         }
 

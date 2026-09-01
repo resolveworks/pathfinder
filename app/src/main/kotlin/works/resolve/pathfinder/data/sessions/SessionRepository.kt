@@ -37,6 +37,9 @@ interface SessionRepository {
         limit: Int?,
     ): List<LaneRecord.OperationStartedRecord>
 
+    /** pi's Session.findRecords (see [SessionStore.findRecords]). */
+    suspend fun findRecords(sessionId: String, query: RecordQuery = RecordQuery()): List<LaneRecord>
+
     /** pi's getStats: the incremental message/usage fold of the log. */
     suspend fun stats(sessionId: String): SessionStats
 

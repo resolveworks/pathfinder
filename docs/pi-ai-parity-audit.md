@@ -7,6 +7,10 @@ Read-only audit, 2026-09. Compares:
 - **pi** (`~/Projects/pi`, behavioral source of truth): `packages/ai/src/`
   (`api/`, `auth/`, `utils/`, `types.ts`, `models.ts`, `models.generated.ts`).
 
+**Ledger:** P1-1, P1-2, P1-3, P2-1 (Kimi), and P2-2 all landed, and the
+catalog was regenerated, in `agent/ai-parity-fixes` (650cefd, merged 06da849).
+P2-4 remains monitor-only. Status lines below.
+
 The provider layer was last parity-audited 2026-08-27→29 (fix batches:
 "Fix five P2 Codex/Responses/Azure parity gaps", "Fix four P2 parity gaps in
 the OpenAI Chat Completions adapter", `agent/p2-codex-azure-fixes`,
@@ -34,6 +38,8 @@ or missing flags on specific provider paths, not structural distortions.
 
 ### P1-1. Mistral indexed tool-call chunks are not merged (upstream fix not ported)
 
+**Status:** landed — 650cefd.
+
 - **pi**: `packages/ai/src/api/mistral-conversations.ts:696`
   (`consumeChatStream`) — commit `6c87d9a02` (2026-08-28, "fix(ai): merge
   indexed Mistral tool call chunks", issue #8387) changed the streaming
@@ -51,6 +57,8 @@ or missing flags on specific provider paths, not structural distortions.
 - **Size**: S (~15 lines + tests).
 
 ### P1-2. `supportsMaxOutputTokens` compat flag missing (upstream drift, 2026-09-01)
+
+**Status:** landed — 650cefd.
 
 - **pi**: commit `b8b873b98` (#8941) adds
   `OpenAIResponsesCompat.supportsMaxOutputTokens` (default `true`;
@@ -74,6 +82,8 @@ or missing flags on specific provider paths, not structural distortions.
 
 ### P1-3. `requiresReasoningContentOnAssistantMessages` not ported (OpenAI Completions)
 
+**Status:** landed — 650cefd.
+
 - **pi**: `api/openai-completions.ts:1344-1349` — for compat models
   (`requiresReasoningContentOnAssistantMessages`, DeepSeek-style endpoints)
   with `model.reasoning`, replayed assistant messages always carry
@@ -95,6 +105,8 @@ or missing flags on specific provider paths, not structural distortions.
 
 ### P2-1. Kimi deferred tool loading (`deferredToolsMode: "kimi"`) not ported
 
+**Status:** landed — 650cefd (deferredToolsMode "kimi").
+
 - **pi**: `api/openai-completions.ts` — `getDeferredToolNames` (from
   `ToolResultMessage.addedToolNames`), filtering active vs deferred tools in
   `buildParams` (~:860-870), the Kimi `system` message with a bare `tools`
@@ -112,6 +124,8 @@ or missing flags on specific provider paths, not structural distortions.
 
 ### P2-2. Catalog compat parsing silently drops unknown compat keys
 
+**Status:** landed — 650cefd (CompatDto rejects unknown compat keys).
+
 - **pi**: model `compat` is an open surface that grows flags
   (`supportsMaxOutputTokens` being the latest example).
 - **Pathfinder**: `providers/ProviderCatalog.kt` `CompatDto` /
@@ -125,6 +139,8 @@ or missing flags on specific provider paths, not structural distortions.
 - **Size**: S–M.
 
 ### P2-3. Bundled model catalog is stale vs current pi (data, not code)
+
+**Status:** landed — catalog regenerated in 650cefd.
 
 Regenerating `app/src/main/assets/models-catalog.json` from the current
 checkout (`node tools/generate-model-catalog.mjs`) and diffing against the
@@ -150,6 +166,8 @@ asset beyond this churn. Fix: regenerate the asset (one command) and review.
 **Size**: S.
 
 ### P2-4. Dormant completions compat fields (monitor, no current catalog use)
+
+**Status:** unchanged — monitor.
 
 `thinkingTokenBudgetField`/`supportsThinkingTokenBudget`,
 `chatTemplateKwargs` (chat-template / qwen-chat-template thinking formats),

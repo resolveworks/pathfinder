@@ -9,12 +9,6 @@ package works.resolve.pathfinder.data.sessions
  * openOperationsByLane map and SessionStats accumulation.
  *
  * Divergences (scope of this port, per the session-parity audit P0-1/P0-2):
- * - pi throws SessionError("invalid_entry", "Invalid session mutation: …");
- *   Pathfinder's module exception is [SessionDataException] with the same
- *   message text. The same holds for the query validation (invalid_query)
- *   and fork (invalid_fork_target) messages below — typed error codes are
- *   audit P2-4.
- * - pi's getLog is not ported (P2-5, incremental observer reads).
  * - createForkMutations copies entries by rebinding seq only (Kotlin's
  *   entry payloads are immutable values); pi structuredClones them.
  * - Records are validated exactly as far as upstream validates them: the
@@ -31,6 +25,7 @@ internal class SessionState {
     private val openOperationsByLane = HashMap<String, LinkedHashMap<String, LaneRecord.OperationStartedRecord>>()
     private val lanes = LinkedHashMap<String, String?>().apply { put(LANE_MAIN, null) }
     private val labels = HashMap<String, String>()
+    private val log = ArrayList<LogItem>()
 
     private var statsMessageCount = 0
     private var statsCachedTokens = 0L
@@ -79,23 +74,23 @@ internal class SessionState {
         if (lanes.containsKey(lane)) {
             lanes[lane]
         } else {
-            throw SessionDataException("Invalid session mutation: Lane not found: $lane")
+            throw SessionError(SessionErrorCode.INVALID_LANE, "Lane not found: $lane")
         }
 
     /** Throws when [id] is already used by an entry or record (pi's validateUnusedId). */
     fun validateUnusedId(id: String) {
-        if (id in usedIds) throw SessionDataException("Session id already exists: $id")
+        if (id in usedIds) throw SessionError(SessionErrorCode.ALREADY_EXISTS, "Session id already exists: $id")
     }
 
     /** Throws when [lane] already exists (pi's validateNewLane). */
     fun validateNewLane(lane: String) {
-        if (lanes.containsKey(lane)) throw SessionDataException("Lane already exists: $lane")
+        if (lanes.containsKey(lane)) throw SessionError(SessionErrorCode.ALREADY_EXISTS, "Lane already exists: $lane")
     }
 
     /** Throws when [targetId] is not an existing entry (pi's validateTarget). */
     fun validateTarget(targetId: String?) {
         if (targetId != null && !entriesById.containsKey(targetId)) {
-            throw SessionDataException("Entry not found: $targetId")
+            throw SessionError(SessionErrorCode.NOT_FOUND, "Entry not found: $targetId")
         }
     }
 
@@ -132,6 +127,7 @@ internal class SessionState {
                 entriesById[mutation.entry.id] = mutation.entry
                 if (mutation.lane != null) lanes[mutation.lane] = mutation.entry.id
                 if (mutation.entry is MessageEntry) statsMessageCount += 1
+                log.add(LogItem.Entry(seq, mutation.entry))
             }
             is SessionMutation.Record -> {
                 val record = mutation.record
@@ -140,6 +136,7 @@ internal class SessionState {
                 sequence = seq
                 usedIds.add(record.id)
                 recordList.add(record)
+                log.add(LogItem.Record(seq, record))
                 when (record) {
                     is LaneRecord.OperationStartedRecord ->
                         openOperationsByLane.getOrPut(record.lane) { LinkedHashMap() }[record.id] = record
@@ -162,11 +159,13 @@ internal class SessionState {
                 }
                 sequence = seq
                 lanes[mutation.lane] = mutation.leafId
+                log.add(LogItem.Lane(seq, mutation.lane, mutation.leafId))
             }
             is SessionMutation.Fact -> when (mutation) {
                 is SessionMutation.Fact.Name -> {
                     sequence = seq
                     name = mutation.name
+                    log.add(LogItem.FactName(seq, mutation.name))
                 }
                 is SessionMutation.Fact.Label -> {
                     if (!entriesById.containsKey(mutation.targetId)) {
@@ -174,13 +173,33 @@ internal class SessionState {
                     }
                     sequence = seq
                     if (mutation.label == null) labels.remove(mutation.targetId) else labels[mutation.targetId] = mutation.label
+                    log.add(LogItem.FactLabel(seq, mutation.targetId, mutation.label))
                 }
             }
         }
     }
 
     /**
-     * pi's findOpenOperations: the lane's unfinished operation starts,
+     * pi's getLog (state.ts): the log items after [afterSeq] (exclusive),
+     * oldest first, up to [limit]. Incremental tail reads for observers.
+     */
+    fun getLog(afterSeq: Long? = null, limit: Int? = null): List<LogItem> {
+        if (limit != null && limit <= 0) {
+            throw SessionError(SessionErrorCode.INVALID_QUERY, "limit must be a positive integer")
+        }
+        if (afterSeq != null && afterSeq < 0) {
+            throw SessionError(SessionErrorCode.INVALID_QUERY, "cursor sequence must be a non-negative integer")
+        }
+        val results = ArrayList<LogItem>()
+        for (item in log) {
+            if (afterSeq != null && item.seq <= afterSeq) continue
+            results.add(item)
+            if (results.size == limit) break
+        }
+        return results
+    }
+
+    /** pi's findOpenOperations: the lane's unfinished operation starts,
      * newest first. Recovery uses `limit: 2` — zero results mean the lane is
      * idle, one means it is suspended, and two mean at least two operations
      * are open, which is corruption; further results provide no additional
@@ -188,14 +207,14 @@ internal class SessionState {
      */
     fun findOpenOperations(lane: String, limit: Int? = null): List<LaneRecord.OperationStartedRecord> {
         if (limit != null && limit <= 0) {
-            throw SessionDataException("limit must be a positive integer")
+            throw SessionError(SessionErrorCode.INVALID_QUERY, "limit must be a positive integer")
         }
         val openOperations = openOperationsByLane[lane]?.values?.toList()?.asReversed() ?: emptyList()
         return if (limit == null) openOperations else openOperations.take(limit)
     }
 
     private fun invalid(message: String): Nothing =
-        throw SessionDataException("Invalid session mutation: $message")
+        throw SessionError(SessionErrorCode.INVALID_ENTRY, "Invalid session mutation: $message")
 
     // ---- queries (pi's state.ts findEntries/findEntriesOnBranch/findRecords) ----
 
@@ -268,8 +287,8 @@ internal class SessionState {
      * are immutable values, so pi's structuredClone has no Kotlin
      * counterpart (documented divergence).
      *
-     * @throws SessionDataException (pi: invalid_fork_target) when a branch
-     * scope targets an entry that is not a message entry.
+     * @throws SessionError [SessionErrorCode.INVALID_FORK_TARGET] when a
+     * branch scope targets an entry that is not a message entry.
      */
     fun createForkMutations(options: ForkOptions): List<SessionMutation> {
         val copiedEntries: List<SessionEntry>
@@ -284,9 +303,11 @@ internal class SessionState {
                 var targetId: String? = null
                 if (selectedEntryId != null) {
                     val entry = entry(selectedEntryId)
-                        ?: throw SessionDataException("Fork target is not a message entry: $selectedEntryId")
                     if (entry !is MessageEntry) {
-                        throw SessionDataException("Fork target is not a message entry: $selectedEntryId")
+                        throw SessionError(
+                            SessionErrorCode.INVALID_FORK_TARGET,
+                            "Fork target is not a message entry: $selectedEntryId",
+                        )
                     }
                     val position = options.position
                         ?: if (options.entryId == null) ForkOptions.Branch.Position.AT else ForkOptions.Branch.Position.BEFORE
@@ -325,16 +346,16 @@ internal class SessionState {
     private fun walkToRoot(start: String, stopAtId: String? = null, stopAtType: EntryType? = null): Sequence<SessionEntry> = sequence {
         val visited = HashSet<String>()
         var current = entriesById[start]
-            ?: throw SessionDataException("Entry not found: $start")
+            ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Entry not found: $start")
         while (true) {
             if (!visited.add(current.id)) {
-                throw SessionDataException("Session branch contains a cycle at ${current.id}")
+                throw SessionError(SessionErrorCode.INVALID_ENTRY, "Session branch contains a cycle at ${current.id}")
             }
             yield(current)
             if (current.id == stopAtId || current.entryType == stopAtType || current.parentId == null) break
             val parentId = current.parentId ?: return@sequence
             current = entriesById[parentId]
-                ?: throw SessionDataException("Entry not found: $parentId")
+                ?: throw SessionError(SessionErrorCode.INVALID_ENTRY, "Entry not found: $parentId")
         }
     }
 
@@ -373,14 +394,14 @@ internal class SessionState {
         /** pi's assertValidLimit (invalid_query: limit must be a positive integer). */
         private fun assertValidLimit(limit: Int?) {
             if (limit != null && limit <= 0) {
-                throw SessionDataException("limit must be a positive integer")
+                throw SessionError(SessionErrorCode.INVALID_QUERY, "limit must be a positive integer")
             }
         }
 
         /** pi's assertValidCursor (invalid_query: cursor sequence must be a non-negative integer). */
         private fun assertValidCursor(afterSeq: Long?) {
             if (afterSeq != null && afterSeq < 0) {
-                throw SessionDataException("cursor sequence must be a non-negative integer")
+                throw SessionError(SessionErrorCode.INVALID_QUERY, "cursor sequence must be a non-negative integer")
             }
         }
     }

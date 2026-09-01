@@ -14,9 +14,12 @@ import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.agent.AgentFactory
+import works.resolve.pathfinder.agent.LaneReductionInput
 import works.resolve.pathfinder.agent.LaneRecovery
 import works.resolve.pathfinder.agent.OperationLifecycleRecorder
-import works.resolve.pathfinder.agent.classifyLaneRecovery
+import works.resolve.pathfinder.agent.RecordLogCorruption
+import works.resolve.pathfinder.agent.RecordLogCorruptionReason
+import works.resolve.pathfinder.agent.reduceLaneState
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
@@ -32,8 +35,10 @@ import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.sessions.CompactionEntry
 import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.sessions.LaneRecord
+import works.resolve.pathfinder.data.sessions.RecordQuery
 import works.resolve.pathfinder.data.sessions.MessageEntry
 import works.resolve.pathfinder.data.sessions.Session
+import works.resolve.pathfinder.data.sessions.SessionEntry
 import works.resolve.pathfinder.data.sessions.SessionState
 import works.resolve.pathfinder.data.sessions.SessionRepository
 import works.resolve.pathfinder.data.sessions.SessionSummary
@@ -545,10 +550,10 @@ class ChatViewModel(
         val conversation = agent.conversation
         val summaries = sessionStore.summaries()
         // Load-time lane recovery (pi's findOpenOperations limit-2 contract,
-        // reduced by the reducer's classification): an interrupted run —
-        // its operation_finished never persisted — stays distinguishable
-        // from a finished one in the UI state.
-        val laneRecovery = laneRecoveryFor(session.id)
+        // reduced by the full reducer — see [laneRecoveryFor]): an
+        // interrupted run stays distinguishable from a finished one, and
+        // record-log corruption is classified rather than silently resumed.
+        val laneRecovery = laneRecoveryFor(session)
         updateState {
             it.copy(
                 activeSessionId = session.id,
@@ -570,18 +575,65 @@ class ChatViewModel(
     }
 
     /**
-     * Classifies the active session's open operations (the reducer's
-     * [classifyLaneRecovery] over the store's findOpenOperations seed). A
-     * failing read degrades to [LaneRecovery.Idle] — classification is
-     * advisory UI state, never a load blocker.
+     * Restores the main lane's recovery classification by running the full
+     * reducer over the session's durable record log (pi's restore contract:
+     * [reduceLaneState] validating the lane's recovery slice, seeded by
+     * findOpenOperations' `limit: 2` contract). The slice is the whole
+     * main-lane record log plus the persisted entries — Pathfinder is
+     * single-lane and sessions are small, so the bounded slice upstream's
+     * caller would assemble is the entire lane. Validation failures map to
+     * [LaneRecovery.Corrupt]; a failing read degrades to
+     * [LaneRecovery.Idle] with telemetry — classification is advisory UI
+     * state, never a load blocker.
      */
-    private suspend fun laneRecoveryFor(sessionId: String): LaneRecovery = try {
-        classifyLaneRecovery(sessionStore.openOperations(sessionId, SessionState.LANE_MAIN, limit = 2))
+    private suspend fun laneRecoveryFor(session: Session): LaneRecovery = try {
+        val openOperations = sessionStore.openOperations(session.id, SessionState.LANE_MAIN, limit = 2)
+        if (openOperations.size > 1) {
+            LaneRecovery.Corrupt(RecordLogCorruptionReason.MULTIPLE_OPEN_OPERATIONS)
+        } else {
+            val started = openOperations.singleOrNull()
+            val result = reduceLaneState(
+                LaneReductionInput(
+                    lane = SessionState.LANE_MAIN,
+                    openOperations = openOperations,
+                    records = sessionStore.findRecords(session.id, RecordQuery(lane = SessionState.LANE_MAIN)),
+                    // Operation-owned entries: everything appended after the
+                    // open operation's start (single writer, single lane).
+                    ownEntries = started?.let { op -> session.entries.filter { it.seq > op.seq } } ?: emptyList(),
+                    entries = session.entries,
+                    // Bounded configuration lookups at the operation anchor
+                    // (sourceLeafId) or the idle leaf, oldest first.
+                    configurationEntries = configurationEntriesFor(session, started?.sourceLeafId),
+                    leafId = session.leafId,
+                ),
+            )
+            val operation = result.laneState.operation
+            if (operation == null) LaneRecovery.Idle else LaneRecovery.Suspended(operation.kind)
+        }
+    } catch (e: RecordLogCorruption) {
+        LaneRecovery.Corrupt(e.reason)
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         recordDegradation("lane_recovery", e)
         LaneRecovery.Idle
+    }
+
+    /**
+     * The anchor's root path, oldest first; falls back to the persisted leaf
+     * when the anchor is an unpersisted buffered entry (legal per pi's
+     * record-log invariants — records may precede the entries they name).
+     */
+    private fun configurationEntriesFor(session: Session, anchorId: String?): List<SessionEntry> {
+        var cursor: String? = anchorId?.takeIf { id -> session.entries.any { it.id == id } } ?: session.leafId ?: return emptyList()
+        val byId = session.entries.associateBy { it.id }
+        val path = ArrayList<SessionEntry>()
+        while (cursor != null && byId.containsKey(cursor)) {
+            val entry = byId.getValue(cursor)
+            path.add(entry)
+            cursor = entry.parentId
+        }
+        return path.asReversed()
     }
 
     /**

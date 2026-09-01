@@ -45,8 +45,25 @@ data class SessionSummary(
     val messageCount: Int,
 )
 
-/** Generic exception for invalid ids and malformed or unreadable session data. */
-class SessionDataException(message: String, cause: Throwable? = null) : Exception(message, cause)
+/** pi's SessionErrorCode (session/types.ts ~382). */
+enum class SessionErrorCode {
+    NOT_FOUND,
+    ALREADY_EXISTS,
+    INVALID_ENTRY,
+    INVALID_PAYLOAD,
+    INVALID_LANE,
+    INVALID_QUERY,
+    INVALID_FORK_TARGET,
+    STORAGE,
+}
+
+/**
+ * pi's SessionError (session/types.ts): the session layer's single
+ * exception type, carrying the typed [code] so callers can react (notably
+ * [SessionErrorCode.INVALID_FORK_TARGET] and [SessionErrorCode.INVALID_LANE]).
+ */
+class SessionError(val code: SessionErrorCode, message: String, cause: Throwable? = null) :
+    Exception(message, cause)
 
 /** Session ids are restricted to a flat, filesystem-safe alphabet. */
 internal val SESSION_ID_REGEX = Regex("[A-Za-z0-9_-]{1,64}")
@@ -54,8 +71,10 @@ internal val SESSION_ID_REGEX = Regex("[A-Za-z0-9_-]{1,64}")
 internal fun requireId(id: String): String {
     // Ids shorter than 3 chars are fine as session ids; persistence pads the
     // temp-file prefix so every accepted id can be saved.
+    // Divergence from pi's validateSessionId (jsonl/repo.ts, invalid_payload):
+    // Pathfinder keeps its narrower filesystem-safe alphabet and message.
     if (!SESSION_ID_REGEX.matches(id)) {
-        throw SessionDataException("Invalid session id")
+        throw SessionError(SessionErrorCode.INVALID_PAYLOAD, "Invalid session id")
     }
     return id
 }

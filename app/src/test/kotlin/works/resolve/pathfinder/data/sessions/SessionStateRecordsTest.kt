@@ -66,8 +66,8 @@ class SessionStateRecordsTest {
         assertEquals(listOf("op2", "op1"), state.findOpenOperations("main").map { it.id })
         assertEquals(listOf("op2", "op1"), state.findOpenOperations("main", limit = 2).map { it.id })
         assertEquals(listOf("op2"), state.findOpenOperations("main", limit = 1).map { it.id })
-        assertFailsWith<SessionDataException> { state.findOpenOperations("main", limit = 0); Unit }
-        assertFailsWith<SessionDataException> { state.findOpenOperations("main", limit = -1); Unit }
+        assertFailsWith<SessionError> { state.findOpenOperations("main", limit = 0); Unit }
+        assertFailsWith<SessionError> { state.findOpenOperations("main", limit = -1); Unit }
         // Unknown lanes are simply empty (pi's map lookup).
         assertEquals(emptyList<LaneRecord.OperationStartedRecord>(), state.findOpenOperations("ghost"))
     }

@@ -22,7 +22,8 @@ import works.resolve.pathfinder.data.sessions.CompactionEntry
 import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.sessions.MessageEntry
 import works.resolve.pathfinder.data.sessions.ModelChangeEntry
-import works.resolve.pathfinder.data.sessions.SessionDataException
+import works.resolve.pathfinder.data.sessions.SessionError
+import works.resolve.pathfinder.data.sessions.SessionErrorCode
 import works.resolve.pathfinder.data.sessions.SessionEntry
 import works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
 import works.resolve.pathfinder.data.sessions.ActiveToolsEntry
@@ -100,15 +101,15 @@ private fun walkToRoot(conversation: Conversation, start: String): List<SessionE
     val path = mutableListOf<SessionEntry>()
     val seen = HashSet<String>()
     var current: SessionEntry? = conversation.entry(start)
-        ?: throw SessionDataException("Entry not found: $start")
+        ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Entry not found: $start")
     while (current != null) {
         if (!seen.add(current.id)) {
-            throw SessionDataException("Session branch contains a cycle at ${current.id}")
+            throw SessionError(SessionErrorCode.INVALID_ENTRY, "Session branch contains a cycle at ${current.id}")
         }
         path.add(current)
         val parentId = current.parentId ?: break
         current = conversation.entry(parentId)
-            ?: throw SessionDataException("Entry not found: $parentId")
+            ?: throw SessionError(SessionErrorCode.INVALID_ENTRY, "Entry not found: $parentId")
     }
     return path
 }
@@ -123,10 +124,9 @@ private fun walkToRoot(conversation: Conversation, start: String): List<SessionE
  * summarize.
  *
  * Divergence: pi looks the paths up asynchronously through its `Session`
- * (`findEntriesOnBranch`/`getEntry`, storage-backed) and throws
- * `SessionError("invalid_entry", …)` on a missing entry; pathfinder walks the
- * in-memory [Conversation] and throws [SessionDataException] (the data
- * layer's typed exception) instead — same conditions, same messages shape.
+ * (`findEntriesOnBranch`/`getEntry`, storage-backed); pathfinder walks the
+ * in-memory [Conversation] instead — same conditions, same [SessionError]
+ * codes and messages.
  */
 fun collectEntriesForBranchSummary(
     conversation: Conversation,
@@ -151,7 +151,7 @@ fun collectEntriesForBranchSummary(
     var current: String? = oldLeafId
     while (current != null && current != commonAncestorId) {
         val entry = conversation.entry(current)
-            ?: throw SessionDataException("Entry $current not found")
+            ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Entry not found: $current")
         entries.add(entry)
         current = entry.parentId
     }

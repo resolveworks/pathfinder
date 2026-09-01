@@ -46,11 +46,11 @@ class SessionLanesForkQueryTest {
         // main advanced past a; side's leaf is c, chaining enforced per lane.
         assertEquals("b", state.requireLane("main"))
         assertEquals("c", state.requireLane("side"))
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             apply(state, SessionMutation.Entry("side", msg("x", "b", seq = 5)))
         }
         // Duplicate lane creation is rejected (pi's validateNewLane).
-        assertFailsWith<SessionDataException> { state.validateNewLane("side") }
+        assertFailsWith<SessionError> { state.validateNewLane("side") }
         state.validateNewLane("other")
     }
 
@@ -83,8 +83,8 @@ class SessionLanesForkQueryTest {
             ).map { it.id },
         )
         // Validation (pi's invalid_query).
-        assertFailsWith<SessionDataException> { state.findEntries(EntryQuery(limit = 0)) }
-        assertFailsWith<SessionDataException> { state.findEntries(EntryQuery(cursor = EntryCursor(afterSeq = -1))) }
+        assertFailsWith<SessionError> { state.findEntries(EntryQuery(limit = 0)) }
+        assertFailsWith<SessionError> { state.findEntries(EntryQuery(cursor = EntryCursor(afterSeq = -1))) }
     }
 
     // ---- queries: findEntriesOnBranch ----
@@ -127,7 +127,7 @@ class SessionLanesForkQueryTest {
             state.findEntriesOnBranch(BranchEntryQuery(start = "c", cursor = EntryCursor(afterSeq = 4))).map { it.id },
         )
         // Unknown start (pi's not_found).
-        assertFailsWith<SessionDataException> { state.findEntriesOnBranch(BranchEntryQuery(start = "ghost")) }
+        assertFailsWith<SessionError> { state.findEntriesOnBranch(BranchEntryQuery(start = "ghost")) }
     }
 
     // ---- queries: findRecords ----
@@ -223,12 +223,12 @@ class SessionLanesForkQueryTest {
         val state = SessionState()
         apply(state, SessionMutation.Entry("main", msg("a", null, seq = 1)))
         apply(state, SessionMutation.Entry("main", compaction("k", "a", seq = 2)))
-        val e = assertFailsWith<SessionDataException> {
+        val e = assertFailsWith<SessionError> {
             state.createForkMutations(ForkOptions.Branch(entryId = "k"))
         }
         assertEquals("Fork target is not a message entry: k", e.message)
         // A missing entry id is the same failure (pi: !entry || type !== "message").
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             state.createForkMutations(ForkOptions.Branch(entryId = "ghost"))
         }
     }
@@ -279,11 +279,11 @@ class SessionLanesForkQueryTest {
         assertNull(fresh.parentSessionId(saved.id))
 
         // Forking onto an existing id is rejected (pi's already_exists).
-        assertFailsWith<SessionDataException> {
+        assertFailsWith<SessionError> {
             store.fork(saved.id, ForkOptions.Tree, id = forked.id)
         }
         // Unknown source.
-        assertFailsWith<SessionDataException> { store.fork("missing", ForkOptions.Tree) }
+        assertFailsWith<SessionError> { store.fork("missing", ForkOptions.Tree) }
     }
 
     @Test
@@ -330,7 +330,7 @@ class SessionLanesForkQueryTest {
         assertEquals(2, sideAfterRestart.findEntriesOnBranch().size)
 
         // Unknown lane views are rejected (pi's invalid_lane).
-        assertFailsWith<SessionDataException> { store.view(withMessage.id, "ghost") }
+        assertFailsWith<SessionError> { store.view(withMessage.id, "ghost") }
     }
 
     @Test
@@ -347,7 +347,7 @@ class SessionLanesForkQueryTest {
             store.findRecords(session.id, RecordQuery(type = RecordType.OPERATION_STARTED, operationKind = OperationIntent.Kind.RUN))
                 .map { it.id },
         )
-        val e = assertFailsWith<SessionDataException> {
+        val e = assertFailsWith<SessionError> {
             store.findRecords(session.id, RecordQuery(operationKind = OperationIntent.Kind.RUN))
         }
         assertEquals("operationKind requires type \"operation_started\"", e.message)
