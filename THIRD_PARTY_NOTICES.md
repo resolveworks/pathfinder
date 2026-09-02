@@ -36,3 +36,16 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## scry
+
+The Brave web search tool and its provider credential service
+(`app/src/main/kotlin/works/resolve/pathfinder/tools/websearch/`) are Kotlin
+ports of the [scry](https://github.com/resolveworks/scry) pi extension (the
+local source at `~/Projects/scry`). That portion is:
+
+Copyright (c) 2025 Johan Schuijt
+
+Licensed under the MIT License reproduced above. The attribution here applies
+to the ported portions only; it does not place a license on pathfinder as a
+whole.
