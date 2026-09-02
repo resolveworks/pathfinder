@@ -54,10 +54,11 @@ class SearchProviderService(private val credentials: CredentialStore) {
         credentials.delete(credentialId(providerId))
     }
 
-    /** The stored API key for [providerId], or null when not configured. */
+    /** The stored API key for [providerId], or null when not configured. Blank stored keys count as unconfigured. */
     suspend fun apiKey(providerId: String): String? {
         requireKnown(providerId)
         return (credentials.read(credentialId(providerId)) as? ApiKeyCredential)?.key
+            ?.takeIf { it.isNotBlank() }
     }
 
     private fun requireKnown(providerId: String) {

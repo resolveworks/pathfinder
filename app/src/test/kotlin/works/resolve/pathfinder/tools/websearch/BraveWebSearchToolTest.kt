@@ -2,6 +2,7 @@ package works.resolve.pathfinder.tools.websearch
 
 import works.resolve.pathfinder.ai.core.TextContent
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
@@ -57,13 +58,15 @@ class BraveWebSearchToolTest {
     }
 
     @Test
-    fun `validation rejects missing blank and mistyped query`() {
+    fun `validation rejects missing and mistyped query`() {
         val tool = tool()
         assertFailsWith<IllegalArgumentException> { tool.validateArguments(args()) }
-        assertFailsWith<IllegalArgumentException> { tool.validateArguments(args(query = "  ")) }
         assertFailsWith<IllegalArgumentException> {
             tool.validateArguments(buildJsonObject { put("query", 5) })
         }
+        // Type.String allows an empty/blank query (upstream TypeBox schema);
+        // do not strengthen the upstream schema.
+        tool.validateArguments(args(query = "  "))
     }
 
     @Test
@@ -183,15 +186,28 @@ class BraveWebSearchToolTest {
 
     @Test
     fun `cancellation rethrows CancellationException instead of returning aborted content`() = runBlocking<Unit> {
-        server.enqueue(MockResponse().setBody("""{"web":{"results":[]}}""").setHeadersDelay(5, java.util.concurrent.TimeUnit.SECONDS))
-        val job = async {
+        server.enqueue(
+            MockResponse()
+                .setBody("""{"web":{"results":[]}}""")
+                .setHeadersDelay(10, java.util.concurrent.TimeUnit.SECONDS),
+        )
+        // Run execute on IO so the runBlocking thread can block in takeRequest
+        // while the request is dispatched (single-threaded event loop would
+        // otherwise never start the call).
+        val job = async(Dispatchers.IO) {
             tool().execute("t1", tool().validateArguments(args(query = "q")), {})
         }
-        // Give the request time to be in flight before cancelling.
-        Thread.sleep(200)
+        // Deterministically wait until the request is in flight before canceling.
+        assertTrue(server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS) != null)
         job.cancelAndJoin()
+        assertTrue(job.isCancelled)
+        try {
+            job.await()
+            kotlin.test.fail("expected CancellationException")
+        } catch (_: CancellationException) {
+            // cancellation propagated out of execute, not converted to content
+        }
         // Scry's "Search aborted." content path is deliberately not ported:
         // cancellation must propagate (see BraveWebSearchTool KDoc).
-        assertTrue(job.isCancelled)
     }
 }

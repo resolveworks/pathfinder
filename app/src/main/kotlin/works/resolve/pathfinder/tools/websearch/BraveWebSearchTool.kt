@@ -109,8 +109,6 @@ class BraveWebSearchTool(
                 throw IllegalArgumentException("web_search: missing required argument 'query'")
             query == null || !query.isString ->
                 throw IllegalArgumentException("web_search: 'query' must be a string")
-            query.content.isBlank() ->
-                throw IllegalArgumentException("web_search: 'query' must not be blank")
         }
         val freshness = arguments["freshness"]
         if (freshness != null) {
@@ -159,7 +157,12 @@ class BraveWebSearchTool(
         // Cancellable OkHttp execution (pi's AbortSignal → coroutine
         // cancellation): cancelling the caller cancels the call. Any
         // CancellationException is always rethrown, never converted into a
-        // tool result (see class KDoc divergence note).
+        // tool result (see class KDoc divergence note). If cancellation wins
+        // the race after the response arrives but before the continuation
+        // consumes it, the resume onCancellation handler closes the
+        // response; if cancellation comes later, invokeOnCancellation only
+        // cancels the call (the already-resumed caller owns the response,
+        // closed by its own `use`).
         val response = suspendCancellableCoroutine { continuation ->
             val call = client.newCall(request)
             continuation.invokeOnCancellation { call.cancel() }
@@ -172,7 +175,7 @@ class BraveWebSearchTool(
                     }
 
                     override fun onResponse(call: Call, response: Response) {
-                        continuation.resume(response)
+                        continuation.resume(response) { _ -> response.close() }
                     }
                 },
             )
@@ -181,9 +184,16 @@ class BraveWebSearchTool(
         response.use {
             if (!it.isSuccessful) {
                 // Scry: `Search failed (${status}): ${body || statusText}`;
-                // the body is bounded by the shared provider error-body cap.
+                // read at most ~4x the char cap (worst-case UTF-8) from the
+                // Okio source so a huge error body is never fully buffered
+                // just to be truncated (same pattern as OkHttpTransport),
+                // then trim/cap via the shared provider error-body helpers.
+                val readLimit = MAX_PROVIDER_ERROR_BODY_CHARS.toLong() * 4
                 val body = try {
-                    it.body.string()
+                    val source = it.body.source()
+                    source.request(readLimit)
+                    val buffered = source.buffer
+                    buffered.readUtf8(minOf(buffered.size, readLimit))
                 } catch (_: IOException) {
                     ""
                 }

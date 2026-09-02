@@ -65,4 +65,15 @@ class SearchProviderServiceTest {
         service.remove("brave")
         assertFalse(service.isConfigured("brave"))
     }
+
+    @Test
+    fun `blank stored credential key counts as unconfigured`() = runBlocking<Unit> {
+        // saveApiKey prevents blanks, but the shared credential store can
+        // already contain one (e.g. written elsewhere).
+        val store = InMemoryCredentialStore()
+        store.modify(SearchProviderService.BRAVE_CREDENTIAL_ID) { ApiKeyCredential(key = "   ") }
+        val service = SearchProviderService(store)
+        assertFalse(service.isConfigured("brave"))
+        assertNull(service.apiKey("brave"))
+    }
 }
