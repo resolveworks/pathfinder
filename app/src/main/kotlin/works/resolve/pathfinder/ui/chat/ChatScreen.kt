@@ -85,6 +85,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -136,6 +137,7 @@ fun ChatRoute(
         onSetStartupDefault = viewModel::saveStartupDefault,
         onToggleModelScope = viewModel::toggleModelScope,
         onSelectThinkingLevel = viewModel::selectThinkingLevel,
+        onToggleToolOutputExpansion = viewModel::toggleToolOutputExpansion,
         onSetDefaultThinkingLevel = viewModel::setThinkingLevelDefault,
         onSaveProviderCredential = viewModel::saveProviderCredential,
         onRemoveProviderCredential = viewModel::removeProviderCredential,
@@ -189,6 +191,7 @@ fun ChatScreen(
     onSetStartupDefault: (providerId: String, modelId: String) -> Unit,
     onToggleModelScope: (providerId: String, modelId: String, checked: Boolean) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
+    onToggleToolOutputExpansion: () -> Unit,
     onSetDefaultThinkingLevel: (ModelThinkingLevel) -> Unit,
     onSaveProviderCredential: (providerId: String, apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
     onRemoveProviderCredential: (providerId: String) -> Unit,
@@ -393,6 +396,7 @@ fun ChatScreen(
                                         onStop = onStop,
                                         onSelectModel = onSelectModel,
                                         onSelectThinkingLevel = onSelectThinkingLevel,
+                                        onToggleToolOutputExpansion = onToggleToolOutputExpansion,
                                         onNavigateTreeEntry = onNavigateTreeEntry,
                                         onTreeFilterChange = onTreeFilterChange,
                                     )
@@ -404,6 +408,7 @@ fun ChatScreen(
                                         onStop = onStop,
                                         onSelectModel = onSelectModel,
                                         onSelectThinkingLevel = onSelectThinkingLevel,
+                                        onToggleToolOutputExpansion = onToggleToolOutputExpansion,
                                     )
                                 }
                             }
@@ -1419,6 +1424,7 @@ private fun ConversationPager(
     onStop: () -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
+    onToggleToolOutputExpansion: () -> Unit,
     onNavigateTreeEntry: (entryId: String) -> Unit,
     onTreeFilterChange: (TreeFilter) -> Unit,
 ) {
@@ -1438,6 +1444,7 @@ private fun ConversationPager(
                 onStop = onStop,
                 onSelectModel = onSelectModel,
                 onSelectThinkingLevel = onSelectThinkingLevel,
+                onToggleToolOutputExpansion = onToggleToolOutputExpansion,
             )
         }
     }
@@ -1458,11 +1465,13 @@ private fun ChatSurface(
     onStop: () -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
+    onToggleToolOutputExpansion: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ConversationContent(
             uiState = uiState,
             modifier = Modifier.weight(1f),
+            onToggleToolOutputExpansion = onToggleToolOutputExpansion,
         )
         Column(
             modifier = Modifier
@@ -1849,6 +1858,7 @@ private fun ConversationContent(
     uiState: ChatUiState,
     modifier: Modifier = Modifier,
     initialThinkingOverrides: Map<String, Boolean> = emptyMap(),
+    onToggleToolOutputExpansion: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val messageCount = uiState.messages.size
@@ -1919,9 +1929,11 @@ private fun ConversationContent(
             items(uiState.pendingTools, key = { "pending-${it.toolCallId}" }) { pending ->
                 ToolResultRow(
                     toolName = pending.toolName,
-                    summary = null,
+                    output = null,
                     isError = false,
                     running = true,
+                    expanded = uiState.toolOutputExpanded,
+                    onToggleExpansion = onToggleToolOutputExpansion,
                 )
                 HorizontalDivider()
             }
@@ -1932,9 +1944,11 @@ private fun ConversationContent(
                     message.toolResult?.let { result ->
                         ToolResultRow(
                             toolName = result.toolName,
-                            summary = result.summary,
+                            output = result.output,
                             isError = result.isError,
                             running = false,
+                            expanded = uiState.toolOutputExpanded,
+                            onToggleExpansion = onToggleToolOutputExpansion,
                         )
                     }
                 } else {
@@ -2057,19 +2071,40 @@ private fun ToolCallChip(name: String) {
 }
 
 /**
+ * Collapsed preview cap (pi's FALLBACK_PREVIEW_LINES, tool-execution.ts):
+ * the generic fallback renders the first 10 output lines plus a
+ * "... (N more lines)" continuation hint; the expansion flag lifts the cap.
+ */
+private const val FALLBACK_PREVIEW_LINES = 10
+
+/**
  * One tool row (pi's ToolExecutionComponent semantics, native adaptation):
- * tool name first with a bounded one-line summary, a loader while the
+ * tool name first, the result output below — bounded to a
+ * [FALLBACK_PREVIEW_LINES] preview with a remaining-lines hint until the
+ * global expand flag lifts the cap to the full output; a loader while the
  * execution is running and a done/failed label after, error-colored when
- * the result is an error.
+ * the result is an error. Tapping a row with output flips the global flag
+ * (pi's Ctrl+O, `app.tools.expand`, exposed here as a tap on the tool
+ * output itself); running rows carry no output and stay inert.
  */
 @Composable
 private fun ToolResultRow(
     toolName: String,
-    summary: String?,
+    output: String?,
     isError: Boolean,
     running: Boolean,
+    expanded: Boolean,
+    onToggleExpansion: () -> Unit,
 ) {
     ListItem(
+        // The whole row is the toggle's touch target (Android 48dp-target
+        // convention); only rows that render output respond.
+        modifier =
+            if (output != null) {
+                Modifier.clickable(onClickLabel = stringResource(R.string.tool_output_toggle)) { onToggleExpansion() }
+            } else {
+                Modifier
+            },
         leadingContent = {
             Icon(
                 imageVector = Icons.Filled.Build,
@@ -2083,14 +2118,33 @@ private fun ToolResultRow(
                 color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified,
             )
         },
-        supportingContent = summary?.let { text ->
+        supportingContent = output?.let { text ->
             {
-                Text(
-                    text = text,
-                    color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                val lines = text.lines()
+                val display = if (expanded) lines else lines.take(FALLBACK_PREVIEW_LINES)
+                val remaining = lines.size - display.size
+                Column {
+                    // pi renders tool output as terminal text (toolOutput
+                    // gray); monospace body keeps that shape on Android.
+                    Text(
+                        text = display.joinToString("\n"),
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = if (isError) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                    if (remaining > 0) {
+                        // pi: `... (${remaining} more lines, <key> to
+                        // expand)`; the row tap replaces the keybinding hint.
+                        Text(
+                            text = stringResource(R.string.tool_output_more_lines, remaining),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         },
         trailingContent = {
@@ -2289,6 +2343,7 @@ private fun PreviewChatScreen(
             onSetStartupDefault = { _, _ -> },
             onToggleModelScope = { _, _, _ -> },
             onSelectThinkingLevel = { },
+            onToggleToolOutputExpansion = { },
             onSetDefaultThinkingLevel = { },
             onSaveProviderCredential = { _, _, _ -> },
             onRemoveProviderCredential = { },

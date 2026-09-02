@@ -638,6 +638,34 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun toggleToolOutputExpansion_flipsInMemoryFlag_withoutPersisting() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        assertFalse(vm.uiState.value.toolOutputExpanded)
+
+        // pi's toolOutputExpanded (interactive-mode.ts:481) is an in-memory
+        // toggle: it applies immediately and is never written to settings.
+        vm.toggleToolOutputExpansion()
+        vm.uiState.first { it.toolOutputExpanded }
+        assertNull(vm.uiState.value.error)
+
+        vm.toggleToolOutputExpansion()
+        vm.uiState.first { !it.toolOutputExpanded }
+
+        // Unlike showThinking, the flag does not survive a fresh ViewModel
+        // (it lives in UI state, not settings).
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val vm2 = h.newViewModel()
+        vm2.uiState.first { it.status == ChatStatus.Ready }
+        assertFalse(vm2.uiState.value.toolOutputExpanded)
+
+        vm.closeForTest()
+        vm2.closeForTest()
+    }
+
+    @Test
     fun resetSignal_followsSuccessfulIntents_andNeverGetsStale() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()
@@ -983,7 +1011,7 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun toolResultMessages_renderAsToolRows_withBoundedSummary() = runTest(mainDispatcherRule.scheduler) {
+    fun toolResultMessages_renderAsToolRows_withFullOutput() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
@@ -1026,17 +1054,18 @@ class ChatViewModelTest {
         assertEquals(ChatRole.Tool, okRow.role)
         assertTrue(okRow.blocks.isEmpty())
         assertEquals(
-            ChatToolResult("call-1", "get_weather", isError = false, summary = "21°C, sunny wind 3 m/s"),
+            ChatToolResult("call-1", "get_weather", isError = false, output = "  21°C, sunny\n  wind 3 m/s"),
             okRow.toolResult,
         )
         assertTrue(vm.uiState.value.pendingTools.isEmpty())
 
-        // Error result: long first line truncated to the 200-char cap,
-        // error flag projected.
+        // Error result: output projected verbatim (line structure kept —
+        // pi's getTextOutput joins text parts with newlines; renderers, not
+        // the projection, bound the preview), error flag projected.
         val failed = ToolResultMessage(
             toolCallId = "call-1",
             toolName = "get_weather",
-            content = listOf(TextContent("x".repeat(250))),
+            content = listOf(TextContent("boom"), TextContent("exit 1")),
             isError = true,
             timestamp = System.nanoTime(),
         )
@@ -1048,8 +1077,7 @@ class ChatViewModelTest {
         assertEquals(ChatRole.Tool, errorRow.role)
         val result = errorRow.toolResult!!
         assertTrue(result.isError)
-        assertEquals(200, result.summary!!.length)
-        assertEquals("x".repeat(200), result.summary)
+        assertEquals("boom\nexit 1", result.output)
 
         vm.closeForTest()
     }

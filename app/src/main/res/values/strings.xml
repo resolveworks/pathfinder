@@ -85,6 +85,8 @@
     <string name="tool_row_icon">Tool</string>
     <string name="tool_status_done">Done</string>
     <string name="tool_status_failed">Failed</string>
+    <string name="tool_output_toggle">Expand or collapse tool output</string>
+    <string name="tool_output_more_lines">… (%1$d more lines, tap to expand)</string>
 
     <string name="error_generic">Something went wrong</string>
 

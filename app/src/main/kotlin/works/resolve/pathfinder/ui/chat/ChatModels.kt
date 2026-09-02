@@ -50,14 +50,15 @@ data class ChatMessage(
 
 /**
  * UI-safe projection of a committed tool result (pi's ToolResultMessage):
- * tool name, error flag, and a bounded single-line summary. The structured
- * `details` JSON is never projected.
+ * tool name, error flag, and the full text output (pi's getTextOutput —
+ * text parts joined with newlines; renderers bound the preview). The
+ * structured `details` JSON is never projected.
  */
 data class ChatToolResult(
     val toolCallId: String,
     val toolName: String,
     val isError: Boolean,
-    val summary: String? = null,
+    val output: String? = null,
 )
 
 /** An in-flight tool execution (pi's tool_execution_start..end window). */
@@ -335,6 +336,14 @@ data class ChatUiState(
     val canSend: Boolean = false,
     /** Display-only flag: whether to show the model's reasoning (never affects the agent). */
     val showThinking: Boolean = false,
+    /**
+     * Display-only flag: tool rows render their full output instead of the
+     * bounded preview (pi's `toolOutputExpanded`, interactive-mode.ts:481 —
+     * an in-memory toggle bound to Ctrl+O; here flipping it is a tap on any
+     * tool output row. Applies to every tool row, past and future, like
+     * pi's setToolsExpanded walking the chat container; never persisted).
+     */
+    val toolOutputExpanded: Boolean = false,
     /** Flattened tree rows of the active session's conversation (see TreeProjection.kt). */
     val treeRows: List<TreeRow> = emptyList(),
     /** In-memory tree-panel filter (never persisted). */

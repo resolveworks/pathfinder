@@ -516,6 +516,16 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * Flips the global tool-output expansion flag (pi's
+     * toggleToolOutputExpansion → setToolsExpanded, interactive-mode.ts:4192 —
+     * Ctrl+O). Display-only: like pi, the flag lives in memory only (never
+     * persisted) and applies to every tool row.
+     */
+    fun toggleToolOutputExpansion() {
+        updateState { it.copy(toolOutputExpanded = !it.toolOutputExpanded) }
+    }
+
     fun send() {
         viewModelScope.launch { sendInternal() }
     }
@@ -1914,12 +1924,12 @@ private fun projectCommitted(liveMessages: List<Message>, conversation: Conversa
                     )
                     // Pi's tool-result messages render as tool rows (pi's
                     // ToolExecutionComponent semantics: tool name first,
-                    // result text as a bounded preview). Only UI-safe fields
-                    // cross the boundary: the structured `details` JSON is
-                    // never projected (pi's TUI renders rich per-tool details;
-                    // pathfinder stays minimal until real tools define
-                    // needs). Distinct id namespace so a tool row can never
-                    // collide with a message row.
+                    // result text below, bounded to a preview until expanded).
+                    // Only UI-safe fields cross the boundary: the structured
+                    // `details` JSON is never projected (pi's TUI renders rich
+                    // per-tool details; pathfinder stays minimal until real
+                    // tools define needs). Distinct id namespace so a tool row
+                    // can never collide with a message row.
                     is ToolResultMessage -> ChatMessage(
                         id = "tool-$index-${message.timestamp}-${message.toolCallId}",
                         role = ChatRole.Tool,
@@ -1928,7 +1938,7 @@ private fun projectCommitted(liveMessages: List<Message>, conversation: Conversa
                             toolCallId = message.toolCallId,
                             toolName = message.toolName,
                             isError = message.isError,
-                            summary = toolResultSummary(message),
+                            output = toolResultOutput(message),
                         ),
                     )
                 }
@@ -1989,23 +1999,16 @@ private fun List<Content>.toChatBlocks(): List<ChatBlock> {
 }
 
 /**
- * Bounded one-line summary of a tool result (pi's rendered preview, reduced):
- * the first text part with whitespace collapsed into one trimmed line,
- * capped at [TOOL_RESULT_SUMMARY_MAX] characters. Null when the result
- * carries no text at all.
+ * Full text output of a tool result (pi's getTextOutput, render-utils.ts —
+ * text parts joined with newlines, no truncation at the projection
+ * boundary; renderers bound the collapsed preview the way pi's renderers
+ * cap preview lines). Null when the result carries no text at all.
  */
-private fun toolResultSummary(message: ToolResultMessage): String? {
-    val text = message.content.asSequence().filterIsInstance<TextContent>().firstOrNull()?.text
-        ?: return null
-    return text.trim()
-        .split(Regex("\\s+"))
-        .joinToString(" ")
-        .takeIf { it.isNotEmpty() }
-        ?.take(TOOL_RESULT_SUMMARY_MAX)
+private fun toolResultOutput(message: ToolResultMessage): String? {
+    val parts = message.content.filterIsInstance<TextContent>()
+    if (parts.isEmpty()) return null
+    return parts.joinToString("\n") { it.text }.takeIf { it.isNotEmpty() }
 }
-
-/** Cap for [toolResultSummary] previews. */
-private const val TOOL_RESULT_SUMMARY_MAX = 200
 
 /**
  * Resolves the agent's pending tool-execution ids into UI rows: names come
