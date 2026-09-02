@@ -2499,7 +2499,10 @@ class ChatViewModelTest {
         val sessionId = vm.uiState.value.activeSessionId!!
 
         vm.selectThinkingLevel(ModelThinkingLevel.HIGH)
-        vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 3 }
+        // Real-time wait: the store's IO appends run on Dispatchers.IO,
+        // which runTest's virtual clock cannot see (waitUntil's documented
+        // purpose) — a uiState-gated first{} can miss the final store write.
+        waitUntil { h.sessionStore.load(sessionId)!!.entries.size == 3 }
         vm.closeForTest()
 
         val vm2 = h.newViewModel()
