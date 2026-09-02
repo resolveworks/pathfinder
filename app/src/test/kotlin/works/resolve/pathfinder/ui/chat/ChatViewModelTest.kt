@@ -29,6 +29,10 @@ import works.resolve.pathfinder.ai.core.ThinkingContent
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.agent.AgentToolResult
+import works.resolve.pathfinder.agent.AgentTool
+import works.resolve.pathfinder.ai.core.Tool
+import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
+import works.resolve.pathfinder.tools.websearch.SearchProviderService
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
@@ -275,6 +279,24 @@ class ChatViewModelTest {
 
         val credentials = FakeCredentialStore()
 
+        /** The real [SearchProviderService] over the harness store, exactly like PathfinderApplication. */
+        val searchProviders = SearchProviderService(credentials)
+
+        /**
+         * Registry fake standing in for the production BraveWebSearchTool
+         * (name-only behavior; nothing here ever executes a search).
+         */
+        private val fakeWebSearchTool: AgentTool = object : AgentTool {
+            override val definition = Tool(BraveWebSearchTool.NAME, "fake web search", JsonPrimitive("object"))
+            override val label = "Web Search"
+            override fun validateArguments(arguments: JsonObject) = arguments
+            override suspend fun execute(
+                toolCallId: String,
+                arguments: JsonObject,
+                onUpdate: (AgentToolResult) -> Unit,
+            ) = AgentToolResult(content = listOf(TextContent("no results")))
+        }
+
         /** Records the ViewModel's diagnostics spans for boundary assertions. */
         val telemetry = works.resolve.pathfinder.telemetry.InMemoryTelemetryContext()
         val diagnostics = works.resolve.pathfinder.logging.PathfinderDiagnostics(telemetry)
@@ -443,6 +465,7 @@ class ChatViewModelTest {
                     },
                 ),
                 conversation = conversation,
+                tools = listOf(fakeWebSearchTool),
                 retrySettings = settings.retry,
                 compactionSettings = if (disableCompaction) settings.compaction.copy(enabled = false) else settings.compaction,
                 models = compactionModels ?: switchModels,
@@ -457,6 +480,7 @@ class ChatViewModelTest {
             agentFactory = factory,
             modelResolver = modelResolver,
             diagnostics = diagnostics,
+            searchProviderService = searchProviders,
         ).also { viewModels += it }
 
         fun assistant(text: String, stopReason: StopReason = StopReason.STOP, error: String? = null) =
@@ -1151,6 +1175,164 @@ class ChatViewModelTest {
         vm.saveProviderCredential("zai", "k2", emptyMap())
         vm.uiState.first { it.credentialSuccessEpoch == 2L }
         assertEquals("k2", h.storedApiKey("zai"))
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun searchInit_unconfiguredBraveRow_andWebSearchAbsent() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+        // One known provider row, unconfigured, name-sorted; the search
+        // credential alone did not satisfy LLM first-run configuration.
+        assertEquals(
+            listOf(ProviderOption(SearchProviderService.BRAVE_PROVIDER_ID, "Brave Search", configured = false)),
+            vm.uiState.value.searchProviderOptions,
+        )
+        assertEquals(0, h.createdAgents.size)
+
+        // Prompts: exactly one secret Brave prompt for the known provider;
+        // nothing for unknown ids.
+        val prompts = vm.searchProviderAuthPrompts(SearchProviderService.BRAVE_PROVIDER_ID)
+        assertEquals(1, prompts.size)
+        assertTrue(prompts.single().secret)
+        assertTrue(prompts.single().message.contains("Brave Search API key"))
+        assertTrue(vm.searchProviderAuthPrompts("nope").isEmpty())
+
+        // A configured LLM provider binds a first session without web_search.
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val agent = h.createdAgents.single()
+        assertFalse(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun preStoredSearchKey_enablesWebSearch_beforeFirstReadySession() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        h.credentials.creds[SearchProviderService.BRAVE_CREDENTIAL_ID] = ApiKeyCredential(key = "brave-key")
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+
+        // Search credentials never satisfy LLM first-run configuration.
+        assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
+        assertTrue(vm.uiState.value.searchProviderOptions.single().configured)
+
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val names = h.createdAgents.single().getActiveToolNames()
+        assertEquals(BraveWebSearchTool.NAME, names.last())
+        assertEquals(1, names.count { it == BraveWebSearchTool.NAME })
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun searchSave_blankAndFailedSaves_neverBumpOrActivate() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val agent = h.createdAgents.single()
+
+        // Blank save: static error, no epoch bump, nothing stored.
+        vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "   ")
+        vm.uiState.first { it.error != null }
+        assertEquals(0L, vm.uiState.value.searchCredentialSuccessEpoch)
+        assertNull(h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
+        vm.dismissError()
+
+        // Unknown provider: same rejection.
+        vm.saveSearchProviderCredential("nope", "k")
+        vm.uiState.first { it.error != null }
+        assertEquals(0L, vm.uiState.value.searchCredentialSuccessEpoch)
+        vm.dismissError()
+
+        // Storage failure: error, no epoch bump, status/tool set intact.
+        h.credentials.failWrites = true
+        vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
+        vm.uiState.first { it.error != null }
+        assertEquals(0L, vm.uiState.value.searchCredentialSuccessEpoch)
+        assertFalse(vm.uiState.value.searchProviderOptions.single().configured)
+        assertFalse(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+        vm.dismissError()
+        h.credentials.failWrites = false
+
+        // Confirmed save writes search_brave, bumps exactly once, updates
+        // the row, and enables web_search on the SAME session.
+        vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
+        vm.uiState.first { it.searchCredentialSuccessEpoch == 1L }
+        assertEquals("brave-key", h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
+        assertTrue(vm.uiState.value.searchProviderOptions.single().configured)
+        assertEquals(1, h.createdAgents.size)
+        assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+        // Never any secret material in UI state.
+        assertFalse(vm.uiState.value.toString().contains("brave-key"))
+
+        // A re-save rotates the key wholesale and bumps again.
+        vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key-2")
+        vm.uiState.first { it.searchCredentialSuccessEpoch == 2L }
+        assertEquals("brave-key-2", h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun searchRemove_deletesKey_andDisablesWebSearch() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val agent = h.createdAgents.single()
+
+        vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
+        vm.uiState.first { it.searchCredentialSuccessEpoch == 1L }
+        assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+
+        vm.removeSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID)
+        vm.uiState.first { !it.searchProviderOptions.single().configured }
+        assertNull(h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
+        assertFalse(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+        assertEquals(1, h.createdAgents.size)
+        assertEquals(1L, vm.uiState.value.searchCredentialSuccessEpoch)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun searchStatusReadFailure_degradesWithoutBreakingReady() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val agent = h.createdAgents.single()
+        vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
+        vm.uiState.first { it.searchCredentialSuccessEpoch == 1L }
+        assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+
+        // A credential read failure degrades search to unconfigured/disabled
+        // with a safe error — chat stays Ready and the key stays stored.
+        h.credentials.failWrites = true
+        vm.refreshSearchProviderStatus()
+        vm.uiState.first { it.error != null }
+        assertFalse(vm.uiState.value.searchProviderOptions.single().configured)
+        assertFalse(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+        assertEquals(ChatStatus.Ready, vm.uiState.value.status)
+        assertEquals("brave-key", h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
+        assertFalse(vm.uiState.value.toString().contains("brave-key"))
+        vm.dismissError()
+        h.credentials.failWrites = false
+
+        // The degraded state recovers on the next successful read.
+        vm.refreshSearchProviderStatus()
+        vm.uiState.first { it.searchProviderOptions.single().configured }
+        assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
 
         vm.closeForTest()
     }

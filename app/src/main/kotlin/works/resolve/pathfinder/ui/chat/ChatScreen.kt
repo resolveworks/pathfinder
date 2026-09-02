@@ -145,18 +145,10 @@ fun ChatRoute(
         onSubmitAuthPrompt = viewModel::submitAuthPrompt,
         onCancelProviderAuthLogin = viewModel::cancelProviderAuthLogin,
         onRefreshProviderStatus = viewModel::refreshProviderStatus,
-        // Search-provider integration (later branch) wires these to
-        // viewModel::saveSearchProviderCredential,
-        // viewModel::removeSearchProviderCredential,
-        // viewModel::refreshSearchProviderStatus, and
-        // viewModel::searchProviderAuthPrompts. Those ViewModel methods do
-        // not exist yet on this isolated branch, so the route passes
-        // placeholders to keep it compiling; no stubs are added to the
-        // ViewModel itself.
-        onSaveSearchProviderCredential = { _, _ -> },
-        onRemoveSearchProviderCredential = { _ -> },
-        onRefreshSearchProviderStatus = { },
-        searchAuthPrompts = { emptyList() },
+        onSaveSearchProviderCredential = viewModel::saveSearchProviderCredential,
+        onRemoveSearchProviderCredential = viewModel::removeSearchProviderCredential,
+        onRefreshSearchProviderStatus = viewModel::refreshSearchProviderStatus,
+        searchAuthPrompts = viewModel::searchProviderAuthPrompts,
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
         onToggleShowThinking = viewModel::setShowThinking,

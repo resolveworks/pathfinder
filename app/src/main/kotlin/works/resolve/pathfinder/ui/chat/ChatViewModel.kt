@@ -50,6 +50,8 @@ import works.resolve.pathfinder.data.sessions.SessionRepository
 import works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
 import works.resolve.pathfinder.data.sessions.SessionSummary
 import works.resolve.pathfinder.logging.PathfinderDiagnostics
+import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
+import works.resolve.pathfinder.tools.websearch.SearchProviderService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -161,6 +163,8 @@ class ChatViewModel(
      * waits and network work on it while the app is backgrounded.
      */
     private val appForegroundGate: AppForegroundGate = AppForegroundGate(),
+    /** Web-search credential management (Brave only, Scry parity). */
+    private val searchProviderService: SearchProviderService,
 ) : ViewModel() {
 
     // Catalog-driven provider/model surface: option lists are computed from
@@ -211,6 +215,14 @@ class ChatViewModel(
 
     /** Agent-sourced error last projected into the UI, to detect agent-side clearing. */
     private var lastAgentError: String? = null
+
+    /**
+     * Whether a usable Brave Search key is currently stored — the flag every
+     * agent created or bound here is synchronized against (web_search
+     * active iff true). Maintained by [refreshSearchStatus] from live
+     * credential reads, never persisted.
+     */
+    private var searchBraveConfigured: Boolean = false
 
     init {
         viewModelScope.launch { initialize() }
@@ -413,6 +425,81 @@ class ChatViewModel(
             ?.prompts
             ?.map { ProviderAuthPrompt(it.envKey, it.message, it.secret) }
             .orEmpty()
+
+    /**
+     * UI-safe auth prompts for a search provider's credential form. Only
+     * Brave is supported (Scry parity): one secret prompt for its API key,
+     * mirroring Scry's `BRAVE_API_KEY`. Unknown providers return an empty
+     * list (the form never renders stale prompts for them).
+     */
+    fun searchProviderAuthPrompts(providerId: String): List<ProviderAuthPrompt> =
+        if (providerId == SearchProviderService.BRAVE_PROVIDER_ID) {
+            listOf(ProviderAuthPrompt(BRAVE_API_KEY_PROMPT, SEARCH_BRAVE_KEY_PROMPT_MESSAGE, secret = true))
+        } else {
+            emptyList()
+        }
+
+    /**
+     * Stores a web-search provider's API key (the search form's save).
+     * Blank input, an unknown provider, or a storage failure surfaces a
+     * static, secret-free error and changes nothing: the stored key, the
+     * surfaced status, and the bound session's tools stay intact. Only a
+     * confirmed non-blank save bumps [ChatUiState.searchCredentialSuccessEpoch]
+     * (exactly once), refreshes status, and enables web_search on the bound
+     * session for the next run.
+     */
+    fun saveSearchProviderCredential(providerId: String, apiKeyInput: String) {
+        viewModelScope.launch {
+            if (providerId != SearchProviderService.BRAVE_PROVIDER_ID) {
+                setError(ERROR_SEARCH_CREDENTIAL_SAVE)
+                return@launch
+            }
+            val key = apiKeyInput.trim()
+            if (key.isEmpty()) {
+                setError(ERROR_SEARCH_CREDENTIAL_SAVE)
+                return@launch
+            }
+            try {
+                searchProviderService.saveApiKey(providerId, key)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(ERROR_SEARCH_CREDENTIAL_SAVE, e)
+                return@launch
+            }
+            updateState { it.copy(searchCredentialSuccessEpoch = it.searchCredentialSuccessEpoch + 1) }
+            refreshSearchStatus()
+        }
+    }
+
+    /**
+     * Deletes a search provider's stored key. A successful delete refreshes
+     * the status and disables web_search on the bound session for the next
+     * run; a failure surfaces a safe error and changes nothing.
+     */
+    fun removeSearchProviderCredential(providerId: String) {
+        viewModelScope.launch {
+            try {
+                searchProviderService.remove(providerId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(ERROR_SEARCH_CREDENTIAL_SAVE, e)
+                return@launch
+            }
+            refreshSearchStatus()
+        }
+    }
+
+    /**
+     * Explicitly re-reads search credentials and recomputes the derived
+     * surfaces (row status and the session's web_search activation), like
+     * [refreshProviderStatus] for LLM providers. A read failure degrades
+     * search to unconfigured/disabled with a safe error.
+     */
+    fun refreshSearchProviderStatus() {
+        viewModelScope.launch { refreshSearchStatus() }
+    }
 
     /** Persists the show-thinking display preference; safe mid-stream (display-only). */
     fun setShowThinking(enabled: Boolean) {
@@ -868,6 +955,10 @@ class ChatViewModel(
     ): AgentSession? =
         try {
             agentFactory.create(settings, sessionId, conversation)
+                // Every session is synchronized against the current Brave
+                // credential before anything binds to it: web_search active
+                // when configured, absent otherwise.
+                .also(::synchronizeWebSearch)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1483,6 +1574,13 @@ class ChatViewModel(
      * persisted settings — projects [ChatUiState.selectedModel].
      */
     private suspend fun refreshOptions() {
+        // Search status is computed first (and independently of the LLM
+        // surfaces below): a provider read failure must not leave it
+        // stale, and it must be fresh before any agent creation this
+        // call precedes. Search credentials never contribute to the LLM
+        // first-run configuration below — `search_`-namespaced keys are
+        // not catalog provider credentials.
+        refreshSearchStatus()
         val providerOptions = try {
             catalog.providers
                 .map { provider ->
@@ -1542,6 +1640,64 @@ class ChatViewModel(
             )
         }
         projectScope(modelOptions)
+    }
+
+    /**
+     * Recomputes the search-provider surface ([ChatUiState.searchProviderOptions],
+     * name-sorted) from live credential reads and updates
+     * [searchBraveConfigured]; every bound session's web_search activation
+     * follows ([synchronizeWebSearch]). A read failure degrades search to
+     * unconfigured/disabled and surfaces a safe error — it never fails an
+     * otherwise-valid chat initialization.
+     */
+    private suspend fun refreshSearchStatus() {
+        val options = try {
+            searchProviderService.providers
+                .map { provider ->
+                    ProviderOption(
+                        id = provider.id,
+                        name = provider.name,
+                        configured = searchProviderService.isConfigured(provider.id),
+                    )
+                }
+                .sortedBy { it.name }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            recordDegradation("search_provider_status", e)
+            setError(ERROR_SEARCH_STATUS, e)
+            searchBraveConfigured = false
+            updateState {
+                it.copy(
+                    searchProviderOptions = searchProviderService.providers
+                        .map { provider -> ProviderOption(provider.id, provider.name, configured = false) }
+                        .sortedBy { option -> option.name },
+                )
+            }
+            agent?.let(::synchronizeWebSearch)
+            return
+        }
+        searchBraveConfigured =
+            options.firstOrNull { it.id == SearchProviderService.BRAVE_PROVIDER_ID }?.configured == true
+        updateState { it.copy(searchProviderOptions = options) }
+        agent?.let(::synchronizeWebSearch)
+    }
+
+    /**
+     * Aligns one session's tool set with the current search credential:
+     * any existing web_search entry is removed and the tool is appended
+     * (last) only while Brave is configured — the order and activation of
+     * every non-web-search tool is preserved exactly. Safe mid-stream and
+     * against future runs alike: the agent snapshots its tool list per run
+     * (see [AgentSession.setActiveToolsByName]), so an in-flight run keeps
+     * its own snapshot and the change lands on the next run. Like pi's
+     * core, no `active_tools_change` session entry is appended — adoption
+     * re-seeds the fold, and this runtime-only toggle is never persisted.
+     */
+    private fun synchronizeWebSearch(session: AgentSession) {
+        val names = session.getActiveToolNames().filter { it != BraveWebSearchTool.NAME } +
+            listOfNotNull(BraveWebSearchTool.NAME.takeIf { searchBraveConfigured })
+        session.setActiveToolsByName(names)
     }
 
     /**
@@ -1681,6 +1837,14 @@ class ChatViewModel(
         const val ERROR_ALREADY_STREAMING = "A response is already streaming"
         const val ERROR_ALREADY_AT_POINT = "Already at this point"
         const val ERROR_ENTRY_MISSING = "Message not found"
+        const val ERROR_SEARCH_CREDENTIAL_SAVE = "Could not store the search API key"
+        const val ERROR_SEARCH_STATUS = "Could not read the search provider status"
+
+        /** Scry's environment-variable name, kept as the prompt's stable id. */
+        const val BRAVE_API_KEY_PROMPT = "BRAVE_API_KEY"
+
+        /** Clear, secret-free message for the Brave key prompt. */
+        const val SEARCH_BRAVE_KEY_PROMPT_MESSAGE = "Enter your Brave Search API key"
 
         /** pi's DEFAULT_THINKING_LEVEL (coding-agent defaults.ts: "medium"). */
         val DEFAULT_THINKING_LEVEL = ModelThinkingLevel.MEDIUM
