@@ -31,55 +31,33 @@ import works.resolve.pathfinder.ai.utils.stringOrNull
 import kotlin.time.Clock
 
 /**
- * GitHub Copilot OAuth account flow, ported from pi
- * `packages/ai/src/auth/oauth/github-copilot.ts`.
+ * GitHub Copilot OAuth account flow: device-code login against github.com or
+ * a GitHub Enterprise domain, Copilot token exchange/refresh, and account
+ * model discovery/enablement.
  *
- * Mirrors the upstream file symbol-for-symbol: `loginGitHubCopilot`
- * ([login]), `refreshGitHubCopilotToken` ([refresh]), `toAuth`,
- * `normalizeDomain`, `getUrls`, `getBaseUrlFromToken`,
- * `getGitHubCopilotBaseUrl`, `parseGitHubCopilotModelCatalog`,
- * `fetchWithRateLimitRetry`, `fetchGitHubCopilotModels`, `fetchJson`,
- * `startDeviceFlow`, `pollForGitHubAccessToken`,
- * `refreshGitHubCopilotAccessToken`, `enableGitHubCopilotModel(s)`, and
- * `copilotEnterpriseDomain`. Token polling runs through the shared
- * [pollOAuthDeviceCodeFlow] (pi `device-code.ts`) with
- * `waitBeforeFirstPoll = true`.
- *
- * Divergences from pi (documented per AGENTS.md):
+ * Divergences from pi:
  * - All HTTP goes through the injected [OAuthHttpClient] with bounded
- *   timeouts instead of `fetch` + `AbortSignal`; cancellation travels as
- *   coroutine cancellation. `fetchJson` (which pi leaves unbounded) uses a
- *   bounded 30s exchange like the other Pathfinder flows; pi's per-attempt
- *   5s `AbortSignal.timeout` inside the rate-limit retry is kept verbatim.
- * - [OAuthHttpResponse] carries no HTTP reason phrase, so pi's
- *   `${status} ${statusText}` prefix becomes `${status}`. Raw response
- *   bodies are never interpolated into error messages (a security
- *   divergence from pi's `await response.text()`): only structured
+ *   timeouts; cancellation travels as coroutine cancellation. [fetchJson]
+ *   is bounded at 30s where pi leaves it unbounded.
+ * - [OAuthHttpResponse] carries no HTTP reason phrase, so error messages
+ *   prefix with the bare status.
+ * - Raw response bodies are never interpolated into error messages (pi
+ *   interpolates `await response.text()`): only structured
  *   `error`/`error_description` fields from a JSON error object are
  *   preserved; unparseable or non-error bodies are redacted.
- * - pi's `GITHUB_COPILOT_MODELS` membership check (`Object.hasOwn`) uses the
- *   generated static model catalog; the constructor receives the same ids
- *   ([knownModelIds]) from the generated `models-catalog.json` provider
- *   entry, so no parallel model list is maintained.
- * - `Date.now()` (retry deadlines, expiry math) is read through the
- *   internal [clock] seam (system clock by default) for deterministic tests.
- *
- * Nothing secret is ever logged or placed in exception messages by this
- * class: errors carry HTTP statuses and server-provided response text only.
+ * - pi's `GITHUB_COPILOT_MODELS` membership check uses the generated static
+ *   model catalog, received as [knownModelIds]; no parallel model list is
+ *   maintained.
  */
 class GitHubCopilotOAuthAuth(
     private val http: OAuthHttpClient,
-    /** pi `GITHUB_COPILOT_MODELS` ids (generated catalog entry's model ids). */
     private val knownModelIds: Set<String>,
     private val clock: Clock = Clock.System,
 ) : OAuthAuth {
 
     override val name: String = "GitHub Copilot"
 
-    /** pi `isSubscription: true`. */
     override val isSubscription: Boolean = true
-
-    // --- login / refresh / toAuth (pi `loginGitHubCopilot` etc.) ---
 
     override suspend fun login(interaction: AuthInteraction): OAuthCredential {
         val input = interaction.prompt(
@@ -88,8 +66,6 @@ class GitHubCopilotOAuthAuth(
                 placeholder = "company.ghe.com",
             ),
         )
-        // pi checks `signal.aborted` after the prompt; mapped to cooperative
-        // cancellation (conventions doc) with pi's "Login cancelled" message.
         try {
             currentCoroutineContext().ensureActive()
         } catch (error: CancellationException) {
@@ -141,27 +117,17 @@ class GitHubCopilotOAuthAuth(
     override suspend fun refresh(credential: OAuthCredential): OAuthCredential =
         refreshGitHubCopilotToken(credential.refresh, copilotEnterpriseDomain(credential))
 
-    /**
-     * Port of pi `toAuth`: derives the credential-specific proxy endpoint for
-     * each request — API key plus the per-account base URL.
-     */
     override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
         ModelAuth(
             apiKey = credential.access,
             baseUrl = getGitHubCopilotBaseUrl(credential.access, copilotEnterpriseDomain(credential)),
         )
 
-    // --- domain normalization / URL derivation (pi `normalizeDomain`, `getUrls`, base URL helpers) ---
-
     /**
-     * Port of pi `normalizeDomain`: accepts a bare domain or a URL and
-     * returns its hostname, or null when unparseable.
-     *
-     * Divergence from pi (documented per AGENTS.md): WHATWG `new URL`
-     * lower-cases the host; the JDK [java.net.URI] preserves case, so the
-     * host is explicitly lower-cased here to keep hostname semantics
-     * identical. Anything WHATWG accepts but `URI` rejects is null
-     * (treated as invalid input), strictly rejecting rather than opening.
+     * WHATWG `new URL` lower-cases the host; [java.net.URI] preserves case,
+     * so the host is explicitly lower-cased to keep hostname semantics
+     * identical. Anything WHATWG accepts but `URI` rejects is null:
+     * strictly rejecting rather than opening.
      */
     internal fun normalizeDomain(input: String): String? {
         val trimmed = input.trim()
@@ -175,7 +141,6 @@ class GitHubCopilotOAuthAuth(
         }
     }
 
-    /** Port of pi `getUrls`. */
     internal fun getUrls(domain: String): CopilotUrls =
         CopilotUrls(
             deviceCodeUrl = "https://$domain/login/device/code",
@@ -189,11 +154,7 @@ class GitHubCopilotOAuthAuth(
         val copilotTokenUrl: String,
     )
 
-    /**
-     * Port of pi `getBaseUrlFromToken`. Token format:
-     * `tid=...;exp=...;proxy-ep=proxy.individual.githubcopilot.com;...`;
-     * `proxy.xxx` becomes `api.xxx`.
-     */
+    /** Copilot tokens embed `proxy-ep=<host>`; the API host swaps the `proxy.` prefix. */
     internal fun getBaseUrlFromToken(token: String): String? {
         val match = PROXY_EP_REGEX.find(token) ?: return null
         val proxyHost = match.groupValues[1]
@@ -201,7 +162,6 @@ class GitHubCopilotOAuthAuth(
         return "https://$apiHost"
     }
 
-    /** Port of pi `getGitHubCopilotBaseUrl`. */
     internal fun getGitHubCopilotBaseUrl(token: String?, enterpriseDomain: String?): String {
         if (token != null) {
             getBaseUrlFromToken(token)?.let { return it }
@@ -210,15 +170,11 @@ class GitHubCopilotOAuthAuth(
         return INDIVIDUAL_BASE_URL
     }
 
-    // --- model catalog (pi `parseGitHubCopilotModelCatalog`) ---
-
-    /** Port of pi's `{ availableModelIds, policyModelIds }` parse result. */
     internal data class CopilotModelCatalog(
         val availableModelIds: List<String>,
         val policyModelIds: List<String>,
     )
 
-    /** Port of pi `parseGitHubCopilotModelCatalog` (strict shape validation). */
     internal fun parseGitHubCopilotModelCatalog(raw: JsonElement?, allowPolicyFallback: Boolean): CopilotModelCatalog {
         val data = (raw as? JsonObject)?.get("data")
         if (data !is JsonArray) throw IllegalStateException("Invalid Copilot models response")
@@ -231,7 +187,6 @@ class GitHubCopilotOAuthAuth(
 
             val capabilities = item.obj("capabilities")
             val supports = capabilities.obj("supports")
-            // pi: `supports?.tool_calls === false` — only an explicit boolean false skips.
             if (supports?.get("tool_calls") == JsonPrimitive(false)) return@flatMap emptyList()
 
             listOf(
@@ -262,19 +217,12 @@ class GitHubCopilotOAuthAuth(
         return CopilotModelCatalog(availableModelIds, policyModelIds)
     }
 
-    // --- rate-limited fetch (pi `fetchWithRateLimitRetry`) ---
-
-    /** Port of pi's `{ maxRetries, maxElapsedMs }` retry policy. */
     internal data class RetryPolicy(val maxRetries: Int, val maxElapsedMs: Long)
 
     /**
-     * Port of pi `fetchWithRateLimitRetry`: retries 429s with exponential
-     * backoff (500ms * 2^retry), honoring `Retry-After` (seconds or
-     * HTTP-date) and stopping at the retry count or elapsed budget. Sleeps
-     * are cancellable; per-attempt timeout is pi's 5s `AbortSignal.timeout`
-     * clamped to the remaining elapsed budget (pi's `AbortSignal.any` of
-     * per-attempt and budget signals), so retries can never spend more than
-     * the budget on a fresh full request timeout.
+     * The per-attempt timeout is clamped to the remaining elapsed budget, so
+     * a fresh attempt can never spend more than the budget on a full
+     * request timeout.
      */
     private suspend fun fetchWithRateLimitRetry(
         url: String,
@@ -323,7 +271,6 @@ class GitHubCopilotOAuthAuth(
         }
     }
 
-    /** Parses an HTTP-date `Retry-After` value to epoch ms (pi's `Date.parse`). */
     internal fun parseHttpDateMs(value: String): Long? = try {
         DateTimeFormatter.RFC_1123_DATE_TIME
             .parse(value.trim())
@@ -331,8 +278,6 @@ class GitHubCopilotOAuthAuth(
         } catch (_: Exception) {
             null
         }
-
-    // --- model fetch / enablement (pi `fetchGitHubCopilotModels`, `enableGitHubCopilotModel(s)`) ---
 
     private suspend fun fetchGitHubCopilotModels(
         copilotToken: String,
@@ -379,9 +324,6 @@ class GitHubCopilotOAuthAuth(
         }
     }
 
-    // --- device authorization (pi `startDeviceFlow`, `pollForGitHubAccessToken`) ---
-
-    /** Port of pi `DeviceCodeResponse`. */
     internal data class DeviceCodeResponse(
         val deviceCode: String,
         val userCode: String,
@@ -414,7 +356,7 @@ class GitHubCopilotOAuthAuth(
         val interval = data.strictDouble("interval")
         val expiresIn = data.strictDouble("expires_in")
 
-        // pi: `interval` may be absent but must be a number when present.
+        // `interval` is optional but must be numeric when present.
         val intervalAbsent = data["interval"] == null || data["interval"] is JsonNull
         if (
             deviceCode == null || userCode == null || verificationUri == null ||
@@ -423,8 +365,6 @@ class GitHubCopilotOAuthAuth(
             throw IllegalStateException("Invalid device code response fields")
         }
 
-        // The verification URI is opened in the user's browser and to prevent `open` from
-        // opening an executable or similar, we force it to be an http(s) URL.
         val normalizedUri = validateVerificationUri(verificationUri)
 
         return DeviceCodeResponse(
@@ -487,15 +427,6 @@ class GitHubCopilotOAuthAuth(
         )
     }
 
-    // --- Copilot token exchange / refresh (pi `refreshGitHubCopilotAccessToken`, `refreshGitHubCopilotToken`) ---
-
-    /**
-     * Port of pi `refreshGitHubCopilotAccessToken`: exchanges the GitHub
-     * OAuth token for a Copilot token. `expires` is pi's exact skew math
-     * (`expires_at * 1000 - 5min`); `enterpriseUrl` is stored as a credential
-     * extra only when an enterprise domain is in play (pi's undefined field
-     * is simply absent from the JSON record).
-     */
     internal suspend fun refreshGitHubCopilotAccessToken(
         refreshToken: String,
         enterpriseDomain: String?,
@@ -532,7 +463,6 @@ class GitHubCopilotOAuthAuth(
         )
     }
 
-    /** Port of pi `refreshGitHubCopilotToken`: exchange + account model list (no retries). */
     internal suspend fun refreshGitHubCopilotToken(
         refreshToken: String,
         enterpriseDomain: String?,
@@ -549,13 +479,9 @@ class GitHubCopilotOAuthAuth(
         )
     }
 
-    // --- policy enablement (pi `enableGitHubCopilotModel` / `enableGitHubCopilotModels`) ---
-
     /**
-     * Port of pi `enableGitHubCopilotModel`: POSTs
-     * `{"state":"enabled"}` to the model's policy endpoint. Any
-     * non-cancellation failure (network error, other non-ok status) returns
-     * false; an exhausted 429 throws.
+     * Best effort: a non-cancellation transport failure reports false, but a
+     * 429 that exhausts retries throws.
      */
     private suspend fun enableGitHubCopilotModel(
         token: String,
@@ -581,8 +507,6 @@ class GitHubCopilotOAuthAuth(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            // pi catches any non-abort fetch failure and reports false; the
-            // batch continues with the next model.
             return false
         }
         if (response.status == 429) {
@@ -591,12 +515,6 @@ class GitHubCopilotOAuthAuth(
         return response.status in 200..299
     }
 
-    /**
-     * Port of pi `enableGitHubCopilotModels`: policy updates are best
-     * effort; a false enablement (any non-cancellation transport failure)
-     * continues with the next model, and only a thrown error (exhausted
-     * rate limiting) stops the batch; cancellation always propagates.
-     */
     private suspend fun enableGitHubCopilotModels(
         token: String,
         modelIds: List<String>,
@@ -617,23 +535,18 @@ class GitHubCopilotOAuthAuth(
         return enabledModelIds
     }
 
-    /** Test seam: pi `GITHUB_COPILOT_MODELS` id set as injected. */
     internal fun knownModelIdsForTest(): Set<String> = knownModelIds
 
-    /** Port of pi `copilotEnterpriseDomain`. */
     internal fun copilotEnterpriseDomain(credential: OAuthCredential): String? {
         val enterpriseUrl = credential.extras["enterpriseUrl"].stringOrNull()
         if (enterpriseUrl.isNullOrEmpty()) return null
         return normalizeDomain(enterpriseUrl)
     }
 
-    // --- JSON field helpers (pi's inline `typeof` checks) ---
-
     /**
-     * pi's `!raw || typeof raw !== "object"` guard: JSON objects pass
-     * through; arrays pass pi's check too (JS `typeof [] === "object"`), so
-     * they are mapped to the empty object and fail downstream field
-     * validation exactly like upstream; scalars/null fail with [message].
+     * Mirrors the upstream JS guard where `typeof [] === "object"`: arrays
+     * become the empty object and fail downstream field validation; scalars
+     * and null fail with [message].
      */
     private fun recordOr(raw: JsonElement?, message: String): JsonObject = when (raw) {
         is JsonObject -> raw
@@ -642,16 +555,12 @@ class GitHubCopilotOAuthAuth(
     }
 
     /**
-     * Safe non-OK failure for a status/body pair (Pathfinder security
-     * divergence from pi's raw `response.text()` interpolation): the message
-     * carries the status plus only structured `error`/`error_description`
-     * string fields from a JSON error object; anything else (unparseable
-     * body, non-object JSON, no error fields) is fully redacted, so raw
-     * response bodies never reach exceptions. Note the guarantee's limit:
-     * `error`/`error_description` are provider-authored text and could
-     * themselves echo request material; the app neither logs nor projects
-     * these exception messages, and credentials never travel in URLs or
-     * bodies where this port could attribute them.
+     * Raw response bodies never reach exception messages: only structured
+     * `error`/`error_description` string fields from a JSON error object are
+     * preserved; anything else (unparseable body, non-object JSON, no error
+     * fields) is fully redacted. Those fields are provider-authored text and
+     * could echo request material, so the app neither logs nor projects
+     * these exception messages.
      */
     internal fun statusError(status: Int, body: ByteArray): IllegalStateException =
         IllegalStateException("$status: ${safeErrorDetail(body)}")
@@ -670,9 +579,9 @@ class GitHubCopilotOAuthAuth(
     }
 
     /**
-     * Port of JS `Number.parseFloat` for the `Retry-After` numeric form: the
-     * longest numeric prefix of the trimmed value parses (`"1x"`, `" 2.5 sec"`,
-     * `"1e2foo"`), anything else (no numeric prefix, `"Infinity"`) is null.
+     * Mirrors JS `Number.parseFloat` prefix semantics for `Retry-After`: the
+     * longest numeric prefix of the trimmed value parses (`"1x"`,
+     * `" 2.5 sec"`), anything else (no numeric prefix, `"Infinity"`) is null.
      */
     internal fun parseFloatPrefix(value: String): Double? {
         val trimmed = value.trim()
@@ -682,15 +591,11 @@ class GitHubCopilotOAuthAuth(
     }
 
     /**
-     * Trust check plus normalization for the device flow's verification URI
-     * (pi parses with WHATWG `new URL` and returns `parsedUri.href`).
-     *
-     * Divergence from pi (documented per AGENTS.md): the JDK has no href
-     * normalizer, so the safe form is rebuilt here — lower-cased scheme and
-     * host, scheme-default ports (`:80`/`:443`) omitted, empty path becomes
-     * `/`, query and fragment preserved verbatim. The check is equally
-     * strict-or-stricter than WHATWG: the URI must carry an http(s) scheme
-     * and a non-empty authority, and anything `URI` rejects (opaque
+     * The device flow's verification URI is opened in the user's browser, so
+     * it must be a strict http(s) URL. The JDK has no WHATWG `href`
+     * normalizer, so the safe form is rebuilt: lower-cased scheme and host,
+     * scheme-default ports (`:80`/`:443`) omitted, empty path becomes `/`,
+     * query and fragment preserved verbatim. Anything `URI` rejects (opaque
      * authority-less forms like `http:foo`, control characters, invalid
      * escapes) is treated as untrusted rather than opened.
      */
@@ -717,14 +622,11 @@ class GitHubCopilotOAuthAuth(
         buildJsonObject { put("state", "enabled") }.toString().toByteArray(Charsets.UTF_8)
 
     companion object {
-        /** pi `CLIENT_ID` (pi stores it base64-decoded at module load). */
         val CLIENT_ID: String =
             Base64.getDecoder().decode("SXYxLmI1MDdhMDhjODdlY2ZlOTg=").toString(Charsets.US_ASCII)
 
-        /** pi `COPILOT_HEADERS["User-Agent"]`. */
         const val COPILOT_USER_AGENT: String = "GitHubCopilotChat/0.35.0"
 
-        /** pi `COPILOT_HEADERS`. */
         val COPILOT_HEADERS: Map<String, String> = mapOf(
             "User-Agent" to COPILOT_USER_AGENT,
             "Editor-Version" to "vscode/1.107.0",
@@ -732,25 +634,18 @@ class GitHubCopilotOAuthAuth(
             "Copilot-Integration-Id" to "vscode-chat",
         )
 
-        /** pi `COPILOT_API_VERSION`. */
         const val COPILOT_API_VERSION: String = "2026-06-01"
 
-        /** pi's individual-account default base URL. */
         const val INDIVIDUAL_BASE_URL: String = "https://api.individual.githubcopilot.com"
 
-        /** pi device grant type (RFC 8628 section 3.4). */
         const val DEVICE_GRANT_TYPE: String = "urn:ietf:params:oauth:grant-type:device_code"
 
-        /** pi `5 * 60 * 1000` expiry skew in `refreshGitHubCopilotAccessToken`. */
         const val REFRESH_SKEW_MS: Long = 5 * 60 * 1000
 
-        /** pi's `AbortSignal.timeout(5000)` per attempt in `fetchWithRateLimitRetry`. */
         const val PER_ATTEMPT_TIMEOUT_MS: Int = 5000
 
-        /** Bounded exchange timeout for pi's otherwise-unbounded `fetchJson` calls (Pathfinder divergence). */
         const val REQUEST_TIMEOUT_MS: Int = 30_000
 
-        /** Redaction marker for response bodies that carry no safe structured error detail. */
         internal const val REDACTED_BODY: String = "<redacted response body>"
 
         private val PROXY_EP_REGEX = Regex("proxy-ep=([^;]+)")

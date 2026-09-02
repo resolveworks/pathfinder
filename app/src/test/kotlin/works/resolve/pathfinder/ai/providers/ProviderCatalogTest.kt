@@ -25,15 +25,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assume.assumeTrue
 import java.io.File
 
-/**
- * Parsing tests for the generated model catalog: lenient unknown-field
- * handling, exact compat mapping (including chatTemplateArgs refs and
- * thinkingLevelMap absent-vs-null), fail-fast unknown enum values, and the
- * real bundled asset.
- */
 class ProviderCatalogTest {
-
-    // ---- fixture parsing ----
 
     @Test
     fun `parses provider identity, auth prompts, and bearer header override`() {
@@ -92,7 +84,6 @@ class ProviderCatalogTest {
             """,
         ).getProvider("cf")!!
 
-        // Cloudflare AI Gateway: header auth only, no default apiKey path.
         val cfAuth = cf.toResolvedAuth("cf-key", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acct"))
         assertNull(cfAuth.apiKey)
         assertEquals(
@@ -105,7 +96,6 @@ class ProviderCatalogTest {
         )
         assertEquals(mapOf("CLOUDFLARE_ACCOUNT_ID" to "acct"), cfAuth.env)
 
-        // Ordinary providers: plain apiKey auth with no headers.
         val plain = ProviderCatalog.parse(
             """
             {
@@ -200,9 +190,6 @@ class ProviderCatalogTest {
 
     @Test
     fun `completions cacheControlFormat parses and openrouter anthropic detection applies`() {
-        // pi detectCompat (openai-completions.ts:1621,1633): "anthropic" when
-        // the provider is openrouter and the model id starts with "anthropic/";
-        // getCompat merges an explicit model.compat override on top (:1701).
         val catalog = ProviderCatalog.parse(
             """
             {
@@ -234,9 +221,8 @@ class ProviderCatalogTest {
 
     @Test
     fun `openrouter anthropic models keep anthropic cache control format from the real asset`() {
-        // pi openrouter-cache-control-models.test.ts: the ~anthropic/*-latest
-        // aliases (explicit catalog compat) and the anthropic/* models both
-        // resolve cacheControlFormat "anthropic".
+        // The ~anthropic/*-latest aliases carry explicit catalog compat; the
+        // anthropic/* models go through openrouter detection.
         val catalog = realAsset()
         for (id in listOf(
             "~anthropic/claude-fable-latest",
@@ -295,10 +281,9 @@ class ProviderCatalogTest {
 
     @Test
     fun `unknown compat keys fail at parse instead of being dropped silently`() {
-        // pi's compat surface grows flags over time (supportsMaxOutputTokens
-        // being the latest); the generator emits pi's compat verbatim, so an
-        // unknown key means upstream drift that must fail loudly, not
-        // silently disable the behavior (this is what hid the responses
+        // The generator emits pi's compat flags verbatim, so an unknown key
+        // means upstream drift that must fail loudly rather than silently
+        // disable the behavior (a silent drop is what hid the responses
         // max_output_tokens gate).
         val error = assertFailsWith<IllegalArgumentException> {
             ProviderCatalog.parse(
@@ -321,10 +306,6 @@ class ProviderCatalogTest {
 
     @Test
     fun `real asset compat keys are all modeled by CompatDto`() {
-        // Guards the generator/DTO lockstep: every compat key the current
-        // bundled catalog carries parses without the unknown-key rejection
-        // firing (and every deferredToolsMode/reasoning-content model is
-        // plumbed).
         val catalog = realAsset()
         var deferred = 0
         var requiresReasoningContent = 0
@@ -343,8 +324,6 @@ class ProviderCatalogTest {
 
     @Test
     fun `completions supportsStrictMode defaults true and parses false from the catalog`() {
-        // pi openai-completions getCompat (:1653,:1699): detected default true;
-        // the catalog marks moonshotai/together/nvidia/cloudflare-ai-gateway false.
         val catalog = ProviderCatalog.parse(
             """
             {
@@ -364,9 +343,6 @@ class ProviderCatalogTest {
 
     @Test
     fun `supportsOpenAIGrammarTools defaults false and parses true for responses and completions`() {
-        // pi: responses getCompat (openai-responses.ts:74) and completions
-        // detectCompat (openai-completions.ts:1654, :1700) both default false;
-        // the generated catalog enables it for capable models.
         val catalog = ProviderCatalog.parse(
             """
             {
@@ -392,8 +368,6 @@ class ProviderCatalogTest {
 
     @Test
     fun `anthropic supportsStrictTools defaults false and parses true from the catalog`() {
-        // pi getAnthropicCompat (anthropic-messages.ts:193):
-        // `model.compat?.supportsStrictTools ?? false`.
         val catalog = ProviderCatalog.parse(
             """
             {"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
@@ -409,8 +383,6 @@ class ProviderCatalogTest {
 
     @Test
     fun `anthropic allowedFallbackModels decode with costs and default to empty`() {
-        // pi types.ts:307-311,695-702: AnthropicAllowedFallbackModel list with
-        // local pricing metadata; absent means callers must omit `fallbacks`.
         val catalog = ProviderCatalog.parse(
             """
             {"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
@@ -427,8 +399,6 @@ class ProviderCatalogTest {
         assertEquals(5.0, fallbacks[0].cost.input)
         assertEquals(6.25, fallbacks[0].cost.cacheWrite)
         assertEquals(0, catalog.getModel("p", "b")!!.anthropicCompat.allowedFallbackModels.size)
-        // Real asset round-trip: pi's data carries the list on claude-fable-5
-        // and claude-opus-5 only.
         val fable = realAsset().getModel("anthropic", "claude-fable-5")!!
         assertTrue(fable.anthropicCompat.allowedFallbackModels.size > 0)
         assertEquals(
@@ -509,18 +479,14 @@ class ProviderCatalogTest {
         }
     }
 
-    // ---- credential completeness ----
-
     @Test
     fun `cloudflare credential is incomplete without every auth prompt value`() {
         val provider = TestCatalogs.CLOUDFLARE
-        // Key only: account/gateway ids are still missing.
         assertFalse(provider.isCredentialComplete("cf-key", emptyMap()))
         assertEquals(
             listOf("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"),
             provider.missingAuthPrompts("cf-key", emptyMap()).map { it.envKey },
         )
-        // Gateway id still missing; blank values count as missing.
         assertFalse(provider.isCredentialComplete("cf-key", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc")))
         assertFalse(
             provider.isCredentialComplete(
@@ -528,7 +494,6 @@ class ProviderCatalogTest {
                 mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "  "),
             ),
         )
-        // No key at all (first prompt): incomplete even with both env ids.
         assertFalse(
             provider.isCredentialComplete(
                 null,
@@ -547,7 +512,6 @@ class ProviderCatalogTest {
             ),
         )
         assertTrue(provider.missingAuthPrompts("cf-key", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw")).isEmpty())
-        // A single-prompt provider (zai) is complete with just the key.
         assertTrue(TestCatalogs.ZAI.isCredentialComplete("zai-key", emptyMap()))
         assertFalse(TestCatalogs.ZAI.isCredentialComplete(null, emptyMap()))
     }
@@ -561,8 +525,6 @@ class ProviderCatalogTest {
         assertFalse(provider.isCredentialComplete("  ", emptyMap()))
         assertTrue(provider.isCredentialComplete("k", emptyMap()))
     }
-
-    // ---- fail-fast on unknown enum values ----
 
     @Test
     fun `unknown thinkingFormat throws with context`() {
@@ -595,8 +557,6 @@ class ProviderCatalogTest {
             )
         }
     }
-
-    // ---- glm-4.7 must parse to exactly the old hand-ported values ----
 
     @Test
     fun `real asset zai glm-4_7 matches the retired hand-written ZaiModels port`() {
@@ -632,8 +592,6 @@ class ProviderCatalogTest {
         )
         assertEquals(expected, model)
     }
-
-    // ---- anthropic-messages compat mapping ----
 
     @Test
     fun `compat anthropic flags map with pi defaults when absent`() {
@@ -679,8 +637,6 @@ class ProviderCatalogTest {
     @Test
     fun `real asset loads non-default anthropic compat flags`() {
         val catalog = realAsset()
-        // anthropic/claude-opus-4-7: strict tools + adaptive thinking + no
-        // temperature; everything else stays at pi defaults.
         assertEquals(
             works.resolve.pathfinder.ai.core.AnthropicMessagesCompat(
                 supportsTemperature = false,
@@ -689,7 +645,6 @@ class ProviderCatalogTest {
             ),
             catalog.getModel("anthropic", "claude-opus-4-7")!!.anthropicCompat,
         )
-        // fireworks deepseek-v4-flash: session affinity on, everything else off.
         assertEquals(
             works.resolve.pathfinder.ai.core.AnthropicMessagesCompat(
                 supportsEagerToolInputStreaming = false,
@@ -721,19 +676,15 @@ class ProviderCatalogTest {
     @Test
     fun `completions compat parses affinity and cache retention flags`() {
         val catalog = realAsset()
-        // cloudflare-ai-gateway workers-ai model: affinity on, long retention off.
         val cf = catalog.getModel("cloudflare-ai-gateway", "workers-ai/@cf/google/gemma-4-26b-a4b-it")!!
         assertEquals(true, cf.compat.sendSessionAffinityHeaders)
         assertEquals(false, cf.compat.supportsLongCacheRetention)
         assertNull(cf.compat.sessionAffinityFormat, "format auto-detects at request time")
-        // openrouter models keep pi defaults: affinity off, format auto-detect, retention supported.
         val or = catalog.getModel("openrouter", "aion-labs/aion-2.0")!!
         assertEquals(false, or.compat.sendSessionAffinityHeaders)
         assertEquals(true, or.compat.supportsLongCacheRetention)
         assertNull(or.compat.sessionAffinityFormat)
     }
-
-    // ---- the real bundled asset ----
 
     private var realCatalog: ProviderCatalog? = null
 
@@ -763,8 +714,6 @@ class ProviderCatalogTest {
         assertNull(catalog.getProvider("google-vertex"))
         assertNull(catalog.getModel("zai", "not-a-model"))
         assertEquals("cf-aig-authorization", catalog.getProvider("cloudflare-ai-gateway")!!.bearerHeaderName)
-        // Parsing already proved every compat field maps; sanity-check a couple
-        // of the special shapes made it through.
         val kimi = catalog.getModel("baseten", "moonshotai/Kimi-K2.5")!!
         assertTrue(kimi.reasoning)
         assertIs<ChatTemplateKwargValue.Ref>(kimi.compat.chatTemplateArgs["enable_thinking"])
@@ -788,7 +737,7 @@ class ProviderCatalogTest {
             ),
             apis,
         )
-        // Mixed-API providers keep every model (pi's Record<ApiId, Api>).
+        // Mixed-API providers keep every model.
         assertEquals(
             setOf("anthropic-messages", "openai-completions", "openai-responses"),
             catalog.getProvider("cloudflare-ai-gateway")!!.apis,
@@ -800,8 +749,7 @@ class ProviderCatalogTest {
     @Test
     fun `real asset auth metadata covers new providers`() {
         val catalog = realAsset()
-        // OAuth-only provider: models kept, auth carries OAuth capability
-        // metadata only — no API-key prompts, no placeholder env key.
+        // OAuth-only provider: no API-key prompts, OAuth metadata instead.
         val codex = catalog.getProvider("openai-codex")!!
         assertTrue(codex.models.isNotEmpty())
         assertEquals(emptyList<AuthPrompt>(), codex.auth.prompts)
@@ -809,10 +757,8 @@ class ProviderCatalogTest {
             ProviderOAuth(name = "OpenAI (ChatGPT Plus/Pro)", isSubscription = true),
             codex.auth.oauth,
         )
-        // Simple env-key providers.
         assertEquals("ANTHROPIC_API_KEY", catalog.getProvider("anthropic")!!.auth.prompts.single().envKey)
         assertEquals("GEMINI_API_KEY", catalog.getProvider("google")!!.auth.prompts.single().envKey)
-        // Non-secret extra prompts (Cloudflare account/gateway).
         val gateway = catalog.getProvider("cloudflare-ai-gateway")!!.auth.prompts
         assertEquals(
             listOf("CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"),
@@ -855,8 +801,6 @@ class ProviderCatalogTest {
         val catalog = realAsset()
         val entry = catalog.getProvider("cloudflare-ai-gateway")!!
         val runtime = entry.toRuntimeProvider(FakeTransport())
-        // Only APIs without a Kotlin port are excluded from the runtime api
-        // map; openai-responses now streams like the rest.
         assertEquals(setOf("openai-completions", "anthropic-messages", "openai-responses"), runtime.apis.keys)
         val completionsModel = entry.models.first { it.api == "openai-completions" }
         val models = Models(listOf(runtime))

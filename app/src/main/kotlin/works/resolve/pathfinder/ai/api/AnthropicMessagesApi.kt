@@ -73,7 +73,7 @@ import kotlin.time.Clock
  *   needs them).
  * - pi's ambient ANTHROPIC_AUTH_TOKEN (Authorization: Bearer header auth) and
  *   ANTHROPIC_OAUTH_TOKEN (apiKey source) paths (providers/anthropic.ts:24-36)
- *   are reduced to ANTHROPIC_API_KEY only — see ai/AGENTS.md.
+ *   are reduced to ANTHROPIC_API_KEY only.
  */
 class AnthropicMessagesApi(
     private val transport: HttpStreamingTransport,

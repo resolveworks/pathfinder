@@ -27,20 +27,11 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Immutable public state of an [Agent], exposed as a [StateFlow]. Ported from
- * pi's AgentState (packages/agent/src/types.ts) reduced to pathfinder's
- * surface: [messages] is the committed transcript, [tools] the copied tool
- * snapshot (pi's copying accessor in `createMutableAgentState`, agent.ts:68),
- * [streamingMessage] the partial message currently being streamed — of any
- * role, since user and tool-result `message_start`s transiently occupy it
- * too (pi types it `AgentMessage | undefined`) — and [pendingToolCalls] the
- * ids of tool calls whose execution has started but not ended.
- * [thinkingLevel] is pi's AgentState.thinkingLevel (agent.ts:77), default
- * `"off"`; the run loop snapshots it into its request options (see
- * [Agent.prompt]). [systemPrompt] is pi's AgentState.systemPrompt
- * (createMutableAgentState, agent.ts:75: `initialState?.systemPrompt ?? ""`),
- * diverging from upstream's required `""` default only in keeping
- * pathfinder's nullable Context.systemPrompt.
+ * Immutable public state of an [Agent], exposed as a [StateFlow].
+ * [streamingMessage] is the partial message currently being streamed — of any
+ * role, since user and tool-result message starts transiently occupy it too —
+ * and [pendingToolCalls] the ids of tool calls whose execution has started
+ * but not ended.
  */
 data class AgentState(
     val model: Model,
@@ -55,55 +46,37 @@ data class AgentState(
 )
 
 /**
- * Stateful wrapper around the low-level agent loop, ported from pi's Agent
- * class reduced to the state/lifecycle/prompt/continue/abort subset needed
- * by a no-tools chat: it owns the agent transcript, reduces loop events into
- * [AgentState] before notifying [events] observers, and synthesizes terminal
- * lifecycle when a run fails at this boundary.
- *
- * One [prompt] (or [continueRun]) is exactly one run of the agent loop: the
- * post-run orchestration pi layers above the Agent in agent-session
- * (auto-retry, compaction) lives in [AgentSession] here, exactly like pi's
- * layering (coding-agent `agent-session.ts` over `packages/agent/src/agent.ts`).
- *
- * Queues, hooks, tools, images, and persistence are deliberately absent.
- * Auto-retry settings ([RetrySettings]) are an [AgentSession] concern; this
- * class has no retry behavior.
+ * Stateful wrapper around the low-level agent loop: owns the agent
+ * transcript, reduces loop events into [AgentState] before notifying
+ * [events] observers, and synthesizes terminal lifecycle when a run fails at
+ * this boundary. Post-run orchestration — auto-retry ([RetrySettings]),
+ * compaction — is an [AgentSession] concern, not an Agent capability.
  */
 class Agent(
-    /** Initial model (pi's AgentOptions.initialState.model); mutable via [setModel]. */
     model: Model,
-    /** Initial system prompt (pi's AgentOptions.initialState.systemPrompt); mutable via [setSystemPrompt]. */
     systemPrompt: String? = null,
     val streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
-    /** Tools available to every run (pi's AgentOptions.initialState.tools). Copied into state. */
     tools: List<AgentTool> = emptyList(),
-    /** Tool execution mode (pi's AgentOptions.toolExecution, default "parallel"). */
     private val toolExecution: ToolExecutionMode = ToolExecutionMode.PARALLEL,
-    /** Wall clock for minting message timestamps (TS→Kotlin timing rule). */
     private val clock: Clock = Clock.System,
     private val streamFn: StreamFn,
 ) {
-    /** Guards [active] and transcript mutations; all critical sections are brief and non-suspending. */
+    /** Guards [active] and transcript mutations; critical sections stay brief and non-suspending. */
     private val lock = Any()
 
-    /** True while a prompt is running; guarded by [lock]. */
     private var active = false
 
-    /** Job of the current run's loop, cancelled by [abort]; volatile: abort may come from any coroutine. */
+    /** Current run's loop job, cancelled by [abort]; volatile because abort may come from any coroutine. */
     @Volatile
     private var activeJob: Job? = null
 
-    /** True once the low-level loop emitted AgentEnd for the current run. */
     private var sawAgentEnd = false
 
     /**
-     * Event sink installed by the owning [AgentSession] (pi's agent-session
-     * registers an agent event listener). Invoked synchronously from
-     * [processEvent] after the event has been reduced into [state] and
+     * Event sink installed by the owning [AgentSession]. Invoked synchronously
+     * from [processEvent] after the event has been reduced into [state] and
      * emitted to [events], so a session sees the already-reduced state and
-     * full source-ordered events without flow-subscription races. Only one
-     * session may own an Agent.
+     * full source-ordered events. Only one session may own an Agent.
      */
     internal var eventSink: suspend (AgentEvent) -> Unit = {}
 
@@ -112,74 +85,45 @@ class Agent(
     )
     val state: StateFlow<AgentState> = _state.asStateFlow()
 
-    /**
-     * The currently selected model — state, not identity (pi keeps `model`
-     * inside AgentState, agent.ts:76; coding-agent's setModel assigns
-     * `agent.state.model`, agent-session.ts:1671). Reassigned, never mutated.
-     */
     val model: Model get() = _state.value.model
 
-    /**
-     * The currently selected thinking level (pi's `agent.state.thinkingLevel`
-     * accessor, agent-session.ts:916). Reassigned, never mutated.
-     */
     val thinkingLevel: ModelThinkingLevel get() = _state.value.thinkingLevel
 
-    /**
-     * The current system prompt (pi's `agent.state.systemPrompt`,
-     * createMutableAgentState agent.ts:75). Reassigned, never mutated.
-     */
     val systemPrompt: String? get() = _state.value.systemPrompt
 
     /**
-     * Select the model for subsequent runs (pi's harness `setModel`,
-     * agent-harness.ts:425, and coding-agent's state assignment). Safe during
-     * an in-flight run: [prompt] snapshots the model into its loop config at
-     * run start (pi's createLoopConfig reads `_state.model`, agent.ts:515),
-     * so the active run keeps streaming from its original model and the next
-     * prompt uses the new one. Pure state assignment — validation and the
-     * session-tree model_change record are [AgentSession.setModel]'s job,
-     * exactly like pi's layering.
+     * Select the model for subsequent runs. Safe during an in-flight run:
+     * [prompt] snapshots the model at run start, so the active run keeps its
+     * original model and the next prompt uses the new one. Validation and the
+     * session-tree model_change record are [AgentSession.setModel]'s job.
      */
     fun setModel(model: Model) {
         reduce { it.copy(model = model) }
     }
 
     /**
-     * Select the thinking level for subsequent runs (pi's agent-session
-     * assigning `agent.state.thinkingLevel`, agent-session.ts:1800). Safe
-     * during an in-flight run: [prompt] snapshots the level into its loop
-     * config's request options at run start (pi's createLoopConfig reads
-     * `this._state.thinkingLevel`, agent.ts:450), so the active run keeps its
-     * start-of-run level and the next prompt uses the new one. Pure state
-     * assignment — clamping and the session-tree thinking_level_change record
-     * are [AgentSession.setThinkingLevel]'s job, exactly like pi's layering.
+     * Select the thinking level for subsequent runs. Safe during an in-flight
+     * run: [prompt] snapshots the level at run start, so the active run keeps
+     * its start-of-run level and the next prompt uses the new one. Clamping
+     * and the session-tree thinking_level_change record are
+     * [AgentSession.setThinkingLevel]'s job.
      */
     fun setThinkingLevel(level: ModelThinkingLevel) {
         reduce { it.copy(thinkingLevel = level) }
     }
 
     /**
-     * Assign the tools for subsequent runs. Mirrors pi's copying `tools`
-     * setter in `createMutableAgentState` (agent.ts:68–96: the setter stores
-     * `nextTools.slice()`); the caller's list is copied via [toList] on
-     * assignment. Motivating consumer: pi's `setActiveToolsByName`
-     * (agent-session.ts:971) assigns `this.agent.state.tools = tools` between
-     * runs. Safe during an in-flight run: [prompt] snapshots the tools into
-     * its context snapshot at run start (pi's createContextSnapshot, agent.ts:437),
-     * so the active run keeps its start-of-run tool set and the next prompt
-     * uses the new one.
+     * Assign the tools for subsequent runs. Safe during an in-flight run:
+     * [prompt] snapshots the tools at run start, so the active run keeps its
+     * start-of-run tool set and the next prompt uses the new ones.
      */
     fun setTools(tools: List<AgentTool>) {
         reduce { it.copy(tools = tools.toList()) }
     }
 
     /**
-     * Assign the system prompt for subsequent runs, mirroring pi's
-     * `agent.state.systemPrompt = …` assignment in `setActiveToolsByName`
-     * (agent-session.ts:971–984). Safe during an in-flight run: [prompt]
-     * snapshots the system prompt into its context snapshot at run start
-     * (pi's createContextSnapshot, agent.ts:437), so the active run keeps its
+     * Assign the system prompt for subsequent runs. Safe during an in-flight
+     * run: [prompt] snapshots it at run start, so the active run keeps its
      * start-of-run prompt and the next prompt uses the new one.
      */
     fun setSystemPrompt(value: String?) {
@@ -187,34 +131,32 @@ class Agent(
     }
 
     /**
-     * Serializes [processEvent] critical sections. Pi's processEvents is
-     * effectively single-threaded (JS); under parallel tool execution,
-     * tool-execution events can arrive concurrently with message events, so
-     * reduction + emission + sink run under this mutex to keep the
+     * Serializes [processEvent] critical sections: under parallel tool
+     * execution, tool-execution events can arrive concurrently with message
+     * events, so reduction + emission + sink run under this mutex to keep the
      * already-reduced-state contract and prevent lost pending-call updates
      * (copy-on-write sets alone cannot fix a read-modify-write race).
      */
     private val eventMutex = Mutex()
 
     /**
-     * Lifecycle events in source order. Internal state is reduced before an
-     * event is emitted, so observers always see the already-reduced state.
+     * Lifecycle events in source order; state is reduced before each event is
+     * emitted, so observers always see the already-reduced state.
      *
-     * Contract of this zero-replay, zero-buffer [MutableSharedFlow]: a value
-     * emitted with no subscribers is dropped immediately (emit does not await
-     * subscribers appearing), and with subscribers present `emit` suspends
-     * only until the value has been handed to every subscriber's collector —
-     * not until subscribers finish processing it. Observers must subscribe
-     * before starting a run to observe all of its events; the already-reduced
+     * Zero-replay, zero-buffer: a value emitted with no subscribers is
+     * dropped immediately, and with subscribers present `emit` suspends only
+     * until the value has been handed to every collector — not until
+     * subscribers finish processing it. Observers must subscribe before
+     * starting a run to observe all of its events; the already-reduced
      * [state] is always complete regardless of subscription timing.
      */
     private val _events = MutableSharedFlow<AgentEvent>()
     val events: SharedFlow<AgentEvent> = _events.asSharedFlow()
 
     /**
-     * Run one agent loop over [messages] (pi's `Agent.prompt(messages)`),
-     * appending them to the committed transcript and streaming one assistant
-     * response from the resulting snapshot.
+     * Run one agent loop over [messages], appending them to the committed
+     * transcript and streaming one assistant response from the resulting
+     * snapshot.
      *
      * @throws IllegalStateException when a run is already active.
      * @throws CancellationException when aborted or when the caller is cancelled;
@@ -235,15 +177,8 @@ class Agent(
         sawAgentEnd = false
 
         try {
-            // Snapshot the selected model and thinking level for this run
-            // (pi's createLoopConfig builds the loop config — including
-            // `this._state.model` and `reasoning: this._state.thinkingLevel
-            // === "off" ? undefined : this._state.thinkingLevel`
-            // (agent.ts:450-453) — once per run, agent.ts:509-515), and the
-            // context snapshot — `systemPrompt`, `messages.slice()`,
-            // `tools.slice()` from `this._state` (createContextSnapshot,
-            // agent.ts:437-443): a setModel/setThinkingLevel/setTools/
-            // setSystemPrompt during the run changes only later runs.
+            // Start-of-run snapshot: setter calls during the run affect only
+            // later runs.
             val runModel = _state.value.model
             val runOptions = streamOptions.copy(
                 reasoning = _state.value.thinkingLevel.toThinkingLevelOrNull(),
@@ -269,9 +204,6 @@ class Agent(
                     runAgentLoop(messages, contextSnapshot, config) { event -> processEvent(event) }
                 }
                 activeJob = job
-                // Pi's runWithLifecycle clears streamingMessage and
-                // errorMessage when a run starts (agent.ts:496-498);
-                // pendingToolCalls is only cleared by finishRun at run end.
                 reduce { it.copy(isStreaming = true, streamingMessage = null, errorMessage = null) }
                 job.start()
 
@@ -285,43 +217,31 @@ class Agent(
             withContext(NonCancellable) { handleRunFailure(aborted = true) }
             throw e
         } catch (e: Exception) {
-            // Ordinary failures are reduced into state (mirroring pi's
-            // handleRunFailure) rather than rethrown; the run resolves normally.
+            // Ordinary failures are reduced into state rather than rethrown;
+            // the run resolves normally.
             withContext(NonCancellable) { handleRunFailure(aborted = false, cause = e) }
         } finally {
             activeJob = null
-            // Pi's finishRun (agent.ts:529-534): runtime-owned state is
-            // cleared on every exit path, aborts included.
             reduce { it.copy(isStreaming = false, streamingMessage = null, pendingToolCalls = emptySet()) }
             synchronized(lock) { active = false }
         }
     }
 
-    /**
-     * Continue the agent with no new prompts, pi's `agent.continue()` (pi
-     * packages/agent/src/agent.ts): a full run whose streams resume from the
-     * committed transcript unchanged.
-     */
+    /** Continue from the committed transcript without new prompts. */
     suspend fun continueRun() {
         prompt(emptyList())
     }
 
-    /** Abort the active prompt, if any. May be called from any coroutine.
-     *
-     * Safe to call at any moment from outside: once [AgentState.isStreaming]
-     * is observable, the run's job is already published, so this never races
-     * the run's start. Calling while idle is a no-op.
+    /**
+     * Abort the active prompt, if any; a no-op while idle. May be called from
+     * any coroutine: once [AgentState.isStreaming] is observable, the run's
+     * job is already published, so this never races the run's start.
      */
     fun abort() {
         activeJob?.cancel()
     }
 
-    /**
-     * Replace the committed transcript with a copy of [messages]. Only valid
-     * while idle.
-     *
-     * @throws IllegalStateException when a run is active.
-     */
+    /** Replace the committed transcript with a copy of [messages]; only valid while idle. */
     fun replaceTranscript(messages: List<Message>) {
         synchronized(lock) {
             if (active) {
@@ -332,11 +252,7 @@ class Agent(
         }
     }
 
-    /**
-     * Clear the committed transcript and any error. Only valid while idle.
-     *
-     * @throws IllegalStateException when a run is active.
-     */
+    /** Clear the committed transcript and any error; only valid while idle. */
     fun resetTranscript() {
         synchronized(lock) {
             if (active) {
@@ -347,15 +263,14 @@ class Agent(
     }
 
     /**
-     * Synthesize the terminal lifecycle for a run that failed at this facade
+     * Synthesize the terminal lifecycle for a run that failed at this
      * boundary: one ABORTED/ERROR assistant message carried through
      * message_start/end, turn_end, and agent_end. Skipped when the low-level
-     * loop already terminated normally, so no final message is duplicated.
+     * loop already emitted AgentEnd, so no final message is duplicated.
      *
-     * The synthesized message carries the *live* selected model, exactly
-     * like pi's handleRunFailure reading `this._state.model` (agent.ts:515)
-     * — a mid-run switch relabels the failure even though the failed run
-     * itself used its start-of-run snapshot.
+     * The synthesized message carries the live selected model — a mid-run
+     * switch relabels the failure even though the failed run itself used its
+     * start-of-run snapshot.
      */
     private suspend fun handleRunFailure(aborted: Boolean, cause: Throwable? = null) {
         if (sawAgentEnd) return
@@ -377,12 +292,8 @@ class Agent(
 
     /**
      * Reduce internal state for a loop event, then emit the event to
-     * observers, mirroring pi's processEvents (agent.ts:544-591).
-     *
-     * Divergence: upstream `processEvents` is private; this port marks it
-     * `internal` so reduction semantics (pending tool calls, generic
-     * streamingMessage) stay testable at the facade before tool execution
-     * lands in the loop — the frozen events contract is public.
+     * observers. Internal rather than private so reduction semantics stay
+     * testable; the public event surface is [events].
      */
     internal suspend fun processEvent(event: AgentEvent) = eventMutex.withLock {
         when (event) {
@@ -407,8 +318,6 @@ class Agent(
             }
 
             is AgentEvent.ToolExecutionStart -> {
-                // Copy-on-write set, exactly pi's tool_execution_start case
-                // (agent.ts:559-564).
                 reduce { it.copy(pendingToolCalls = it.pendingToolCalls + event.toolCallId) }
             }
 
@@ -417,9 +326,8 @@ class Agent(
             }
 
             is AgentEvent.TurnEnd -> {
-                // Pi guards `event.message.role === "assistant" && errorMessage`
-                // (agent.ts:569-572); TurnEnd always carries an assistant
-                // message in this contract, so only the null check remains.
+                // Upstream also checks for an assistant role; TurnEnd always
+                // carries an assistant message in this port's contract.
                 val message = event.message.errorMessage
                 if (message != null) reduce { it.copy(errorMessage = message) }
             }

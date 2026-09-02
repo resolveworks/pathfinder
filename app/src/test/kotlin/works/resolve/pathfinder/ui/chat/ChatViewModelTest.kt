@@ -95,7 +95,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
-/** Replaces Dispatchers.Main so viewModelScope runs on a shared test scheduler. */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MainDispatcherRule : org.junit.rules.TestWatcher() {
     val scheduler = kotlinx.coroutines.test.TestCoroutineScheduler()
@@ -106,22 +105,10 @@ class MainDispatcherRule : org.junit.rules.TestWatcher() {
 
 class ChatViewModelTest {
 
-    /**
-     * Live harnesses (pi's `harnesses[]` array in
-     * packages/coding-agent/test/suite/harness.ts): every [Harness] registers
-     * itself on construction, and [disposeHarnesses] tears them all down even
-     * when a test failed mid-body — so a still-alive ViewModel scope can never
-     * leak into a later test (the Dispatchers.Main /
-     * UncaughtExceptionsBeforeTest cascade).
-     */
+    /** Live harnesses; [disposeHarnesses] tears them all down even when a test failed mid-body, so a still-alive ViewModel scope never leaks into a later test. */
     private val harnesses = CopyOnWriteArrayList<Harness>()
 
-    /**
-     * pi's `cleanup`/afterEach discipline: cancel AND join every ViewModel
-     * scope the harnesses created, then dispose their store scopes. Passing
-     * tests already joined deterministically via [closeForTest]; this rule is
-     * the safety net for tests that failed before reaching it.
-     */
+    /** Safety net: passing tests join via [closeForTest]; a test that failed first leaves live ViewModel scopes to cancel and join here. */
     @After
     fun disposeHarnesses() {
         for (harness in harnesses) {
@@ -150,7 +137,6 @@ class ChatViewModelTest {
         baseUrl = "https://example.invalid",
     )
 
-    /** In-memory [CredentialStore] whose reads/writes can be made to fail. */
     private class FakeCredentialStore : CredentialStore {
         val creds = mutableMapOf<String, Credential>()
         var failWrites = false
@@ -180,7 +166,6 @@ class ChatViewModelTest {
         }
     }
 
-    /** Scriptable fake OAuth flow (never any real networking). */
     private class FakeOAuthAuth(
         override val name: String = "Z.AI Account",
         override val loginLabel: String = "Sign in with a Z.AI account",
@@ -195,7 +180,6 @@ class ChatViewModelTest {
             ModelAuth(apiKey = credential.access)
     }
 
-    /** SettingsStore wrapper whose writes can be made to fail deterministically. */
     class FailingSettingsStore(
         private val delegate: SettingsStore,
     ) : SettingsStore by delegate {
@@ -219,7 +203,6 @@ class ChatViewModelTest {
         }
     }
 
-    /** SessionRepository wrapper whose saves can be made to fail deterministically. */
     class FailingSessionRepository(
         private val delegate: SessionRepository,
     ) : SessionRepository by delegate {
@@ -228,11 +211,8 @@ class ChatViewModelTest {
             private set
         var totalSaves = 0
             private set
-        /** Every record appended through the ViewModel's lifecycle recorder. */
         val appendedRecords = ConcurrentLinkedQueue<works.resolve.pathfinder.data.sessions.LaneRecord>()
-        /** When set, completed as each save is entered (before the gate). */
         var saveEntered: CompletableDeferred<Unit>? = null
-        /** When set, every save suspends on it before delegating. */
         var saveGate: CompletableDeferred<Unit>? = null
         override suspend fun appendRecord(sessionId: String, record: works.resolve.pathfinder.data.sessions.LaneRecord): works.resolve.pathfinder.data.sessions.LaneRecord {
             appendedRecords.add(record)
@@ -252,40 +232,23 @@ class ChatViewModelTest {
     }
 
     /**
-     * Test harness wiring real repositories/stores and scripted real Agents.
-     *
-     * Follows pi's test architecture
-     * (packages/coding-agent/test/model-runtime-test-utils.ts and
-     * packages/coding-agent/test/suite/harness.ts): real implementations run
-     * above the storage boundaries, and substitution happens ONLY there —
-     * [FakeCredentialStore] mirrors pi's `AuthStorage.inMemory()`, the
-     * DataStore/SessionStore live on real files in a tempdir
-     * (`SessionManager.inMemory`-adjacent), and the Models stack + model
-     * resolver are the real production code paths
-     * ([CatalogProvider.toRuntimeProvider] + [catalogAuthResolver], real
-     * [NativeAgentFactory.resolveModel]) over those in-memory stores, like
-     * pi running a real ModelRuntime over `AuthStorage.inMemory`. The two
-     * remaining seams — the scripted [factory] ([AgentFactory] standing in
-     * for pi's `registerFauxProvider`) and [rejectedModelIds] — keep
-     * signature fidelity and are the only behavior fakes.
+     * Test harness wiring real repositories/stores and scripted real Agents:
+     * real implementations run above the storage boundaries and substitution
+     * happens only there (in-memory credentials, real tempdir files, real
+     * Models/resolver paths). The scripted [factory] and [rejectedModelIds]
+     * are the only behavior fakes.
      */
     private inner class Harness {
         init {
             harnesses += this
         }
 
-        /** Every ViewModel this harness created; joined by [disposeHarnesses]. */
         val viewModels = CopyOnWriteArrayList<ChatViewModel>()
 
         val credentials = FakeCredentialStore()
 
-        /** The real [SearchProviderService] over the harness store, exactly like PathfinderApplication. */
         val searchProviders = SearchProviderService(credentials)
 
-        /**
-         * Registry fake standing in for the production BraveWebSearchTool
-         * (name-only behavior; nothing here ever executes a search).
-         */
         private val fakeWebSearchTool: AgentTool = object : AgentTool {
             override val definition = Tool(BraveWebSearchTool.NAME, "fake web search", JsonPrimitive("object"))
             override val label = "Web Search"
@@ -297,11 +260,9 @@ class ChatViewModelTest {
             ) = AgentToolResult(content = listOf(TextContent("no results")))
         }
 
-        /** Records the ViewModel's diagnostics spans for boundary assertions. */
         val telemetry = works.resolve.pathfinder.telemetry.InMemoryTelemetryContext()
         val diagnostics = works.resolve.pathfinder.logging.PathfinderDiagnostics(telemetry)
 
-        /** Registered OAuth flows: zai (also has API-key prompts → both methods) and the promptless oauth-only provider. */
         val oauthZai = FakeOAuthAuth()
         val oauthOnly = FakeOAuthAuth(
             name = "OAuth Only Account",
@@ -312,11 +273,6 @@ class ChatViewModelTest {
             loginLabel = "Sign in with GitHub",
             isSubscription = true,
         )
-        /**
-         * Shared auth registry, wired through BOTH [ProviderAuthService] and
-         * the runtime [catalogAuthResolver] exactly like PathfinderApplication
-         * shares `authRegistry` between them.
-         */
         val authRegistry = MapCatalogAuthRegistry(
             mapOf("zai" to oauthZai, "oauth-only" to oauthOnly, "github-copilot" to oauthCopilot),
         )
@@ -340,14 +296,9 @@ class ChatViewModelTest {
         )
         val sessions = FailingSessionRepository(sessionStore)
 
-        /** Scripted stream flows per prompt; queued before send(). */
         val scriptedStreams = ConcurrentLinkedQueue<Flow<AssistantMessageEvent>>()
 
-        /**
-         * Fake summarization stack for compaction tests: a faux provider
-         * serving [summaryResponses] through [Models.completeSimple]
-         * (CompactionLlmTest pattern), optionally gated mid-summary.
-         */
+        /** Fake summarization stack for compaction tests: serves [summaryResponses] through [Models.completeSimple], optionally gated mid-summary. */
         var compactionModels: Models? = null
         val summaryResponses = ConcurrentLinkedQueue<AssistantMessage>()
         var summaryGate: CompletableDeferred<Unit>? = null
@@ -381,25 +332,19 @@ class ChatViewModelTest {
         /** When set, agents are built with auto-compaction disabled (isolates branch summarization). */
         var disableCompaction = false
 
-        /** Model ids rejected by the fake resolver (validation-error path). */
         val rejectedModelIds = mutableSetOf<String>()
 
-        /** When set, the factory rejects every configuration. */
         var rejectAll = false
         val createdAgents = mutableListOf<AgentSession>()
 
-        /** The settings each created agent was built from (fold-seed assertions). */
         val createdSettings = mutableListOf<ModelSettings>()
 
-        /** The request model of every scripted stream invocation (live-switch assertions). */
         val streamedModels = CopyOnWriteArrayList<Model>()
 
         /**
-         * Network-boundary seam (pi's harnesses never touch the network): the
-         * real provider APIs in [switchModels] are constructed over this
-         * transport, which must never be reached — agent streams are scripted
+         * Boundary fake: must never be reached — agent streams are scripted
          * at the [factory] seam, so only [Models.checkAuth] resolution runs
-         * against the stack. This is a boundary fake, not a behavior fake.
+         * against the stack built over this transport.
          */
         val transport = object : HttpStreamingTransport {
             override suspend fun post(request: TransportRequest): TransportResponse =
@@ -407,13 +352,10 @@ class ChatViewModelTest {
         }
 
         /**
-         * The live-switch model stack, built through the REAL production path
-         * (pi's harness runs a real ModelRuntime over `AuthStorage.inMemory`):
-         * every catalog provider via [CatalogProvider.toRuntimeProvider] with
-         * the factory's [catalogAuthResolver] over the in-memory credential
-         * store and shared auth registry — so setModel's checkAuth resolves
-         * stored credentials (completeness, OAuth flows, everything) exactly
-         * like production.
+         * Live-switch model stack built through the real production path
+         * ([CatalogProvider.toRuntimeProvider] + [catalogAuthResolver]), so
+         * setModel's checkAuth resolves stored credentials exactly like
+         * production.
          */
         val switchModels = Models(
             works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG.providers.map { entry ->
@@ -424,13 +366,6 @@ class ChatViewModelTest {
             },
         )
 
-        /**
-         * The production resolver seam: a REAL [NativeAgentFactory] over the
-         * test catalog, in-memory credential store, and shared auth registry —
-         * [modelResolver] is `nativeFactory::resolveModel` composed with the
-         * [rejectedModelIds] injection, exactly the function
-         * PathfinderApplication passes as ChatViewModel's `modelResolver`.
-         */
         private val nativeFactory = NativeAgentFactory(
             credentials = credentials,
             catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
@@ -450,13 +385,10 @@ class ChatViewModelTest {
             require(settings.modelId !in rejectedModelIds) { "model rejected" }
             createdSettings += settings
             AgentSession(
-                // pi's harness registers its faux models in the ModelRuntime
-                // and every consumer — resolver, session, setModel — resolves
-                // the same objects; here the test catalog plays that role,
-                // so the agent's model resolves through the same production
-                // seam as modelResolver. Never a parallel hand-written
-                // Model: capabilities (reasoning, thinkingLevelMap) are
-                // behavior, and a duplicate shape diverges silently.
+                // Resolves through the same production seam as modelResolver —
+                // never a parallel hand-written Model: capabilities (reasoning,
+                // thinkingLevelMap) are behavior, and a duplicate shape
+                // diverges silently.
                 agent = Agent(
                     model = nativeFactory.resolveModel(settings.providerId, settings.modelId),
                     streamFn = StreamFn { requestedModel, _, _ ->
@@ -494,7 +426,6 @@ class ChatViewModelTest {
                 timestamp = System.nanoTime(),
             )
 
-        /** Stream that emits a partial, then waits for [gate] before finishing. */
         fun gatedStream(text: String, gate: CompletableDeferred<Unit>): Flow<AssistantMessageEvent> = flow {
             emit(AssistantMessageEvent.Start(assistant("")))
             gate.await()
@@ -503,13 +434,11 @@ class ChatViewModelTest {
             emit(AssistantMessageEvent.Done(StopReason.STOP, full))
         }
 
-        /** Stream that fails before any content. */
         fun errorStream(message: AssistantMessage) =
             flowOf(AssistantMessageEvent.Error(StopReason.ERROR, message))
 
         suspend fun countSessions(): Int = sessionStore.summaries().size
 
-        /** The stored API-key credential's key for [providerId], cast-safe. */
         fun storedApiKey(providerId: String): String? =
             (credentials.creds[providerId] as? ApiKeyCredential)?.key
     }
@@ -527,18 +456,12 @@ class ChatViewModelTest {
         }
     }
 
-    /** Cancels the ViewModel scope and waits until all in-flight work has settled. */
     private suspend fun ChatViewModel.closeForTest() {
         val job = viewModelScope.coroutineContext[Job]!!
         job.cancel()
         job.join()
     }
 
-    /**
-     * Configures zai: an optional credential save (which alone completes
-     * configuration through the derived initial model), then an optional
-     * live model switch away from the derived glm-4.7 default.
-     */
     private fun ChatViewModel.configure(
         modelId: String = "glm-4.7",
         apiKey: String = "",
@@ -547,7 +470,6 @@ class ChatViewModelTest {
         if (modelId != "glm-4.7") selectModel("zai", modelId)
     }
 
-    /** Stored Copilot OAuth credential with the given availableModelIds extra. */
     private fun copilotCredential(availableModelIds: JsonElement? = null): OAuthCredential =
         OAuthCredential(
             access = "copilot-access",
@@ -558,13 +480,10 @@ class ChatViewModelTest {
 
     private fun stringArray(vararg ids: String): JsonArray = JsonArray(ids.map { JsonPrimitive(it) })
 
-    /** Primitive JSON payload value as a string (record intent assertions). */
     private val JsonElement.jsonPrimitiveContent: String get() = (this as JsonPrimitive).content
 
     private fun ChatViewModel.copilotModelOptions(): List<String> =
         uiState.value.modelOptions.filter { it.providerId == "github-copilot" }.map { it.modelId }
-
-    // ---- tests ----
 
     @Test
     fun unconfiguredInit_showsNeedsConfiguration_andKeepsKeyPrivate() = runTest(mainDispatcherRule.scheduler) {
@@ -578,10 +497,9 @@ class ChatViewModelTest {
         assertTrue(state.messages.isEmpty())
         assertTrue(state.modelOptions.isEmpty())
 
-        // Configure a stored key but no model settings: the initial model is
-        // derived (pi's findInitialModel: first available of a configured
-        // provider) and the app enters the chat directly — and the key never
-        // appears anywhere in the UI state.
+        // A stored key with no model settings: the initial model is derived
+        // (first available of a configured provider) and the app enters the
+        // chat directly — while the key never appears anywhere in the UI state.
         h.credentials.creds["zai"] = ApiKeyCredential("SECRET-KEY-123")
         val vm2 = h.newViewModel()
         val state2 = vm2.uiState.first { it.status == ChatStatus.Ready }
@@ -606,7 +524,6 @@ class ChatViewModelTest {
         assertTrue(h.settings.currentSettings().showThinking)
         assertNull(vm.uiState.value.error)
 
-        // A failing store surfaces the error and leaves the state unchanged.
         h.settingsStore.failWrites = true
         vm.setShowThinking(false)
         vm.uiState.first { it.error != null }
@@ -614,7 +531,7 @@ class ChatViewModelTest {
         assertTrue(h.settings.currentSettings().showThinking)
         vm.dismissError()
 
-        // setShowThinking is display-only: the configuration flow is unaffected.
+        // setShowThinking is display-only: configuration is unaffected.
         h.settingsStore.failWrites = false
         vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
@@ -622,14 +539,12 @@ class ChatViewModelTest {
         vm.uiState.first { !it.showThinking }
         assertFalse(h.settings.currentSettings().showThinking)
 
-        // Reconfiguration preserves the user's preference in the candidate.
         vm.configure(modelId = "glm-5.3")
         vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
         assertFalse(vm.uiState.value.showThinking)
 
         vm.closeForTest()
 
-        // A fresh init projects the persisted value into the Ready state.
         h.settings.setShowThinking(true)
         val vm2 = h.newViewModel()
         vm2.uiState.first { it.status == ChatStatus.Ready }
@@ -644,8 +559,6 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
         assertFalse(vm.uiState.value.toolOutputExpanded)
 
-        // pi's toolOutputExpanded (interactive-mode.ts:481) is an in-memory
-        // toggle: it applies immediately and is never written to settings.
         vm.toggleToolOutputExpansion()
         vm.uiState.first { it.toolOutputExpanded }
         assertNull(vm.uiState.value.error)
@@ -653,8 +566,6 @@ class ChatViewModelTest {
         vm.toggleToolOutputExpansion()
         vm.uiState.first { !it.toolOutputExpanded }
 
-        // Unlike showThinking, the flag does not survive a fresh ViewModel
-        // (it lives in UI state, not settings).
         vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
         val vm2 = h.newViewModel()
@@ -671,13 +582,9 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        // While unconfigured the reset signal pins the forced first-run root:
-        // the UI back stack is rebuilt to exactly [ProvidersNavKey] and back
-        // is a no-op.
+        // While unconfigured the reset signal pins the forced first-run root.
         assertEquals(ProvidersNavKey, vm.uiState.value.startKey)
 
-        // A credential save completes configuration through the derived
-        // initial model: the epoch bumps and the app enters the chat root.
         vm.saveProviderCredential("zai", "k", emptyMap())
         val configured = vm.uiState.first { it.status == ChatStatus.Ready }
         assertEquals(ChatNavKey, configured.startKey)
@@ -687,7 +594,6 @@ class ChatViewModelTest {
 
         vm.newSession()
         val secondId = vm.uiState.first { it.activeSessionId != firstId }.activeSessionId!!
-        // Each successful session adoption bumps the epoch again (reset to chat).
         assertTrue(vm.uiState.value.navigationEpoch >= 2L)
 
         vm.switchSession(firstId)
@@ -700,17 +606,14 @@ class ChatViewModelTest {
         assertEquals(ChatNavKey, created.startKey)
         assertTrue(created.navigationEpoch >= 4L)
 
-        // A live model switch is NOT navigation: same agent, same session,
-        // no epoch bump or stack reset — only the live model changes.
+        // A live model switch is NOT navigation: no epoch bump or stack reset.
         val epochBefore = vm.uiState.value.navigationEpoch
         vm.selectModel("zai", "glm-5.3")
         val switched2 = vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
         assertEquals(epochBefore, switched2.navigationEpoch)
         assertEquals(ChatNavKey, switched2.startKey)
 
-        // Status changes stay atomic with the signal: every Ready observation
-        // pairs with the chat root, every NeedsConfiguration one with the
-        // providers root.
+        // Status changes stay atomic with the signal.
         vm.uiState.value.let {
             assertTrue(
                 it.status != ChatStatus.NeedsConfiguration ||
@@ -738,9 +641,8 @@ class ChatViewModelTest {
         assertFalse(state.toString().contains("SECRET-KEY-123"))
         assertEquals(1, h.countSessions())
 
-        // The derived initial model is NOT persisted as the startup default
-        // (pi's findInitialModel picks; only Ctrl+S persists) — but the
-        // active session id is.
+        // The derived initial model is NOT persisted as the startup default —
+        // but the active session id is.
         val persisted = h.settings.currentSettings()
         assertEquals("", persisted.providerId)
         assertEquals("", persisted.modelId)
@@ -764,7 +666,6 @@ class ChatViewModelTest {
         assertTrue(vm.uiState.value.canSend)
         vm.send()
 
-        // Mid-stream: partial visible, committed transcript has only the user message.
         vm.uiState.first { it.isStreaming && it.streamingMessage != null }
         val mid = vm.uiState.value
         assertEquals(1, mid.messages.size)
@@ -775,7 +676,6 @@ class ChatViewModelTest {
 
         gate.complete(Unit)
 
-        // Done: user + assistant committed, no duplicates, not streaming.
         vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
         val done = vm.uiState.value
         assertNull(done.streamingMessage)
@@ -783,7 +683,6 @@ class ChatViewModelTest {
         assertEquals("world", done.messages[1].singleText())
         assertNull(done.error)
 
-        // Session persisted with both messages and a derived title.
         vm.uiState.first {
             it.sessionSummaries.firstOrNull()?.title == "Hello" &&
                 it.sessionSummaries.firstOrNull()?.messageCount == 2
@@ -852,8 +751,8 @@ class ChatViewModelTest {
         vm.onDraftChange("Hello")
         vm.send()
 
-        // Mid-compaction: the transient status is visible while the turn's
-        // final message is already committed.
+        // Mid-compaction: the transient status shows while the final message
+        // is already committed.
         vm.uiState.first { it.isCompacting }
         gate.complete(Unit)
 
@@ -861,10 +760,8 @@ class ChatViewModelTest {
         val state = vm.uiState.value
         assertFalse(state.isCompacting)
         assertNull(state.retryStatus)
-        // The compaction cut projects as a divider marker in the transcript.
         assertTrue(state.messages.any { it.isCompactionMarker })
 
-        // The compaction entry is persisted with the tree and survives adoption.
         val sessionId = state.activeSessionId!!
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         vm.closeForTest()
@@ -885,7 +782,6 @@ class ChatViewModelTest {
             vm.configure(apiKey = "k")
             vm.uiState.first { it.status == ChatStatus.Ready }
 
-            // Transient error, then a successful retry (pi's auto-retry).
             h.scriptedStreams.add(h.errorStream(h.assistant("", StopReason.ERROR, "terminated")))
             h.scriptedStreams.add(h.gatedStream("recovered", CompletableDeferred<Unit>().apply { complete(Unit) }))
             vm.onDraftChange("Hello")
@@ -893,8 +789,6 @@ class ChatViewModelTest {
 
             vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
             val state = vm.uiState.value
-            // Agent transcript dropped the error message; the retry's answer
-            // replaced it in the chat surface, and no retry status remains.
             assertNull(state.retryStatus)
             assertEquals(ChatRole.Assistant, state.messages[1].role)
             assertNull(state.messages[1].error)
@@ -902,8 +796,6 @@ class ChatViewModelTest {
             val sessionId = state.activeSessionId!!
             vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 3 }
 
-            // The session tree keeps the error message in history (pi keeps
-            // it in the session while removing it from agent state).
             val session = h.sessionStore.load(sessionId)!!
             assertEquals(3, session.messages.size)
             val failed = session.messages[1] as works.resolve.pathfinder.ai.core.AssistantMessage
@@ -938,7 +830,7 @@ class ChatViewModelTest {
         vm.dismissError()
         assertNull(vm.uiState.value.error)
 
-        // A new successful run clears the (re-surfaced) agent error for good.
+        // A new successful run clears the re-surfaced agent error for good.
         vm.onDraftChange("Again")
         vm.uiState.first { it.canSend }
         h.scriptedStreams.add(h.gatedStream("fine", CompletableDeferred<Unit>().apply { complete(Unit) }))
@@ -964,7 +856,6 @@ class ChatViewModelTest {
         vm.send()
         vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
         val originalId = vm.uiState.value.activeSessionId
-        // Wait until persistence of both messages is observable.
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == originalId }.messageCount == 2 }
         vm.closeForTest()
 
@@ -973,7 +864,7 @@ class ChatViewModelTest {
         assertEquals(originalId, state.activeSessionId)
         assertEquals(2, state.messages.size)
         assertEquals("Hello", state.sessionSummaries.first { it.id == originalId!! }.title)
-        // No save loop: restart alone does not bump the file beyond content.
+        // No save loop: restart alone must not rewrite the file.
         assertEquals(2, h.sessionStore.load(originalId!!)!!.messages.size)
 
         vm2.closeForTest()
@@ -988,7 +879,6 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.Ready }
         val firstId = vm.uiState.value.activeSessionId!!
 
-        // Populate the first session.
         val gate = CompletableDeferred<Unit>().apply { complete(Unit) }
         h.scriptedStreams.add(h.gatedStream("world", gate))
         vm.onDraftChange("Hello")
@@ -1060,8 +950,8 @@ class ChatViewModelTest {
         assertTrue(vm.uiState.value.pendingTools.isEmpty())
 
         // Error result: output projected verbatim (line structure kept —
-        // pi's getTextOutput joins text parts with newlines; renderers, not
-        // the projection, bound the preview), error flag projected.
+        // renderers, not the projection, bound the preview), error flag
+        // projected.
         val failed = ToolResultMessage(
             toolCallId = "call-1",
             toolName = "get_weather",
@@ -1179,13 +1069,11 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        // Incomplete save (blank key, nothing stored): error, no epoch bump.
         vm.saveProviderCredential("zai", "   ", emptyMap())
         vm.uiState.first { it.error != null }
         assertEquals(0, vm.uiState.value.credentialSuccessEpoch)
         vm.dismissError()
 
-        // Storage failure: error, no epoch bump, form inputs conceptually kept.
         h.credentials.failWrites = true
         vm.saveProviderCredential("zai", "k", emptyMap())
         vm.uiState.first { it.error != null }
@@ -1194,12 +1082,10 @@ class ChatViewModelTest {
         vm.dismissError()
         h.credentials.failWrites = false
 
-        // Confirmed persistence bumps exactly once per successful save.
         vm.saveProviderCredential("zai", "k", emptyMap())
         vm.uiState.first { it.credentialSuccessEpoch == 1L }
         assertEquals("k", h.storedApiKey("zai"))
 
-        // A second successful save bumps again (monotonic).
         vm.saveProviderCredential("zai", "k2", emptyMap())
         vm.uiState.first { it.credentialSuccessEpoch == 2L }
         assertEquals("k2", h.storedApiKey("zai"))
@@ -1213,23 +1099,20 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        // One known provider row, unconfigured, name-sorted; the search
-        // credential alone did not satisfy LLM first-run configuration.
+        // A search provider row alone does not satisfy LLM first-run
+        // configuration.
         assertEquals(
             listOf(ProviderOption(SearchProviderService.BRAVE_PROVIDER_ID, "Brave Search", configured = false)),
             vm.uiState.value.searchProviderOptions,
         )
         assertEquals(0, h.createdAgents.size)
 
-        // Prompts: exactly one secret Brave prompt for the known provider;
-        // nothing for unknown ids.
         val prompts = vm.searchProviderAuthPrompts(SearchProviderService.BRAVE_PROVIDER_ID)
         assertEquals(1, prompts.size)
         assertTrue(prompts.single().secret)
         assertTrue(prompts.single().message.contains("Brave Search API key"))
         assertTrue(vm.searchProviderAuthPrompts("nope").isEmpty())
 
-        // A configured LLM provider binds a first session without web_search.
         vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
         val agent = h.createdAgents.single()
@@ -1267,20 +1150,17 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.Ready }
         val agent = h.createdAgents.single()
 
-        // Blank save: static error, no epoch bump, nothing stored.
         vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "   ")
         vm.uiState.first { it.error != null }
         assertEquals(0L, vm.uiState.value.searchCredentialSuccessEpoch)
         assertNull(h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
         vm.dismissError()
 
-        // Unknown provider: same rejection.
         vm.saveSearchProviderCredential("nope", "k")
         vm.uiState.first { it.error != null }
         assertEquals(0L, vm.uiState.value.searchCredentialSuccessEpoch)
         vm.dismissError()
 
-        // Storage failure: error, no epoch bump, status/tool set intact.
         h.credentials.failWrites = true
         vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
         vm.uiState.first { it.error != null }
@@ -1290,18 +1170,15 @@ class ChatViewModelTest {
         vm.dismissError()
         h.credentials.failWrites = false
 
-        // Confirmed save writes search_brave, bumps exactly once, updates
-        // the row, and enables web_search on the SAME session.
+        // Confirmed save enables web_search on the SAME session.
         vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
         vm.uiState.first { it.searchCredentialSuccessEpoch == 1L }
         assertEquals("brave-key", h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
         assertTrue(vm.uiState.value.searchProviderOptions.single().configured)
         assertEquals(1, h.createdAgents.size)
         assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
-        // Never any secret material in UI state.
         assertFalse(vm.uiState.value.toString().contains("brave-key"))
 
-        // A re-save rotates the key wholesale and bumps again.
         vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key-2")
         vm.uiState.first { it.searchCredentialSuccessEpoch == 2L }
         assertEquals("brave-key-2", h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
@@ -1344,8 +1221,8 @@ class ChatViewModelTest {
         vm.uiState.first { it.searchCredentialSuccessEpoch == 1L }
         assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
 
-        // A credential read failure degrades search to unconfigured/disabled
-        // with a safe error — chat stays Ready and the key stays stored.
+        // A credential read failure degrades search with a safe error; chat
+        // stays Ready.
         h.credentials.failWrites = true
         vm.refreshSearchProviderStatus()
         vm.uiState.first { it.error != null }
@@ -1357,7 +1234,6 @@ class ChatViewModelTest {
         vm.dismissError()
         h.credentials.failWrites = false
 
-        // The degraded state recovers on the next successful read.
         vm.refreshSearchProviderStatus()
         vm.uiState.first { it.searchProviderOptions.single().configured }
         assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
@@ -1377,8 +1253,7 @@ class ChatViewModelTest {
         vm.uiState.first { it.searchCredentialSuccessEpoch == 1L }
         assertTrue(BraveWebSearchTool.NAME in h.createdAgents.single().getActiveToolNames())
 
-        // Every tryCreateAgent path synchronizes web_search: a newly created
-        // session's agent is created with the tool already active.
+        // Every tryCreateAgent path synchronizes web_search.
         vm.newSession()
         vm.uiState.first { it.activeSessionId != firstId }
         val newAgent = h.createdAgents.single { it !== h.createdAgents.first() }
@@ -1394,7 +1269,7 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        // Without a bound session there is nothing to switch: safe error.
+        // No bound session: nothing to switch, safe error.
         vm.selectModel("zai", "glm-4.7")
         vm.uiState.first { it.error != null }
         assertEquals(ChatStatus.NeedsConfiguration, vm.uiState.value.status)
@@ -1405,7 +1280,6 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.Ready }
         val agentsBefore = h.createdAgents.size
 
-        // An id the catalog has never carried is rejected by the resolver.
         vm.selectModel("zai", "not-a-model")
         vm.uiState.first { it.error != null }
         assertEquals("Unknown model", vm.uiState.value.error)
@@ -1413,15 +1287,12 @@ class ChatViewModelTest {
         assertEquals("glm-4.7", vm.uiState.value.selectedModel?.modelId)
         vm.dismissError()
 
-        // A resolver-rejected model (the factory-validation seam) keeps the
-        // bound agent and its model.
         h.rejectedModelIds += "glm-5.3"
         vm.selectModel("zai", "glm-5.3")
         vm.uiState.first { it.error != null }
         assertEquals(agentsBefore, h.createdAgents.size)
         assertTrue(vm.uiState.value.status == ChatStatus.Ready)
         assertEquals("glm-4.7", vm.uiState.value.selectedModel?.modelId)
-        // No startup default was ever persisted.
         assertEquals("", h.settings.currentSettings().modelId)
 
         vm.closeForTest()
@@ -1436,10 +1307,9 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.Ready }
         assertEquals("first-key", h.storedApiKey("zai"))
 
-        // Pi's logins replace wholesale, so a blank key input no longer keeps
-        // the stored key: it is a missing required value. The save is rejected
-        // with an error naming the missing prompt — never its value — and the
-        // stored credential and status are left untouched.
+        // A blank key is a missing required value (logins replace wholesale):
+        // rejected with an error naming the missing prompt — never its value —
+        // leaving the stored credential untouched.
         vm.saveProviderCredential("zai", "   ", emptyMap())
         vm.uiState.first { it.error != null }
         val state = vm.uiState.value
@@ -1452,8 +1322,6 @@ class ChatViewModelTest {
         assertEquals("first-key", h.storedApiKey("zai"))
         vm.dismissError()
 
-        // A complete re-save replaces the stored key wholesale (replace, not
-        // merge) and the app keeps working.
         vm.saveProviderCredential("zai", "second-key", emptyMap())
         vm.uiState.first { it.credentialSuccessEpoch == 2L }
         assertEquals("second-key", h.storedApiKey("zai"))
@@ -1489,15 +1357,14 @@ class ChatViewModelTest {
         assertEquals(sessionId, vm.uiState.value.activeSessionId)
         vm.dismissError()
 
-        // A live model switch is NOT busy-rejected (pi: a mid-stream pick
-        // applies to the next prompt): no error, and the model_change lands.
+        // A live model switch is NOT busy-rejected: a mid-stream pick applies
+        // to the next prompt.
         vm.selectModel("zai", "glm-5.3")
         mainDispatcherRule.scheduler.advanceUntilIdle()
         assertNull(vm.uiState.value.error)
         assertEquals("glm-5.3", vm.uiState.value.selectedModel?.modelId)
         assertTrue(vm.uiState.value.isStreaming)
 
-        // Blank send is a no-op even when idle; blank draft cannot send.
         vm.onDraftChange("   ")
         assertFalse(vm.uiState.value.canSend)
         vm.send()
@@ -1541,7 +1408,6 @@ class ChatViewModelTest {
         assertEquals(0, h.sessionStore.load(secondId)!!.messages.size)
         assertEquals(2, state.sessionSummaries.first { s -> s.id == firstId }.messageCount)
 
-        // A later exchange in the new session only touches the new session file.
         h.scriptedStreams.add(h.gatedStream("second", CompletableDeferred<Unit>().apply { complete(Unit) }))
         vm.onDraftChange("Second")
         vm.send()
@@ -1556,7 +1422,6 @@ class ChatViewModelTest {
     @Test
     fun initFactoryFailure_isFailed_neverReady_andRejectedConfigNotPersisted() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
-        // Persist a fully valid-looking configuration, but the factory is down.
         h.settings.setProviderId("zai")
         h.settings.setModelId("glm-4.7")
         h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
@@ -1571,7 +1436,7 @@ class ChatViewModelTest {
         vm.closeForTest()
 
         // Restart after a factory-rejected model: the invalid selection was
-        // never persisted, so the previous valid configuration still works.
+        // never persisted.
         val h2 = Harness()
         val vm2 = h2.newViewModel()
         vm2.uiState.first { it.status == ChatStatus.NeedsConfiguration }
@@ -1596,25 +1461,22 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        // The key is stored, but the resolver rejects glm-5.3 afterwards.
         h.rejectedModelIds += "glm-5.3"
         vm.saveProviderCredential("zai", "first-key", emptyMap())
-        // The derived initial model (glm-4.7) is unaffected by the rejection.
+        // The derived initial model is unaffected by the rejection.
         vm.uiState.first { it.status == ChatStatus.Ready }
         val state = vm.uiState.value
         assertEquals("first-key", h.storedApiKey("zai"))
         assertTrue(state.providerOptions.first { o -> o.id == "zai" }.configured)
         assertFalse(state.toString().contains("first-key"))
 
-        // A live switch to the rejected model fails safely and mutates nothing.
         vm.selectModel("zai", "glm-5.3")
         vm.uiState.first { it.error != null }
         assertEquals("glm-4.7", vm.uiState.value.selectedModel?.modelId)
         vm.dismissError()
 
-        // An incomplete re-save (blank key: pi logins re-prompt everything,
-        // nothing is merged) is rejected; the stored credential survives and
-        // the key never leaks into state.
+        // An incomplete re-save (blank key: logins re-prompt everything,
+        // nothing is merged) is rejected; the stored credential survives.
         vm.saveProviderCredential("zai", "  ", emptyMap())
         vm.uiState.first { it.error != null }
         assertFalse(checkNotNull(vm.uiState.value.error).contains("first-key"))
@@ -1622,7 +1484,6 @@ class ChatViewModelTest {
         assertFalse(vm.uiState.value.toString().contains("first-key"))
         vm.dismissError()
 
-        // A complete re-save (everything re-entered) keeps the app working.
         vm.saveProviderCredential("zai", "second-key", emptyMap())
         vm.uiState.first { it.credentialSuccessEpoch == 2L }
         assertEquals("second-key", h.storedApiKey("zai"))
@@ -1634,7 +1495,6 @@ class ChatViewModelTest {
     @Test
     fun sameTimestampMessages_getDistinctKeys() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
-        // A persisted session whose user and assistant messages share a timestamp.
         val session = h.sessionStore.create("Collide")
         val saved = h.sessionStore.save(
             session.withMessages(listOf(
@@ -1667,14 +1527,10 @@ class ChatViewModelTest {
 
         h.settingsStore.failWrites = true
 
-        // A live model switch touches no settings write: it succeeds even
-        // while settings writes fail.
         vm.selectModel("zai", "glm-5.3")
         vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
         assertNull(vm.uiState.value.error)
 
-        // The startup default save is the explicit persistence action: its
-        // failure surfaces a safe error and persists nothing.
         vm.saveStartupDefault("zai", "glm-5.3")
         vm.uiState.first { it.error != null }
         val state = vm.uiState.value
@@ -1682,7 +1538,6 @@ class ChatViewModelTest {
         assertEquals("", h.settings.currentSettings().modelId)
         vm.dismissError()
 
-        // The still-bound agent keeps chatting and persisting transcripts.
         h.settingsStore.failWrites = false
         h.scriptedStreams.add(h.gatedStream("world", CompletableDeferred<Unit>().apply { complete(Unit) }))
         vm.onDraftChange("Hello")
@@ -1692,7 +1547,6 @@ class ChatViewModelTest {
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         assertEquals(2, h.sessionStore.load(sessionId)!!.messages.size)
 
-        // Recovery: a retry with a working store persists the default.
         vm.saveStartupDefault("zai", "glm-5.3")
         vm.uiState.first { h.settings.currentSettings().modelId == "glm-5.3" }
         assertNull(vm.uiState.value.error)
@@ -1703,7 +1557,6 @@ class ChatViewModelTest {
     @Test
     fun initActiveSessionWriteFailure_isFailed_neverReady() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
-        // Fully valid persisted configuration, but the active-id write fails.
         h.settings.setProviderId("zai")
         h.settings.setModelId("glm-4.7")
         h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
@@ -1730,7 +1583,6 @@ class ChatViewModelTest {
         val firstId = vm.uiState.value.activeSessionId!!
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == firstId }.messageCount == 0 }
 
-        // Seed a second session with a longer transcript in the store.
         val other = h.sessionStore.create("Other")
         h.sessionStore.save(
             other.withMessages(listOf(
@@ -1740,13 +1592,12 @@ class ChatViewModelTest {
         )
         val savesBefore = h.sessions.totalSaves
 
-        // Switching binds an agent over the longer transcript; binding alone
-        // must not observe it against the previous (empty) session.
+        // Binding alone must not observe the transcript against the previous
+        // (empty) session.
         vm.switchSession(other.id)
         val state = vm.uiState.first { it.activeSessionId == other.id }
         assertEquals(2, state.messages.size)
         assertEquals(savesBefore, h.sessions.totalSaves)
-        // No cross-write: the empty session is untouched on disk.
         assertEquals(0, h.sessionStore.load(firstId)!!.messages.size)
         assertEquals(2, h.sessionStore.load(other.id)!!.messages.size)
 
@@ -1756,8 +1607,6 @@ class ChatViewModelTest {
     @Test
     fun firstConfiguredInitialization_exposesCreatedSessionSummary() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
-        // Persisted settings + key, but no sessions yet: initialization must
-        // create the first session and expose it in the summaries.
         h.settings.setProviderId("zai")
         h.settings.setModelId("glm-4.7")
         h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
@@ -1875,8 +1724,8 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         val state = vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        // All catalog providers listed (name-sorted), all unconfigured, so the
-        // model picker is empty: pi's "only configured providers" rule.
+        // All catalog providers listed, all unconfigured: only configured
+        // providers contribute model options.
         assertEquals(
             listOf("Cloudflare AI Gateway", "GitHub Copilot", "OAuth Only", "OpenAI", "Z.AI"),
             state.providerOptions.map { it.name },
@@ -1890,8 +1739,6 @@ class ChatViewModelTest {
         assertTrue(after.modelOptions.isNotEmpty())
         assertTrue(after.modelOptions.all { it.providerId == "zai" })
         assertEquals("GLM-4.7", after.modelOptions.first { it.modelId == "glm-4.7" }.name)
-        // The derived initial model runs; with no scope curated the picker's
-        // scoped view is everything offered.
         assertEquals("glm-4.7", after.selectedModel?.modelId)
         assertEquals(after.modelOptions, after.scopedModelOptions)
         assertNull(after.enabledModels)
@@ -1904,7 +1751,7 @@ class ChatViewModelTest {
         )
         val both = vm.uiState.first { it.providerOptions.first { o -> o.id == "cloudflare-ai-gateway" }.configured }
         assertTrue(both.modelOptions.any { it.providerId == "cloudflare-ai-gateway" && it.modelId == "workers-ai/test-model" })
-        // Provider-name-then-model-name sort: Cloudflare options come first.
+        // Provider-name-then-model-name sort.
         assertEquals("Cloudflare AI Gateway", both.modelOptions.first().providerName)
 
         vm.closeForTest()
@@ -1917,8 +1764,8 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
         // A key-only save is incomplete for Cloudflare (account/gateway ids
-        // are required too): rejected, nothing persisted, safe error naming
-        // the missing prompts — never the submitted values.
+        // are required too); the error names the missing prompts — never the
+        // submitted values.
         vm.saveProviderCredential("cloudflare-ai-gateway", "cf-key", emptyMap())
         val state = vm.uiState.first { it.error != null }
         val error = checkNotNull(state.error)
@@ -1929,7 +1776,6 @@ class ChatViewModelTest {
         assertFalse(vm.uiState.value.providerOptions.first { o -> o.id == "cloudflare-ai-gateway" }.configured)
         vm.dismissError()
 
-        // A complete save persists key plus env.
         vm.saveProviderCredential(
             "cloudflare-ai-gateway",
             "cf-key",
@@ -1940,8 +1786,8 @@ class ChatViewModelTest {
         assertEquals("cf-key", filled.key)
         assertEquals(mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"), filled.env)
 
-        // A complete re-save with different values fully replaces key and
-        // env (pi logins never merge: no stale old values survive).
+        // A complete re-save fully replaces key and env — no stale values
+        // survive.
         vm.saveProviderCredential(
             "cloudflare-ai-gateway",
             "cf-key-2",
@@ -1955,9 +1801,8 @@ class ChatViewModelTest {
             rotated.env,
         )
 
-        // An incomplete re-save (missing env: replace semantics, nothing is
-        // merged from the stored credential) is rejected; the old credential
-        // is untouched and the error never echoes values.
+        // An incomplete re-save (replace semantics, nothing merged from the
+        // stored credential) is rejected; the old credential is untouched.
         vm.saveProviderCredential("cloudflare-ai-gateway", "cf-key-3", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc-3"))
         vm.uiState.first { it.error != null }
         val retryError = checkNotNull(vm.uiState.value.error)
@@ -1967,13 +1812,11 @@ class ChatViewModelTest {
         assertEquals(rotated, h.credentials.creds["cloudflare-ai-gateway"])
         vm.dismissError()
 
-        // A save with a blank key is rejected (the key is always required).
         vm.saveProviderCredential("zai", "   ", emptyMap())
         vm.uiState.first { it.error != null }
         assertFalse(vm.uiState.value.providerOptions.first { o -> o.id == "zai" }.configured)
         vm.dismissError()
 
-        // A credential-store failure surfaces a safe error.
         h.credentials.failWrites = true
         vm.saveProviderCredential("zai", "k", emptyMap())
         vm.uiState.first { it.error != null }
@@ -1992,8 +1835,8 @@ class ChatViewModelTest {
 
         // A key-only credential is incomplete for Cloudflare (account/gateway
         // ids required): the provider never counts as configured, and
-        // pi's checkAuth ("No API key for provider/id") rejects the live
-        // switch with a safe error — nothing appended, model unchanged.
+        // checkAuth rejects the live switch — nothing appended, model
+        // unchanged.
         h.credentials.creds["cloudflare-ai-gateway"] = ApiKeyCredential("cf", emptyMap())
         vm.refreshProviderStatus()
         assertFalse(vm.uiState.value.providerOptions.first { o -> o.id == "cloudflare-ai-gateway" }.configured)
@@ -2012,8 +1855,8 @@ class ChatViewModelTest {
     @Test
     fun saveProviderCredential_withValidSettings_adoptsSession_andGoesReady() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
-        // Valid model settings persisted, but the key is missing: pi's
-        // completeProviderAuthentication semantics — logging in completes it.
+        // Valid model settings persisted, but the key is missing: logging in
+        // completes configuration.
         h.settings.setProviderId("zai")
         h.settings.setModelId("glm-4.7")
 
@@ -2028,7 +1871,6 @@ class ChatViewModelTest {
         assertNotNull(state.activeSessionId)
         assertEquals("zai", state.selectedModel?.providerId)
         assertTrue(state.modelOptions.all { it.providerId == "zai" })
-        // The saved default was already usable: it became the running model.
         assertEquals("glm-4.7", state.selectedModel?.modelId)
 
         vm.closeForTest()
@@ -2041,8 +1883,6 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
         assertEquals(ProvidersNavKey, vm.uiState.value.startKey)
 
-        // A credential save without model settings derives the initial model
-        // (first available of a configured provider) and enters the chat.
         vm.saveProviderCredential("zai", "k", emptyMap())
         val ready = vm.uiState.first { it.status == ChatStatus.Ready }
         assertEquals(ChatNavKey, ready.startKey)
@@ -2053,8 +1893,6 @@ class ChatViewModelTest {
         assertEquals("glm-4.7", ready.selectedModel?.modelId)
         assertTrue(ready.modelOptions.all { it.providerId == "zai" })
 
-        // A second credential save (another provider) keeps the app Ready and
-        // widens the offered models.
         vm.saveProviderCredential(
             "cloudflare-ai-gateway",
             "cf",
@@ -2070,9 +1908,6 @@ class ChatViewModelTest {
     @Test
     fun unconfiguredInit_withStoredCredential_entersChatWithDerivedModel() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
-        // Restoration case: a complete stored credential but no model
-        // settings — initialization derives the first available model and
-        // enters the chat directly (pi's findInitialModel reduced).
         h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
 
         val vm = h.newViewModel()
@@ -2084,7 +1919,7 @@ class ChatViewModelTest {
         assertFalse(state.toString().contains("stored-key"))
         assertNotNull(state.activeSessionId)
         assertEquals("glm-4.7", state.selectedModel?.modelId)
-        // The derivation seeded the new session with a model_change.
+        // The derivation seeds the new session with a model_change.
         vm.uiState.first { h.sessionStore.load(state.activeSessionId!!)!!.entries.isNotEmpty() }
         val seeded = h.sessionStore.load(state.activeSessionId!!)!!
         val change = seeded.entries.filterIsInstance<ModelChangeEntry>().single()
@@ -2105,8 +1940,8 @@ class ChatViewModelTest {
 
         vm.removeProviderCredential("zai")
         val state = vm.uiState.first { !it.providerOptions.first { o -> o.id == "zai" }.configured }
-        // Status stays Ready and the agent is untouched: credentials are read
-        // per request, sessions are never torn down.
+        // Credentials are read per request: status stays Ready and the agent
+        // is untouched.
         assertEquals(ChatStatus.Ready, state.status)
         assertEquals(agentsBefore, h.createdAgents.size)
         assertNotNull(state.activeSessionId)
@@ -2116,13 +1951,11 @@ class ChatViewModelTest {
         assertEquals("glm-4.7", state.selectedModel?.modelId)
         assertNull(h.credentials.creds["zai"])
 
-        // Sending still works through the still-bound agent.
         h.scriptedStreams.add(h.gatedStream("world", CompletableDeferred<Unit>().apply { complete(Unit) }))
         vm.onDraftChange("Hello")
         vm.send()
         vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
 
-        // Re-login restores configured status.
         vm.saveProviderCredential("zai", "k2", emptyMap())
         vm.uiState.first { it.providerOptions.first { o -> o.id == "zai" }.configured }
 
@@ -2137,14 +1970,11 @@ class ChatViewModelTest {
         h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
 
         val vm = h.newViewModel()
-        // The unusable saved default is replaced by the first available model
-        // of a configured provider; the app enters the chat directly.
         val state = vm.uiState.first { it.status == ChatStatus.Ready }
         assertEquals("glm-4.7", state.selectedModel?.modelId)
         assertTrue(state.modelOptions.all { it.providerId == "zai" })
         assertTrue(state.modelOptions.isNotEmpty())
 
-        // Picking for an unknown provider is rejected safely.
         vm.selectModel("not-a-provider", "glm-4.7")
         vm.uiState.first { it.error != null }
         assertEquals(ChatStatus.Ready, vm.uiState.value.status)
@@ -2161,13 +1991,11 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-        // Sole API-key method (Cloudflare): catalog label, not a subscription.
         val cloudflare = vm.providerAuthMethods("cloudflare-ai-gateway")
         assertEquals(listOf(AuthType.API_KEY), cloudflare.map { it.type })
         assertEquals("Cloudflare API key", cloudflare.single().label)
         assertFalse(cloudflare.single().isSubscription)
 
-        // Both methods (zai): the API key first, then the account login.
         val zai = vm.providerAuthMethods("zai")
         assertEquals(listOf(AuthType.API_KEY, AuthType.OAUTH), zai.map { it.type })
         assertEquals("Z.AI API key", zai[0].label)
@@ -2175,19 +2003,15 @@ class ChatViewModelTest {
         assertEquals("Sign in with a Z.AI account", zai[1].label)
         assertTrue(zai[1].isSubscription)
 
-        // Sole OAuth method (promptless provider: pi's openai-codex shape).
         val only = vm.providerAuthMethods("oauth-only")
         assertEquals(listOf(AuthType.OAUTH), only.map { it.type })
         assertTrue(only.single().isSubscription)
 
-        // Screen-mode routing (pi's startProviderLogin):
-        // sole API-key → form, more than one → method choice, sole OAuth → flow.
         assertEquals(ProviderAuthScreenMode.API_KEY_FORM, providerAuthScreenMode(cloudflare))
         assertEquals(ProviderAuthScreenMode.METHOD_CHOICE, providerAuthScreenMode(zai))
         assertEquals(ProviderAuthScreenMode.START_OAUTH, providerAuthScreenMode(only))
         assertEquals(ProviderAuthScreenMode.NO_METHODS, providerAuthScreenMode(emptyList()))
 
-        // Unknown providers list no methods.
         assertTrue(vm.providerAuthMethods("no-such-provider").isEmpty())
 
         vm.closeForTest()
@@ -2221,19 +2045,16 @@ class ChatViewModelTest {
     @Test
     fun storedOAuthCredential_configuresProvider_onlyWithRegisteredFlow() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
-        // Account-vs-key stored status: a stored OAuth credential marks the
-        // provider configured where a flow is registered (zai)...
+        // A stored OAuth credential marks the provider configured where a
+        // flow is registered (zai)...
         h.credentials.creds["zai"] =
             OAuthCredential("access-token-9", "refresh-token-9", Long.MAX_VALUE)
         // ...but resolves as unconfigured without a handler (cloudflare has
-        // key prompts and no registered flow — pi's handler-less credential).
+        // no registered flow).
         h.credentials.creds["cloudflare-ai-gateway"] =
             OAuthCredential("access-token-9", "refresh-token-9", Long.MAX_VALUE)
 
         val vm = h.newViewModel()
-        // zai has a registered flow, so its stored OAuth credential configures
-        // the provider and the app enters the chat directly on the derived
-        // model (the new first-run flow — no model-settings step).
         val state = vm.uiState.first { it.status == ChatStatus.Ready }
         assertTrue(state.providerOptions.first { it.id == "zai" }.configured)
         assertFalse(state.providerOptions.first { it.id == "cloudflare-ai-gateway" }.configured)
@@ -2241,7 +2062,6 @@ class ChatViewModelTest {
         assertTrue(state.modelOptions.isNotEmpty())
         assertFalse(state.toString().contains("access-token-9"))
 
-        // Logout removes the stored credential and unconfigures.
         vm.removeProviderCredential("zai")
         vm.uiState.first { !it.providerOptions.first { o -> o.id == "zai" }.configured }
         assertNull(h.credentials.creds["zai"])
@@ -2289,7 +2109,6 @@ class ChatViewModelTest {
         vm.submitAuthPrompt("work")
         assertEquals("work", chosen)
 
-        // Events accumulate in order while the manual-code prompt is pending.
         vm.uiState.first { it.authFlow?.pendingPrompt?.kind == AuthPromptKind.MANUAL_CODE }
         val events = vm.uiState.value.authFlow!!.events
         assertTrue(events[0] is AuthEvent.Info)
@@ -2300,16 +2119,15 @@ class ChatViewModelTest {
         vm.submitAuthPrompt("654321")
 
         // Success: the flow clears, the epoch bumps exactly once (the UI
-        // closes the auth screen on it, like a key save), derived state
-        // refreshes, and no token material ever entered the state.
+        // closes the auth screen on it), and no token material ever entered
+        // the state.
         val done = vm.uiState.first { it.authFlow == null && it.credentialSuccessEpoch == 1L }
         assertTrue(done.providerOptions.first { it.id == "zai" }.configured)
         assertTrue(done.modelOptions.any { it.providerId == "zai" })
         assertFalse(done.toString().contains("access-token-1"))
         assertNull(done.error)
 
-        // The stored credential is the OAuth one (account login replaced nothing
-        // else — the store was empty before).
+        // The stored credential is the OAuth one (the store was empty before).
         assertEquals(CredentialType.OAUTH, h.credentials.creds["zai"]?.type)
 
         vm.closeForTest()
@@ -2326,8 +2144,7 @@ class ChatViewModelTest {
         vm.beginProviderAuthLogin("zai", oauthMethod)
         vm.uiState.first { it.authFlow == null && it.error != null }
 
-        // The login operation itself is one error span (recorded by the
-        // ViewModel at the pf.auth.login app boundary).
+        // The login operation itself records one error span.
         val loginSpan = h.telemetry.getSpans().single { it.name == "pf.auth.login" }
         assertEquals(
             works.resolve.pathfinder.telemetry.attr("zai"),
@@ -2346,8 +2163,8 @@ class ChatViewModelTest {
             errorSpan.attributes["pf.error.ui_message"],
         )
         val status = errorSpan.status as works.resolve.pathfinder.telemetry.SpanStatus.Error
-        // The UI boundary records the wrapped ModelsError (ProviderAuthService wraps
-        // flow failures) type-only: short class name, never the free-form message.
+        // The UI boundary records the wrapped ModelsError type-only: short
+        // class name, never the free-form message.
         assertEquals("ModelsError", status.error?.name)
         assertEquals("", status.error?.message)
 
@@ -2363,8 +2180,6 @@ class ChatViewModelTest {
         vm.saveProviderCredential("zai", "k", emptyMap())
         vm.uiState.first { it.credentialSuccessEpoch > 0 }
 
-        // The pf.auth.login span moved out of the ported ProviderAuthService
-        // to the caller boundary; the API-key save path records it too.
         val span = h.telemetry.getSpans().single { it.name == "pf.auth.login" }
         assertEquals(works.resolve.pathfinder.telemetry.attr("zai"), span.attributes["pf.auth.provider"])
         assertEquals(works.resolve.pathfinder.telemetry.attr("api_key"), span.attributes["pf.auth.type"])
@@ -2377,10 +2192,9 @@ class ChatViewModelTest {
     @Test
     fun credentialReadFailure_degradesWithTelemetryNotSilence() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
-        // Persist a valid provider+model selection, then make credential reads
-        // fail: the restoration path must degrade to NeedsConfiguration
-        // (pi's semantics) while recording why — the failure must be
-        // distinguishable on-device from an actually-missing credential.
+        // The restoration path must degrade to NeedsConfiguration while
+        // recording why — the failure must be distinguishable on-device from
+        // an actually-missing credential.
         h.settings.setProviderId("zai")
         h.settings.setModelId(testModel.id)
         h.credentials.failWrites = true
@@ -2391,8 +2205,7 @@ class ChatViewModelTest {
         assertTrue(degraded.isNotEmpty())
         assertTrue(degraded.all { it.status is works.resolve.pathfinder.telemetry.SpanStatus.Error })
         // The credential-read failure is named, not silently absorbed into
-        // "unconfigured" (the init projection and the options refresh each
-        // record their own degraded operation).
+        // "unconfigured".
         assertTrue(
             degraded.any { it.attributes["pf.degraded.operation"] == works.resolve.pathfinder.telemetry.attr("available_models") } ||
                 degraded.any { it.attributes["pf.degraded.operation"] == works.resolve.pathfinder.telemetry.attr("provider_status") },
@@ -2408,7 +2221,6 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
         val oauthMethod = vm.providerAuthMethods("zai").first { it.type == AuthType.OAUTH }
 
-        // Cancel while a secret prompt is suspended.
         h.oauthZai.loginFn = { interaction ->
             interaction.prompt(AuthInteractionPrompt.Secret("Paste token"))
             OAuthCredential("never-stored", "never-stored", Long.MAX_VALUE)
@@ -2421,7 +2233,6 @@ class ChatViewModelTest {
         assertNull(h.credentials.creds["zai"])
         assertNull(vm.uiState.value.error)
 
-        // Failure surfaces only the safe generic error (never the cause).
         h.oauthZai.loginFn = { throw IllegalStateException("token endpoint returned access-token-2") }
         vm.beginProviderAuthLogin("zai", oauthMethod)
         vm.uiState.first { it.authFlow == null && it.error != null }
@@ -2431,7 +2242,6 @@ class ChatViewModelTest {
         assertEquals(0, vm.uiState.value.credentialSuccessEpoch)
         vm.dismissError()
 
-        // After cancel/failure a fresh login succeeds (nothing stuck).
         h.oauthZai.loginFn = { OAuthCredential("access-token-3", "refresh-token-3", Long.MAX_VALUE) }
         vm.beginProviderAuthLogin("zai", oauthMethod)
         vm.uiState.first { it.authFlow == null && it.credentialSuccessEpoch == 1L }
@@ -2457,7 +2267,6 @@ class ChatViewModelTest {
         vm.beginProviderAuthLogin("zai", oauthMethod)
         vm.uiState.first { it.authFlow?.pendingPrompt != null }
 
-        // A second login and a key save are both rejected while a flow runs.
         vm.beginProviderAuthLogin("zai", oauthMethod)
         vm.uiState.first { it.error != null }
         vm.dismissError()
@@ -2468,7 +2277,6 @@ class ChatViewModelTest {
 
         vm.cancelProviderAuthLogin()
         vm.uiState.first { it.authFlow == null }
-        // Now the key save works through the normal form path.
         vm.saveProviderCredential("zai", "k", emptyMap())
         vm.uiState.first { it.credentialSuccessEpoch == 1L }
         assertEquals("k", (h.credentials.creds["zai"] as ApiKeyCredential).key)
@@ -2476,9 +2284,8 @@ class ChatViewModelTest {
         vm.closeForTest()
     }
 
-    // ---- tree navigation (pi's navigateTree, reduced) ----
+    // ---- tree navigation ----
 
-    /** Runs one scripted exchange and waits for its persistence. */
     private suspend fun ChatViewModel.exchange(
         h: Harness,
         text: String,
@@ -2505,8 +2312,8 @@ class ChatViewModelTest {
         assertEquals(4, vm.uiState.value.treeRows.size)
         assertTrue(vm.uiState.value.treeRows.last().isCurrentLeaf)
 
-        // Navigate to the first assistant answer: transcript truncates to the
-        // root..that-entry path, tree rows keep every entry.
+        // Transcript truncates to the root..entry path; tree rows keep every
+        // entry.
         val assistantEntryId = vm.uiState.value.treeRows[1].id
         vm.navigateToTreeEntry(assistantEntryId)
         val truncated = vm.uiState.first { it.messages.size == 2 }
@@ -2516,16 +2323,15 @@ class ChatViewModelTest {
         assertFalse(truncated.treeRows[3].isOnActivePath)
         assertEquals("world", truncated.messages[1].singleText())
 
-        // Entries + leafId persist (branch structure survives the save); the
-        // seed model_change and thinking_level_change entries ride along as
-        // sixth and seventh (elided) entries.
+        // Entries + leafId persist; the seed model_change and
+        // thinking_level_change entries ride along.
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         val saved = h.sessionStore.load(sessionId)!!
         assertEquals(6, saved.entries.size)
         assertEquals(assistantEntryId, saved.leafId)
 
-        // A new exchange from here forks: the second user message becomes a
-        // SIBLING of the old one under the same assistant entry.
+        // A new exchange from here forks: the new user message becomes a
+        // sibling of the old one under the same assistant entry.
         vm.exchange(h, "Third", "forked")
         vm.uiState.first { it.messages.size == 4 && it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 4 }
         val forked = h.sessionStore.load(sessionId)!!
@@ -2534,7 +2340,6 @@ class ChatViewModelTest {
         val childrenOfTarget = forked.entries.filter { it.parentId == assistantEntryId }
         assertEquals(2, childrenOfTarget.map { it.id }.toSet().size)
 
-        // Roundtrip: a fresh ViewModel restores the branched session intact.
         vm.closeForTest()
         val vm2 = h.newViewModel()
         val restored = vm2.uiState.first { it.status == ChatStatus.Ready && it.activeSessionId == sessionId }
@@ -2565,8 +2370,7 @@ class ChatViewModelTest {
         vm.exchange(h, "Hello", "world")
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
 
-        // Re-edit the user prompt: draft is restored, active path empties
-        // (the leaf resets to the root), and the tree keeps both entries.
+        // Re-edit: the leaf resets to the root; the tree keeps both entries.
         val userEntryId = vm.uiState.value.treeRows[0].id
         vm.navigateToTreeEntry(userEntryId)
         val reedit = vm.uiState.first { it.draft == "Hello" }
@@ -2578,19 +2382,16 @@ class ChatViewModelTest {
         vm.exchange(h, "Hello edited", "rewritten")
         vm.uiState.first { it.messages.size == 2 && it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         val saved = h.sessionStore.load(sessionId)!!
-        // Six entries: the seed model_change + thinking_level_change roots,
-        // the original pair, and the re-sent sibling pair (its user message
-        // forking under the thinking seed).
+        // Six entries: the two seed roots, the original pair, and the re-sent
+        // sibling pair.
         assertEquals(6, saved.entries.size)
-        // The seed model_change is the only root: the re-edited user message
-        // forks as a sibling of the original under the thinking seed entry
-        // (re-edit branches to the target's parent, which now exists).
+        // Re-edit branches to the target's parent: the re-edited user message
+        // forks as a sibling of the original under the thinking seed entry.
         val seedChange = saved.entries.filterIsInstance<ModelChangeEntry>().single()
         val roots = saved.entries.filter { it.parentId == null }
         assertEquals(listOf(seedChange.id), roots.map { it.id })
         assertEquals("Hello edited", (saved.messages[0] as works.resolve.pathfinder.ai.core.UserMessage).content.filterIsInstance<TextContent>().first().text)
 
-        // Tree rows show both roots, active one first.
         val rows = vm.uiState.value.treeRows
         assertEquals(4, rows.size)
         assertTrue(rows[0].isCurrentLeaf || rows[1].isCurrentLeaf)
@@ -2614,8 +2415,8 @@ class ChatViewModelTest {
         val userEntryId = vm.uiState.value.treeRows[0].id
         vm.navigateToTreeEntry(userEntryId)
 
-        // pi's navigateTree loads the re-edit text into the editor only when
-        // it is empty; a typed draft is never clobbered by navigation.
+        // Navigation loads the re-edit text only into an empty draft; a typed
+        // draft is never clobbered.
         val state = vm.uiState.first { it.messages.isEmpty() }
         assertEquals("half-typed draft", state.draft)
 
@@ -2623,11 +2424,10 @@ class ChatViewModelTest {
     }
 
     /**
-     * pi's setModel records every model selection as a model_change entry on
-     * the session tree (agent-session.ts ~1665), and sdk.ts seeds new
-     * sessions with the initial selection. Both must persist: the seed entry
-     * on first configuration, and a recorded switch appended to the active
-     * leaf when the user re-selects while Ready.
+     * Every model selection is recorded as a model_change entry on the
+     * session tree: the seed entry on first configuration, and a recorded
+     * switch appended to the active leaf when the user re-selects while
+     * Ready.
      */
     @Test
     fun modelSelection_recordsModelChangeEntries_andPersistsThem() = runTest(mainDispatcherRule.scheduler) {
@@ -2638,7 +2438,6 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.Ready }
         val sessionId = vm.uiState.value.activeSessionId!!
 
-        // Initial configuration seeds the new session with the selection.
         vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.isNotEmpty() }
         val seeded = h.sessionStore.load(sessionId)!!
         val seedChange = seeded.entries.filterIsInstance<ModelChangeEntry>().single()
@@ -2650,10 +2449,8 @@ class ChatViewModelTest {
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         val agentsBefore = h.createdAgents.size
 
-        // A live re-selection (pi's /model pick) switches the SAME session —
-        // no agent rebuild — and appends a model_change after the leaf.
-        // (The thinking re-application after the switch appends nothing:
-        // no stored default, so the session's current level is re-applied.)
+        // A live re-selection switches the SAME session — no agent rebuild —
+        // and appends a model_change after the leaf.
         vm.selectModel("zai", "glm-5.3")
         vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
         assertEquals(agentsBefore, h.createdAgents.size)
@@ -2663,30 +2460,26 @@ class ChatViewModelTest {
         assertEquals("zai", switch.provider)
         assertEquals("glm-5.3", switch.modelId)
         assertEquals(saved.entries[3].id, switch.parentId)
-        // pi's setModel re-applies the session's thinking level for the new
-        // model (_getThinkingLevelForModelSwitch → setThinkingLevel), clamped
-        // to its capabilities: glm-5.3's map supports only low/high/max, so
-        // the session's seeded medium clamps up to high and a
-        // thinking_level_change lands beneath the model_change.
+        // setModel re-applies the session's thinking level, clamped to the
+        // new model's capabilities: glm-5.3 supports only low/high/max, so
+        // the seeded medium clamps up to high and a thinking_level_change
+        // lands beneath the model_change.
         val switchThinking = saved.entries[5] as works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
         assertEquals("high", switchThinking.thinkingLevel)
         assertEquals(switch.id, switchThinking.parentId)
         assertEquals(switchThinking.id, saved.leafId)
-        // The next prompt runs on the switched model (no rebuild involved).
         vm.exchange(h, "Again", "fine")
         assertEquals(listOf("glm-4.7", "glm-5.3"), h.streamedModels.map { it.id })
 
         vm.closeForTest()
     }
 
-    // ---- thinking level (pi's thinking selector + setThinkingLevel) ----
+    // ---- thinking level ----
 
     /**
-     * pi's sdk.ts session initialization: a new session seeds the default
-     * thinking level (getDefaultThinkingLevel() ?? DEFAULT "medium"),
+     * A new session seeds the default thinking level ("medium" default),
      * clamped to the model; the chip surfaces fold onto the live session
-     * state (footer reads state.thinkingLevel and the model's supported
-     * levels).
+     * state.
      */
     @Test
     fun newSession_seedsDefaultThinkingLevel_andProjectsTheChipSurfaces() = runTest(mainDispatcherRule.scheduler) {
@@ -2712,8 +2505,6 @@ class ChatViewModelTest {
         )
         assertNull(ready.defaultThinkingLevel)
 
-        // The seed lands on the tree and persists (pi's appendModelChange +
-        // appendThinkingLevelChange new-session path).
         vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 2 }
         val seeded = h.sessionStore.load(sessionId)!!
         assertEquals(
@@ -2726,9 +2517,9 @@ class ChatViewModelTest {
     }
 
     /**
-     * pi's selector pick (Enter): one setThinkingLevel call switches the
-     * session, appends thinking_level_change only when the level changes,
-     * and never persists the default.
+     * One setThinkingLevel call switches the session, appends
+     * thinking_level_change only when the level changes, and never persists
+     * the default.
      */
     @Test
     fun selectThinkingLevel_switchesTheSession_appendingOnlyOnChange() = runTest(mainDispatcherRule.scheduler) {
@@ -2745,8 +2536,7 @@ class ChatViewModelTest {
         assertNull(h.settings.currentSettings().defaultThinkingLevel)
         vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 3 }
 
-        // Re-picking the current level appends nothing (pi: only when the
-        // level actually changes).
+        // Re-picking the current level appends nothing.
         vm.selectThinkingLevel(ModelThinkingLevel.HIGH)
         vm.uiState.first { it.thinkingLevel == ModelThinkingLevel.HIGH }
         assertTrue(h.sessionStore.load(sessionId)!!.entries.size == 3)
@@ -2761,9 +2551,8 @@ class ChatViewModelTest {
     }
 
     /**
-     * pi's setThinkingLevel clamps to the model's capabilities
-     * (agent-session.ts:1795): glm-5.3's map supports only low/high/max, so
-     * a minimal pick rounds up to low.
+     * setThinkingLevel clamps to the model's capabilities: glm-5.3's map
+     * supports only low/high/max, so a minimal pick rounds up to low.
      */
     @Test
     fun selectThinkingLevel_clampsToTheModelSupportedLevels() = runTest(mainDispatcherRule.scheduler) {
@@ -2789,10 +2578,10 @@ class ChatViewModelTest {
     }
 
     /**
-     * pi's Ctrl+S (setThinkingLevel(level, { persist: true })): applies to
-     * the live session clamped, but "persists the requested default thinking
-     * level even when the current model clamps it" — glm-4.7 supports at
-     * most high, so xhigh runs as high while the setting stores xhigh.
+     * Applies to the live session clamped, but persists the requested
+     * default thinking level even when the current model clamps it:
+     * glm-4.7 supports at most high, so xhigh runs as high while the setting
+     * stores xhigh.
      */
     @Test
     fun setThinkingLevelDefault_persistsTheRequestedLevel_andRunsItClamped() = runTest(mainDispatcherRule.scheduler) {
@@ -2813,10 +2602,8 @@ class ChatViewModelTest {
     }
 
     /**
-     * pi's model-switch thinking re-application
-     * (_getThinkingLevelForModelSwitch): the stored global default wins over
-     * the session's current level (pi's "switch back to faux-1 → uses global
-     * default"), clamped to the new model.
+     * On model switch the stored global default wins over the session's
+     * current level, clamped to the new model.
      */
     @Test
     fun selectModel_reappliesTheStoredDefaultThinkingLevel() = runTest(mainDispatcherRule.scheduler) {
@@ -2835,8 +2622,6 @@ class ChatViewModelTest {
 
         vm.selectModel("zai", "glm-5.3")
         vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
-        // The switch re-applied the stored default (low), clamped into the
-        // new model's low/high/max map, appending beneath the model_change.
         val reapply = vm.uiState.first { it.thinkingLevel == ModelThinkingLevel.LOW }
         assertEquals(ModelThinkingLevel.LOW, reapply.thinkingLevel)
         vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 6 }
@@ -2849,9 +2634,8 @@ class ChatViewModelTest {
     }
 
     /**
-     * pi's session-load restore (sdk.ts: hasThinkingEntry → the branch's
-     * level, not the global default): a reload keeps the recorded branch
-     * level and does not re-seed over it.
+     * On session load the branch's recorded level wins over the global
+     * default: a reload keeps it and does not re-seed over it.
      */
     @Test
     fun sessionReload_restoresTheBranchThinkingLevel() = runTest(mainDispatcherRule.scheduler) {
@@ -2863,9 +2647,9 @@ class ChatViewModelTest {
         val sessionId = vm.uiState.value.activeSessionId!!
 
         vm.selectThinkingLevel(ModelThinkingLevel.HIGH)
-        // Real-time wait: the store's IO appends run on Dispatchers.IO,
-        // which runTest's virtual clock cannot see (waitUntil's documented
-        // purpose) — a uiState-gated first{} can miss the final store write.
+        // Real-time wait: store IO appends run on Dispatchers.IO, invisible
+        // to runTest's virtual clock — a uiState-gated first{} can miss the
+        // final store write.
         waitUntil { h.sessionStore.load(sessionId)!!.entries.size == 3 }
         vm.closeForTest()
 
@@ -2883,9 +2667,6 @@ class ChatViewModelTest {
         vm2.closeForTest()
     }
 
-    /**
-     * prompt (agent.ts snapshots the model per run).
-     */
     @Test
     fun selectModel_midStream_appliesToTheNextPrompt() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
@@ -2901,7 +2682,6 @@ class ChatViewModelTest {
         vm.send()
         vm.uiState.first { it.isStreaming }
 
-        // The mid-stream pick is accepted without complaint.
         vm.selectModel("zai", "glm-5.3")
         mainDispatcherRule.scheduler.advanceUntilIdle()
         assertNull(vm.uiState.value.error)
@@ -2911,7 +2691,7 @@ class ChatViewModelTest {
         gate.complete(Unit)
         vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
 
-        // The in-flight run kept its start-of-run model; the next one switches.
+        // The in-flight run keeps its start-of-run model; the next switches.
         h.scriptedStreams.add(h.gatedStream("second", CompletableDeferred<Unit>().apply { complete(Unit) }))
         vm.onDraftChange("Again")
         vm.send()
@@ -2922,9 +2702,8 @@ class ChatViewModelTest {
     }
 
     /**
-     * Default persistence is pi's explicit Ctrl+S action — never part of a
-     * pick — and appends the default to a non-empty scope when missing
-     * (pi's _addPersistedDefaultToNonEmptyScope).
+     * Default persistence is a separate action — never part of a pick — and
+     * appends the default to a non-empty scope when missing.
      */
     @Test
     fun saveStartupDefault_separateAction_appendsToNonEmptyScope() = runTest(mainDispatcherRule.scheduler) {
@@ -2934,24 +2713,21 @@ class ChatViewModelTest {
         vm.configure(apiKey = "k")
         vm.uiState.first { it.status == ChatStatus.Ready }
 
-        // No scope curated: the default save persists provider+model only.
         vm.saveStartupDefault("zai", "glm-4.7")
         vm.uiState.first { h.settings.currentSettings().modelId == "glm-4.7" }
         assertNull(h.settings.currentSettings().enabledModels)
         assertNull(vm.uiState.value.enabledModels)
 
-        // Curate a scope: uncheck glm-4.7 (materializes the explicit list in
-        // display order — all remaining models, everything offered minus it).
+        // Unchecking materializes the explicit scope list in display order.
         vm.toggleModelScope("zai", "glm-4.7", false)
         val scoped = vm.uiState.first { it.enabledModels != null }
         assertTrue(scoped.enabledModels!!.none { it == "zai/glm-4.7" })
         assertEquals(h.settings.currentSettings().enabledModels, scoped.enabledModels)
-        // The picker's scoped view narrowed; the running model is untouched.
         assertTrue(scoped.scopedModelOptions.none { it.modelId == "glm-4.7" })
         assertEquals("glm-4.7", scoped.selectedModel?.modelId)
 
-        // Saving a default that is not in the non-empty scope appends it
-        // (order-preserving append, pi's behavior).
+        // Saving a default missing from the non-empty scope order-preservingly
+        // appends it.
         vm.saveStartupDefault("zai", "glm-4.7")
         val grown = vm.uiState.first { it.enabledModels?.contains("zai/glm-4.7") == true }.enabledModels!!
         assertEquals("zai/glm-4.7", grown.last())
@@ -2963,10 +2739,10 @@ class ChatViewModelTest {
     }
 
     /**
-     * [ChatUiState.defaultModel] mirrors only the stored startup default
-     * (pi's `defaultModel` setting): null before one is saved, set by the
-     * Settings save, and never moved by live model switches — unlike
-     * [ChatUiState.selectedModel], which follows the running session.
+     * [ChatUiState.defaultModel] mirrors only the stored startup default:
+     * null before one is saved, set by the save, never moved by live model
+     * switches — unlike [ChatUiState.selectedModel], which follows the
+     * running session.
      */
     @Test
     fun defaultModel_mirrorFollowsStoredDefault_notLiveSwitches() = runTest(mainDispatcherRule.scheduler) {
@@ -2977,7 +2753,6 @@ class ChatViewModelTest {
         val ready = vm.uiState.first { it.status == ChatStatus.Ready }
         assertNull(ready.defaultModel)
 
-        // A live switch (pi's Enter) never touches the stored-default mirror.
         vm.selectModel("zai", "glm-5.3")
         vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
         assertNull(vm.uiState.value.defaultModel)
@@ -2993,8 +2768,7 @@ class ChatViewModelTest {
         vm.closeForTest()
     }
 
-    /** The curator persists the ordered list; removing everything keeps an
-     * empty scope that behaves as no scope downstream (pi's !length). */
+    /** Persists the ordered list; an emptied scope behaves as no scope downstream. */
     @Test
     fun toggleModelScope_persistsOrderedList_emptyBehavesAsNoScope() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
@@ -3005,30 +2779,24 @@ class ChatViewModelTest {
         val all = vm.uiState.value.modelOptions
         assertTrue(all.size >= 2)
 
-        // First edit materializes the explicit list in display order.
         vm.toggleModelScope(all[0].providerId, all[0].modelId, false)
         val curated = vm.uiState.first { it.enabledModels != null }.enabledModels!!
         assertEquals(all.drop(1).map { "${it.providerId}/${it.modelId}" }, curated)
 
-        // Unchecking every remaining row writes an empty list.
         all.drop(1).forEach { vm.toggleModelScope(it.providerId, it.modelId, false) }
         val emptied = vm.uiState.first { it.enabledModels?.isEmpty() == true }
         assertEquals(emptyList<String>(), h.settings.currentSettings().enabledModels)
-        // Downstream it behaves as no scope: the picker shows everything.
         assertEquals(emptied.modelOptions, emptied.scopedModelOptions)
 
-        // Re-checking from the empty scope re-adds just that ref.
         vm.toggleModelScope(all[1].providerId, all[1].modelId, true)
         vm.uiState.first { it.enabledModels == listOf("${all[1].providerId}/${all[1].modelId}") }
 
         vm.closeForTest()
     }
 
-    /** Picker projections follow credential filtering (pi's getAvailable). */
     @Test
     fun scopedModelOptions_followCredentialFiltering() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
-        // Copilot narrowed to gpt-4.1; zai full.
         h.credentials.creds["github-copilot"] = copilotCredential(stringArray("gpt-4.1"))
         h.credentials.creds["zai"] = ApiKeyCredential("z")
         val vm = h.newViewModel()
@@ -3040,8 +2808,6 @@ class ChatViewModelTest {
             listOf("gpt-4.1", "glm-4.7", "glm-5-turbo", "glm-5.2", "glm-5.2-highspeed", "glm-5.3"),
             state.modelOptions.map { it.modelId },
         )
-        // Scope the Copilot model and one zai model: the scoped view keeps
-        // display order and drops the filtered-out models.
         vm.toggleModelScope("github-copilot", "gpt-4.1", false)
         vm.toggleModelScope("zai", "glm-4.7", false)
         val scoped = vm.uiState.first { it.enabledModels != null }
@@ -3054,11 +2820,10 @@ class ChatViewModelTest {
     }
 
     /**
-     * The branch's configuration fold (pi's deriveSessionContextState)
-     * decides the running model: navigating back before a model_change makes
-     * the older selection effective again (agent rebuilt on it), and a fresh
-     * ViewModel restores the same folded model on session load even though
-     * the persisted global default differs.
+     * The branch's configuration fold decides the running model: navigating
+     * back before a model_change makes the older selection effective again,
+     * and a fresh ViewModel restores the same folded model on load even
+     * though the persisted global default differs.
      */
     @Test
     fun effectiveModel_isSeededFromBranchFold_onNavigationAndRestore() = runTest(mainDispatcherRule.scheduler) {
@@ -3071,22 +2836,20 @@ class ChatViewModelTest {
 
         vm.exchange(h, "Hello", "world")
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
-        // Switch the model (records model_change glm-5.3 after the leaf) and
-        // persist it as the startup default (pi's Ctrl+S).
         vm.selectModel("zai", "glm-5.3")
         vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
         vm.saveStartupDefault("zai", "glm-5.3")
         vm.uiState.first { h.settings.currentSettings().modelId == "glm-5.3" }
 
-        // Navigate back to the first assistant answer: the branch fold is
-        // seed(glm-4.7) + assistant(glm-4.7), so the agent rebuilds on 4.7.
+        // The branch fold is seed(glm-4.7) + assistant(glm-4.7), so the agent
+        // rebuilds on 4.7.
         val assistantEntryId = vm.uiState.value.treeRows[1].id
         vm.navigateToTreeEntry(assistantEntryId)
         vm.uiState.first { h.createdSettings.last().modelId == "glm-4.7" }
         vm.uiState.first { h.sessionStore.load(sessionId)!!.leafId == assistantEntryId }
 
-        // Restore: persisted global default stays glm-5.3, but the loaded
-        // branch's fold seeds the running agent on glm-4.7.
+        // Restore: the global default stays glm-5.3, but the branch fold
+        // seeds the running agent on glm-4.7.
         vm.closeForTest()
         val vm2 = h.newViewModel()
         vm2.uiState.first { it.status == ChatStatus.Ready && it.activeSessionId == sessionId }
@@ -3161,7 +2924,6 @@ class ChatViewModelTest {
         val filtered = vm.uiState.first { it.treeFilter == TreeFilter.USER_ONLY }.treeRows
         assertEquals(1, filtered.size)
         assertEquals("You: Hello", filtered[0].preview)
-        // Default view restored on demand; nothing persisted.
         vm.setTreeFilter(TreeFilter.DEFAULT)
         assertEquals(2, vm.uiState.value.treeRows.size)
 
@@ -3170,7 +2932,6 @@ class ChatViewModelTest {
 
     // ---- thinking block projection ----
 
-    /** Text-only convenience for single-text-block assertions. */
     private fun ChatMessage.singleText(): String =
         blocks.single().let { it as ChatBlock.Text }.text
 
@@ -3210,7 +2971,6 @@ class ChatViewModelTest {
             ),
             blocks,
         )
-        // User message → a single Text block.
         assertEquals(listOf(ChatBlock.Text("hi")), state.messages[0].blocks)
         // The display preference is untouched by projection.
         assertEquals(state.showThinking, h.settings.currentSettings().showThinking)
@@ -3250,7 +3010,7 @@ class ChatViewModelTest {
         vm.closeForTest()
     }
 
-    // ---- GitHub Copilot credential-based model filtering (pi's filterModels) ----
+    // ---- GitHub Copilot credential-based model filtering ----
 
     @Test
     fun copilotOAuthAvailableModelIds_narrowsModelOptions() = runTest(mainDispatcherRule.scheduler) {
@@ -3268,8 +3028,8 @@ class ChatViewModelTest {
     @Test
     fun copilotOAuthMalformedAvailableModelIds_showsAllModels() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
-        // Mixed (string + number) array: not entirely strings, so pi keeps
-        // the full static list.
+        // Mixed (string + number) array: not entirely strings, so the full
+        // static list applies.
         h.credentials.creds["github-copilot"] = copilotCredential(
             JsonArray(listOf(JsonPrimitive("gpt-4.1"), JsonPrimitive(7))),
         )
@@ -3302,15 +3062,15 @@ class ChatViewModelTest {
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.Ready }
 
-        // Logout: no credential ⇒ the provider is unconfigured, so pi's
-        // getAvailable contributes nothing (not even unfiltered models).
+        // Logout: no credential ⇒ unconfigured ⇒ no model options at all
+        // (not even unfiltered ones).
         vm.removeProviderCredential("github-copilot")
         mainDispatcherRule.scheduler.advanceUntilIdle()
         assertEquals(emptyList<String>(), vm.copilotModelOptions())
         assertFalse(vm.uiState.value.providerOptions.first { it.id == "github-copilot" }.configured)
 
-        // Switching to an API-key credential (COPILOT_GITHUB_TOKEN prompt) is
-        // complete and never filtered ⇒ every static model returns.
+        // An API-key credential is complete and never filtered ⇒ every
+        // static model returns.
         h.credentials.creds["github-copilot"] = ApiKeyCredential(key = "tok")
         vm.refreshProviderStatus()
         mainDispatcherRule.scheduler.advanceUntilIdle()
@@ -3328,9 +3088,9 @@ class ChatViewModelTest {
             h.settings.setModelId("gpt-4.5")
             val vm = h.newViewModel()
 
-            // The saved default is credential-filtered out (pi's getAvailable
-            // drops it): a safe availability error surfaces, but the derived
-            // replacement (the only available model) runs — chat is usable.
+            // The saved default is credential-filtered out: a safe
+            // availability error surfaces, but the derived replacement runs —
+            // chat is usable.
             val state = vm.uiState.first { it.status == ChatStatus.Ready }
             assertEquals("gpt-4.1", state.selectedModel?.modelId)
             assertEquals(ChatNavKey, state.startKey)
@@ -3338,13 +3098,11 @@ class ChatViewModelTest {
             assertEquals(listOf("gpt-4.1"), vm.copilotModelOptions())
             vm.dismissError()
 
-            // The unavailable model is rejected exactly like an unknown one.
             vm.selectModel("github-copilot", "gpt-4.5")
             mainDispatcherRule.scheduler.advanceUntilIdle()
             assertEquals("Unknown model", vm.uiState.value.error)
             vm.dismissError()
 
-            // A live pick of an available model switches.
             vm.selectModel("github-copilot", "gpt-4.1")
             mainDispatcherRule.scheduler.advanceUntilIdle()
             assertNull(vm.uiState.value.error)
@@ -3363,13 +3121,11 @@ class ChatViewModelTest {
             val vm = h.newViewModel()
             vm.uiState.first { it.status == ChatStatus.Ready }
 
-            // Unknown provider: unknown-model error, never a credential error.
             vm.selectModel("no-such-provider", "gpt-4.1")
             mainDispatcherRule.scheduler.advanceUntilIdle()
             assertEquals("Unknown model", vm.uiState.value.error)
             vm.dismissError()
 
-            // Static id the catalog has never carried, on a known provider.
             vm.selectModel("github-copilot", "not-a-catalog-model")
             mainDispatcherRule.scheduler.advanceUntilIdle()
             assertEquals("Unknown model", vm.uiState.value.error)
@@ -3382,9 +3138,8 @@ class ChatViewModelTest {
         val h = Harness()
         h.credentials.creds["github-copilot"] = copilotCredential(stringArray("gpt-4.1"))
         h.settings.setProviderId("github-copilot")
-        // Corrupt id the static catalog never carried: not "no longer
-        // available for this account" — no availability error, the derived
-        // replacement just runs.
+        // A corrupt id the catalog never carried is not "unavailable for this
+        // account": no availability error, the derived replacement just runs.
         h.settings.setModelId("corrupt-model-id")
         val vm = h.newViewModel()
 
@@ -3393,9 +3148,8 @@ class ChatViewModelTest {
         assertEquals("gpt-4.1", state.selectedModel?.modelId)
         vm.closeForTest()
     }
-    // ---- append-only persistence (pi's JSONL v4 mutation log, P0-2) ----
+    // ---- append-only persistence ----
 
-    /** Locates the session's .jsonl log file under the harness root. */
     private fun sessionLogFile(sessionId: String): File =
         tmpFolder.root.walkTopDown().filter { it.isFile && it.name == "$sessionId.jsonl" }.first()
 
@@ -3417,8 +3171,6 @@ class ChatViewModelTest {
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 4 }
         val afterSecond = sessionLogFile(sessionId).readText()
 
-        // The second save only appended mutation lines: the first file's
-        // bytes are a strict prefix of the grown log.
         assertTrue(afterSecond.length > afterFirst.length)
         assertEquals(afterFirst, afterSecond.substring(0, afterFirst.length))
 
@@ -3438,8 +3190,7 @@ class ChatViewModelTest {
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         val before = sessionLogFile(sessionId).readText()
 
-        // Re-edit the user message: the leaf resets to root (a lane move)
-        // without appending any entry.
+        // Re-edit: a lane move to the root that appends no entry.
         val userEntryId = vm.uiState.value.treeRows.first { it.isOnActivePath }.id
         vm.navigateToTreeEntry(userEntryId)
         vm.uiState.first { it.messages.isEmpty() && it.draft == "Hello" }
@@ -3459,15 +3210,15 @@ class ChatViewModelTest {
         assertTrue(appended.contains("\"kind\":\"navigation\""))
         assertTrue(appended.contains("\"type\":\"operation_finished\""))
 
-        // A fresh store (process restart) replays the lane move: same
-        // entries, empty active transcript, leaf on the seed thinking entry.
+        // A fresh store replays the lane move: same entries, empty active
+        // transcript, leaf on the seed thinking entry.
         val reloaded = h.sessionStore.load(sessionId)!!
         assertEquals(4, reloaded.entries.size) // seed model_change + thinking_level_change + user + assistant
         assertEquals(reloaded.entries[1].id, reloaded.leafId)
         assertTrue(reloaded.messages.isEmpty())
     }
 
-    // ---- navigation trigger: branch summarization (audit P1-4/P1-5) ----
+    // ---- navigation-trigger branch summarization ----
 
     @Test
     fun navigateWithSummarize_appendsNavigationRecordAndBranchSummary() = runTest(mainDispatcherRule.scheduler) {
@@ -3488,12 +3239,9 @@ class ChatViewModelTest {
         vm.exchange(h, "Again", "fine")
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 4 }
 
-        // Navigate back to the first assistant answer, summarizing the
-        // abandoned second exchange.
         val assistantEntryId = vm.uiState.value.treeRows[1].id
         vm.navigateToTreeEntry(assistantEntryId, summarize = true)
 
-        // The branch summary entry lands on the target branch and persists.
         waitUntil { h.sessionStore.load(sessionId)!!.entries.any { it is works.resolve.pathfinder.data.sessions.BranchSummaryEntry } }
         val saved = h.sessionStore.load(sessionId)!!
         val summary = saved.entries.filterIsInstance<works.resolve.pathfinder.data.sessions.BranchSummaryEntry>().single()
@@ -3501,9 +3249,8 @@ class ChatViewModelTest {
         assertTrue(summary.summary.contains("explored the branch"))
         assertEquals(summary.id, saved.leafId)
 
-        // The durable navigation operation: started (navigation intent with
-        // the summarize flag and pre-minted summaryEntryId) + finished
-        // completed.
+        // The durable navigation operation records the summarize flag and the
+        // pre-minted summaryEntryId.
         waitUntil {
             h.sessions.appendedRecords.count { it is works.resolve.pathfinder.data.sessions.LaneRecord.OperationFinishedRecord } >= 3
         }
@@ -3529,8 +3276,7 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.Ready }
         val sessionId = vm.uiState.value.activeSessionId!!
 
-        // A finished exchange: its run operation closed. Drain the async
-        // record appends before reloading.
+        // Drain the async record appends before reloading.
         vm.exchange(h, "Hello", "world")
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         waitUntil { h.sessionStore.openOperations(sessionId, "main", null).isEmpty() }
@@ -3541,8 +3287,7 @@ class ChatViewModelTest {
         assertEquals(works.resolve.pathfinder.agent.LaneRecovery.Idle, finished.laneRecovery)
         vm2.closeForTest()
 
-        // An unfinished operation record makes the same session suspend:
-        // the run's operation_finished never persisted.
+        // An unfinished operation record suspends the session.
         h.sessionStore.appendRecord(
             sessionId,
             works.resolve.pathfinder.data.sessions.LaneRecord.OperationStartedRecord(

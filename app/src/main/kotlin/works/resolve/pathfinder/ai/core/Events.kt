@@ -141,8 +141,8 @@ data class SimpleStreamOptions(
     /**
      * Narrow tool choice, pi's SimpleStreamOptions.toolChoice (types.ts:316)
      * typed as pi's `ToolChoice = "auto" | "none"` (types.ts:82). The full
-     * union lives only on completions-level options. Reduction: pi's
-     * `deferred` flag is excluded per ai/AGENTS.md adapter-capability scope.
+     * union lives only on completions-level options; pi's `deferred` flag is
+     * not represented.
      */
     val toolChoice: SimpleToolChoice? = null,
     val timeoutMs: Long? = null,

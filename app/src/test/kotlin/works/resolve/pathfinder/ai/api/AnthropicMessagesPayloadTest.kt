@@ -34,11 +34,6 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 
-/**
- * Request-construction tests for the anthropic-messages port, mirroring pi's
- * packages/ai/test/anthropic-*.test.ts coverage of buildParams,
- * convertMessages, convertTools, and transform-messages.
- */
 class AnthropicMessagesPayloadTest {
 
     private val claude = Model(
@@ -78,14 +73,12 @@ class AnthropicMessagesPayloadTest {
         assertEquals("claude-sonnet-4-5", json["model"]!!.jsonPrimitive.content)
         assertEquals(64_000L, json["max_tokens"]!!.jsonPrimitive.content.toLong())
         assertEquals(true, json["stream"]!!.jsonPrimitive.content.toBoolean())
-        // System prompt carries a default (short-retention) cache_control marker.
         val system = json["system"]!!.jsonArray.single().jsonObject
         assertEquals("Be helpful.", system["text"]!!.jsonPrimitive.content)
         assertEquals(
             "ephemeral",
             system["cache_control"]!!.jsonObject["type"]!!.jsonPrimitive.content,
         )
-        // Text-only user messages replay as text content blocks.
         val userContent = json["messages"]!!.jsonArray.single().jsonObject["content"]!!.jsonArray
         assertEquals("text", userContent[0].jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("hi", userContent[0].jsonObject["text"]!!.jsonPrimitive.content)
@@ -103,7 +96,6 @@ class AnthropicMessagesPayloadTest {
             json["system"]!!.jsonArray.single().jsonObject["cache_control"]!!
                 .jsonObject["ttl"]!!.jsonPrimitive.content,
         )
-        // Explicit PI_CACHE_RETENTION=long env behaves the same.
         val envJson = body(
             context,
             AnthropicMessagesOptions(apiKey = "k", env = mapOf("PI_CACHE_RETENTION" to "long")),
@@ -113,7 +105,6 @@ class AnthropicMessagesPayloadTest {
             envJson["system"]!!.jsonArray.single().jsonObject["cache_control"]!!
                 .jsonObject["ttl"]!!.jsonPrimitive.content,
         )
-        // A model without long-retention support keeps the default marker.
         val shortOnly = body(
             context,
             AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.LONG),
@@ -173,9 +164,8 @@ class AnthropicMessagesPayloadTest {
         )
         val content = body(context)["messages"]!!.jsonArray.single()
             .jsonObject["content"]!!.jsonArray
-        // User-message images replay as source blocks; the "(see attached
-        // image)" placeholder belongs to tool-result content only (pi's
-        // convertContentBlocks is not applied to user messages).
+        // No "(see attached image)" placeholder: pi applies convertContentBlocks
+        // (which adds it) to tool-result content only.
         assertEquals(1, content.size)
         assertEquals("image", content[0].jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("base64", content[0].jsonObject["source"]!!.jsonObject["type"]!!.jsonPrimitive.content)
@@ -215,7 +205,6 @@ class AnthropicMessagesPayloadTest {
             content[2].jsonObject["input"]!!.jsonObject["path"]!!.jsonPrimitive.content,
         )
 
-        // Redacted thinking passes the opaque payload back.
         val redacted = sameModelAssistant.copy(
             content = listOf(ThinkingContent("[Reasoning redacted]", "opaque-data", redacted = true)),
         )
@@ -238,7 +227,6 @@ class AnthropicMessagesPayloadTest {
         assertEquals("text", block["type"]!!.jsonPrimitive.content)
         assertEquals("partial thought", block["text"]!!.jsonPrimitive.content)
 
-        // allowEmptySignature models (z.ai-style) keep an empty-signature block.
         val allowModel = claude.copy(anthropicCompat = claude.anthropicCompat.copy(allowEmptySignature = true))
         val allowJson = body(Context(messages = listOf(abortedThinking, UserMessage.ofText("next"))), model = allowModel)
         val allowBlock = allowJson["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray[0].jsonObject
@@ -271,7 +259,6 @@ class AnthropicMessagesPayloadTest {
         assertEquals("toolu_1", results[0].jsonObject["tool_use_id"]!!.jsonPrimitive.content)
         assertEquals("r1", (results[0].jsonObject["content"] as kotlinx.serialization.json.JsonPrimitive).content)
         assertEquals(true, results[1].jsonObject["is_error"]!!.jsonPrimitive.content.toBoolean())
-        // Last user block (a tool_result) carries the history cache marker.
         assertEquals(
             "ephemeral",
             results[1].jsonObject["cache_control"]!!.jsonObject["type"]!!.jsonPrimitive.content,
@@ -328,8 +315,6 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `cross-provider replay converts thinking to text and normalizes tool ids`() {
-        // Assistant produced by another provider/API: thinking -> text, and the
-        // OpenAI-style tool id must be normalized to Anthropic's pattern.
         val foreign = AssistantMessage(
             content = listOf(
                 ThinkingContent("foreign thoughts"),
@@ -383,7 +368,6 @@ class AnthropicMessagesPayloadTest {
             "(image omitted: model does not support images)",
             content[0].jsonObject["text"]!!.jsonPrimitive.content,
         )
-        // Adjacent images share one placeholder.
         assertEquals(3, content.size)
         assertEquals("t", content[1].jsonObject["text"]!!.jsonPrimitive.content)
     }
@@ -410,7 +394,6 @@ class AnthropicMessagesPayloadTest {
     fun `thinking maps to adaptive budget and disabled forms`() {
         val context = Context(messages = listOf(UserMessage.ofText("hi")))
 
-        // Budget-based thinking (default model): default budget 1024, summarized display.
         val budget = body(
             context,
             AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true),
@@ -419,14 +402,12 @@ class AnthropicMessagesPayloadTest {
         assertEquals(1024, budget["budget_tokens"]!!.jsonPrimitive.content.toInt())
         assertEquals("summarized", budget["display"]!!.jsonPrimitive.content)
 
-        // Explicit budget and omitted display.
         val explicit = body(
             context,
             AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true, thinkingBudgetTokens = 8192),
         )["thinking"]!!.jsonObject
         assertEquals(8192, explicit["budget_tokens"]!!.jsonPrimitive.content.toInt())
 
-        // Adaptive thinking: effort via output_config.
         val adaptiveModel = claude.copy(
             anthropicCompat = claude.anthropicCompat.copy(forceAdaptiveThinking = true),
         )
@@ -439,7 +420,6 @@ class AnthropicMessagesPayloadTest {
         assertEquals("adaptive", adaptive["type"]!!.jsonPrimitive.content)
         assertEquals("high", adaptiveJson["output_config"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
 
-        // Explicitly disabled thinking.
         val disabled = body(
             context,
             AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = false),
@@ -457,7 +437,6 @@ class AnthropicMessagesPayloadTest {
                 .containsKey("thinking"),
         )
 
-        // Non-reasoning models never get thinking.
         assertFalse(
             body(
                 context,
@@ -499,7 +478,6 @@ class AnthropicMessagesPayloadTest {
             converted["cache_control"]!!.jsonObject["type"]!!.jsonPrimitive.content,
         )
 
-        // No eager flag for models without it; no tool cache_control when unsupported.
         val legacy = claude.copy(
             anthropicCompat = claude.anthropicCompat.copy(
                 supportsEagerToolInputStreaming = false,
@@ -539,7 +517,6 @@ class AnthropicMessagesPayloadTest {
         assertEquals("tx", sanitizeSurrogates(unpairedLow))
     }
 
-    /** pi xhigh.test.ts / max-thinking.test.ts: xhigh/max clamp to the high budget. */
     @Test
     fun `xhigh and max clamp to the high thinking budget`() {
         for (level in listOf(ThinkingLevel.XHIGH, ThinkingLevel.MAX)) {
@@ -550,7 +527,6 @@ class AnthropicMessagesPayloadTest {
         }
     }
 
-    /** pi thinkingBudgetForLevel: customBudgets merge over defaults. */
     @Test
     fun `custom thinking budgets override defaults per level`() {
         val custom = mapOf(ThinkingLevel.MEDIUM to 1000, ThinkingLevel.XHIGH to 2000)
@@ -560,11 +536,9 @@ class AnthropicMessagesPayloadTest {
             DEFAULT_THINKING_BUDGETS.getValue(ThinkingLevel.HIGH),
             thinkingBudgetForLevel(ThinkingLevel.XHIGH, custom),
         )
-        // A custom high budget is used even after xhigh clamping.
         assertEquals(2000, thinkingBudgetForLevel(ThinkingLevel.HIGH, mapOf(ThinkingLevel.HIGH to 2000)))
     }
 
-    /** pi anthropic-messages.ts: `budget_tokens: options.thinkingBudgetTokens || 1024` — 0 coerces to 1024. */
     @Test
     fun `thinking budget tokens of zero coerces to 1024 like pi`() {
         val context = Context(messages = listOf(UserMessage.ofText("hi")))
@@ -575,13 +549,6 @@ class AnthropicMessagesPayloadTest {
         assertEquals(1024, budget["budget_tokens"]!!.jsonPrimitive.content.toInt())
     }
 
-    /**
-     * Port of pi's "only sends the full input schema for strict JSON-schema
-     * tools" (test/anthropic-eager-tool-input-compat.test.ts): with
-     * supportsStrictTools, only tools whose constrainedSampling resolves
-     * strict get the rewritten full schema and the `strict: true` wire field;
-     * everything else keeps the legacy input_schema shape.
-     */
     @Test
     fun `only sends the full input schema for strict json-schema tools`() {
         val strictModel = claude.copy(
@@ -601,8 +568,6 @@ class AnthropicMessagesPayloadTest {
 
         fun firstTool(json: JsonObject): JsonObject = json["tools"]!!.jsonArray[0].jsonObject
 
-        // Enabled compat, no constrained sampling: exactly the legacy shape,
-        // even when the tool schema carries additionalProperties/title.
         val legacy = body(
             Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(schemaCompatibilityTool)),
             model = strictModel,
@@ -615,7 +580,6 @@ class AnthropicMessagesPayloadTest {
         )
         assertNull(firstTool(legacy)["strict"])
 
-        // Enabled compat, strict config: strict field plus rewritten full schema.
         val strict = body(
             Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(strictTool)),
             model = strictModel,
@@ -638,8 +602,6 @@ class AnthropicMessagesPayloadTest {
         assertEquals("StrictLookupInput", inputSchema["title"]!!.jsonPrimitive.content)
         assertEquals("object", inputSchema["type"]!!.jsonPrimitive.content)
 
-        // Default compat (supportsStrictTools false): prefer downgrades to the
-        // legacy shape with no strict field.
         val downgraded = body(
             Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(strictTool)),
         )
@@ -652,11 +614,6 @@ class AnthropicMessagesPayloadTest {
         )
     }
 
-    /**
-     * pi anthropic-messages.ts convertTools → resolveJsonSchemaStrictSampling:
-     * `require` rejects with pi's exact error when the model has no strict
-     * tool support.
-     */
     @Test
     fun `require strict tools reject when compat is false`() {
         val requireTool = tool.copy(
@@ -671,9 +628,8 @@ class AnthropicMessagesPayloadTest {
         )
     }
 
-    // pi anthropic-messages.ts:1107-1110: fallbacks carry model ids only and
-    // are omitted when the catalog list is empty (Anthropic rejects the field
-    // for models with no permitted fallback targets).
+    // Anthropic rejects the fallbacks field for models with no permitted
+    // fallback targets, so an empty catalog list omits it entirely.
     @Test
     fun `fallbacks carry model ids only when the catalog list is non-empty`() {
         val context = Context(messages = listOf(UserMessage.ofText("hi")))
@@ -697,10 +653,8 @@ class AnthropicMessagesPayloadTest {
         val fallbacks = json["fallbacks"]!!.jsonArray
         assertEquals("claude-opus-4-8", fallbacks[0].jsonObject["model"]!!.jsonPrimitive.content)
         assertEquals("claude-opus-5", fallbacks[1].jsonObject["model"]!!.jsonPrimitive.content)
-        // Only the model key goes on the wire; provider/cost stay local.
         assertEquals(setOf("model"), fallbacks[0].jsonObject.keys)
         assertEquals(setOf("model"), fallbacks[1].jsonObject.keys)
-        // Absent for models with no fallback targets.
         assertNull(body(context)["fallbacks"])
     }
 }

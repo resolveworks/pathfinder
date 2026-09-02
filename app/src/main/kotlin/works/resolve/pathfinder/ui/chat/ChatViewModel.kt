@@ -64,81 +64,24 @@ import kotlinx.coroutines.withContext
 
 /**
  * Chat screen controller. Owns configuration, sessions, and the active
- * [Agent]; projects everything into an immutable [ChatUiState] (UDF).
+ * [AgentSession]; projects everything into an immutable [ChatUiState] (UDF).
  *
- * The provider/model pair is user-selectable from the injected generated
- * catalog; credentials are managed per provider (pi's /login semantics:
- * one credential per provider, removed per provider), while the startup
- * default model persists in settings only through the explicit Settings ▸
- * Default model screen. Divergence from pi (deliberate, narrow): pi's
- * Ctrl+S in the pickers applies the highlighted row AND persists it as
- * the default in one gesture; Pathfinder keeps the pickers purely
- * ephemeral (pi's Enter) and moves default persistence to Settings — the
- * Android convention of Settings-managed defaults, which pi has no
- * settings-screen equivalent of. Consequence: "use it now AND default
- * it" takes two steps.
+ * Divergence from pi (deliberate): pi's picker Ctrl+S applies the highlighted
+ * row AND persists it as the startup default in one gesture; Pathfinder keeps
+ * the pickers ephemeral and moves default persistence to the Settings
+ * screens, so "use it now AND default it" takes two steps.
  *
- * Provider auth status (`configured`/`unconfigured`) is derived live from
- * the credential store — never persisted in settings — and the model
- * surfaces only list models of configured providers (pi's
- * model-selector rule), narrowed per provider by pi's credential-based
- * `filterModels` (GitHub Copilot's `availableModelIds` extra; pi's
- * getAvailable).
+ * Transcript persistence keeps every transcript with its session: at most
+ * one save per session is in flight and newer snapshots coalesce into it,
+ * session switches wait for pending saves, snapshot writes are
+ * non-cancellable, and a failed save blocks session/config switches until
+ * it is retried successfully — neither a failed save nor ViewModel teardown
+ * can silently abandon a transcript.
  *
- * Model selection is split exactly like pi: Settings ▸ Scoped models curates the
- * scoped models (pi's /scoped-models — which models are *offered*),
- * persisted as the ordered `enabledModels` setting, while the chat's model
- * chip switches the model that *runs* on the live session (pi's /model):
- * `selectModel` resolves the target through the factory seam and calls
- * [AgentSession.setModel] — no agent rebuild, no navigation reset, and no
- * busy rejection (a mid-stream pick applies to the next prompt). A scope
- * is not a hard constraint: the picker keeps an All view over every
- * available model.
- *
- * The agent itself is created through the injected [AgentFactory]
- * (see [works.resolve.pathfinder.agent]); the production implementation wires the native
- * Z.AI runtime. The factory returns the [AgentSession] facade (pi's
- * agent-session), which owns the session tree, the retry budget, and (in
- * later waves) compaction; this ViewModel only projects its state/events
- * and persists tree snapshots.
- *
- * Transcript persistence runs through a single latest-snapshot pipeline: at
- * most one save per session is in flight, superseded snapshots are coalesced,
- * and session switches wait for pending saves so transcripts always stay with
- * the session they belong to. The persisted unit is the conversation tree
- * itself (entries + leafId), so branch structure survives saves; snapshots
- * are taken from the immutable [Conversation] the ViewModel owns alongside
- * the active session. Saves are append-only (pi's JSONL v4 mutation log,
- * P0-2): [SessionRepository.save] syncs the snapshot by appending the
- * entries not yet in the log — a lane mutation first when the tree branched
- * — then the lane's move to the snapshot leaf and the title fact, so
- * re-syncing a snapshot is a no-op and a partially-failed save can simply
- * be retried. A failed save surfaces an error and blocks
- * session/config switches; the blocked intent explicitly retries the latest
- * snapshot and only proceeds once it is saved, so an unsaved transcript is
- * never silently abandoned. Snapshot writes themselves are non-cancellable
- * and the save loop drains whatever it accepted, so ViewModel teardown can
- * never abandon an accepted snapshot either.
- *
- * Tree navigation (pi's navigateTree, reduced to no summarization) is a
- * state change on the same conversation: navigating to an assistant entry
- * moves the leaf there (the active path becomes root..that entry);
- * navigating to a user entry implements re-edit semantics — the leaf moves
- * to the entry's parent (or resets to root) and the message text lands in
- * the draft, so the next send appends a sibling of the original message.
- *
- * Navigation is state, not effects: an unconfigured app (no configured
- * provider at all) pins [ChatUiState.startKey] to [ProvidersNavKey]
- * (first-run: pick a provider and sign in); with a stored credential the
- * initial model is derived (pi's findInitialModel reduced: the saved
- * default when usable, else the first available model of a configured
- * provider) and the app enters the chat directly. Every
- * intent that should return the user to the chat (adopting a session, saving
- * configuration) sets [ChatUiState.startKey] to [ChatNavKey] and bumps
- * [ChatUiState.navigationEpoch] atomically with the rest of the state.
- * The UI layer owns the Nav3 back stack and resets it to
- * [ChatUiState.startKey] whenever either field changes, so the forced
- * first-run steps are single-entry dead ends until configuration completes.
+ * Navigation is state, not effects: intents that complete configuration set
+ * [ChatUiState.startKey] (and bump [ChatUiState.navigationEpoch]) atomically
+ * with the rest of the state, and the UI layer resets its Nav3 back stack to
+ * [ChatUiState.startKey] whenever either field changes.
  */
 class ChatViewModel(
     private val settingsRepository: SettingsStore,
@@ -146,36 +89,24 @@ class ChatViewModel(
     private val authService: ProviderAuthService,
     private val sessionStore: SessionRepository,
     private val agentFactory: AgentFactory,
-    /**
-     * Resolves a provider/model pair to the effective request model (the
-     * [works.resolve.pathfinder.agent.NativeAgentFactory.resolveModel] seam:
-     * validates catalog existence and API support, stamps the normalized
-     * base URL). Throwing input is surfaced as a safe unknown-model error.
-     */
+    /** Resolves a provider/model pair to the effective request model; throwing input is surfaced as a safe unknown-model error. */
     private val modelResolver: (providerId: String, modelId: String) -> Model,
     /** App-owned diagnostics boundary for the UI error/degradation spans. */
     private val diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP,
     /**
      * Process-wide foreground state (Android platform glue; pi has no
-     * foreground concept). MainActivity's onResume/onPause drive this via
-     * [onAppForegrounded]/[onAppBackgrounded]; the OAuth flows gate loopback
-     * waits and network work on it while the app is backgrounded.
+     * foreground concept), driven from MainActivity lifecycle; the OAuth
+     * flows gate loopback waits and network work on it.
      */
     private val appForegroundGate: AppForegroundGate = AppForegroundGate(),
     /** Web-search credential management (Brave only, Scry parity). */
     private val searchProviderService: SearchProviderService,
 ) : ViewModel() {
 
-    // Catalog-driven provider/model surface: option lists are computed from
-    // live credential state (see refreshOptions).
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
-    /**
-     * Interactive provider-login state machine (pi's `startProviderLogin`
-     * plus its modal login dialog); its [ProviderLoginController.flow] is
-     * the source of truth [ChatUiState.authFlow] mirrors.
-     */
+    /** Interactive provider-login state machine; [ProviderLoginController.flow] is the source of truth [ChatUiState.authFlow] mirrors. */
     private val loginController = ProviderLoginController(
         scope = viewModelScope,
         authService = authService,
@@ -188,12 +119,10 @@ class ChatViewModel(
     private var currentSettings: ModelSettings = ModelSettings()
 
     /**
-     * The persisted startup default provider/model pair (pi's `defaultModel`
-     * setting), kept separate from [currentSettings]: initialization seeds
-     * currentSettings from the derived/branch-folded model while the stored
-     * default stays whatever settings last wrote — only
-     * [saveStartupDefaultInternal] changes this pair. Projects into
-     * [ChatUiState.defaultModel].
+     * The persisted startup default provider/model pair, kept separate from
+     * [currentSettings]: initialization may seed currentSettings from a
+     * derived/branch-folded model while the stored default stays whatever
+     * settings last wrote. Only [saveStartupDefaultInternal] changes this.
      */
     private var defaultModelRef: Pair<String, String> = "" to ""
 
@@ -202,22 +131,14 @@ class ChatViewModel(
     private var agentEventsJob: Job? = null
     private var activeSession: Session? = null
 
-    /**
-     * The conversation tree of [activeSession]: the transcript source of
-     * truth for persistence and tree navigation. Owned by the bound
-     * [AgentSession] (pi's agent-session owns the session manager); this
-     * ViewModel reads it for projection and persistence, and navigates it
-     * through [AgentSession.replaceConversation].
-     */
+    /** The conversation tree of [activeSession], owned by the bound [AgentSession]; read here for projection and persistence. */
     private val activeConversation: Conversation
         get() = agent?.conversation ?: Conversation(emptyList(), null)
 
     /**
      * Watermark of active-session entries already appended to the session's
-     * mutation log (pi's seq watermark equivalent: entries are append-only
-     * and consume one consecutive seq each, so the persisted-entry count is
-     * the log's entry frontier). Tree growth beyond it schedules a persist;
-     * leaf-only moves (navigation) persist without moving it.
+     * mutation log. Tree growth beyond it schedules a persist; leaf-only
+     * moves (navigation) persist without moving it.
      */
     private var persistedEntryCount: Int = 0
 
@@ -229,17 +150,14 @@ class ChatViewModel(
     private var lastAgentError: String? = null
 
     /**
-     * Whether a usable Brave Search key is currently stored — the flag every
-     * agent created or bound here is synchronized against (web_search
-     * active iff true). Maintained by [refreshSearchStatus] from live
-     * credential reads, never persisted.
+     * Whether a usable Brave Search key is currently stored; every agent
+     * created or bound here synchronizes web_search against it. Maintained
+     * from live credential reads, never persisted.
      */
     private var searchBraveConfigured: Boolean = false
 
     init {
         viewModelScope.launch { initialize() }
-        // Login-flow state is owned by the controller; the UI-state field
-        // is a projection of it.
         viewModelScope.launch {
             loginController.flow.collect { flow -> updateState { it.copy(authFlow = flow) } }
         }
@@ -251,66 +169,43 @@ class ChatViewModel(
         updateState { it.copy(draft = text) }
     }
 
-    /** Clears the surfaced error without touching anything else. */
     fun dismissError() {
         updateState { it.copy(error = null) }
     }
 
     /**
-     * Switches the live session's model (pi's /model picker pick). Resolves
-     * the pair through the factory seam and calls [AgentSession.setModel]:
-     * the same [AgentSession] stays bound — no agent rebuild, no navigation
-     * reset — and the model_change entry lands on the session tree (child of
-     * the current leaf), so the grown tree is re-projected and persisted.
-     *
-     * Not busy-rejected: like pi, a mid-stream pick is safe — the active run
-     * keeps its start-of-run model and the switch applies to the next
-     * prompt. This does NOT persist the startup default: setting the
-     * default lives in Settings ▸ Default model (pi's Ctrl+S adapted — see
-     * the class KDoc divergence note), i.e. [saveStartupDefault].
+     * Switches the live session's model. Not busy-rejected: like pi, a
+     * mid-stream pick is safe — the active run keeps its start-of-run model
+     * and the switch applies to the next prompt. Does NOT persist the
+     * startup default; that lives in [saveStartupDefault].
      */
     fun selectModel(providerId: String, modelId: String) {
         viewModelScope.launch { selectModelInternal(providerId, modelId) }
     }
 
     /**
-     * Persists the startup default provider+model. The persistence action of
-     * pi's picker Ctrl+S, surfaced here as the Settings ▸ Default model
-     * screen's commit-on-tap row (divergence: this does not also switch the
-     * live session — see the class KDoc). Applies pi's
-     * `_addPersistedDefaultToNonEmptyScope`: when a non-empty scope exists
-     * and the default is not in it, the default is appended to the scope
-     * too (order-preserving).
+     * Persists the startup default provider+model. Divergence from pi's
+     * Ctrl+S: this does not also switch the live session (see the class
+     * KDoc). A non-empty model scope gains the default when missing.
      */
     fun saveStartupDefault(providerId: String, modelId: String) {
         viewModelScope.launch { saveStartupDefaultInternal(providerId, modelId) }
     }
 
     /**
-     * Curates the scoped models (pi's /scoped-models): checks/unchecks one
-     * model and persists the resulting curated list in display order via
-     * [SettingsStore.setEnabledModels]. A null scope (nothing curated yet)
-     * is materialized as an explicit list on the first edit. Curating never
-     * touches the running model — the scope only narrows what the picker
-     * offers, and the picker keeps an All view (pi's scope is not a hard
-     * constraint).
+     * Curates the scoped models — which models the picker offers. The scope
+     * is not a hard constraint: curating never touches the running model,
+     * and the picker keeps an All view over every available model.
      */
     fun toggleModelScope(providerId: String, modelId: String, checked: Boolean) {
         viewModelScope.launch { toggleModelScopeInternal(providerId, modelId, checked) }
     }
 
     /**
-     * Switches the live session's thinking level (pi's thinking-selector
-     * pick, Enter in the selector): [AgentSession.setThinkingLevel] clamps
-     * to the model's supported levels and appends a thinking_level_change
-     * entry to the tree only when the level changes.
-     *
-     * Not busy-rejected: like pi, a mid-stream pick is safe — the active run
-     * keeps its start-of-run level (the agent snapshots it per prompt) and
-     * the switch applies to the next prompt. This does NOT persist the
-     * default: that lives in Settings ▸ Default thinking level
-     * ([setThinkingLevelDefault]; pi's Ctrl+S adapted — see the class KDoc
-     * divergence note).
+     * Switches the live session's thinking level. Not busy-rejected: like
+     * pi, a mid-stream pick is safe — the active run keeps its start-of-run
+     * level and the switch applies to the next prompt. Does NOT persist the
+     * default; that lives in [setThinkingLevelDefault].
      */
     fun selectThinkingLevel(level: ModelThinkingLevel) {
         viewModelScope.launch {
@@ -330,16 +225,11 @@ class ChatViewModel(
     }
 
     /**
-     * Persists the default thinking level (pi's thinking-selector Ctrl+S:
-     * one `setThinkingLevel(level, { persist: true })` call). Called from
-     * the Settings ▸ Default thinking level screen's commit-on-tap row.
-     * Pi applies first and persists after; the same order here means a
-     * failed settings write leaves the session switched, exactly like pi
-     * (divergence noted in the class KDoc: pi's gesture also starts from the
-     * picker's highlighted row; the Settings screen owns the pick here).
-     * The stored default seeds sessions without a recorded branch level
-     * ([seededSettingsFor]) and is re-applied on model switches
-     * ([selectModelInternal]).
+     * Persists the default thinking level. Applies to the live session
+     * first and persists after (pi's order), so a failed settings write
+     * leaves the session switched. The stored default seeds sessions
+     * without a recorded branch level ([seededSettingsFor]) and is
+     * re-applied on model switches ([selectModelInternal]).
      */
     fun setThinkingLevelDefault(level: ModelThinkingLevel) {
         viewModelScope.launch {
@@ -372,20 +262,13 @@ class ChatViewModel(
     }
 
     /**
-     * Saves a fresh credential for [providerId] (pi's /login semantics):
-     * every prompt's input is its value and a complete save replaces the
-     * stored credential wholesale — pi's logins (e.g. `envApiKeyAuth`,
-     * `cloudflareAIGatewayAuth`) re-prompt everything and never merge with
-     * stored values. Blank/missing required values are rejected with an
-     * error naming the missing prompts. A completed save re-runs
-     * configuration ([onCredentialStored]): when it completes the last
-     * first-run step, the initial model is derived (pi's
-     * `completeProviderAuthentication` auto-select, findInitialModel
-     * reduced) and the app enters the chat directly.
+     * Saves a fresh credential for [providerId]: every prompt's input is its
+     * value and a complete save replaces the stored credential wholesale —
+     * values are never merged with what was stored. Blank/missing required
+     * values are rejected with an error naming the missing prompts.
      *
-     * Not busy-rejected: the agent resolves the credential once per request
-     * (inside its stream flow), so changing it mid-stream is safe — like pi's
-     * mid-conversation /login — and only affects the next request.
+     * Not busy-rejected: the agent resolves the credential once per request,
+     * so changing it mid-stream only affects the next request.
      */
     fun saveProviderCredential(providerId: String, apiKeyInput: String, envInputs: Map<String, String>) {
         viewModelScope.launch { saveProviderCredentialInternal(providerId, apiKeyInput, envInputs) }
@@ -394,10 +277,7 @@ class ChatViewModel(
     /**
      * Forgets the credential for [providerId]. Never tears down sessions or
      * the agent (credentials are read per request); only the derived status
-     * surfaces (provider/model options and `configured`) are refreshed.
-     *
-     * Not busy-rejected: safe mid-stream for the same reason as
-     * [saveProviderCredential] — credentials are read per request.
+     * surfaces are refreshed.
      */
     fun removeProviderCredential(providerId: String) {
         viewModelScope.launch {
@@ -413,12 +293,7 @@ class ChatViewModel(
         }
     }
 
-    /**
-     * Re-reads credentials and recomputes the derived provider/model surfaces.
-     *
-     * Not busy-rejected: credentials are read per request by the agent, so
-     * this cannot race a stream into an inconsistent state.
-     */
+    /** Re-reads credentials and recomputes the derived provider/model surfaces. */
     fun refreshProviderStatus() {
         viewModelScope.launch {
             try {
@@ -443,12 +318,7 @@ class ChatViewModel(
             ?.map { ProviderAuthPrompt(it.envKey, it.message, it.secret) }
             .orEmpty()
 
-    /**
-     * UI-safe auth prompts for a search provider's credential form. Only
-     * Brave is supported (Scry parity): one secret prompt for its API key,
-     * mirroring Scry's `BRAVE_API_KEY`. Unknown providers return an empty
-     * list (the form never renders stale prompts for them).
-     */
+    /** UI-safe auth prompts for a search provider's credential form (only Brave is supported). */
     fun searchProviderAuthPrompts(providerId: String): List<ProviderAuthPrompt> =
         if (providerId == SearchProviderService.BRAVE_PROVIDER_ID) {
             listOf(ProviderAuthPrompt(BRAVE_API_KEY_PROMPT, SEARCH_BRAVE_KEY_PROMPT_MESSAGE, secret = true))
@@ -457,13 +327,11 @@ class ChatViewModel(
         }
 
     /**
-     * Stores a web-search provider's API key (the search form's save).
-     * Blank input, an unknown provider, or a storage failure surfaces a
-     * static, secret-free error and changes nothing: the stored key, the
-     * surfaced status, and the bound session's tools stay intact. Only a
-     * confirmed non-blank save bumps [ChatUiState.searchCredentialSuccessEpoch]
-     * (exactly once), refreshes status, and enables web_search on the bound
-     * session for the next run.
+     * Stores a web-search provider's API key. Blank input, an unknown
+     * provider, or a storage failure surfaces a static, secret-free error
+     * and changes nothing. Only a confirmed non-blank save bumps
+     * [ChatUiState.searchCredentialSuccessEpoch] and enables web_search on
+     * the bound session for the next run.
      */
     fun saveSearchProviderCredential(providerId: String, apiKeyInput: String) {
         viewModelScope.launch {
@@ -490,9 +358,8 @@ class ChatViewModel(
     }
 
     /**
-     * Deletes a search provider's stored key. A successful delete refreshes
-     * the status and disables web_search on the bound session for the next
-     * run; a failure surfaces a safe error and changes nothing.
+     * Deletes a search provider's stored key; a failure surfaces a safe
+     * error and changes nothing.
      */
     fun removeSearchProviderCredential(providerId: String) {
         viewModelScope.launch {
@@ -509,8 +376,7 @@ class ChatViewModel(
     }
 
     /**
-     * Explicitly re-reads search credentials and recomputes the derived
-     * surfaces (row status and the session's web_search activation), like
+     * Re-reads search credentials and recomputes the derived surfaces, like
      * [refreshProviderStatus] for LLM providers. A read failure degrades
      * search to unconfigured/disabled with a safe error.
      */
@@ -534,10 +400,8 @@ class ChatViewModel(
     }
 
     /**
-     * Flips the global tool-output expansion flag (pi's
-     * toggleToolOutputExpansion → setToolsExpanded, interactive-mode.ts:4192 —
-     * Ctrl+O). Display-only: like pi, the flag lives in memory only (never
-     * persisted) and applies to every tool row.
+     * Flips the global tool-output expansion flag. Display-only: the flag
+     * lives in memory only (never persisted) and applies to every tool row.
      */
     fun toggleToolOutputExpansion() {
         updateState { it.copy(toolOutputExpanded = !it.toolOutputExpanded) }
@@ -552,23 +416,22 @@ class ChatViewModel(
     }
 
     /**
-     * Navigates the conversation tree to [id] (pi's navigateTree). 
-     * Busy-rejected while streaming; selecting the current leaf is a no-op
-     * error; unknown ids are a safe error. A user message target re-edits:
-     * the leaf moves to its parent (or resets to root) and its text is
-     * restored into the draft, so the next send forks as a sibling. Any
-     * other target moves the leaf to that entry.
+     * Navigates the conversation tree to [id]. Busy-rejected while
+     * streaming; selecting the current leaf or an unknown id surfaces a
+     * safe error. A user message target re-edits: the leaf moves to its
+     * parent (or resets to root) and its text is restored into the draft,
+     * so the next send forks as a sibling. Any other target moves the leaf
+     * to that entry.
      */
     fun navigateToTreeEntry(id: String) {
         navigateToTreeEntry(id, summarize = false)
     }
 
     /**
-     * Navigation with branch summarization: when [summarize] is set (pi's
-     * tree-selector "Summarize" choice), the abandoned branch segment is
-     * summarized and a branch-summary entry is appended at the target
-     * position, both wrapped in a durable navigation operation record
-     * (see [AgentSession.navigateTree]).
+     * Navigation with branch summarization: when [summarize] is set, the
+     * abandoned branch segment is summarized and a branch-summary entry is
+     * appended at the target position, both wrapped in a durable navigation
+     * operation record (see [AgentSession.navigateTree]).
      */
     fun navigateToTreeEntry(id: String, summarize: Boolean) {
         viewModelScope.launch {
@@ -591,12 +454,11 @@ class ChatViewModel(
             }
             if (result.cancelled) return@launch
             val updated = session.conversation
-            // pi's reducer folds branch configuration root→leaf; the agent
-            // runs on the folded model. Divergence: an agent rebuild only
-            // happens when the fold changes the model (pi swaps state
-            // in-place on the live agent, which pathfinder's factory-built
-            // agents do not support), and unknown folded models keep the
-            // running agent rather than failing navigation.
+            // The agent runs on the branch's folded configuration.
+            // Divergence from pi: a rebuild happens only when the fold
+            // changes the model (pi swaps state in-place on the live agent,
+            // which factory-built agents do not support); an unknown folded
+            // model keeps the running agent rather than failing navigation.
             val seeded = settingsSeededFromFold(currentSettings, updated)
             val active: AgentSession = if (
                 session.model.provider == seeded.providerId && session.model.id == seeded.modelId
@@ -609,9 +471,8 @@ class ChatViewModel(
             }
             updateState {
                 it.copy(
-                    // pi's navigateTree loads the re-edit text into the
-                    // editor only when it is empty; a typed draft is never
-                    // clobbered by navigation.
+                    // A typed draft is never clobbered by navigation; the
+                    // re-edit text lands only in an empty draft.
                     draft = if (it.draft.isBlank()) result.editorText ?: it.draft else it.draft,
                     messages = projectCommitted(active.agent.state.value.messages, updated),
                     treeRows = buildTreeRows(updated, it.treeFilter),
@@ -637,10 +498,9 @@ class ChatViewModel(
                     return@launch
                 }
                 val session = sessionStore.create(DEFAULT_SESSION_TITLE)
-                // pi seeds every new session with the initial model selection
-                // and thinking level (coding-agent sdk.ts: appendModelChange +
-                // appendThinkingLevelChange before first use), so the branch's
-                // configuration fold restores both on resume.
+                // Seeding the initial model and thinking level on new
+                // sessions lets the branch's configuration fold restore both
+                // on resume.
                 val (seeded, conversation) = seededSettingsFor(session, currentSettings)
                 val newAgent = tryCreateAgent(seeded, session.id, conversation) ?: return@launch
                 if (!activateSession(session, newAgent)) return@launch
@@ -690,10 +550,9 @@ class ChatViewModel(
             defaultModelRef = settings.providerId to settings.modelId
             refreshOptions()
 
-            // NeedsConfiguration is exactly "no configured provider at all":
-            // pi's first-run flow reduced — once any provider credential
-            // resolves, the initial model is derived and the app enters the
-            // chat directly (no forced model-settings step).
+            // NeedsConfiguration means exactly "no configured provider at
+            // all"; once any provider credential resolves, the app enters
+            // the chat directly with a derived initial model.
             if (_uiState.value.modelOptions.isEmpty()) {
                 updateState {
                     it.copy(
@@ -706,13 +565,11 @@ class ChatViewModel(
                 return
             }
 
-            // findInitialModel reduced (sdk.ts): the saved default when
-            // usable, else the first available model of a configured
-            // provider. A saved model that exists in the catalog but is no
-            // longer in the credential-filtered set (pi's getAvailable would
-            // drop it) surfaces a safe error — the derived replacement runs.
-            // A corrupt/unknown model id is NOT "no longer available": no
-            // error is added for it.
+            // The saved default when usable, else the first available model
+            // of a configured provider. A saved model known to the catalog
+            // but absent from the credential-filtered set surfaces a safe
+            // error while the derived replacement runs; a corrupt/unknown
+            // model id is NOT "unavailable" and adds no error.
             val dbgConfigured = isConfigured(settings)
             val candidate = if (dbgConfigured) {
                 settings
@@ -749,12 +606,9 @@ class ChatViewModel(
                 updateState { it.copy(status = ChatStatus.Failed) }
                 return
             }
-            // The in-memory mirror follows the effective running model (the
-            // derivation and/or branch fold may differ from the stored
-            // default); persistence keeps the stored default untouched.
+            // currentSettings follows the effective running model; the
+            // stored default stays untouched.
             currentSettings = seeded
-            // activateSession already projected the session and fresh
-            // summaries; only the configuration surfaces remain.
             refreshOptions()
             updateState {
                 it.copy(
@@ -806,10 +660,6 @@ class ChatViewModel(
         bindAgent(agent)
         val conversation = agent.conversation
         val summaries = sessionStore.summaries()
-        // Load-time lane recovery (pi's findOpenOperations limit-2 contract,
-        // reduced by the full reducer — see [laneRecoveryFor]): an
-        // interrupted run stays distinguishable from a finished one, and
-        // record-log corruption is classified rather than silently resumed.
         val laneRecovery = laneRecoveryFor(session)
         updateState {
             it.copy(
@@ -823,25 +673,20 @@ class ChatViewModel(
                 laneRecovery = laneRecovery,
             )
         }
-        // Initial-configuration seeding (pi's sdk.ts new-session path) may
-        // have appended a model_change to an entry-less session; flush it
-        // like any other appended entry. Loaded sessions carry no new
-        // entries, so this never saves on a plain load or switch.
+        // Initial seeding may have appended entries to an entry-less
+        // session; flush them like any other append. Loaded sessions carry
+        // no new entries, so a plain load or switch never saves here.
         if (activeConversation.entries.size > persistedEntryCount) enqueuePersist()
         return true
     }
 
     /**
      * Restores the main lane's recovery classification by running the full
-     * reducer over the session's durable record log (pi's restore contract:
-     * [reduceLaneState] validating the lane's recovery slice, seeded by
-     * findOpenOperations' `limit: 2` contract). The slice is the whole
-     * main-lane record log plus the persisted entries — Pathfinder is
-     * single-lane and sessions are small, so the bounded slice upstream's
-     * caller would assemble is the entire lane. Validation failures map to
-     * [LaneRecovery.Corrupt]; a failing read degrades to
-     * [LaneRecovery.Idle] with telemetry — classification is advisory UI
-     * state, never a load blocker.
+     * reducer over the session's durable record log. Pathfinder is
+     * single-lane and sessions are small, so the recovery slice is the
+     * entire lane. Validation failures map to [LaneRecovery.Corrupt]; a
+     * failing read degrades to [LaneRecovery.Idle] with telemetry —
+     * classification is advisory UI state, never a load blocker.
      */
     private suspend fun laneRecoveryFor(session: Session): LaneRecovery = try {
         val openOperations = sessionStore.openOperations(session.id, SessionState.LANE_MAIN, limit = 2)
@@ -858,8 +703,6 @@ class ChatViewModel(
                     // open operation's start (single writer, single lane).
                     ownEntries = started?.let { op -> session.entries.filter { it.seq > op.seq } } ?: emptyList(),
                     entries = session.entries,
-                    // Bounded configuration lookups at the operation anchor
-                    // (sourceLeafId) or the idle leaf, oldest first.
                     configurationEntries = configurationEntriesFor(session, started?.sourceLeafId),
                     leafId = session.leafId,
                 ),
@@ -878,8 +721,8 @@ class ChatViewModel(
 
     /**
      * The anchor's root path, oldest first; falls back to the persisted leaf
-     * when the anchor is an unpersisted buffered entry (legal per pi's
-     * record-log invariants — records may precede the entries they name).
+     * when the anchor is an unpersisted buffered entry (records may precede
+     * the entries they name).
      */
     private fun configurationEntriesFor(session: Session, anchorId: String?): List<SessionEntry> {
         var cursor: String? = anchorId?.takeIf { id -> session.entries.any { it.id == id } } ?: session.leafId ?: return emptyList()
@@ -916,16 +759,12 @@ class ChatViewModel(
     }
 
     /**
-     * Adopts [session] with fold-seeded settings: the active branch's
-     * configuration fold ([Conversation.effectiveConfiguration], pi's
-     * deriveSessionContextState) overrides the provider/model when it
-     * recorded one; new (entry-less) sessions are seeded with the initial
-     * model selection (pi's sdk.ts new-session path) so the fold can
-     * restore it on resume. A branch with no thinking_level_change entry is
-     * seeded with the default thinking level (pi's sdk.ts load path:
-     * `hasExistingSession && !hasThinkingEntry → appendThinkingLevelChange`,
-     * and the new-session append below it) — the stored default, else pi's
-     * DEFAULT_THINKING_LEVEL "medium", clamped to the effective model.
+     * Seeds settings for [session]: the active branch's configuration fold
+     * ([Conversation.effectiveConfiguration]) overrides the provider/model
+     * when it recorded one; new (entry-less) sessions are seeded with the
+     * initial model selection so the fold can restore it on resume. A branch
+     * with no thinking_level_change entry is seeded with the stored default
+     * thinking level, else "medium", clamped to the effective model.
      */
     private fun seededSettingsFor(session: Session, settings: ModelSettings): Pair<ModelSettings, Conversation> {
         var conversation = Conversation(session.entries, session.leafId)
@@ -936,10 +775,9 @@ class ChatViewModel(
         if (conversation.entries.none { it is ThinkingLevelEntry } &&
             seeded.providerId.isNotBlank() && seeded.modelId.isNotBlank()
         ) {
-            // Clamped before storing, exactly like pi's sdk.ts:253 clamp
-            // preceding the append. An unresolvable model fails agent
-            // creation anyway (the safe ERROR_CONFIG_INVALID path), so the
-            // tree stays unseeded rather than gaining a second error path.
+            // Clamped before storing. An unresolvable model fails agent
+            // creation anyway, so the tree stays unseeded rather than
+            // gaining a second error path.
             val seededLevel = try {
                 val model = modelResolver(seeded.providerId, seeded.modelId)
                 clampThinkingLevel(model, seeded.defaultThinkingLevel ?: DEFAULT_THINKING_LEVEL)
@@ -954,13 +792,10 @@ class ChatViewModel(
     }
 
     /**
-     * Seeds the provider/model from the conversation's configuration fold
-     * (pi's deriveSessionContextState / reducer deriveEffectiveConfiguration):
-     * a branch that recorded a different model via model_change or its
-     * assistant messages runs on that model, overriding the global
-     * defaults. Divergence: pi resolves any recorded pair, while pathfinder's
-     * agent factory only builds generated-catalog models, so a pair missing
-     * from the catalog (or with an unsupported API) falls back to [settings].
+     * Seeds the provider/model from the conversation's configuration fold: a
+     * branch that recorded a different model runs on that model, overriding
+     * the global defaults. Divergence from pi: only pairs the generated
+     * catalog supports are applied; anything else falls back to [settings].
      */
     private fun settingsSeededFromFold(settings: ModelSettings, conversation: Conversation): ModelSettings {
         val model = conversation.effectiveConfiguration().model ?: return settings
@@ -982,9 +817,8 @@ class ChatViewModel(
     ): AgentSession? =
         try {
             agentFactory.create(settings, sessionId, conversation)
-                // Every session is synchronized against the current Brave
-                // credential before anything binds to it: web_search active
-                // when configured, absent otherwise.
+                // Synchronize web_search against the current Brave credential
+                // before anything binds to the session.
                 .also(::synchronizeWebSearch)
         } catch (e: CancellationException) {
             throw e
@@ -998,14 +832,12 @@ class ChatViewModel(
         agentEventsJob?.cancel()
         agent = newAgent
         lastAgentError = null
-        // Durable operation-lifecycle records (P0-3): the recorder resolves
-        // the session at call time (mid-run session switches are blocked).
+        // The recorder resolves the session at call time (mid-run session
+        // switches are blocked).
         newAgent.operationRecorder = operationRecorder
         agentStateJob = viewModelScope.launch { newAgent.state.collect { state -> onAgentState(state) } }
-        // Session-level status (retry, and later compaction) and persistence
-        // points are event-driven (pi's auto_retry_start/end and message_end
-        // persistence reach the UI as agent-session events); zero-replay
-        // flow, so the subscriber must be bound before any prompt starts.
+        // Events are zero-replay flow: the subscriber must be bound before
+        // any prompt starts.
         agentEventsJob = viewModelScope.launch { newAgent.events.collect { event -> onAgentEvent(event) } }
     }
 
@@ -1019,23 +851,19 @@ class ChatViewModel(
             is AgentEvent.CompactionStart -> updateState { it.copy(isCompacting = true) }
             is AgentEvent.CompactionEnd -> {
                 updateState { it.copy(isCompacting = false, treeRows = buildTreeRows(activeConversation, it.treeFilter)) }
-                // The compaction entry was appended to the tree before the
-                // end event; persist the grown tree.
+                // The compaction entry landed on the tree before this event.
                 if (activeConversation.entries.size > persistedEntryCount) {
                     enqueuePersist()
                 }
             }
-            // Summarization-retry telemetry is not surfaced in the UI yet
-            // (pi shows it in the spinner tooltip).
+            // Summarization-retry telemetry is deliberately unsurfaced.
             is AgentEvent.SummarizationRetryScheduled,
             is AgentEvent.SummarizationRetryAttemptStart,
             is AgentEvent.SummarizationRetryFinished,
             -> Unit
-            // The session tree appends on message_end (AgentSession, pi's
-            // sessionManager.appendMessage); re-project rows and persist on
-            // tree growth, not agent-transcript growth — an auto-retry or
-            // overflow recovery removes the error message from agent state
-            // while the append-only tree keeps it.
+            // Re-project and persist on tree growth, not agent-transcript
+            // growth: an auto-retry or overflow recovery removes the error
+            // message from agent state while the append-only tree keeps it.
             is AgentEvent.MessageEnd -> {
                 updateState {
                     it.copy(
@@ -1054,13 +882,10 @@ class ChatViewModel(
     /**
      * Re-projects from the same state/tree intersection as [onAgentState], so
      * observing both paths is idempotent rather than append-incremental.
-     * Provenance: pi's Agent reduces `message_end` into state before invoking
-     * AgentSession's event sink (`packages/agent/src/agent.ts`); the session
-     * then appends it to the conversation before re-emitting the session event
-     * (`packages/coding-agent/src/core/agent-session.ts`). The first projection
-     * therefore sees the old tree, and with no follow-up state emission (for
-     * example an injected terminal MessageEnd) it would otherwise never see
-     * the committed message.
+     * Ordering: the agent reduces `message_end` into state before the
+     * session appends it to the conversation and re-emits the session event,
+     * so the first projection sees the old tree — with no follow-up state
+     * emission it would otherwise never see the committed message.
      */
     private fun projectCommittedAfterSessionMessageEnd(): List<ChatMessage> =
         projectCommitted(agent?.state?.value?.messages.orEmpty(), activeConversation)
@@ -1073,9 +898,6 @@ class ChatViewModel(
                 pendingTools = pendingToolExecutions(state),
                 streamingMessage = (state.streamingMessage as? AssistantMessage)?.let(::projectStreaming),
                 isStreaming = state.isStreaming,
-                // The thinking surfaces follow the live session (pi's footer
-                // reads state.thinkingLevel and the model's supported
-                // levels); both re-project on level picks and model switches.
                 thinkingLevel = state.thinkingLevel,
                 availableThinkingLevels = getSupportedThinkingLevels(state.model),
                 error = agentError ?: it.error?.takeIf { e -> e != lastAgentError },
@@ -1088,16 +910,13 @@ class ChatViewModel(
 
     /**
      * Bridge from [AgentSession]'s operation lifecycle to the session's
-     * mutation log (pi's Session.appendRecord; audit P0-3 producers).
-     *
-     * Appends dispatch asynchronously onto [viewModelScope] (Main.immediate)
+     * mutation log. Appends dispatch asynchronously onto [viewModelScope]
      * in call order and serialize through the store's mutex: the run loop
      * never blocks on record durability, and abort_requested still lands
-     * before the cancellation handler's operation_finished (the recorder
-     * call order). Record appends never flush buffered conversation entries
-     * — pi's log invariant permits records to precede the entries they
-     * reference (see [LaneRecord]). A failed append degrades durability
-     * only: the error surfaces, the run continues.
+     * before the cancellation handler's operation_finished. Record appends
+     * never flush buffered conversation entries — the log permits records
+     * to precede the entries they reference (see [LaneRecord]). A failed
+     * append degrades durability only: the error surfaces, the run continues.
      */
     private val operationRecorder = object : OperationLifecycleRecorder {
         override suspend fun append(record: LaneRecord) {
@@ -1132,10 +951,10 @@ class ChatViewModel(
         pendingPersist = session to activeConversation
         if (persistJob?.isActive == true) return
         persistJob = viewModelScope.launch {
-            // [persistSnapshot] is non-cancellable, so once a snapshot is
-            // dequeued its write always completes; on scope teardown the loop
-            // keeps draining until no accepted snapshot remains (new enqueues
-            // stop with the cancelled state collector) and then exits.
+            // persistSnapshot is non-cancellable, so a dequeued snapshot
+            // always completes; on scope teardown the loop drains accepted
+            // snapshots and then exits (new enqueues stop with the
+            // cancelled collectors).
             while (true) {
                 val next = pendingPersist ?: break
                 pendingPersist = null
@@ -1145,16 +964,13 @@ class ChatViewModel(
     }
 
     /**
-     * Writes one snapshot. The append-only sync always reaches the file (the
-     * transcript stays with its session even if the user switched away
-     * meanwhile); UI/active state is only updated when that session is still
-     * active.
+     * Writes one snapshot. The append-only sync always reaches the file even
+     * if the user switched sessions meanwhile; UI/active state is only
+     * updated when that session is still active.
      */
     private suspend fun persistSnapshot(session: Session, conversation: Conversation) {
-        // Non-cancellable: an accepted snapshot must reach the file even when
-        // the ViewModel scope is torn down mid-write; without this, cancelling
-        // the save coroutine between dequeue and write would silently drop the
-        // transcript. UI bookkeeping still only targets a still-active session.
+        // Non-cancellable: an accepted snapshot must reach the file even
+        // when the ViewModel scope is torn down mid-write.
         withContext(NonCancellable) {
             try {
                 val activeMessages = conversation.activeMessages()
@@ -1163,9 +979,8 @@ class ChatViewModel(
                 } else {
                     session.title
                 }
-                // Persist the tree itself (entry appends + lane move): branch
-                // structure survives saves via the mutation log; withMessages
-                // stays a flat-transcript bridge only.
+                // Persist the tree itself (entries + leaf): branch structure
+                // survives saves.
                 val saved = sessionStore.save(
                     session.copy(entries = conversation.entries, leafId = conversation.leafId, title = title),
                 )
@@ -1187,10 +1002,9 @@ class ChatViewModel(
 
     /**
      * Ensures the latest conversation of the active session is fully saved,
-     * retrying once from the current tree if a previous save failed.
-     * Returns false when the latest snapshot remains unsaved: callers must
-     * then keep the current session (and surface the save error) so an
-     * unsaved transcript is never abandoned.
+     * re-enqueueing it first if a previous save failed. Returns false when
+     * the latest snapshot remains unsaved: callers must keep the current
+     * session so an unsaved transcript is never abandoned.
      */
     private suspend fun awaitPersistence(): Boolean {
         retryUnsavedSnapshot()
@@ -1214,8 +1028,6 @@ class ChatViewModel(
             setError(ERROR_CONFIG_INVALID)
             return
         }
-        // Factory seam first: an unknown provider/model or an unsupported
-        // API is rejected exactly like pi's unknown-model pick.
         val model = try {
             modelResolver(providerId, modelId.trim())
         } catch (e: CancellationException) {
@@ -1224,10 +1036,8 @@ class ChatViewModel(
             setError(ERROR_UNKNOWN_MODEL, e)
             return
         }
-        // Credential-filtered availability (pi's getAvailable rule the
-        // selector lists): a catalog model the account cannot use — e.g. a
-        // Copilot credential's availableModelIds — is rejected exactly like
-        // an unknown one.
+        // A catalog model the account cannot use (credential-filtered
+        // availability) is rejected like an unknown one.
         val available = try {
             authService.availableModels(providerId)
         } catch (e: CancellationException) {
@@ -1240,9 +1050,6 @@ class ChatViewModel(
             setError(ERROR_UNKNOWN_MODEL)
             return
         }
-        // Live switch: auth is validated by the session (pi's checkAuth →
-        // "No API key for provider/id"), then the agent's model state is
-        // swapped and the model_change entry appended to the tree.
         try {
             session.setModel(model)
         } catch (e: CancellationException) {
@@ -1251,14 +1058,12 @@ class ChatViewModel(
             setError(ERROR_MODEL_SWITCH, e)
             return
         }
-        // pi's setModel then applies the thinking level for the new model
-        // (_getThinkingLevelForModelSwitch → setThinkingLevel,
-        // agent-session.ts:1663-1674): the stored global default, else the
-        // session's current level (per-model overrides are not ported).
-        // Applied here — after the model_change, like pi's order — because
-        // the default is app-owned settings the session facade holds none of;
-        // setThinkingLevel clamps to the new model and appends only on
-        // change, so this usually records nothing.
+        // Like pi's model switch, apply the thinking level for the new
+        // model: the stored global default, else the session's current
+        // level (per-model overrides are not ported). Applied after the
+        // model_change because the default is app-owned settings the
+        // session facade holds none of; setThinkingLevel clamps to the new
+        // model and appends only on change, so this usually records nothing.
         session.setThinkingLevel(currentSettings.defaultThinkingLevel ?: session.thinkingLevel)
         updateState {
             it.copy(
@@ -1281,9 +1086,8 @@ class ChatViewModel(
         currentSettings = candidate
         defaultModelRef = providerId to trimmed
 
-        // pi's _addPersistedDefaultToNonEmptyScope: a non-empty scope gains
-        // the default when missing (order-preserving append; case-insensitive
-        // reference match, pi's pattern comparison).
+        // A non-empty scope gains the default when missing (order-preserving
+        // append; case-insensitive reference match).
         val scope = currentSettings.enabledModels.orEmpty().filter { it.isNotBlank() }
         if (scope.isNotEmpty()) {
             val reference = "$providerId/$trimmed"
@@ -1336,19 +1140,14 @@ class ChatViewModel(
             setError(ERROR_UNKNOWN_PROVIDER)
             return
         }
-        // One auth flow at a time: a key save must not race an in-flight
-        // account login (pi serializes logins through the credential store).
+        // A key save must not race an in-flight account login.
         if (isAuthProviderBusy()) {
             setError(ERROR_AUTH_IN_PROGRESS)
             return
         }
-        // The first auth prompt is the API key (stored in credential.key);
-        // every other prompt fills its env slot. Each input is the value —
-        // a complete save replaces the stored credential wholesale (pi's
-        // login semantics: nothing survives from the previous credential).
-        // A still-incomplete credential is rejected rather than persisted
-        // (pi's cloudflare auth resolution: unconfigured unless every required
-        // value exists). The error names the missing prompts — never values.
+        // The first auth prompt is the API key; every other prompt fills its
+        // env slot. An incomplete credential is rejected rather than
+        // persisted.
         val newKey = apiKeyInput.trim()
         val env = buildMap<String, String> {
             provider.auth.prompts.drop(1).forEach { prompt ->
@@ -1361,12 +1160,9 @@ class ChatViewModel(
             setError(missingCredentialError(missing))
             return
         }
-        // Save through the provider-neutral login orchestration: the form's
-        // values answer the catalog's own prompts (in order) through an
-        // in-memory interaction, and the credential is persisted only after
-        // the login succeeds — an unconditional replacement of whatever was
-        // stored (account↔key switches replace the credential type). The
-        // answers live only in this local interaction, never in UI state.
+        // The form's values answer the catalog's own prompts (in order)
+        // through an in-memory interaction; the answers live only here,
+        // never in UI state.
         val answers = buildList {
             provider.auth.prompts.forEachIndexed { index, prompt ->
                 add(if (index == 0) newKey else env[prompt.envKey].orEmpty())
@@ -1386,18 +1182,15 @@ class ChatViewModel(
     }
 
     /**
-     * Shared post-login success path (pi's `completeProviderAuthentication`):
-     * bumps the credential-success epoch so the UI closes the auth screen
-     * only after confirmed persistence, refreshes every credential-derived
-     * surface, and — while still unconfigured — completes configuration
-     * with the derived initial model (pi's findInitialModel reduced) and
-     * enters the chat directly.
+     * Shared post-login success path: bumps the credential-success epoch so
+     * the UI closes the auth screen only after confirmed persistence,
+     * refreshes every credential-derived surface, and — while still
+     * unconfigured — completes configuration with the derived initial model
+     * and enters the chat directly.
      */
     private suspend fun onCredentialStored() {
-        // Success signal for the UI layer: only a confirmed persistence
-        // closes the credential form (it pops one ProviderAuth entry when
-        // this epoch changes); a failed or incomplete save above returns
-        // without bumping it, so the form and its typed inputs survive.
+        // Only a confirmed persistence bumps this epoch, so the credential
+        // form and its typed inputs survive a failed save above.
         updateState { it.copy(credentialSuccessEpoch = it.credentialSuccessEpoch + 1) }
 
         refreshOptions()
@@ -1413,9 +1206,8 @@ class ChatViewModel(
             val prepared = prepareAdoption(candidate) ?: return
             if (!activateSession(prepared.first, prepared.second)) return
             currentSettings = candidate
-            // The derivation changed provider/model after the pre-bind
-            // refreshOptions above; re-project now that the agent is bound
-            // (selectedModel projects the live session model).
+            // The derivation may have changed provider/model after the
+            // pre-bind refreshOptions; re-project now that the agent is bound.
             refreshOptions()
             updateState {
                 it.copy(
@@ -1441,10 +1233,9 @@ class ChatViewModel(
     // ---- interactive provider login (OAuth/account flows) ----
 
     /**
-     * Starts the selected method's login flow (pi's `startProviderLogin`).
-     * The login itself runs in [loginController] (one login at a time,
-     * exactly like pi's modal login dialog); only [AuthType.API_KEY] with a
-     * sole method is normally started through the all-fields form instead.
+     * Starts the selected method's login flow in [loginController] (one
+     * login at a time). Only [AuthType.API_KEY] with a sole method is
+     * normally started through the all-fields form instead.
      */
     fun beginProviderAuthLogin(providerId: String, method: AuthMethodInfo) {
         if (isAuthProviderBusy()) {
@@ -1466,9 +1257,9 @@ class ChatViewModel(
     fun submitAuthPrompt(answer: String) = loginController.submitPrompt(answer)
 
     /**
-     * Cancels the in-flight login (pi's dialog cancel): the login coroutine
-     * and any pending prompt are cancelled, no credential is mutated, and
-     * the flow state clears. A no-op when no flow is active.
+     * Cancels the in-flight login: the login coroutine and any pending
+     * prompt are cancelled, no credential is mutated. A no-op when no flow
+     * is active.
      */
     fun cancelProviderAuthLogin() = loginController.cancel()
 
@@ -1486,8 +1277,8 @@ class ChatViewModel(
     }
 
     /**
-     * The provider's selectable auth methods (pi's login menu entries), or
-     * an empty list for an unknown provider. Never touches credentials.
+     * The provider's selectable auth methods, or an empty list for an
+     * unknown provider. Never touches credentials.
      */
     fun providerAuthMethods(providerId: String): List<AuthMethodInfo> =
         try {
@@ -1498,10 +1289,8 @@ class ChatViewModel(
 
     /**
      * True iff settings name a catalog provider+model the stored credential
-     * can still use (the model must be in the credential-filtered set, pi's
-     * getAvailable) AND the provider's stored credential resolves
-     * (API-key completeness or a registered OAuth flow for a stored OAuth
-     * credential).
+     * can still use (in the credential-filtered set) AND the provider's
+     * stored credential resolves.
      */
     private suspend fun isConfigured(settings: ModelSettings): Boolean {
         val provider = catalog.getProvider(settings.providerId) ?: return false
@@ -1525,19 +1314,16 @@ class ChatViewModel(
     }
 
     /**
-     * Recomputes every credential-derived surface (providers screen rows,
-     * model-scope curator options, the picker's scoped list, selection
-     * projection). Called on init, after every credential mutation, and
-     * from [refreshProviderStatus]. The live session model — not the
-     * persisted settings — projects [ChatUiState.selectedModel].
+     * Recomputes every credential-derived surface (provider rows, model
+     * options, scoped list, selection projection). The live session model —
+     * not the persisted settings — projects [ChatUiState.selectedModel].
      */
     private suspend fun refreshOptions() {
-        // Search status is computed first (and independently of the LLM
-        // surfaces below): a provider read failure must not leave it
-        // stale, and it must be fresh before any agent creation this
-        // call precedes. Search credentials never contribute to the LLM
-        // first-run configuration below — `search_`-namespaced keys are
-        // not catalog provider credentials.
+        // Search status first: a provider read failure must not leave it
+        // stale, and it must be fresh before any agent creation follows.
+        // Search credentials never contribute to the LLM first-run
+        // configuration below — `search_`-namespaced keys are not catalog
+        // provider credentials.
         refreshSearchStatus()
         val providerOptions = try {
             catalog.providers
@@ -1557,10 +1343,8 @@ class ChatViewModel(
             return
         }
         val configuredIds = providerOptions.filter { it.configured }.map { it.id }.toSet()
-        // Pi's model-selector rule: only models from configured providers,
-        // and only the credential-filtered set each provider exposes
-        // (pi's getAvailable: filterModels over the static list — GitHub
-        // Copilot's availableModelIds).
+        // Only models from configured providers, limited to each provider's
+        // credential-filtered set.
         val modelOptions = catalog.providers
             .filter { it.id in configuredIds }
             .flatMap { provider ->
@@ -1601,12 +1385,11 @@ class ChatViewModel(
     }
 
     /**
-     * Recomputes the search-provider surface ([ChatUiState.searchProviderOptions],
-     * name-sorted) from live credential reads and updates
-     * [searchBraveConfigured]; every bound session's web_search activation
-     * follows ([synchronizeWebSearch]). A read failure degrades search to
-     * unconfigured/disabled and surfaces a safe error — it never fails an
-     * otherwise-valid chat initialization.
+     * Recomputes the search-provider surface from live credential reads and
+     * updates [searchBraveConfigured]; every bound session's web_search
+     * activation follows ([synchronizeWebSearch]). A read failure degrades
+     * search to unconfigured/disabled and surfaces a safe error — it never
+     * fails an otherwise-valid chat initialization.
      */
     private suspend fun refreshSearchStatus() {
         val options = try {
@@ -1643,14 +1426,12 @@ class ChatViewModel(
 
     /**
      * Aligns one session's tool set with the current search credential:
-     * any existing web_search entry is removed and the tool is appended
-     * (last) only while Brave is configured — the order and activation of
-     * every non-web-search tool is preserved exactly. Safe mid-stream and
-     * against future runs alike: the agent snapshots its tool list per run
-     * (see [AgentSession.setActiveToolsByName]), so an in-flight run keeps
-     * its own snapshot and the change lands on the next run. Like pi's
-     * core, no `active_tools_change` session entry is appended — adoption
-     * re-seeds the fold, and this runtime-only toggle is never persisted.
+     * web_search is appended (last) only while Brave is configured; the
+     * order and activation of every other tool is preserved exactly. Safe
+     * mid-stream: the agent snapshots its tool list per run, so an
+     * in-flight run keeps its own snapshot and the change lands on the
+     * next run. No `active_tools_change` session entry is appended — this
+     * runtime-only toggle is never persisted.
      */
     private fun synchronizeWebSearch(session: AgentSession) {
         val names = session.getActiveToolNames().filter { it != BraveWebSearchTool.NAME } +
@@ -1659,15 +1440,15 @@ class ChatViewModel(
     }
 
     /**
-     * Projects the scope-derived surfaces: the mirror of the stored scope and
-     * the picker's scoped list (pi's `!enabledModels?.length` = no scope).
+     * Projects the scope-derived surfaces: the stored-scope mirror and the
+     * picker's scoped list (an empty scope means no scoping).
      */
     private fun projectScope(modelOptions: List<ModelOption>) {
         val scope = currentSettings.enabledModels
         val scoped = if (scope.isNullOrEmpty()) {
             modelOptions
         } else {
-            // Case-insensitive reference match, pi's enabledModels comparison.
+            // Case-insensitive reference match.
             val enabled = scope.mapTo(mutableSetOf()) { it.lowercase() }
             modelOptions.filter { "${it.providerId}/${it.modelId}".lowercase() in enabled }
         }
@@ -1715,8 +1496,8 @@ class ChatViewModel(
         try {
             currentAgent.prompt(text)
         } catch (e: CancellationException) {
-            // Abort (or ViewModel teardown): the agent already committed its
-            // terminal state, which the state observer persists.
+            // Abort or teardown: the agent committed its terminal state,
+            // which the state observer persists.
             throw e
         } catch (e: IllegalStateException) {
             setError(ERROR_ALREADY_STREAMING)
@@ -1735,24 +1516,22 @@ class ChatViewModel(
     // ---- helpers ----
 
     /**
-     * Records a `pf.chat.degraded` telemetry span: a failure the ViewModel
-     * deliberately absorbs into degraded UI state ("unconfigured", "no
-     * selection") instead of an error — pi's degradation semantics, kept,
-     * but no longer invisible on-device (the credential store failing to
-     * read must be distinguishable from an actually-missing credential).
+     * Records a `pf.chat.degraded` telemetry span for a failure the
+     * ViewModel deliberately absorbs into degraded UI state instead of an
+     * error — the credential store failing to read must be distinguishable
+     * from an actually-missing credential.
      */
     private suspend fun recordDegradation(operation: String, cause: Throwable) {
         diagnostics.chatDegraded(operation, cause)
     }
 
     /**
-     * Surfaces [message] as the UI error. This is the UI's single error
-     * boundary, so when a [cause] exception is available it is also recorded
-     * as a `pf.chat.error` telemetry span — the only place otherwise-invisible
+     * Surfaces [message] as the UI error and records a `pf.chat.error`
+     * telemetry span for the [cause] — the only place otherwise-invisible
      * failures become diagnosable on-device. Only the cause's exception
      * type is recorded (app diagnostics policy: exception messages are not
-     * a guaranteed-safe free-form surface). The generic [message] itself is
-     * a static UI string and carries no secrets.
+     * a guaranteed-safe free-form surface); [message] is a static UI string
+     * carrying no secrets.
      */
     private fun setError(message: String, cause: Throwable? = null) {
         updateState { it.copy(error = message) }
@@ -1798,13 +1577,13 @@ class ChatViewModel(
         const val ERROR_SEARCH_CREDENTIAL_SAVE = "Could not store the search API key"
         const val ERROR_SEARCH_STATUS = "Could not read the search provider status"
 
-        /** Scry's environment-variable name, kept as the prompt's stable id. */
+        /** Kept as the prompt's stable id. */
         const val BRAVE_API_KEY_PROMPT = "BRAVE_API_KEY"
 
         /** Clear, secret-free message for the Brave key prompt. */
         const val SEARCH_BRAVE_KEY_PROMPT_MESSAGE = "Enter your Brave Search API key"
 
-        /** pi's DEFAULT_THINKING_LEVEL (coding-agent defaults.ts: "medium"). */
+        /** pi's default thinking level: "medium". */
         val DEFAULT_THINKING_LEVEL = ModelThinkingLevel.MEDIUM
 
         /** Actionable, secret-free message naming the still-missing auth prompts. */

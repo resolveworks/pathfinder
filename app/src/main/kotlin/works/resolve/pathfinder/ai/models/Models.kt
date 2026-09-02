@@ -16,9 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.last
 
-// Exclusion: pi's models-store.ts (dynamic catalog persistence and refresh)
-// is not ported; Pathfinder uses the bundled static catalog per the policy in
-// ai/AGENTS.md.
+// Pathfinder uses a bundled static catalog rather than pi's dynamic model store.
 
 /**
  * A resolved provider credential (pi's auth resolve result): the API key (or,

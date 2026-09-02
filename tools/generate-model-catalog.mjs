@@ -9,8 +9,7 @@
 // from hand-written provider files (src/providers/*.ts).
 //
 // Dynamic providers (radius), llama.cpp, Amazon Bedrock, Google Vertex AI,
-// and image-generation providers are deliberately excluded. The product and
-// maintenance rationale is recorded in the AI package's AGENTS.md.
+// and image-generation providers are deliberately excluded.
 // OAuth capability metadata is emitted declaratively for retained providers;
 // their native flows are composed separately in ProductionCatalogAuthRegistry.
 //
@@ -88,7 +87,7 @@ const PROVIDER_IDENTITY = {
 
 	// Only the API-key path is emitted: pi's ANTHROPIC_AUTH_TOKEN (Bearer header) and
 	// ANTHROPIC_OAUTH_TOKEN paths (providers/anthropic.ts:24-36) are deliberately
-	// reduced — see ai/AGENTS.md.
+	// reduced.
 	anthropic: { name: "Anthropic", label: "Anthropic API key", envKey: "ANTHROPIC_API_KEY" },
 	"ant-ling": { name: "Ant Ling", label: "Ant Ling API key", envKey: "ANT_LING_API_KEY" },
 	"azure-openai-responses": {

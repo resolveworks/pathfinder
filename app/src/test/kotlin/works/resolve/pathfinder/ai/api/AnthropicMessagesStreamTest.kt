@@ -34,11 +34,6 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/**
- * Streaming tests for the anthropic-messages port, mirroring pi's
- * packages/ai/test coverage (stream, anthropic-sse-parsing, abort, tokens,
- * anthropic-thinking-disable, anthropic-auth-token, cross-provider-handoff).
- */
 class AnthropicMessagesStreamTest {
 
     private val claude = Model(
@@ -127,7 +122,6 @@ clock = FakeClock(1_770_000_000_000L),
         assertEquals("end_turn", done.message.rawStopReason)
     }
 
-    /** pi streamSimple forwards options.thinkingBudgets into the budget split. */
     @Test
     fun `streamSimple applies custom thinking budgets and clamps xhigh`() = runTest {
         val transport = FakeTransport()
@@ -146,7 +140,7 @@ clock = FakeClock(1_770_000_000_000L),
         assertEquals(64_000, body["max_tokens"]!!.jsonPrimitive.content.toInt())
         assertEquals(4096, body["thinking"]!!.jsonObject["budget_tokens"]!!.jsonPrimitive.content.toInt())
 
-        // xhigh clamps to the high budget instead of crashing (pi's clampReasoning).
+        // xhigh clamps to the high budget.
         val xhigh = FakeTransport()
         xhigh.enqueueNamedResponse(textStream("hi"))
         api(xhigh).streamSimple(
@@ -166,8 +160,6 @@ clock = FakeClock(1_770_000_000_000L),
             "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
             "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
-            // message_delta omits input/cache fields (nullish-preserving) but reports
-            // output tokens and reasoning tokens.
             messageDelta(output = 7, thinkingTokens = 3),
             messageStop,
         )
@@ -226,7 +218,6 @@ clock = FakeClock(1_770_000_000_000L),
         assertEquals("sig-1", thinking.thinkingSignature)
         assertFalse(thinking.redacted)
 
-        // Redacted thinking: opaque signature payload, fixed text.
         transport.enqueueNamedResponse(
             messageStart(),
             "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"opaque"}}""",
@@ -269,7 +260,6 @@ clock = FakeClock(1_770_000_000_000L),
         assertEquals("toolu_1", call.id)
         assertEquals("edit", call.name)
         assertEquals("""{"path":1}""", call.arguments)
-        // Block ends carry their own content index.
         val toolEnd = events.filterIsInstance<AssistantMessageEvent.ToolCallEnd>().single()
         assertEquals(1, toolEnd.contentIndex)
         assertEquals("""{"path":1}""", toolEnd.toolCall.arguments)
@@ -319,11 +309,9 @@ clock = FakeClock(1_770_000_000_000L),
                 .last(),
         )
         val call = assertIs<ToolCall>(done.message.content.single())
-        // CC-cased "Read" maps back to the provided tool's real name.
         assertEquals("read", call.name)
         // Streamed partial JSON wins over the content_block_start seed.
         assertEquals("""{"path":2}""", call.arguments)
-        // The request sent the CC-cased tool name (pi's toClaudeCodeName).
         val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
         assertEquals(
             "Read",
@@ -415,7 +403,6 @@ clock = FakeClock(1_770_000_000_000L),
             "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
             "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}""",
             messageDelta(output = 1),
-            // no message_stop
         )
         val last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         val error = assertIs<AssistantMessageEvent.Error>(last)
@@ -584,7 +571,6 @@ clock = FakeClock(1_770_000_000_000L),
         )
     }
 
-    /** pi anthropic-messages.ts:592-599: fallback usage attribution. */
     private val fableWithFallbacks = claude.copy(
         anthropicCompat = claude.anthropicCompat.copy(
             allowedFallbackModels = listOf(
@@ -616,7 +602,6 @@ clock = FakeClock(1_770_000_000_000L),
                 .toList()
                 .last(),
         )
-        // responseModel follows the observed model; cost uses the fallback rates.
         assertEquals("claude-opus-4-8", done.message.responseModel)
         assertEquals("claude-opus-4-8", done.message.model)
         assertEquals(100 * 5.0 / 1_000_000, done.message.usage.cost.input, 1e-12)
@@ -643,8 +628,8 @@ clock = FakeClock(1_770_000_000_000L),
 
     @Test
     fun `unknown different model keeps the requested model cost`() = runTest {
-        // Same model id but a different provider entry: no fallback match,
-        // exactly like pi's provider + model check.
+        // Same model id as the openrouter fallback entry but a different
+        // provider: no fallback match.
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(input = 100, model = "claude-opus-5"),
@@ -680,11 +665,6 @@ clock = FakeClock(1_770_000_000_000L),
         assertEquals("cli", request.headers["x-app"])
     }
 
-    /**
-     * pi test/github-copilot-anthropic.test.ts: Copilot models via
-     * anthropic-messages use Bearer auth (no x-api-key), Copilot static model
-     * headers, and the dynamic X-Initiator / Openai-Intent headers.
-     */
     private val copilotClaude = claude.copy(
         id = "claude-sonnet-4.6",
         provider = "github-copilot",
@@ -706,12 +686,9 @@ clock = FakeClock(1_770_000_000_000L),
         val request = transport.requests.single()
         assertEquals("https://api.individual.githubcopilot.com/v1/messages", request.url)
         assertEquals("tid_copilot_session_test_token", request.bearerToken)
-        // pi: apiKey null in the SDK client, so no x-api-key header at all.
         assertTrue(request.headers.keys.none { it.equals("x-api-key", ignoreCase = true) })
-        // Copilot static headers from model.headers.
         assertEquals("GitHubCopilotChat/1.0", request.headers["User-Agent"])
         assertEquals("vscode-chat", request.headers["Copilot-Integration-Id"])
-        // Dynamic headers.
         assertEquals("user", request.headers["X-Initiator"])
         assertEquals("conversation-edits", request.headers["Openai-Intent"])
         assertEquals("2023-06-01", request.headers["anthropic-version"])
@@ -727,10 +704,9 @@ clock = FakeClock(1_770_000_000_000L),
     fun `copilot api-key-shaped token still takes the bearer path`() = runTest {
         val transport = FakeTransport()
         transport.enqueueNamedResponse(textStream("ok"))
-        // pi checks the Copilot branch before the OAuth branch, so even a
-        // token shaped like an Anthropic key stays on Bearer with Copilot
-        // headers (isOAuth false: no Claude Code system prompt or tool-name
-        // renaming).
+        // The Copilot branch precedes the OAuth branch, so even an
+        // Anthropic-shaped token stays on Bearer with isOAuth false (no
+        // Claude Code system prompt or tool-name renaming).
         api(transport)
             .stream(copilotClaude, context, AnthropicMessagesOptions(apiKey = "sk-ant-api03-copilot"))
             .toList()
@@ -763,7 +739,6 @@ clock = FakeClock(1_770_000_000_000L),
             )
             .toList()
         val request = transport.requests.single()
-        // Explicit headers win case-insensitively over model and dynamic headers.
         assertEquals("jetbrains", request.headers["copilot-integration-id"])
         assertEquals("completion", request.headers["OPENAI-INTENT"])
         assertTrue(request.headers.keys.none { it.equals("x-initiator", ignoreCase = true) })
@@ -832,7 +807,7 @@ clock = FakeClock(1_770_000_000_000L),
         val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
         val thinking = body["thinking"]!!.jsonObject
         assertEquals("enabled", thinking["type"]!!.jsonPrimitive.content)
-        // medium -> 8192 budget, clamped to max_tokens - 1024 answer room.
+        // medium -> 8192 budget.
         assertEquals(8192, thinking["budget_tokens"]!!.jsonPrimitive.content.toInt())
         assertEquals(claude.maxTokens, body["max_tokens"]!!.jsonPrimitive.content.toInt())
     }
@@ -877,12 +852,9 @@ clock = FakeClock(1_770_000_000_000L),
     }
 
     /**
-     * pi's streamSimple passes toolChoice through to the payload's
-     * tool_choice mapping (anthropic-messages.ts:834, 1099-1103). The simple
-     * API carries only pi's narrow ToolChoice (types.ts:82), so only
-     * auto/none can reach the wire via streamSimple; the broader shapes are
-     * exercised through AnthropicMessagesOptions (stream) below and in
-     * AnthropicMessagesPayloadTest.
+     * streamSimple carries only the narrow auto/none ToolChoice; broader
+     * AnthropicToolChoice shapes are exercised through AnthropicMessagesOptions
+     * (stream) below and in AnthropicMessagesPayloadTest.
      */
     @Test
     fun `streamSimple forwards each toolChoice shape to the wire`() = runTest {
@@ -901,8 +873,7 @@ clock = FakeClock(1_770_000_000_000L),
             val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
             assertEquals(expected, body["tool_choice"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         }
-        // Provider-level options still carry the full Anthropic union
-        // (anthropic-messages.ts:265).
+        // Provider-level options still carry the full Anthropic union.
         val forced = FakeTransport()
         forced.enqueueNamedResponse(textStream("ok"))
         api(forced)
@@ -918,7 +889,6 @@ clock = FakeClock(1_770_000_000_000L),
         assertEquals("edit", forcedChoice["name"]!!.jsonPrimitive.content)
     }
 
-    /** pi's buildBaseOptions forwards cacheRetention (simple-options.ts:40). */
     @Test
     fun `streamSimple cacheRetention long uses the 1h ttl`() = runTest {
         val transport = FakeTransport()
@@ -938,7 +908,6 @@ clock = FakeClock(1_770_000_000_000L),
         )
     }
 
-    /** Retention none suppresses cache_control and the x-session-affinity header. */
     @Test
     fun `streamSimple cacheRetention none suppresses caching and session affinity`() = runTest {
         val transport = FakeTransport()

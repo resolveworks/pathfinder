@@ -5,8 +5,8 @@ idioms for translating TypeScript patterns from pi into Kotlin. Pi remains
 the source of truth for behavior; these rules govern the Kotlin-side idioms
 pi cannot dictate because TypeScript provides them implicitly — property
 access, optional fields, unions, errors, timing, redaction. Where a rule
-here would conflict with a faithful port of a specific pi file, provenance
-wins: keep the local shape and document it in KDoc rather than generalizing.
+here would conflict with a faithful port of a specific pi file, keep the local
+shape rather than generalizing.
 
 ## Sealed types and unions
 
@@ -23,7 +23,7 @@ wins: keep the local shape and document it in KDoc rather than generalizing.
   that divergence in KDoc.
 - In new code, dispatch on the sealed subtype (`when (c) { is TextContent
   -> … }`), not on a discriminator enum followed by a cast.
-- Canonical union translations — reuse these patterns with pi-citing KDoc:
+- Canonical union translations — reuse these patterns:
   - `false | Config | undefined` → nullable sealed property plus a
     `Disabled` data object for the literal `false` (ConstrainedSamplingConfig).
   - `Record<K, string | null>` with three-state semantics →
@@ -135,13 +135,6 @@ I/O, handled at one boundary; expected failures as values.
   enum without a projecting function.
 - Only UI models touch kotlinx.serialization directly (Navigation keys);
   the domain core stays serialization-free apart from `JsonElement`.
-
-## Provenance
-
-- Ported symbols keep upstream names; KDoc cites pi as
-  `packages/<pkg>/src/<file>.ts[:line]`, with line numbers whenever the
-  upstream symbol is locatable. Document divergences at the narrowest
-  boundary.
 
 ## Deliberately not standardized
 

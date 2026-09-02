@@ -35,57 +35,18 @@ import works.resolve.pathfinder.data.sessions.ModelChangeEntry
 import works.resolve.pathfinder.data.sessions.SessionEntry
 import works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
 
-/**
- * Pure core of pi's harness compaction module, ported from
- * `packages/agent/src/harness/compaction/compaction.ts`.
- *
- * This file covers only the declarative/pure parts: settings, token
- * estimation, compaction-threshold decision, cut-point selection, the
- * summarization system prompt, and file-operation extraction. The
- * LLM-calling parts (`generateSummary`, `generateSummaryWithUsage`,
- * `completeSimpleWithRetries`, `prepareCompaction`, `compact`,
- * `CompactResult`, `CompactionPreparation`, `combineUsage`) are ported
- * below in the same file, mirroring upstream's single-module layout.
- *
- * Adaptation boundaries (documented per symbol below):
- * - pi's `AgentMessage` union maps to pathfinder's `ai.core.Message`
- *   hierarchy; the AgentMessage roles `custom`, `bashExecution`,
- *   `branchSummary`, and `compactionSummary` have no pathfinder counterpart:
- *   compaction entries synthesize their summary as a wrapped user message
- *   instead (see `Messages.kt`).
- * - pi's harness `Entry` maps to pathfinder's [SessionEntry]; the
- *   message-bearing kinds beyond [MessageEntry] and [CompactionEntry]
- *   ([BranchSummaryEntry], [CustomEntry]) are handled by the per-entry-type
- *   message-synthesis dispatch below.
- *
- * Reuse decisions: `calculateContextTokens`, per-message token estimation,
- * and `ContextUsageEstimate` already exist in
- * `works.resolve.pathfinder.ai.utils.TokenEstimate` (itself ported from pi's
- * `packages/ai/src/utils/estimate.ts`) with identical semantics for the
- * message roles pathfinder supports, so they are reused rather than
- * duplicated.
- */
-
-/** Compaction thresholds and retention settings (compaction.ts `CompactionSettings`). */
 data class CompactionSettings(
-    /** Enable automatic compaction decisions. */
     val enabled: Boolean,
-    /** Tokens reserved for summary prompt and output. */
+    /** Headroom held out of the context window for the summary request. */
     val reserveTokens: Int,
-    /** Approximate recent-context tokens to keep after compaction. */
     val keepRecentTokens: Int,
 )
 
-/** Default compaction settings used by the harness (compaction.ts `DEFAULT_COMPACTION_SETTINGS`). */
 val DEFAULT_COMPACTION_SETTINGS = CompactionSettings(
     enabled = true,
     reserveTokens = 16384,
     keepRecentTokens = 20000,
 )
-
-// calculateContextTokens (compaction.ts) is reused from
-// works.resolve.pathfinder.ai.utils.TokenEstimate: same "prefer totalTokens,
-// else sum components" semantics.
 
 private fun getAssistantUsage(msg: Message): Usage? {
     if (msg is AssistantMessage) {
@@ -100,7 +61,6 @@ private fun getAssistantUsage(msg: Message): Usage? {
     return null
 }
 
-/** Return usage from the last valid assistant message in session entries (compaction.ts `getLastAssistantUsage`). */
 fun getLastAssistantUsage(entries: List<SessionEntry>): Usage? {
     for (i in entries.indices.reversed()) {
         val entry = entries[i]
@@ -113,14 +73,9 @@ fun getLastAssistantUsage(entries: List<SessionEntry>): Usage? {
 }
 
 /**
- * Estimate token count for one message using a conservative character
- * heuristic (compaction.ts `estimateTokens`).
- *
- * Delegates to [estimateMessageTokens] in `ai.utils.TokenEstimate`, which
- * implements the same heuristic. Divergence: compaction.ts also estimates
- * `custom`, `bashExecution`, `branchSummary`, and `compactionSummary`
- * message roles, which do not exist in pathfinder's [Message] yet; when a
- * compaction-summary message type is added, extend the estimation there.
+ * Upstream also estimates `custom`, `bashExecution`, `branchSummary`, and
+ * `compactionSummary` message roles; the pathfinder [Message] hierarchy has
+ * no such roles.
  */
 fun estimateTokens(message: Message): Int = estimateMessageTokens(message)
 
@@ -133,14 +88,10 @@ private fun getLastAssistantUsageInfo(messages: List<Message>): Pair<Usage, Int>
 }
 
 /**
- * Estimate context tokens for messages using provider usage when available
- * (compaction.ts `estimateContextTokens`).
- *
- * Note: this is pi's compaction-specific estimator over a bare message list;
- * it differs from `ai.utils.estimateContextTokens(Context)`, which mirrors
- * pi's `packages/ai/src/utils/estimate.ts` (system prompt/tools accounting,
- * timestamp-prefix usage validation). Compaction's simpler "last valid
- * assistant usage wins" rule is ported here faithfully.
+ * Compaction's own estimator over a bare message list: last valid assistant
+ * usage wins, with per-message estimates for the trailing messages — unlike
+ * the same-named `ai.utils.estimateContextTokens(Context)`, which also
+ * accounts for the system prompt and tools.
  */
 fun estimateContextTokens(messages: List<Message>): ContextUsageEstimate {
     val usageInfo = getLastAssistantUsageInfo(messages)
@@ -173,24 +124,11 @@ fun estimateContextTokens(messages: List<Message>): ContextUsageEstimate {
     )
 }
 
-/** Return whether context usage exceeds the configured compaction threshold (compaction.ts `shouldCompact`). */
 fun shouldCompact(contextTokens: Int, contextWindow: Int, settings: CompactionSettings): Boolean {
     if (!settings.enabled) return false
     return contextTokens > contextWindow - settings.reserveTokens
 }
 
-/**
- * Collect valid compaction cut points in `[startIndex, endIndex)` (compaction.ts
- * `findValidCutPoints`, private upstream).
- *
- * Adaptation: only [MessageEntry] exists in pathfinder's [SessionEntry]
- * today. As upstream, message entries are cut points for every role except
- * tool results (`bashExecution`/`custom`/`branchSummary`/`compactionSummary`
- * roles would also be cut points but do not exist here). Non-message entry
- * kinds (thinking/model/tools changes, compaction entries) contribute
- * nothing; `branch_summary` entries additionally push their own index
- * upstream (compaction.ts findValidCutPoints) and do so here too.
- */
 private fun findValidCutPoints(entries: List<SessionEntry>, startIndex: Int, endIndex: Int): List<Int> {
     val cutPoints = mutableListOf<Int>()
     for (i in startIndex until endIndex) {
@@ -207,13 +145,6 @@ private fun findValidCutPoints(entries: List<SessionEntry>, startIndex: Int, end
     return cutPoints
 }
 
-/**
- * Find the user-visible message that starts the turn containing an entry
- * (compaction.ts `findTurnStartIndex`).
- *
- * Adaptation: `bashExecution` role is not present. A [BranchSummaryEntry]
- * is a turn start like upstream (compaction.ts findTurnStartIndex).
- */
 fun findTurnStartIndex(entries: List<SessionEntry>, entryIndex: Int, startIndex: Int): Int {
     for (i in entryIndex downTo startIndex) {
         val entry = entries[i]
@@ -225,20 +156,13 @@ fun findTurnStartIndex(entries: List<SessionEntry>, entryIndex: Int, startIndex:
     return -1
 }
 
-/** Cut point selected for compaction (compaction.ts `CutPointResult`). */
 data class CutPointResult(
-    /** Index of the first entry retained after compaction. */
     val firstKeptEntryIndex: Int,
-    /** Index of the turn-start entry when the cut splits a turn, otherwise -1. */
+    /** Turn-start entry index when the cut splits a turn, otherwise -1. */
     val turnStartIndex: Int,
-    /** Whether the selected cut point splits an in-progress turn. */
     val isSplitTurn: Boolean,
 )
 
-/**
- * Find the compaction cut point that keeps approximately the requested
- * recent-token budget (compaction.ts `findCutPoint`).
- */
 fun findCutPoint(
     entries: List<SessionEntry>,
     startIndex: Int,
@@ -269,8 +193,6 @@ fun findCutPoint(
     }
     while (cutIndex > startIndex) {
         val prevEntry = entries[cutIndex - 1]
-        // A cut never lands immediately after a compaction entry (pi
-        // compaction.ts findCutPoint).
         if (prevEntry is CompactionEntry) break
         if (prevEntry is MessageEntry) break
         cutIndex--
@@ -286,28 +208,21 @@ fun findCutPoint(
     )
 }
 
-/** System prompt for summarization (compaction.ts `SUMMARIZATION_SYSTEM_PROMPT`), ported verbatim. */
 const val SUMMARIZATION_SYSTEM_PROMPT =
     "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n" +
         "\n" +
         "Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary."
 
-/** File-operation details stored on generated compaction entries (compaction.ts `CompactionDetails`). */
 data class CompactionDetails(
-    /** Files read in the compacted history. */
     val readFiles: List<String>,
-    /** Files modified in the compacted history. */
     val modifiedFiles: List<String>,
 )
 
 /**
- * Accumulate file operations for a compaction summary (compaction.ts
- * `extractFileOperations`, private upstream).
- *
- * Adaptation: upstream reads the previous compaction entry's details via
- * `entries[prevCompactionIndex]` and tolerates unknown shapes; pathfinder
- * types the details, so the previous [CompactionDetails] are accepted
- * directly and the entry lookup happens in [prepareCompaction].
+ * Upstream reads the previous compaction entry's details out of the entries
+ * list and tolerates unknown shapes; pathfinder's details are typed, so the
+ * previous [CompactionDetails] are passed in directly and the entry lookup
+ * happens in [prepareCompaction].
  */
 fun extractFileOperations(
     messages: List<Message>,
@@ -326,44 +241,28 @@ fun extractFileOperations(
 
 private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
     is MessageEntry -> entry.message
-    // pi synthesizes a dedicated branchSummary agent message here
-    // (compaction.ts:72); the port projects it as its convertToLlm form —
-    // a wrapped user message (Messages.kt createBranchSummaryMessage).
+    // Upstream synthesizes dedicated branchSummary/compactionSummary agent
+    // messages here; pathfinder has no such roles, so both entries project
+    // to their LLM form — a wrapped user message (Messages.kt).
     is BranchSummaryEntry -> createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)
-    // pi synthesizes a dedicated compactionSummary agent message here; the
-    // port projects it as its convertToLlm form — a wrapped user message
-    // (Messages.kt createCompactionSummaryMessage).
     is CompactionEntry -> createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp)
-    // Configuration/bookkeeping kinds contribute no message (compaction.ts
-    // switch: model_change/thinking_level_change/active_tools_change/custom
-    // break).
     is ModelChangeEntry, is ThinkingLevelEntry, is ActiveToolsEntry, is CustomEntry -> null
 }
 
 /**
- * Map an entry to the message it contributes to compaction input
- * (compaction.ts `getMessageFromEntryForCompaction`, private upstream).
- *
- * Compaction entries contribute nothing: their summary is handled via the
- * `previousSummary` update path instead (upstream returns undefined for
- * `compaction` entries).
+ * Compaction entries contribute no message: their stored summary re-enters
+ * summarization via `previousSummary` instead.
  */
 internal fun getMessageFromEntryForCompaction(entry: SessionEntry): Message? =
     if (entry is CompactionEntry) null else getMessageFromEntry(entry)
 
-// ---- LLM-calling half (compaction.ts) ----
-
-/** Error codes returned by compaction helpers (harness/types.ts `CompactionErrorCode`). */
 enum class CompactionErrorCode { ABORTED, SUMMARIZATION_FAILED }
 
-/** Error returned by compaction helpers (harness/types.ts `CompactionError`). */
 class CompactionError(
-    /** Backend-independent error code. */
     val code: CompactionErrorCode,
     message: String,
 ) : Exception(message)
 
-/** pi's Result<T, E> shape for compaction helpers (harness/types.ts `ok`/`err`/`Result`). */
 sealed interface CompactionResult<out T> {
     data class Ok<T>(val value: T) : CompactionResult<T>
     data class Err(val error: CompactionError) : CompactionResult<Nothing>
@@ -373,32 +272,25 @@ internal fun <T> ok(value: T): CompactionResult<T> = CompactionResult.Ok(value)
 
 internal fun err(error: CompactionError): CompactionResult<Nothing> = CompactionResult.Err(error)
 
-/** Generated summary plus its provider usage (compaction.ts `generateSummaryWithUsage` return value). */
 data class GeneratedSummary(
     val text: String,
     val usage: Usage,
 )
 
-/** Generated compaction data ready to be persisted as a compaction entry (compaction.ts `CompactResult`). */
+/** Compaction outcome to persist as a session compaction entry. */
 data class CompactResult(
-    /** Summary text that replaces compacted history in future context. */
+    /** Replaces the compacted history in future context. */
     val summary: String,
-    /** Estimated context tokens before compaction. */
     val tokensBefore: Int,
-    /** Usage from the LLM call(s) that generated this summary, if available. */
     val usage: Usage?,
-    /** Retained recent messages stored directly on the compaction entry. */
     val retainedTail: List<Message>,
-    /** Optional implementation-specific details stored with the compaction entry. */
     val details: CompactionDetails?,
 )
 
 /**
- * Add two provider usage blocks (compaction.ts `combineUsage`, private upstream).
- *
- * Divergence: upstream keeps `cacheWrite1h`/`reasoning` undefined when absent
- * on both sides; pathfinder's [Usage] models them as non-optional ints
- * (0 = unreported), so they are summed unconditionally.
+ * Upstream keeps `cacheWrite1h`/`reasoning` undefined when absent on both
+ * sides; pathfinder's [Usage] models them as non-nullable ints (0 =
+ * unreported), so they are summed unconditionally.
  */
 fun combineUsage(first: Usage, second: Usage): Usage = Usage(
     input = first.input + second.input,
@@ -422,20 +314,11 @@ private operator fun Cost.plus(other: Cost): Cost = Cost(
 private val DEFAULT_RETRY = Retry()
 
 /**
- * Run a single summary completion with bounded retry (compaction.ts
- * `completeSimpleWithRetries`).
- *
- * Summaries are standalone requests, so routing is isolated and cache
- * writes that cannot be reused are avoided: every call sets
- * `cacheRetention = "none"` and a fresh `sessionId` (upstream
- * `requestOptions` tweaks, ported verbatim onto [SimpleStreamOptions]).
- *
- * Adaptation: upstream is a free function calling pi's module-level
- * `retryAssistantCall(produce, retry, signal, callbacks)`; pathfinder's
- * `retryAssistantCall` lives on the [Retry] class (injectable sleep), so the
- * runner is taken as a defaulted [retryRunner] parameter. Upstream's
- * `signal` is dropped — aborts are expressed as coroutine cancellation in
- * this codebase (see ai/utils/Retry.kt docs).
+ * Summaries are standalone requests, so every call isolates routing and
+ * avoids cache writes that cannot be reused: `cacheRetention = NONE` and a
+ * fresh `sessionId` on each attempt. Upstream's `signal` parameter is
+ * dropped — aborts are coroutine cancellation here — and the retry runner is
+ * an injected [retryRunner] because retry sleeping lives on [Retry].
  */
 suspend fun completeSimpleWithRetries(
     models: Models,
@@ -577,17 +460,10 @@ private fun completionOptions(
     }
 
 /**
- * Generate or update a conversation summary for compaction (compaction.ts
- * `generateSummary`).
- *
- * Divergences: pi's `signal` parameter is dropped (aborts are coroutine
- * cancellation here); the `thinkingLevel` parameter uses
- * [ModelThinkingLevel] because pi's `ThinkingLevel` includes "off", which
- * pathfinder's core `ThinkingLevel` enum models as `ModelThinkingLevel.OFF`;
- * the retry runner adaptation is documented on [completeSimpleWithRetries]; and
- * the wall [clock] used to timestamp the summarization prompt is received
- * from the caller (TS→Kotlin timing rule: pure functions get the clock from
- * their caller) rather than defaulting here.
+ * Divergences from upstream: no `signal` parameter (aborts are coroutine
+ * cancellation); `thinkingLevel` is [ModelThinkingLevel] because pathfinder
+ * models upstream's "off" as [ModelThinkingLevel.OFF]; the wall [clock] is
+ * received from the caller (TS→Kotlin timing rule).
  */
 suspend fun generateSummary(
     currentMessages: List<Message>,
@@ -611,13 +487,10 @@ suspend fun generateSummary(
     }
 
 /**
- * Generate or update a conversation summary and return its provider usage
- * (compaction.ts `generateSummaryWithUsage`).
- *
- * Divergences: upstream builds the prompt over `convertToLlm(messages)`;
- * pathfinder messages are already LLM messages (the compaction-summary
- * agent role is pre-projected at its convertToLlm form, see `Messages.kt`),
- * so the conversion step is the identity and is omitted.
+ * Upstream builds the prompt over `convertToLlm(messages)`; pathfinder
+ * messages are already LLM messages (branch/compaction summaries are
+ * pre-projected, see `Messages.kt`), so the conversion step is the identity
+ * and is omitted.
  */
 suspend fun generateSummaryWithUsage(
     currentMessages: List<Message>,
@@ -668,30 +541,17 @@ suspend fun generateSummaryWithUsage(
     return ok(GeneratedSummary(text = contentText(response.content), usage = response.usage))
 }
 
-/** Prepared inputs for a compaction run (compaction.ts `CompactionPreparation`). */
 data class CompactionPreparation(
-    /** Messages summarized into the history summary. */
     val messagesToSummarize: List<Message>,
-    /** Prefix messages summarized separately when compaction splits a turn. */
     val turnPrefixMessages: List<Message>,
-    /** Recent messages retained after compaction and stored on the compaction entry. */
     val retainedTail: List<Message>,
-    /** Whether compaction splits a turn. */
     val isSplitTurn: Boolean,
-    /** Estimated context tokens before compaction. */
     val tokensBefore: Int,
-    /** Previous compaction summary used for iterative updates. */
     val previousSummary: String?,
-    /** File operations extracted from summarized history. */
     val fileOps: FileOperations,
-    /** Settings used to prepare compaction. */
     val settings: CompactionSettings,
 )
 
-/**
- * Prepare session entries for compaction, or return null when compaction is
- * not applicable (compaction.ts `prepareCompaction`).
- */
 fun prepareCompaction(
     pathEntries: List<SessionEntry>,
     settings: CompactionSettings,
@@ -770,14 +630,10 @@ fun prepareCompaction(
 }
 
 /**
- * Generate compaction summary data from prepared session history
- * (compaction.ts `compact`).
- *
- * Divergences: pi's `signal` parameter is dropped (coroutine cancellation);
- * `details` is typed [CompactionDetails] rather than upstream's generic
- * `T = unknown`. The retry runner adaptation is documented on
- * [completeSimpleWithRetries]. The wall [clock] for the summarization
- * prompts is received from the caller (TS→Kotlin timing rule).
+ * Divergences from upstream: no `signal` parameter (aborts are coroutine
+ * cancellation); `details` is typed [CompactionDetails] rather than
+ * upstream's unknown-typed generic; the wall [clock] is received from the
+ * caller (TS→Kotlin timing rule).
  */
 suspend fun compact(
     preparation: CompactionPreparation,
@@ -843,10 +699,6 @@ suspend fun compact(
     )
 }
 
-/**
- * Summarize the prefix of an oversized split turn (compaction.ts
- * `generateTurnPrefixSummary`, private upstream).
- */
 private suspend fun generateTurnPrefixSummary(
     messages: List<Message>,
     models: Models,

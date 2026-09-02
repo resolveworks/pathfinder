@@ -55,30 +55,23 @@ import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
 
 /**
- * OpenAI Codex Responses streaming adapter, ported from pi's
- * openai-codex-responses.ts (SSE and WebSocket transports).
+ * OpenAI Codex Responses streaming adapter (SSE and WebSocket transports).
  *
- * Transport divergences from pi, by design (documented narrow Android/runtime
- * adaptations over Pathfinder's HTTP/SSE and WebSocket transports):
- * - pi supports runtimes without a WebSocket constructor (browsers, old
- *   Node): the WebSocket path throws "WebSocket transport is not available in
- *   this runtime" and the request falls back to the full-context SSE POST
- *   (openai-codex-responses.ts ~:1046-1048). That branch is deliberately not
- *   ported (owner decision): Android always provides an OkHttp WebSocket
- *   transport, so [webSocketTransport] is required. Real WebSocket
- *   connect/transport failures still fall back to SSE exactly like pi.
- * - pi's AssistantMessage diagnostics (`appendAssistantMessageDiagnostic` with
- *   `provider_transport_failure`) are not ported (AssistantMessage has no
- *   diagnostics field); the failure/retry behavior is preserved without the
- *   attached diagnostic.
- * - pi's `registerSessionResourceCleanup` (session-resources.ts, a Node
- *   session-lifecycle hook) has no counterpart; the public close/reset API
- *   ([closeOpenAICodexWebSocketSessions]) plus the pool's idle TTL and max
- *   connection age own cleanup.
- * - AbortSignal aborts map to coroutine cancellation (no ABORTED error event).
+ * Divergences from pi, by design:
+ * - The "no WebSocket constructor in this runtime" branch is not ported:
+ *   Android always provides a WebSocket transport, so [webSocketTransport]
+ *   is required. Real WebSocket connect/transport failures still fall back
+ *   to SSE exactly like pi.
+ * - AssistantMessage transport-failure diagnostics are not ported
+ *   (AssistantMessage has no diagnostics field); the failure/retry behavior
+ *   is preserved without the attached diagnostic.
+ * - pi's Node session-lifecycle cleanup hook has no counterpart; the public
+ *   close/reset API ([closeOpenAICodexWebSocketSessions]) plus the pool's
+ *   idle TTL and max connection age own cleanup.
+ * - AbortSignal aborts map to coroutine cancellation (no ABORTED error
+ *   event).
  */
 
-/** Options for the Codex adapter, pi's OpenAICodexResponsesOptions (SSE subset). */
 data class OpenAICodexResponsesOptions(
     val apiKey: String? = null,
     val sessionId: String? = null,
@@ -90,13 +83,10 @@ data class OpenAICodexResponsesOptions(
     val serviceTier: String? = null,
     val textVerbosity: String? = null,
     /**
-     * Divergence note (Sealed types/unions convention): pi types this as a
-     * string-literal union `"auto" | "none" | "required"`
-     * (openai-codex-responses.ts:77). The port keeps it a passthrough
-     * `String?` instead of an enum because the value originates as a
-     * Responses wire string (`mapResponsesToolChoice`, whose union carries
-     * non-constant `function` members upstream) and is re-serialized
-     * verbatim (buildRequestBody `tool_choice`).
+     * Divergence: pi types this as the string-literal union
+     * `"auto" | "none" | "required"`. Kept a passthrough `String?` because
+     * the value originates as a Responses wire string (the upstream union
+     * carries non-constant `function` members) and is re-serialized verbatim.
      */
     val toolChoice: String? = null,
     val cacheRetention: CacheRetention? = null,
@@ -106,33 +96,24 @@ data class OpenAICodexResponsesOptions(
     val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
     /**
-     * pi's onPayload request hook (ProviderRequestOptions, types.ts:145-149;
-     * openai-codex-responses.ts:270): replaces the request body object before
-     * serialization when it returns non-null. Receives full message content;
-     * installers must not log it. Never included in toString().
+     * Request hook: replaces the request body object before serialization
+     * when it returns non-null. Receives full message content; installers
+     * must not log it. Never included in toString().
      */
     val onPayload: (suspend (payload: JsonObject, model: Model) -> JsonObject?)? = null,
     /**
-     * pi's onResponse request hook (types.ts:184;
-     * openai-codex-responses.ts:406): invoked after each SSE attempt's
-     * response headers arrive — before the ok check, so also for non-2xx
-     * (and once per retry attempt). Never included in toString().
+     * Response hook: invoked after each attempt's response headers arrive —
+     * before the ok check, so also for non-2xx (and once per retry attempt).
+     * Never included in toString().
      */
     val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
-    /**
-     * pi's transport (types.ts:110; stream() ~:286): effective default
-     * [Transport.AUTO] — WebSocket-first with per-session SSE fallback.
-     */
+    /** Effective default [Transport.AUTO]: WebSocket-first with per-session SSE fallback. */
     val transport: Transport? = null,
-    /** pi's websocketConnectTimeoutMs (types.ts:216): WS handshake timeout. */
     val websocketConnectTimeoutMs: Long? = null,
     /**
-     * pi's ProviderRequestOptions.telemetryContext (types.ts:126-127),
-     * inherited via StreamOptions (OpenAICodexResponsesOptions extends
-     * StreamOptions, openai-codex-responses.ts:73): explicit parent context
-     * for telemetry produced by this logical request. Dormant in this port —
-     * carried for shape fidelity, preserved through the streamSimple
-     * conversion (buildBaseOptions). Presence boolean only in toString().
+     * Explicit parent context for telemetry produced by this logical
+     * request. Dormant in this port — carried for shape fidelity. Presence
+     * boolean only in toString().
      */
     val telemetryContext: TelemetryContext? = null,
 ) {
@@ -163,10 +144,9 @@ data class OpenAICodexResponsesOptions(
 }
 
 /**
- * pi's streamSimple options conversion for openai-codex-responses:
- * buildBaseOptions plus the clamped reasoning level and tool choice. Extracted
- * as a named function so the conversion (including telemetryContext identity)
- * is directly testable.
+ * The streamSimple options conversion (clamped reasoning level and tool
+ * choice), extracted as a named function so the conversion — including the
+ * telemetryContext identity — is directly testable.
  */
 internal fun buildOpenAICodexResponsesOptions(
     model: Model,
@@ -183,8 +163,7 @@ internal fun buildOpenAICodexResponsesOptions(
         options.maxTokens ?: model.maxTokens,
     ),
     reasoningEffort = reasoningEffort,
-    // Narrow simple-API choice widened to the Responses wire union
-    // (types.ts:82), pi's streamSimple pass-through.
+    // Simple-API choice widened to the Responses wire union.
     toolChoice = options.toolChoice?.toToolChoice()?.let(::mapResponsesToolChoice),
     cacheRetention = options.cacheRetention,
     timeoutMs = options.timeoutMs,
@@ -204,32 +183,28 @@ private const val JWT_CLAIM_PATH = "https://api.openai.com/auth"
 private const val BASE_DELAY_MS = 1000.0
 private const val DEFAULT_MAX_RETRY_DELAY_MS = 60_000L
 
-/** Pi's CodexApiError: a provider error with a stable code. */
+/** Provider error with a stable code. */
 internal class CodexApiException(
     message: String,
     val code: String? = null,
 ) : Exception(message)
 
 /**
- * Pi's CodexProtocolError: a protocol/parse failure (non-transport), e.g.
- * invalid WebSocket JSON. Pi attaches the offending payload; that field is
- * not consumed by the port's error formatting, so it is omitted here.
+ * Protocol/parse failure (non-transport), e.g. invalid WebSocket JSON.
+ * pi attaches the offending payload; omitted here — the port's error
+ * formatting never consumes it.
  */
 internal class CodexProtocolException(message: String) : Exception(message)
 
-/** Pi's isCodexNonTransportError (~:692). */
 internal fun isCodexNonTransportError(error: Throwable): Boolean =
     error is CodexApiException || error is CodexProtocolException
 
-/** Pi's isWebSocketConnectionLimitReachedError (~:696). */
 internal fun isWebSocketConnectionLimitReachedError(error: Throwable): Boolean =
     error is CodexApiException && error.code == "websocket_connection_limit_reached"
 
-/** Pi's isPreviousResponseNotFoundError (~:699). */
 internal fun isPreviousResponseNotFoundError(error: Throwable): Boolean =
     error is CodexApiException && error.code == "previous_response_not_found"
 
-/** Pi's isTerminalRateLimitError (openai-codex-responses.ts:114-118, /i). */
 internal fun isTerminalRateLimitError(errorText: String): Boolean =
     Regex(
         "GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|" +
@@ -237,7 +212,6 @@ internal fun isTerminalRateLimitError(errorText: String): Boolean =
         RegexOption.IGNORE_CASE,
     ).containsMatchIn(errorText)
 
-/** Pi's isRetryableError (openai-codex-responses.ts:122-130, /i). */
 internal fun isRetryableError(status: Int, errorText: String): Boolean {
     if (status == 429 && isTerminalRateLimitError(errorText)) return false
     if (status == 429 || status == 500 || status == 502 || status == 503 || status == 504) return true
@@ -245,14 +219,14 @@ internal fun isRetryableError(status: Int, errorText: String): Boolean {
         .containsMatchIn(errorText)
 }
 
-/** Pi's getRetryAfterDelayMs from response headers.
- *
- * Parsing stays codex-local rather than shared with [works.resolve.pathfinder.ai.utils.ProviderRetry]:
- * pi's two parsers are deliberately different (codex uses strict
- * whole-string `Number` parsing and clamps to >= 0;
- * provider-retry.ts uses `Number.parseFloat` without clamping), so they are
- * not verifiably identical and are not deduplicated. The delay-cap check
- * they feed into is shared (validateRetryDelayMs in ProviderRetry.kt). */
+/**
+ * Retry delay from the retry-after-ms / retry-after headers. Parsing stays
+ * codex-local rather than shared with ProviderRetry: the two parsers are
+ * deliberately different (this one uses strict whole-string number parsing
+ * and clamps to >= 0; ProviderRetry parses lenient floats without
+ * clamping), so they are not deduplicated. The delay-cap check they feed
+ * into is shared ([validateRetryDelayMs]).
+ */
 internal fun getRetryAfterDelayMs(
     retryAfterMs: String?,
     retryAfter: String?,
@@ -263,9 +237,9 @@ internal fun getRetryAfterDelayMs(
     }
     if (retryAfter == null) return null
     retryAfter.toDoubleOrNull()?.let { seconds -> return maxOf(0.0, seconds * 1000).toLong() }
-    // Pi's Date.parse accepts HTTP dates ("Wed, 21 Oct 2015 07:28:00 GMT" —
-    // the retry-after spec format) and ISO-8601. Try both (RFC 1123 first,
-    // as Instant.parse only accepts ISO-8601-with-Z).
+    // retry-after can be an HTTP date ("Wed, 21 Oct 2015 07:28:00 GMT" —
+    // the spec format) or ISO-8601; try both, RFC 1123 first (Instant.parse
+    // only accepts ISO-8601-with-Z).
     val date = works.resolve.pathfinder.ai.utils.parseHttpDateMsOrNull(retryAfter)
         ?: try {
             java.time.Instant.parse(retryAfter).toEpochMilli()
@@ -275,7 +249,6 @@ internal fun getRetryAfterDelayMs(
     return maxOf(0L, date - nowMs())
 }
 
-/** Pi's extractAccountId: chatgpt_account_id claim from the JWT API key. */
 internal fun extractAccountId(token: String): String {
     try {
         val parts = token.split(".")
@@ -284,8 +257,6 @@ internal fun extractAccountId(token: String): String {
             parts[1].replace('-', '+').replace('_', '/').padBase64(),
         ).decodeToString()
         val json = responsesJson.parseToJsonElement(payload)
-            // Element-shape dispatch: a JWT payload is a JSON object; anything
-            // else is an invalid token (pi's JSON.parse + property access).
             as? JsonObject ?: error("Invalid token")
         val accountId = json.obj(JWT_CLAIM_PATH)?.str("chatgpt_account_id")
         if (accountId.isNullOrEmpty()) error("No account ID in token")
@@ -300,7 +271,6 @@ private fun String.padBase64(): String {
     return if (remainder == 0) this else this + "=".repeat(4 - remainder)
 }
 
-/** Pi's resolveCodexUrl. */
 internal fun resolveCodexUrl(baseUrl: String?): String {
     val raw = if (!baseUrl.isNullOrBlank()) baseUrl else DEFAULT_CODEX_BASE_URL
     val normalized = raw.replace(Regex("/+$"), "")
@@ -309,7 +279,6 @@ internal fun resolveCodexUrl(baseUrl: String?): String {
     return "$normalized/codex/responses"
 }
 
-/** Pi's resolveCodexWebSocketUrl (~:641-647): https→wss, http→ws over the resolved Codex URL. */
 internal fun resolveCodexWebSocketUrl(baseUrl: String?): String {
     val url = resolveCodexUrl(baseUrl)
     return when {
@@ -319,7 +288,6 @@ internal fun resolveCodexWebSocketUrl(baseUrl: String?): String {
     }
 }
 
-/** Pi's resolveCodexServiceTier. */
 internal fun resolveCodexServiceTier(responseTier: String?, requestTier: String?): String? =
     if (responseTier == "default" && (requestTier == "flex" || requestTier == "priority")) {
         requestTier
@@ -332,11 +300,11 @@ private val CODEX_RESPONSE_STATUSES = setOf(
 )
 
 /**
- * Pi's mapCodexEvents for one event: throws [CodexApiException] for error /
- * response.failed events, normalizes `response.done` to `response.completed`
- * with a status whitelist and end_turn capture, and returns null for
- * non-terminal handling continuation. Returns the event to process plus
- * whether the event stream is finished (terminal normalization returns true).
+ * Normalizes one Codex event: throws [CodexApiException] for error /
+ * response.failed events; normalizes `response.done` to `response.completed`
+ * with a status whitelist and captures end_turn. Returns the event to
+ * process plus whether the event stream is finished, or null to continue
+ * with the next event.
  */
 internal fun mapCodexEvent(
     event: JsonObject,
@@ -365,8 +333,6 @@ internal fun mapCodexEvent(
 
     if (type == "response.done" || type == "response.completed" || type == "response.incomplete") {
         val response = event.obj("response")
-        // pi checks `typeof response.end_turn === "boolean"` — strict read
-        // (the old inline cast accepted "true"/"false" string primitives).
         response?.strictBoolean("end_turn")?.let(onEndTurn)
         val normalizedResponse = response?.let {
             buildJsonObject {
@@ -389,9 +355,11 @@ internal fun mapCodexEvent(
     return event to false
 }
 
-/** Pi's parseErrorResponse friendly usage-limit message. `raw || statusText || "Request failed"`
- * (openai-codex-responses.ts parseErrorResponse); the status line reason
- * phrase surfaces when the body is empty, as fetch's Response.statusText does. */
+/**
+ * Parses an error body into (message, friendly usage-limit text). The
+ * status-line reason phrase is the fallback message when the body is empty
+ * (as fetch's Response.statusText does).
+ */
 internal fun parseCodexErrorResponse(
     status: Int,
     body: String,
@@ -409,9 +377,6 @@ internal fun parseCodexErrorResponse(
                 .containsMatchIn(code) || status == 429
             if (usageLimit) {
                 val plan = err.str("plan_type")?.let { " (${it.lowercase()} plan)" } ?: ""
-                // pi types resets_at as a number (openai-codex-responses.ts
-                // parseErrorResponse); strict numeric read — string-encoded
-                // timestamps do not count.
                 val resetsAt = err.strictDouble("resets_at")
                 val whenText = resetsAt?.let {
                     val mins = maxOf(0, Math.round((it * 1000 - nowMs()) / 60000.0))
@@ -427,7 +392,6 @@ internal fun parseCodexErrorResponse(
     return message to friendly
 }
 
-/** Pi's buildBaseCodexHeaders (~:1631): model + additional headers, auth, originator, User-Agent. */
 internal fun buildBaseCodexHeaders(
     modelHeaders: Map<String, String>,
     optionsHeaders: Map<String, String?>,
@@ -436,18 +400,17 @@ internal fun buildBaseCodexHeaders(
 ): MutableMap<String, String?> {
     val headers = LinkedHashMap<String, String?>()
     headers.putAll(modelHeaders)
-    headers.putAll(optionsHeaders) // null values delete (pi's Headers.delete)
+    headers.putAll(optionsHeaders) // a null value deletes the header (Headers.delete semantics)
     headers["Authorization"] = "Bearer $token"
     headers["chatgpt-account-id"] = accountId
-    // pi sends `originator: "pi"` (its own client identity); Pathfinder
-    // identifies itself instead — deliberate, owner-approved divergence,
-    // consistent with the OAuth authorize URL's originator default.
+    // pi sends `originator: "pi"`; Pathfinder identifies itself instead —
+    // deliberate divergence, consistent with the OAuth authorize URL's
+    // originator default.
     headers["originator"] = "pathfinder"
     headers["User-Agent"] = getPiUserAgent()
     return headers
 }
 
-/** Pi's buildSSEHeaders (SSE transport). */
 internal fun buildCodexSSEHeaders(
     modelHeaders: Map<String, String>,
     optionsHeaders: Map<String, String?>,
@@ -467,17 +430,16 @@ internal fun buildCodexSSEHeaders(
 }
 
 /**
- * Pi's buildWebSocketHeaders (~:1637-1650): base codex headers minus
- * accept/content-type and any prior OpenAI-Beta (both spellings), plus the
- * responses-websockets beta and the request/session id headers.
+ * Base codex headers minus accept/content-type and any prior OpenAI-Beta
+ * (both spellings), plus the responses-websockets beta and the
+ * request/session id headers.
  *
- * Verified upstream quirk, ported as behavior: pi's `connectWebSocket`
- * "deletes" `OpenAI-Beta` from the handshake headers, but its
- * `headersToRecord` (utils/headers.ts) iterates fetch Headers entries whose
- * names are lowercase (WHATWG fetch spec), so the mixed-case delete is a
- * no-op and the beta header DOES reach the handshake. This port therefore
- * does not delete it — the headers built here are passed through verbatim to
- * [works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport.connect].
+ * Upstream quirk, ported as behavior: pi's `connectWebSocket` "deletes"
+ * `OpenAI-Beta` from the handshake headers, but its `headersToRecord`
+ * iterates fetch Headers entries whose names are lowercase (WHATWG fetch
+ * spec), so the mixed-case delete is a no-op and the beta header DOES reach
+ * the handshake. This port therefore does not delete it — the headers built
+ * here are passed to the transport verbatim.
  */
 internal fun buildCodexWebSocketHeaders(
     modelHeaders: Map<String, String>,
@@ -496,7 +458,6 @@ internal fun buildCodexWebSocketHeaders(
     return headers.filterValues { it != null }.mapValues { it.value!! }
 }
 
-/** Pi's buildRequestBody for Codex. */
 internal fun buildCodexRequestBody(
     model: Model,
     context: Context,
@@ -584,33 +545,27 @@ internal fun buildCodexRequestBody(
 }
 
 /**
- * The Codex SSE adapter. Runs pi's Codex-specific retry loop (terminal rate
- * limits are not retried; retry delays come from retry-after headers) and
- * processes the SSE event stream through the shared Responses state machine
- * with Codex event normalization and service-tier resolution.
+ * Codex-specific retry loop (terminal rate limits are not retried; retry
+ * delays come from retry-after headers). The event stream runs through the
+ * shared Responses state machine with Codex event normalization and
+ * service-tier resolution.
  */
 class OpenAICodexResponsesApi(
     private val transport: works.resolve.pathfinder.ai.transport.HttpStreamingTransport,
     private val clock: Clock = Clock.System,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
-    // Narrow seam over pi's compressRequestBodyZstd for tests (injects the
-    // compression-failure fallback). Blocking zstd JNI runs under
-    // [ioDispatcher] at the call site (SessionStore blocking-IO pattern).
+    // Test seam: injects the compression-failure fallback. Blocking zstd JNI
+    // runs under [ioDispatcher] at the call site.
     private val compressRequestBody: (String) -> ByteArray? = ::compressRequestBodyZstd,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    /** WebSocket seam (pi's WebSocket constructor); required on Android. */
+    /** WebSocket transport seam; required on Android. */
     private val webSocketTransport: WebSocketStreamingTransport,
-    /** Pooled WebSocket session state (pi's module-level websocketSessionCache). */
     private val webSocketSessions: OpenAICodexWebSocketSessions = OpenAICodexWebSocketSessions(clock),
 ) : ChatApi {
 
     private fun nowMs(): Long = clock.now().toEpochMilliseconds()
 
 
-    /**
-     * pi's streamSimple for openai-codex-responses: missing keys fail fast,
-     * then buildBaseOptions plus the clamped reasoning level and tool choice.
-     */
     override fun streamSimple(
         model: Model,
         context: Context,
@@ -652,7 +607,7 @@ class OpenAICodexResponsesApi(
         )
         var endTurn: Boolean? = null
 
-        /** pi's assertSuccessfulOutput + Done emission, shared by both transports. */
+        /** Shared by both transports. */
         suspend fun finishStream() {
             state.assertTerminalEvent()
             if (state.stopReason == StopReason.PENDING) {
@@ -679,13 +634,11 @@ class OpenAICodexResponsesApi(
             )
             val cacheSessionId = if (cacheRetention == CacheRetention.NONE) null else options.sessionId
             val codexSessionId = OpenAiResponsesShared.clampOpenAIPromptCacheKey(cacheSessionId)
-            // pi openai-codex-responses.ts:270: onPayload inspects/replaces
-            // the body object before serialization; null keeps the payload.
             var bodyObj = buildCodexRequestBody(model, context, options, codexSessionId, grammarToolInputProperties)
             options.onPayload?.let { hook -> hook(bodyObj, model)?.let { bodyObj = it } }
             val bodyJson = bodyObj.toString()
-            // pi stream() (~:274-286): both header sets are built up front so
-            // an SSE fallback after a WebSocket transport failure reuses them.
+            // Both header sets are built up front so an SSE fallback after a
+            // WebSocket transport failure reuses them.
             val websocketRequestId = codexSessionId ?: uuidv7()
             val headers = buildCodexSSEHeaders(model.headers, options.headers, accountId, apiKey, codexSessionId)
                 .toMutableMap()
@@ -752,22 +705,19 @@ class OpenAICodexResponsesApi(
                         }
                         if (isCodexNonTransportError(error) && !connectionLimitBeforeStart) throw error
                         // pi also appends a provider_transport_failure
-                        // AssistantMessage diagnostic here; diagnostics are not
-                        // ported (see the class KDoc divergence note).
+                        // diagnostic here; not ported (see class KDoc).
                         webSocketSessions.recordWebSocketFailure(cacheSessionId, error)
                         if (websocketStarted) throw error
                         // SSE becomes sticky for this session; fall through to
-                        // the SSE path with the already-built headers/body.
+                        // the SSE path.
                         webSocketSessions.recordSseFallback(cacheSessionId)
                         break
                     }
                 }
             }
 
-            // Compress the request body once for the SSE path
-            // (openai-codex-responses.ts:368-375): the Codex backend decodes
-            // Content-Encoding: zstd; the uncompressed JSON is sent unchanged
-            // when compression is unavailable.
+            // The Codex backend decodes Content-Encoding: zstd; the body goes
+            // uncompressed when compression is unavailable.
             val compressedBody = withContext(ioDispatcher) { compressRequestBody(bodyJson) }
             val body: ByteArray
             if (compressedBody != null) {
@@ -780,14 +730,10 @@ class OpenAICodexResponsesApi(
             val response = requestWithRetries(model, options, headers, body)
             emit(AssistantMessageEvent.Start(state.partialSnapshot()))
 
-            // Pi maps Codex SSE events incrementally and stops at the terminal
-            // event (response.done/completed/incomplete) even while the SSE
-            // body stays open (openai-codex-responses.ts mapCodexEvents returns
-            // after yielding the normalized terminal event). Mirror that by
-            // collecting the events flow incrementally and abandoning collection
-            // once the terminal event has been processed; the transport cancels
-            // the HTTP call when collection is abandoned (onCompletion {
-            // eventSource.cancel() }).
+            // pi stops at the terminal event (done/completed/incomplete) even
+            // while the SSE body stays open; mirror that by abandoning
+            // collection once the terminal event has been processed — the
+            // transport cancels the HTTP call when collection is abandoned.
             try {
                 response.events.collect { event ->
                     if (event.data.trim() == "[DONE]") return@collect
@@ -810,10 +756,9 @@ class OpenAICodexResponsesApi(
                     }
                 }
             } catch (_: TerminalEventReached) {
-                // Terminal event processed; stop consuming the SSE body.
             }
-            // If parseSSE consumed the whole body without a terminal event, the
-            // shared state machine reports it via assertTerminalEvent below.
+            // A body that ends without a terminal event is reported by
+            // assertTerminalEvent in finishStream.
             finishStream()
         } catch (error: Exception) {
             if (error is CancellationException) throw error
@@ -831,18 +776,10 @@ class OpenAICodexResponsesApi(
     }
 
     /**
-     * pi's parseWebSocket (~:1273-1378) adapted to the transport's events
-     * channel: pulls one parsed frame at a time. A terminal
-     * response.completed/done/incomplete frame is flagged; invalid JSON throws
-     * [CodexProtocolException] (pi's CodexProtocolError message; the payload
-     * attachment and AssistantMessage diagnostics are not ported); a
-     * close/failure before completion throws the transport-layer close/error
-     * message (pi's extract shapes); close after completion ends the stream
-     * cleanly; a channel that ends without a terminal frame throws
-     * "WebSocket stream closed before response.completed"; and while waiting
-     * for a frame, no event for [idleTimeoutMs] closes 1000/"idle_timeout"
-     * and throws (pi arms the idle timer only while waiting and resets it on
-     * every event).
+     * Pulls one parsed frame at a time. A terminal
+     * response.completed/done/incomplete frame is flagged (the stream then
+     * ends cleanly on close); when no frame arrives within [idleTimeoutMs]
+     * the connection is closed 1000/"idle_timeout" and the wait throws.
      */
     private class WebSocketFrameReader(
         private val connection: WebSocketConnection,
@@ -890,12 +827,10 @@ class OpenAICodexResponsesApi(
     }
 
     /**
-     * pi's processWebSocketStream (~:1455-1543): acquire a (pooled) socket,
-     * send `{type:"response.create", ...requestBody}` (type first), run the
-     * frames through the SAME shared responses event machine as SSE
-     * (mapCodexEvent/processSseEvent), then on success store the cached-context
-     * continuation; on any failure (including cancellation-as-abort) clear it
-     * and drop the connection.
+     * Acquires a (pooled) socket, sends
+     * `{type:"response.create", ...requestBody}` (type key first), runs the
+     * frames through the same shared Responses machine as SSE, and on success
+     * stores the cached-context continuation.
      */
     private suspend fun processWebSocketStream(
         url: String,
@@ -960,8 +895,8 @@ class OpenAICodexResponsesApi(
                     requestBody.forEach { (key, value) -> put(key, value) }
                 }.toString(),
             )
-            // pi's startWebSocketOutputOnFirstEvent: onStart fires exactly
-            // once, before the first mapped event is processed.
+            // onStart fires exactly once, before the first mapped event is
+            // processed.
             var startedOutput = false
             val reader = WebSocketFrameReader(connection, idleTimeoutMs)
             while (true) {
@@ -998,12 +933,10 @@ class OpenAICodexResponsesApi(
                 }
             }
         } catch (error: Throwable) {
-            // Throwable (not Exception): this is a cleanup-and-rethrow block
-            // mirroring pi's `catch (error)` around processWebSocketStream
-            // (~:1534) — the continuation must be invalidated and the pooled
-            // connection dropped even for Errors escaping OkHttp completion
-            // handlers. The error is rethrown unchanged, so cancellation
-            // passes through untouched (stream-error contract unaffected).
+            // Throwable (not Exception): cleanup-and-rethrow — the
+            // continuation must be invalidated and the pooled connection
+            // dropped even for Errors escaping OkHttp completion handlers.
+            // Rethrown unchanged, so cancellation passes through untouched.
             entry?.continuation = null
             keepConnection = false
             throw error
@@ -1012,7 +945,6 @@ class OpenAICodexResponsesApi(
         }
     }
 
-    /** Pi's SSE fetch retry loop (DEFAULT_MAX_RETRIES = 0). */
     private suspend fun requestWithRetries(
         model: Model,
         options: OpenAICodexResponsesOptions,
@@ -1033,8 +965,6 @@ class OpenAICodexResponsesApi(
                         timeoutMs = options.timeoutMs,
                     ),
                 )
-                // pi openai-codex-responses.ts:406: onResponse fires after each
-                // attempt's response headers arrive, before the ok check.
                 options.onResponse?.invoke(
                     ProviderResponse(response.status, headersToRecord(response.headers)),
                     model,
@@ -1043,15 +973,14 @@ class OpenAICodexResponsesApi(
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 if (error is ProviderHttpException) {
-                    // Non-2xx headers arrived: pi's onResponse still fired
-                    // before the ok check, so mirror it from the exception.
+                    // Non-2xx: onResponse fired before the ok check, so fire
+                    // it here too, from the exception.
                     options.onResponse?.invoke(
                         ProviderResponse(error.status, headersToRecord(error.headers)),
                         model,
                     )
                 }
-                // Terminal usage limits (pi's friendly "You have hit your
-                // ChatGPT usage limit" path) must surface their message and
+                // Terminal usage limits surface their friendly message and
                 // never retry.
                 val terminal: Exception = when (error) {
                     is ProviderHttpException -> {
@@ -1077,9 +1006,8 @@ class OpenAICodexResponsesApi(
                     }
                     else -> error
                 }
-                // pi's catch-path retry rule: network-style errors retry unless
-                // the server-requested delay was rejected or the message is a
-                // usage-limit failure.
+                // Network-style errors retry unless the server-requested delay
+                // was rejected or the message is a usage-limit failure.
                 lastError = terminal
                 val retryable = attempt < maxRetries &&
                     terminal !is RetryDelayExceededError &&
@@ -1093,11 +1021,9 @@ class OpenAICodexResponsesApi(
 }
 
 /**
- * Port of pi's codex catch block (openai-codex-responses.ts:483): the shared
- * `formatProviderError` with NO prefix — upstream codex composes the bare
- * `"<status>: <body>"` (or the message when no body). The separate
- * [parseCodexErrorResponse] usage-limit path elsewhere in this file is a
- * faithful port and unchanged.
+ * pi's codex catch block uses the shared `formatProviderError` with NO
+ * prefix — codex composes the bare `"<status>: <body>"` (or the message when
+ * no body).
  */
 internal fun formatCodexError(error: Exception): String = when (error) {
     is CodexApiException -> error.message ?: "Codex error"

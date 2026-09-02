@@ -10,9 +10,8 @@ as thin as possible.
   `~/Projects/pi` as closely as Kotlin and Android allow: preserve concepts,
   data shapes, event ordering, provider behavior, session semantics, and error
   handling rather than designing Pathfinder-specific equivalents.
-- Port selectively, but faithfully. Minimal scope means exposing a focused set
-  of pi capabilities, not creating simpler competing semantics. Add capability
-  by porting it from pi when possible.
+- Provider coverage is intentionally selective. Weigh expected use against
+  implementation and maintenance cost; full provider parity is not a goal.
 - Android is the source of truth for the application layer. Use current
   platform guidance, Jetpack Compose, Material 3, and stock Android components
   and interactions. Translate pi behavior into native Android UX; do not copy
@@ -41,10 +40,10 @@ main mappings are:
 - Android UI behavior may adapt useful interaction semantics from
   `packages/coding-agent`, while remaining native Android UI.
 
-Keep symbol-level provenance in KDoc and tests for ported logic. When Android or
-Kotlin requires a divergence, make the adaptation at the narrowest boundary,
-document the upstream behavior and reason for the divergence, and test it. Do
-not silently “improve” or reinterpret pi while porting it.
+When Android or Kotlin requires a divergence, make the adaptation at the
+narrowest boundary, document the upstream behavior and reason for the
+divergence, and test it. Do not silently “improve” or reinterpret pi while
+porting it.
 
 Follow current official Android documentation for platform APIs and UI
 patterns. Prefer documented current APIs over remembered ones.
@@ -58,8 +57,8 @@ defaults for everything pi does not dictate.
   names: `utils/error-body.ts` ports to `ai/utils/ErrorBody.kt` with
   `normalizeProviderError`; `overflow.ts` would port to `Overflow.kt` with
   `isContextOverflow`. Do not rename ported behavior to Kotlin-idiomatic
-  alternatives; obvious provenance beats local style preference. Non-exported
-  upstream symbols become `internal`/`private` per their module scope.
+  alternatives. Non-exported upstream symbols become `internal`/`private` per
+  their module scope.
 - Where pi does not dictate, use current idiomatic Kotlin and platform
   defaults: data classes, expression bodies, nullability, nullable function
   types instead of optional-method interfaces, kotlinx.coroutines patterns,
@@ -88,11 +87,8 @@ under that root.
   graph direct; add a DI framework only if the graph's complexity clearly
   justifies its maintenance cost.
 
-The model catalog asset is generated from pi and must never be hand-edited.
-Provider and native-runtime scope decisions, including deliberate exclusions,
-are recorded in `app/src/main/kotlin/works/resolve/pathfinder/ai/AGENTS.md`;
-read it before changing provider coverage, authentication, runtime dependencies,
-or catalog generation.
+The model catalog asset is generated from pi, includes only providers supported
+end to end, and must never be hand-edited.
 
 ## Security
 

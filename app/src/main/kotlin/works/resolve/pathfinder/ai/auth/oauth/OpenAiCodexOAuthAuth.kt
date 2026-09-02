@@ -23,82 +23,51 @@ import kotlin.time.Clock
 import works.resolve.pathfinder.ai.utils.strictDouble
 
 /**
- * OpenAI Codex (ChatGPT OAuth) flow, ported from pi
- * `packages/ai/src/auth/oauth/openai-codex.ts`.
- *
- * Mirrors the upstream file symbol-for-symbol: the login-method [AuthPrompt.Select]
- * (`browser` / `device_code`, pi `loginOpenAICodex`), PKCE browser flow
- * (`createAuthorizationFlow`), RFC 8628 device flow (`startOpenAICodexDeviceAuth`,
- * `pollOpenAICodexDeviceAuth` via the shared [pollOAuthDeviceCodeFlow]), strict
- * token validation (`readTokenResponse`), JWT account metadata (`decodeJwt`,
- * `getAccountId`, `credentialsFromToken`), refresh (`refreshAccessToken`), and
- * `toAuth` (`{ apiKey: credential.access }`). The provider metadata matches pi
- * `providers/openai-codex.ts`: `name "OpenAI (ChatGPT Plus/Pro)"`,
- * `isSubscription: true`, no `loginLabel`.
- *
- * Divergences from pi (documented per AGENTS.md, each as narrow as possible):
- * - **Loopback callback race (ported).** Pi's `startLocalOAuthServer` binds
- *   a Node `http.Server` on `127.0.0.1:1455`; this port runs the same race on
- *   [LoopbackOAuthServer] (fixed port [CALLBACK_PORT] on [CALLBACK_HOST]; pi's
- *   `getCallbackHost()` env override does not exist on Android, so the host is
- *   a constant). The browser flow notifies [AuthEvent.AuthUrl], then races
- *   the server's callback ([LoopbackCallbackHandle.waitForResult]) against a
- *   manual [AuthPrompt.ManualCode] with pi's message and placeholder: the
- *   manual prompt's completion (answer or failure) calls `cancelWait()`, a
- *   server result with a code wins outright, and manual input goes through
- *   [parseAuthorizationInput] + state check + exchange exactly like pi's
- *   manual path. When the server wins, the manual-prompt child coroutine is
- *   cancelled — pi simply abandons the pending promise; here the prompt
- *   coroutine's cancellation is what clears the UI sheet
- *   (`UiAuthInteraction.prompt` clears pending state in `finally`). Bind
- *   failure (port taken) degrades to exactly today's manual-only flow (pi's
- *   `server.on("error")` path resolves a handle whose wait is already null).
- *   Caveat: if Android kills the app process while the browser is
- *   foregrounded, the login dies; retryable — same risk class as pi's
- *   abortable login.
- * - **originator default.** pi's `createAuthorizationFlow` defaults
- *   `originator` to `"pi"`; the authorize request presents as whatever the
- *   originator says (`codex_cli_rs` for the codex CLI, `opencode` for
- *   OpenCode), so this port defaults to [ORIGINATOR] = `"pathfinder"` to
- *   avoid misattributing Pathfinder's traffic to pi. Deliberate,
- *   owner-approved divergence; the parameter is kept as in pi.
+ * Divergences from pi:
+ * - **Loopback callback race.** The browser flow races the loopback callback
+ *   server against a manual [AuthPrompt.ManualCode]: a server result with a
+ *   code wins outright, manual input goes through [parseAuthorizationInput],
+ *   the state check, and the exchange, and when the server wins the
+ *   manual-prompt coroutine is cancelled — pi abandons the pending promise,
+ *   while here that cancellation is what clears the UI sheet
+ *   (`UiAuthInteraction.prompt` clears pending state in `finally`). A bind
+ *   failure degrades to the manual-only flow. If Android kills the app
+ *   process while the browser is foregrounded, the login dies and must be
+ *   retried.
+ * - **originator default.** The authorize request presents as whatever
+ *   originator it names, so pi's `"pi"` default would misattribute
+ *   Pathfinder's traffic; this port defaults to [ORIGINATOR] (`"pathfinder"`).
+ *   Deliberate divergence; the parameter is otherwise kept as in pi.
  * - **HTTP boundary.** Pi `fetch`es with an `AbortSignal`; all HTTP goes
  *   through the injected [OAuthHttpClient] with a bounded request timeout,
- *   and cancellation travels as coroutine cancellation (pi's
- *   `fetchWithLoginCancellation` abort→"Login cancelled" mapping).
+ *   and cancellation travels as coroutine cancellation.
  * - **Redacted error bodies.** Pi interpolates raw response bodies into
- *   several error messages (`device code request failed`, `Invalid OpenAI
- *   Codex device code response`, `Invalid OpenAI Codex device auth token
- *   response`, `device auth failed`, token `failed`/`missing fields`). A
- *   server response can echo back the very secrets the request carried
- *   (authorization code, code verifier, device auth id, tokens, JWT, account
- *   id), so this port never interpolates a raw body: it keeps only the
+ *   several error messages; a server response can echo back the very secrets
+ *   the request carried (authorization code, code verifier, device auth id,
+ *   tokens), so this port never interpolates a raw body: it keeps only the
  *   structured `error` / `error.code` / `error.message` /
  *   `error_description` strings (scrubbed of any in-flight secret value) as
  *   `error=<detail>`, writes `<redacted>` when none parse, and reports
  *   invalid JSON shapes as missing field names only. Everything else in the
  *   messages (statuses, wording, ordering) is verbatim.
  * - **No status line fallback.** `OAuthHttpResponse` has no `statusText`, so
- *   failed token responses append nothing when the body is empty (pi:
- *   `text || response.statusText`).
+ *   failed token responses append nothing when the body is empty.
  * - **JWT base64 tolerance.** Pi decodes with `atob` (standard base64); this
  *   port also accepts unpadded base64url, since real ChatGPT access tokens
  *   are RFC 7515 base64url JWTs — strictly more permissive, never less.
- * - **Seams.** `Date.now()` reads through [clock], state generation through
- *   [createState] (pi `createState`: 16 random bytes, hex), and PKCE through
- *   [pkce] — all for deterministic tests; production uses defaults.
+ * - **Test seams.** `Date.now()` reads through [clock], state generation
+ *   through [createState], and PKCE through [pkce] — all for deterministic
+ *   tests; production uses defaults.
  *
- * Nothing secret is ever logged or echoed in exception messages: even the
- * structured server error text that survives is scrubbed of every in-flight
- * secret value, and the internal result shapes redact their secret fields
- * in `toString`.
+ * Nothing secret is ever logged or echoed in exception messages, and the
+ * internal result shapes redact their secret fields in `toString`.
  */
 class OpenAiCodexOAuthAuth(
     private val http: OAuthHttpClient,
     private val clock: Clock = Clock.System,
     private val createState: () -> String = { defaultCreateState() },
     private val pkce: PkceGenerator = PkceGenerator(),
-    /** pi hardcodes port 1455; injectable so tests never race the fixed port. */
+    /** Injectable so tests never race the fixed port. */
     private val callbackPort: Int = CALLBACK_PORT,
     /** Android foreground gate for the loopback wait; `null` = pi parity. */
     private val gate: OAuthForegroundGate? = null,
@@ -106,22 +75,18 @@ class OpenAiCodexOAuthAuth(
 
     override val name: String = "OpenAI (ChatGPT Plus/Pro)"
 
-    /** pi `isSubscription: true`. */
     override val isSubscription: Boolean = true
 
     /**
-     * The port the loopback callback server actually bound (pi's listen
-     * callback), or null after a bind failure. Test seam for driving the
-     * callback against an ephemeral port; production always binds
-     * [CALLBACK_PORT].
+     * Port the loopback callback server actually bound, or null after a bind
+     * failure; test seam for driving the callback on an ephemeral port.
      */
     internal var lastCallbackPort: Int? = null
         private set
 
-    /** Pi's provider definition passes no `loginLabel`, so the default null stands. */
     override val loginLabel: String? = null
 
-    // --- login (pi `openaiCodexOAuth.login`) ---
+    // --- login ---
 
     override suspend fun login(interaction: AuthInteraction): OAuthCredential {
         val method = interaction.prompt(
@@ -144,15 +109,13 @@ class OpenAiCodexOAuthAuth(
     override suspend fun refresh(credential: OAuthCredential): OAuthCredential =
         credentialsFromToken(refreshAccessToken(credential.refresh))
 
-    /** Port of pi `toAuth`: `{ apiKey: credential.access }`. */
     override suspend fun toAuth(credential: OAuthCredential): ModelAuth = ModelAuth(apiKey = credential.access)
 
-    // --- browser login (pi `loginOpenAICodex` + `createAuthorizationFlow`) ---
+    // --- browser login ---
 
     /**
-     * Port of pi `createAuthorizationFlow`: PKCE pair + state + the exact
-     * authorize-URL parameter set (order preserved as upstream insertion
-     * order; spaces encode as `+` like `URLSearchParams.toString()`).
+     * The authorize-URL parameter set encodes like `URLSearchParams`:
+     * insertion order preserved, spaces as `+`.
      */
     internal fun createAuthorizationFlow(originator: String = ORIGINATOR): AuthorizationFlow {
         val pair = pkce.generate()
@@ -175,24 +138,12 @@ class OpenAiCodexOAuthAuth(
         return AuthorizationFlow(verifier = pair.verifier, state = state, url = url)
     }
 
-    /**
-     * Port of pi `createAuthorizationFlow`'s result shape. The verifier is
-     * redacted in `toString` (it must never reach logs or error surfaces).
-     */
     internal data class AuthorizationFlow(val verifier: String, val state: String, val url: String) {
         override fun toString(): String =
             "AuthorizationFlow(verifier=<redacted>, state=$state, url=$url)"
     }
 
-    /**
-     * Port of pi `loginOpenAICodex` (browser branch): start the loopback
-     * callback server ([startLocalOAuthServer]), notify [AuthEvent.AuthUrl],
-     * and race the server's result against a manual [AuthPrompt.ManualCode].
-     * The manual prompt's completion calls `cancelWait()`; a server code wins
-     * outright; manual input goes through [parseAuthorizationInput] with pi's
-     * state check; the server closes in `finally` and the manual-prompt
-     * coroutine is cancelled when the server wins (see class KDoc).
-     */
+    /** Races the loopback callback against a manual [AuthPrompt.ManualCode] (see class KDoc). */
     private suspend fun loginOpenAICodex(interaction: AuthInteraction): OAuthCredential {
         val flow = createAuthorizationFlow()
         val handle = startLocalOAuthServer(flow.state)
@@ -204,8 +155,6 @@ class OpenAiCodexOAuthAuth(
                 ),
             )
             return coroutineScope {
-                // Pi captures `manualCode`/`manualError` in the prompt
-                // promise's callbacks; here the child coroutine's completions.
                 var manualCode: String? = null
                 var manualError: Throwable? = null
                 val manualJob = launch {
@@ -221,30 +170,27 @@ class OpenAiCodexOAuthAuth(
                     } catch (error: Throwable) {
                         manualError = error
                     }
-                    // pi's manual promise calls cancelWait in both then/catch.
                     handle?.cancelWait()
                 }
                 try {
-                    // A bind failure makes this null immediately (pi's error
-                    // handle resolves waitForCode to null), leaving the manual
-                    // path as the only one — exactly the manual-only flow.
+                    // A bind failure makes this null, leaving the manual
+                    // prompt as the only path.
                     val result = handle?.waitForResult()
                     manualError?.let { throw it }
                     var code = result?.code
                         ?: manualCode?.let { manual ->
                             val parsed = parseAuthorizationInput(manual)
-                            // pi: `if (parsed.state && parsed.state !== state)`
-                            // — an empty state is absent for this check, while
-                            // any non-empty state must match.
+                            // An empty state counts as absent; any non-empty
+                            // state must match (JS truthiness).
                             if (!parsed.state.isNullOrEmpty() && parsed.state != flow.state) {
                                 throw IllegalStateException("State mismatch")
                             }
-                            // pi's `if (!code)` treats an empty string as absent.
+                            // An empty code counts as absent.
                             parsed.code?.takeIf { it.isNotEmpty() }
                         }
                     if (code == null) {
-                        // pi: `await manualPromise` before giving up — the
-                        // prompt may not have produced its answer yet.
+                        // The prompt may not have answered yet; wait before
+                        // giving up.
                         manualJob.join()
                         manualError?.let { throw it }
                         code = manualCode?.let { manual ->
@@ -255,12 +201,11 @@ class OpenAiCodexOAuthAuth(
                             parsed.code?.takeIf { it.isNotEmpty() }
                         }
                     }
-                    // pi: `if (!code) throw` — rejects a missing or empty code.
                     code ?: throw IllegalStateException("Missing authorization code")
                     exchangeAuthorizationCodeForCredentials(code, flow.verifier, REDIRECT_URI)
                 } finally {
-                    // pi aborts the manual prompt in its `finally`; when the
-                    // server wins this cancellation clears the UI sheet.
+                    // When the server wins, cancelling the manual prompt is
+                    // what clears the UI sheet.
                     manualJob.cancel()
                 }
             }
@@ -269,16 +214,7 @@ class OpenAiCodexOAuthAuth(
         }
     }
 
-    /**
-     * Port of pi `startLocalOAuthServer`: fixed [CALLBACK_PORT] on
-     * [CALLBACK_HOST] (pi `listen(1455, getCallbackHost())`; the env override
-     * does not exist on Android, so the host is the constant `127.0.0.1`).
-     * Handler mirrors pi's request handler exactly: `/auth/callback` or 404,
-     * state first then code, pi's HTML pages. Pi's in-handler `catch` 500 is
-     * covered by the shared server's uniform 500 (same HTML text); this
-     * handler cannot realistically throw since the transport pre-parses the
-     * URL. Bind failure returns null (pi's `server.on("error")` handle).
-     */
+    /** Bind failure returns null, degrading to the manual-only flow. */
     private suspend fun startLocalOAuthServer(state: String): LoopbackCallbackHandle<CallbackCode>? {
         val server = LoopbackOAuthServer(
             port = callbackPort,
@@ -308,22 +244,17 @@ class OpenAiCodexOAuthAuth(
         return handle
     }
 
-    /** pi `waitForCode`'s `{ code: string }`; the code is redacted in `toString`. */
     internal data class CallbackCode(val code: String) {
         override fun toString(): String = "CallbackCode(code=<redacted>)"
     }
 
     /**
-     * Port of pi `parseAuthorizationInput`. Accepts a URL (query params), a
-     * `code#state` fragment pair, a `code=`-style query string, or a bare
-     * code. Android uses [java.net.URI] to recognize an absolute pasted
-     * redirect URL; non-URLs fall through to the fragment/query/bare-code
-     * branches.
+     * Accepts a pasted redirect URL, a `code#state` fragment, a `code=`-style
+     * query string, or a bare code.
      *
-     * The `#` branch mirrors JS `value.split("#", 2)`, which keeps only the
-     * first two segments: `code#state#ignored` yields `state`, not
-     * `state#ignored` (Kotlin's `split(limit = 2)` would keep the whole
-     * remainder, so the port splits without a limit and takes `[0]`/`[1]`).
+     * The `#` branch mirrors JS `value.split("#", 2)`, keeping only the first
+     * two segments: `code#state#ignored` yields `state`, not `state#ignored`
+     * (Kotlin's `split(limit = 2)` would keep the whole remainder).
      */
     internal fun parseAuthorizationInput(input: String): AuthorizationInput {
         val value = input.trim()
@@ -356,13 +287,9 @@ class OpenAiCodexOAuthAuth(
         return AuthorizationInput(code = value, state = null)
     }
 
-    /** Port of pi `parseAuthorizationInput`'s result shape. */
     internal data class AuthorizationInput(val code: String?, val state: String?)
 
-    /**
-     * Reads the first matching form-encoded query parameter, matching the
-     * `URLSearchParams.get` behavior used by pi for valid OAuth redirects.
-     */
+    /** First matching form-encoded query parameter (`URLSearchParams.get` parity). */
     private fun queryParam(rawQuery: String?, name: String): String? {
         if (rawQuery == null) return null
         for (pair in rawQuery.split('&')) {
@@ -376,11 +303,10 @@ class OpenAiCodexOAuthAuth(
         return null
     }
 
-    /** Standard UTF-8 application/x-www-form-urlencoded component decoding. */
     private fun formUrlDecode(raw: String): String =
         java.net.URLDecoder.decode(raw, Charsets.UTF_8.name())
 
-    // --- device-code login (pi `loginOpenAICodexDeviceCode`) ---
+    // --- device-code login ---
 
     private suspend fun loginOpenAICodexDeviceCode(interaction: AuthInteraction): OAuthCredential {
         val device = startOpenAICodexDeviceAuth()
@@ -400,7 +326,6 @@ class OpenAiCodexOAuthAuth(
         )
     }
 
-    /** Port of pi `DeviceAuthInfo`; the device auth id is redacted in `toString`. */
     internal data class DeviceAuthInfo(
         val deviceAuthId: String,
         val userCode: String,
@@ -410,16 +335,6 @@ class OpenAiCodexOAuthAuth(
             "DeviceAuthInfo(deviceAuthId=<redacted>, userCode=$userCode, intervalSeconds=$intervalSeconds)"
     }
 
-    /**
-     * Port of pi `startOpenAICodexDeviceAuth`: POSTs `{client_id}` as JSON,
-     * maps 404 to pi's "not enabled" message, other failures to the
-     * status message with a sanitized body (see class KDoc), and validates
-     * `device_auth_id`, `user_code`, and `interval` — string intervals go
-     * through JS `Number(trimmed)` coercion via [jsNumber] (so
-     * `" 0x10 "` is 16 and whitespace-only is 0), numbers must be finite
-     * and non-negative. Invalid shapes fail with the missing field names
-     * instead of pi's raw `JSON.stringify(json)` body.
-     */
     internal suspend fun startOpenAICodexDeviceAuth(): DeviceAuthInfo {
         val response = postJson(
             DEVICE_USER_CODE_URL,
@@ -507,22 +422,11 @@ class OpenAiCodexOAuthAuth(
 
     private val DecimalLiteral = Regex("^([+-]?)((\\d+(\\.\\d*)?)|\\.\\d+)([eE][+-]?\\d+)?$")
 
-    /**
-     * Port of pi `DeviceTokenSuccess`; both fields are secrets and are
-     * redacted in `toString`.
-     */
     internal data class DeviceTokenSuccess(val authorizationCode: String, val codeVerifier: String) {
         override fun toString(): String =
             "DeviceTokenSuccess(authorizationCode=<redacted>, codeVerifier=<redacted>)"
     }
 
-    /**
-     * Port of pi `pollOpenAICodexDeviceAuth`: RFC 8628 polling through the
-     * shared [pollOAuthDeviceCodeFlow] with pi's 15-minute expiry. 403/404
-     * poll responses are pending; `deviceauth_authorization_pending` and
-     * `slow_down` error codes (string or `{code}` object) map to the poller's
-     * Pending/SlowDown; anything else fails with pi's status+body message.
-     */
     private suspend fun pollOpenAICodexDeviceAuth(device: DeviceAuthInfo): DeviceTokenSuccess =
         pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(
@@ -543,9 +447,8 @@ class OpenAiCodexOAuthAuth(
                         val authorizationCode = json?.truthyString("authorization_code")
                         val codeVerifier = json?.truthyString("code_verifier")
                         if (authorizationCode == null || codeVerifier == null) {
-                            // pi echoes the raw body, which can carry the
-                            // authorization code / code verifier; report the
-                            // missing field names only (see class KDoc).
+                            // The raw body can echo the code/verifier; report
+                            // missing field names only.
                             OAuthDeviceCodePollResult.Failed(
                                 "Invalid OpenAI Codex device auth token response: missing fields: " +
                                     listOfNotNull(
@@ -578,7 +481,6 @@ class OpenAiCodexOAuthAuth(
             clock = clock,
         )
 
-    /** Pi's inline error-code extraction: `error` as string or `{code}` object. */
     private fun errorCode(body: String): String? {
         val error = (parseJson(body) as? JsonObject)?.get("error") ?: return null
         return when (error) {
@@ -588,7 +490,7 @@ class OpenAiCodexOAuthAuth(
         }
     }
 
-    // --- token exchange / refresh (pi `exchangeAuthorizationCode`, `refreshAccessToken`) ---
+    // --- token exchange / refresh ---
 
     private suspend fun exchangeAuthorizationCode(
         code: String,
@@ -608,11 +510,6 @@ class OpenAiCodexOAuthAuth(
         return readTokenResponse(response, TokenOperation.EXCHANGE, secrets = listOf(code, verifier))
     }
 
-    /**
-     * Port of pi `refreshAccessToken`: network failures wrap in
-     * `OpenAI Codex token refresh error: <message>`; caller cancellation
-     * propagates unwrapped.
-     */
     private suspend fun refreshAccessToken(refreshToken: String): OAuthToken {
         val response: OAuthHttpResponse
         try {
@@ -632,21 +529,16 @@ class OpenAiCodexOAuthAuth(
         return readTokenResponse(response, TokenOperation.REFRESH, secrets = listOf(refreshToken))
     }
 
-    /** Port of pi `OAuthToken`; token values are redacted in `toString`. */
     internal data class OAuthToken(val access: String, val refresh: String, val expires: Long) {
         override fun toString(): String =
             "OAuthToken(access=<redacted>, refresh=<redacted>, expires=$expires)"
     }
 
     /**
-     * Port of pi `readTokenResponse`. Non-2xx fails with pi's status message
-     * plus a sanitized body (see class KDoc; no status-line fallback);
-     * [secrets] covers the in-flight values a hostile body could echo. A 2xx
-     * body must be a JSON object carrying non-empty `access_token` and
-     * `refresh_token` strings and a numeric `expires_in`, else the
-     * missing-fields error (field names only — redacted divergence). Expiry
-     * is `now + expires_in * 1000` with no skew (pi's five-minute refresh
-     * skew lives in the shared resolver, not this flow).
+     * [secrets] are the in-flight values a hostile response body could echo
+     * into the error message (see class KDoc). Expiry is `now + expires_in`
+     * with no skew: pi's five-minute refresh skew lives in the shared
+     * resolver, not this flow.
      */
     internal fun readTokenResponse(
         response: OAuthHttpResponse,
@@ -686,20 +578,13 @@ class OpenAiCodexOAuthAuth(
         )
     }
 
-    /** Port of pi `TokenOperation`. */
     internal enum class TokenOperation(internal val id: String) {
         EXCHANGE("exchange"),
         REFRESH("refresh"),
     }
 
-    // --- credentials (pi `decodeJwt`, `getAccountId`, `credentialsFromToken`) ---
+    // --- credentials ---
 
-    /**
-     * Port of pi `decodeJwt`: splits on `.` (exactly three parts), decodes
-     * the payload segment, parses it as JSON. Returns null on any failure —
-     * no exception, no partial payload. Accepts unpadded standard and
-     * base64url alphabets (see class KDoc divergence note).
-     */
     internal fun decodeJwt(token: String): JsonObject? {
         return try {
             val parts = token.split(".")
@@ -715,20 +600,11 @@ class OpenAiCodexOAuthAuth(
         }
     }
 
-    /**
-     * Port of pi `getAccountId`: the `chatgpt_account_id` claim under
-     * `https://api.openai.com/auth`, or null when absent/empty.
-     */
     internal fun getAccountId(accessToken: String): String? =
         decodeJwt(accessToken)
             ?.obj(JWT_CLAIM_PATH)
             ?.truthyString("chatgpt_account_id")
 
-    /**
-     * Port of pi `credentialsFromToken`: extracts the account id from the
-     * access-token JWT (failing with pi's message when it cannot) and stores
-     * it as the `accountId` extra alongside the canonical OAuth fields.
-     */
     private fun credentialsFromToken(token: OAuthToken): OAuthCredential {
         val accountId =
             getAccountId(token.access)
@@ -750,7 +626,7 @@ class OpenAiCodexOAuthAuth(
         redirectUri: String,
     ): OAuthCredential = credentialsFromToken(exchangeAuthorizationCode(code, verifier, redirectUri))
 
-    // --- HTTP (pi `fetch` with JSON/form bodies) ---
+    // --- HTTP ---
 
     private suspend fun postForm(url: String, fields: Map<String, String>): OAuthHttpResponse =
         http.execute(
@@ -782,10 +658,8 @@ class OpenAiCodexOAuthAuth(
         }
 
     /**
-     * Appends a sanitized `: error=<detail>` suffix for a non-empty body (see
-     * class KDoc): only structured `error` / `error.code` / `error.message` /
-     * `error_description` strings survive, scrubbed of any [secrets]; an
-     * unparseable or detail-free body yields `<redacted>`.
+     * Appends a sanitized `: error=<detail>` suffix (see class KDoc for what
+     * survives), scrubbed of any [secrets]; `<redacted>` when nothing does.
      */
     private fun withErrorBody(message: String, body: String, secrets: List<String> = emptyList()): String {
         if (body.isEmpty()) return message
@@ -808,69 +682,51 @@ class OpenAiCodexOAuthAuth(
         return "$message: error=" + scrub(parts.joinToString(": "), secrets)
     }
 
-    /** Replaces every occurrence of an in-flight secret with `<redacted>`. */
     private fun scrub(text: String, secrets: List<String>): String =
         secrets.filter { it.isNotEmpty() }.fold(text) { acc, secret -> acc.replace(secret, "<redacted>") }
 
     companion object {
-        /** pi `CLIENT_ID`. */
         const val CLIENT_ID: String = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-        /** pi `AUTH_BASE_URL` and the URLs derived from it. */
         const val AUTH_BASE_URL: String = "https://auth.openai.com"
 
-        /** pi `AUTHORIZE_URL` path. */
         const val AUTHORIZE_PATH: String = "/oauth/authorize"
 
-        /** pi `TOKEN_URL`. */
         const val TOKEN_URL: String = "$AUTH_BASE_URL/oauth/token"
 
-        /** pi `REDIRECT_URI` (the loopback callback address, kept for the exchange and prompt placeholder). */
         const val REDIRECT_URI: String = "http://localhost:1455/auth/callback"
 
-        /** pi `DEVICE_USER_CODE_URL`. */
         const val DEVICE_USER_CODE_URL: String = "$AUTH_BASE_URL/api/accounts/deviceauth/usercode"
 
-        /** pi `DEVICE_TOKEN_URL`. */
         const val DEVICE_TOKEN_URL: String = "$AUTH_BASE_URL/api/accounts/deviceauth/token"
 
-        /** pi `DEVICE_VERIFICATION_URI`. */
         const val DEVICE_VERIFICATION_URI: String = "$AUTH_BASE_URL/codex/device"
 
-        /** pi `DEVICE_REDIRECT_URI`. */
         const val DEVICE_REDIRECT_URI: String = "$AUTH_BASE_URL/deviceauth/callback"
 
-        /** pi `DEVICE_CODE_TIMEOUT_SECONDS` (15 minutes). */
         const val DEVICE_CODE_TIMEOUT_SECONDS: Long = 15 * 60
 
-        /** pi `OPENAI_CODEX_BROWSER_LOGIN_METHOD`. */
         const val BROWSER_LOGIN_METHOD: String = "browser"
 
-        /** pi `OPENAI_CODEX_DEVICE_CODE_LOGIN_METHOD`. */
         const val DEVICE_CODE_LOGIN_METHOD: String = "device_code"
 
-        /** pi `SCOPE`. */
         const val SCOPE: String = "openid profile email offline_access"
 
-        /** pi `JWT_CLAIM_PATH`. */
         const val JWT_CLAIM_PATH: String = "https://api.openai.com/auth"
 
-        /** pi `originator: "pi"` default; deliberately `"pathfinder"` here (see class KDoc). */
+        /** Deliberate divergence from pi's `"pi"` default (see class KDoc). */
         const val ORIGINATOR: String = "pathfinder"
 
-        /** pi's fixed loopback listen port (`listen(1455, ...)`). */
         const val CALLBACK_PORT: Int = 1455
 
-        /** pi `getCallbackHost()` default; no env override exists on Android. */
+        /** Fixed loopback host; pi's `getCallbackHost()` env override doesn't exist on Android. */
         const val CALLBACK_HOST: String = "127.0.0.1"
 
-        /** pi's callback route check (`url.pathname !== "/auth/callback"`). */
         const val CALLBACK_PATH: String = "/auth/callback"
 
-        /** Bounded connect+read timeout for every OAuth exchange (pi relies on fetch; Pathfinder bounds it). */
+        /** Bounded timeout for every OAuth request; pi relies on fetch defaults. */
         const val REQUEST_TIMEOUT_MS: Int = 30_000
 
-        /** Port of pi `createState`: 16 random bytes as hex. */
         private fun defaultCreateState(): String {
             val bytes = ByteArray(16)
             java.security.SecureRandom().nextBytes(bytes)

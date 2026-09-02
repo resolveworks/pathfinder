@@ -25,20 +25,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * AgentSession.setThinkingLevel tests, ported from pi's
- * test/suite/agent-session-model-extension.test.ts ("clamps thinking levels
- * to model capabilities", "only persists ... when requested", level-cycling
- * order) and the sdk.ts session-load fold: clamping to the model's supported
- * levels, the thinking_level_change tree entry with pi's branch ordering
- * (appended only when the level actually changes), init seeding from the
- * branch fold, and the per-run request `reasoning` snapshot
- * (pi agent.ts:450 createLoopConfig).
- *
- * Exclusions (documented on [AgentSession.setThinkingLevel]): pi's
- * per-model thinking overrides, cycleThinkingLevel, and `persist` (the app
- * layer owns settings).
- */
 class AgentSessionThinkingTest {
 
     private val reasoningModel = Model(
@@ -100,11 +86,6 @@ class AgentSessionThinkingTest {
         models = Models(listOf(provider(model))),
     )
 
-    /**
-     * pi "clamps thinking levels to model capabilities": a non-reasoning
-     * model's only level is off, so any request clamps there — and since the
-     * clamped level equals the current one, no entry is appended.
-     */
     @Test
     fun `setThinkingLevel clamps to a non-reasoning model's off`() = runTest {
         val s = session(plainModel)
@@ -115,11 +96,6 @@ class AgentSessionThinkingTest {
         assertEquals("no thinking_level_change when the clamped level is unchanged", 0, s.conversation.entries.size)
     }
 
-    /**
-     * pi agent-session.ts:1797-1810: the agent state is assigned the clamped
-     * level unconditionally, but the thinking_level_change entry lands only
-     * when the level actually changes.
-     */
     @Test
     fun `setThinkingLevel appends thinking_level_change only when the level changes`() = runTest {
         val s = session(reasoningModel)
@@ -141,12 +117,7 @@ class AgentSessionThinkingTest {
         assertEquals(second.id, s.conversation.leafId)
     }
 
-    /**
-     * pi setThinkingLevel's clamp (agent-session.ts:1795): unavailable levels
-     * clamp via clampThinkingLevel — round up first, then down. The extended
-     * map supports only low/high/max, so medium rounds up to high and off
-     * rounds up to low.
-     */
+    /** Clamping rounds up to the nearest supported level first, then down. */
     @Test
     fun `unavailable levels clamp up to the nearest supported level`() = runTest {
         val s = session(extendedModel)
@@ -163,11 +134,6 @@ class AgentSessionThinkingTest {
         )
     }
 
-    /**
-     * pi getAvailableThinkingLevels order (agent-session.ts:1837-1841 over
-     * getSupportedThinkingLevels): canonical order with explicit xhigh/max
-     * mappings, and explicit-null mappings excluded.
-     */
     @Test
     fun `the model's thinkingLevelMap shapes the available levels`() {
         val s = session(reasoningModel)
@@ -189,14 +155,8 @@ class AgentSessionThinkingTest {
         )
     }
 
-    /**
-     * pi sdk.ts:229-253: the agent's initial thinking level is the branch's
-     * thinking_level_change fold, clamped to the model; a branch without a
-     * thinking entry folds "off" (the app layer seeds the default entry
-     * before adoption) — and the fold clamps like any requested level, so
-     * "off" on a model whose map disables it rounds up (pi's clamp:
-     * up first, then down).
-     */
+    /** A branch without a thinking entry folds "off", which itself clamps:
+     *  the extended map marks off unsupported, so it rounds up to low. */
     @Test
     fun `init seeds the level from the branch fold clamped to the model`() {
         val folded = session(
@@ -213,11 +173,6 @@ class AgentSessionThinkingTest {
         assertEquals(ModelThinkingLevel.OFF, plainFold.thinkingLevel)
     }
 
-    /**
-     * pi agent.ts:450 (createLoopConfig): the run's request carries the
-     * run-start thinking level as its reasoning option; a level switched
-     * mid-run applies to the next prompt, and off sends no reasoning.
-     */
     @Test
     fun `the per-run reasoning follows the run-start level and off sends none`() = runTest {
         val requestReasoning = CopyOnWriteArrayList<ThinkingLevel?>()
@@ -235,11 +190,8 @@ class AgentSessionThinkingTest {
         s.prompt("first")
         s.prompt("second")
 
-        // First run started at medium (switched mid-run to high); the second
-        // run started at high.
         assertEquals(listOf(ThinkingLevel.MEDIUM, ThinkingLevel.HIGH), requestReasoning)
 
-        // Off maps to no reasoning parameter (pi: undefined).
         s.setThinkingLevel(ModelThinkingLevel.OFF)
         s.prompt("third")
         assertEquals(listOf(ThinkingLevel.MEDIUM, ThinkingLevel.HIGH, null), requestReasoning)

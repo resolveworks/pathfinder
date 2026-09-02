@@ -192,8 +192,7 @@ data class Cost(
  * for session-parity consumers (pi's sessionEntryToContextMessages drops
  * deferred assistant messages from context, harness/session/context.ts:72;
  * SessionStopReason in harness/session/types.ts:10 adds "deferred"); no
- * pathfinder adapter produces it — deferred responses stay excluded per the
- * adapter-capability scope in ai/AGENTS.md.
+ * Pathfinder adapter produces it.
  */
 enum class StopReason { PENDING, STOP, LENGTH, TOOL_USE, ERROR, ABORTED, DEFERRED }
 

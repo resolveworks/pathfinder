@@ -20,15 +20,6 @@ import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 
-/**
- * Tests for the OpenAI Codex (ChatGPT) OAuth flow, ported from pi
- * `packages/ai/test/openai-codex-oauth.test.ts` plus the browser-flow cases
- * pi covers with its loopback server (here: the documented manual-code
- * divergence).
- *
- * All HTTP goes through a fake [OAuthHttpClient] (no network); clock, state,
- * and PKCE seams are deterministic.
- */
 class OpenAiCodexOAuthAuthTest {
 
     private class FakeHttpClient : OAuthHttpClient {
@@ -42,7 +33,6 @@ class OpenAiCodexOAuthAuthTest {
         }
     }
 
-    /** Answers each request in order; extra requests fail the test. */
     private fun FakeHttpClient.enqueue(vararg responses: OAuthHttpResponse) {
         val remaining = responses.toMutableList()
         respond = {
@@ -75,7 +65,6 @@ class OpenAiCodexOAuthAuthTest {
     /** Raw entropy injected through the PKCE seam; the flow sees its base64url form. */
     private val rawVerifierBytes = "unit-test-verifier-unit-test-verifier".toByteArray(Charsets.US_ASCII)
 
-    /** The verifier `PkceGenerator` derives from [rawVerifierBytes]. */
     private val fixedVerifier = works.resolve.pathfinder.ai.auth.PkceGenerator.base64url(rawVerifierBytes)
 
     private fun auth(
@@ -109,10 +98,6 @@ class OpenAiCodexOAuthAuthTest {
 
     private fun requestBody(request: OAuthHttpRequest): String = request.body.toString(Charsets.UTF_8)
 
-    // ------------------------------------------------------------------
-    // Login-method selection (pi's select prompt)
-    // ------------------------------------------------------------------
-
     @Test
     fun `select prompt offers browser first then device code with pi labels`() = runTest {
         val http = FakeHttpClient()
@@ -143,14 +128,12 @@ class OpenAiCodexOAuthAuthTest {
             ),
             select.options,
         )
-        // Device-code branch: no auth_url event, one device_code event.
         val deviceCode = assertIs<AuthEvent.DeviceCode>(interaction.events.single())
         assertEquals("ABCD-1234", deviceCode.userCode)
         assertEquals("https://auth.openai.com/codex/device", deviceCode.verificationUri)
         assertEquals(5, deviceCode.intervalSeconds)
         assertEquals(900, deviceCode.expiresInSeconds)
 
-        // The credential carries the JWT account id and no-skew expiry.
         assertEquals(accessToken("account-456"), credential.access)
         assertEquals("refresh-token", credential.refresh)
         assertEquals(1_000_000L + 3600 * 1000, credential.expires)
@@ -165,10 +148,6 @@ class OpenAiCodexOAuthAuthTest {
         }
         assertEquals("Unknown OpenAI Codex login method: carrier-pigeon", error.message)
     }
-
-    // ------------------------------------------------------------------
-    // Device-code flow
-    // ------------------------------------------------------------------
 
     @Test
     fun `device code login exchanges authorization code with the device redirect uri`() = runTest {
@@ -236,7 +215,6 @@ class OpenAiCodexOAuthAuthTest {
             error.message,
         )
 
-        // Unparseable bodies are never interpolated.
         val raw = FakeHttpClient()
         raw.enqueue(json(502, "gateway melted"))
         val rawError = assertFailsWith<IllegalStateException> {
@@ -362,10 +340,6 @@ class OpenAiCodexOAuthAuthTest {
         deferred.cancel()
         assertFailsWith<CancellationException> { deferred.await() }
     }
-
-    // ------------------------------------------------------------------
-    // Browser login (manual-code divergence)
-    // ------------------------------------------------------------------
 
     @Test
     fun `browser login notifies the auth url and exchanges a pasted code`() = runTest {
@@ -505,11 +479,8 @@ class OpenAiCodexOAuthAuthTest {
     @Test
     fun `browser login rejects an empty code like pi if (!code)`() = runTest {
         for (answer in listOf(
-            // URL with an explicitly empty code.
             "http://localhost:1455/auth/callback?code=&state=0123456789abcdef",
-            // Bare query form with an empty code value.
             "code=",
-            // Whitespace-only input trims to an empty parse result.
             "   ",
         )) {
             val http = FakeHttpClient()
@@ -528,7 +499,6 @@ class OpenAiCodexOAuthAuthTest {
         }
     }
 
-    /** An interaction that answers the select with `browser` and parks the manual-code prompt until the test completes it. */
     private class GatedManualInteraction : AuthInteraction {
         val events = mutableListOf<AuthEvent>()
         val prompts = mutableListOf<AuthPrompt>()
@@ -548,7 +518,6 @@ class OpenAiCodexOAuthAuthTest {
         }
     }
 
-    /** Drives the loopback callback server with a real HTTP GET (status, body). */
     private fun httpGet(port: Int, path: String): Pair<Int, String> {
         val connection = java.net.URL("http://127.0.0.1:$port$path").openConnection()
             as java.net.HttpURLConnection
@@ -563,7 +532,6 @@ class OpenAiCodexOAuthAuthTest {
         }
     }
 
-    /** Waits until the browser flow has bound its loopback server and parked the manual prompt. */
     private suspend fun awaitBrowserPrompt(interaction: GatedManualInteraction, flow: OpenAiCodexOAuthAuth): Int {
         while (interaction.prompts.size < 2 || flow.lastCallbackPort == null) {
             kotlinx.coroutines.yield()
@@ -613,7 +581,6 @@ class OpenAiCodexOAuthAuthTest {
         assertTrue("State mismatch." in body, body)
         assertTrue(http.requests.isEmpty(), "no exchange after a state mismatch")
 
-        // The login is still parked on the manual prompt; a pasted code finishes it.
         interaction.manualAnswer.complete("manual-after-mismatch")
         login.await()
         assertEquals("manual-after-mismatch", formFields(http.requests.single())["code"])
@@ -727,10 +694,6 @@ class OpenAiCodexOAuthAuthTest {
         assertTrue(http.requests.isEmpty())
     }
 
-    // ------------------------------------------------------------------
-    // Interval coercion (JS Number(trimmed)) and shared helpers
-    // ------------------------------------------------------------------
-
     @Test
     fun `jsNumber pins JS Number coercion for string intervals`() {
         val flow = OpenAiCodexOAuthAuth(FakeHttpClient())
@@ -814,10 +777,6 @@ class OpenAiCodexOAuthAuthTest {
         assertTrue("device-secret" !in device && "ABCD-1234" in device)
     }
 
-    // ------------------------------------------------------------------
-    // parseAuthorizationInput
-    // ------------------------------------------------------------------
-
     @Test
     fun `parseAuthorizationInput handles url fragment query and bare forms`() {
         val flow = OpenAiCodexOAuthAuth(FakeHttpClient())
@@ -851,7 +810,6 @@ class OpenAiCodexOAuthAuthTest {
             OpenAiCodexOAuthAuth.AuthorizationInput("with space", null),
             flow.parseAuthorizationInput("code=with+space"),
         )
-        // A URL without a code param yields a null code, not an empty one.
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput(null, "only"),
             flow.parseAuthorizationInput("http://localhost:1455/auth/callback?state=only"),
@@ -869,12 +827,10 @@ class OpenAiCodexOAuthAuthTest {
             OpenAiCodexOAuthAuth.AuthorizationInput("decoded-name", null),
             flow.parseAuthorizationInput("http://localhost:1455/auth/callback?%63ode=decoded-name"),
         )
-        // First occurrence wins.
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("first", null),
             flow.parseAuthorizationInput("code=first&code=second"),
         )
-        // `+` decodes as a space in names and values.
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("a b", null),
             flow.parseAuthorizationInput("http://localhost:1455/auth/callback?c%6Fde=a+b"),
@@ -891,10 +847,6 @@ class OpenAiCodexOAuthAuthTest {
             flow.parseAuthorizationInput("http://localhost:1455/auth/callback?code"),
         )
     }
-
-    // ------------------------------------------------------------------
-    // Token response validation, refresh, JWT account metadata
-    // ------------------------------------------------------------------
 
     @Test
     fun `token failures carry status and sanitized detail without a status line fallback`() {
@@ -1035,10 +987,6 @@ class OpenAiCodexOAuthAuthTest {
         }
         assertEquals("Failed to extract accountId from token", error.message)
     }
-
-    // ------------------------------------------------------------------
-    // Secret safety
-    // ------------------------------------------------------------------
 
     @Test
     fun `no secret material appears in any error message`() = runTest {

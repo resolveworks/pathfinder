@@ -32,22 +32,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
-/**
- * Request construction for OpenAI Chat Completions, ported from pi's
- * openai-completions.ts and reduced to the ZAI-relevant behavior: the
- * transformMessages normalization pass, message replay
- * (system/user/assistant/tool-result), tool JSON Schema conversion, ZAI
- * thinking format, max_tokens field, tool_stream, and
- * stream_options.include_usage.
- *
- * Anthropic-style prompt caching for anthropic-format compat models, ported
- * from pi's getCompatCacheControl / applyAnthropicCacheControl
- * (openai-completions.ts:1057-1160): when cacheControlFormat is "anthropic"
- * and cacheRetention is not "none", cache_control {type: "ephemeral", ttl?
- * "1h"} is attached to the first instruction message, the last tool, and the
- * last conversation text (user/assistant/tool), where the ttl is sent only
- * for long retention on models that support it.
- */
 object OpenAiCompletionsPayload {
 
     /** Reasoning delta fields some OpenAI-compatible servers use, in preference order. */
@@ -65,17 +49,10 @@ object OpenAiCompletionsPayload {
     ): JsonObject {
         val body = mutableMapOf<String, JsonElement>()
         body["model"] = JsonPrimitive(model.id)
-        // pi buildParams (openai-completions.ts:795-844): the converted
-        // messages and tools are finalized first so anthropic-style
-        // cache_control markers can be applied to them (:843-845).
         val messages = convertMessages(model, context, compat).toMutableList()
         val cacheControl = getCompatCacheControl(compat, cacheRetention)
         body["stream"] = JsonPrimitive(true)
 
-        // pi buildParams (openai-completions.ts:804-810): prompt_cache_key is
-        // gated on direct OpenAI base URLs with caching enabled, or on long
-        // retention where the provider supports it; the key is clamped to
-        // OpenAI's 64-code-point limit (shared openai-prompt-cache.ts).
         val sendPromptCacheKey =
             (model.baseUrl.contains("api.openai.com") && cacheRetention != CacheRetention.NONE) ||
                 (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention)
@@ -105,9 +82,8 @@ object OpenAiCompletionsPayload {
         options.temperature?.let { body["temperature"] = JsonPrimitive(it) }
 
         val tools: MutableList<JsonObject>? = if (context.tools.isNotEmpty()) {
-            // pi openai-completions.ts:833-841 (deferredToolsMode "kimi"):
-            // tools already loaded via the Kimi bare-tools system message are
-            // excluded from the standard tools param.
+            // deferredToolsMode "kimi": tools already loaded via the bare-tools
+            // system message are excluded from the standard tools param.
             val deferredToolNames =
                 if (compat.deferredToolsMode == DeferredToolsMode.KIMI) getDeferredToolNames(context.messages) else emptySet()
             val activeTools = context.tools.filter { it.name !in deferredToolNames }
@@ -135,26 +111,15 @@ object OpenAiCompletionsPayload {
         body["messages"] = JsonArray(messages.toList())
         tools?.let { body["tools"] = JsonArray(it.toList()) }
 
-        // pi's buildParams: `if (options?.toolChoice) params.tool_choice = options.toolChoice`
-        // (openai-completions.ts:850-851), where toolChoice is the wire form
-        // ChatCompletionToolChoiceOption: "auto"/"none"/"required" or
-        // {type:"function", function:{name}}.
         mapToolChoice(options.toolChoice)?.let { body["tool_choice"] = it }
 
         applyThinking(model, options, compat)?.let { body.putAll(it) }
 
-        // pi buildParams (openai-completions.ts:981-982): merged last so
-        // custom keys override the named request fields.
         options.samplingParams?.let { body.putAll(it) }
 
         return JsonObject(body)
     }
 
-    /**
-     * Serializes the core ToolChoice to the Chat Completions `tool_choice`
-     * wire form (pi's ChatCompletionToolChoiceOption pass-through,
-     * openai-completions.ts:850-851). Null means the field is omitted.
-     */
     private fun mapToolChoice(choice: ToolChoice?): JsonElement? = when (choice) {
         null -> null
         ToolChoice.Auto -> JsonPrimitive("auto")
@@ -166,7 +131,6 @@ object OpenAiCompletionsPayload {
         }
     }
 
-    /** Returns the extra thinking-related params to merge into the request body. */
     private fun applyThinking(
         model: Model,
         options: OpenAiCompletionsOptions,
@@ -183,7 +147,7 @@ object OpenAiCompletionsPayload {
             return if (map.isSpecified(level)) map.forLevel(level) else level.name.lowercase()
         }
 
-        /** Pi's `map?.off !== null`: false only for an explicit null OFF entry. */
+        /** True only for an explicit null OFF entry in the level map. */
         val explicitNullOff = map?.isSpecified(ModelThinkingLevel.OFF) == true &&
             map.forLevel(ModelThinkingLevel.OFF) == null
 
@@ -256,7 +220,7 @@ object OpenAiCompletionsPayload {
 
             ThinkingFormat.ANT_LING -> {
                 if (effort == null) return null
-                // Pi requires an explicitly mapped string; no level-name fallback.
+                // Requires an explicitly mapped string; no level-name fallback.
                 val mapped = map?.takeIf { it.isSpecified(effort) }?.forLevel(effort)
                 return mapped?.let { mapOf("reasoning" to buildJsonObject { put("effort", it) }) }
             }
@@ -267,7 +231,7 @@ object OpenAiCompletionsPayload {
                     params.add("chat_template_args" to it)
                 }
                 if (compat.supportsReasoningEffort) {
-                    // Pi maps the OFF entry when effort is null; no fallback then.
+                    // With null effort, only the mapped OFF entry is sent; no fallback.
                     val value = if (effort != null) {
                         mappedEffort(effort)
                     } else {
@@ -280,7 +244,6 @@ object OpenAiCompletionsPayload {
             }
 
             ThinkingFormat.OPENAI -> {
-                // OpenAI-style reasoning_effort.
                 if (!compat.supportsReasoningEffort) return null
                 if (effort != null) {
                     return effortParam()?.let { mapOf(it) }
@@ -296,7 +259,6 @@ object OpenAiCompletionsPayload {
         }
     }
 
-    /** Resolves compat.chatTemplateArgs into wire values; null when empty. */
     private fun buildChatTemplateValues(
         compat: OpenAiCompletionsCompat,
         effort: ModelThinkingLevel?,
@@ -336,14 +298,6 @@ object OpenAiCompletionsPayload {
         return resolved.toMap().takeIf { it.isNotEmpty() }?.let { JsonObject(it) }
     }
 
-    // =====================================================================
-    // Anthropic-style cache_control (openai-completions.ts:1057-1160)
-    // =====================================================================
-
-    /**
-     * pi's OpenAICompatCacheControl wire shape (openai-completions.ts:174-177):
-     * `{type: "ephemeral", ttl?: "1h"}`.
-     */
     internal data class OpenAiCompatCacheControl(val type: String, val ttl: String?) {
         fun toJson(): JsonObject = buildJsonObject {
             put("type", type)
@@ -351,12 +305,6 @@ object OpenAiCompletionsPayload {
         }
     }
 
-    /**
-     * pi's getCompatCacheControl (openai-completions.ts:1057-1066): undefined
-     * unless cacheControlFormat is "anthropic", and suppressed entirely when
-     * cacheRetention is "none"; the "1h" ttl is only sent for long retention
-     * where the model supports long cache retention.
-     */
     internal fun getCompatCacheControl(
         compat: OpenAiCompletionsCompat,
         cacheRetention: CacheRetention,
@@ -369,10 +317,8 @@ object OpenAiCompletionsPayload {
     }
 
     /**
-     * pi's applyAnthropicCacheControl (openai-completions.ts:1068-1076): marks
-     * the first instruction message, the last tool, and the last conversation
-     * message with the given cache_control. pi mutates the converted payload
-     * objects in place; the immutable JSON values are rebuilt here instead.
+     * pi mutates the converted payload objects in place; the immutable JSON
+     * values are rebuilt here instead.
      */
     internal fun applyAnthropicCacheControl(
         messages: MutableList<JsonObject>,
@@ -384,11 +330,7 @@ object OpenAiCompletionsPayload {
         addCacheControlToLastConversationMessage(messages, cacheControl)
     }
 
-    /**
-     * pi's addCacheControlToSystemPrompt (openai-completions.ts:1078-1087):
-     * only the first system/developer message is marked, regardless of
-     * whether it had markable text content.
-     */
+    /** Only the first system/developer message is considered; no fallback when it has no markable text. */
     private fun addCacheControlToSystemPrompt(
         messages: MutableList<JsonObject>,
         cacheControl: OpenAiCompatCacheControl,
@@ -401,12 +343,6 @@ object OpenAiCompletionsPayload {
         }
     }
 
-    /**
-     * pi's addCacheControlToLastConversationMessage
-     * (openai-completions.ts:1089-1099): walks back to the last
-     * user/assistant/tool message with markable text content; earlier
-     * messages are tried when one has none.
-     */
     private fun addCacheControlToLastConversationMessage(
         messages: MutableList<JsonObject>,
         cacheControl: OpenAiCompatCacheControl,
@@ -421,20 +357,15 @@ object OpenAiCompletionsPayload {
         }
     }
 
-    /**
-     * pi's addCacheControlToLastTool (openai-completions.ts:1101-1109): the
-     * cache_control goes directly on the last tool object.
-     */
     private fun addCacheControlToLastTool(tools: MutableList<JsonObject>?, cacheControl: OpenAiCompatCacheControl) {
         if (tools.isNullOrEmpty()) return
         tools[tools.size - 1] = JsonObject(tools.last() + ("cache_control" to cacheControl.toJson()))
     }
 
     /**
-     * pi's addCacheControlToTextContent (openai-completions.ts:1127-1160):
-     * string content is replaced by a single text part carrying cache_control
-     * (empty strings are not markable); array content gets cache_control on
-     * its last text part; other shapes (absent/null content) are not markable.
+     * Anthropic cache_control attaches to text content parts, not messages:
+     * string content is rewritten to a single text part, array content is
+     * marked on its last text part, and empty/absent text is not markable.
      */
     private fun addCacheControlToTextContent(
         messages: MutableList<JsonObject>,
@@ -498,8 +429,6 @@ object OpenAiCompletionsPayload {
         }
 
         val messages = transformMessages(context.messages, model) { id, _ -> normalizeToolCallId(id, model.provider) }
-        // pi openai-completions.ts:834/getDeferredToolNames + 1437-1454:
-        // names accumulated from tool-result addedToolNames in this loop.
         val deferredToolNames = mutableSetOf<String>()
         var i = 0
         while (i < messages.size) {
@@ -537,8 +466,7 @@ object OpenAiCompletionsPayload {
                             toolMessage["name"] = JsonPrimitive(toolMsg.toolName)
                         }
                         params.add(JsonObject(toolMessage))
-                        // pi openai-completions.ts:1396-1399: under
-                        // deferredToolsMode "kimi", tool results mark the
+                        // deferredToolsMode "kimi": tool results mark the
                         // tools they loaded; those are re-announced as a bare
                         // `tools` system message after the group.
                         if (compat.deferredToolsMode == DeferredToolsMode.KIMI) {
@@ -568,9 +496,8 @@ object OpenAiCompletionsPayload {
                         )
                     }
                     if (deferredToolNames.isNotEmpty()) {
-                        // pi openai-completions.ts:1440-1451
-                        // (KimiToolSystemMessageParam): Kimi accepts a system
-                        // message with a bare `tools` array and no content.
+                        // Kimi accepts a system message with a bare `tools`
+                        // array and no content.
                         val deferredTools = getToolsByName(context.tools, deferredToolNames)
                         if (deferredTools.isNotEmpty()) {
                             params.add(
@@ -589,13 +516,13 @@ object OpenAiCompletionsPayload {
     }
 
     /**
- * pi's openai-completions.ts `normalizeToolCallId`: splits pipe-separated
- * ids coming from Responses-style providers (`{call_id}|{item_id}`), where
- * item ids can be 400+ chars of special chars, and recombines them as
- * `{callId}_{itemId}` so multiple tool calls sharing a call_id stay unique.
- * Results longer than 40 chars (the OpenAI limit) are truncated with a hash
- * suffix. Plain ids are truncated to 40 chars only for provider "openai".
- */
+     * Splits pipe-separated ids coming from Responses-style providers
+     * (`{call_id}|{item_id}`), where item ids can be 400+ chars of special
+     * chars, and recombines them as `{callId}_{itemId}` so multiple tool
+     * calls sharing a call_id stay unique. Results longer than 40 chars (the
+     * OpenAI limit) are truncated with a hash suffix. Plain ids are truncated
+     * to 40 chars only for provider "openai".
+     */
 private fun normalizeToolCallId(id: String, provider: String): String {
     if ("|" in id) {
         val separatorIndex = id.indexOf("|")
@@ -651,7 +578,6 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
     ): JsonObject? {
         val assistant = mutableMapOf<String, JsonElement>()
 
-        // Keep only assistant text blocks with non-whitespace content.
         val text = sanitizeSurrogates(
             msg.content.filter { it.type == ContentType.TEXT }
                 .map { (it as works.resolve.pathfinder.ai.core.TextContent).text }
@@ -665,9 +591,6 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
         val toolCalls = msg.content.filter { it.type == ContentType.TOOL_CALL }
             .map { it as works.resolve.pathfinder.ai.core.ToolCall }
 
-        // pi openai-completions.ts:1274-1285: prefer the serialized
-        // reasoning_details from a thinking signature, then fall back to the
-        // legacy encrypted thoughtSignature carried on tool calls.
         val signedReasoningDetails = thinkingBlocks.firstNotNullOfOrNull {
             parseOpenAIReasoningDetails(it.thinkingSignature)
         }
@@ -694,22 +617,20 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
             // alongside tool calls.
         }
 
-        // Replay reasoning when the provider stored a wire-field signature.
-        // pi openai-completions.ts:1302-1313: the raw reasoning field is only
-        // sent when no structured reasoning_details were preserved.
+        // The raw reasoning field is replayed only when no structured
+        // reasoning_details were preserved.
         if (preservedReasoningDetails == null &&
             !compat.requiresThinkingAsText && nonEmptyThinking.isNotEmpty()
         ) {
-            // pi openai-completions.ts:1304-1306: the opencode-go provider remaps
-            // a stored "reasoning" signature back to "reasoning_content" — the
-            // field it actually accepts.
+            // opencode-go accepts "reasoning_content", not the stored
+            // "reasoning" signature field.
             var signature = nonEmptyThinking.first().thinkingSignature
             if (model.provider == "opencode-go" && signature == "reasoning") {
                 signature = "reasoning_content"
             }
             if (signature != null && signature in REASONING_FIELDS) {
-                // Exact pi parity: the raw reasoning field is replayed unsanitized
-                // (only requiresThinkingAsText output is sanitized).
+                // Replayed unsanitized, for exact parity with pi; only
+                // requiresThinkingAsText output is sanitized.
                 assistant[signature] = JsonPrimitive(nonEmptyThinking.joinToString("\n") { it.thinking })
             }
         }
@@ -732,15 +653,10 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
             )
         }
 
-        // pi openai-completions.ts:1344-1346: reasoning_details is the
-        // structured alternative to a raw reasoning field, sent whenever
-        // details were preserved (even alongside requiresThinkingAsText).
         preservedReasoningDetails?.let { assistant["reasoning_details"] = it }
 
-        // pi openai-completions.ts:1347-1351: DeepSeek-style endpoints
-        // (requiresReasoningContentOnAssistantMessages) reject replayed
-        // assistant messages without a reasoning_content field when the
-        // model reasons, so send an empty string when none was set.
+        // DeepSeek-style endpoints reject replayed assistant messages without
+        // reasoning_content when the model reasons; send an empty string.
         if (compat.requiresReasoningContentOnAssistantMessages &&
             model.reasoning &&
             !assistant.containsKey("reasoning_content")
@@ -759,11 +675,9 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
     }
 
     /**
-     * pi's convertTools (openai-completions.ts:1478-1495): resolves JSON-schema
-     * strict sampling and rewrites the tool schema when strict applies. pi
-     * passes `compat.supportsStrictMode !== false` (undefined means supported);
-     * [OpenAiCompletionsCompat.supportsStrictMode] is a non-null Boolean that
-     * defaults to true, so it is passed directly.
+     * pi's supportsStrictMode is tri-state (`!== false`, undefined means
+     * supported); [OpenAiCompletionsCompat.supportsStrictMode] is a non-null
+     * Boolean defaulting to true, so it is passed through directly.
      */
     private fun convertTool(tool: Tool, compat: OpenAiCompletionsCompat): JsonObject {
         val strict = resolveJsonSchemaStrictSampling(tool, compat.supportsStrictMode)
@@ -775,25 +689,17 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.core.UserMessage
                     put("name", tool.name)
                     put("description", tool.description)
                     put("parameters", getJsonSchemaToolParameters(tool, strict))
-                    // pi convertTools (openai-completions.ts:1490-1492): only
-                    // include strict when the provider supports it; some
-                    // providers reject unknown fields.
+                    // Some providers reject unknown fields.
                     if (compat.supportsStrictMode) put("strict", strict ?: false)
                 },
             )
         }
     }
 
-    /**
-     * pi's getDeferredToolNames (openai-completions.ts:96-104): tool names
-     * made available by tool-result messages (addedToolNames), i.e. tools
-     * already loaded into the session under deferredToolsMode "kimi".
-     */
     private fun getDeferredToolNames(messages: List<Message>): Set<String> =
         messages.flatMap { (it as? works.resolve.pathfinder.ai.core.ToolResultMessage)?.addedToolNames.orEmpty() }
             .toSet()
 
-    /** pi's getToolsByName (openai-completions.ts:106-113). */
     private fun getToolsByName(tools: List<Tool>, names: Collection<String>): List<Tool> {
         val byName = tools.associateBy { it.name }
         return names.mapNotNull { byName[it] }

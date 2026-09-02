@@ -86,8 +86,6 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `tool choice serialized to chat completions wire form`() {
-        // pi openai-completions.ts buildParams passes ChatCompletionToolChoiceOption
-        // through as tool_choice (test/openai-completions-tool-choice.test.ts).
         val cases = mapOf(
             ToolChoice.Auto to JsonPrimitive("auto"),
             ToolChoice.None to JsonPrimitive("none"),
@@ -108,8 +106,6 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `tool choice included without tools and omitted when absent`() {
-        // pi includes tool_choice even when no tools are sent, and omits the
-        // field when toolChoice is unset (openai-completions.ts:850).
         val withChoice = body(
             Context(messages = listOf(UserMessage.ofText("hi"))),
             OpenAiCompletionsOptions(apiKey = "k", toolChoice = ToolChoice.None),
@@ -196,7 +192,6 @@ class OpenAiCompletionsPayloadTest {
         )
         val b = body(context)
         val messages = b["messages"]!!.jsonArray
-        // system-less: user, assistant with tool_calls, tool result
         assertEquals(3, messages.size)
         assertEquals(
             "assistant",
@@ -237,7 +232,6 @@ class OpenAiCompletionsPayloadTest {
         )
         val function = b["messages"]!!.jsonArray[0].jsonObject["tool_calls"]!!.jsonArray[0]
             .jsonObject["function"]!!.jsonObject
-        // The raw string is sent verbatim as the JSON string value.
         assertEquals(raw, function["arguments"]!!.jsonPrimitive.content)
         assertEquals(raw, Json.parseToJsonElement(function.toString()).jsonObject["arguments"]!!.jsonPrimitive.content)
     }
@@ -252,9 +246,7 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `strict is omitted when compat disables strict mode`() {
-        // pi convertTools (openai-completions.ts:1491-1492): strict is only
-        // included when compat.supportsStrictMode !== false; some providers
-        // reject unknown fields.
+        // Some providers reject unknown fields.
         val tool = Tool(name = "read_file", description = "Reads a file", parameters = schema)
         val strictless = model.copy(compat = model.compat.copy(supportsStrictMode = false))
         val b = body(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool)), model = strictless)
@@ -264,9 +256,6 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `strict tool schema is rewritten with strict true`() {
-        // pi convertTools resolves strict sampling and sends the rewritten
-        // schema (constrained-sampling.test.ts "derives strict provider
-        // schemas without changing tool definitions").
         val parameters = Json.parseToJsonElement(
             """{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"number"}},"required":["path"]}""",
         )
@@ -289,7 +278,6 @@ class OpenAiCompletionsPayloadTest {
             """{"anyOf":[{"type":"number"},{"type":"null"}]}""",
             sent["properties"]!!.jsonObject["offset"].toString(),
         )
-        // The tool definition itself is unchanged.
         assertTrue(!parameters.jsonObject.containsKey("additionalProperties"))
     }
 
@@ -468,8 +456,7 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `raw reasoning field replayed verbatim without surrogate sanitization`() {
-        // pi's openai-completions.ts joins thinking blocks into the reasoning
-        // field without sanitizeSurrogates; exact-parity port.
+        // Intentional parity: pi replays the raw reasoning field without sanitizeSurrogates.
         val lone = buildString { append("think "); append(0xD800.toChar()) }
         val b = body(
             Context(
@@ -522,9 +509,7 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `reasoning_content is sent empty on compat assistant replay without reasoning (pi 1344-1349)`() {
-        // requiresReasoningContentOnAssistantMessages + model.reasoning:
-        // a replayed assistant message with no reasoning field carries
-        // reasoning_content: "" (DeepSeek-style endpoints reject otherwise).
+        // DeepSeek-style endpoints reject assistant replays without reasoning_content.
         val deepseekModel = TestCatalogs.GLM_5_2.copy(
             compat = TestCatalogs.GLM_5_2.compat.copy(requiresReasoningContentOnAssistantMessages = true),
         )
@@ -541,11 +526,9 @@ class OpenAiCompletionsPayloadTest {
         val assistant = body(context, model = deepseekModel)["messages"]!!.jsonArray[0].jsonObject
         assertEquals("", assistant["reasoning_content"]!!.jsonPrimitive.content)
 
-        // Without the flag the field stays absent.
         val plain = body(context, model = TestCatalogs.GLM_5_2)["messages"]!!.jsonArray[0].jsonObject
         assertNull(plain["reasoning_content"])
 
-        // The flag does not apply to non-reasoning models (pi: model.reasoning gate).
         val nonReasoning = deepseekModel.copy(reasoning = false)
         val gated = body(context, model = nonReasoning)["messages"]!!.jsonArray[0].jsonObject
         assertNull(gated["reasoning_content"])
@@ -606,13 +589,10 @@ class OpenAiCompletionsPayloadTest {
         )
         val b = body(context, model = kimiModel)
 
-        // The standard tools param carries only the not-yet-loaded tool.
         val tools = b["tools"]!!.jsonArray
         assertEquals(1, tools.size)
         assertEquals("read_file", tools[0].jsonObject["function"]!!.jsonObject["name"]!!.jsonPrimitive.content)
 
-        // messages: system, user, assistant, tool result, then the Kimi
-        // bare-tools system message (role + tools, no content).
         val messages = b["messages"]!!.jsonArray
         assertEquals(5, messages.size)
         val kimiSystem = messages[4].jsonObject
@@ -648,7 +628,6 @@ class OpenAiCompletionsPayloadTest {
         )
         val b = body(context, model = kimiModel)
         assertEquals(0, b["tools"]!!.jsonArray.size)
-        // The deferred tool is still re-announced after the tool result.
         val messages = b["messages"]!!.jsonArray
         assertEquals("system", messages[2].jsonObject["role"]!!.jsonPrimitive.content)
         assertEquals(1, messages[2].jsonObject["tools"]!!.jsonArray.size)
@@ -678,9 +657,6 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `serialized reasoning_details replay as assistant reasoning_details and suppress the raw field`() {
-        // pi openai-completions.ts:1270-1285,1300-1313,1344-1346: when a
-        // thinking signature parses as reasoning details, the details are
-        // replayed as reasoning_details and the raw reasoning field is not sent.
         val details =
             """[{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}]"""
         val b = body(
@@ -707,9 +683,6 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `legacy encrypted tool-call thoughtSignature replays as reasoning_details`() {
-        // pi test/openai-completions-reasoning-details.test.ts "falls back to
-        // encrypted tool-call signatures for older stored assistant messages":
-        // openai-completions.ts:1277-1283 parseLegacyEncryptedReasoningDetail.
         val detail =
             """{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}"""
         val b = body(
@@ -762,7 +735,6 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `invalid reasoning_details signature falls back to plain replay`() {
-        // Non-detail signatures keep the plain reasoning-field replay path.
         val b = body(
             Context(
                 messages = listOf(
@@ -840,9 +812,7 @@ class OpenAiCompletionsPayloadTest {
         )
         val messages = b["messages"]!!.jsonArray
         assertEquals(1, messages.size, "no follow-up user image message for text-only model")
-        // transformMessages already replaced the image with pi's non-vision tool
-        // image placeholder (transform-messages.ts NON_VISION_TOOL_IMAGE_PLACEHOLDER),
-        // so the tool message carries that text.
+        // transformMessages already replaced the image with its non-vision placeholder.
         assertEquals(
             "(tool image omitted: model does not support images)",
             messages[0].jsonObject["content"]!!.jsonPrimitive.content,
@@ -851,8 +821,6 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `user image downgraded to placeholder for non-vision model and deduped`() {
-        // pi transform-messages.ts: images in user messages become a single
-        // deduplicated "(image omitted: ...)" placeholder for non-vision models.
         val b = body(
             Context(
                 messages = listOf(
@@ -876,7 +844,6 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `aborted assistant turn with partial content is skipped`() {
-        // pi transform-messages.ts drops error/aborted assistant turns entirely.
         val b = body(
             Context(
                 messages = listOf(
@@ -902,8 +869,6 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `orphaned tool call gets synthetic tool result`() {
-        // pi transform-messages.ts inserts "No result provided" error tool
-        // results for tool calls left unanswered at the next user turn.
         val b = body(
             Context(
                 messages = listOf(
@@ -932,9 +897,6 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `foreign pipe tool call ids are split and applied to tool calls and results`() {
-        // pi openai-completions.ts normalizeToolCallId: Responses-style
-        // "{call_id}|{item_id}" ids from foreign models recombine to
-        // "{callId}_{itemId}"; the matching tool result id is rewritten too.
         val b = body(
             Context(
                 messages = listOf(
@@ -985,14 +947,13 @@ class OpenAiCompletionsPayloadTest {
             expected,
             assistant["tool_calls"]!!.jsonArray[0].jsonObject["id"]!!.jsonPrimitive.content,
         )
-        // The synthetic orphan tool result uses the normalized id as well.
         val tool = b["messages"]!!.jsonArray[1].jsonObject
         assertEquals(expected, tool["tool_call_id"]!!.jsonPrimitive.content)
     }
 
     @Test
     fun `plain foreign id truncated to 40 chars only for openai provider`() {
-        val longId = "call_" + "a".repeat(40) // 45 chars
+        val longId = "call_" + "a".repeat(40)
         fun idFor(model: works.resolve.pathfinder.ai.core.Model): String = body(
             Context(
                 messages = listOf(
@@ -1011,13 +972,11 @@ class OpenAiCompletionsPayloadTest {
             .jsonObject["id"]!!.jsonPrimitive.content
 
         assertEquals(longId.take(40), idFor(TestCatalogs.GPT_4O))
-        // Non-openai providers pass foreign ids through untouched.
         assertEquals(longId, idFor(model))
     }
 
     @Test
     fun `same-model tool call ids are not normalized`() {
-        // pi transform-messages.ts only normalizes ids of foreign models.
         val id = "call_123|fc_123"
         val b = body(
             Context(
@@ -1043,9 +1002,6 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `cross-model thinking replayed as plain text`() {
-        // pi transform-messages.ts converts foreign thinking blocks to text
-        // in place, so the completions adapter replays them concatenated with
-        // the assistant text and no reasoning wire field.
         val b = body(
             Context(
                 messages = listOf(
@@ -1066,10 +1022,6 @@ class OpenAiCompletionsPayloadTest {
         assertEquals("let me thinkanswer", assistant["content"]!!.jsonPrimitive.content)
         assertFalse(assistant.containsKey("reasoning_content"))
     }
-
-    // Prompt cache params, ported from pi's
-    // test/openai-completions-prompt-cache.test.ts (buildParams,
-    // openai-completions.ts:804-810).
 
     @Test
     fun `prompt cache key sent for direct openai requests when caching enabled`() {
@@ -1155,9 +1107,6 @@ class OpenAiCompletionsPayloadTest {
         assertEquals("session-proxy", b["prompt_cache_key"]!!.jsonPrimitive.content)
         assertEquals("24h", b["prompt_cache_retention"]!!.jsonPrimitive.content)
     }
-
-    // ---- Anthropic-style cache_control (pi openai-completions.ts:1057-1160,
-    // test/openai-completions-cache-control-format.test.ts) ----
 
     private val openrouterAnthropic = works.resolve.pathfinder.ai.core.Model(
         id = "anthropic/claude-sonnet-4",
@@ -1266,8 +1215,6 @@ class OpenAiCompletionsPayloadTest {
             model = openrouterAnthropic,
         )
         val messages = b["messages"]!!.jsonArray
-        // The user message keeps plain string content; the marker lands on
-        // the trailing tool result instead.
         assertEquals("Read the file", messages[1].jsonObject["content"]!!.jsonPrimitive.content)
         val toolMessage = messages.last().jsonObject
         assertEquals("tool", toolMessage["role"]!!.jsonPrimitive.content)
