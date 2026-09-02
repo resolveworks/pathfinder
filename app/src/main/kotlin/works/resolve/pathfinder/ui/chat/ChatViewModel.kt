@@ -66,9 +66,14 @@ import kotlinx.coroutines.withContext
  * The provider/model pair is user-selectable from the injected generated
  * catalog; credentials are managed per provider (pi's /login semantics:
  * one credential per provider, removed per provider), while the startup
- * default model persists in settings only through the explicit "set as
- * startup default" action (pi's Ctrl+S in the picker — never on every
- * pick).
+ * default model persists in settings only through the explicit Settings ▸
+ * Default model screen. Divergence from pi (deliberate, narrow): pi's
+ * Ctrl+S in the pickers applies the highlighted row AND persists it as
+ * the default in one gesture; Pathfinder keeps the pickers purely
+ * ephemeral (pi's Enter) and moves default persistence to Settings — the
+ * Android convention of Settings-managed defaults, which pi has no
+ * settings-screen equivalent of. Consequence: "use it now AND default
+ * it" takes two steps.
  *
  * Provider auth status (`configured`/`unconfigured`) is derived live from
  * the credential store — never persisted in settings — and the model
@@ -164,6 +169,16 @@ class ChatViewModel(
     /** Current committed configuration; updated on init and successful save. */
     private var currentSettings: ModelSettings = ModelSettings()
 
+    /**
+     * The persisted startup default provider/model pair (pi's `defaultModel`
+     * setting), kept separate from [currentSettings]: initialization seeds
+     * currentSettings from the derived/branch-folded model while the stored
+     * default stays whatever settings last wrote — only
+     * [saveStartupDefaultInternal] changes this pair. Projects into
+     * [ChatUiState.defaultModel].
+     */
+    private var defaultModelRef: Pair<String, String> = "" to ""
+
     private var agent: AgentSession? = null
     private var agentStateJob: Job? = null
     private var agentEventsJob: Job? = null
@@ -219,16 +234,19 @@ class ChatViewModel(
      *
      * Not busy-rejected: like pi, a mid-stream pick is safe — the active run
      * keeps its start-of-run model and the switch applies to the next
-     * prompt. This does NOT persist the startup default (pi's Ctrl+S is a
-     * separate action, [saveStartupDefault]).
+     * prompt. This does NOT persist the startup default: setting the
+     * default lives in Settings ▸ Default model (pi's Ctrl+S adapted — see
+     * the class KDoc divergence note), i.e. [saveStartupDefault].
      */
     fun selectModel(providerId: String, modelId: String) {
         viewModelScope.launch { selectModelInternal(providerId, modelId) }
     }
 
     /**
-     * Persists the startup default provider+model (pi's picker Ctrl+S), as
-     * an explicit action separate from picking. Applies pi's
+     * Persists the startup default provider+model. The persistence action of
+     * pi's picker Ctrl+S, surfaced here as the Settings ▸ Default model
+     * screen's commit-on-tap row (divergence: this does not also switch the
+     * live session — see the class KDoc). Applies pi's
      * `_addPersistedDefaultToNonEmptyScope`: when a non-empty scope exists
      * and the default is not in it, the default is appended to the scope
      * too (order-preserving).
@@ -259,7 +277,9 @@ class ChatViewModel(
      * Not busy-rejected: like pi, a mid-stream pick is safe — the active run
      * keeps its start-of-run level (the agent snapshots it per prompt) and
      * the switch applies to the next prompt. This does NOT persist the
-     * default (pi's Ctrl+S is a separate action, [setThinkingLevelDefault]).
+     * default: that lives in Settings ▸ Default thinking level
+     * ([setThinkingLevelDefault]; pi's Ctrl+S adapted — see the class KDoc
+     * divergence note).
      */
     fun selectThinkingLevel(level: ModelThinkingLevel) {
         viewModelScope.launch {
@@ -280,10 +300,13 @@ class ChatViewModel(
 
     /**
      * Persists the default thinking level (pi's thinking-selector Ctrl+S:
-     * one `setThinkingLevel(level, { persist: true })` call). Pi applies
-     * first and persists after; the same order here means a failed settings
-     * write leaves the session switched, exactly like pi. The stored default
-     * seeds sessions without a recorded branch level
+     * one `setThinkingLevel(level, { persist: true })` call). Called from
+     * the Settings ▸ Default thinking level screen's commit-on-tap row.
+     * Pi applies first and persists after; the same order here means a
+     * failed settings write leaves the session switched, exactly like pi
+     * (divergence noted in the class KDoc: pi's gesture also starts from the
+     * picker's highlighted row; the Settings screen owns the pick here).
+     * The stored default seeds sessions without a recorded branch level
      * ([seededSettingsFor]) and is re-applied on model switches
      * ([selectModelInternal]).
      */
@@ -548,6 +571,7 @@ class ChatViewModel(
             val settings = settingsRepository.currentSettings()
             val summaries = sessionStore.summaries()
             currentSettings = settings
+            defaultModelRef = settings.providerId to settings.modelId
             refreshOptions()
 
             // NeedsConfiguration is exactly "no configured provider at all":
@@ -1115,6 +1139,7 @@ class ChatViewModel(
         )
         if (!persistSettings(candidate)) return
         currentSettings = candidate
+        defaultModelRef = providerId to trimmed
 
         // pi's _addPersistedDefaultToNonEmptyScope: a non-empty scope gains
         // the default when missing (order-preserving append; case-insensitive
@@ -1482,11 +1507,15 @@ class ChatViewModel(
             .sortedWith(compareBy({ it.providerName }, { it.name }))
         val selectedModel = agent?.let { selectedModelProjection(it.model) }
             ?: selectedModelProjection(currentSettings.providerId, currentSettings.modelId)
+        val defaultModel = defaultModelRef
+            .takeIf { it.first.isNotBlank() && it.second.isNotBlank() }
+            ?.let { selectedModelProjection(it.first, it.second) }
         updateState {
             it.copy(
                 providerOptions = providerOptions,
                 modelOptions = modelOptions,
                 selectedModel = selectedModel,
+                defaultModel = defaultModel,
                 defaultThinkingLevel = currentSettings.defaultThinkingLevel,
             )
         }

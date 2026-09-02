@@ -54,6 +54,14 @@ data object SettingsNavKey : NavKey
 @Serializable
 data object ModelsNavKey : NavKey
 
+/** Navigation 3 destination key: the startup-default model picker (Settings ▸ Default model). */
+@Serializable
+data object DefaultModelNavKey : NavKey
+
+/** Navigation 3 destination key: the default thinking-level picker (Settings ▸ Default thinking level). */
+@Serializable
+data object DefaultThinkingNavKey : NavKey
+
 /** Navigation 3 destination key: the provider credential list (pi's /login). */
 @Serializable
 data object ProvidersNavKey : NavKey
@@ -244,6 +252,14 @@ data class ChatUiState(
     val scopedModelOptions: List<ModelOption> = emptyList(),
     /** The live model of the bound session, or null when unbound/unknown. */
     val selectedModel: SelectedModel? = null,
+    /**
+     * The persisted startup default model mirror (pi's `defaultModel`
+     * setting): the stored provider/model pair resolved through the
+     * catalog, or null when unset or no longer resolvable. Display twin of
+     * [defaultThinkingLevel]; unlike [selectedModel] it never follows the
+     * live session or the branch fold.
+     */
+    val defaultModel: SelectedModel? = null,
     /**
      * The live thinking level of the bound session (pi's session
      * thinkingLevel), or null when unbound. Display-only twin of the level

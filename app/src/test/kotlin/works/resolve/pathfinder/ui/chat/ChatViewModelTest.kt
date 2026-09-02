@@ -2595,6 +2595,37 @@ class ChatViewModelTest {
         vm.closeForTest()
     }
 
+    /**
+     * [ChatUiState.defaultModel] mirrors only the stored startup default
+     * (pi's `defaultModel` setting): null before one is saved, set by the
+     * Settings save, and never moved by live model switches — unlike
+     * [ChatUiState.selectedModel], which follows the running session.
+     */
+    @Test
+    fun defaultModel_mirrorFollowsStoredDefault_notLiveSwitches() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        val ready = vm.uiState.first { it.status == ChatStatus.Ready }
+        assertNull(ready.defaultModel)
+
+        // A live switch (pi's Enter) never touches the stored-default mirror.
+        vm.selectModel("zai", "glm-5.3")
+        vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
+        assertNull(vm.uiState.value.defaultModel)
+
+        vm.saveStartupDefault("zai", "glm-5.3")
+        vm.uiState.first { it.defaultModel?.modelId == "glm-5.3" }
+        assertEquals("glm-5.3", h.settings.currentSettings().modelId)
+
+        vm.selectModel("zai", "glm-4.7")
+        vm.uiState.first { it.selectedModel?.modelId == "glm-4.7" }
+        assertEquals("glm-5.3", vm.uiState.value.defaultModel?.modelId)
+
+        vm.closeForTest()
+    }
+
     /** The curator persists the ordered list; removing everything keeps an
      * empty scope that behaves as no scope downstream (pi's !length). */
     @Test

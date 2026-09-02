@@ -14,7 +14,9 @@
     <string name="action_new_chat">New chat</string>
     <string name="settings_title">Settings</string>
     <string name="settings_model">Scoped models</string>
-    <string name="settings_model_scope_hint">Choose which models the chat offers</string>
+    <string name="settings_default_model">Default model</string>
+    <string name="settings_default_thinking">Default thinking level</string>
+    <string name="settings_not_set">Not set</string>
     <string name="settings_show_thinking">Show thinking</string>
     <string name="settings_show_thinking_hint">Show the model\'s reasoning as it thinks</string>
     <string name="thinking_label">thinking</string>
@@ -31,7 +33,7 @@
     <string name="model_picker_scoped">Scoped</string>
     <string name="model_picker_all">All</string>
     <string name="models_scope_empty">No models are in scope — switch to All to see every available model</string>
-    <string name="action_set_default">Set as startup default</string>
+    <string name="model_default_marker">%1$s · default</string>
     <string name="models_empty_configured_hint">Only showing models from configured providers</string>
     <string name="thinking_chip_off">thinking off</string>
     <string name="thinking_level_off">off</string>
