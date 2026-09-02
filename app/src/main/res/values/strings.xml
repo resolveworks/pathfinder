@@ -79,6 +79,10 @@
     <string name="role_assistant">Assistant</string>
     <string name="role_assistant_failed">Assistant — failed</string>
 
+    <string name="tool_row_icon">Tool</string>
+    <string name="tool_status_done">Done</string>
+    <string name="tool_status_failed">Failed</string>
+
     <string name="error_generic">Something went wrong</string>
 
     <string name="tree_search_hint">Search conversation</string>

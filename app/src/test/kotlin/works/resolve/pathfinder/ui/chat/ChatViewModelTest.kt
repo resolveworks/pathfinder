@@ -26,7 +26,9 @@ import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
+import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
+import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
@@ -56,6 +58,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
@@ -956,7 +959,7 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun toolResultMessages_neverRenderAsChatMessages() = runTest(mainDispatcherRule.scheduler) {
+    fun toolResultMessages_renderAsToolRows_withBoundedSummary() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
@@ -969,23 +972,151 @@ class ChatViewModelTest {
         vm.send()
         vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
 
-        // Regression for the generic streamingMessage: a tool-result
-        // message committed through the agent must not render as a blank
-        // chat message (projectCommitted's else -> null).
         val session = h.createdAgents.single()
-        val result = ToolResultMessage(
-            toolCallId = "call-1",
-            toolName = "get_weather",
-            content = listOf(TextContent("sunny")),
+        val call = AssistantMessage(
+            content = listOf(
+                ThinkingContent("Weather is external; use the tool."),
+                TextContent("Checking the weather."),
+                ToolCall(id = "call-1", name = "get_weather", arguments = "{}"),
+            ),
+            api = testModel.api,
+            provider = "zai",
+            model = "glm-4.7",
             timestamp = System.nanoTime(),
         )
-        session.agent.processEvent(AgentEvent.MessageStart(result))
-        session.agent.processEvent(AgentEvent.MessageEnd(result))
+        session.agent.processEvent(AgentEvent.MessageStart(call))
+        session.agent.processEvent(AgentEvent.MessageEnd(call))
+        waitUntil { vm.uiState.value.messages.size == 3 }
 
-        vm.uiState.first { it.messages.size == 2 && it.streamingMessage == null }
-        val state = vm.uiState.value
-        assertEquals(2, state.messages.size)
-        assertNull(state.streamingMessage)
+        val ok = ToolResultMessage(
+            toolCallId = "call-1",
+            toolName = "get_weather",
+            content = listOf(TextContent("  21°C, sunny\n  wind 3 m/s")),
+            timestamp = System.nanoTime(),
+        )
+        session.agent.processEvent(AgentEvent.MessageStart(ok))
+        session.agent.processEvent(AgentEvent.MessageEnd(ok))
+        waitUntil { vm.uiState.value.messages.size == 4 && vm.uiState.value.streamingMessage == null }
+
+        val okRow = vm.uiState.value.messages[3]
+        assertEquals(ChatRole.Tool, okRow.role)
+        assertTrue(okRow.blocks.isEmpty())
+        assertEquals(
+            ChatToolResult("call-1", "get_weather", isError = false, summary = "21°C, sunny wind 3 m/s"),
+            okRow.toolResult,
+        )
+        assertTrue(vm.uiState.value.pendingTools.isEmpty())
+
+        // Error result: long first line truncated to the 200-char cap,
+        // error flag projected.
+        val failed = ToolResultMessage(
+            toolCallId = "call-1",
+            toolName = "get_weather",
+            content = listOf(TextContent("x".repeat(250))),
+            isError = true,
+            timestamp = System.nanoTime(),
+        )
+        session.agent.processEvent(AgentEvent.MessageStart(failed))
+        session.agent.processEvent(AgentEvent.MessageEnd(failed))
+        waitUntil { vm.uiState.value.messages.size == 5 }
+
+        val errorRow = vm.uiState.value.messages[4]
+        assertEquals(ChatRole.Tool, errorRow.role)
+        val result = errorRow.toolResult!!
+        assertTrue(result.isError)
+        assertEquals(200, result.summary!!.length)
+        assertEquals("x".repeat(200), result.summary)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun assistantToolCalls_projectInlineInContentOrder() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        vm.uiState.first { !it.isStreaming && it.activeSessionId != null }
+
+        val session = h.createdAgents.single()
+        val call = AssistantMessage(
+            content = listOf(
+                ThinkingContent("reasoning first"),
+                TextContent("Before"),
+                ToolCall(id = "call-1", name = "get_weather", arguments = "{\"city\":\"secret\"}"),
+                TextContent("After"),
+            ),
+            api = testModel.api,
+            provider = "zai",
+            model = "glm-4.7",
+            timestamp = System.nanoTime(),
+        )
+        session.agent.processEvent(AgentEvent.MessageStart(call))
+        session.agent.processEvent(AgentEvent.MessageEnd(call))
+        waitUntil { vm.uiState.value.messages.size == 1 }
+
+        val blocks = vm.uiState.value.messages[0].blocks
+        assertEquals(4, blocks.size)
+        assertEquals(ChatBlock.Thinking("reasoning first"), blocks[0])
+        assertEquals(ChatBlock.Text("Before"), blocks[1])
+        assertEquals(ChatBlock.ToolCall("call-1", "get_weather"), blocks[2])
+        assertEquals(ChatBlock.Text("After"), blocks[3])
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun pendingToolExecution_appearsRunning_andResolvesOnEnd() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        vm.uiState.first { !it.isStreaming && it.activeSessionId != null }
+
+        val session = h.createdAgents.single()
+        val call = AssistantMessage(
+            content = listOf(ToolCall(id = "call-1", name = "get_weather", arguments = "{}")),
+            api = testModel.api,
+            provider = "zai",
+            model = "glm-4.7",
+            timestamp = System.nanoTime(),
+        )
+        session.agent.processEvent(AgentEvent.MessageStart(call))
+        session.agent.processEvent(AgentEvent.MessageEnd(call))
+        waitUntil { vm.uiState.value.messages.size == 1 }
+
+        session.agent.processEvent(
+            AgentEvent.ToolExecutionStart("call-1", "get_weather", JsonObject(emptyMap())),
+        )
+        waitUntil { vm.uiState.value.pendingTools == listOf(PendingToolExecution("call-1", "get_weather")) }
+
+        // Unknown id (no committed call): generic fallback label, still listed.
+        session.agent.processEvent(
+            AgentEvent.ToolExecutionStart("call-x", "get_weather", JsonObject(emptyMap())),
+        )
+        waitUntil { vm.uiState.value.pendingTools.size == 2 }
+        assertEquals(PendingToolExecution("call-x", "tool"), vm.uiState.value.pendingTools[1])
+
+        session.agent.processEvent(
+            AgentEvent.ToolExecutionEnd(
+                "call-1",
+                "get_weather",
+                AgentToolResult(content = listOf(TextContent("sunny"))),
+                isError = false,
+            ),
+        )
+        waitUntil { vm.uiState.value.pendingTools.map { it.toolCallId } == listOf("call-x") }
+        session.agent.processEvent(
+            AgentEvent.ToolExecutionEnd(
+                "call-x",
+                "get_weather",
+                AgentToolResult(content = listOf(TextContent("sunny"))),
+                isError = false,
+            ),
+        )
+        waitUntil { vm.uiState.value.pendingTools.isEmpty() }
 
         vm.closeForTest()
     }

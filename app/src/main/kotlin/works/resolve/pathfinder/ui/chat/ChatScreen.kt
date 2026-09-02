@@ -31,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -81,6 +82,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
@@ -1762,6 +1764,7 @@ private fun ConversationContent(
         when (block) {
             is ChatBlock.Text -> block.text.length
             is ChatBlock.Thinking -> block.text.length
+            is ChatBlock.ToolCall -> 0
         }
     }
 
@@ -1769,8 +1772,10 @@ private fun ConversationContent(
     // that valid index whenever a session opens, a message is added, or the
     // streaming item grows. Including activeSessionId matters when switching
     // between transcripts that happen to contain the same number of messages.
-    LaunchedEffect(uiState.activeSessionId, messageCount, streamingId, streamingLength) {
-        if (messageCount > 0 || streamingId != null) listState.requestScrollToItem(0)
+    LaunchedEffect(uiState.activeSessionId, messageCount, uiState.pendingTools.size, streamingId, streamingLength) {
+        if (messageCount > 0 || uiState.pendingTools.isNotEmpty() || streamingId != null) {
+            listState.requestScrollToItem(0)
+        }
     }
 
     // Per-block expanded overrides (ephemeral view state keyed by stable
@@ -1782,7 +1787,7 @@ private fun ConversationContent(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        if (messageCount == 0 && streamingId == null) {
+        if (messageCount == 0 && uiState.pendingTools.isEmpty() && streamingId == null) {
             Text(
                 text = stringResource(R.string.chat_empty),
                 style = MaterialTheme.typography.bodyLarge,
@@ -1800,8 +1805,9 @@ private fun ConversationContent(
                 item(key = streaming.id) {
                     val hasVisibleText = streaming.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() }
                     val hasThinking = streaming.blocks.any { it is ChatBlock.Thinking }
+                    val hasToolCall = streaming.blocks.any { it is ChatBlock.ToolCall }
                     MessageItem(
-                        message = if (hasVisibleText || hasThinking || streaming.error != null) {
+                        message = if (hasVisibleText || hasThinking || hasToolCall || streaming.error != null) {
                             streaming
                         } else {
                             // No visible content at all yet: same "…" placeholder
@@ -1815,9 +1821,27 @@ private fun ConversationContent(
                     )
                 }
             }
+            items(uiState.pendingTools, key = { "pending-${it.toolCallId}" }) { pending ->
+                ToolResultRow(
+                    toolName = pending.toolName,
+                    summary = null,
+                    isError = false,
+                    running = true,
+                )
+                HorizontalDivider()
+            }
             items(uiState.messages.asReversed(), key = ChatMessage::id) { message ->
                 if (message.isCompactionMarker) {
                     CompactedDivider()
+                } else if (message.role == ChatRole.Tool) {
+                    message.toolResult?.let { result ->
+                        ToolResultRow(
+                            toolName = result.toolName,
+                            summary = result.summary,
+                            isError = result.isError,
+                            running = false,
+                        )
+                    }
                 } else {
                     MessageItem(
                         message = message,
@@ -1876,6 +1900,7 @@ private fun MessageItem(
                     message.blocks.forEachIndexed { index, block ->
                         when (block) {
                             is ChatBlock.Text -> MarkdownText(markdown = block.text)
+                            is ChatBlock.ToolCall -> ToolCallChip(block.name)
                             is ChatBlock.Thinking -> {
                                 val key = "${message.id}:$index"
                                 val expanded = thinkingOverrides[key] ?: showThinking
@@ -1910,6 +1935,82 @@ private fun MessageItem(
                 Text(
                     text = error,
                     color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+    )
+}
+
+/**
+ * Inline label for an assistant tool call (pi's ToolCall): name-only chip —
+ * the raw JSON arguments are never rendered. Disabled: a call is inert UI
+ * metadata, not an interaction.
+ */
+@Composable
+private fun ToolCallChip(name: String) {
+    AssistChip(
+        onClick = {},
+        enabled = false,
+        label = { Text(name) },
+        leadingIcon = {
+            Icon(
+                imageVector = Icons.Filled.Build,
+                contentDescription = stringResource(R.string.tool_row_icon),
+            )
+        },
+    )
+}
+
+/**
+ * One tool row (pi's ToolExecutionComponent semantics, native adaptation):
+ * tool name first with a bounded one-line summary, a loader while the
+ * execution is running and a done/failed label after, error-colored when
+ * the result is an error.
+ */
+@Composable
+private fun ToolResultRow(
+    toolName: String,
+    summary: String?,
+    isError: Boolean,
+    running: Boolean,
+) {
+    ListItem(
+        leadingContent = {
+            Icon(
+                imageVector = Icons.Filled.Build,
+                contentDescription = stringResource(R.string.tool_row_icon),
+                tint = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        headlineContent = {
+            Text(
+                text = toolName,
+                color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified,
+            )
+        },
+        supportingContent = summary?.let { text ->
+            {
+                Text(
+                    text = text,
+                    color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        },
+        trailingContent = {
+            if (running) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                Text(
+                    text = stringResource(
+                        if (isError) R.string.tool_status_failed else R.string.tool_status_done,
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
