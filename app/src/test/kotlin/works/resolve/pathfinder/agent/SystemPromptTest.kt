@@ -112,4 +112,39 @@ class SystemPromptTest {
             prompt,
         )
     }
+
+    @Test
+    fun `whitespace-only snippet is treated as absent`() {
+        val prompt = buildSystemPrompt(
+            listOf(
+                FakeTool("bash", promptSnippet = "   "),
+                FakeTool("read", promptSnippet = "Read file contents"),
+            ),
+        )
+        assertEquals(
+            "Available tools:\n" +
+                "- read: Read file contents\n" +
+                "\n" +
+                "Guidelines:\n" +
+                "- Be concise in your responses\n" +
+                "- Show file paths clearly when working with files",
+            prompt,
+        )
+    }
+
+    @Test
+    fun `multi-line snippet with whitespace runs is collapsed to one trimmed line`() {
+        val prompt = buildSystemPrompt(
+            listOf(FakeTool("web_search", promptSnippet = "Search\n  the   web\r\nfor facts  ")),
+        )
+        assertEquals(
+            "Available tools:\n" +
+                "- web_search: Search the web for facts\n" +
+                "\n" +
+                "Guidelines:\n" +
+                "- Be concise in your responses\n" +
+                "- Show file paths clearly when working with files",
+            prompt,
+        )
+    }
 }

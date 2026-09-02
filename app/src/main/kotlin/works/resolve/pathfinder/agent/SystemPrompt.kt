@@ -1,6 +1,18 @@
 package works.resolve.pathfinder.agent
 
 /**
+ * Ports `AgentSession._normalizePromptSnippet`
+ * (packages/coding-agent/src/core/agent-session.ts:1042-1049): maps
+ * null/empty/whitespace-only snippets to null and collapses newline and
+ * whitespace runs to a single trimmed line.
+ */
+private fun normalizePromptSnippet(text: String?): String? {
+    if (text.isNullOrEmpty()) return null
+    val oneLine = text.replace("[\\r\\n]+".toRegex(), " ").replace("\\s+".toRegex(), " ").trim()
+    return oneLine.ifEmpty { null }
+}
+
+/**
  * Builds the tool-dependent sections of the default system prompt. Ports the
  * tool-section composition of pi's `buildSystemPrompt`
  * (packages/coding-agent/src/core/system-prompt.ts:28) fed from
@@ -22,12 +34,20 @@ fun buildSystemPrompt(activeTools: List<AgentTool>): String? {
         return null
     }
 
-    // A tool appears in Available tools only when it provides a one-line
-    // snippet (pi: `tools.filter((name) => !!toolSnippets?.[name])`).
-    val visibleTools = activeTools.filter { it.promptSnippet != null }
+    // A tool appears in Available tools only when it provides a snippet.
+    // This composed function replaces both pi's collection step and its
+    // rendering gate: `AgentSession._normalizePromptSnippet`
+    // (packages/coding-agent/src/core/agent-session.ts:1042-1049) maps
+    // null/empty/whitespace-only snippets to absent and collapses newline
+    // and whitespace runs to a single trimmed line, and `buildSystemPrompt`
+    // then keeps a tool only when `!!toolSnippets?.[name]` (JS truthiness —
+    // an empty string is falsy there too).
+    val visibleTools = activeTools.mapNotNull { tool ->
+        normalizePromptSnippet(tool.promptSnippet)?.let { tool to it }
+    }
     val toolsList =
         if (visibleTools.isNotEmpty()) {
-            visibleTools.joinToString("\n") { "- ${it.definition.name}: ${it.promptSnippet}" }
+            visibleTools.joinToString("\n") { "- ${it.first.definition.name}: ${it.second}" }
         } else {
             "(none)"
         }
