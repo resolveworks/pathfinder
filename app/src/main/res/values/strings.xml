@@ -23,6 +23,9 @@
     <string name="settings_show_thinking_hint">Show the model\'s reasoning as it thinks</string>
     <string name="thinking_label">thinking</string>
     <string name="providers_title">Providers</string>
+    <string name="search_providers_title">Search providers</string>
+    <string name="search_providers_hint">Manage web search API keys</string>
+    <string name="search_provider_search_hint">Search providers</string>
     <string name="provider_search_hint">Search providers</string>
     <string name="no_matching_providers">No matching providers</string>
     <string name="provider_status_configured">configured</string>

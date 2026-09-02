@@ -90,6 +90,14 @@ data object DefaultThinkingNavKey : NavKey
 @Serializable
 data object ProvidersNavKey : NavKey
 
+/** Navigation 3 destination key: the search-provider credential list (Settings ▸ Search providers). */
+@Serializable
+data object SearchProvidersNavKey : NavKey
+
+/** Navigation 3 destination key: the API-key credential form of one search provider. */
+@Serializable
+data class SearchProviderAuthNavKey(val providerId: String) : NavKey
+
 /** Navigation 3 destination key: the credential form of one provider. */
 @Serializable
 data class ProviderAuthNavKey(val providerId: String) : NavKey
@@ -237,7 +245,9 @@ data class SelectedModel(
  * [ChatUiState.credentialSuccessEpoch]; the UI pops exactly one
  * [ProviderAuthNavKey] entry when this changes while one is on top. A failed
  * or incomplete save leaves it unchanged so the form and its typed inputs
- * stay intact for correction.
+ * stay intact for correction. A successful search-provider save bumps
+ * [ChatUiState.searchCredentialSuccessEpoch] instead, popping a
+ * [SearchProviderAuthNavKey] entry.
  */
 data class ChatUiState(
     val status: ChatStatus = ChatStatus.Loading,
@@ -253,8 +263,17 @@ data class ChatUiState(
      * still on top of the stack; single-entry roots are never popped.
      */
     val credentialSuccessEpoch: Long = 0,
+    /**
+     * Monotonic success signal for search-provider-credential saves: the
+     * [credentialSuccessEpoch] counterpart for [SearchProviderAuthNavKey]
+     * entries — the UI pops exactly one such entry when this changes while
+     * one is on top; single-entry roots are never popped.
+     */
+    val searchCredentialSuccessEpoch: Long = 0,
     /** Every catalog provider with live auth status; name-sorted (providers screen). */
     val providerOptions: List<ProviderOption> = emptyList(),
+    /** Every catalog search provider with live auth status; name-sorted (search-providers screen). */
+    val searchProviderOptions: List<ProviderOption> = emptyList(),
     /**
      * Models of configured providers only; provider-name-then-model-name
      * sorted (pi's getAvailable: the credential-filtered set). The scope

@@ -145,6 +145,18 @@ fun ChatRoute(
         onSubmitAuthPrompt = viewModel::submitAuthPrompt,
         onCancelProviderAuthLogin = viewModel::cancelProviderAuthLogin,
         onRefreshProviderStatus = viewModel::refreshProviderStatus,
+        // Search-provider integration (later branch) wires these to
+        // viewModel::saveSearchProviderCredential,
+        // viewModel::removeSearchProviderCredential,
+        // viewModel::refreshSearchProviderStatus, and
+        // viewModel::searchProviderAuthPrompts. Those ViewModel methods do
+        // not exist yet on this isolated branch, so the route passes
+        // placeholders to keep it compiling; no stubs are added to the
+        // ViewModel itself.
+        onSaveSearchProviderCredential = { _, _ -> },
+        onRemoveSearchProviderCredential = { _ -> },
+        onRefreshSearchProviderStatus = { },
+        searchAuthPrompts = { emptyList() },
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
         onToggleShowThinking = viewModel::setShowThinking,
@@ -194,6 +206,10 @@ fun ChatScreen(
     onSubmitAuthPrompt: (answer: String) -> Unit,
     onCancelProviderAuthLogin: () -> Unit,
     onRefreshProviderStatus: () -> Unit,
+    onSaveSearchProviderCredential: (providerId: String, apiKeyInput: String) -> Unit,
+    onRemoveSearchProviderCredential: (providerId: String) -> Unit,
+    onRefreshSearchProviderStatus: () -> Unit,
+    searchAuthPrompts: (providerId: String) -> List<ProviderAuthPrompt>,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
     onToggleShowThinking: (Boolean) -> Unit,
@@ -252,12 +268,20 @@ fun ChatScreen(
         }
     }
 
+    LaunchedEffect(uiState.searchCredentialSuccessEpoch) {
+        if (backStack.size > 1 && backStack.lastOrNull() is SearchProviderAuthNavKey) {
+            backStack.removeAt(backStack.lastIndex)
+        }
+    }
+
     val pushSettings: () -> Unit = { backStack.add(SettingsNavKey) }
     val pushModels: () -> Unit = { backStack.add(ModelsNavKey) }
     val pushDefaultModel: () -> Unit = { backStack.add(DefaultModelNavKey) }
     val pushDefaultThinking: () -> Unit = { backStack.add(DefaultThinkingNavKey) }
     val pushProviders: () -> Unit = { backStack.add(ProvidersNavKey) }
     val pushProviderAuth: (String) -> Unit = { backStack.add(ProviderAuthNavKey(it)) }
+    val pushSearchProviders: () -> Unit = { backStack.add(SearchProvidersNavKey) }
+    val pushSearchProviderAuth: (String) -> Unit = { backStack.add(SearchProviderAuthNavKey(it)) }
     val popBackStack: () -> Unit = {
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
@@ -304,6 +328,10 @@ fun ChatScreen(
                             DefaultModelNavKey -> stringResource(R.string.settings_default_model)
                             DefaultThinkingNavKey -> stringResource(R.string.settings_default_thinking)
                             ProvidersNavKey -> stringResource(R.string.providers_title)
+                            SearchProvidersNavKey -> stringResource(R.string.search_providers_title)
+                            is SearchProviderAuthNavKey -> uiState.searchProviderOptions
+                                .firstOrNull { it.id == topKey.providerId }?.name
+                                ?: stringResource(R.string.search_providers_title)
                             is ProviderAuthNavKey -> uiState.providerOptions
                                 .firstOrNull { it.id == topKey.providerId }?.name
                                 ?: stringResource(R.string.providers_title)
@@ -397,6 +425,7 @@ fun ChatScreen(
                                     onOpenDefaultThinking = pushDefaultThinking,
                                     onOpenModels = pushModels,
                                     onOpenProviders = pushProviders,
+                                    onOpenSearchProviders = pushSearchProviders,
                                     onToggleShowThinking = onToggleShowThinking,
                                 )
                             }
@@ -429,6 +458,35 @@ fun ChatScreen(
                                     onRefresh = onRefreshProviderStatus,
                                     onOpenProvider = pushProviderAuth,
                                 )
+                            }
+                            entry<SearchProvidersNavKey> {
+                                SearchProvidersContent(
+                                    providerOptions = uiState.searchProviderOptions,
+                                    onRefresh = onRefreshSearchProviderStatus,
+                                    onOpenProvider = pushSearchProviderAuth,
+                                )
+                            }
+                            entry<SearchProviderAuthNavKey> { key ->
+                                val option = uiState.searchProviderOptions
+                                    .firstOrNull { it.id == key.providerId }
+                                if (option != null) {
+                                    // Search providers offer only API-key auth, so
+                                    // this reuses the plain all-fields form with the
+                                    // search catalog's prompts; the form is API-key
+                                    // only and env inputs are not forwarded.
+                                    ProviderAuthContent(
+                                        provider = option,
+                                        prompts = searchAuthPrompts(key.providerId),
+                                        onSave = { apiKeyInput, _ ->
+                                            onSaveSearchProviderCredential(
+                                                key.providerId,
+                                                apiKeyInput,
+                                            )
+                                        },
+                                        onRemove = { onRemoveSearchProviderCredential(key.providerId) },
+                                        onClose = popBackStack,
+                                    )
+                                }
                             }
                             entry<ProviderAuthNavKey> { key ->
                                 val option = uiState.providerOptions
@@ -613,6 +671,7 @@ private fun SettingsContent(
     onOpenDefaultThinking: () -> Unit,
     onOpenModels: () -> Unit,
     onOpenProviders: () -> Unit,
+    onOpenSearchProviders: () -> Unit,
     onToggleShowThinking: (Boolean) -> Unit,
 ) {
     Column(
@@ -661,6 +720,14 @@ private fun SettingsContent(
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },
             modifier = Modifier.clickable(onClick = onOpenProviders),
+        )
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.search_providers_title)) },
+            supportingContent = { Text(stringResource(R.string.search_providers_hint)) },
+            trailingContent = {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+            },
+            modifier = Modifier.clickable(onClick = onOpenSearchProviders),
         )
         ListItem(
             headlineContent = { Text(stringResource(R.string.settings_show_thinking)) },
@@ -838,7 +905,8 @@ private fun ModelsContent(
 
 /**
  * Providers screen (pi's /login list): every catalog provider with live
- * configured/unconfigured status, filtered by name/id substring.
+ * configured/unconfigured status, filtered by name/id substring. Shares
+ * [ProviderListContent] with the search-providers screen.
  */
 @Composable
 private fun ProvidersContent(
@@ -847,7 +915,42 @@ private fun ProvidersContent(
     onOpenProvider: (providerId: String) -> Unit,
 ) {
     LaunchedEffect(Unit) { onRefresh() }
+    ProviderListContent(
+        providerOptions = providerOptions,
+        searchHint = stringResource(R.string.provider_search_hint),
+        onOpenProvider = onOpenProvider,
+    )
+}
 
+/**
+ * Search-providers screen (Settings ▸ Search providers): the same list as
+ * the providers screen over the search-provider catalog. API-key only — no
+ * method selection or OAuth.
+ */
+@Composable
+private fun SearchProvidersContent(
+    providerOptions: List<ProviderOption>,
+    onRefresh: () -> Unit,
+    onOpenProvider: (providerId: String) -> Unit,
+) {
+    LaunchedEffect(Unit) { onRefresh() }
+    ProviderListContent(
+        providerOptions = providerOptions,
+        searchHint = stringResource(R.string.search_provider_search_hint),
+        onOpenProvider = onOpenProvider,
+    )
+}
+
+/**
+ * Shared provider list: search field plus name-sorted rows with live
+ * configured/unconfigured status, filtered by name/id substring.
+ */
+@Composable
+private fun ProviderListContent(
+    providerOptions: List<ProviderOption>,
+    searchHint: String,
+    onOpenProvider: (providerId: String) -> Unit,
+) {
     var query by rememberSaveable { mutableStateOf("") }
     val filtered = providerOptions.filter { option ->
         val q = query.trim()
@@ -865,7 +968,7 @@ private fun ProvidersContent(
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            label = { Text(stringResource(R.string.provider_search_hint)) },
+            label = { Text(searchHint) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -2153,6 +2256,10 @@ private val PREVIEW_PROVIDER_OPTIONS = listOf(
     ProviderOption("zai", "Z.AI", configured = false),
 )
 
+private val PREVIEW_SEARCH_PROVIDER_OPTIONS = listOf(
+    ProviderOption("brave", "Brave Search", configured = true),
+)
+
 private val PREVIEW_CLOUDFLARE_PROMPTS = listOf(
     ProviderAuthPrompt("CLOUDFLARE_API_KEY", "Enter the Cloudflare API key", secret = true),
     ProviderAuthPrompt("CLOUDFLARE_ACCOUNT_ID", "Enter the Cloudflare account ID", secret = false),
@@ -2177,6 +2284,7 @@ private fun PreviewChatScreen(
     extraKeys: List<NavKey> = emptyList(),
     authPrompts: (String) -> List<ProviderAuthPrompt> = { emptyList() },
     authMethods: (String) -> List<AuthMethodInfo> = { emptyList() },
+    searchAuthPrompts: (String) -> List<ProviderAuthPrompt> = { emptyList() },
 ) {
     PathfinderTheme {
         ChatScreen(
@@ -2198,6 +2306,10 @@ private fun PreviewChatScreen(
             onSubmitAuthPrompt = { },
             onCancelProviderAuthLogin = { },
             onRefreshProviderStatus = {},
+            onSaveSearchProviderCredential = { _, _ -> },
+            onRemoveSearchProviderCredential = { _ -> },
+            onRefreshSearchProviderStatus = {},
+            searchAuthPrompts = searchAuthPrompts,
             onNewSession = {},
             onSwitchSession = {},
             onToggleShowThinking = {},
@@ -2261,6 +2373,47 @@ private fun ChatScreenProvidersPreview() {
             selectedModel = PREVIEW_SELECTED_MODEL,
         ),
         extraKeys = listOf(SettingsNavKey, ProvidersNavKey),
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenSearchProvidersPreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            providerOptions = PREVIEW_PROVIDER_OPTIONS,
+            searchProviderOptions = PREVIEW_SEARCH_PROVIDER_OPTIONS,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+        ),
+        extraKeys = listOf(SettingsNavKey, SearchProvidersNavKey),
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenSearchProviderAuthPreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            providerOptions = PREVIEW_PROVIDER_OPTIONS,
+            searchProviderOptions = PREVIEW_SEARCH_PROVIDER_OPTIONS,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+        ),
+        extraKeys = listOf(
+            SettingsNavKey,
+            SearchProvidersNavKey,
+            SearchProviderAuthNavKey("brave"),
+        ),
+        searchAuthPrompts = { providerId ->
+            if (providerId == "brave") {
+                listOf(ProviderAuthPrompt("BRAVE_API_KEY", "Enter Brave Search API key", secret = true))
+            } else {
+                emptyList()
+            }
+        },
     )
 }
 
