@@ -79,6 +79,31 @@ interface AgentTool {
     val executionMode: ToolExecutionMode? get() = null
 
     /**
+     * Optional one-line snippet for the Available tools section in the default
+     * system prompt. Custom tools are omitted from that section when this is
+     * not provided.
+     *
+     * Ports `ToolDefinition.promptSnippet`
+     * (packages/coding-agent/src/core/extensions/types.ts:461). Placement
+     * divergence: pi keeps this on its coding-agent `ToolDefinition` rather
+     * than `packages/agent`'s `AgentTool`, but pathfinder has no separate
+     * coding-agent tool layer (no extension runner, no `ToolDefinition`), so
+     * [AgentTool] — already carrying pi's `label`/`executionMode` — is the
+     * `ToolDefinition` analog and hosts this field verbatim.
+     */
+    val promptSnippet: String? get() = null
+
+    /**
+     * Optional guideline bullets appended to the default system prompt
+     * Guidelines section when this tool is active.
+     *
+     * Ports `ToolDefinition.promptGuidelines`
+     * (packages/coding-agent/src/core/extensions/types.ts:463); see
+     * [promptSnippet] for the placement decision.
+     */
+    val promptGuidelines: List<String> get() = emptyList()
+
+    /**
      * Validates raw parsed tool-call arguments against this tool's
      * [definition.parameters] and may return a normalized copy.
      *
