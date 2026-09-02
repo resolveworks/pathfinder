@@ -31,7 +31,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -85,7 +84,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -1910,14 +1908,18 @@ private fun ConversationContent(
                 item(key = streaming.id) {
                     val hasVisibleText = streaming.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() }
                     val hasThinking = streaming.blocks.any { it is ChatBlock.Thinking }
-                    val hasToolCall = streaming.blocks.any { it is ChatBlock.ToolCall }
                     MessageItem(
-                        message = if (hasVisibleText || hasThinking || hasToolCall || streaming.error != null) {
+                        message = if (hasVisibleText || hasThinking || streaming.error != null) {
                             streaming
                         } else {
-                            // No visible content at all yet: same "…" placeholder
-                            // as before. A thinking-only stream renders its real
-                            // blocks (thinking header + loader) instead.
+                            // No visible content yet: same "…" placeholder as
+                            // before. A thinking-only stream renders its real
+                            // blocks (thinking header + loader) instead; a
+                            // tool-call-only stream keeps it too — pi renders
+                            // such assistant messages as zero lines (the
+                            // execution shows as its own row), so the placeholder
+                            // bridges until the call commits and the pending
+                            // tool row appears.
                             streaming.copy(blocks = listOf(ChatBlock.Text(STREAMING_PLACEHOLDER)))
                         },
                         isStreaming = true,
@@ -1937,7 +1939,10 @@ private fun ConversationContent(
                 )
                 HorizontalDivider()
             }
-            items(uiState.messages.asReversed(), key = ChatMessage::id) { message ->
+            items(
+                uiState.messages.asReversed().filter(ChatMessage::hasRenderableContent),
+                key = ChatMessage::id,
+            ) { message ->
                 if (message.isCompactionMarker) {
                     CompactedDivider()
                 } else if (message.role == ChatRole.Tool) {
@@ -1985,12 +1990,28 @@ private fun CompactedDivider() {
         HorizontalDivider(modifier = Modifier.weight(1f))
     }
 }
+
+/**
+ * Whether the message renders a row at all. Pi's AssistantMessageComponent
+ * renders zero lines for a tool-call-only assistant message — `toolCall`
+ * blocks never render in the parent message; the executions render as their
+ * own tool rows — so such messages are filtered out here. A message carrying
+ * an error keeps its row (the error text shows in it).
+ */
+private fun ChatMessage.hasRenderableContent(): Boolean =
+    isCompactionMarker ||
+        role != ChatRole.Assistant ||
+        error != null ||
+        blocks.any { it is ChatBlock.Text || it is ChatBlock.Thinking }
+
 /**
  * One chat row. User messages render plain concatenated text; assistant
  * messages render their blocks in content order — text blocks as markdown,
  * thinking blocks as collapsible [ThinkingBlock]s whose default expanded
  * state follows [showThinking] until the user taps one (then the per-block
- * [thinkingOverrides] entry wins, surviving changes to the setting).
+ * [thinkingOverrides] entry wins, surviving changes to the setting). Tool
+ * call blocks render nothing (pi's AssistantMessageComponent skips them:
+ * executions render as their own tool rows).
  */
 @Composable
 private fun MessageItem(
@@ -2009,7 +2030,9 @@ private fun MessageItem(
                     message.blocks.forEachIndexed { index, block ->
                         when (block) {
                             is ChatBlock.Text -> MarkdownText(markdown = block.text)
-                            is ChatBlock.ToolCall -> ToolCallChip(block.name)
+                            // Pi skips toolCall blocks in the assistant message;
+                            // the execution renders as its own tool row.
+                            is ChatBlock.ToolCall -> Unit
                             is ChatBlock.Thinking -> {
                                 val key = "${message.id}:$index"
                                 val expanded = thinkingOverrides[key] ?: showThinking
@@ -2051,26 +2074,6 @@ private fun MessageItem(
 }
 
 /**
- * Inline label for an assistant tool call (pi's ToolCall): name-only chip —
- * the raw JSON arguments are never rendered. Disabled: a call is inert UI
- * metadata, not an interaction.
- */
-@Composable
-private fun ToolCallChip(name: String) {
-    AssistChip(
-        onClick = {},
-        enabled = false,
-        label = { Text(name) },
-        leadingIcon = {
-            Icon(
-                imageVector = Icons.Filled.Build,
-                contentDescription = stringResource(R.string.tool_row_icon),
-            )
-        },
-    )
-}
-
-/**
  * Collapsed preview cap (pi's FALLBACK_PREVIEW_LINES, tool-execution.ts):
  * the generic fallback renders the first 10 output lines plus a
  * "... (N more lines)" continuation hint; the expansion flag lifts the cap.
@@ -2079,13 +2082,15 @@ private const val FALLBACK_PREVIEW_LINES = 10
 
 /**
  * One tool row (pi's ToolExecutionComponent semantics, native adaptation):
- * tool name first, the result output below — bounded to a
- * [FALLBACK_PREVIEW_LINES] preview with a remaining-lines hint until the
- * global expand flag lifts the cap to the full output; a loader while the
- * execution is running and a done/failed label after, error-colored when
- * the result is an error. Tapping a row with output flips the global flag
- * (pi's Ctrl+O, `app.tools.expand`, exposed here as a tap on the tool
- * output itself); running rows carry no output and stay inert.
+ * tool name first, the result output below — parsed as markdown, matching
+ * Scry's web_search renderer (renderMarkdownResult renders the result text
+ * through Markdown), bounded to a [FALLBACK_PREVIEW_LINES] raw-line preview
+ * with a remaining-lines hint until the global expand flag lifts the cap to
+ * the full output; a loader while the execution is running and a done/failed
+ * label after, error-colored when the result is an error. Tapping a row with
+ * output flips the global flag (pi's Ctrl+O, `app.tools.expand`, exposed
+ * here as a tap on the tool output itself); running rows carry no output and
+ * stay inert.
  */
 @Composable
 private fun ToolResultRow(
@@ -2105,13 +2110,6 @@ private fun ToolResultRow(
             } else {
                 Modifier
             },
-        leadingContent = {
-            Icon(
-                imageVector = Icons.Filled.Build,
-                contentDescription = stringResource(R.string.tool_row_icon),
-                tint = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        },
         headlineContent = {
             Text(
                 text = toolName,
@@ -2124,11 +2122,10 @@ private fun ToolResultRow(
                 val display = if (expanded) lines else lines.take(FALLBACK_PREVIEW_LINES)
                 val remaining = lines.size - display.size
                 Column {
-                    // pi renders tool output as terminal text (toolOutput
-                    // gray); monospace body keeps that shape on Android.
-                    Text(
-                        text = display.joinToString("\n"),
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    // Scry's renderMarkdownResult caps the raw markdown
+                    // lines first, then renders the kept lines as Markdown.
+                    MarkdownText(
+                        markdown = display.joinToString("\n"),
                         color = if (isError) {
                             MaterialTheme.colorScheme.error
                         } else {
