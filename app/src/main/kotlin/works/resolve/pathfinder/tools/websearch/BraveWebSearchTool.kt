@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.tools.websearch
 
+import works.resolve.pathfinder.agent.AgentSession
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.ai.core.TextContent
