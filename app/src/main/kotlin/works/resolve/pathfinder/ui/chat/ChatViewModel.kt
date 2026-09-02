@@ -12,6 +12,8 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
+import works.resolve.pathfinder.ai.core.ToolCall
+import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.core.clampThinkingLevel
 import works.resolve.pathfinder.ai.core.getSupportedThinkingLevels
@@ -917,7 +919,12 @@ class ChatViewModel(
             // overflow recovery removes the error message from agent state
             // while the append-only tree keeps it.
             is AgentEvent.MessageEnd -> {
-                updateState { it.copy(treeRows = buildTreeRows(activeConversation, it.treeFilter)) }
+                updateState {
+                    it.copy(
+                        messages = projectCommittedAfterSessionMessageEnd(),
+                        treeRows = buildTreeRows(activeConversation, it.treeFilter),
+                    )
+                }
                 if (activeConversation.entries.size > persistedEntryCount) {
                     enqueuePersist()
                 }
@@ -926,11 +933,26 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * Re-projects from the same state/tree intersection as [onAgentState], so
+     * observing both paths is idempotent rather than append-incremental.
+     * Provenance: pi's Agent reduces `message_end` into state before invoking
+     * AgentSession's event sink (`packages/agent/src/agent.ts`); the session
+     * then appends it to the conversation before re-emitting the session event
+     * (`packages/coding-agent/src/core/agent-session.ts`). The first projection
+     * therefore sees the old tree, and with no follow-up state emission (for
+     * example an injected terminal MessageEnd) it would otherwise never see
+     * the committed message.
+     */
+    private fun projectCommittedAfterSessionMessageEnd(): List<ChatMessage> =
+        projectCommitted(agent?.state?.value?.messages.orEmpty(), activeConversation)
+
     private fun onAgentState(state: AgentState) {
         val agentError = state.errorMessage
         updateState {
             it.copy(
                 messages = projectCommitted(state.messages, activeConversation),
+                pendingTools = pendingToolExecutions(state),
                 streamingMessage = (state.streamingMessage as? AssistantMessage)?.let(::projectStreaming),
                 isStreaming = state.isStreaming,
                 // The thinking surfaces follow the live session (pi's footer
@@ -1726,9 +1748,27 @@ private fun projectCommitted(liveMessages: List<Message>, conversation: Conversa
                         blocks = message.content.toChatBlocks(),
                         error = message.errorMessage,
                     )
-                    else -> null
+                    // Pi's tool-result messages render as tool rows (pi's
+                    // ToolExecutionComponent semantics: tool name first,
+                    // result text as a bounded preview). Only UI-safe fields
+                    // cross the boundary: the structured `details` JSON is
+                    // never projected (pi's TUI renders rich per-tool details;
+                    // pathfinder stays minimal until real tools define
+                    // needs). Distinct id namespace so a tool row can never
+                    // collide with a message row.
+                    is ToolResultMessage -> ChatMessage(
+                        id = "tool-$index-${message.timestamp}-${message.toolCallId}",
+                        role = ChatRole.Tool,
+                        blocks = emptyList(),
+                        toolResult = ChatToolResult(
+                            toolCallId = message.toolCallId,
+                            toolName = message.toolName,
+                            isError = message.isError,
+                            summary = toolResultSummary(message),
+                        ),
+                    )
                 }
-                chat?.let { projected.add(it) }
+                projected.add(chat)
             }
         }
     }
@@ -1771,9 +1811,62 @@ private fun List<Content>.toChatBlocks(): List<ChatBlock> {
                 flushThinking()
                 part.text.takeIf { it.isNotBlank() }?.let { blocks.add(ChatBlock.Text(it)) }
             }
+            is ToolCall -> {
+                // Name-only label in content order; raw JSON arguments are
+                // deliberately never projected into UI state.
+                flushThinking()
+                blocks.add(ChatBlock.ToolCall(part.id, part.name))
+            }
             else -> flushThinking()
         }
     }
     flushThinking()
     return blocks
 }
+
+/**
+ * Bounded one-line summary of a tool result (pi's rendered preview, reduced):
+ * the first text part with whitespace collapsed into one trimmed line,
+ * capped at [TOOL_RESULT_SUMMARY_MAX] characters. Null when the result
+ * carries no text at all.
+ */
+private fun toolResultSummary(message: ToolResultMessage): String? {
+    val text = message.content.asSequence().filterIsInstance<TextContent>().firstOrNull()?.text
+        ?: return null
+    return text.trim()
+        .split(Regex("\\s+"))
+        .joinToString(" ")
+        .takeIf { it.isNotEmpty() }
+        ?.take(TOOL_RESULT_SUMMARY_MAX)
+}
+
+/** Cap for [toolResultSummary] previews. */
+private const val TOOL_RESULT_SUMMARY_MAX = 200
+
+/**
+ * Resolves the agent's pending tool-execution ids into UI rows: names come
+ * from committed assistant [ToolCall] blocks in transcript order (calls
+ * commit before execution starts); an unknown id falls back to a generic
+ * label so it can never block the indicator.
+ */
+private fun pendingToolExecutions(state: AgentState): List<PendingToolExecution> {
+    if (state.pendingToolCalls.isEmpty()) return emptyList()
+    val rows = mutableListOf<PendingToolExecution>()
+    val resolved = mutableSetOf<String>()
+    for (message in state.messages) {
+        val content = (message as? AssistantMessage)?.content ?: continue
+        for (part in content) {
+            if (part is ToolCall && part.id in state.pendingToolCalls && resolved.add(part.id)) {
+                rows.add(PendingToolExecution(part.id, part.name))
+            }
+        }
+    }
+    // Defensive fallback: a malformed or out-of-order event must still show
+    // an in-flight indicator rather than disappearing from the UI.
+    for (id in state.pendingToolCalls) {
+        if (resolved.add(id)) rows.add(PendingToolExecution(id, UNKNOWN_TOOL_NAME))
+    }
+    return rows
+}
+
+private const val UNKNOWN_TOOL_NAME = "tool"

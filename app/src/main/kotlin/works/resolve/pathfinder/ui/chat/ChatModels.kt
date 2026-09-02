@@ -13,6 +13,7 @@ import works.resolve.pathfinder.data.sessions.SessionSummary
 enum class ChatRole {
     User,
     Assistant,
+    Tool,
 }
 
 /**
@@ -25,6 +26,9 @@ sealed class ChatBlock {
 
     /** Model reasoning part; rendering is owned by a later chunk. */
     data class Thinking(val text: String) : ChatBlock()
+
+    /** Assistant tool call: name-only; raw JSON arguments never enter UI state. */
+    data class ToolCall(val toolCallId: String, val name: String) : ChatBlock()
 }
 
 data class ChatMessage(
@@ -40,6 +44,26 @@ data class ChatMessage(
      * renders as a minimal divider instead of message content.
      */
     val isCompactionMarker: Boolean = false,
+    /** Tool-result payload; set only on [ChatRole.Tool] rows (empty blocks). */
+    val toolResult: ChatToolResult? = null,
+)
+
+/**
+ * UI-safe projection of a committed tool result (pi's ToolResultMessage):
+ * tool name, error flag, and a bounded single-line summary. The structured
+ * `details` JSON is never projected.
+ */
+data class ChatToolResult(
+    val toolCallId: String,
+    val toolName: String,
+    val isError: Boolean,
+    val summary: String? = null,
+)
+
+/** An in-flight tool execution (pi's tool_execution_start..end window). */
+data class PendingToolExecution(
+    val toolCallId: String,
+    val toolName: String,
 )
 
 /** Navigation 3 destination key: the conversation surface. */
@@ -281,6 +305,7 @@ data class ChatUiState(
     val activeSessionId: String? = null,
     val sessionSummaries: List<SessionSummary> = emptyList(),
     val messages: List<ChatMessage> = emptyList(),
+    val pendingTools: List<PendingToolExecution> = emptyList(),
     val streamingMessage: ChatMessage? = null,
     val draft: String = "",
     val isStreaming: Boolean = false,
