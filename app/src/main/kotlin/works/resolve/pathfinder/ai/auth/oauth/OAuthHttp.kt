@@ -8,30 +8,26 @@ import kotlin.concurrent.thread
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
- * Minimal provider-neutral OAuth HTTP boundary (the narrow Android stand-in
- * for pi's `fetch` in the files under `packages/ai/src/auth/oauth/`): a single JSON request
+ * The narrow Android stand-in for pi's `fetch`: a single JSON request
  * executed with bounded timeouts, returning status/body/headers for the flow
  * to interpret — matching pi, non-2xx handling is the caller's decision, not
  * the transport's.
  *
- * Contract:
- * - Network-level failures throw [IOException]; a bounded connect/read
- *   timeout throws [SocketTimeoutException] (an [IOException] subclass).
- * - Coroutine cancellation disconnects the underlying connection and
- *   propagates as [kotlinx.coroutines.CancellationException].
- * - Implementations must never log request URLs' query secrets, bodies,
- *   response bodies, or headers. Both request and response `toString`s
- *   redact accordingly.
+ * Network-level failures throw [IOException] (bounded connect/read timeouts
+ * as [SocketTimeoutException]); coroutine cancellation disconnects the
+ * underlying connection and propagates as
+ * [kotlinx.coroutines.CancellationException]. Implementations must never log
+ * request URLs' query secrets, bodies, response bodies, or headers.
  */
 interface OAuthHttpClient {
     suspend fun execute(request: OAuthHttpRequest): OAuthHttpResponse
 }
 
 /**
- * One OAuth HTTP exchange (pi's fetch arguments). [body] is JSON bytes and
- * may carry secrets (verifier, authorization code); it is redacted in
- * [toString]. So is the request URL: query strings, fragments, and
- * user-info may carry codes/tokens, so [toString] surfaces only the safe
+ * One OAuth HTTP exchange. [body] is JSON bytes and may carry secrets
+ * (verifier, authorization code); it is redacted in [toString]. So is the
+ * request URL: query strings, fragments, and user-info may carry
+ * codes/tokens, so [toString] surfaces only the safe
  * `scheme://host[:port]/path` form and falls back to a generic
  * `<redacted-url>` for anything unparseable.
  */
@@ -47,7 +43,6 @@ data class OAuthHttpRequest(
         "OAuthHttpRequest(method=$method, url=$safeUrlString, headers=${headers.keys}, " +
             "body=<${body.size} bytes>, timeoutMs=$timeoutMs)"
 
-    /** The URL without query, fragment, or user-info — safe for logs/errors. */
     private val safeUrlString: String
         get() = try {
             val uri = java.net.URI(url)
@@ -76,7 +71,7 @@ data class OAuthHttpRequest(
         31 * (31 * (31 * method.hashCode() + url.hashCode()) + headers.hashCode()) + body.contentHashCode()
 }
 
-/** Complete response of an [OAuthHttpRequest]. [body] may carry credential values; it is redacted in [toString]. */
+/** [body] may carry credential values; it is redacted in [toString]. */
 data class OAuthHttpResponse(
     val status: Int,
     /** Header names lower-cased. */
@@ -102,10 +97,8 @@ data class OAuthHttpResponse(
  * one-shot, non-streaming exchanges, so the app's streaming dependency adds
  * no value here.
  *
- * The exchange runs on its own worker thread; cancelling the caller
- * disconnects the [HttpURLConnection] (unblocking the worker) and
- * propagates. Response bodies are read only up to [MAX_BODY_BYTES] so a
- * hostile server cannot exhaust memory. Never logs URLs, bodies, or headers.
+ * The exchange runs on its own worker thread; response bodies are read only
+ * up to [MAX_BODY_BYTES] so a hostile server cannot exhaust memory.
  */
 class UrlConnectionOAuthHttpClient : OAuthHttpClient {
 

@@ -10,37 +10,30 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
 /**
- * Configuration for how tool calls from a single assistant message are
- * executed. Ported from pi's ToolExecutionMode (packages/agent/src/types.ts):
+ * How tool calls from a single assistant message are executed.
  *
  * - [SEQUENTIAL]: each tool call is prepared, executed, and finalized before
  *   the next one starts.
- * - [PARALLEL]: tool calls are prepared sequentially, then allowed tools
- *   execute concurrently. `tool_execution_end` is emitted in tool completion
- *   order after each tool is finalized, while tool-result message artifacts
- *   are emitted later in assistant source order.
+ * - [PARALLEL]: calls are prepared sequentially, then allowed tools execute
+ *   concurrently. `tool_execution_end` is emitted in tool completion order
+ *   after each tool is finalized, while tool-result message artifacts are
+ *   emitted later in assistant source order.
  */
 enum class ToolExecutionMode { SEQUENTIAL, PARALLEL }
 
 /**
- * Final or partial result produced by a tool. Ported from pi's AgentToolResult
- * (packages/agent/src/types.ts).
- *
- * Divergence: pi's `terminate` field is omitted. Upstream it only participates
- * in the `beforeToolCall`/`afterToolCall` hook early-termination rule, and
- * hooks are out of scope for this port.
- *
- * @throws IllegalArgumentException if [content] contains anything other than
- *   [TextContent] or [ImageContent] (pi: `(TextContent | ImageContent)[]`).
+ * Final or partial result produced by a tool. Divergence: pi's `terminate`
+ * field is omitted — upstream it only participates in the hook
+ * early-termination rule, and hooks are out of scope.
  */
 data class AgentToolResult(
     /** Text or image content returned to the model. */
     val content: List<Content>,
     /** Arbitrary structured details for logs or UI rendering. */
     val details: JsonElement? = null,
-    /** Usage from the final tool execution itself, if available. Not used for main LLM context accounting. */
+    /** Usage of the final tool execution itself; not used for main LLM context accounting. */
     val usage: Usage? = null,
-    /** Names of tools introduced by this result and available from this transcript point onward. */
+    /** Tools introduced by this result, available from this transcript point onward. */
     val addedToolNames: List<String> = emptyList(),
 ) {
     init {
@@ -51,93 +44,57 @@ data class AgentToolResult(
 }
 
 /**
- * Callback used by tools to stream partial execution updates. Ported from pi's
- * AgentToolUpdateCallback (packages/agent/src/types.ts), a plain non-suspending
- * function.
- *
- * Pi semantics: the callback is scoped to the current [AgentTool.execute]
- * invocation; calls made after the tool settles are ignored; the loop (not the
- * tool) owns serialization and lifetime of update events.
+ * Callback tools use to stream partial execution updates. Scoped to the
+ * current [AgentTool.execute] invocation; calls made after the tool settles
+ * are ignored, and the loop owns serialization and lifetime of update events.
  */
 typealias AgentToolUpdateCallback = (AgentToolResult) -> Unit
 
-/** Tool definition used by the agent runtime. Ported from pi's AgentTool (packages/agent/src/types.ts). */
 interface AgentTool {
-    /** The single provider-facing tool definition (name/description/parameters). */
     val definition: Tool
 
-    /** Human-readable label for UI display (pi's AgentTool.label). */
     val label: String
 
-    /**
-     * Per-tool execution mode override (pi's AgentTool.executionMode):
-     * [ToolExecutionMode.SEQUENTIAL] means this tool must execute one at a
-     * time with other tool calls; [ToolExecutionMode.PARALLEL] means it can
-     * execute concurrently with others. If null, the default execution mode
-     * applies.
-     */
+    /** Per-tool override of the run's execution mode; null uses the default. */
     val executionMode: ToolExecutionMode? get() = null
 
     /**
-     * Optional one-line snippet for the Available tools section in the default
-     * system prompt. Custom tools are omitted from that section when this is
-     * not provided.
+     * Optional one-line snippet for the Available tools section of the default
+     * system prompt; tools without one are omitted from that section.
      *
-     * Ports `ToolDefinition.promptSnippet`
-     * (packages/coding-agent/src/core/extensions/types.ts:461). Placement
-     * divergence: pi keeps this on its coding-agent `ToolDefinition` rather
-     * than `packages/agent`'s `AgentTool`, but pathfinder has no separate
-     * coding-agent tool layer (no extension runner, no `ToolDefinition`), so
-     * [AgentTool] — already carrying pi's `label`/`executionMode` — is the
-     * `ToolDefinition` analog and hosts this field verbatim.
+     * Placement divergence: pi keeps this on its coding-agent `ToolDefinition`,
+     * but pathfinder has no separate coding-agent tool layer, so [AgentTool]
+     * hosts it.
      */
     val promptSnippet: String? get() = null
 
     /**
-     * Optional guideline bullets appended to the default system prompt
-     * Guidelines section when this tool is active.
-     *
-     * Ports `ToolDefinition.promptGuidelines`
-     * (packages/coding-agent/src/core/extensions/types.ts:463); see
-     * [promptSnippet] for the placement decision.
+     * Guideline bullets appended to the default system prompt Guidelines
+     * section while this tool is active; see [promptSnippet] for placement.
      */
     val promptGuidelines: List<String> get() = emptyList()
 
     /**
-     * Validates raw parsed tool-call arguments against this tool's
-     * [definition.parameters] and may return a normalized copy.
-     *
-     * Kotlin adaptation of pi's `prepareArguments` + `validateToolArguments`
-     * (packages/agent/src/types.ts AgentTool.prepareArguments;
-     * packages/ai/src/utils/validation.ts:317-350): instead of a
-     * TypeBox/JSON-Schema validation framework, each tool owns typed
-     * decoding/validation and throws (e.g. [IllegalArgumentException]) on
-     * failure — the loop catches failures and converts them to error tool
-     * results, mirroring pi's thrown `Error` from `validateToolArguments`.
+     * Validates raw parsed tool-call arguments against [definition.parameters]
+     * and may return a normalized copy. Instead of pi's TypeBox/JSON-Schema
+     * validation, each tool owns typed decoding/validation and throws on
+     * failure; the loop catches that and converts it to an error tool result.
      */
     fun validateArguments(arguments: JsonObject): JsonObject
 
     /**
-     * Execute the tool call. Throw on failure instead of encoding errors in
-     * [AgentToolResult.content] (pi's AgentTool.execute contract).
-     *
-     * Kotlin divergences from pi's
-     * `execute(toolCallId, params, signal?, onUpdate?)`:
-     * - coroutine cancellation replaces pi's `AbortSignal`, so there is no
-     *   signal parameter;
-     * - [onUpdate] is required — a non-streaming tool passes a no-op.
+     * Execute the tool call, throwing on failure instead of encoding errors
+     * in [AgentToolResult.content]. Coroutine cancellation replaces pi's
+     * `AbortSignal`; [onUpdate] is required — a non-streaming tool passes a
+     * no-op.
      */
     suspend fun execute(toolCallId: String, arguments: JsonObject, onUpdate: AgentToolUpdateCallback): AgentToolResult
 }
 
 /**
- * Context snapshot passed into the low-level agent loop. Ported from pi's
- * AgentContext (packages/agent/src/types.ts): system prompt, transcript
- * visible to the model, tools available for this run.
- *
- * Divergence: upstream `systemPrompt` is a required `string`, while
- * [works.resolve.pathfinder.ai.core.Context.systemPrompt] is nullable, so this
- * port keeps [String?].
+ * Context snapshot passed into the low-level agent loop. Divergence: pi's
+ * `systemPrompt` is required; this port keeps it nullable to match
+ * [works.resolve.pathfinder.ai.core.Context.systemPrompt].
  */
 data class AgentContext(
     val systemPrompt: String? = null,

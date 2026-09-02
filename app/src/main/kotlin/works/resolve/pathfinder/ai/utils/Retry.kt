@@ -6,14 +6,6 @@ import kotlinx.coroutines.withContext
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.StopReason
 
-/**
- * Ported from pi `packages/ai/src/utils/retry.ts`
- * (`buildProviderErrorPattern`, `NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN`,
- * `RETRYABLE_PROVIDER_ERROR_PATTERN`, `RetryPolicy`, `RetryCallbacks`,
- * `retryAssistantCall`, `isRetryableAssistantError`).
- */
-
-/** Upstream `buildProviderErrorPattern`: one case-insensitive regex joining fragments with `|`. */
 private fun buildProviderErrorPattern(patterns: List<String>): Regex =
     Regex(patterns.joinToString("|"), setOf(RegexOption.IGNORE_CASE))
 
@@ -106,12 +98,7 @@ private val RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern(
     ),
 )
 
-/**
- * Retry policy: bounded attempts with exponential backoff (`baseDelayMs * 2^(attempt-1)`).
- * Matches `settings.retry` (`enabled`, `maxRetries`, `baseDelayMs`) in coding-agent; kept
- * here so the classifier and the policy-driven retry loop live together and stay reusable
- * by other callers. Upstream `RetryPolicy` (retry.ts).
- */
+/** Matches `settings.retry` (`enabled`, `maxRetries`, `baseDelayMs`) in coding-agent. */
 data class RetryPolicy(
     val enabled: Boolean,
     /** Max retry attempts (0 = no retries). The initial call never counts as a retry. */
@@ -120,11 +107,7 @@ data class RetryPolicy(
     val baseDelayMs: Long,
 )
 
-/**
- * Optional callbacks emitted by [Retry.retryAssistantCall] around each retry.
- * Upstream `RetryCallbacks` (retry.ts) is an interface with optional methods; the
- * repo rule maps that to a data class of nullable function types.
- */
+/** Optional callbacks emitted by [Retry.retryAssistantCall] around each retry. */
 data class RetryCallbacks(
     /** Emitted before the backoff sleep of each retry attempt (1-indexed). */
     val onRetryScheduled: (suspend (attempt: Int, maxAttempts: Int, delayMs: Long, errorMessage: String) -> Unit)? = null,
@@ -135,16 +118,13 @@ data class RetryCallbacks(
 )
 
 /**
- * Upstream `retryAssistantCall` (retry.ts). Sleep is injectable like `ProviderRetry`
- * so tests never wait.
+ * Sleep is injectable so tests never wait.
  *
- * Divergence: upstream takes an `AbortSignal` and its `sleep` rejects on abort,
- * returning `{...response, stopReason: "aborted", errorMessage: undefined}`. This
- * codebase expresses abort as plain coroutine cancellation (see `agent/AgentLoop.kt`,
- * which surfaces aborts as ABORTED AssistantMessages, not exceptions), so the abort
- * path maps to catching [CancellationException] around the backoff sleep; the final
- * callback still fires via [NonCancellable] and the aborted `AssistantMessage` is
- * returned normally.
+ * Divergence: upstream takes an `AbortSignal` and its `sleep` rejects on abort, while
+ * this codebase expresses abort as plain coroutine cancellation (AgentLoop surfaces
+ * aborts as ABORTED AssistantMessages, not exceptions); the abort path is a caught
+ * [CancellationException] around the backoff sleep, and the final callback still
+ * fires via [NonCancellable].
  */
 class Retry(
     private val sleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
@@ -179,19 +159,16 @@ class Retry(
         while (true) {
             val response = produce()
 
-            // Abort: terminal but not successful. Never retry an aborted message.
             if (response.stopReason == StopReason.ABORTED) {
                 if (lastRetry != null) callbacks?.onRetryFinished?.invoke(false, lastRetry.first, null)
                 return response
             }
 
-            // Success: non-error, non-abort responses return as-is.
             if (response.stopReason != StopReason.ERROR) {
                 if (lastRetry != null) callbacks?.onRetryFinished?.invoke(true, lastRetry.first, null)
                 return response
             }
 
-            // Non-retryable, or budget exhausted: return the final error message.
             if (attempt >= maxAttempts || !isRetryableAssistantError(response)) {
                 if (lastRetry != null) callbacks?.onRetryFinished?.invoke(false, lastRetry.first, response.errorMessage)
                 return response
@@ -203,9 +180,6 @@ class Retry(
             val delayMs = policy!!.baseDelayMs shl (attempt - 1)
             callbacks?.onRetryScheduled?.invoke(attempt, maxAttempts, delayMs, errorMessage)
 
-            // Normalize aborts during retry backoff to the same AssistantMessage shape as
-            // provider stream aborts, so callers do not need to care when cancellation
-            // happened. Upstream's RetrySleepAbortError maps to coroutine cancellation.
             try {
                 sleep(delayMs)
             } catch (error: CancellationException) {

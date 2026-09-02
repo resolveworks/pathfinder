@@ -5,21 +5,14 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 
 /**
- * Ported from pi `packages/ai/src/auth/resolve.ts`: auth resolution shared by
- * model collections. A stored credential owns the provider: ambient/env is
- * consulted only when nothing is stored. No silent env fallback after a
- * failed refresh or for a credential type without a matching handler.
+ * A stored credential owns the provider: ambient/env is consulted only when
+ * nothing is stored. No silent env fallback after a failed refresh or for a
+ * credential type without a matching handler.
  *
- * Cancellation: pi races every operation against an `AbortSignal`; here the
- * suspend call's structured cancellation plays that role. Caller
- * cancellation ([CancellationException]) always propagates unwrapped; only
- * genuine failures are wrapped in [ModelsError]. The internal 15s OAuth
- * refresh timeout is pi's `AbortSignal.timeout` — it is an internal
- * [TimeoutCancellationException], wrapped as an OAUTH error, and is distinct
- * from external cancellation.
+ * Cancellation: caller cancellation ([CancellationException]) always
+ * propagates unwrapped; only genuine failures are wrapped in [ModelsError].
  */
 
-/** Pi `ModelsErrorCode` (auth-adjacent subset kept for future orchestrators). */
 enum class ModelsErrorCode {
     MODEL_SOURCE,
     MODEL_VALIDATION,
@@ -29,7 +22,7 @@ enum class ModelsErrorCode {
     OAUTH,
 }
 
-/** Pi `ModelsError`: callers surface `message` only, so the underlying reason stays in it. */
+/** Callers surface `message` only, so the underlying reason stays in it. */
 class ModelsError(
     val code: ModelsErrorCode,
     message: String,
@@ -38,7 +31,6 @@ class ModelsError(
     constructor(code: ModelsErrorCode, message: String) : this(code, message, null)
 
     companion object {
-        /** Pi `withCauseDetail`: keep the underlying reason in the message. */
         private fun withCauseDetail(message: String, cause: Throwable?): String {
             val detail = cause?.message?.trim().orEmpty()
             if (detail.isEmpty() || message.contains(detail)) return message
@@ -47,11 +39,9 @@ class ModelsError(
     }
 }
 
-/** Pi `AuthResolutionOverrides`. */
 data class AuthResolutionOverrides(
     val apiKey: String? = null,
     val env: Map<String, String> = emptyMap(),
-    /** Require this much remaining OAuth-token validity; defaults to five minutes. */
     val minOAuthValidityMs: Long? = null,
 )
 
@@ -106,7 +96,6 @@ suspend fun resolveProviderAuth(
         ?.let { resolveApiKey(requestAuthContext, it, provider.id, null) }
 }
 
-/** Minimal provider reference (pi resolves over `{ id, auth }`). */
 interface AuthProviderRef {
     val id: String
     val auth: ProviderAuth
@@ -114,8 +103,8 @@ interface AuthProviderRef {
 
 private fun overlayEnvAuthContext(base: AuthContext, env: Map<String, String>): AuthContext =
     object : AuthContext {
-        // Pi: `env[name] || base.env(name)` — an empty override falls through
-        // to the ambient value instead of suppressing it.
+        // An empty override falls through to the ambient value instead of
+        // suppressing it.
         override suspend fun env(name: String): String? = env[name]?.takeIf { it.isNotEmpty() } ?: base.env(name)
 
         override suspend fun fileExists(path: String): Boolean = base.fileExists(path)
@@ -125,13 +114,11 @@ private const val DEFAULT_OAUTH_MINIMUM_VALIDITY_MS = 5 * 60 * 1000L
 private const val DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 15_000L
 
 /**
- * OAuth resolution with double-checked locking (pi `resolveStoredOAuth`):
- * tokens with less than five minutes remaining lock, re-check expiry under
- * the lock, refresh once globally, and persist the rotated credential before
- * release. The refresh network call is bounded by pi's 15s timeout
- * (`AbortSignal.timeout` → [withTimeoutOrNull], which distinguishes its own
- * timeout from external cancellation); an internal timeout is reported as
- * an OAUTH error while external caller cancellation propagates unchanged.
+ * OAuth resolution with double-checked locking: tokens with less than five
+ * minutes remaining lock, re-check expiry under the lock, and refresh once
+ * globally. The refresh call is bounded by [withTimeoutOrNull], whose own
+ * timeout is reported as an OAUTH error while external caller cancellation
+ * propagates unchanged.
  */
 private suspend fun resolveStoredOAuth(
     credentials: CredentialStore,

@@ -58,11 +58,7 @@ import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.ui.openInCustomTab
 
-/**
- * Providers screen (pi's /login list): every catalog provider with live
- * configured/unconfigured status, filtered by name/id substring. Shares
- * [ProviderListContent] with the search-providers screen.
- */
+/** Providers screen (pi's /login list). */
 @Composable
 internal fun ProvidersContent(
     providerOptions: List<ProviderOption>,
@@ -77,11 +73,7 @@ internal fun ProvidersContent(
     )
 }
 
-/**
- * Search-providers screen (Settings ▸ Search providers): the same list as
- * the providers screen over the search-provider catalog. API-key only — no
- * method selection or OAuth.
- */
+/** Search-providers screen (Settings ▸ Search providers): API-key auth only. */
 @Composable
 internal fun SearchProvidersContent(
     providerOptions: List<ProviderOption>,
@@ -96,10 +88,6 @@ internal fun SearchProvidersContent(
     )
 }
 
-/**
- * Shared provider list: search field plus name-sorted rows with live
- * configured/unconfigured status, filtered by name/id substring.
- */
 @Composable
 private fun ProviderListContent(
     providerOptions: List<ProviderOption>,
@@ -170,12 +158,11 @@ private fun ProviderListContent(
 
 /**
  * Credential form for one provider (pi's auth dialog): one field per catalog
- * prompt in order — the first is the secret API key, later prompts fill env
- * slots. All inputs live in plain Compose memory only: never saved across
- * process death or recomposition-surviving state, never logged. Submitting
- * does not clear the inputs — the form is popped (and its inputs disposed)
- * only after the save is confirmed successful via the state's
- * credential-success epoch, so a failed save retains them for correction.
+ * prompt — the first is the secret API key, later prompts fill env slots.
+ * Inputs live in plain Compose memory only: never saved across process
+ * death, never logged. The form is popped (and its inputs disposed) only
+ * after the save is confirmed via the state's credential-success epoch, so
+ * a failed save retains them for correction.
  */
 @Composable
 internal fun ProviderAuthContent(
@@ -257,16 +244,11 @@ internal fun ProviderAuthContent(
     }
 }
 
-// ---- provider auth (pi's /login method selection and login dialog) ----
-
 /**
- * The provider-auth screen: routes between pi's three login surfaces — the
- * authentication-method selector (account/subscription vs API key, shown
- * only when the provider offers more than one method), the all-fields
- * API-key form (a sole API-key method goes straight there), and the
- * interactive login flow (a sole OAuth method starts immediately). While a
- * login flow for this provider is in flight, it replaces whatever surface
- * was showing (pi's login dialog replaces the editor).
+ * The provider-auth screen (pi's /login method selection and login dialog).
+ * Per-method routing follows [providerAuthScreenMode]; while a login flow
+ * for this provider is in flight it replaces whatever surface was showing
+ * (pi's login dialog replaces the editor).
  */
 @Composable
 internal fun ProviderAuthEntry(
@@ -281,8 +263,7 @@ internal fun ProviderAuthEntry(
     onCancelLogin: () -> Unit,
     onClose: () -> Unit,
 ) {
-    // System back during an active flow cancels the login first (pi's
-    // dialog escape); otherwise back pops the screen as usual.
+    // System back cancels an active login flow first (pi's dialog escape).
     BackHandler(enabled = flow != null) { onCancelLogin() }
 
     if (flow != null) {
@@ -328,8 +309,6 @@ internal fun ProviderAuthEntry(
         }
         ProviderAuthScreenMode.START_OAUTH -> {
             val method = methods.first()
-            // Sole account method: start immediately (pi's startProviderLogin
-            // opens the login dialog without a selector step).
             LaunchedEffect(provider.id) { onBeginLogin(method) }
             Column(
                 modifier = Modifier
@@ -364,12 +343,7 @@ internal fun ProviderAuthEntry(
     }
 }
 
-/**
- * Authentication-method selector (pi's auth-type selector): one row per
- * offered method, labeled with the method's own label (the catalog label
- * or the OAuth login label) and supporting text distinguishing
- * account/subscription sign-in from an API key.
- */
+/** pi's auth-type selector. */
 @Composable
 private fun AuthMethodSelectorContent(
     providerName: String,
@@ -407,12 +381,11 @@ private fun AuthMethodSelectorContent(
 }
 
 /**
- * Android projection of pi's login dialog. Provider events and prompts keep
- * their upstream shapes and ordering, but the phone UI presents only the
- * current action: an explicit browser button, a provider-required device
- * code, or a real choice/text prompt. Terminal-oriented raw URLs, progress
- * transcripts, and the raced manual-code fallback are intentionally not
- * rendered here.
+ * Android projection of pi's login dialog: events and prompts keep their
+ * upstream shapes and ordering, but the phone UI presents only the current
+ * action (browser button, device code, or live prompt). Terminal-oriented
+ * raw URLs, progress transcripts, and the raced manual-code fallback are
+ * intentionally not rendered.
  */
 @Composable
 private fun AuthFlowContent(
@@ -519,9 +492,9 @@ private fun AuthEventItem(
 }
 
 /**
- * A real login prompt: a selection list or an ephemeral single-line input.
- * ManualCode is a pi fallback for remote browsers and is filtered by
- * [AuthFlowContent] because Pathfinder's browser runs on the same device.
+ * [AuthPromptKind.MANUAL_CODE] is pi's fallback for completing the flow in
+ * a remote browser (raced against the callback server); [AuthFlowContent]
+ * filters it because Pathfinder's browser runs on the same device.
  */
 @Composable
 private fun AuthPromptItem(

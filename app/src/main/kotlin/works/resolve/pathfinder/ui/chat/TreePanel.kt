@@ -46,21 +46,14 @@ import androidx.compose.ui.unit.dp
 import works.resolve.pathfinder.R
 
 /**
- * Panel rendering a conversation's branching history as a navigable tree,
- * ported from pi's /tree view: role-prefixed one-line previews, the accent •
- * marker on entries of the loaded path, and pi-shaped tree guides. Android
- * renders the guides with a Canvas and fold state with Material Symbols rather
- * than terminal glyphs: unlike a monospace TUI, Android font fallback does not
- * guarantee that │/├/└ and ⊟/⊞ share metrics or even a baseline.
+ * Panel rendering a conversation's branching history as a navigable tree
+ * (pi's /tree view). Purely presentational: it consumes [TreeRow]s produced
+ * by the tree projection and reports navigation taps; fold and search state
+ * are panel-local.
  *
- * The panel is purely presentational: it consumes [TreeRow]s produced by the
- * tree projection and reports navigation taps; fold and search state are
- * panel-local.
- *
- * @param rows flattened tree rows, root first
- * @param filter current filter mode
- * @param onFilterChange invoked when the user picks another filter
- * @param onNavigate invoked with a row's entry id when the row is tapped
+ * Guides draw as Canvas geometry and fold icons use Material Symbols rather
+ * than terminal glyphs: unlike a monospace TUI, Android font fallback does
+ * not guarantee that │/├/└ and ⊟/⊞ share metrics or even a baseline.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,8 +65,7 @@ fun TreePanel(
     modifier: Modifier = Modifier,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
-    // Folded row ids. Cleared whenever the search query or filter mode
-    // changes (pi resets folds on both).
+    // Folded row ids; cleared on query or filter change, as in pi.
     var foldedIds by rememberSaveable(
         stateSaver = listSaver<Set<String>, String>(save = { it.toList() }, restore = { it.toSet() })
     ) { mutableStateOf(emptySet()) }
@@ -114,8 +106,7 @@ private fun TreePanelContent(
             onQueryChange = onQueryChange,
             filter = filter,
             onFilterChange = { newFilter ->
-                // Filter changes reset folds (pi does the same), so entries
-                // hidden by a stale fold become visible again.
+                // Stale folds would hide entries the new filter makes visible.
                 onFoldedIdsChange(emptySet())
                 onFilterChange(newFilter)
             },
@@ -143,11 +134,6 @@ private fun TreePanelContent(
     }
 }
 
-/**
- * Pure visibility filter: search tokens (case-insensitive AND over the
- * preview) select candidate rows, then rows hidden under a folded ancestor
- * (any path element except the row's own id) are dropped.
- */
 internal fun filterTreeRows(
     rows: List<TreeRow>,
     query: String,
@@ -160,18 +146,14 @@ internal fun filterTreeRows(
         rows.filter { row -> tokens.all { row.preview.lowercase().contains(it) } }
     }
     return matched.filter { row ->
-        // path ends with the row's own id; every element before it is an ancestor
         row.path.dropLast(1).none { it in foldedIds }
     }
 }
 
-/** One display cell per indent level, matching pi's three-column cells. */
+/** One guide cell per indent level. */
 internal enum class TreeGuideCell { EMPTY, GUTTER, TEE, ELBOW }
 
-/**
- * Pure guide layout ported from pi's TreeList.render(). The UI draws these
- * cells instead of asking Android fonts to align terminal box-drawing glyphs.
- */
+/** Pure guide layout: pi's TreeList.render() reduced to drawable cells. */
 internal fun treeGuideCells(row: TreeRow): List<TreeGuideCell> =
     List(row.indent) { level ->
         when {
@@ -233,9 +215,8 @@ private fun TreePanelHeader(
 }
 
 /**
- * One full-width tree row. The branch geometry is drawn continuously across
- * the fixed-height row and the boxed plus/minus comes from Material Symbols.
- * This is the narrow Android adaptation of pi's Unicode TUI prefix.
+ * One full-width tree row: pi's Unicode TUI prefix rendered as Canvas branch
+ * geometry plus a Material Symbols fold icon.
  */
 @Composable
 private fun TreeRowItem(
@@ -416,8 +397,6 @@ private fun EmptyTreeText(text: String, modifier: Modifier = Modifier) {
     }
 }
 
-// --- Previews -------------------------------------------------------------
-
 private fun row(
     id: String,
     parentPath: List<String>,
@@ -443,7 +422,6 @@ private fun row(
 @Preview(showBackground = true)
 @Composable
 private fun TreePanelLinearPreview() {
-    // Linear chain: everything at indent 0, the whole path loaded.
     val rows = listOf(
         row("u1", emptyList(), 0, onActivePath = true, foldable = true, preview = "You: explain MVVM"),
         row("a1", listOf("u1"), 0, onActivePath = true, currentLeaf = true, preview = "Assistant: MVVM separates…"),
@@ -462,8 +440,8 @@ private fun TreePanelLinearPreview() {
 @Preview(showBackground = true)
 @Composable
 private fun TreePanelForkedPreview() {
-    // Mirrors pi's tree for a three-way fork: the active branch first with a
-    // │ gutter below its connector, abandoned branches after, last one └─.
+    // Three-way fork as pi orders it: active branch first, abandoned
+    // branches after, the last abandoned sibling on └─.
     val rows = listOf(
         row("u1", emptyList(), 0, onActivePath = true, foldable = true, preview = "You: write a haiku"),
         row("u2b", listOf("u1"), 1, TreeConnector.TEE, foldable = true, onActivePath = true, preview = "You: make it longer"),

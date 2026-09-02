@@ -20,23 +20,13 @@ import works.resolve.pathfinder.ai.utils.string
 import kotlin.time.Clock
 import works.resolve.pathfinder.ai.utils.strictDouble
 /**
- * Kimi Code (subscription) OAuth flow, ported from pi
- * `packages/ai/src/auth/oauth/kimi-coding.ts`.
- *
- * RFC 8628 device authorization grant against `https://auth.kimi.com` with
- * JSON responses. The access token authenticates requests to
- * `https://api.kimi.com/coding` as an `Authorization: Bearer` header.
- *
- * Divergence from pi (documented per AGENTS.md): pi resolves the OAuth host
- * from `KIMI_CODE_OAUTH_HOST`/`KIMI_OAUTH_HOST` provider env overrides; the
+ * Divergence from pi: pi resolves the OAuth host from
+ * `KIMI_CODE_OAUTH_HOST`/`KIMI_OAUTH_HOST` provider env overrides; the
  * Android process has no ambient provider env at this layer, so this port
- * always uses pi's default host [OAUTH_HOST] (the upstream default
- * when neither override is set). The [clock] is injectable for
- * deterministic tests only; production callers use the system-clock default.
+ * always uses pi's default host [OAUTH_HOST].
  *
- * HTTP goes through the injected [OAuthHttpClient]; no network happens in
- * tests. Nothing secret is logged: exceptions carry only statuses and
- * server-provided error details.
+ * Secret safety: nothing secret is logged; exceptions carry only statuses
+ * and server-provided error details.
  */
 class KimiCodingOAuthAuth(
     private val http: OAuthHttpClient,
@@ -67,9 +57,6 @@ class KimiCodingOAuthAuth(
     override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
         ModelAuth(headers = mapOf("Authorization" to "Bearer ${credential.access}"))
 
-    /**
-     * Port of pi `DeviceAuthorization`.
-     */
     internal data class DeviceAuthorization(
         val deviceCode: String,
         val userCode: String,
@@ -79,17 +66,12 @@ class KimiCodingOAuthAuth(
         val expiresInSeconds: Long,
     )
 
-    /**
-     * Port of pi `TokenResponse`. `expires` mirrors pi's
-     * `Date.now() + expiresIn * 1000`, computed through the injectable clock.
-     */
     internal data class TokenResponse(
         val access: String,
         val refresh: String,
         val expires: Long,
     )
 
-    /** Port of pi `startDeviceAuthorization`. */
     private suspend fun startDeviceAuthorization(): DeviceAuthorization {
         val response = http.execute(
             OAuthHttpRequest(
@@ -108,9 +90,6 @@ class KimiCodingOAuthAuth(
         }
 
         val json = readJson(response)
-        // pi's `json?.field` — field access only succeeds on objects (arrays
-        // have no fields, `undefined` upstream), matching pi's
-        // `Record<string, unknown> | null` shape.
         val record = json as? JsonObject
         val deviceCode = record.string("device_code")
         val userCode = record.string("user_code")
@@ -136,15 +115,13 @@ class KimiCodingOAuthAuth(
         )
     }
 
-    /** Port of pi `parseTokenResponse`. */
     internal fun parseTokenResponse(json: JsonElement?, operation: String): TokenResponse {
-        // strictDouble matches pi's `typeof n === "number" &&
-        // Number.isFinite(n)`: JSON.parse output can never be non-finite, so
-        // the shared finite filter is exactly pi's guard.
         val record = json as? JsonObject
         val accessToken = record.string("access_token")
         val refreshToken = record.string("refresh_token")
         val expiresIn = record.strictDouble("expires_in")
+        // JSON-parsed numbers are never non-finite; the isFinite filter is
+        // exactly pi's `Number.isFinite` guard.
         if (accessToken.isNullOrEmpty() || refreshToken.isNullOrEmpty() ||
             expiresIn == null || !expiresIn.isFinite() || expiresIn <= 0
         ) {
@@ -159,7 +136,6 @@ class KimiCodingOAuthAuth(
         )
     }
 
-    /** Port of pi `pollForToken` via the shared [pollOAuthDeviceCodeFlow]. */
     private suspend fun pollForToken(device: DeviceAuthorization): TokenResponse =
         pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(
@@ -171,12 +147,6 @@ class KimiCodingOAuthAuth(
             clock = clock,
         )
 
-    /**
-     * One token poll: port of the `poll` callback pi passes to
-     * `pollOAuthDeviceCodeFlow`. Classifies each response into the shared
-     * poll result statuses (pending / slow_down / expired / denied / failed /
-     * complete) with pi's messages verbatim.
-     */
     private suspend fun pollTokenRequest(device: DeviceAuthorization): OAuthDeviceCodePollResult<TokenResponse> {
         val response = http.execute(
             OAuthHttpRequest(
@@ -232,11 +202,6 @@ class KimiCodingOAuthAuth(
     }
 
     /**
-     * Port of pi `refreshToken`: up to [REFRESH_MAX_RETRIES] retries with
-     * 1s/2s/4s backoff for network failures, 429, and 5xx; 401/403 and
-     * `invalid_grant` fail immediately (the stored credential is dead and the
-     * orchestrator must clear it and prompt re-login).
-     *
      * Cancellation: pi checks `signal.aborted` after each backoff sleep and
      * its `sleep` rejects on abort; here [delay] throws
      * [CancellationException] promptly, and [ensureActive] performs pi's
@@ -308,38 +273,28 @@ class KimiCodingOAuthAuth(
         OAuthCredential(access = access, refresh = refresh, expires = expires)
 
     companion object {
-        /** pi `CLIENT_ID`. */
         const val CLIENT_ID: String = "17e5f671-d194-4dfb-9706-5516cb48c098"
 
-        /** pi `DEFAULT_OAUTH_HOST` (trailing slashes stripped like pi's `getOauthHost`). */
         const val OAUTH_HOST: String = "https://auth.kimi.com"
 
-        /** pi `DEVICE_CODE_TIMEOUT_SECONDS`. */
         const val DEVICE_CODE_TIMEOUT_SECONDS: Long = 15 * 60
 
-        /** pi `DEFAULT_POLL_INTERVAL_SECONDS`. */
         const val DEFAULT_POLL_INTERVAL_SECONDS: Int = 5
 
-        /** pi `REQUEST_TIMEOUT_MS`, the bound on every exchange. */
         const val REQUEST_TIMEOUT_MS: Int = 30_000
 
-        /** pi `REFRESH_MAX_RETRIES`. */
         const val REFRESH_MAX_RETRIES: Int = 3
 
-        /** RFC 8628 device-code grant type URI. */
         private const val DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 
-        /** pi sends `Content-Type` + `Accept` on every form POST. */
         private val FORM_HEADERS = mapOf(
             "Content-Type" to "application/x-www-form-urlencoded",
             "Accept" to "application/json",
         )
 
-        /** Port of pi `isRetryableRefreshFailure`. */
         internal fun isRetryableRefreshFailure(status: Int): Boolean = status == 429 || status >= 500
 
         /**
-         * Port of pi `formUrlEncode` (`new URLSearchParams(fields).toString()`):
          * application/x-www-form-urlencoded serialization — space becomes `+`,
          * exactly like `URLSearchParams` (and `URLEncoder`) on the wire.
          */
@@ -351,11 +306,11 @@ class KimiCodingOAuthAuth(
         private fun urlEncode(value: String): String = URLEncoder.encode(value, "UTF-8")
 
         /**
-         * Port of pi `readJson`: JS `typeof [] === "object"`, so any non-null
-         * JSON object *or array* is returned as-is (pi keeps it for
-         * `JSON.stringify` in malformed-response errors); scalars and
-         * unparseable bodies become null. Field access still only succeeds on
-         * [JsonObject], matching pi's `json?.field` → `undefined` on arrays.
+         * JS `typeof [] === "object"`, so any non-null JSON object *or array*
+         * is returned as-is (pi keeps it for `JSON.stringify` in
+         * malformed-response errors); scalars and unparseable bodies become
+         * null. Field access still only succeeds on [JsonObject], matching
+         * pi's `json?.field` → `undefined` on arrays.
          */
         internal fun readJson(response: OAuthHttpResponse): JsonElement? {
             val parsed = try {
@@ -368,16 +323,16 @@ class KimiCodingOAuthAuth(
 
         /**
          * The verification URI is opened in the user's browser; only http(s)
-         * URLs are trusted (pi `trustedHttpUrl`). Like pi's `url.href` return,
-         * the value is the normalized URL form, rebuilt from the parsed [URI]:
-         * lowercase scheme, root path `/` for empty paths, and default ports
+         * URLs are trusted. Like pi's `url.href` return, the value is the
+         * normalized URL form, rebuilt from the parsed [URI]: lowercase
+         * scheme, root path `/` for empty paths, and default ports
          * `:80`/`:443` omitted.
          *
-         * Divergence from pi (documented per AGENTS.md): WHATWG URL accepts
-         * authority-less/opaque forms like `https:foo`; [URI] (and this port)
-         * reject them by requiring a non-empty host, because a provider device
-         * authorization response should always carry an absolute verification
-         * URL. This is the narrow safety boundary.
+         * Divergence from pi: WHATWG URL accepts authority-less/opaque forms
+         * like `https:foo`; [URI] (and this port) reject them by requiring a
+         * non-empty host, because a provider device authorization response
+         * should always carry an absolute verification URL. This is the
+         * narrow safety boundary.
          */
         internal fun trustedHttpUrl(value: String?): String? {
             if (value.isNullOrEmpty()) return null

@@ -37,12 +37,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/**
- * Canned tests for the native Mistral Chat Completions adapter, porting the
- * scenarios of pi's mistral-http-transport, mistral-raw-stop-reason,
- * mistral-reasoning-mode, and mistral-tool-schema tests. No live network: the
- * scripted FakeTransport stands in for fetch().
- */
 class MistralConversationsApiTest {
 
     private val model = mistralModel()
@@ -219,7 +213,6 @@ class MistralConversationsApiTest {
             .jsonObject["id"]!!.jsonPrimitive.content
         assertEquals(9, callId.length)
         assertTrue(callId.all { it.isLetterOrDigit() })
-        // The tool result is remapped to the normalized id.
         assertEquals(callId, messages[1].jsonObject["tool_call_id"]!!.jsonPrimitive.content)
     }
 
@@ -266,11 +259,9 @@ class MistralConversationsApiTest {
         assertEquals(3, message.usage.cacheRead)
         assertEquals(0, message.usage.cacheWrite)
         assertEquals(14, message.usage.totalTokens)
-        // Cost from the model rates: 2.0/1M in, 6.0/1M out, 0.5/1M cached.
         assertEquals(7 * 2.0 / 1_000_000 + 4 * 6.0 / 1_000_000 + 3 * 0.5 / 1_000_000, message.usage.cost.total)
 
-        // Event ordering mirrors pi: blocks open/close in stream order, the
-        // open text block ends when the tool call starts, toolcall_end comes last.
+        // The open text block closes when the tool call starts; toolcall_end comes last.
         val kinds = events.drop(1).dropLast(1).map { it::class.simpleName }
         assertEquals(
             listOf(
@@ -284,9 +275,8 @@ class MistralConversationsApiTest {
 
     @Test
     fun `indexed tool call chunks merge even when later fragments carry no id (pi 6c87d9a02, #8387)`() = runTest {
-        // The #8387 gateway shape: only the first indexed chunk carries the
-        // id; continuation chunks carry index alone. They must merge into a
-        // single tool call whose id and name come from the first chunk.
+        // #8387 gateway shape: only the first indexed chunk carries the id;
+        // continuation chunks carry index alone.
         val transport = FakeTransport()
         transport.enqueueResponse(
             sse(
@@ -317,8 +307,7 @@ class MistralConversationsApiTest {
     @Test
     fun `indexed chunks sharing an id stay distinct tool calls`() = runTest {
         // pi keys by `toolCall.index ?? callId`, so the index dominates: a
-        // shared id across two indexes is two tool calls, while fragments of
-        // the same index merge (previous test).
+        // shared id across two indexes is two tool calls.
         val transport = FakeTransport()
         transport.enqueueResponse(
             sse(
@@ -337,7 +326,6 @@ class MistralConversationsApiTest {
             .toList()
 
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
-        // Different indexes are distinct tool calls even with a shared id.
         assertEquals(
             listOf(
                 ToolCall("shared1", "lookup", "{\"q\":"),
@@ -417,7 +405,6 @@ class MistralConversationsApiTest {
         api(transport)
             .stream(model, context, MistralOptions(apiKey = "test"))
             .toList()
-        // pi: AbortSignal.timeout(options?.timeoutMs ?? 60_000)
         assertEquals(60_000L, transport.requests.single().timeoutMs)
     }
 
@@ -431,8 +418,7 @@ class MistralConversationsApiTest {
             .stream(model, context, MistralOptions(apiKey = "test", maxRetries = 3))
             .toList()
             .last()
-        // pi's requestMistralStream uses a raw fetch with no retry wrapper:
-        // a retryable transport error surfaces immediately, exactly once.
+        // pi streams via a raw fetch with no retry wrapper.
         assertIs<AssistantMessageEvent.Error>(error)
         assertEquals(1, transport.requests.size)
     }
@@ -449,7 +435,6 @@ class MistralConversationsApiTest {
         val events = api(transport)
             .stream(model, context, MistralOptions(apiKey = "test"))
             .toList()
-        // pi appends the empty delta: text_start then a text_delta with "".
         val start = events.filterIsInstance<AssistantMessageEvent.TextStart>().single()
         val delta = events.filterIsInstance<AssistantMessageEvent.TextDelta>().single()
         assertEquals(start.contentIndex, delta.contentIndex)
@@ -614,8 +599,7 @@ class MistralConversationsApiTest {
         assertEquals("auto", wire["tool_choice"]!!.jsonPrimitive.content)
 
         val transport2 = FakeTransport()
-        // pi throws synchronously before opening the stream; nothing is
-        // requested and no events are produced.
+        // pi throws synchronously before opening the stream.
         val thrown = kotlin.test.assertFailsWith<ProviderAuthException> {
             api(transport2).streamSimple(model, context, SimpleStreamOptions())
         }
@@ -647,7 +631,7 @@ class MistralConversationsApiTest {
         val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
             .jsonObject["messages"]!!.jsonArray
         // pi's transformMessages inserts the omission notice in place of each
-        // image run (deduplicated), keeping surrounding text.
+        // image run, deduplicated.
         assertEquals(
             """[{"type":"text","text":"look"},""" +
                 """{"type":"text","text":"(image omitted: model does not support images)"},""" +
@@ -684,8 +668,8 @@ class MistralConversationsApiTest {
         ).toList()
         val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
             .jsonObject["messages"]!!.jsonArray
-        // pi's transformMessages turns the image into a placeholder text block;
-        // buildToolResultText then joins it into the tool text.
+        // pi's transformMessages replaces the image with the non-vision tool
+        // placeholder, which buildToolResultText joins into the tool text.
         assertEquals(
             "found\n(tool image omitted: model does not support images)",
             messages[1].jsonObject["content"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content,
@@ -728,10 +712,8 @@ class MistralConversationsApiTest {
         ).toList()
         val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
             .jsonObject["messages"]!!.jsonArray
-        // The errored assistant turn is dropped entirely.
         assertEquals(3, messages.size)
         assertEquals("assistant", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
-        // A synthetic error tool result follows the orphaned (normalized) call.
         val callId = messages[0].jsonObject["tool_calls"]!!.jsonArray[0]
             .jsonObject["id"]!!.jsonPrimitive.content
         assertEquals(9, callId.length)
@@ -771,8 +753,7 @@ class MistralConversationsApiTest {
         ).toList()
         val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
             .jsonObject["messages"]!!.jsonArray
-        // pi's transformMessages: foreign thinking becomes text, redacted is
-        // dropped; only same-model thinking replays as a thinking chunk.
+        // pi's transformMessages: foreign thinking becomes text; redacted thinking is dropped.
         assertEquals(
             """[{"role":"assistant","prefix":false,""" +
                 """"content":[{"type":"text","text":"deep thought"},{"type":"text","text":"answer"}]},""" +
@@ -797,7 +778,6 @@ class MistralConversationsApiTest {
     }
 }
 
-/** Mirrors pi's getModel("mistral", ...) values used by the upstream tests. */
 internal fun mistralModel(
     id: String = "mistral-large-latest",
     reasoning: Boolean = false,

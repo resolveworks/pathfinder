@@ -35,13 +35,9 @@ import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 
 /**
- * Settings root: a submenu listing. The default rows (Pixel "Default apps"
- * convention) show the persisted default's summary and push the dedicated
- * pickers; the scoped-models curator, the provider credential list, and the
- * display-preference toggle keep their own rows. The "Default thinking
- * level" row hides when the live session's model offers no levels (no
- * session or a non-reasoning model) — same condition as the chat's thinking
- * chip.
+ * The "Default thinking level" row hides when the live session's model
+ * offers no levels (no session or a non-reasoning model) — the same
+ * condition as the chat's thinking chip.
  */
 @Composable
 internal fun SettingsContent(
@@ -126,13 +122,9 @@ internal fun SettingsContent(
 }
 
 /**
- * The startup-default model screen: a single-select radio list over every
- * model of configured providers (M3 single-choice list convention). Tapping
- * a row commits immediately — no confirm button — exactly like the Pixel
- * "Default apps" screens. This is the native-Android home of pi's picker
- * Ctrl+S persistence (pi itself has no settings-screen path for the
- * default); see [ModelPickerSheet] for the divergence note — setting the
- * default here does not switch the live session.
+ * Startup-default model screen — the Settings home of pi's picker Ctrl+S
+ * persistence. Commit-on-tap; unlike pi's Ctrl+S, setting the default does
+ * not switch the live session (see [ChatViewModel.saveStartupDefault]).
  */
 @Composable
 internal fun DefaultModelContent(
@@ -179,14 +171,10 @@ internal fun DefaultModelContent(
 }
 
 /**
- * The default thinking-level screen: a commit-on-tap radio list (Pixel
- * "Default apps" convention) over the live session model's supported
- * levels — the native-Android home of pi's thinking-selector Ctrl+S
- * persistence. Tapping a row calls [ChatViewModel.setThinkingLevelDefault],
- * which applies the level to the live session first and persists after,
- * mirroring pi's Ctrl+S order. Unlike pi's single gesture, though, this is
- * a Settings screen, so "switch now" and "set default" remain separate
- * intents; see [ThinkingLevelPickerSheet] for the divergence note.
+ * Default thinking-level screen — the Settings home of pi's
+ * thinking-selector Ctrl+S persistence. Commit-on-tap; unlike the model
+ * default, tapping also switches the live session — applied first, then
+ * persisted, pi's order (see [ChatViewModel.setThinkingLevelDefault]).
  */
 @Composable
 internal fun DefaultThinkingLevelContent(
@@ -216,11 +204,10 @@ internal fun DefaultThinkingLevelContent(
 }
 
 /**
- * Models screen: the scoped-models curator (pi's /scoped-models). Rows are
- * every model of configured providers with a checkbox; an absent scope
- * (never curated) shows everything checked. Toggles persist immediately
- * as the ordered `enabledModels` list and only affect which models the
- * chat picker offers — never the running model.
+ * Scoped-models curator (pi's /scoped-models): an absent scope (never
+ * curated) shows everything checked; toggles persist immediately as the
+ * ordered `enabledModels` list and only affect what the chat picker
+ * offers — never the running model.
  */
 @Composable
 internal fun ModelsContent(

@@ -43,12 +43,6 @@ import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.NetworkException
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 
-/**
- * Canned tests for [OpenAICodexResponsesApi] (SSE transport), ported
- * alongside pi's openai-codex-responses.ts (URL/headers/body shape, Codex
- * event normalization, end_turn, retry/usage-limit handling from
- * openai-codex-stream.test.ts).
- */
 class OpenAiCodexResponsesApiTest {
 
     private val model = Model(
@@ -82,8 +76,6 @@ class OpenAiCodexResponsesApiTest {
         webSocketTransport = NoWebSocketTransport,
     )
 
-    /** Decodes a recorded request body, transparently zstd-decompressing when the
-     * request carried Content-Encoding: zstd (pi compresses SSE request bodies). */
     private fun requestBodyText(transport: FakeTransport, index: Int = 0): String {
         val request = transport.requests[index]
         if (request.headers["content-encoding"] != "zstd") return request.body.decodeToString()
@@ -92,10 +84,6 @@ class OpenAiCodexResponsesApiTest {
 
     private fun bodyOf(transport: FakeTransport, index: Int = 0) =
         responsesJson.parseToJsonElement(requestBodyText(transport, index)).jsonObject
-
-    // -----------------------------------------------------------------------
-    // URL / auth helpers
-    // -----------------------------------------------------------------------
 
     @Test
     fun `codex urls resolve from base url variants`() {
@@ -129,10 +117,6 @@ class OpenAiCodexResponsesApiTest {
                 .message!!.contains("Failed to extract accountId"),
         )
     }
-
-    // -----------------------------------------------------------------------
-    // Request shape
-    // -----------------------------------------------------------------------
 
     private fun doneEvents(text: String = "ok") = listOf(
         """{"type":"response.output_item.added","output_index":0,
@@ -175,10 +159,6 @@ class OpenAiCodexResponsesApiTest {
         assertEquals("session-1", body["prompt_cache_key"]!!.jsonPrimitive.content)
     }
 
-    // -----------------------------------------------------------------------
-    // zstd request-body compression (SSE path)
-    // -----------------------------------------------------------------------
-
     @Test
     fun `sse requests compress the body with content-encoding zstd`() = runTest {
         val transport = FakeTransport()
@@ -191,7 +171,6 @@ class OpenAiCodexResponsesApiTest {
         assertIs<AssistantMessageEvent.Done>(events.last())
         val request = transport.requests.single()
         assertEquals("zstd", request.headers["content-encoding"])
-        // Round-trip: recompressing the decoded text at level 3 is byte-identical.
         assertTrue(
             request.body.contentEquals(
                 com.github.luben.zstd.Zstd.compress(requestBodyText(transport).toByteArray(Charsets.UTF_8), 3),
@@ -274,8 +253,6 @@ class OpenAiCodexResponsesApiTest {
         assertEquals("lark", format["syntax"]!!.jsonPrimitive.content)
         assertEquals("start: /[a-z]+/", format["definition"]!!.jsonPrimitive.content)
 
-        // Default compat (supportsOpenAIGrammarTools ?? false) falls back to a
-        // function tool, and Codex's strict: null leaves the strict field unset.
         val fallback = FakeTransport()
         fallback.enqueueResponse(sse(*doneEvents().toTypedArray()))
         api(fallback).stream(model, toolContext, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
@@ -339,13 +316,10 @@ class OpenAiCodexResponsesApiTest {
         assertEquals(5, done.message.usage.output)
     }
 
-    // Ports pi openai-codex-stream.test.ts "completes after response.completed even
-    // when the SSE body stays open".
     @Test
     fun `completes after response completed even when the sse body stays open`() = runTest {
         val transport = FakeTransport()
         transport.enqueueHangingResponse(
-            // response.output_item.added
             """{"type":"response.output_item.added","output_index":0,
             "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
             """{"type":"response.output_text.delta","output_index":0,"delta":"Hello"}""",
@@ -359,8 +333,6 @@ class OpenAiCodexResponsesApiTest {
         assertEquals("Hello", (done.message.content.single() as TextContent).text)
     }
 
-    // Ports pi openai-codex-stream.test.ts "maps response.incomplete to stopReason
-    // length even when the SSE body stays open".
     @Test
     fun `response incomplete maps to length even when the sse body stays open`() = runTest {
         val transport = FakeTransport()
@@ -378,9 +350,6 @@ class OpenAiCodexResponsesApiTest {
         assertEquals("Hello", (done.message.content.single() as TextContent).text)
     }
 
-    // Deltas must be emitted incrementally, before the terminal event (and any
-    // later body data) arrives: with a hanging body that never delivers a
-    // terminal event, the delta is still observed.
     @Test
     fun `deltas are emitted incrementally before the terminal event`() = runTest {
         val transport = FakeTransport()
@@ -406,8 +375,6 @@ class OpenAiCodexResponsesApiTest {
 
     @Test
     fun `unknown response done statuses are dropped`() = runTest {
-        // A bogus status must not be mapped; the completed terminal event that
-        // follows still finalizes the message.
         val transport = FakeTransport()
         transport.enqueueResponse(
             sse(
@@ -470,10 +437,6 @@ class OpenAiCodexResponsesApiTest {
         val error = assertIs<AssistantMessageEvent.Error>(events.single())
         assertEquals("Failed to extract accountId from token", error.error.errorMessage)
     }
-
-    // -----------------------------------------------------------------------
-    // Retry behavior (pi's SSE retry loop)
-    // -----------------------------------------------------------------------
 
     @Test
     fun `terminal usage limits on 429 are not retried and get friendly text`() = runTest {
@@ -572,18 +535,16 @@ class OpenAiCodexResponsesApiTest {
 
     @Test
     fun `retry-after http dates parse to the server-requested delay`() {
-        // "Wed, 21 Oct 2015 07:28:00 GMT" is 1445412480000 ms; pi's Date.parse
-        // accepts HTTP dates (the retry-after spec format), not just ISO-8601.
+        // "Wed, 21 Oct 2015 07:28:00 GMT" is 1445412480000 ms; HTTP dates (the
+        // Retry-After format) must parse, not just ISO-8601.
         assertEquals(
             5000L,
             getRetryAfterDelayMs(null, "Wed, 21 Oct 2015 07:28:00 GMT") { 1_445_412_475_000L },
         )
-        // ISO-8601 with Z still parses (Date.parse accepts both).
         assertEquals(
             5000L,
             getRetryAfterDelayMs(null, "2015-10-21T07:28:00Z") { 1_445_412_475_000L },
         )
-        // Dates already past clamp to zero.
         assertEquals(
             0L,
             getRetryAfterDelayMs(null, "Wed, 21 Oct 2015 07:28:00 GMT") { 1_445_412_490_000L },
@@ -623,7 +584,7 @@ class OpenAiCodexResponsesApiTest {
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals("Service Unavailable", error.error.errorMessage)
 
-        // Without a status line either, pi's final fallback applies.
+        // No status line either: the generic fallback applies.
         val transport2 = FakeTransport()
         transport2.enqueueError(503, "")
         val events2 = api(transport2).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
@@ -648,15 +609,10 @@ class OpenAiCodexResponsesApiTest {
         // The undispatched coroutine ran until the hanging stream suspended.
         assertTrue(collected.any { it is AssistantMessageEvent.Start })
         job.cancelAndJoin()
-        // KDoc-documented divergence: abort maps to coroutine cancellation and
-        // rethrows CancellationException instead of emitting an Error event.
+        // Documented divergence: abort maps to cancellation, not an Error event.
         assertTrue(collected.none { it is AssistantMessageEvent.Error })
         assertTrue(transport.cancelled.value)
     }
-
-    // -----------------------------------------------------------------------
-    // Service tier resolution
-    // -----------------------------------------------------------------------
 
     @Test
     fun `default service tier resolves to the requested flex or priority tier`() {
@@ -690,7 +646,6 @@ class OpenAiCodexResponsesApiTest {
     }
 }
 
-/** Builds a minimal unsigned JWT carrying the ChatGPT account id claim. */
 internal fun jwt(accountId: String): String {
     val encode: (String) -> String = { text ->
         Base64.getUrlEncoder().withoutPadding().encodeToString(text.toByteArray())

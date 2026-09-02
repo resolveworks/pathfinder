@@ -48,12 +48,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlin.time.Clock
 
 /**
- * OpenAI Chat Completions streaming adapter, ported from pi's
- * openai-completions.ts and reduced to the ZAI-relevant behavior: SSE chunk
- * parsing, streamed text, `reasoning_content`/`reasoning`/`reasoning_text`
- * thinking, fragmented and interleaved tool calls with raw-string argument
- * accumulation, finish reasons, final usage/cached/reasoning accounting with
- * costs, and provider JSON error events.
+ * OpenAI Chat Completions streaming adapter.
  *
  * Like pi's stream(), failures after the stream starts are encoded as an
  * [AssistantMessageEvent.Error] carrying the partial message, not thrown.
@@ -66,9 +61,6 @@ class OpenAiCompletionsApi(
     private val clock: Clock = Clock.System,
 ) : ChatApi {
 
-    /** pi's streamSimple for openai-completions: clamps the thinking level
-     * against the model and max tokens against the estimated context before
-     * delegating to [stream]. */
     override fun streamSimple(
         model: Model,
         context: Context,
@@ -86,8 +78,6 @@ class OpenAiCompletionsApi(
         return stream(
             model,
             context,
-            // pi's buildBaseOptions (simple-options.ts:20-56) merges
-            // model.samplingParams under per-request keys here.
             options.toStreamOptions(effort)
                 .copy(maxTokens = maxTokens, samplingParams = mergeSamplingParams(model, options)),
         )
@@ -98,12 +88,11 @@ class OpenAiCompletionsApi(
         context: Context,
         options: OpenAiCompletionsOptions,
     ): Flow<AssistantMessageEvent> = flow {
-        // One request-start timestamp shared by every partial/final snapshot.
         val startedAtMs = clock.now().toEpochMilliseconds()
         val state = StreamingState(model, startedAtMs)
         try {
-            // Header-based auth (e.g. Cloudflare's cf-aig-authorization) needs
-            // no apiKey; pi's getClientApiKey allows both headers to stand in.
+            // Header-based auth (e.g. Cloudflare's cf-aig-authorization)
+            // stands in for an apiKey.
             val hasAuthHeader = hasHeader(options.headers, "authorization") ||
                 hasHeader(options.headers, "cf-aig-authorization")
             val apiKey = options.apiKey
@@ -111,25 +100,14 @@ class OpenAiCompletionsApi(
                     "No API key for provider: ${model.provider}",
                 )
 
-            // pi openai-completions.ts:352: onPayload inspects/replaces the
-            // params object before serialization; null keeps the payload.
             var params = OpenAiCompletionsPayload.buildRequestBody(model, context, options)
             options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
             val body = params
                 .toString()
                 .toByteArray(Charsets.UTF_8)
 
-            // Base URL placeholders (Cloudflare account/gateway ids) are
-            // substituted from the request-time env, mirroring pi's
-            // cloudflare-stream wrapper. Headers merge like pi's
-            // openai-completions createClient: the default User-Agent first
-            // (openai-completions.ts:751), then model headers, then the
-            // Copilot dynamic headers (github-copilot only; they override
-            // model headers), then session-affinity headers (only when a
-            // cache session id survives the cacheRetention none gate), then
-            // the merged request/auth headers (explicit requests win), then
-            // the always-sent Accept header, which can never be overridden
-            // (a null request value cannot remove it).
+            // The always-sent Accept header is merged last and can never be
+            // overridden by request headers.
             val cacheRetention = OpenAiResponsesShared.resolveCacheRetention(
                 options.cacheRetention,
                 options.env,
@@ -165,9 +143,8 @@ class OpenAiCompletionsApi(
                 transport.post(request)
             }
 
-            // pi openai-completions.ts:369: onResponse fires after response
-            // headers arrive; like the SDK path it only runs for 2xx (the
-            // transport throws ProviderHttpException before this on non-2xx).
+            // Only runs for 2xx: the transport throws ProviderHttpException
+            // on non-2xx before reaching this point.
             options.onResponse?.invoke(ProviderResponse(response.status, headersToRecord(response.headers)), model)
 
             emitAll(state.start())
@@ -201,8 +178,8 @@ class OpenAiCompletionsApi(
             emit(AssistantMessageEvent.Done(state.stopReason, state.snapshot()))
         } catch (error: Exception) {
             if (error is CancellationException) throw error
-            // pi openai-completions.ts:693-696: the partial error message still
-            // carries the serialized reasoning details.
+            // The partial error message still carries the serialized reasoning
+            // details.
             state.applyStreamedReasoningDetails()
             val finalMessage = state.snapshot().copy(
                 stopReason = StopReason.ERROR,
@@ -212,10 +189,7 @@ class OpenAiCompletionsApi(
         }
     }
 
-    /**
-     * Parses one complete SSE data payload strictly; null events ([DONE])
-     * mark the stream complete. Returns the block events to emit.
-     */
+    /** Returns the block events to emit; null marks the stream complete (`[DONE]`). */
     private fun processSseEvent(
         event: SseEvent,
         model: Model,
@@ -244,7 +218,6 @@ class OpenAiCompletionsApi(
         chunk.str("id")
             ?.takeIf { it.isNotEmpty() && state.responseId == null }
             ?.let { state.responseId = it }
-        // pi guards this read with `typeof chunk.model === "string"` — strict.
         chunk["model"].stringOrNull()
             ?.takeIf { it.isNotEmpty() && it != model.id && state.responseModel == null }
             ?.let { state.responseModel = it }
@@ -273,8 +246,8 @@ class OpenAiCompletionsApi(
         delta["content"].strOrNull()?.takeIf { it.isNotEmpty() }?.let { events += state.appendText(it) }
 
         // Reasoning arrives in reasoning_content (llama.cpp-style), reasoning,
-        // or reasoning_text; use the first non-empty field to avoid duplication.
-        // pi openai-completions.ts:610-613: opencode-go stores the delta field
+        // or reasoning_text; the first non-empty field wins so duplicated
+        // fields do not double-count. opencode-go stores the delta field
         // "reasoning" under the signature "reasoning_content" — the field it
         // accepts on replay.
         for (field in REASONING_FIELDS) {
@@ -291,9 +264,9 @@ class OpenAiCompletionsApi(
             (element as? JsonObject)?.let { events += state.appendToolCallDelta(it) }
         }
 
-        // pi openai-completions.ts:655-665: reasoning_details deltas keep the
-        // provider replay data in the thinking signature slot; they are not
-        // user-visible stream deltas, so no thinking_delta is emitted.
+        // reasoning_details deltas keep the provider replay data in the
+        // thinking signature slot; they are not user-visible stream deltas,
+        // so no thinking_delta is emitted.
         delta.arr("reasoning_details")?.forEach { element ->
             if (element is JsonObject && isOpenAiReasoningDetail(element)) {
                 state.appendReasoningDetail(LinkedHashMap(element))
@@ -305,7 +278,6 @@ class OpenAiCompletionsApi(
     private fun parseChunkUsage(raw: JsonObject, model: Model): Usage {
         val promptTokens = raw.int("prompt_tokens") ?: 0
         val details = raw.obj("prompt_tokens_details")
-        // Nullish fallback: an explicit 0 stays 0; an absent field falls through.
         val cacheReadTokens = details?.int("cached_tokens")
             ?: raw.int("prompt_cache_hit_tokens")
             ?: raw.int("cached_tokens")
@@ -314,8 +286,8 @@ class OpenAiCompletionsApi(
         val outputTokens = raw.int("completion_tokens") ?: 0
         val reasoningTokens = raw.obj("completion_tokens_details")?.int("reasoning_tokens") ?: 0
 
-        // Follow documented semantics: cached_tokens counts cache-read hits;
-        // do not subtract writes from it.
+        // cached_tokens counts cache-read hits; do not subtract cache writes
+        // from it.
         val input = maxOf(0, promptTokens - cacheReadTokens - cacheWriteTokens)
         val usage = Usage(
             input = input,
@@ -337,23 +309,16 @@ class OpenAiCompletionsApi(
         else -> StopReason.ERROR to "Provider finish_reason: $reason"
     }
 
-    /**
-     * Port of pi's openai-completions.ts catch block (~700): the shared
-     * `formatProviderError` with NO prefix. The OpenRouter raw-metadata append
-     * below mirrors openai-completions.ts:704-712.
-     */
     private fun formatProviderError(error: Exception): String = when (error) {
         is ProviderHttpException -> buildString {
             append(formatProviderError(normalizeProviderError(error)))
-            // pi openai-completions.ts:709: some providers via OpenRouter give
-            // additional information in `error.error.metadata.raw`; append the
-            // raw metadata only when the formatted body has not already
-            // surfaced it, to avoid double-printing.
+            // Some providers via OpenRouter put additional information in
+            // error.error.metadata.raw; append it only when the formatted body
+            // has not already surfaced it, to avoid double-printing.
             openRouterRawMetadata(error.body)?.let { raw ->
                 if (!contains(raw)) append("\n").append(raw)
             }
         }
-        // Non-HTTP exceptions keep the port's `message ?: simpleName` handling;
         // pi's safeJsonStringify fallback for non-Error throws is moot in Kotlin.
         is ProviderStreamException -> error.message ?: "Provider stream error"
         else -> error.message ?: error::class.simpleName ?: "Unknown error"
@@ -370,7 +335,6 @@ class OpenAiCompletionsApi(
         ).joinToString(" — ")
     }
 
-    /** pi openai-completions.ts:709: `error.error.metadata.raw` on the SDK error. */
     private fun openRouterRawMetadata(body: String): String? {
         val parsed = try {
             lenientJson.parseToJsonElement(body)
@@ -385,14 +349,6 @@ class OpenAiCompletionsApi(
     }
 }
 
-/**
- * Session-affinity headers, pi's openai-completions createClient
- * (openai-completions.ts:760-770): "openrouter" sends `x-session-id`; every
- * other format sends `x-client-request-id` and `x-session-affinity`, with
- * "openai" additionally sending `session_id`. The format resolves as
- * `model.compat.sessionAffinityFormat ?? detected`, where detection is the
- * same OpenRouter provider/baseUrl check as the Responses family.
- */
 private fun sessionAffinityHeaders(model: Model, cacheSessionId: String?): Map<String, String> {
     if (cacheSessionId == null || !model.compat.sendSessionAffinityHeaders) return emptyMap()
     val format = model.compat.sessionAffinityFormat
@@ -414,12 +370,11 @@ private suspend fun kotlinx.coroutines.flow.FlowCollector<AssistantMessageEvent>
 }
 
 /**
- * Accumulates streamed content, producing pi-style block events. Content
- * blocks are immutable values; every [snapshot] builds fresh instances so
- * partial snapshots never share mutable state across events. Streamed
- * `tool_calls[].function.arguments` fragments are accumulated as a raw string
- * per tool-call index/id; strict parsing belongs to tool execution, not this
- * provider layer.
+ * Accumulates streamed content into block events. Every [snapshot] builds
+ * fresh content instances so partial snapshots never share mutable state
+ * across events. Streamed `tool_calls[].function.arguments` fragments are
+ * accumulated as a raw string; strict parsing belongs to tool execution, not
+ * this provider layer.
  */
 internal class StreamingState(private val model: Model, private val timestampMs: Long) {
     private sealed interface Block {
@@ -444,8 +399,8 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     private var thinking = ""
     private var thinkingSignature: String? = null
 
-    // pi openai-completions.ts:332-334: reasoning_details are replay metadata,
-    // kept in memory during streaming and serialized once when finalized.
+    // reasoning_details are replay metadata, kept in memory during streaming
+    // and serialized once when finalized.
     private var streamedReasoningDetails: MutableList<MutableMap<String, JsonElement>>? = null
 
     var usage: Usage = Usage()
@@ -487,7 +442,6 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         return events
     }
 
-    /** pi's ensureThinkingBlock (openai-completions.ts:473). */
     private fun ensureThinkingBlock(signature: String): MutableList<AssistantMessageEvent> {
         val events = mutableListOf<AssistantMessageEvent>()
         if (thinkingIndex == -1) {
@@ -500,9 +454,8 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     }
 
     /**
-     * pi openai-completions.ts:655-665: opens the thinking block (with an
-     * empty signature, overwritten at finish) and merges the delta into the
-     * accumulated reasoning details.
+     * Opens the thinking block with an empty signature (overwritten at
+     * finish) and merges the delta into the accumulated reasoning details.
      */
     fun appendReasoningDetail(detail: MutableMap<String, JsonElement>) {
         ensureThinkingBlock("")
@@ -511,11 +464,8 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         appendOpenAIReasoningDetail(details, detail)
     }
 
-    /**
-     * pi openai-completions.ts:335-338 applyStreamedReasoningDetails:
-     * serializes the accumulated details into the thinking signature once
-     * the block is finalized (including on error).
-     */
+    /** Serializes the accumulated details into the thinking signature,
+     * including on the error path. */
     fun applyStreamedReasoningDetails() {
         streamedReasoningDetails?.let {
             thinkingSignature = JsonArray(it.map { detail -> JsonObject(detail) }).toString()
@@ -551,8 +501,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
 
     /** Emits the terminal event for every open block, exactly once per block. */
     fun finish(): List<AssistantMessageEvent> {
-        // pi finishBlock (openai-completions.ts:431) applies the serialized
-        // reasoning details before thinking_end.
+        // Serialized reasoning details must be applied before thinking_end.
         applyStreamedReasoningDetails()
         return blocks.mapIndexed { index, block ->
             when (block) {

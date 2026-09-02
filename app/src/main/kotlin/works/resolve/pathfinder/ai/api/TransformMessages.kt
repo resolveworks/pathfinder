@@ -12,20 +12,12 @@ import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 
 /**
- * Message normalization for provider replay, ported from pi's
- * packages/ai/src/api/transform-messages.ts.
+ * Normalizes a replayed history into a shape the target provider accepts:
+ * non-vision image downgrade, cross-model thinking handling, tool call ID
+ * normalization, synthetic error results for orphaned tool calls.
  *
- * - Downgrades images to placeholders for non-vision models (deduplicated).
- * - Keeps same-model thinking blocks (with signatures) for replay, drops
- *   redacted thinking cross-model, and converts other thinking to plain text
- *   (pi's cross-provider handoff: `<thinking>` tagging belongs to callers that
- *   want it; pi's anthropic adapter sends the bare text).
- * - Strips provider-specific tool thought signatures cross-provider and
- *   normalizes tool call IDs via [normalizeToolCallId] (pi's callback shape
- *   is `(id, model, source)`; the model is already a parameter here, so the
- *   callback receives the source assistant message).
- * - Skips errored/aborted assistant messages entirely.
- * - Inserts synthetic error tool results for orphaned tool calls.
+ * Cross-model thinking degrades to bare text without `<thinking>` tagging;
+ * tagging belongs to callers that want it (mirrors pi's handoff behavior).
  */
 
 private const val NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)"
@@ -67,12 +59,16 @@ private fun downgradeUnsupportedImages(messages: List<Message>, model: Model): L
         }
     }
 
-/** pi's transformMessages; see the file KDoc for the preserved behavior. * thinkingSignature truthiness: an empty-string signature falls through to
- * the blank-drop path, exactly like pi's `if (block.thinkingSignature)`.
+/**
+ * The shared replay pre-pass: every provider adapter runs this with its own
+ * [normalizeToolCallId] before building its payload.
  *
- * This is the single port of pi's transformMessages; every adapter
- * (Anthropic, Google, Mistral, OpenAI Completions, OpenAI Responses)
- * runs this pass with its provider-specific [normalizeToolCallId].
+ * Divergence from pi's callback shape `(id, model, source)`: the model is
+ * already a parameter here, so the callback receives the source assistant
+ * message instead.
+ *
+ * [ThinkingContent.thinkingSignature] truthiness mirrors pi: an empty-string
+ * signature counts as absent and falls through to the blank-drop path.
  */
 internal fun transformMessages(
     messages: List<Message>,
@@ -82,7 +78,6 @@ internal fun transformMessages(
     val toolCallIdMap = mutableMapOf<String, String>()
     val imageAwareMessages = downgradeUnsupportedImages(messages, model)
 
-    // First pass: image downgrade, thinking blocks, tool call ID normalization.
     val transformed = imageAwareMessages.map { msg ->
         when (msg.role) {
             MessageRole.USER -> msg
@@ -143,8 +138,6 @@ internal fun transformMessages(
         }
     }
 
-    // Second pass: skip error/aborted assistant turns and synthesize tool
-    // results for orphaned tool calls.
     val result = mutableListOf<Message>()
     var pendingToolCalls = mutableListOf<ToolCall>()
     var existingToolResultIds = mutableSetOf<String>()

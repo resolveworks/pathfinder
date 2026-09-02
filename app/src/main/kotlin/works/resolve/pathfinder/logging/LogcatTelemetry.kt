@@ -14,46 +14,23 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * The app's telemetry backend — an **Android application adapter** over the
- * ported pi telemetry contract, rendering spans as structured Logcat lines
- * under one tag (pi's README names OpenTelemetry/Sentry/logs as application
- * adapters; this is Pathfinder's "logs" case).
+ * The app's telemetry backend — an Android application adapter over the
+ * ported pi telemetry contract: each span renders as structured Logcat lines
+ * under one tag, and recording is passive — adapter failures never prevent
+ * or replace the callback's result or `Throwable`.
  *
- * One line per span lifecycle step, so a span reads in logcat as:
- *
- * ```text
- * I Pathfinder: > pf.auth.login id=2 parent=1 pf.auth.provider=openai-codex pf.auth.type=oauth
- * I Pathfinder: + pf.auth.login id=2 event=callback_received attempt=1
- * E Pathfinder: < pf.auth.login id=2 status=error error_name=ProviderAuthException duration_ms=1837 stack="AuthRepository.login(AuthRepository.kt:88); ..."
- * ```
- *
- * Contract semantics (mirroring pi's adapter contract and conformance suite):
- * the callback is admitted exactly once and its result/`Throwable` pass
- * through unchanged; adapter failures — recording, rendering, or sink — are
- * passive and never prevent or replace them; a throw settles the span with an
- * automatic error status unless the callback set one explicitly
- * (last-write-wins); every `SpanStatus.Error` end line logs at `error` level
- * even without detail; event attributes stay event-only; `setAttributes`
- * merges with later values winning; all span methods and child admission
- * become inert after settlement, with a late child routed through
- * [NOOP_TELEMETRY_CONTEXT] (its callback still runs). State is guarded by
- * atomics only — never a lock held across the business callback.
- *
- * Security divergences from a literal OTel/Sentry adapter (app policy, each
- * deliberate):
+ * Security boundary, deliberate divergences from a literal OTel/Sentry
+ * adapter (app policy):
  * - **No free-form status messages.** `TelemetryError.message` is never
- *   rendered, even when non-empty. [PathfinderDiagnostics] records type-only
- *   statuses, and automatic error statuses may carry provider exception
- *   messages (provider bodies, paths, prompts) that are not a guaranteed-safe
- *   free-form surface. Only the low-cardinality `error_name` is emitted.
+ *   rendered, even when non-empty: automatic error statuses may carry
+ *   provider exception messages (provider bodies, paths, prompts) that are
+ *   not a guaranteed-safe free-form surface. Only the low-cardinality
+ *   `error_name` is emitted ([PathfinderDiagnostics] records type-only
+ *   statuses).
  * - **No `Throwable` is ever passed to `android.util.Log`.** Exception
  *   messages and causes stay out of logcat; the callback `Throwable` is
- *   observed only in this adapter's catch path and rendered as bounded,
- *   defensively-read stack-frame metadata (`class.method(File:line)`),
- *   capped in frames and length.
- * - **Late children log nothing** (they are NOOP-routed like the in-memory
- *   reference adapter; a previous revision logged them, but the merged pi
- *   contract makes post-settlement recording inert).
+ *   rendered only as bounded, defensively-read stack-frame metadata
+ *   (`class.method(File:line)`), capped in frames and length.
  *
  * [sink] and [nanoTime] are internal seams so JVM tests can drive lifecycle,
  * passivity, and duration without `android.util.Log`; production uses the
@@ -127,9 +104,8 @@ class LogcatTelemetryContext internal constructor(
             childOptions: SpanOptions,
             childCallback: suspend (TelemetrySpan) -> R,
         ): R = if (settled.get()) {
-            // Post-settlement child admission is inert: route through the
-            // no-op context so the child callback still runs and its result
-            // (or exception) passes through, but nothing is recorded.
+            // Post-settlement admission is inert: the child callback still
+            // runs via the no-op context, but nothing is recorded.
             NOOP_TELEMETRY_CONTEXT.startSpan(childOptions, childCallback)
         } else {
             this@LogcatTelemetryContext.startSpan(id, childOptions, childCallback)
@@ -138,12 +114,12 @@ class LogcatTelemetryContext internal constructor(
         override fun addEvent(eventName: String, eventAttributes: SpanAttributes) {
             if (settled.get()) return
             // Event attributes stay event-only: they never merge into the
-            // span's attribute bag. The whole call fails atomically.
+            // span's attribute bag.
             try {
                 val copied = copyAttributes(eventAttributes)
                 emitPassively(isError = false) { renderEvent(id, name, eventName, copied) }
             } catch (_: Throwable) {
-                // Recording is passive. Ignore malformed or unreadable telemetry payloads.
+                // Passive: ignore malformed or unreadable payloads.
             }
         }
 
@@ -159,7 +135,7 @@ class LogcatTelemetryContext internal constructor(
                     newAttributes.forEach { (key, value) -> merged[key] = copyAttributeValue(value) }
                     if (attributes.compareAndSet(current, merged)) return
                 } catch (_: Throwable) {
-                    // Recording is passive; a partially copied bag is discarded atomically.
+                    // Passive; the partial copy is discarded.
                     return
                 }
             }
@@ -184,7 +160,7 @@ class LogcatTelemetryContext internal constructor(
                 val durationMs = (endNanos - startNanos) / 1_000_000
                 emitPassively(isError) { renderEnd(id, name, status, attributes.get(), durationMs, stack) }
             } catch (_: Throwable) {
-                // Settlement rendering is passive; the business result/exception is already on its way.
+                // Passive; the business result/exception is already on its way.
             }
         }
     }
@@ -194,7 +170,6 @@ class LogcatTelemetryContext internal constructor(
         try {
             sink.log(isError, tag, line())
         } catch (_: Throwable) {
-            // Backend failures are suppressed; the business callback still runs exactly once.
         }
     }
 
@@ -231,8 +206,7 @@ internal fun renderEvent(
 }
 
 /**
- * Renders a span end line with outcome, accumulated attributes, and duration.
- * `error_message` is never emitted (type-only app policy — see class KDoc);
+ * Renders a span end line with outcome, accumulated attributes, and duration;
  * [stack] carries the callback `Throwable`'s bounded stack-frame metadata on
  * error end lines.
  */
@@ -258,10 +232,10 @@ internal fun renderEnd(
 }
 
 /**
- * Renders bounded, type-only stack metadata for [error]: at most
- * [MAX_STACK_FRAMES] `class.method(File:line)` frames joined with `;`,
- * capped to [MAX_STACK_LENGTH]. No exception message, cause, or cause chain
- * is ever included; every read is defensive and a failure yields `null`.
+ * Bounded, type-only stack metadata for [error]: at most [MAX_STACK_FRAMES]
+ * `class.method(File:line)` frames joined with `;`, capped to
+ * [MAX_STACK_LENGTH]. No exception message, cause, or cause chain is ever
+ * included.
  */
 internal fun renderStack(error: Throwable): String? = try {
     error.stackTrace
@@ -318,7 +292,6 @@ internal fun String.asLogValue(): String {
     }
 }
 
-/** pi `copyAttributeValue`: scalars pass through, arrays copy defensively. */
 private fun copyAttributeValue(value: AttributeValue): AttributeValue = when (value) {
     is AttributeValue.Str -> value
     is AttributeValue.Num -> value
@@ -328,7 +301,6 @@ private fun copyAttributeValue(value: AttributeValue): AttributeValue = when (va
     is AttributeValue.Bools -> AttributeValue.Bools(value.values.toList())
 }
 
-/** pi `copyAttributes`. */
 private fun copyAttributes(attributes: SpanAttributes): SpanAttributes {
     val copy = LinkedHashMap<String, AttributeValue>(attributes.size)
     attributes.forEach { (name, value) -> copy[name] = copyAttributeValue(value) }

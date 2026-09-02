@@ -1,20 +1,15 @@
 package works.resolve.pathfinder.ai.auth
 
 /**
- * Provider-neutral auth contracts ported from pi
- * `packages/ai/src/auth/types.ts`. Provider flow implementations and
- * orchestration use these contracts without adding provider knowledge here.
- *
- * Cancellation: pi's `AbortSignal` parameters map to Kotlin structured
- * concurrency — every suspend function is cancellation-friendly, and flow
- * implementations must honor cancellation for blocking work.
+ * pi's `AbortSignal` parameters map to Kotlin structured concurrency: every
+ * suspend function is cancellation-friendly, and flow implementations must
+ * honor cancellation for blocking work.
  */
 
 /**
- * Request auth for a single model request (pi `ModelAuth`). If a value cannot
- * be expressed as `apiKey`, `headers`, or `baseUrl`, it is provider config,
- * not auth. Header values are nullable (pi `ProviderHeaders`): null
- * suppresses a lower-level default header during merging.
+ * Request auth for a single model request. If a value cannot be expressed as
+ * `apiKey`, `headers`, or `baseUrl`, it is provider config, not auth. A null
+ * header value suppresses a lower-level default header during merging.
  */
 data class ModelAuth(
     val apiKey: String? = null,
@@ -22,13 +17,11 @@ data class ModelAuth(
     val baseUrl: String? = null,
 )
 
-/** Auth method tag (pi `AuthType`: `"api_key" | "oauth"`). */
 enum class AuthType(val wire: String) {
     API_KEY("api_key"),
     OAUTH("oauth"),
 }
 
-/** Result of resolving auth for a model (pi `AuthResult`). */
 data class AuthResult(
     val auth: ModelAuth,
     /** Provider-scoped environment/config values resolved from credentials and ambient context. */
@@ -37,13 +30,12 @@ data class AuthResult(
     val source: String? = null,
 )
 
-/** Side-effect-free availability check result (pi `AuthCheck`). */
 data class AuthCheck(
     val source: String? = null,
     val type: AuthType,
 )
 
-/** Environment access for auth resolution (pi `AuthContext`). Injectable for tests. */
+/** Environment access for auth resolution; injectable for tests. */
 interface AuthContext {
     suspend fun env(name: String): String?
 
@@ -51,26 +43,22 @@ interface AuthContext {
     suspend fun fileExists(path: String): Boolean
 }
 
-/** Link attached to an info event (pi `AuthInfoLink`). */
 data class AuthInfoLink(
     val url: String,
     val label: String? = null,
 )
 
 /**
- * Prompt shown to the user during login (pi `AuthPrompt`). Pi attaches an
- * out-of-band abort signal per prompt; in Kotlin, per-prompt cancellation is
- * expressed by cancelling the `prompt` coroutine (e.g. launching it in a
- * child scope and cancelling that child when an out-of-band event wins).
+ * Prompt shown to the user during login. pi's per-prompt abort signal is
+ * expressed by cancelling the `prompt` coroutine (e.g. cancelling the child
+ * scope when an out-of-band event wins).
  */
 sealed interface AuthPrompt {
-    /** Text input. */
     data class Text(val message: String, val placeholder: String? = null) : AuthPrompt
 
     /** Secret input (never logged, never persisted outside the credential boundary). */
     data class Secret(val message: String, val placeholder: String? = null) : AuthPrompt
 
-    /** Option selection; [prompt] returns the chosen option id. */
     data class Select(
         val message: String,
         val options: List<Option>,
@@ -82,7 +70,6 @@ sealed interface AuthPrompt {
     data class ManualCode(val message: String, val placeholder: String? = null) : AuthPrompt
 }
 
-/** Progress/instruction events emitted during login (pi `AuthEvent`). */
 sealed interface AuthEvent {
     data class Info(val message: String, val links: List<AuthInfoLink> = emptyList()) : AuthEvent
 
@@ -99,10 +86,10 @@ sealed interface AuthEvent {
 }
 
 /**
- * Login interaction callbacks serving both api-key and OAuth flows
- * (pi `AuthInteraction`). `prompt` returns the entered/selected string
- * (`Select` returns the option id) and throws on cancel. Cancelling the
- * calling coroutine aborts the whole login flow.
+ * Login interaction callbacks serving both api-key and OAuth flows. `prompt`
+ * returns the entered/selected string (`Select` returns the option id) and
+ * throws on cancel. Cancelling the calling coroutine aborts the whole login
+ * flow.
  */
 interface AuthInteraction {
     suspend fun prompt(prompt: AuthPrompt): String
@@ -111,9 +98,8 @@ interface AuthInteraction {
 }
 
 /**
- * Api-key auth (pi `ApiKeyAuth`): stored key/provider env plus ambient
- * sources (env vars, AWS profiles, ADC files). Ambient-only providers omit
- * [login].
+ * Api-key auth: stored key/provider env plus ambient sources (env vars, AWS
+ * profiles, ADC files).
  */
 interface ApiKeyAuth {
     /** Display name, e.g. "Anthropic API key". */
@@ -124,8 +110,8 @@ interface ApiKeyAuth {
         get() = null
 
     /**
-     * Optional side-effect-free availability check. Use this when [resolve]
-     * may execute commands or perform other request-time work. Missing means
+     * Side-effect-free availability check. Use this when [resolve] may
+     * execute commands or perform other request-time work. Missing means
      * availability is checked by resolving auth.
      */
     val check: (suspend (ctx: AuthContext, credential: ApiKeyCredential?) -> AuthCheck?)?
@@ -142,16 +128,14 @@ interface ApiKeyAuth {
 }
 
 /**
- * OAuth auth (pi `OAuthAuth`). The `refresh`/`toAuth` split lets the
- * orchestrator own the locked refresh pattern: [refresh] produces a
- * credential, [toAuth] derives request auth from whatever credential ends up
- * stored.
+ * OAuth auth. The `refresh`/`toAuth` split lets the orchestrator own the
+ * locked refresh pattern: [refresh] produces a credential, [toAuth] derives
+ * request auth from whatever credential ends up stored.
  */
 interface OAuthAuth {
     /** Display name, e.g. "Anthropic (Claude Pro/Max)". */
     val name: String
 
-    /** Whether access through this auth method is backed by a provider subscription. */
     val isSubscription: Boolean
         get() = false
 
@@ -174,10 +158,10 @@ interface OAuthAuth {
 }
 
 /**
- * Provider auth (pi `ProviderAuth`). At least one of [apiKey]/[oauth] must be
- * present: even ambient-credential providers and keyless local servers
- * provide [apiKey] auth whose [ApiKeyAuth.resolve] reports whether the
- * provider is configured.
+ * Provider auth. At least one of [apiKey]/[oauth] must be present: even
+ * ambient-credential providers and keyless local servers provide [apiKey]
+ * auth whose [ApiKeyAuth.resolve] reports whether the provider is
+ * configured.
  */
 interface ProviderAuth {
     val apiKey: ApiKeyAuth?

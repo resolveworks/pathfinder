@@ -33,32 +33,10 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/**
- * Request construction for the Anthropic Messages API, ported from pi's
- * packages/ai/src/api/anthropic-messages.ts (buildParams, convertMessages,
- * convertTools, convertContentBlocks, normalizeToolCallId, cache-control
- * handling, Claude Code OAuth tool-name mapping, and the streamSimple
- * thinking helpers from simple-options.ts).
- *
- * Documented divergences from pi (kept narrow, per project rules):
- * - Deferred tool loading (`splitDeferredTools`, `tool_reference` blocks,
- *   `defer_loading`, and pi's `supportsToolReferences`/`deferredToolsMode`)
- *   is not ported: `StopReason.DEFERRED`/`DeferredHandle` are excluded at the
- *   Types.kt scope boundary (see its KDoc), and this adapter neither emits
- *   `defer_loading`/`tool_reference` nor consumes
- *   `ToolResultMessage.addedToolNames` as a deferred-load point.
- * - pi's `metadata.user_id` option is not ported (no metadata option here).
- * - Thinking content stays a raw text/signature pair.
- */
-
-
-/** pi's AnthropicEffort. */
 enum class AnthropicEffort { LOW, MEDIUM, HIGH, XHIGH, MAX }
 
-/** pi's AnthropicThinkingDisplay. */
 enum class AnthropicThinkingDisplay { SUMMARIZED, OMITTED }
 
-/** pi's AnthropicOptions.toolChoice. */
 sealed interface AnthropicToolChoice {
     data object Auto : AnthropicToolChoice
     data object Any : AnthropicToolChoice
@@ -67,24 +45,21 @@ sealed interface AnthropicToolChoice {
 }
 
 /**
- * Options for the Anthropic Messages adapter, ported from pi's
- * AnthropicOptions (StreamOptions base plus the Anthropic-specific fields).
- * `client` is not ported: the transport is injected at construction instead.
+ * Options for the Anthropic Messages adapter. pi's `client` field is not
+ * ported: the transport is injected at construction instead.
  */
 data class AnthropicMessagesOptions(
     val apiKey: String? = null,
     val sessionId: String? = null,
     val temperature: Double? = null,
     val maxTokens: Int? = null,
-    /** pi's thinkingEnabled; null means "unspecified" (thinking omitted). */
+    /** Null means "unspecified" (thinking omitted). */
     val thinkingEnabled: Boolean? = null,
-    /** pi's thinkingBudgetTokens; default 1024 when enabled (older models). */
+    /** Default 1024 when enabled (older models). */
     val thinkingBudgetTokens: Int? = null,
-    /** pi's effort: adaptive-thinking effort level. */
+    /** Adaptive-thinking effort level. */
     val effort: AnthropicEffort? = null,
-    /** pi's thinkingDisplay; defaults to SUMMARIZED when thinking is enabled. */
     val thinkingDisplay: AnthropicThinkingDisplay = AnthropicThinkingDisplay.SUMMARIZED,
-    /** pi's interleavedThinking (default true). */
     val interleavedThinking: Boolean = true,
     val toolChoice: AnthropicToolChoice? = null,
     val cacheRetention: CacheRetention? = null,
@@ -94,24 +69,16 @@ data class AnthropicMessagesOptions(
     val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
     /**
-     * pi's onPayload request hook (ProviderRequestOptions, types.ts:145-149;
-     * anthropic-messages.ts:566): replaces the params object before
-     * serialization when it returns non-null. Receives full message content;
+     * Request hook that may return a replacement for the outgoing payload,
+     * applied before serialization. It receives full message content —
      * installers must not log it. Never included in toString().
      */
     val onPayload: (suspend (payload: JsonObject, model: Model) -> JsonObject?)? = null,
-    /**
-     * pi's onResponse request hook (types.ts:184; anthropic-messages.ts:583):
-     * invoked after 2xx response headers arrive. Never included in toString().
-     */
+    /** Invoked after the 2xx response headers arrive. Never included in toString(). */
     val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
     /**
-     * pi's ProviderRequestOptions.telemetryContext (types.ts:126-127),
-     * inherited via StreamOptions (AnthropicOptions extends StreamOptions,
-     * anthropic-messages.ts): explicit parent context for telemetry produced
-     * by this logical request. Dormant in this port — carried for shape
-     * fidelity, preserved through the streamSimple conversion
-     * (buildBaseOptions). Presence boolean only in toString().
+     * Explicit parent telemetry context for this request. Dormant in this
+     * port — carried for shape fidelity.
      */
     val telemetryContext: TelemetryContext? = null,
 ) {
@@ -139,17 +106,12 @@ data class AnthropicMessagesOptions(
     )
 }
 
-/** pi's resolveCacheRetention: explicit value, then PI_CACHE_RETENTION=long, else short. */
 internal fun resolveCacheRetention(cacheRetention: CacheRetention?, env: Map<String, String>): CacheRetention {
     if (cacheRetention != null) return cacheRetention
     if (env["PI_CACHE_RETENTION"] == "long") return CacheRetention.LONG
     return CacheRetention.SHORT
 }
 
-/**
- * pi's getCacheControl: cache_control marker to attach, or null when
- * retention is "none". Long retention uses the 1h TTL when supported.
- */
 internal fun getCacheControl(model: Model, options: AnthropicMessagesOptions): JsonObject? {
     val retention = resolveCacheRetention(options.cacheRetention, options.env)
     if (retention == CacheRetention.NONE) return null
@@ -160,11 +122,9 @@ internal fun getCacheControl(model: Model, options: AnthropicMessagesOptions): J
     }
 }
 
-// --- Claude Code OAuth stealth naming (pi's claudeCodeTools table) ---------
-
+// Stealth mode: on OAuth requests, tool names mimic Claude Code's exactly.
 internal const val CLAUDE_CODE_VERSION = "2.1.75"
 
-// Claude Code 2.x tool names (canonical casing), pi's claudeCodeTools.
 private val CLAUDE_CODE_TOOLS = listOf(
     "Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion",
     "EnterPlanMode", "ExitPlanMode", "KillShell", "NotebookEdit", "Skill",
@@ -173,10 +133,9 @@ private val CLAUDE_CODE_TOOLS = listOf(
 
 private val CC_TOOL_LOOKUP = CLAUDE_CODE_TOOLS.associateBy { it.lowercase() }
 
-/** pi's toClaudeCodeName: CC canonical casing when it matches (case-insensitive). */
 internal fun toClaudeCodeName(name: String): String = CC_TOOL_LOOKUP[name.lowercase()] ?: name
 
-/** pi's fromClaudeCodeName: map a CC-cased name back onto a provided tool's real name. */
+/** Maps a Claude Code-cased name back onto the matching tool's real name. */
 internal fun fromClaudeCodeName(name: String, tools: List<Tool>): String {
     if (tools.isNotEmpty()) {
         val lowerName = name.lowercase()
@@ -188,23 +147,12 @@ internal fun fromClaudeCodeName(name: String, tools: List<Tool>): String {
 
 internal const val CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 
-/** pi's isOAuthToken. */
 internal fun isOAuthToken(apiKey: String): Boolean = apiKey.contains("sk-ant-oat")
 
-/**
- * pi's normalizeToolCallId: Anthropic requires IDs matching
- * ^[a-zA-Z0-9_-]+$ (max 64 chars).
- */
+/** Anthropic tool-use ids must match ^[a-zA-Z0-9_-]+$ (max 64 chars). */
 internal fun normalizeToolCallId(id: String): String =
     id.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(64)
 
-// --- Content / message conversion ------------------------------------------
-
-/**
- * pi's convertContentBlocks: text-only content collapses to a joined string;
- * image content becomes base64 source blocks with a placeholder text block
- * when no text is present.
- */
 internal fun convertContentBlocks(content: List<Content>): Any {
     val hasImages = content.any { it.type == ContentType.IMAGE }
     if (!hasImages) {
@@ -256,17 +204,6 @@ private fun imageBlock(block: ImageContent): JsonObject = buildJsonObject {
     })
 }
 
-/**
- * pi's convertMessages: transforms [messages] (already passed through
- * [transformMessages]) into Anthropic MessageParam objects.
- *
- * - Empty user text content is dropped; image-only user content keeps images.
- * - Assistant thinking is replayed with signatures; redacted thinking passes
- *   the opaque payload back as redacted_thinking; missing signatures degrade
- *   to text (or an empty-signature block for allowEmptySignature models).
- * - Consecutive toolResult messages are grouped into one user message.
- * - cache_control lands on the final block of the last user message.
- */
 internal fun convertMessages(
     transformedMessages: List<Message>,
     isOAuthToken: Boolean,
@@ -364,7 +301,6 @@ internal fun convertMessages(
                 }
             }
             works.resolve.pathfinder.ai.core.MessageRole.TOOL_RESULT -> {
-                // Collect all consecutive toolResult messages.
                 val toolResults = mutableListOf<JsonObject>()
                 var j = i
                 while (j < transformedMessages.size &&
@@ -397,7 +333,8 @@ internal fun convertMessages(
         i++
     }
 
-    // Add cache_control to the last user message to cache conversation history.
+    // Prompt caching: the marker on the last user message caches the
+    // conversation history.
     if (cacheControl != null && params.isNotEmpty()) {
         val lastMessage = params.last()
         if (lastMessage.str("role") == "user") {
@@ -429,7 +366,6 @@ internal fun convertMessages(
     return params
 }
 
-/** Parses raw tool arguments to a JSON object; blank/malformed values become `{}`. */
 private fun parseOrEmptyObject(arguments: String): JsonObject {
     if (arguments.isBlank()) return JsonObject(emptyMap())
     return try {
@@ -440,12 +376,6 @@ private fun parseOrEmptyObject(arguments: String): JsonObject {
     }
 }
 
-/**
- * pi's convertTools (anthropic-messages.ts:1326-1363, without deferred
- * loading): legacy input_schema shape, strict JSON-schema sampling via
- * constrained-sampling.ts, optional eager_input_streaming, and cache_control
- * on the last tool.
- */
 internal fun convertTools(
     tools: List<Tool>,
     isOAuthToken: Boolean,
@@ -461,7 +391,7 @@ internal fun convertTools(
         put("properties", schema["properties"] ?: JsonObject(emptyMap()))
         put("required", schema["required"] ?: JsonArray(emptyList()))
     }
-    // `{ ...parameters, ...legacyInputSchema }`: legacy keys override.
+    // Legacy type/properties/required override the schema's own keys.
     val inputSchema = if (strict == true) {
         val merged = LinkedHashMap(schema)
         merged.putAll(legacyInputSchema)
@@ -479,9 +409,6 @@ internal fun convertTools(
     }
 }
 
-/**
- * pi's buildParams: assembles the streaming Messages API request body.
- */
 internal fun buildRequestBody(
     model: Model,
     context: Context,
@@ -500,7 +427,7 @@ internal fun buildRequestBody(
     body["max_tokens"] = JsonPrimitive(options.maxTokens ?: model.maxTokens)
     body["stream"] = JsonPrimitive(true)
 
-    // System prompt: OAuth requests prepend the Claude Code identity.
+    // OAuth requests prepend the Claude Code identity to the system prompt.
     val systemBlocks = mutableListOf<JsonObject>()
     if (isOAuthToken) {
         systemBlocks.add(textBlock(CLAUDE_CODE_IDENTITY, cacheControl))
@@ -529,7 +456,6 @@ internal fun buildRequestBody(
         )
     }
 
-    // Thinking mode: adaptive, budget-based, or explicitly disabled.
     if (model.reasoning) {
         if (options.thinkingEnabled == true) {
             val display = options.thinkingDisplay
@@ -566,9 +492,9 @@ internal fun buildRequestBody(
         null -> {}
     }
 
-    // pi anthropic-messages.ts:1107-1110: fallbacks carry model ids only;
-    // provider/cost are local metadata. Omitted when empty (Anthropic rejects
-    // the field for models with no permitted fallback targets).
+    // Fallbacks carry model ids only; provider/cost are local metadata.
+    // Omitted when empty: Anthropic rejects the field without permitted
+    // fallback targets.
     val allowedFallbackModels = compat.allowedFallbackModels
     if (allowedFallbackModels.isNotEmpty()) {
         body["fallbacks"] = JsonArray(
@@ -579,18 +505,14 @@ internal fun buildRequestBody(
     return JsonObject(body)
 }
 
-/** pi's `model.thinkingLevelMap?.off !== null` check: an explicit null entry disables off. */
+/** An explicit null OFF entry in [Model.thinkingLevelMap] means off is unsupported. */
 internal fun thinkingOffExplicitlyUnsupported(model: Model): Boolean {
     val map = model.thinkingLevelMap ?: return false
     return map.isSpecified(ModelThinkingLevel.OFF) && map.forLevel(ModelThinkingLevel.OFF) == null
 }
 
-// --- streamSimple helpers (pi's simple-options.ts) --------------------------
-
-/** pi's MIN_ANSWER_TOKENS. */
 internal const val MIN_ANSWER_TOKENS = 1024
 
-/** pi's DEFAULT_THINKING_BUDGETS. */
 internal val DEFAULT_THINKING_BUDGETS = mapOf(
     works.resolve.pathfinder.ai.core.ThinkingLevel.MINIMAL to 1024,
     works.resolve.pathfinder.ai.core.ThinkingLevel.LOW to 2048,
@@ -598,7 +520,7 @@ internal val DEFAULT_THINKING_BUDGETS = mapOf(
     works.resolve.pathfinder.ai.core.ThinkingLevel.HIGH to 16384,
 )
 
-/** pi's clampReasoning: xhigh/max clamp to high before budget lookups. */
+/** Xhigh/max have no budget entries, so they clamp to high before lookup. */
 internal fun clampReasoning(
     level: works.resolve.pathfinder.ai.core.ThinkingLevel,
 ): works.resolve.pathfinder.ai.core.ThinkingLevel =
@@ -618,7 +540,6 @@ internal fun thinkingBudgetForLevel(
     return budgets[clampReasoning(level)]!!
 }
 
-/** pi's adjustMaxTokensForThinking: fit a thinking budget under the response ceiling. */
 internal fun adjustMaxTokensForThinking(
     baseMaxTokens: Int?,
     modelMaxTokens: Int,
@@ -637,17 +558,11 @@ internal fun adjustMaxTokensForThinking(
     return maxTokens to thinkingBudget
 }
 
-/**
- * pi's mapThinkingLevelToEffort: model thinkingLevelMap wins, then the level
- * default mapping (minimal/low -> low, medium -> medium, else high).
- */
 internal fun mapThinkingLevelToEffort(
     model: Model,
     level: works.resolve.pathfinder.ai.core.ThinkingLevel?,
 ): AnthropicEffort {
-    // ThinkingLevel has no OFF case (pi's union splits it into
-    // ModelThinkingLevel.OFF), so toModelThinkingLevel is total here and
-    // replaces the previous ModelThinkingLevel.valueOf(name) reflection.
+    // Core ThinkingLevel has no OFF case, so toModelThinkingLevel is total here.
     val mapped = level?.let { model.thinkingLevelMap?.forLevel(it.toModelThinkingLevel()) }
     if (mapped is String) {
         return try {
@@ -666,12 +581,9 @@ internal fun mapThinkingLevelToEffort(
 }
 
 /**
- * Maps core ToolChoice to pi's AnthropicOptions.toolChoice wire shape
- * (anthropic-messages.ts:265). The simple API now carries only the narrow
- * pi ToolChoice (types.ts:82), so streamSimple pass-through can only produce
- * Auto/None here; the remaining shapes map Required to Any because the
- * Anthropic protocol has no "required" (a tool must be called), matching the
- * Any/Required collapse in the other adapters.
+ * Required maps to [AnthropicToolChoice.Any]: the Anthropic protocol has no
+ * "required" (a tool must be called), matching the Any/Required collapse in
+ * the other adapters.
  */
 internal fun mapToolChoice(choice: works.resolve.pathfinder.ai.core.ToolChoice?): AnthropicToolChoice? =
     when (choice) {
@@ -684,7 +596,6 @@ internal fun mapToolChoice(choice: works.resolve.pathfinder.ai.core.ToolChoice?)
         null -> null
     }
 
-/** pi's buildBaseOptions (reduced): common clamped defaults for streamSimple. */
 internal fun buildBaseOptions(
     model: Model,
     context: Context,

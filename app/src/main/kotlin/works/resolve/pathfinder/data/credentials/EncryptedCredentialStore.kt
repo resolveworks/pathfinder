@@ -13,23 +13,21 @@ import works.resolve.pathfinder.ai.auth.CredentialStore
 import works.resolve.pathfinder.logging.PathfinderDiagnostics
 
 /**
- * Persistent [CredentialStore] (pi contract from
- * `packages/ai/src/auth/types.ts`): stores one credential per provider as
+ * Persistent [CredentialStore]: one credential per provider, stored as
  * AES-GCM ciphertext (via [KeystoreAeadCipher], backed by the Android
- * Keystore) in per-provider files under the app's private storage, serialized
- * with [CredentialCodec] (type-tagged JSON only).
+ * Keystore) in per-provider files under the app's private storage and
+ * serialized with [CredentialCodec].
  *
- * Writes are serialized per provider with an in-process mutex — the app is a
- * single Android process, so pi's cross-process file-lock requirement
- * collapses to this. Key material never leaves the credential boundary in
- * plaintext and is never logged.
+ * Mutual exclusion is per provider id; pi also permits cross-process
+ * locking, but the single-process app needs only this in-process mutex. Key
+ * material never leaves the credential boundary in plaintext and is never
+ * logged.
  *
- * Failures to read (decrypt), decode, or persist a credential are recorded as
- * sanitized `pf.credentials.*` spans through the app-owned
- * [PathfinderDiagnostics] boundary before the original exception is
- * rethrown. The vocabulary and sanitization policy live there: only the
- * provider id, operation outcome, and exception *type* are recorded — never
- * exception messages, which can embed platform detail, and never file
+ * Failures to read (decrypt), decode, or persist are recorded as sanitized
+ * `pf.credentials.*` spans through [PathfinderDiagnostics] before the
+ * original exception is rethrown. The sanitization policy lives there: only
+ * the provider id, operation outcome, and exception *type* are recorded —
+ * never exception messages, which can embed platform detail, and never file
  * content.
  */
 class EncryptedCredentialStore(

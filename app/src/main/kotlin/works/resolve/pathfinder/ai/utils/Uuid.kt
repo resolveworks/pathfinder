@@ -3,31 +3,22 @@ package works.resolve.pathfinder.ai.utils
 import java.security.SecureRandom
 
 /**
- * Generates a time-ordered UUIDv7; faithful port of pi's `uuidv7`
- * (packages/ai/src/utils/uuid.ts).
+ * Time-ordered UUIDv7: 48-bit big-endian Unix-millisecond timestamp in bytes
+ * 0-5, a process-wide monotonic counter over bytes 6-10 that keeps
+ * same-millisecond ids ordered, then random bytes. The lowercase hex string
+ * sorts chronologically, which is why pi uses it for session and entry ids.
  *
- * Layout, exactly as upstream: 48-bit big-endian Unix-millisecond timestamp in
- * bytes 0-5, a process-wide monotonic counter spread over bytes 6-10 (seeded
- * from random bytes when the clock advances, incremented on ties, with the
- * timestamp bumped on counter wraparound so ordering never regresses), the
- * version/variant nibbles, and random bytes for the remainder. The resulting
- * canonical lowercase hex string sorts chronologically, which is why pi uses
- * it for session and entry ids.
- *
- * Documented divergences, at the narrowest boundary:
- * - pi reads `crypto.getRandomValues` with a `Math.random` fallback for
- *   environments without WebCrypto; the JVM/Android platform always provides
- *   [SecureRandom], so the fallback branch does not exist here.
+ * Divergences from pi:
  * - pi's module-level `lastTimestamp`/`sequence` state is protected by the
- *   single-threaded JS event loop; here [Uuidv7.next] is `@Synchronized` to
- *   keep the same monotonicity guarantee under Kotlin concurrency.
- * - pi extracts the timestamp bytes with float division on a double; here the
- *   equivalent `Long` shifts are used.
+ *   single-threaded JS event loop; [Uuidv7.next] is `@Synchronized` to keep
+ *   the same monotonicity guarantee under Kotlin concurrency.
+ * - pi falls back to `Math.random` when WebCrypto is unavailable;
+ *   [SecureRandom] always exists on JVM/Android, so there is no fallback
+ *   branch.
  *
- * The internal `System.currentTimeMillis()` below is a deliberate exception
- * to the "no System.currentTimeMillis in domain code" timing rule: this is a
- * verbatim port of pi's `Date.now()`-based generator, and reading wall time is
- * the function's entire job (it is not minting event timestamps).
+ * The `System.currentTimeMillis()` call below deliberately breaks the
+ * domain-code timing rule: pi's generator is `Date.now()`-based, and reading
+ * wall time is this function's entire job.
  */
 fun uuidv7(): String = Uuidv7.next()
 

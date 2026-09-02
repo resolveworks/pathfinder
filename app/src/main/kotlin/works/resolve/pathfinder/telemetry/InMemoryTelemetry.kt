@@ -1,32 +1,24 @@
 package works.resolve.pathfinder.telemetry
 
 /**
- * Backend-neutral reference implementation recording spans in process memory,
- * ported symbol-for-symbol from pi `packages/telemetry/src/memory.ts`.
+ * Records spans in process memory; create a fresh instance to isolate tests
+ * or independent recording scopes. Recording is passive: copy failures are
+ * swallowed, never propagated. Spans started from an already-settled parent
+ * record nothing.
  *
- * Create a fresh instance to isolate tests or independent recording scopes;
- * [getSpans] returns detached snapshots in span-start order. Recording is
- * passive (pi's try/catch guarantees): exceptions from attribute copies or
- * status copies are swallowed, never propagated. Spans started from an
- * already-settled parent record nothing (pi routes them through the no-op
- * context). A callback exception settles the span with
- * [automaticErrorStatus] unless the callback already set an explicit status.
- *
- * Kotlin divergence from pi (single-threaded JS): coroutines may admit spans,
- * record, and settle concurrently from multiple threads, so all state
+ * Kotlin divergence from pi (single-threaded JS): coroutines may admit,
+ * record, and settle spans concurrently from multiple threads, so all state
  * mutation is guarded by one context lock. The lock is never held across the
  * business callback — each recording call and settlement takes and releases
- * it, matching pi's observable semantics under concurrency.
+ * it.
  */
 class InMemoryTelemetryContext : TelemetryContext {
 
-    /** Port of pi `RecordedTelemetryEvent`. */
     data class RecordedTelemetryEvent(
         val name: String,
         val attributes: SpanAttributes,
     )
 
-    /** Port of pi `RecordedTelemetrySpan` (a detached snapshot). */
     data class RecordedTelemetrySpan(
         val id: Int,
         val parentId: Int?,
@@ -39,7 +31,6 @@ class InMemoryTelemetryContext : TelemetryContext {
         val endSequence: Int?,
     )
 
-    /** pi's mutable recorded span (internal; snapshots only escape). */
     private class MutableSpan(
         val id: Int,
         val parentId: Int?,
@@ -53,7 +44,7 @@ class InMemoryTelemetryContext : TelemetryContext {
         var endSequence: Int? = null
     }
 
-    /** Guards [spans] and the id/sequence counters; never held across callbacks. */
+    /** Guards [spans] and the id/sequence counters. */
     private val lock = Any()
     private val spans = mutableListOf<MutableSpan>()
     private var nextSpanId = 1
@@ -69,10 +60,9 @@ class InMemoryTelemetryContext : TelemetryContext {
         options: SpanOptions,
         callback: suspend (TelemetrySpan) -> T,
     ): T {
-        // One atomic admission, mirroring pi's synchronous settled-parent check
-        // followed immediately by createSpan: the parent cannot settle between
-        // the check and the append. pi's createSpan copies options.attributes
-        // before consuming nextSpanId, so an unreadable payload wastes no ID.
+        // One atomic admission: the parent cannot settle between the
+        // settled-parent check and the append, and attributes are copied
+        // before an id is consumed, so an unreadable payload wastes no ID.
         val admitted: MutableSpan? = synchronized(lock) {
             if (parent?.settled == true) return@synchronized null
             try {
@@ -104,7 +94,6 @@ class InMemoryTelemetryContext : TelemetryContext {
                     try {
                         recorded.events += RecordedTelemetryEvent(name, copyAttributes(attributes))
                     } catch (_: Throwable) {
-                        // Recording is passive. Ignore malformed or unreadable telemetry payloads.
                     }
                 }
             }
@@ -115,7 +104,6 @@ class InMemoryTelemetryContext : TelemetryContext {
                     try {
                         recorded.attributes = mergeAttributes(recorded.attributes, attributes)
                     } catch (_: Throwable) {
-                        // Recording is passive. Ignore malformed or unreadable telemetry payloads.
                     }
                 }
             }
@@ -127,7 +115,6 @@ class InMemoryTelemetryContext : TelemetryContext {
                         recorded.status = copyStatus(status)
                         recorded.explicitStatus = true
                     } catch (_: Throwable) {
-                        // Recording is passive. Ignore malformed or unreadable telemetry payloads.
                     }
                 }
             }
@@ -143,7 +130,7 @@ class InMemoryTelemetryContext : TelemetryContext {
         }
     }
 
-    /** pi `settleSpan` (under [lock]); the automatic error never marks the status explicit. */
+    /** Under [lock]; the automatic error never marks the status explicit. */
     private fun settleSpan(span: MutableSpan, failed: Boolean, error: Throwable?) {
         synchronized(lock) {
             if (span.settled) return
@@ -155,7 +142,7 @@ class InMemoryTelemetryContext : TelemetryContext {
         }
     }
 
-    /** Returns detached snapshots in span-start order (pi `getSpans`). */
+    /** Detached snapshots in span-start order. */
     fun getSpans(): List<RecordedTelemetrySpan> = synchronized(lock) {
         spans.map { span ->
             RecordedTelemetrySpan(
@@ -172,7 +159,7 @@ class InMemoryTelemetryContext : TelemetryContext {
     }
 }
 
-/** pi `copyAttributeValue`: scalars pass through, arrays copy defensively. */
+/** Scalars pass through; arrays copy defensively. */
 private fun copyAttributeValue(value: AttributeValue): AttributeValue = when (value) {
     is AttributeValue.Str -> value
     is AttributeValue.Num -> value
@@ -182,14 +169,12 @@ private fun copyAttributeValue(value: AttributeValue): AttributeValue = when (va
     is AttributeValue.Bools -> AttributeValue.Bools(value.values.toList())
 }
 
-/** pi `copyAttributes`. */
 private fun copyAttributes(attributes: SpanAttributes): SpanAttributes {
     val copy = LinkedHashMap<String, AttributeValue>(attributes.size)
     attributes.forEach { (name, value) -> copy[name] = copyAttributeValue(value) }
     return copy
 }
 
-/** pi `mergeAttributes`. */
 private fun mergeAttributes(current: SpanAttributes, attributes: SpanAttributes): SpanAttributes {
     val merged = LinkedHashMap<String, AttributeValue>(current.size + attributes.size)
     current.forEach { (name, value) -> merged[name] = copyAttributeValue(value) }
@@ -197,7 +182,7 @@ private fun mergeAttributes(current: SpanAttributes, attributes: SpanAttributes)
     return merged
 }
 
-/** pi `copyStatus`: snapshots carry the serializable shape only. */
+/** Error details copy defensively so snapshots detach from the caller's [TelemetryError]. */
 private fun copyStatus(status: SpanStatus): SpanStatus = when (status) {
     is SpanStatus.Ok -> SpanStatus.Ok
     is SpanStatus.Error -> status.error?.let {

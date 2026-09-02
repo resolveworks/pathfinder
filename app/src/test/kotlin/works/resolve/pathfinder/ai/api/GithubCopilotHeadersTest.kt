@@ -26,20 +26,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/**
- * Tests for the GitHub Copilot dynamic request headers port
- * (GithubCopilotHeaders.kt, mirroring pi's
- * packages/ai/src/api/github-copilot-headers.ts) and their wiring into the
- * three wire protocols, mirroring pi's
- * test/github-copilot-anthropic.test.ts header assertions and the call-site
- * behavior of openai-completions.ts / openai-responses.ts /
- * anthropic-messages.ts createClient.
- */
 class GithubCopilotHeadersTest {
-
-    // =========================================================================
-    // Helper unit tests (pi's github-copilot-headers.ts semantics)
-    // =========================================================================
 
     @Test
     fun `inferCopilotInitiator marks non-user last messages as agent`() {
@@ -89,7 +76,6 @@ class GithubCopilotHeadersTest {
                 ),
             ),
         )
-        // Assistant images do not trigger Copilot-Vision-Request.
         assertFalse(
             hasCopilotVisionInput(
                 listOf(
@@ -123,10 +109,6 @@ class GithubCopilotHeadersTest {
             buildCopilotDynamicHeaders(messages, hasImages = true),
         )
     }
-
-    // =========================================================================
-    // Shared request fixtures
-    // =========================================================================
 
     private fun copilotModel(
         api: String,
@@ -169,9 +151,9 @@ class GithubCopilotHeadersTest {
     private fun retry() = ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 })
 
     /**
-     * Header lookups are case-insensitive at HTTP layer; assert the sent
-     * casing and that no lowercased name is duplicated (a later layer must
-     * replace, not coexist with, an earlier differently-cased name).
+     * Header lookups are case-insensitive: assert that no differently-cased
+     * duplicate names were sent (replacements must not coexist), then return
+     * the sent headers.
      */
     private fun sent(request: works.resolve.pathfinder.ai.transport.TransportRequest): Map<String, String> {
         val lowered = request.headers.keys.groupBy { it.lowercase() }
@@ -184,10 +166,6 @@ class GithubCopilotHeadersTest {
 
     private fun jsonBody(request: works.resolve.pathfinder.ai.transport.TransportRequest) =
         Json.parseToJsonElement(request.body.decodeToString()).jsonObject
-
-    // =========================================================================
-    // openai-completions wiring (pi's openai-completions.ts createClient)
-    // =========================================================================
 
     @Test
     fun `completions sends dynamic headers for user and tool initiation and vision`() = runTest {
@@ -267,10 +245,6 @@ class GithubCopilotHeadersTest {
         assertNull(headers["Openai-Intent"])
     }
 
-    // =========================================================================
-    // openai-responses wiring (pi's openai-responses.ts createClient)
-    // =========================================================================
-
     private fun responsesChunk() = listOf(
         """{"type":"response.output_item.added","output_index":0,
             "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
@@ -337,10 +311,6 @@ class GithubCopilotHeadersTest {
         assertEquals("custom-intent", headers["openai-intent"])
         assertNull(headers["Openai-Intent"])
     }
-
-    // =========================================================================
-    // anthropic-messages wiring (pi's anthropic-messages.ts createClient)
-    // =========================================================================
 
     private fun anthropicChunk() = listOf(
         null to """{"type":"message_start","message":{"id":"msg_test",

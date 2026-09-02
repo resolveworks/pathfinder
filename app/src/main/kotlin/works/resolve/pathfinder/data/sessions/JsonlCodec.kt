@@ -32,26 +32,22 @@ import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
 
 /**
- * JSONL v4 session codec, porting pi's session/jsonl/codec.ts: a session
- * file is one header line followed by one [SessionMutation] line per
- * append. Malformed input is rejected with [JsonlDecodeError], whose [kind]
- * distinguishes JSON syntax errors (only ever producible by a torn final
- * append — the load path's torn-tail repair signal) from schema violations.
+ * JSONL v4 session codec: a session file is one header line followed by
+ * one [SessionMutation] line per append. Malformed input is rejected with
+ * [JsonlDecodeError], whose [kind] distinguishes JSON syntax errors (only
+ * ever producible by a torn final append — the load path's torn-tail
+ * repair signal) from schema violations.
  *
- * Deliberate divergences from upstream (documented per the audit's P0-2):
+ * Divergences from pi:
  * - `cwd` is a required header field upstream; Android has no working
- *   directory, so Pathfinder never writes it and decode accepts its absence
- *   (a pi-written session's cwd decodes and is ignored).
+ *   directory, so Pathfinder never writes it and decode accepts its
+ *   absence (a pi-written session's cwd decodes and is ignored).
  * - Entry payloads decode into Pathfinder's typed [SessionEntry] hierarchy
  *   (rejecting unknown/malformed fields) rather than pi's permissive field
  *   spread; the line shapes are otherwise identical.
- * - parseHeader/parseMutation throw [JsonlDecodeError] instead of returning
- *   pi's Result (Kotlin exceptions at this parse boundary; the caller
- *   distinguishes failure modes via [JsonlDecodeError.kind]).
  */
 internal object JsonlCodec {
 
-    /** pi's JsonlDecodeError (session/jsonl/errors.ts): syntax vs schema. */
     class JsonlDecodeError(
         val kind: Kind,
         message: String,
@@ -60,32 +56,27 @@ internal object JsonlCodec {
         enum class Kind { SYNTAX, SCHEMA }
     }
 
-    /** pi's JsonlV4Header (session/jsonl/types.ts). */
     data class JsonlV4Header(
         val id: String,
         val createdAt: Long,
         val parentSessionId: String? = null,
-        /** Preserved only when a v3 parent path could not be resolved (pi). */
+        /** Preserved only when a v3 parent path could not be resolved. */
         val legacyParentSessionPath: String? = null,
-        /** Opaque application-owned metadata (pi's free-form `metadata`). */
+        /** Opaque application-owned metadata. */
         val metadata: JsonObject? = null,
     )
 
-    /** pi's ENTRY_TYPES (codec.ts). */
     private val ENTRY_TYPES = setOf(
         "message", "model_change", "thinking_level_change", "active_tools_change",
         "compaction", "branch_summary", "custom",
     )
 
-    /** pi's RECORD_TYPES (codec.ts). */
     private val RECORD_TYPES = setOf(
         "operation_started", "abort_requested", "operation_finished", "step_attempt",
         "tool_started", "queue_enqueued", "queue_cancelled", "write_deferred", "usage",
     )
 
-    // ---- header ----
-
-    /** pi's encodeHeader: the JSON header line, newline-terminated. */
+    /** The header line, newline-terminated. */
     fun encodeHeader(header: JsonlV4Header): String = buildJsonObject {
         put("kind", "header")
         put("version", 4)
@@ -96,7 +87,6 @@ internal object JsonlCodec {
         header.metadata?.let { put("metadata", it) }
     }.toString() + "\n"
 
-    /** pi's decodeHeader; throws [JsonlDecodeError] on any violation. */
     fun decodeHeader(line: String): JsonlV4Header {
         val value = parseObject(line)
         if (value.string("kind") != "header") schema("is not a header")
@@ -121,9 +111,7 @@ internal object JsonlCodec {
         )
     }
 
-    // ---- mutations ----
-
-    /** pi's encodeMutation: one mutation line, newline-terminated. */
+    /** One mutation line, newline-terminated. */
     fun encodeMutation(mutation: SessionMutation): String = when (mutation) {
         is SessionMutation.Entry ->
             buildJsonObject {
@@ -160,7 +148,6 @@ internal object JsonlCodec {
             }.toString() + "\n"
     }
 
-    /** pi's decodeMutation; throws [JsonlDecodeError] on any violation. */
     fun decodeMutation(line: String): SessionMutation {
         val value = parseObject(line)
         val seq = requireSequence(value["seq"]) { schema("has invalid seq") }
@@ -262,12 +249,10 @@ internal object JsonlCodec {
         }
     }
 
-    /** The shared RecordBase members every record line carries. */
     private val RECORD_BASE_FIELDS = setOf("id", "seq", "lane", "timestamp", "type")
 
     private data class RecordLineFields(val id: String, val lane: String, val seq: Long, val timestamp: Long)
 
-    /** Encodes a typed record's RecordBase members plus its payload fields. */
     private fun kotlinx.serialization.json.JsonObjectBuilder.putRecordFields(record: LaneRecord) {
         put("id", record.id)
         put("seq", record.seq)
@@ -324,8 +309,6 @@ internal object JsonlCodec {
         else -> schema("has unknown fact type")
     }
 
-    // ---- shared strictness helpers (pi's require* functions) ----
-
     private fun parseObject(line: String): JsonObject {
         val value = try {
             lenientJson.parseToJsonElement(line)
@@ -335,7 +318,6 @@ internal object JsonlCodec {
         return value as? JsonObject ?: schema("is not a JSON object")
     }
 
-    /** pi's requireNullableId: JSON null or a string primitive; absent or other kinds are invalid. */
     private fun requireNullableId(value: JsonObject, field: String): String? {
         val element = value[field] ?: schema("has invalid $field")
         return when {
@@ -344,14 +326,12 @@ internal object JsonlCodec {
         }
     }
 
-    /** pi's requireSequence: a positive safe integer (never string-encoded). */
     private inline fun requireSequence(value: JsonElement?, invalid: () -> Nothing): Long {
         val seq = (value as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull ?: invalid()
         if (seq <= 0) invalid()
         return seq
     }
 
-    /** pi's requireTimestamp: a non-negative safe integer (never string-encoded). */
     private inline fun requireTimestamp(value: JsonElement?, invalid: () -> Nothing): Long {
         val ts = (value as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull ?: invalid()
         if (ts < 0) invalid()
@@ -361,9 +341,6 @@ internal object JsonlCodec {
     private fun schema(message: String): Nothing =
         throw JsonlDecodeError(JsonlDecodeError.Kind.SCHEMA, message)
 
-    // ---- entries (line payload of entry mutations) ----
-
-    /** Encodes [entry]'s fields (id, seq, parentId, timestamp, payload) into [this]. */
     fun kotlinx.serialization.json.JsonObjectBuilder.putEntry(entry: SessionEntry) {
         put("id", entry.id)
         put("seq", entry.seq)
@@ -372,7 +349,7 @@ internal object JsonlCodec {
         when (entry) {
             is MessageEntry -> {
                 put("type", "message")
-                // pi's MessageEntry.terminate is `true`-only (harness/session/types.ts:27)
+                // pi's MessageEntry.terminate is `true`-only
                 entry.terminate?.takeIf { it }?.let { put("terminate", it) }
                 put("message", encodeMessage(entry.message))
             }
@@ -417,7 +394,6 @@ internal object JsonlCodec {
         }
     }
 
-    /** Decodes an entry object; throws [JsonlDecodeError] (schema) on malformed input. */
     fun decodeEntry(element: JsonElement, seqOverride: Long? = null, defaultParentId: String? = null): SessionEntry {
         val obj = element as? JsonObject ?: schema("entry must be an object")
         val id = obj.string("id") ?: schema("entry missing id")
@@ -489,8 +465,6 @@ internal object JsonlCodec {
             else -> schema("has unknown entry type $type")
         }
     }
-
-    // ---- messages ----
 
     private fun kotlinx.serialization.json.JsonObjectBuilder.putUsage(usage: works.resolve.pathfinder.ai.core.Usage) {
         put("input", usage.input)
@@ -607,8 +581,6 @@ internal object JsonlCodec {
         )
     }
 
-    // ---- content ----
-
     private fun encodeContentList(content: List<Content>): JsonArray = JsonArray(content.map(::encodeContent))
 
     private fun decodeContentList(element: JsonElement?): List<Content> {
@@ -616,13 +588,11 @@ internal object JsonlCodec {
         return array.map(::decodeContent)
     }
 
-    /** Strict string array; absence is an empty list, malformed values are rejected. */
     private fun JsonObject.stringListOrReject(key: String): List<String> {
         val array = arr(key) ?: schema("has invalid $key")
         return array.map { value -> value.stringOrNull() ?: schema("has invalid $key") }
     }
 
-    /** Optional string array; absence uses the current model default. */
     private fun decodeStringList(element: JsonElement?): List<String> {
         if (element == null) return emptyList()
         val array = element as? JsonArray ?: schema("has invalid addedToolNames")
@@ -685,13 +655,11 @@ internal object JsonlCodec {
 }
 
 /**
- * pi's assertJsonSerializable (session/session.ts:42): rejects non-JSON-safe
- * payloads before write. Adaptation: pi validates the provisioned (plain
- * JSON) value; pathfinder's entries and records are typed values that are
- * JSON-safe by construction, so the port walks the encoded mutation's
- * [JsonElement] tree — the only remaining hazard is a non-finite number
- * primitive (kotlinx would emit invalid JSON for it), which pi rejects with
- * the same `Durable payload …` message.
+ * Rejects non-JSON-safe payloads before write. Pathfinder's entries and
+ * records are typed values that are JSON-safe by construction, so this
+ * walks the encoded mutation's [JsonElement] tree; the only remaining
+ * hazard is a non-finite number primitive, which kotlinx would emit as
+ * invalid JSON.
  */
 internal fun assertJsonSerializable(value: JsonElement) {
     when (value) {

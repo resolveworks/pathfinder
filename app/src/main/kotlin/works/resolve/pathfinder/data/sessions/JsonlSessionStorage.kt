@@ -12,28 +12,16 @@ import works.resolve.pathfinder.ai.utils.uuidv7
 import kotlinx.serialization.json.JsonElement
 
 /**
- * Append-only storage for one JSONL v4 session file, porting pi's
- * JsonlSessionStorage (packages/agent/src/harness/session/jsonl/storage.ts):
- * a header line followed by one [SessionMutation] line per write, an
- * in-memory [SessionState] replayed from the file on load, and torn-tail
- * repair.
+ * Append-only storage for one JSONL v4 session file: a header line followed
+ * by one [SessionMutation] line per write, an in-memory [SessionState]
+ * replayed from the file on load, and torn-tail repair.
  *
- * Divergences from upstream (narrowest faithful adaptations, audit P0-2):
- * - Writes are synchronous and callers serialize them (Pathfinder's
- *   [SessionStore] mutex on an IO dispatcher replaces pi's `tail` promise
- *   chain).
- * - appendEntry receives an entry that already carries its id, parentId,
- *   and timestamp (Pathfinder's Conversation mints them as the live tree);
- *   pi's storage assigns all three. The storage-assigned [SessionEntry.seq]
- *   and the same append-time validation (unused id, parent existence,
- *   chaining to the appending lane's leaf) are preserved; the parentId check
- *   replaces pi's assignment because the value is identical.
- * - appendRecord/fork/getLog/queries are ported as far as the store's
- *   surfaces need them ([appendRecord], [findOpenOperations], [getLog],
- *   the query passthroughs, and [fork]).
- * - timestamp on entry append is the caller's (Conversation-minted) value,
- *   not Date.now() assigned here; record appends assign [clock] time like
- *   pi's appendRecord (records have no producer-minted timestamp).
+ * Divergences from pi's storage: writes are synchronous and callers
+ * serialize them (the [SessionStore] mutex replaces pi's `tail` promise
+ * chain), and [appendEntry] receives an entry that already carries its id,
+ * parentId, and timestamp (Pathfinder's Conversation mints them as the live
+ * tree; storage still assigns [SessionEntry.seq] and validates chaining to
+ * the lane leaf).
  */
 internal class JsonlSessionStorage private constructor(
     val file: File,
@@ -44,71 +32,60 @@ internal class JsonlSessionStorage private constructor(
     val nextSequence: Long
         get() = state.nextSequence
 
-    /** The main lane's current leaf (Pathfinder's single-lane projection). */
+    /** The main lane's current leaf. */
     fun leafId(): String? = state.requireLane(SessionState.LANE_MAIN)
 
-    /** The [lane]'s current leaf; throws when the lane does not exist. */
     fun leafId(lane: String): String? = state.requireLane(lane)
 
     /** Throws when [lane] does not exist; returns its leaf. */
     fun requireLane(lane: String): String? = state.requireLane(lane)
 
-    /** Entry lookup by id. */
     fun entry(id: String): SessionEntry? = state.entry(id)
 
-    /** Entry label fact by id. */
     fun label(id: String): String? = state.label(id)
 
-    /** pi's getLanes. */
     fun getLanes(): List<LanePointer> = state.getLanes()
 
-    /** pi's createLane: registers [lane] at [at]; the lane must not exist. */
+    /** Registers [lane] at [at]; the lane must not exist. */
     fun createLane(lane: String, at: String?) {
         state.validateNewLane(lane)
         state.validateTarget(at)
         appendAndApply(SessionMutation.Lane(state.nextSequence, lane, at))
     }
 
-    /** pi's moveLane: moves an existing [lane] to [to]. */
     fun moveLane(lane: String = SessionState.LANE_MAIN, to: String?) {
         state.requireLane(lane)
         state.validateTarget(to)
         appendAndApply(SessionMutation.Lane(state.nextSequence, lane, to))
     }
 
-    /** Whether an entry with [id] is already in the log (sync diff). */
     fun hasEntry(id: String): Boolean = state.entry(id) != null
 
     fun entries(): List<SessionEntry> = state.entries()
 
     fun messageCount(): Int = state.messageCount()
 
-    /** Records in append (seq) order (pi's findRecords without queries). */
+    /** Records in append (seq) order. */
     fun records(): List<LaneRecord> = state.records()
 
-    /** pi's getStats(): the incremental message/usage fold of the replayed log. */
+    /** The incremental message/usage fold of the replayed log. */
     fun stats(): SessionStats = state.stats()
 
-    /** pi's findOpenOperations (see [SessionState.findOpenOperations]). */
     fun findOpenOperations(lane: String = SessionState.LANE_MAIN, limit: Int? = null): List<LaneRecord.OperationStartedRecord> =
         state.findOpenOperations(lane, limit)
 
-    /** pi's findEntries (see [SessionState.findEntries]). */
     fun findEntries(query: EntryQuery = EntryQuery()): List<SessionEntry> = state.findEntries(query)
 
-    /** pi's findEntriesOnBranch, storage-level signature ([start] required). */
     fun findEntriesOnBranch(query: BranchEntryQuery): List<SessionEntry> = state.findEntriesOnBranch(query)
 
-    /** pi's findRecords (see [SessionState.findRecords]). */
     fun findRecords(query: RecordQuery = RecordQuery()): List<LaneRecord> = state.findRecords(query)
 
-    /** pi's getLog (see [SessionState.getLog]): incremental tail reads. */
+    /** Incremental tail reads. */
     fun getLog(afterSeq: Long? = null, limit: Int? = null): List<LogItem> = state.getLog(afterSeq, limit)
 
     /** Latest-wins session name fact; Pathfinder's title carrier. */
     fun name(): String? = state.name
 
-    /** Projects the replayed state into the read-side [Session] value. */
     fun toSession(updatedAt: Long): Session = Session(
         id = header.id,
         title = name() ?: "",
@@ -119,13 +96,11 @@ internal class JsonlSessionStorage private constructor(
     )
 
     /**
-     * Appends [entry] to [lane], assigning the storage seq (pi's
-     * appendEntry(entry, lane)). Throws [SessionError]
-     * (invalid_entry) when the id is used or the entry does not chain to
-     * the lane's current leaf (pi's appendEntry invariant; callers emit a
-     * lane mutation first when the tree branched), and (invalid_payload)
-     * when the encoded mutation is not JSON-safe (pi's commitEntry runs
-     * assertJsonSerializable before the storage write).
+     * Appends [entry] to [lane], assigning the storage seq. Throws
+     * [SessionError] (invalid_entry) when the id is used or the entry does
+     * not chain to the lane's current leaf — callers emit a lane mutation
+     * first when the tree branched — and (invalid_payload) when the encoded
+     * mutation is not JSON-safe.
      */
     fun appendEntry(entry: SessionEntry, lane: String = SessionState.LANE_MAIN): SessionEntry {
         val leaf = state.requireLane(lane)
@@ -143,15 +118,12 @@ internal class JsonlSessionStorage private constructor(
     }
 
     /**
-     * Appends a record mutation, porting pi's appendRecord (storage.ts):
-     * the lane must exist, the id must be unused, and a lane may not open a
-     * second operation while one is open (pi throws SessionError
-     * "storage", `Lane <lane> already has an open operation <id>`). The
-     * storage assigns seq and timestamp and returns the stored record.
+     * Appends a record mutation: the lane must exist, the id must be
+     * unused, and a lane may not open a second operation while one is open.
+     * Storage assigns seq and timestamp.
      *
-     * No flush of buffered entries is required or performed: pi's
-     * applyMutation validates no payload references, and records may
-     * precede the entries they reference in seq order (see [LaneRecord]).
+     * Records append immediately: a record may precede the entries it
+     * references in seq order (see [LaneRecord]).
      */
     fun appendRecord(record: LaneRecord): LaneRecord {
         state.requireLane(record.lane)
@@ -169,22 +141,17 @@ internal class JsonlSessionStorage private constructor(
         return stored
     }
 
-    /** Appends a name fact mutation (pi's setName). */
     fun setName(name: String?) {
         appendAndApply(SessionMutation.Fact.Name(state.nextSequence, name))
     }
 
-    /** Appends a label fact mutation (pi's setLabel). */
+    /** Appends a label fact; [targetId] must be an existing entry. */
     fun setLabel(targetId: String, label: String?) {
         state.validateTarget(targetId)
         appendAndApply(SessionMutation.Fact.Label(state.nextSequence, targetId, label))
     }
 
-    /**
-     * pi's Session.appendMessageToLane: mints the entry id and timestamp
-     * here (pi's idGenerator + storage assignment) and appends it to
-     * [lane], returning the entry id.
-     */
+    /** Mints the entry id and timestamp, then appends to [lane]. */
     fun appendMessage(message: Message, lane: String = SessionState.LANE_MAIN): String {
         val entry = MessageEntry(
             id = uuidv7(),
@@ -196,7 +163,6 @@ internal class JsonlSessionStorage private constructor(
         return entry.id
     }
 
-    /** pi's Session.appendCustomEntryToLane; returns the entry id. */
     fun appendCustomEntry(customType: String, data: JsonElement? = null, lane: String = SessionState.LANE_MAIN): String {
         val entry = CustomEntry(
             id = uuidv7(),
@@ -210,10 +176,9 @@ internal class JsonlSessionStorage private constructor(
     }
 
     /**
-     * pi's JsonlSessionStorage.fork: builds [options]' mutation batch via
-     * [SessionState.createForkMutations], publishes the forked file
-     * atomically (header line + one mutation line each — the same bytes pi
-     * writes through a temp storage), then loads it with full validation.
+     * Builds [options]' mutation batch via [SessionState.createForkMutations],
+     * publishes the forked file atomically (header line + one mutation line
+     * each), then loads it with full validation.
      */
     fun fork(
         destination: File,
@@ -234,12 +199,11 @@ internal class JsonlSessionStorage private constructor(
         } catch (e: IOException) {
             throw SessionError(SessionErrorCode.STORAGE, "Failed to append session", e)
         }
-        // Apply after the durable write, like pi's appendMutation/applyMutation order.
+        // Apply in memory only after the durable append succeeds.
         state.applyMutation(mutation)
     }
 
     companion object {
-        /** pi's JsonlSessionStorage.create: writes the header line and returns an empty storage. */
         fun create(file: File, header: JsonlCodec.JsonlV4Header, clock: Clock = Clock.System): JsonlSessionStorage {
             try {
                 file.writeText(JsonlCodec.encodeHeader(header))
@@ -250,11 +214,9 @@ internal class JsonlSessionStorage private constructor(
         }
 
         /**
-         * pi's JsonlSessionStorage.load: replays the file with full
-         * validation, repairs a torn tail (an unacknowledged partial final
-         * append — a JSON syntax error on the last line — is dropped by
-         * atomically publishing the valid prefix), and repairs an
-         * unterminated tail by appending the missing newline.
+         * Replays the file with full validation. A torn final append (JSON
+         * syntax error on the last line) is repaired by atomically publishing
+         * the valid prefix; an unterminated tail gets its newline appended.
          *
          * @throws SessionError on unreadable (storage), oversized (storage),
          * or invalid (invalid_entry) files; the header id must match
@@ -293,7 +255,6 @@ internal class JsonlSessionStorage private constructor(
                 } catch (e: JsonlCodec.JsonlDecodeError) {
                     val isTornTail = index == physicalLines.size - 1 && e.kind == JsonlCodec.JsonlDecodeError.Kind.SYNTAX
                     if (isTornTail) {
-                        // Drop the unacknowledged partial append by atomically publishing the valid prefix.
                         val validPrefix = physicalLines.subList(0, index).joinToString("\n") + "\n"
                         publishFileAtomically(file) { temp -> temp.writeText(validPrefix) }
                         return JsonlSessionStorage(file, header, state, clock)
@@ -317,11 +278,12 @@ internal class JsonlSessionStorage private constructor(
         }
 
         /**
-         * pi's publishFileAtomically (storage.ts): stage a complete sibling
-         * temp file, then atomically rename it over the destination. A crash
-         * while populating leaves only the ignored `.tmp` file behind. Falls
-         * back to a non-atomic replace where the filesystem has no atomic
-         * move (same discipline as the store's snapshot writes had).
+         * Stages a complete sibling temp file, then atomically renames it over
+         * the destination, so readers never see a partially written file and a
+         * crash while populating leaves only the ignored `.tmp` file behind.
+         * Callers must serialize publications to the same destination (the
+         * `.tmp` path is deterministic). Falls back to a non-atomic replace
+         * where the filesystem has no atomic move.
          */
         private inline fun publishFileAtomically(destination: File, populate: (File) -> Unit) {
             val temp = File(destination.parentFile, destination.name + ".tmp")
@@ -341,7 +303,6 @@ internal class JsonlSessionStorage private constructor(
             }
         }
 
-        /** pi's invalidFile (jsonl/errors.ts): line-addressed invalid-session error. */
         private fun invalidFile(file: File, line: Int, cause: String): SessionError =
             SessionError(SessionErrorCode.INVALID_ENTRY, "Invalid JSONL v4 session: line $line $cause")
     }

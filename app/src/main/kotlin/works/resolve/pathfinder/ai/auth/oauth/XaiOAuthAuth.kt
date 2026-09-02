@@ -13,25 +13,18 @@ import kotlin.time.Clock
 import works.resolve.pathfinder.ai.utils.strictDouble
 
 /**
- * xAI OAuth device-code flow, ported from pi
- * `packages/ai/src/auth/oauth/xai.ts`.
+ * xAI OAuth device-code flow (RFC 8628): the user approves at the verification
+ * URL while the token endpoint is polled until the authorization completes,
+ * is denied, or expires.
  *
- * Mirrors the upstream file symbol-for-symbol: `loginXai` ([login]),
- * `refreshXaiToken` ([refresh]), `requestDeviceCode`/`parseDeviceCode`,
- * `pollForTokens`, `credentialsFromTokenResponse`, `postForm`,
- * `requiredString`, `positiveNumber`, `validateVerificationUri`, and
- * `requestFailure`. Polling runs through the shared [pollOAuthDeviceCodeFlow]
- * (pi `pollOAuthDeviceCodeFlow` in `device-code.ts`) with
- * `waitBeforeFirstPoll = true`.
- *
- * Divergence from pi (documented per AGENTS.md): pi posts via `fetch` with an
- * `AbortSignal`; here all HTTP goes through the injected [OAuthHttpClient]
- * with a bounded request timeout, and cancellation travels as coroutine
- * cancellation. `Date.now()` in `credentialsFromTokenResponse` is read
- * through the internal [clock] seam (system clock by default) for deterministic
- * expiry tests. [AuthEvent.DeviceCode] carries `Int` interval/expiry fields,
- * so the server's (possibly fractional) interval is floored when emitted —
- * the poller itself floors the same value anyway.
+ * Divergences from pi:
+ * - All HTTP goes through the injected [OAuthHttpClient] with a bounded
+ *   request timeout; cancellation travels as coroutine cancellation.
+ * - [AuthEvent.DeviceCode] carries `Int` interval/expiry fields, so the
+ *   server's possibly fractional interval is floored when emitted — the
+ *   poller floors the same value anyway.
+ * - `Date.now()` reads through the injected [clock] (system clock by
+ *   default) for deterministic expiry tests.
  *
  * Nothing secret is ever logged or placed in exception messages: errors carry
  * only HTTP statuses and server-provided `error`/`error_description` strings.
@@ -43,13 +36,9 @@ class XaiOAuthAuth(
 
     override val name: String = "xAI (Grok/X subscription)"
 
-    /** pi `isSubscription: true`. */
     override val isSubscription: Boolean = true
 
-    /** pi `loginLabel: "Sign in with SuperGrok or X Premium"`. */
     override val loginLabel: String = "Sign in with SuperGrok or X Premium"
-
-    // --- login / refresh (pi `loginXai` / `refreshXaiToken`) ---
 
     override suspend fun login(interaction: AuthInteraction): OAuthCredential {
         val device = requestDeviceCode()
@@ -69,9 +58,6 @@ class XaiOAuthAuth(
 
     override suspend fun toAuth(credential: OAuthCredential): ModelAuth = ModelAuth(apiKey = credential.access)
 
-    // --- device authorization (pi `requestDeviceCode` + `parseDeviceCode`) ---
-
-    /** Port of pi `XaiDeviceCode`. */
     internal data class XaiDeviceCode(
         val deviceCode: String,
         val userCode: String,
@@ -97,9 +83,9 @@ class XaiOAuthAuth(
     }
 
     /**
-     * Port of pi `parseDeviceCode`. RFC 8628 allows interval 0 (no minimum
-     * wait); non-positive or malformed values fall back to `null` so the
-     * poller applies its default instead of failing.
+     * RFC 8628 allows interval 0 (no minimum wait); non-positive or
+     * malformed values fall back to `null` so the poller applies its
+     * default instead of failing.
      */
     private fun parseDeviceCode(body: JsonObject): XaiDeviceCode {
         val intervalSeconds = body.strictDouble("interval")?.takeIf { it > 0 }
@@ -116,8 +102,6 @@ class XaiOAuthAuth(
             expiresInSeconds = positiveNumber(body, "expires_in"),
         )
     }
-
-    // --- token polling (pi `pollForTokens`) ---
 
     private suspend fun pollForTokens(device: XaiDeviceCode): OAuthCredential =
         pollOAuthDeviceCodeFlow(
@@ -173,12 +157,9 @@ class XaiOAuthAuth(
         return credentialsFromTokenResponse(response.body, refreshToken)
     }
 
-    // --- response shaping ---
-
     /**
-     * Port of pi `credentialsFromTokenResponse`. xAI may omit
-     * `refresh_token` on refresh when the token is not rotated, in which case
-     * the previous refresh token is retained.
+     * xAI may omit `refresh_token` on refresh when the token is not rotated,
+     * in which case the previous refresh token is retained.
      */
     internal fun credentialsFromTokenResponse(body: JsonObject, previousRefreshToken: String? = null): OAuthCredential {
         val access = requiredString(body, "access_token")
@@ -201,7 +182,6 @@ class XaiOAuthAuth(
     internal fun parseDeviceCodeForTest(body: String): XaiDeviceCode =
         parseDeviceCode(lenientJson.parseToJsonElement(body) as JsonObject)
 
-    /** Port of pi `requiredString`. */
     private fun requiredString(body: JsonObject, field: String): String {
         val value = body.string(field)
         if (value.isNullOrEmpty()) {
@@ -210,7 +190,6 @@ class XaiOAuthAuth(
         return value
     }
 
-    /** Port of pi `positiveNumber` (finite, non-string-encoded, > 0). */
     private fun positiveNumber(body: JsonObject, field: String): Long {
         val value = body.strictDouble(field) ?: throw invalidField(field)
         if (value <= 0) throw invalidField(field)
@@ -221,18 +200,16 @@ class XaiOAuthAuth(
         IllegalStateException("Invalid xAI OAuth response field: $field")
 
     /**
-     * Port of pi `validateVerificationUri`. The verification URI is opened in
-     * the user's browser; force it to be an https URL so a malicious response
-     * cannot make `open` launch something else.
+     * The verification URI is opened in the user's browser; force it to be
+     * an https URL so a malicious response cannot make `open` launch
+     * something else.
      *
-     * Divergence from pi (documented per AGENTS.md): pi returns the
-     * WHATWG-normalized `new URL(raw).href` (lower-cased host, default port
-     * `:443` removed, empty path becomes `/`). The JDK has no href-equivalent
-     * normalizer (`java.net.URL.toExternalForm` preserves host case and the
-     * default port; `java.net.URI.toString` preserves the raw form), so this
-     * port returns the parsed URI's string as-is after the same trust check.
-     * The check itself is equally strict-or-stricter: anything `URI` rejects
-     * (and WHATWG would accept) is treated as untrusted rather than opened.
+     * Divergence from pi: pi returns the WHATWG-normalized
+     * `new URL(raw).href` (lower-cased host, default port removed, empty
+     * path becomes `/`); the JDK has no href-equivalent normalizer, so the
+     * parsed URI's string is returned as-is. The trust check errs strict:
+     * anything `URI` rejects (and WHATWG would accept) is treated as
+     * untrusted rather than opened.
      */
     private fun validateVerificationUri(raw: String): String {
         val url = try {
@@ -246,20 +223,12 @@ class XaiOAuthAuth(
         return url.toString()
     }
 
-    // --- HTTP (pi `postForm` / `requestFailure`) ---
-
-    /** pi's `{ ok, status, body }` postForm result. */
     private data class FormResponse(
         val ok: Boolean,
         val status: Int,
         val body: JsonObject,
     )
 
-    /**
-     * Port of pi `postForm`: form-url-encoded POST expecting JSON. A network
-     * failure propagates; invalid JSON throws pi's message. Non-object JSON
-     * bodies (arrays, scalars, `null`) become the empty object like upstream.
-     */
     private suspend fun postForm(url: String, fields: Map<String, String>): FormResponse {
         val response: OAuthHttpResponse
         try {
@@ -292,7 +261,6 @@ class XaiOAuthAuth(
         )
     }
 
-    /** Port of pi `requestFailure` (message verbatim, no secrets). */
     private fun requestFailure(action: String, response: FormResponse): IllegalStateException {
         val error = response.body.string("error")
         val description = response.body.string("error_description")
@@ -303,40 +271,31 @@ class XaiOAuthAuth(
     }
 
     companion object {
-        /** pi `XAI_CLIENT_ID`. */
         const val CLIENT_ID: String = "b1a00492-073a-47ea-816f-4c329264a828"
 
-        /** pi `XAI_SCOPE`. */
         const val SCOPE: String = "openid profile email offline_access grok-cli:access api:access"
 
-        /** pi `XAI_DEVICE_CODE_URL`. */
         const val DEVICE_CODE_URL: String = "https://auth.x.ai/oauth2/device/code"
 
-        /** pi `XAI_TOKEN_URL`. */
         const val TOKEN_URL: String = "https://auth.x.ai/oauth2/token"
 
-        /** pi `referrer: "pi"` in the device-code request; `pathfinder` here (owner decision, like the User-Agent product token). */
+        /** Divergence from pi: upstream sends `referrer: "pi"`; `pathfinder` here (owner decision). */
         const val REFERRER: String = "pathfinder"
 
-        /** pi device grant type (RFC 8628 section 3.4). */
         const val DEVICE_GRANT_TYPE: String = "urn:ietf:params:oauth:grant-type:device_code"
 
-        /** pi `REFRESH_SKEW_MS`: refresh slightly before reported expiry. */
+        /** Refresh slightly before reported expiry so a token doesn't die mid-request. */
         const val REFRESH_SKEW_MS: Long = 5 * 60 * 1000
 
-        /** pi `DEFAULT_TOKEN_LIFETIME_SECONDS`. */
         const val DEFAULT_TOKEN_LIFETIME_SECONDS: Long = 3600
 
-        /** Bounded connect+read timeout for every OAuth exchange (pi relies on fetch; Pathfinder bounds it). */
         const val REQUEST_TIMEOUT_MS: Int = 30_000
 
         /**
-         * `application/x-www-form-urlencoded` serialization matching pi's
-         * `new URLSearchParams(fields)` exactly, via the JDK
-         * [java.net.URLEncoder]: it encodes supplementary code points as their
-         * full UTF-8 sequences, `~` as `%7E`, and spaces as `+`, and like
-         * URLSearchParams it leaves `*`, `.-_`, and alphanumerics unescaped —
-         * no post-processing needed.
+         * The JDK [java.net.URLEncoder] uses the WHATWG form-urlencoded set
+         * (as `URLSearchParams` does): alphanumerics, `*`, `-`, `.`, `_`
+         * stay bare, space becomes `+`, and every other byte (including `~`
+         * → `%7E`) is percent-encoded.
          */
         internal fun formUrlEncode(fields: Map<String, String>): ByteArray {
             val out = StringBuilder()

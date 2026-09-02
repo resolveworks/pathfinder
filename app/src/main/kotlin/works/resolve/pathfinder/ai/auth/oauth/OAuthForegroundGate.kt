@@ -7,25 +7,16 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Platform gate that suspends OAuth network work while the app is
- * backgrounded.
- *
- * Deliberate Android-only divergence from pi (documented per AGENTS.md): pi
- * runs on desktop terminals where the process is never network-restricted,
- * so `packages/ai` has no foreground concept. On Pathfinder's targets
- * (GrapheneOS / latest Android), a browser Custom Tab or another foreground
- * app can stop Pathfinder's activity, and modern Android then revokes the
- * UID's network access mid-flow — killing loopback-flow token exchanges and
- * device-code polls with it. The gate defers exactly that network work until
- * the app is foregrounded again; cancellation semantics are untouched
- * (suspending on the gate is fully cancellable, so leaving the sign-in screen
- * still aborts in-flight logins with pi's "Login cancelled" path).
- *
- * The gate is optional plumbing at the port seams: it defaults to [NONE]
- * (pi behavior — never wait), and the ported flow logic never branches on
- * it.
+ * backgrounded. Deliberate Android-only divergence: pi's desktop processes
+ * are never network-restricted, but Android can stop Pathfinder's activity
+ * while a browser Custom Tab or another app is foregrounded and then revoke
+ * the UID's network access mid-flow — killing loopback-flow token exchanges
+ * and device-code polls. The gate defers exactly that network work until the
+ * app is foregrounded again. The ported flow logic never branches on the
+ * gate; it is applied only at the network seams.
  */
 fun interface OAuthForegroundGate {
-    /** Suspends until the app is foregrounded; returns immediately when it already is. Cancellation-friendly. */
+    /** Fully cancellable — cancelling while gated still takes pi's "Login cancelled" path. */
     suspend fun awaitForeground()
 
     companion object {
@@ -35,11 +26,9 @@ fun interface OAuthForegroundGate {
 }
 
 /**
- * [OAuthHttpClient] decorator that defers every exchange until the app is
- * foregrounded — the single seam that gates token exchanges, device-code
- * polling, and refreshes for all flows uniformly, without touching the
- * ported flow logic. Production wiring installs it around
- * [UrlConnectionOAuthHttpClient]; tests pass the raw client for pi parity.
+ * The single seam that gates token exchanges, device-code polling, and
+ * refreshes uniformly for all flows, without branching the ported flow
+ * logic.
  */
 internal class ForegroundGatedOAuthHttpClient(
     private val delegate: OAuthHttpClient,
@@ -51,17 +40,9 @@ internal class ForegroundGatedOAuthHttpClient(
     }
 }
 
-/**
- * The production [OAuthForegroundGate]: one process-wide foreground flag
- * driven by the foreground activity's `onResume`/`onPause` through the
- * ViewModel (MainActivity → ChatViewModel.onAppForegrounded/onAppBackgrounded
- * → here). Created in [works.resolve.pathfinder.PathfinderApplication] as
- * part of the manual composition root.
- */
 class AppForegroundGate : OAuthForegroundGate {
     private val _foreground = MutableStateFlow(true)
 
-    /** True while the app's activity is resumed; exposed read-only for UI/projection use. */
     val foreground: StateFlow<Boolean> = _foreground.asStateFlow()
 
     fun onAppForegrounded() {

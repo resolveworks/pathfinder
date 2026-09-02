@@ -14,40 +14,28 @@ import works.resolve.pathfinder.logging.PathfinderDiagnostics
 
 /**
  * File-backed append-only session store over the JSONL v4 mutation-log
- * format (pi's JsonlSessionRepo + JsonlSessionStorage,
- * packages/agent/src/harness/session/jsonl/). One `<id>.jsonl` file per
- * session under [root]: a header line plus one mutation line per append.
- * Writes append to the file instead of rewriting it; all operations are
- * serialized through a [Mutex] (pi's `tail` promise) and performed on
- * [ioDispatcher]. Credentials and request options never appear in session
- * files.
+ * format: one `<id>.jsonl` file per session under [root] — a header line
+ * plus one mutation line per append. All operations serialize through a
+ * [Mutex] on [ioDispatcher]. Credentials and request options never appear
+ * in session files.
  *
- * Storage-assigned seq (P0-1): every appended mutation consumes the next
- * consecutive seq; [save] syncs a conversation snapshot by appending the
- * entries not yet in the log (emitting a lane mutation whenever the tree
- * branched away from the lane leaf, mirroring pi's moveLane-before-append
- * event order), then moving the lane to the snapshot's leaf and updating
- * the name fact. Re-syncing an already-persisted snapshot is a no-op, so a
- * partially-failed save can simply be retried.
+ * Storage-assigned seq: every appended mutation consumes the next
+ * consecutive seq. [save] is idempotent — re-syncing an already-persisted
+ * snapshot is a no-op, so a partially-failed save can simply be retried.
  *
- * Old snapshot formats (whole-file "format 3" and earlier) are rejected
- * outright per the disposable-data policy: only `.jsonl` v4 files are
- * listed, and anything else on disk is ignored. A torn final append (JSON
- * syntax error on the last line) is repaired on load by atomically
- * publishing the valid prefix; an unterminated tail gets its newline
- * appended.
+ * Only `.jsonl` v4 files are listed and loaded; anything else on disk is
+ * ignored, never migrated. A torn final append (JSON syntax error on the
+ * last line) is repaired on load by atomically publishing the valid
+ * prefix; an unterminated tail gets its newline appended.
  *
- * Disciplines retained from the snapshot store: bounded reads
- * ([maxFileBytes]), id/filename cross-check (the header id must match the
- * file name), defensive copies, and type-only telemetry errors through the
- * app-owned [PathfinderDiagnostics] boundary (`pf.session.*` spans record
- * the session id, outcome, and exception type — never paths or transcript
- * content; the vocabulary and policy live in the facade).
+ * Telemetry errors are type-only through [PathfinderDiagnostics]:
+ * `pf.session.*` spans record the session id, outcome, and exception type
+ * — never paths or transcript content; the vocabulary and policy live in
+ * the facade.
  */
 class SessionStore(
     private val root: File,
     private val clock: Clock = Clock.System,
-    /** Session ids default to pi's `options.id ?? uuidv7()` (harness/session/jsonl/repo.ts). */
     private val idFactory: () -> String = ::uuidv7,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     maxFileBytes: Long = MAX_FILE_BYTES,
@@ -64,14 +52,9 @@ class SessionStore(
 
     private val mutex = Mutex()
 
-    /**
-     * Open storages replayed from their files (pi keeps live JsonlSessionStorage
-     * instances per open Session; Pathfinder caches them per id so appends
-     * continue the in-memory [SessionState] without re-reading the log).
-     */
+    /** Open storages cached per id so appends continue the in-memory state without replaying the log. */
     private val openStorages = HashMap<String, JsonlSessionStorage>()
 
-    /** Creates and persists a new (initially empty) session. */
     override suspend fun create(title: String): Session = mutex.withLock {
         withContext(ioDispatcher) {
             val id = requireId(idFactory())
@@ -79,8 +62,8 @@ class SessionStore(
                 ensureRoot()
                 val createdAt = clock.now().toEpochMilliseconds()
                 val storage = JsonlSessionStorage.create(fileFor(id), JsonlCodec.JsonlV4Header(id = id, createdAt = createdAt))
-                // The title rides as the name fact (pi's fact mutations; a
-                // session always carries one so summaries stay complete).
+                // The title rides as the name fact; a session always carries
+                // one so summaries stay complete.
                 storage.setName(title)
                 openStorages[id] = storage
                 storage.toSession(fileFor(id).lastModified())
@@ -88,7 +71,12 @@ class SessionStore(
         }
     }
 
-    /** Lists session summaries, newest-updated first; unreadable entries are skipped. */
+    /**
+     * Unlike pi's header-only listing, summaries replay the whole log: the
+     * summary surface needs the title (a name fact, not header data) and
+     * the message count. Android session directories stay small enough that
+     * the extra read does not justify a parallel header-only shape.
+     */
     override suspend fun summaries(): List<SessionSummary> = mutex.withLock {
         withContext(ioDispatcher) {
             sessionFiles()
@@ -107,13 +95,6 @@ class SessionStore(
         }
     }
 
-    /**
-     * Divergence from pi's listing (listJsonlSessionMetadata reads headers
-     * only): Pathfinder's summary surface needs the title (a name fact, not
-     * header data) and the message count, so summaries do a bounded full
-     * read + replay instead. Android session directories stay small enough
-     * that the extra read does not justify a parallel header-only shape.
-     */
     override suspend fun load(id: String): Session? = mutex.withLock {
         withContext(ioDispatcher) {
             val safeId = requireId(id)
@@ -127,10 +108,9 @@ class SessionStore(
     }
 
     /**
-     * Appends [session]'s unpersisted state to the mutation log (see the
-     * class KDoc's sync algorithm) and returns the stored session — the
-     * storage-assigned entries, current leaf, and name, with
-     * [Session.updatedAt] from the file's modification time.
+     * Appends [session]'s unpersisted state to the log and returns the
+     * stored session — storage-assigned entries, current leaf, and name,
+     * with [Session.updatedAt] from the file's mtime.
      */
     override suspend fun save(session: Session): Session = mutex.withLock {
         withContext(ioDispatcher) {
@@ -145,7 +125,6 @@ class SessionStore(
         }
     }
 
-    /** Deletes a session; true when it existed. */
     suspend fun delete(id: String): Boolean = mutex.withLock {
         withContext(ioDispatcher) {
             val safeId = requireId(id)
@@ -156,11 +135,10 @@ class SessionStore(
     }
 
     /**
-     * Appends a lane record to the session's log (pi's Session.appendRecord
-     * over JsonlSessionStorage.appendRecord): storage assigns seq and
-     * timestamp; the single-open-operation invariant is enforced. Records
-     * append immediately — a record may precede the buffered entries it
-     * references in seq order (see [LaneRecord]).
+     * Appends a lane record: storage assigns seq and timestamp and enforces
+     * the single-open-operation invariant. Records append immediately — a
+     * record may precede the buffered entries it references in seq order
+     * (see [LaneRecord]).
      *
      * @throws SessionError when the session does not exist (not_found) or
      * the record violates the log invariants.
@@ -178,7 +156,6 @@ class SessionStore(
         }
     }
 
-    /** pi's findOpenOperations (see [SessionState.findOpenOperations]). */
     override suspend fun openOperations(
         sessionId: String,
         lane: String,
@@ -191,7 +168,7 @@ class SessionStore(
         }
     }
 
-    /** pi's getStats: the incremental message/usage fold of the session's log. */
+    /** Session stats, folded incrementally from the log. */
     override suspend fun stats(sessionId: String): SessionStats = mutex.withLock {
         withContext(ioDispatcher) {
             val id = requireId(sessionId)
@@ -201,12 +178,11 @@ class SessionStore(
     }
 
     /**
-     * pi's SessionRepo.fork (jsonl/repo.ts:142): creates a new session whose
-     * log is [options]' mutation batch over this session's replayed state
-     * (see [SessionState.createForkMutations]). The new header's
-     * [parentSessionId] defaults to the source session's id (lineage), and
-     * the new file is published atomically. The id defaults to
-     * [idFactory]; supplying an existing id throws (pi's already_exists).
+     * Creates a new session whose log is [options]' mutation batch over
+     * this session's replayed state (see [SessionState.createForkMutations]).
+     * The new header's parent session id defaults to the source session's id
+     * (lineage), and the new file is published atomically. The id defaults
+     * to [idFactory]; supplying an existing id throws.
      */
     override suspend fun fork(sourceId: String, options: ForkOptions): Session =
         fork(sourceId, options, id = null, parentSessionId = null)
@@ -244,10 +220,7 @@ class SessionStore(
         }
     }
 
-    /**
-     * pi's Session.view(lane) ([LaneView]): a lane-scoped projection whose
-     * writes are serialized through this store's mutex + dispatcher.
-     */
+    /** A lane-scoped projection ([LaneView]) whose writes serialize through this store's mutex + dispatcher. */
     suspend fun view(sessionId: String, lane: String = SessionState.LANE_MAIN): LaneView = mutex.withLock {
         withContext(ioDispatcher) {
             val id = requireId(sessionId)
@@ -260,17 +233,14 @@ class SessionStore(
         }
     }
 
-    /** pi's createLane over the open storage, store-serialized. */
     suspend fun createLane(sessionId: String, lane: String, at: String?) = withOpenStorage(sessionId) {
         it.createLane(lane, at)
     }
 
-    /** pi's moveLane over the open storage, store-serialized. */
     suspend fun moveLane(sessionId: String, lane: String, to: String?) = withOpenStorage(sessionId) {
         it.moveLane(lane, to)
     }
 
-    /** pi's Session.findRecords: the session-layer check for operationKind, then the state query. */
     override suspend fun findRecords(sessionId: String, query: RecordQuery): List<LaneRecord> =
         withOpenStorage(sessionId) {
             if (query.operationKind != null && query.type != RecordType.OPERATION_STARTED) {
@@ -282,22 +252,18 @@ class SessionStore(
             it.findRecords(query)
         }
 
-    /** pi's getLog (session/session.ts): the log items after [afterSeq] (exclusive), oldest first, up to [limit]. */
+    /** Log items after [afterSeq] (exclusive), oldest first, up to [limit]. */
     suspend fun getLog(sessionId: String, afterSeq: Long? = null, limit: Int? = null): List<LogItem> =
         withOpenStorage(sessionId) { it.getLog(afterSeq, limit) }
 
-    /** Lineage read: the header's parentSessionId, when the session has one. */
     suspend fun parentSessionId(sessionId: String): String? = withOpenStorage(sessionId) { it.header.parentSessionId }
 
-    /** Opens (or reuses) the session's storage under the store lock on the IO dispatcher. */
     private suspend fun <T> withOpenStorage(sessionId: String, block: (JsonlSessionStorage) -> T): T = mutex.withLock {
         withContext(ioDispatcher) {
             val id = requireId(sessionId)
             block(storageFor(id, fileFor(id)) ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id"))
         }
     }
-
-    // ---- internals ----
 
     private fun defensiveCopy(session: Session): Session =
         session.copy(entries = session.entries.toList())
@@ -314,7 +280,6 @@ class SessionStore(
         }
     }
 
-    /** The session's open storage, replaying the file on first touch. Null when the file is gone. */
     private fun storageFor(id: String, file: File): JsonlSessionStorage? {
         openStorages[id]?.let { return it }
         if (!file.isFile) return null
@@ -367,10 +332,7 @@ class SessionStore(
     private suspend fun loadSpanned(file: File): Session? =
         diagnostics.sessionLoad(sessionIdOf(file)) { replay(file, sessionIdOf(file)) }
 
-    /**
-     * Summary read under a `pf.session.summary` span, where failures are
-     * recorded and the entry skipped instead of failing the listing.
-     */
+    /** Summary read under a `pf.session.summary` span; failures are recorded and the entry skipped. */
     private suspend fun summarySpanned(file: File): Session? =
         diagnostics.sessionSummary(sessionIdOf(file)) { replay(file, sessionIdOf(file)) }
 

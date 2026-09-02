@@ -11,17 +11,10 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
-/**
- * Lanes (audit P1-1), lineage/fork (P1-2), and the query API (P2-1) over
- * [SessionState], [JsonlSessionStorage], and [SessionStore], porting pi's
- * state.ts/session.ts/jsonl repo semantics.
- */
 class SessionLanesForkQueryTest {
 
     @get:Rule
     val tmpFolder = TemporaryFolder()
-
-    // ---- helpers ----
 
     private fun msg(id: String, parentId: String? = null, seq: Long = 0L) =
         MessageEntry(id = id, seq = seq, parentId = parentId, timestamp = seq, message = UserMessage.ofText(id, seq))
@@ -34,8 +27,6 @@ class SessionLanesForkQueryTest {
 
     private fun apply(state: SessionState, mutation: SessionMutation) = state.applyMutation(mutation)
 
-    // ---- lanes: state ----
-
     @Test
     fun `non-main lanes chain and replay`() {
         val state = SessionState()
@@ -43,18 +34,15 @@ class SessionLanesForkQueryTest {
         apply(state, SessionMutation.Entry("main", msg("b", "a", seq = 2)))
         apply(state, SessionMutation.Lane(3, "side", "a"))
         apply(state, SessionMutation.Entry("side", msg("c", "a", seq = 4)))
-        // main advanced past a; side's leaf is c, chaining enforced per lane.
+        // Chaining is enforced per lane.
         assertEquals("b", state.requireLane("main"))
         assertEquals("c", state.requireLane("side"))
         assertFailsWith<SessionError> {
             apply(state, SessionMutation.Entry("side", msg("x", "b", seq = 5)))
         }
-        // Duplicate lane creation is rejected (pi's validateNewLane).
         assertFailsWith<SessionError> { state.validateNewLane("side") }
         state.validateNewLane("other")
     }
-
-    // ---- queries: findEntries ----
 
     @Test
     fun `findEntries filters orders limits and cursors`() {
@@ -63,13 +51,10 @@ class SessionLanesForkQueryTest {
         apply(state, SessionMutation.Entry(null, compaction("k", "a", seq = 2)))
         apply(state, SessionMutation.Entry(null, msg("b", "k", seq = 3)))
 
-        // Default order is newestFirst.
         assertEquals(listOf("b", "k", "a"), state.findEntries().map { it.id })
         assertEquals(listOf("a", "k", "b"), state.findEntries(EntryQuery(order = EntryOrder.OLDEST_FIRST)).map { it.id })
-        // Type filter.
         assertEquals(listOf("k"), state.findEntries(EntryQuery(type = EntryType.COMPACTION)).map { it.id })
         assertEquals(listOf("b", "a"), state.findEntries(EntryQuery(type = EntryType.MESSAGE)).map { it.id })
-        // Limit.
         assertEquals(listOf("b"), state.findEntries(EntryQuery(limit = 1)).map { it.id })
         // Cursor: exclusive seq bound, direction-aware.
         assertEquals(
@@ -82,12 +67,9 @@ class SessionLanesForkQueryTest {
                 EntryQuery(order = EntryOrder.OLDEST_FIRST, cursor = EntryCursor(afterSeq = 2)),
             ).map { it.id },
         )
-        // Validation (pi's invalid_query).
         assertFailsWith<SessionError> { state.findEntries(EntryQuery(limit = 0)) }
         assertFailsWith<SessionError> { state.findEntries(EntryQuery(cursor = EntryCursor(afterSeq = -1))) }
     }
-
-    // ---- queries: findEntriesOnBranch ----
 
     @Test
     fun `findEntriesOnBranch walks bounds and cursors`() {
@@ -113,7 +95,7 @@ class SessionLanesForkQueryTest {
             state.findEntriesOnBranch(BranchEntryQuery(start = "c", order = EntryOrder.OLDEST_FIRST, stopAtType = EntryType.COMPACTION))
                 .map { it.id },
         )
-        // Filters and limits compose with the walk.
+        // Filters apply to the walk's output; they do not bound the walk.
         assertEquals(
             listOf("c", "b", "a"),
             state.findEntriesOnBranch(BranchEntryQuery(start = "c", type = EntryType.MESSAGE)).map { it.id },
@@ -126,11 +108,8 @@ class SessionLanesForkQueryTest {
             listOf("k", "b", "a"),
             state.findEntriesOnBranch(BranchEntryQuery(start = "c", cursor = EntryCursor(afterSeq = 4))).map { it.id },
         )
-        // Unknown start (pi's not_found).
         assertFailsWith<SessionError> { state.findEntriesOnBranch(BranchEntryQuery(start = "ghost")) }
     }
-
-    // ---- queries: findRecords ----
 
     @Test
     fun `findRecords filters by lane type runId and seq`() {
@@ -171,8 +150,6 @@ class SessionLanesForkQueryTest {
         assertEquals(listOf("u-1"), state.findRecords(RecordQuery(limit = 1)).map { it.id })
     }
 
-    // ---- fork mutations ----
-
     @Test
     fun `createForkMutations branch scope at target re-seqs from one`() {
         val state = SessionState()
@@ -184,7 +161,6 @@ class SessionLanesForkQueryTest {
         apply(state, SessionMutation.Fact.Label(6, "c", "end"))
 
         val mutations = state.createForkMutations(ForkOptions.Branch(entryId = "b", position = ForkOptions.Branch.Position.AT))
-        // Entries re-seq'd from 1 (ids and parents preserved), lane, name, label.
         val entryMutations = mutations.filterIsInstance<SessionMutation.Entry>()
         assertEquals(listOf("a" to 1L, "b" to 2L), entryMutations.map { it.entry.id to it.entry.seq })
         assertEquals(null, entryMutations[0].entry.parentId)
@@ -195,7 +171,6 @@ class SessionLanesForkQueryTest {
         assertEquals("source", (mutations.filterIsInstance<SessionMutation.Fact.Name>().single()).name)
         val labels = mutations.filterIsInstance<SessionMutation.Fact.Label>()
         assertEquals(listOf("a"), labels.map { it.targetId })
-        // All seqs are consecutive from 1.
         assertEquals((1L..mutations.size).toList(), mutations.map { seqOf(it) })
     }
 
@@ -205,14 +180,11 @@ class SessionLanesForkQueryTest {
         apply(state, SessionMutation.Entry("main", msg("a", null, seq = 1)))
         apply(state, SessionMutation.Entry("main", msg("b", "a", seq = 2)))
 
-        // Default entryId = main leaf, default position "at".
         val at = state.createForkMutations(ForkOptions.Branch())
         assertEquals(listOf("a", "b"), at.filterIsInstance<SessionMutation.Entry>().map { it.entry.id })
-        // "before" targets the entry's parent instead.
         val before = state.createForkMutations(ForkOptions.Branch(entryId = "b", position = ForkOptions.Branch.Position.BEFORE))
         assertEquals(listOf("a"), before.filterIsInstance<SessionMutation.Entry>().map { it.entry.id })
         assertEquals("a", before.filterIsInstance<SessionMutation.Lane>().single().leafId)
-        // Empty main lane forks to an empty entry list with a null main leaf.
         val empty = SessionState().createForkMutations(ForkOptions.Branch())
         assertTrue(empty.filterIsInstance<SessionMutation.Entry>().isEmpty())
         assertNull(empty.filterIsInstance<SessionMutation.Lane>().single().leafId)
@@ -227,7 +199,7 @@ class SessionLanesForkQueryTest {
             state.createForkMutations(ForkOptions.Branch(entryId = "k"))
         }
         assertEquals("Fork target is not a message entry: k", e.message)
-        // A missing entry id is the same failure (pi: !entry || type !== "message").
+        // A missing entry id is the same failure.
         assertFailsWith<SessionError> {
             state.createForkMutations(ForkOptions.Branch(entryId = "ghost"))
         }
@@ -254,8 +226,6 @@ class SessionLanesForkQueryTest {
         is SessionMutation.Fact -> mutation.seq
     }
 
-    // ---- store: fork, lineage, views, lanes roundtrip ----
-
     private fun newStore(root: File, startId: Int = 0): Pair<SessionStore, () -> String> {
         var next = startId
         return SessionStore(root = root, idFactory = { "sess-fork-${next++}" }) to { "sess-fork-$next" }
@@ -272,17 +242,15 @@ class SessionLanesForkQueryTest {
         assertEquals(saved.id, store.parentSessionId(forked.id))
         assertEquals("source", forked.title)
         assertEquals(saved.messages.size, forked.messages.size)
-        // The forked log is a distinct file whose entries re-seq from 1.
+        // The fork is a distinct log file.
         val fresh = SessionStore(root = root, idFactory = { "fresh" })
         val reloaded = fresh.load(forked.id)!!
         assertEquals(forked.messages, reloaded.messages)
         assertNull(fresh.parentSessionId(saved.id))
 
-        // Forking onto an existing id is rejected (pi's already_exists).
         assertFailsWith<SessionError> {
             store.fork(saved.id, ForkOptions.Tree, id = forked.id)
         }
-        // Unknown source.
         assertFailsWith<SessionError> { store.fork("missing", ForkOptions.Tree) }
     }
 
@@ -305,7 +273,7 @@ class SessionLanesForkQueryTest {
         val withMessage = store.save(created.withMessages(listOf(UserMessage.ofText("hello", 1L))))
         val aId = withMessage.entries.single().id
 
-        // A side lane at the first entry; a view over it appends and queries there.
+        // Side lane anchored at the first entry; the view scopes appends to it.
         store.createLane(withMessage.id, "side", aId)
         val side = store.view(withMessage.id, "side")
         assertEquals(aId, side.leafId())
@@ -321,7 +289,6 @@ class SessionLanesForkQueryTest {
         assertEquals(aId, main.leafId)
         assertEquals(1, main.messages.size)
 
-        // Chaining through a second store instance replays the persisted lanes.
         val fresh = SessionStore(root = root, idFactory = { "fresh" })
         val reloaded = fresh.load(withMessage.id)!!
         assertEquals(aId, reloaded.leafId)
@@ -329,7 +296,6 @@ class SessionLanesForkQueryTest {
         assertEquals(appended, sideAfterRestart.leafId())
         assertEquals(2, sideAfterRestart.findEntriesOnBranch().size)
 
-        // Unknown lane views are rejected (pi's invalid_lane).
         assertFailsWith<SessionError> { store.view(withMessage.id, "ghost") }
     }
 

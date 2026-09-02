@@ -27,30 +27,17 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * Shared logic for the Google Generative AI adapter, ported from pi's
- * packages/ai/src/api/google-shared.ts (and the transformMessages pass it
- * runs from transform-messages.ts).
+ * Shared logic for the Google Generative AI adapter.
  *
- * Upstream delegates the wire protocol to the `@google/genai` SDK; Pathfinder
- * has no such SDK, so the conversion produces the same GenerateContentRequest
- * JSON the SDK emits for the fields pi sets:
- * - `contents` entries `{role: "user"|"model", parts: [...]}`,
- * - parts `{text}`, `{thought: true, text}`, `{inlineData}`, `{functionCall}`,
- *   `{functionResponse}`, each optionally carrying `thoughtSignature`,
- * - `tools: [{functionDeclarations: [...]}]` with `parametersJsonSchema`
- *   (or legacy OpenAPI `parameters`), strict JSON-schema sampling via
- *   ConstrainedSampling.kt (pi's constrained-sampling.ts).
- *
- * Divergences from upstream (each narrow, see the citing KDoc):
- * - The replay pre-pass is pi's shared transformMessages (TransformMessages.kt),
- *   including the `ThinkingContent.redacted` branch; `convertMessages` then
- *   applies Google-specific thought-signature validation.
- * - `ToolCall.arguments` is a raw JSON string in the Kotlin core, not an
- *   object; parsing belongs to tool execution.
+ * Divergences from pi:
+ * - Upstream delegates the wire protocol to the `@google/genai` SDK;
+ *   Pathfinder has no such SDK, so the conversion here must produce the same
+ *   GenerateContentRequest JSON the SDK emits for the fields pi sets.
+ * - [ToolCall.arguments] stays a raw JSON string rather than a parsed object;
+ *   parsing belongs to tool execution.
  */
 object GoogleShared {
 
-    /** pi's GoogleApiThinkingLevel: Google's ThinkingLevel enum wire values. */
     enum class GoogleApiThinkingLevel(val wire: String) {
         THINKING_LEVEL_UNSPECIFIED("THINKING_LEVEL_UNSPECIFIED"),
         MINIMAL("MINIMAL"),
@@ -59,21 +46,15 @@ object GoogleShared {
         HIGH("HIGH"),
     }
 
-    /** pi's ResolvedGoogleThinkingLevel: ThinkingLevel without xhigh/max. */
+    /** A [ModelThinkingLevel] without the xhigh/max variants. */
     enum class ResolvedGoogleThinkingLevel { MINIMAL, LOW, MEDIUM, HIGH }
 
-    /** Gemini functionCallingConfig mode wire values (FunctionCallingConfigMode). */
     const val FUNCTION_CALLING_MODE_AUTO = "AUTO"
     const val FUNCTION_CALLING_MODE_NONE = "NONE"
     const val FUNCTION_CALLING_MODE_ANY = "ANY"
     const val FUNCTION_CALLING_MODE_VALIDATED = "VALIDATED"
 
-    /**
-     * Resolve a supported pi level or model-specific Google mapping to a
-     * standard Google level. Port of google-shared.ts `resolveGoogleThinkingLevel`:
-     * "off" maps to "high", a string `thinkingLevelMap` entry is lowercased,
-     * and anything outside minimal/low/medium/high throws.
-     */
+    /** Resolves to a standard Google level; "off" maps to "high" (upstream behavior). */
     fun resolveGoogleThinkingLevel(
         model: Model,
         level: ModelThinkingLevel,
@@ -95,18 +76,16 @@ object GoogleShared {
     }
 
     /**
-     * Whether a streamed Gemini part is thinking content. Port of
-     * google-shared.ts `isThinkingPart`: `thought: true` is the definitive
-     * marker (read strictly, like the upstream `=== true`);
-     * `thoughtSignature` can appear on any part type and does not make
-     * the part thinking. See https://ai.google.dev/gemini-api/docs/thought-signatures
+     * Whether a Gemini part is thinking content: `thought: true` is the
+     * definitive marker; `thoughtSignature` can appear on any part type and
+     * does not make the part thinking.
+     * See https://ai.google.dev/gemini-api/docs/thought-signatures
      */
     fun isThinkingPart(part: JsonObject): Boolean = part.strictBoolean("thought") == true
 
     /**
-     * Retain thought signatures during streaming. Port of google-shared.ts
-     * `retainThoughtSignature`: keep the last non-empty signature within the
-     * same streamed block; never merge signatures across distinct parts.
+     * Keeps the last non-empty signature within a streamed block; signatures
+     * are never merged or moved across parts.
      */
     fun retainThoughtSignature(existing: String?, incoming: String?): String? =
         if (!incoming.isNullOrEmpty()) incoming else existing
@@ -128,10 +107,7 @@ object GoogleShared {
         Regex("^gemini(?:-live)?-(\\d+)").find(modelId.lowercase())
             ?.groupValues?.get(1)?.toIntOrNull()
 
-    /**
-     * Models via Google APIs that require explicit tool call IDs in function
-     * calls/responses. Port of google-shared.ts `requiresToolCallId`.
-     */
+    /** Models via Google APIs that require explicit tool call IDs in function calls/responses. */
     fun requiresToolCallId(modelId: String): Boolean {
         val geminiMajorVersion = getGeminiMajorVersion(modelId)
         return modelId.startsWith("claude-") ||
@@ -140,9 +116,8 @@ object GoogleShared {
     }
 
     /**
-     * Gemini 3+ models support multimodal function responses (images nested in
-     * `functionResponse.parts`); other models need a separate user image turn.
-     * Port of google-shared.ts `supportsMultimodalFunctionResponse`.
+     * Gemini 3+ supports images nested in `functionResponse.parts`; Gemini < 3
+     * needs a separate user image turn.
      */
     fun supportsMultimodalFunctionResponse(modelId: String): Boolean {
         val geminiMajorVersion = getGeminiMajorVersion(modelId)
@@ -155,12 +130,7 @@ object GoogleShared {
         return majorVersion != null && majorVersion >= 3
     }
 
-    /**
-     * Convert internal messages to Gemini Content[] wire JSON. Port of
-     * google-shared.ts `convertMessages`, which runs pi's shared
-     * `transformMessages` pre-pass (TransformMessages.kt) with Google's
-     * tool-call-id normalization.
-     */
+    /** Converts internal messages to Gemini `Content[]` wire JSON via [transformMessages]. */
     fun convertMessages(model: Model, context: Context): JsonArray {
         val contents = mutableListOf<JsonObject>()
         val normalizeToolCallId = { id: String, _: AssistantMessage ->
@@ -175,7 +145,6 @@ object GoogleShared {
                 MessageRole.ASSISTANT -> {
                     val assistant = msg as AssistantMessage
                     val parts = mutableListOf<JsonObject>()
-                    // Only keep thinking blocks from the same provider and model.
                     val isSameProviderAndModel =
                         assistant.provider == model.provider && assistant.model == model.id
 
@@ -186,9 +155,9 @@ object GoogleShared {
                                 val thoughtSignature =
                                     resolveThoughtSignature(isSameProviderAndModel, block.textSignature)
                                 // Skip empty text blocks — unless they carry a thought
-                                // signature. Gemini can attach the signature to a part whose
-                                // visible text is empty and requires it echoed back; dropping it
-                                // breaks the reasoning chain (test/google-shared-signed-empty-blocks).
+                                // signature. Gemini attaches the signature to a part whose
+                                // visible text is empty and requires it echoed back; dropping
+                                // it breaks the reasoning chain.
                                 if (block.text.isBlank() && thoughtSignature == null) continue
                                 parts.add(
                                     buildJsonObject {
@@ -392,7 +361,6 @@ object GoogleShared {
         "definitions", // pre-draft-2019-09 equivalent of $defs
     )
 
-    /** Strip meta-declarations from a schema obj. Port of google-shared.ts `sanitizeForOpenApi`. */
     internal fun sanitizeForOpenApi(schema: JsonElement): JsonElement = when (schema) {
         !is JsonObject -> schema
         else -> JsonObject(
@@ -403,13 +371,10 @@ object GoogleShared {
     }
 
     /**
-     * Convert tools to Gemini function declarations format. Port of
-     * google-shared.ts `convertTools` (including the strict JSON-schema
-     * sampling from constrained-sampling.ts). By default uses
+     * Convert tools to Gemini function declarations. By default uses
      * `parametersJsonSchema` (full JSON Schema); `useParameters` selects the
-     * legacy OpenAPI `parameters` field (needed for Cloud Code Assist with
-     * Claude), with the strict-wrapped schema run through
-     * [sanitizeForOpenApi] exactly like pi.
+     * legacy OpenAPI `parameters` field instead (needed for Cloud Code Assist
+     * with Claude), running the schema through [sanitizeForOpenApi].
      */
     fun convertTools(
         tools: List<Tool>,
@@ -443,7 +408,7 @@ object GoogleShared {
         )
     }
 
-    /** Map tool choice string to a Gemini functionCallingConfig mode. Port of `mapToolChoice`. */
+    /** Map tool choice string to a Gemini functionCallingConfig mode. */
     fun mapToolChoice(choice: String): String = when (choice) {
         "auto" -> FUNCTION_CALLING_MODE_AUTO
         "none" -> FUNCTION_CALLING_MODE_NONE
@@ -452,11 +417,9 @@ object GoogleShared {
     }
 
     /**
-     * Resolve the function calling mode. Port of google-shared.ts
-     * `resolveGoogleFunctionCallingMode` (google-shared.ts:364-371): explicit
-     * `none`/`any` choices win, otherwise VALIDATED engages when any tool
-     * resolves strict JSON-schema sampling, and any other explicit choice
-     * maps through [mapToolChoice].
+     * Resolves the function calling mode: explicit `none`/`any` choices win;
+     * otherwise [FUNCTION_CALLING_MODE_VALIDATED] engages when any tool uses
+     * strict JSON-schema sampling.
      */
     fun resolveGoogleFunctionCallingMode(
         tools: List<Tool>,
@@ -473,11 +436,7 @@ object GoogleShared {
         return toolChoice?.let { mapToolChoice(it) }
     }
 
-    /**
-     * Map a Gemini FinishReason (its enum's wire string) to our StopReason.
-     * Port of google-shared.ts `mapStopReason`/`mapStopReasonString`: STOP →
-     * stop, MAX_TOKENS → length, everything else → error.
-     */
+    /** Maps a Gemini `FinishReason` wire string to a [StopReason]; anything but STOP/MAX_TOKENS is an error. */
     fun mapStopReason(reason: String): StopReason = when (reason) {
         "STOP" -> StopReason.STOP
         "MAX_TOKENS" -> StopReason.LENGTH

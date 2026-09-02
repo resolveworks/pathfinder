@@ -22,15 +22,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/**
- * AgentSession tool-activation tests, ported from pi's
- * `setActiveToolsByName` (agent-session.ts:971-984), `getActiveToolNames`
- * (:944), and the harness's active-set seeding (agent-harness.ts:330 via
- * create-harness.ts:137/149 + the active_tools_change fold in
- * harness/session/context.ts): unknown names ignored, request-order
- * resolution without dedupe, prompt rebuild, per-run context snapshot, and
- * adoption seeding (fold override, else registry default-all).
- */
 class AgentSessionToolsTest {
 
     private val model = Model(
@@ -41,7 +32,6 @@ class AgentSessionToolsTest {
         baseUrl = "https://a.example.invalid",
     )
 
-    /** Fake registry tool (pi's AgentTool surface reduced to state). */
     private class FakeTool(
         override val definition: Tool,
         override val promptSnippet: String? = null,
@@ -96,11 +86,6 @@ class AgentSessionToolsTest {
         tools = tools,
     )
 
-    /**
-     * pi setActiveToolsByName: unknown names ignored, valid tools applied
-     * in request order, the system prompt rebuilt, and the next run's
-     * provider context carrying the new tool set and prompt.
-     */
     @Test
     fun `setActiveToolsByName applies registry-filtered tools and rebuilds the prompt`() = runTest {
         val webSearch = tool("web_search")
@@ -137,7 +122,6 @@ class AgentSessionToolsTest {
         assertEquals(buildSystemPrompt(listOf(webFetch, webSearch)), contexts.single().systemPrompt)
     }
 
-    /** pi's loop pushes per occurrence: a duplicate name resolves twice. */
     @Test
     fun `duplicate names are not deduped`() {
         val webSearch = tool("web_search")
@@ -149,10 +133,6 @@ class AgentSessionToolsTest {
         assertEquals(listOf(webSearch, webSearch), s.agent.state.value.tools)
     }
 
-    /**
-     * Emptying the set clears the prompt: buildSystemPrompt(empty) is null
-     * (pathfinder's no-tools prompt divergence, see its KDoc).
-     */
     @Test
     fun `an empty selection yields a null system prompt`() {
         val s = session(tools = listOf(tool("web_search")))
@@ -163,11 +143,6 @@ class AgentSessionToolsTest {
         assertNull(s.agent.state.value.systemPrompt)
     }
 
-    /**
-     * Adoption seeding: the branch's active_tools_change fold overrides the
-     * registry default (agent-harness.ts:330 fold via harness/session/context.ts;
-     * create-harness.ts:137/149 is the seeding precedent).
-     */
     @Test
     fun `adoption seeds the folded active set from the branch`() {
         val webSearch = tool("web_search")
@@ -191,10 +166,6 @@ class AgentSessionToolsTest {
         assertEquals("adoption does not append", 1, s.conversation.entries.size)
     }
 
-    /**
-     * Fold semantics (harness/session/context.ts): entries overwrite along
-     * the root→leaf path, so the last active_tools_change wins.
-     */
     @Test
     fun `the last active_tools_change on the path wins`() {
         val webSearch = tool("web_search")
@@ -208,10 +179,6 @@ class AgentSessionToolsTest {
         assertEquals(listOf("web_fetch"), s.getActiveToolNames())
     }
 
-    /**
-     * Harness default (agent-harness.ts:330): a branch without an
-     * active_tools_change entry activates all registered tools.
-     */
     @Test
     fun `a branch without an entry activates all registry tools`() {
         val webSearch = tool("web_search")
@@ -223,7 +190,6 @@ class AgentSessionToolsTest {
         assertEquals(buildSystemPrompt(listOf(webSearch, webFetch)), s.agent.state.value.systemPrompt)
     }
 
-    /** Empty-registry regression: default construction stays inert. */
     @Test
     fun `an empty registry keeps everything inert`() {
         val s = session()

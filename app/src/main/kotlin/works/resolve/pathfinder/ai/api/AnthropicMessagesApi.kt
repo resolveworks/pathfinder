@@ -41,39 +41,17 @@ import kotlinx.serialization.json.JsonObject
 import kotlin.time.Clock
 
 /**
- * Anthropic Messages streaming adapter, ported from pi's
- * packages/ai/src/api/anthropic-messages.ts.
+ * Anthropic Messages streaming adapter.
  *
- * Covers: request building (see [AnthropicMessagesPayload]), API-key vs OAuth
- * bearer auth headers with beta negotiation, SSE event handling for
- * message_start / content_block_start / content_block_delta /
- * content_block_stop / message_delta / message_stop, text / thinking /
- * signature / tool-input deltas keyed by the upstream block index, OAuth
- * tool-name round-tripping through fromClaudeCodeName, seeding tool
- * arguments from content_block_start input, usage and
- * cost accounting from message_start plus message_delta, stop-reason mapping,
- * and stop/error semantics (stream must end with a stop reason after
- * message_stop).
- *
- * Documented divergences from pi:
- * - Abort semantics: pi's AbortSignal maps to coroutine cancellation here, and
- *   per this codebase's ported convention cancellation propagates without an
- *   Error event (see OpenAiCompletionsApi / Events.kt).
- * - pi parses SSE data with JSON repair (parseJsonWithRepair) and repairs
- *   streamed tool JSON (parseStreamingJson). Here a malformed data payload is
- *   a protocol error and tool arguments are accumulated as the raw JSON
- *   string, matching the ported ToolCall model; a blank buffer finalizes as
- *   `{}`.
- * - The User-Agent is pi's getPiUserAgent() (ai/utils/PiUserAgent.kt), merged
- *   first like pi's mergeClientHeaders; only its platform-string details
- *   diverge.
- * - github-copilot dynamic headers are ported
- *   (GithubCopilotHeaders.kt); deferred tool loading, server-side
- *   fallbacks, metadata, and strict tool sampling are not ported (no surface
- *   needs them).
- * - pi's ambient ANTHROPIC_AUTH_TOKEN (Authorization: Bearer header auth) and
- *   ANTHROPIC_OAUTH_TOKEN (apiKey source) paths (providers/anthropic.ts:24-36)
- *   are reduced to ANTHROPIC_API_KEY only.
+ * Divergences from pi:
+ * - pi repairs SSE data (parseJsonWithRepair) and streamed tool JSON
+ *   (parseStreamingJson); here a malformed data payload is a protocol error
+ *   and tool arguments accumulate as raw JSON strings.
+ * - pi's ambient ANTHROPIC_AUTH_TOKEN / ANTHROPIC_OAUTH_TOKEN env paths are
+ *   reduced to ANTHROPIC_API_KEY.
+ * - AbortSignal aborts map to coroutine cancellation, which propagates
+ *   without an Error event — the established Pathfinder convention
+ *   (see OpenAiCompletionsApi / Events.kt).
  */
 class AnthropicMessagesApi(
     private val transport: HttpStreamingTransport,
@@ -81,15 +59,14 @@ class AnthropicMessagesApi(
     private val clock: Clock = Clock.System,
 ) : ChatApi {
 
-    /** pi's stream(model, context, options) for anthropic-messages. */
     fun stream(
         model: Model,
         context: Context,
         options: AnthropicMessagesOptions = AnthropicMessagesOptions(),
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = clock.now().toEpochMilliseconds()
-        // pi computes isOAuth from createClient; the Copilot branch (checked
-        // first) always yields a non-OAuth, Bearer-auth client.
+        // Copilot is never OAuth: its Bearer-auth branch is checked first,
+        // as in pi's createClient.
         val isOAuth = model.provider != "github-copilot" && options.apiKey?.let { isOAuthToken(it) } == true
         val state = AnthropicStreamState(model, startedAtMs, isOAuth)
         try {
@@ -99,8 +76,6 @@ class AnthropicMessagesApi(
             val cacheSessionId = if (retention == CacheRetention.NONE) null else options.sessionId
 
             val (headers, bearerToken) = buildHeaders(model, isOAuth, options, context, cacheSessionId)
-            // pi anthropic-messages.ts:566: onPayload inspects/replaces the
-            // params object before serialization; null keeps the payload.
             var params = buildRequestBody(model, context, isOAuth, options)
             options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
             val body = params
@@ -120,9 +95,6 @@ class AnthropicMessagesApi(
                 transport.post(request)
             }
 
-            // pi anthropic-messages.ts:583: onResponse fires after response
-            // headers arrive; like the SDK path it only runs for 2xx (the
-            // transport throws ProviderHttpException before this on non-2xx).
             options.onResponse?.invoke(ProviderResponse(response.status, headersToRecord(response.headers)), model)
 
             emit(AssistantMessageEvent.Start(state.snapshot()))
@@ -153,12 +125,8 @@ class AnthropicMessagesApi(
     }
 
     /**
-     * pi's streamSimple for anthropic-messages: reasoning levels map to
-     * adaptive effort (forceAdaptiveThinking models) or budget-based thinking
-     * with the max-tokens/thinking-budget split from simple-options.ts.
-     * Divergence from pi: pi throws synchronously on missing auth; failures
-     * are encoded as a terminal Error event here, matching this codebase's
-     * stream-error convention (see Events.kt).
+     * Divergence from pi: missing auth emits a terminal
+     * [AssistantMessageEvent.Error] instead of throwing synchronously.
      */
     override fun streamSimple(
         model: Model,
@@ -173,8 +141,6 @@ class AnthropicMessagesApi(
         }
 
         val base = buildBaseOptions(model, context, options).copy(
-            // pi's streamSimple: toolChoice: options?.toolChoice (anthropic-messages.ts:834);
-            // the simple level carries only "auto" | "none" (types.ts:82).
             toolChoice = mapToolChoice(options.toolChoice?.toToolChoice()),
         )
         val reasoning = options.reasoning
@@ -198,10 +164,6 @@ class AnthropicMessagesApi(
         emitAll(stream(model, context, resolved))
     }
 
-    /**
-     * Handles one complete SSE event; returns the block events to emit.
-     * Mirrors pi's event loop including the event-name filter set.
-     */
     private fun processSseEvent(
         event: works.resolve.pathfinder.ai.transport.SseEvent,
         model: Model,
@@ -236,7 +198,6 @@ class AnthropicMessagesApi(
         }
     }
 
-    /** pi's assertRequestAuth. */
     private fun assertRequestAuth(provider: String, apiKey: String?, headers: Map<String, String?>) {
         if (apiKey != null) return
         if (hasHeader(headers, "authorization") ||
@@ -264,17 +225,8 @@ class AnthropicMessagesApi(
         return AssistantMessageEvent.Error(message.stopReason, message)
     }
 
-    /**
-     * Port of pi's anthropic-messages.ts catch block (~791). Upstream composes
-     * the shared formatter over the SDK-folded `error.message` (which already
-     * carries the body, so the message survives unchanged); the raw transport
-     * body is the port's stand-in, so the output is the composed
-     * `"<status>: <body>"` (no prefix upstream).
-     */
     private fun formatProviderError(error: Exception): String = when (error) {
         is ProviderHttpException -> formatProviderError(normalizeProviderError(error))
-        // Non-HTTP exceptions keep the port's `message ?: simpleName` handling;
-        // pi's safeJsonStringify fallback for non-Error throws is moot in Kotlin.
         is ProviderStreamException -> error.message ?: "Provider stream error"
         else -> error.message ?: error::class.simpleName ?: "Unknown error"
     }
@@ -291,22 +243,14 @@ class AnthropicMessagesApi(
     }
 }
 
-/** Anthropic Messages API version header value (pi's pinned SDK default). */
+/** pi's pinned Anthropic SDK version default. */
 internal const val ANTHROPIC_VERSION = "2023-06-01"
 
 /**
- * Builds the transport headers and auth, ported from pi's createClient.
- * GitHub Copilot models use Bearer auth with Copilot static/dynamic headers
- * and no x-api-key (pi's Copilot branch, checked before the OAuth branch);
- * API-key auth sends `x-api-key` (pi's SDK default header) plus
- * `anthropic-version`; OAuth tokens (sk-ant-oat) become a Bearer token with
- * Claude Code identity headers and betas.
- *
- * Divergence (owner decision): pi sends
- * `anthropic-dangerous-direct-browser-access: true` unconditionally in all
- * three createClient branches — a CORS-relaxation header for browser clients
- * (anthropic-messages.ts:907-965). Pathfinder's OkHttp transport is not a
- * browser client, so the header is deliberately not sent.
+ * Divergence (owner decision): pi unconditionally sends
+ * `anthropic-dangerous-direct-browser-access: true`, a CORS-relaxation
+ * header for browser clients; Pathfinder's OkHttp transport is not a browser
+ * client, so the header is deliberately not sent.
  */
 private fun buildHeaders(
     model: Model,
@@ -326,12 +270,10 @@ private fun buildHeaders(
     if (needsInterleavedBeta) {
         betaFeatures.add("interleaved-thinking-2025-05-14")
     }
-    // pi's shouldUseServerSideFallbackBeta (anthropic-messages.ts:180).
     if (compat.allowedFallbackModels.isNotEmpty()) {
         betaFeatures.add("server-side-fallback-2026-07-01")
     }
 
-    // Copilot: Bearer auth, selective betas (pi checks this branch before OAuth).
     if (model.provider == "github-copilot") {
         val base = buildMap<String, String?> {
             put("accept", "application/json")
@@ -341,9 +283,8 @@ private fun buildHeaders(
         val merged = filterNonNull(
             mergeHeaders(
                 mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), base),
-                // Copilot dynamic headers come after the model headers and
-                // before the options headers, as in pi's Copilot branch of
-                // anthropic-messages createClient mergeClientHeaders.
+                // Copilot dynamic headers override model headers but not
+                // per-request options headers.
                 mergeHeaders(
                     mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
                     options.headers,
@@ -403,8 +344,8 @@ private fun filterNonNull(headers: Map<String, String?>): Map<String, String> =
     headers.filterValues { it != null }.mapValues { it.value!! }
 
 /**
- * Accumulates the streamed Anthropic response, pi's output/blocks state.
- * Blocks are keyed by the upstream `index` field; events interleave freely.
+ * Accumulates the streamed response. Blocks are keyed by the upstream
+ * `index` field; events interleave freely.
  */
 internal class AnthropicStreamState(
     private val model: Model,
@@ -449,10 +390,9 @@ internal class AnthropicStreamState(
         private set
 
     /**
-     * Model used for usage cost accounting (pi's usageModel,
-     * anthropic-messages.ts:592-599): the requested model, or a copy carrying
-     * the served fallback model's id and cost when message_start reports a
-     * permitted fallback model.
+     * Model used for usage cost accounting: the requested model, or a copy
+     * carrying the served fallback model's id and cost when message_start
+     * reports a permitted fallback model.
      */
     private var usageModel: Model = model
 
@@ -466,9 +406,6 @@ internal class AnthropicStreamState(
         val message = event.obj("message") ?: return emptyList()
         responseId = message["id"].strOrNull() ?: responseId
         responseModel = message["model"].strOrNull()
-        // pi anthropic-messages.ts:592-599: when the server serves a fallback
-        // model, cost accounting uses the fallback entry's cost; the observed
-        // id wins only when it differs and matches a permitted fallback.
         if (responseModel != null && responseModel != model.id) {
             val fallbackCost = model.anthropicCompat.allowedFallbackModels
                 .find { it.provider == model.provider && it.model == responseModel }?.cost
@@ -484,7 +421,6 @@ internal class AnthropicStreamState(
                 output = messageUsage.int("output_tokens") ?: 0,
                 cacheRead = messageUsage.int("cache_read_input_tokens") ?: 0,
                 cacheWrite = messageUsage.int("cache_creation_input_tokens") ?: 0,
-                // pi anthropic-messages.ts:606 — cache_creation.ephemeral_1h_input_tokens || 0.
                 cacheWrite1h = messageUsage.obj("cache_creation")
                     ?.int("ephemeral_1h_input_tokens") ?: 0,
             )
@@ -615,7 +551,6 @@ internal class AnthropicStreamState(
         return emptyList()
     }
 
-    /** pi's mapStopReason. */
     private fun mapStopReason(reason: String, refusalExplanation: String?): Pair<StopReason, String?> =
         when (reason) {
             "end_turn" -> StopReason.STOP to null
@@ -632,13 +567,12 @@ internal class AnthropicStreamState(
     private fun toolCallOf(block: Tool): ToolCall = ToolCall(
         id = block.id,
         name = block.name,
-        // pi replaces the seed with parseStreamingJson(partialJson) at stop;
-        // here the streamed JSON wins when present and the seed (or "{}" for
-        // a blank buffer) stands in otherwise, preserving partial snapshots.
+        // Unlike pi, the streamed JSON is not parsed at stop; the raw string
+        // (seed or "{}" when blank) preserves partial snapshots.
         arguments = block.partialJson.toString().ifBlank { block.seedJson ?: "{}" },
     )
 
-    /** Anthropic doesn't provide total_tokens; compute from components, like pi. */
+    /** Anthropic doesn't provide total_tokens; compute from components. */
     private fun withTotal(usage: Usage): Usage {
         val total = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
         val withTotal = usage.copy(totalTokens = total)

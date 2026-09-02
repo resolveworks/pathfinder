@@ -41,48 +41,31 @@ import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
 
 /**
- * Shared OpenAI Responses API machinery, ported from pi's
- * openai-responses-shared.ts (message/tool conversion, stream processing) and
- * the small utils it depends on (shortHash, sanitizeSurrogates — both in
- * ai/utils mirroring pi's src/utils — openai-prompt-cache, transform-messages,
- * deferred-tools).
+ * Shared OpenAI Responses API machinery: message/tool conversion and stream
+ * processing.
  *
- * Divergences from pi (narrowest-boundary adaptations, documented per symbol):
- * - No external SDKs or new dependencies: the `openai` SDK's wire behavior
- *   is re-created by hand over Pathfinder's transport.
- * - [ToolCall.arguments] stays Pathfinder's raw JSON string rather than a parsed
- *   object; replay passes the string through and streaming accumulates raw
- *   deltas, so pi's parseStreamingJson partial parser is not needed here.
- * - Grammar constrained sampling is ported from pi's constrained-sampling.ts
- *   (ConstrainedSampling.kt): grammar tools convert to OpenAI `custom` tools
- *   (`format: {type:"grammar", syntax, definition}`), replay as
- *   `custom_tool_call` items, and stream through
- *   [GrammarToolInputJsonBuffer] input deltas. See [convertResponsesTools],
- *   [createGrammarToolInputProperties], and the stream's custom-tool-call
- *   slots for the ported wire shapes.
- * - GitHub Copilot dynamic headers are ported (GithubCopilotHeaders.kt);
- *   beyond them only static model headers and the affinity headers are sent.
+ * Divergences from pi:
+ * - The `openai` SDK's wire behavior is re-created by hand over Pathfinder's
+ *   transport.
+ * - [ToolCall.arguments] stays a raw JSON string rather than a parsed object;
+ *   replay passes the string through and streaming accumulates raw deltas, so
+ *   pi's parseStreamingJson partial parser is not needed.
+ * - Grammar constrained sampling maps grammar tools to OpenAI `custom` tools
+ *   (`format: {type:"grammar", syntax, definition}`), replayed as
+ *   `custom_tool_call` items and streamed through [GrammarToolInputJsonBuffer]
+ *   input deltas.
  */
 object OpenAiResponsesShared {
 
-    /** OpenAI Responses rejects max_output_tokens below 16 (pi issue #6265). */
+    /** OpenAI Responses rejects max_output_tokens below 16. */
     const val OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16
 
     const val OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH = 64
 
-    /** pi's OPENAI_TOOL_CALL_PROVIDERS / CODEX_TOOL_CALL_PROVIDERS. */
     val BASE_TOOL_CALL_PROVIDERS = setOf("openai", "openai-codex", "opencode")
 
-    /** pi's AZURE_TOOL_CALL_PROVIDERS. */
     val AZURE_TOOL_CALL_PROVIDERS = BASE_TOOL_CALL_PROVIDERS + "azure-openai-responses"
 
-
-    // =========================================================================
-    // Utilities (sanitizeSurrogates / shortHash live in ai/utils, mirroring pi's
-    // packages/ai/src/utils/)
-    // =========================================================================
-
-    /** Pi's clampOpenAIPromptCacheKey: truncate to 64 Unicode code points. */
     fun clampOpenAIPromptCacheKey(key: String?): String? {
         if (key == null) return null
         val chars = key.codePoints().toArray()
@@ -90,22 +73,20 @@ object OpenAiResponsesShared {
         return String(chars, 0, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH)
     }
 
-    /** Pi's TextSignatureV1 encoding: `{"v":1,"id":...,"phase":...?}`. JSON.stringify
-     * drops an undefined id (malformed events), so a null id is omitted. */
+    /** `{"v":1,"id":...,"phase":...?}`; a null id is omitted because
+     * JSON.stringify drops undefined (malformed events). */
     fun encodeTextSignatureV1(id: String?, phase: String?): String = buildJsonObject {
         put("v", 1)
         if (id != null) put("id", id)
         if (phase != null) put("phase", phase)
     }.toString()
 
-    /** Pi's parseTextSignature: JSON v1 signature or legacy plain string. */
     fun parseTextSignature(signature: String?): Pair<String, String?>? {
         if (signature == null) return null
         if (signature.startsWith("{")) {
             try {
                 val parsed = lenientJson.parseToJsonElement(signature) as? JsonObject
                 if (parsed != null) {
-                    // pi requires the numeric JSON `v: 1` (parsed.v === 1).
                     val id = parsed.string("id")
                     if (parsed.strictInt("v") == 1 && id != null) {
                         val phase = parsed.string("phase")
@@ -114,18 +95,13 @@ object OpenAiResponsesShared {
                     }
                 }
             } catch (_: Exception) {
-                // Fall through to legacy plain-string handling.
             }
         }
         return signature to null
     }
 
-    // =========================================================================
-    // Message conversion (convertResponsesMessages)
-    // =========================================================================
-
     data class ConvertResponsesToolsOptions(
-        /** pi's strict option; null mirrors pi's `strict: null` (omit the field decision to the default). */
+        /** Null omits the `strict` field (server default) rather than sending false. */
         val strict: Boolean? = false,
         val supportsStrictMode: Boolean = true,
         val supportsOpenAIGrammarTools: Boolean = false,
@@ -275,8 +251,7 @@ object OpenAiResponsesShared {
                                 // For different-model messages drop fc_ ids to avoid
                                 // pairing validation. When replaying a custom-tool call
                                 // its ctc_* id is kept; only function_call replay needs
-                                // fc_* item ids (pi: customInputProperty === undefined
-                                // && !itemId?.startsWith("fc_")).
+                                // fc_* item ids.
                                 if ((isDifferentModel && itemId?.startsWith("fc_") == true) ||
                                     (customInputProperty == null && itemId?.startsWith("fc_") != true)
                                 ) {
@@ -285,12 +260,10 @@ object OpenAiResponsesShared {
                                 val canReplayNamespace =
                                     isSameModel || options.deferredTools[block.name] != null
                                 if (customInputProperty != null) {
-                                    // Divergence (documented in the class header): pi keeps
-                                    // parsed argument objects; Pathfinder stores the raw
-                                    // JSON string, so parse it to reach pi's
-                                    // getGrammarToolInput lookup. A non-object body behaves
-                                    // like pi's `{}`/`{payload: 42}` cases: the grammar
-                                    // input error below fires.
+                                    // Raw argument JSON (see class header) is parsed here for the
+                                    // grammar input lookup; unparseable bodies become {} and
+                                    // getGrammarToolInput errors on a missing or non-string
+                                    // input property.
                                     val arguments = try {
                                         lenientJson.parseToJsonElement(block.arguments) as? JsonObject
                                     } catch (_: Exception) {
@@ -324,7 +297,6 @@ object OpenAiResponsesShared {
                                             itemId?.let { put("id", it) }
                                             put("call_id", callId)
                                             put("name", block.name)
-                                            // Pathfinder stores arguments as the raw JSON string.
                                             put("arguments", block.arguments)
                                             if (canReplayNamespace && block.namespace != null) {
                                                 put("namespace", block.namespace)
@@ -417,7 +389,6 @@ object OpenAiResponsesShared {
         return messages
     }
 
-    /** Pi's convertToolResultOutput: joined text, or input_text/input_image parts. */
     private fun convertToolResultOutput(model: Model, content: List<Content>): JsonElement {
         val texts = content.filterIsInstance<TextContent>().map { it.text }
         val images = content.filterIsInstance<ImageContent>()
@@ -454,19 +425,6 @@ object OpenAiResponsesShared {
         return JsonArray(output)
     }
 
-    // =========================================================================
-    // Tool conversion
-    // =========================================================================
-
-    /**
-     * Pi's convertResponsesTools (openai-responses-shared.ts:356-388): grammar
-     * tools become OpenAI `custom` tools carrying
-     * `format: {type: "grammar", syntax: "lark"|"regex", definition}`; other
-     * tools become `function` tools with strict-mode schema rewriting via
-     * [resolveJsonSchemaStrictSampling]/[getJsonSchemaToolParameters], and
-     * the `strict` field is emitted only when [ConvertResponsesToolsOptions.supportsStrictMode]
-     * (an unset/null strict value is omitted, as the SDK drops `undefined`).
-     */
     fun convertResponsesTools(
         tools: List<Tool>,
         options: ConvertResponsesToolsOptions = ConvertResponsesToolsOptions(),
@@ -501,11 +459,6 @@ object OpenAiResponsesShared {
         }
     }
 
-    // =========================================================================
-    // Stream processing (processResponsesStream)
-    // =========================================================================
-
-    /** Options threading pi's OpenAIResponsesStreamOptions + codex tier resolution. */
     data class StreamProcessingOptions(
         val serviceTier: String? = null,
         val grammarToolInputProperties: Map<String, String> = emptyMap(),
@@ -513,11 +466,7 @@ object OpenAiResponsesShared {
         val applyServiceTierPricing: ((usage: Usage, serviceTier: String?) -> Usage)? = null,
     )
 
-    /**
-     * Mutable content block holders; snapshots render fresh immutable [Content]
-     * values so partials never share state (mirrors the existing completions
-     * StreamingState contract).
-     */
+    /** Snapshots render fresh immutable [Content] values so partials never share state. */
     private sealed interface Block {
         val index: Int
 
@@ -536,28 +485,19 @@ object OpenAiResponsesShared {
             var name: String = ""
             var arguments: StringBuilder = StringBuilder()
             var namespace: String? = null
-
-            /**
-             * pi's StreamingToolCall.customInput: the grammar input property and
-             * JSON buffer for `custom_tool_call` items. [currentInput] mirrors
-             * pi's `block.arguments[property]` string (Pathfinder keeps raw
-             * argument JSON instead of a parsed object).
-             */
             var customInput: CustomToolInput? = null
         }
     }
 
-    /** pi's StreamingToolCall.customInput: the grammar input property and JSON
-     * buffer for `custom_tool_call` items. [currentInput] mirrors pi's
-     * `block.arguments[property]` string (Pathfinder keeps raw argument JSON
-     * instead of a parsed object). */
+    /** Grammar input property and JSON buffer for `custom_tool_call` items.
+     * [currentInput] tracks the last accepted input: the base for further
+     * deltas and the fallback when the done event omits its input. */
     private class CustomToolInput(
         val property: String,
         val jsonBuffer: GrammarToolInputJsonBuffer = GrammarToolInputJsonBuffer(),
         var currentInput: String = "",
     )
 
-    /** pi's appendCustomToolCallInput: append the grammar input delta to the JSON buffer. */
     private fun appendCustomToolCallInput(slot: Block.Tool, nextInput: String, close: Boolean): String? {
         val customInput = slot.customInput ?: return null
         val delta = appendGrammarToolInputJsonDelta(customInput.jsonBuffer, customInput.property, nextInput, close)
@@ -566,13 +506,7 @@ object OpenAiResponsesShared {
         return delta
     }
 
-    /**
-     * Event-ordered stream state machine ported from pi's
-     * processResponsesStream: slots keyed by output_index, reasoning/text/
-     * toolcall block events with partial snapshots, Azure
-     * reasoning.encrypted_content backfill from the terminal response, usage/
-     * cost accounting, stop-reason mapping, and provider error events.
-     */
+    /** Event-ordered stream state machine; adapters feed events to [onEvent]. */
     class ResponsesStreamState(
         private val model: Model,
         private val timestampMs: Long,
@@ -595,7 +529,7 @@ object OpenAiResponsesShared {
         var sawTerminalResponseEvent = false
             private set
 
-/** Snapshot exposed to the adapters' Start/Done/Error events. */
+        /** Snapshot exposed to the adapters' Start/Done/Error events. */
         internal fun partialSnapshot(): AssistantMessage = partial()
 
         private fun render(block: Block): Content = when (block) {
@@ -622,7 +556,6 @@ object OpenAiResponsesShared {
             timestamp = timestampMs,
         )
 
-        /** Processes one complete stream event object; returns events to emit. */
         fun onEvent(event: JsonObject): List<AssistantMessageEvent> = when (event.string("type")) {
             "response.created" -> {
                 event.obj("response").string("id")?.let { responseId = it }
@@ -657,8 +590,7 @@ object OpenAiResponsesShared {
                 listOf(AssistantMessageEvent.ToolCallDelta(slot.index, delta, partial()))
             }
             "response.function_call_arguments.done" -> {
-                // Pathfinder keeps raw argument strings: the done event's complete
-                // arguments replace the accumulated buffer and any tail beyond the
+                // The complete arguments replace the buffer; any tail beyond the
                 // streamed prefix is emitted as one final delta.
                 val slot = getSlot<Block.Tool>(event) ?: return emptyList()
                 val arguments = event.string("arguments") ?: return emptyList()
@@ -727,8 +659,6 @@ object OpenAiResponsesShared {
                     tool.namespace = item.string("namespace")
                 }
                 "custom_tool_call" -> {
-                    // pi: inputProperty comes from grammarToolInputProperties,
-                    // defaulting to "input".
                     val name = item.string("name") ?: ""
                     val inputProperty = options.grammarToolInputProperties[name] ?: "input"
                     val input = item.string("input") ?: ""
@@ -761,8 +691,8 @@ object OpenAiResponsesShared {
             val item = event.obj("item") ?: return emptyList()
             val outputIndex = event.int("output_index") ?: return emptyList()
             applyMessagePhaseStopReason(item)
-            // pi's getOrCreateSlot: Azure and others may send output_item.done
-            // without a preceding output_item.added for the same output_index.
+            // Azure and others may send output_item.done without a preceding
+            // output_item.added for the same output_index.
             var events: List<AssistantMessageEvent> = emptyList()
             val slot = slots[outputIndex] ?: run {
                 events = createSlot(outputIndex, item)
@@ -798,8 +728,6 @@ object OpenAiResponsesShared {
                 }
                 item.string("type") == "function_call" && slot is Block.Tool &&
                     slot.customInput == null -> {
-                    // Finalize with the item's complete arguments; the streamed
-                    // buffer is only a scratch replay of partial parsing.
                     val arguments = item.string("arguments")
                     if (!arguments.isNullOrBlank()) slot.arguments = StringBuilder(arguments)
                     item.string("namespace")?.let { slot.namespace = it }
@@ -810,8 +738,6 @@ object OpenAiResponsesShared {
                 }
                 item.string("type") == "custom_tool_call" && slot is Block.Tool &&
                     slot.customInput != null -> {
-                    // pi: close the buffer with the done item's input (falling back
-                    // to the accumulated input), then finalize in-place.
                     val input = item.string("input") ?: slot.customInput!!.currentInput
                     appendCustomToolCallInput(slot, input, true)?.let {
                         events += AssistantMessageEvent.ToolCallDelta(slot.index, it, partial())
@@ -830,8 +756,7 @@ object OpenAiResponsesShared {
         /**
          * Azure can omit reasoning.encrypted_content from output_item.done and
          * provide it only in the terminal response's output; backfill the
-         * persisted reasoning signature so store:false replay stays stateless
-         * (pi issue #6409).
+         * persisted signature so store:false replay stays stateless.
          */
         private fun backfillReasoningSignatures(responseOutput: JsonArray?) {
             for (element in responseOutput ?: return) {
@@ -881,8 +806,8 @@ object OpenAiResponsesShared {
                 }
                 usage = computed
             }
-            // Map status to stop reason; incomplete keeps the provider's specific
-            // reason so truncation and content filtering stay distinct.
+            // The incomplete reason stays in rawStopReason so truncation and
+            // content filtering remain distinct.
             val status = response.string("status")
             val incompleteReason = (response?.get("incomplete_details") as? JsonObject).string("reason")
             rawStopReason = if (incompleteReason != null) "$status.$incompleteReason" else status
@@ -894,7 +819,7 @@ object OpenAiResponsesShared {
             }
         }
 
-        /** Pi: the stream must end with a terminal response event. */
+        /** The stream must end with a terminal response event. */
         fun assertTerminalEvent() {
             if (!sawTerminalResponseEvent) {
                 throw ProviderStreamException("OpenAI Responses stream ended before a terminal response event")
@@ -902,7 +827,6 @@ object OpenAiResponsesShared {
         }
     }
 
-    /** Pi's mapStopReason for response statuses. */
     fun mapStopReason(status: String?, incompleteReason: String?): Pair<StopReason, String?> = when (status) {
         null -> StopReason.STOP to null
         "completed" -> StopReason.STOP to null
@@ -921,17 +845,12 @@ object OpenAiResponsesShared {
         else -> throw ProviderStreamException("Unhandled stop reason: $status")
     }
 
-    // =========================================================================
-    // Service tier pricing (openai-responses.ts / openai-codex-responses.ts)
-    // =========================================================================
-
     fun getServiceTierCostMultiplier(modelId: String, serviceTier: String?): Double = when (serviceTier) {
         "flex" -> 0.5
         "priority" -> if (modelId == "gpt-5.5") 2.5 else 2.0
         else -> 1.0
     }
 
-    /** Pi's applyServiceTierPricing, expressed over immutable [Usage] values. */
     fun applyServiceTierPricing(usage: Usage, serviceTier: String?, modelId: String): Usage {
         val multiplier = getServiceTierCostMultiplier(modelId, serviceTier)
         val cost = usage.cost
@@ -946,10 +865,6 @@ object OpenAiResponsesShared {
             cost = scaled.copy(total = scaled.input + scaled.output + scaled.cacheRead + scaled.cacheWrite),
         )
     }
-
-    // =========================================================================
-    // Compat resolution (openai-responses.ts getCompat)
-    // =========================================================================
 
     fun detectSessionAffinityFormat(model: Model): SessionAffinityFormat =
         if (model.provider == "openrouter" || model.baseUrl.contains("openrouter.ai")) {
@@ -982,34 +897,30 @@ object OpenAiResponsesShared {
         val supportsAdditionalTools: Boolean,
         val supportsToolSearch: Boolean,
         val supportsExplicitPromptCacheMode: Boolean,
-        /** pi b8b873b98 (#8941): default true; gate on `max_output_tokens`. */
+        /** Default true; when false, `max_output_tokens` is not sent (some gateways reject it). */
         val supportsMaxOutputTokens: Boolean,
     )
 
-    /** Pi's resolveCacheRetention: explicit > PI_CACHE_RETENTION=long > short. */
     fun resolveCacheRetention(cacheRetention: CacheRetention?, env: Map<String, String>): CacheRetention = when {
         cacheRetention != null -> cacheRetention
         env["PI_CACHE_RETENTION"] == "long" -> CacheRetention.LONG
         else -> CacheRetention.SHORT
     }
 
-    /** Pi's getPromptCacheRetention. */
     fun getPromptCacheRetention(compat: ResolvedResponsesCompat, cacheRetention: CacheRetention): String? =
         if (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention) "24h" else null
 
-    /** Pi's getClientApiKey: header auth stands in for a key. */
+    /** Header-based auth stands in for a key ("unused" sentinel). */
     fun getClientApiKey(provider: String, apiKey: String?, headers: Map<String, String?>): String {
         if (apiKey != null) return apiKey
         if (hasHeader(headers, "authorization") || hasHeader(headers, "cf-aig-authorization")) return "unused"
         throw ProviderAuthException("No API key for provider: $provider")
     }
 
-    /** Session-affinity headers, pi's openai-responses createClient. */
     fun sessionAffinityHeaders(sessionId: String?, compat: ResolvedResponsesCompat): Map<String, String> {
         if (sessionId == null) return emptyMap()
         return when (compat.sessionAffinityFormat) {
             SessionAffinityFormat.OPENROUTER -> mapOf("x-session-id" to sessionId)
-            // "openai-nosession" sends only x-client-request-id (pi types.ts).
             SessionAffinityFormat.OPENAI_NOSESSION -> mapOf("x-client-request-id" to sessionId)
             SessionAffinityFormat.OPENAI -> mapOf(
                 "session_id" to sessionId,
@@ -1018,7 +929,6 @@ object OpenAiResponsesShared {
         }
     }
 
-    /** Merge order shared by the Responses clients: model, affinity, request headers. */
     fun mergeClientHeaders(
         modelHeaders: Map<String, String>,
         sessionId: String?,
@@ -1027,17 +937,11 @@ object OpenAiResponsesShared {
     ): Map<String, String> {
         val merged = mergeHeaders(
             mergeHeaders(modelHeaders, sessionAffinityHeaders(sessionId, compat)),
-            // Options headers merge last so they can override defaults; null removes.
             optionsHeaders,
         )
         return merged.filterValues { it != null }.mapValues { it.value!! }
     }
 
-    /**
-     * Pi's reasoning-effort resolution shared by the buildParams variants:
-     * map through thinkingLevelMap when specified, else pass the level name
-     * through, else the caller's default.
-     */
     fun resolveReasoningEffort(model: Model, requested: ModelThinkingLevel?, defaultEffort: String): String =
         requested?.let { level ->
             model.thinkingLevelMap?.takeIf { it.isSpecified(level) }?.forLevel(level)

@@ -47,21 +47,14 @@ import androidx.compose.ui.unit.dp
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 
-/** HorizontalPager over the chat surface: page 0 = conversation, page 1 = session tree. */
 internal const val ChatPageIndex = 0
 internal const val TreePageIndex = 1
 internal const val ChatPagerPageCount = 2
 
-// ---- conversation ----
-
 /**
- * Two-page swipeable chat surface: page 0 is the chat page ([ChatSurface]:
- * transcript plus composer with its status rows), page 1 the session-tree
- * panel ([TreePanel] over [ChatUiState.treeRows]). Each page owns its
- * bottom edge, so the composer swipes away with the conversation and the
- * tree gets the full height. The drawer keeps its stock behavior
- * (built-in edge-swipe-to-open + menu button); only the pager's own
- * gestures handle page swiping.
+ * Two-page swipeable chat surface: chat page and session-tree page. Only
+ * the pager's own gestures handle page swiping — the drawer keeps its
+ * stock edge-swipe-to-open.
  */
 @Composable
 internal fun ConversationPager(
@@ -99,11 +92,9 @@ internal fun ConversationPager(
 }
 
 /**
- * The conversation page: [ConversationContent] above the composer column
- * (the model [SelectionBar], transient [RetryStatusRow]/[CompactingStatusRow]
- * rows, and the [Composer]). The composer column is page content, not
- * scaffold chrome — it moves with the chat page when swiping to the tree —
- * and owns its own navigation-bar and IME padding.
+ * The conversation page. The composer column is page content, not scaffold
+ * chrome — it moves with the chat page when swiping to the tree — and owns
+ * its own navigation-bar and IME padding.
  */
 @Composable
 internal fun ChatSurface(
@@ -159,20 +150,7 @@ internal fun ChatSurface(
     }
 }
 
-/**
- * The selector row between the transcript and the composer (pi's /model and
- * /thinking bars). The model chip shows the live session model and opens the
- * [ModelPickerSheet]: rows over the scoped models by default (All view when
- * no scope is configured) with an All/Scoped toggle — pi's selector scope
- * toggle; the scope is what's offered, never a hard constraint. One tap
- * selects (pi's Enter); the sheet is purely ephemeral — setting the default
- * lives in Settings (pi's Ctrl+S adapted to the Android convention; see
- * [ModelPickerSheet]). Next to it, the thinking chip (pi's
- * footer thinking state, footer.ts:184-188 — shown only for reasoning
- * models, whose supported levels are never just OFF) shows the live thinking
- * level and opens the [ThinkingLevelPickerSheet] with the same ephemeral
- * pick semantics.
- */
+/** pi's /model and /thinking bars as a chip row. */
 @Composable
 private fun SelectionBar(
     selectedModel: SelectedModel?,
@@ -213,8 +191,6 @@ private fun SelectionBar(
             AssistChip(
                 onClick = { thinkingSheetOpen = true },
                 label = {
-                    // pi's footer label (footer.ts:185-187): "thinking off"
-                    // at OFF, otherwise the bare level name.
                     val level = thinkingLevel ?: ModelThinkingLevel.OFF
                     Text(
                         text = if (level == ModelThinkingLevel.OFF) {
@@ -256,7 +232,7 @@ private fun SelectionBar(
     }
 }
 
-/** pi's level display names (lowercase wire vocabulary, selector labels). */
+/** pi's thinking-level display names. */
 @Composable
 internal fun thinkingLevelLabel(level: ModelThinkingLevel): String = when (level) {
     ModelThinkingLevel.OFF -> stringResource(R.string.thinking_level_off)
@@ -268,7 +244,7 @@ internal fun thinkingLevelLabel(level: ModelThinkingLevel): String = when (level
     ModelThinkingLevel.MAX -> stringResource(R.string.thinking_level_max)
 }
 
-/** pi's plain level description (thinking-selector.ts:26-34 LEVEL_DESCRIPTIONS). */
+/** pi's plain level descriptions. */
 @Composable
 internal fun thinkingLevelDescriptionText(level: ModelThinkingLevel): String = when (level) {
     ModelThinkingLevel.OFF -> stringResource(R.string.thinking_level_desc_off)
@@ -280,12 +256,7 @@ internal fun thinkingLevelDescriptionText(level: ModelThinkingLevel): String = w
     ModelThinkingLevel.MAX -> stringResource(R.string.thinking_level_desc_max)
 }
 
-/**
- * One level's row description: pi's LEVEL_DESCRIPTIONS
- * (thinking-selector.ts:26-34) with the "· default" suffix on the effective
- * default — pi marks `getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL`,
- * so an unset default marks "medium" (interactive-mode.ts:4817).
- */
+/** Row description with "· default" on the effective default — as in pi, an unset default is MEDIUM. */
 @Composable
 private fun thinkingLevelDescription(level: ModelThinkingLevel, defaultLevel: ModelThinkingLevel?): String {
     val description = thinkingLevelDescriptionText(level)
@@ -297,19 +268,14 @@ private fun thinkingLevelDescription(level: ModelThinkingLevel, defaultLevel: Mo
 }
 
 /**
- * The thinking-level picker sheet (pi's thinking selector,
- * ThinkingSelectorComponent): one row per level the model supports with the
- * current level marked by a check and the default marked in the row
- * description ("· default", thinking-selector.ts). A tap picks (pi's Enter)
- * and closes the sheet.
+ * The thinking-level picker sheet (pi's thinking selector): the current
+ * level checked, the default marked in the row description.
  *
- * Divergence from pi (deliberate, narrow): pi's Ctrl+S applies the
- * highlighted row AND persists it as the default in one gesture
- * (thinking-selector.ts keybinding); Pathfinder's sheet is purely
- * ephemeral — default-setting lives in Settings ▸ Default thinking level
- * (Android's Settings-managed-defaults convention; pi has no
- * settings-screen path for the default). "Use it now AND default it"
- * therefore takes two steps.
+ * Divergence from pi (deliberate, narrow): pi's Ctrl+S applies the row and
+ * persists the default in one gesture; this sheet is purely ephemeral —
+ * default-setting lives in Settings ▸ Default thinking level (pi has no
+ * settings-screen path for it), so "use it now AND default it" takes two
+ * steps.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -338,8 +304,6 @@ private fun ThinkingLevelPickerSheet(
                         supportingContent = { Text(thinkingLevelDescription(level, defaultLevel)) },
                         trailingContent = if (level == selectedLevel) {
                             {
-                                // pi's thinking selector marks the current
-                                // level with a check.
                                 Icon(
                                     Icons.Default.Check,
                                     contentDescription = stringResource(R.string.model_selected),
@@ -358,20 +322,15 @@ private fun ThinkingLevelPickerSheet(
 }
 
 /**
- * The model picker sheet (pi's /model selector): a list with the current
- * selection marked by a check, the persisted default badged " · default",
- * and pi's sortModels order (model-selector.ts:227-235) — current model
- * first, default second, then the existing provider/model display order.
- * Shows the Scoped view when a scope is configured (All otherwise), with
- * an All/Scoped toggle — pi's scope toggle; the All view keeps the scope a
- * soft constraint.
+ * The model picker sheet (pi's /model selector). Shows the Scoped view when
+ * a scope is configured (All otherwise), with an All/Scoped toggle — pi's
+ * scope toggle; the All view keeps the scope a soft constraint.
  *
- * Divergence from pi (deliberate, narrow): pi's Ctrl+S applies the
- * highlighted row AND persists it as the default in one gesture
- * (model-selector.ts keybinding); Pathfinder's sheet is purely ephemeral —
- * default-setting lives in Settings ▸ Default model (Android's
- * Settings-managed-defaults convention; pi has no settings-screen path for
- * the default). "Use it now AND default it" therefore takes two steps.
+ * Divergence from pi (deliberate, narrow): pi's Ctrl+S applies the row and
+ * persists the default in one gesture; this sheet is purely ephemeral —
+ * default-setting lives in Settings ▸ Default model (pi has no
+ * settings-screen path for it), so "use it now AND default it" takes two
+ * steps.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -386,10 +345,9 @@ private fun ModelPickerSheet(
 ) {
     var allView by rememberSaveable { mutableStateOf(!scopeConfigured) }
     val options = if (allView) allOptions else scopedOptions
-    // pi's sortModels (model-selector.ts:227-235): current model first,
-    // default model second; the stable sort keeps the option list's
-    // provider/model display order for everything else (pi compares
-    // provider names there).
+    // pi's sortModels: current model first, then default; the stable sort
+    // keeps the option list's display order otherwise (pi breaks ties by
+    // provider name).
     val isCurrent: (ModelOption) -> Boolean = { option ->
         selectedModel?.let { option.providerId == it.providerId && option.modelId == it.modelId } == true
     }
@@ -441,8 +399,6 @@ private fun ModelPickerSheet(
                         ListItem(
                             headlineContent = { Text(option.name) },
                             supportingContent = {
-                                // pi appends the muted " · default" badge to
-                                // the default row's provider (model-selector.ts:316-323).
                                 Text(
                                     text = if (isDefault(option)) {
                                         stringResource(R.string.model_default_marker, option.providerName)
@@ -453,7 +409,6 @@ private fun ModelPickerSheet(
                             },
                             trailingContent = if (isSelected) {
                                 {
-                                    // pi's model selector marks the current model with a check.
                                     Icon(
                                         Icons.Default.Check,
                                         contentDescription = stringResource(R.string.model_selected),
@@ -472,7 +427,6 @@ private fun ModelPickerSheet(
     }
 }
 
-/** Compact status line while the agent backs off before an auto-retry (nothing on success). */
 @Composable
 private fun RetryStatusRow(attempt: Int, maxAttempts: Int, modifier: Modifier = Modifier) {
     Text(
@@ -485,7 +439,6 @@ private fun RetryStatusRow(attempt: Int, maxAttempts: Int, modifier: Modifier = 
     )
 }
 
-/** Transient "Compacting…" status between compaction_start and compaction_end. */
 @Composable
 private fun CompactingStatusRow(modifier: Modifier = Modifier) {
     Text(

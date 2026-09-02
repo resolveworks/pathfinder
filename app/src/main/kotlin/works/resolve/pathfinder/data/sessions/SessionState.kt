@@ -1,20 +1,16 @@
 package works.resolve.pathfinder.data.sessions
 
 /**
- * Replay state for a session's mutation log, porting pi's SessionState
- * (packages/agent/src/harness/session/state.ts): folds mutations in order,
+ * Replay state for a session's mutation log: folds mutations in order,
  * enforcing the log invariants — consecutive 1-based seq, unused ids,
- * existing parents/lanes/label targets, and lane chaining for lane-addressed
- * entry mutations. Record mutations additionally fold pi's
- * openOperationsByLane map and SessionStats accumulation.
+ * existing parents/lanes/label targets, and lane chaining for
+ * lane-addressed entry mutations.
  *
- * Divergences (scope of this port, per the session-parity audit P0-1/P0-2):
- * - createForkMutations copies entries by rebinding seq only (Kotlin's
- *   entry payloads are immutable values); pi structuredClones them.
- * - Records are validated exactly as far as upstream validates them: the
- *   lane must exist and the id must be unused; payload references (e.g.
- *   sourceLeafId) are never validated, and records may precede the entries
- *   they reference in seq order (see [LaneRecord]'s KDoc).
+ * Divergences from pi: fork copies entries by rebinding seq only (Kotlin
+ * payloads are immutable values; pi structuredClones them), and records
+ * are validated only for lane existence and unused id — payload references
+ * are never validated, so a record may precede the entries it references
+ * in seq order (see [LaneRecord]).
  */
 internal class SessionState {
     private var sequence = 0L
@@ -33,7 +29,7 @@ internal class SessionState {
     private var statsTotalTokens = 0L
     private var statsCostTotal = 0.0
 
-    /** Latest-wins session name fact (pi's `name` state). */
+    /** Latest-wins session name fact. */
     var name: String? = null
         private set
 
@@ -43,7 +39,7 @@ internal class SessionState {
     /** Records in append (seq) order; defensive copy. */
     fun records(): List<LaneRecord> = recordList.toList()
 
-    /** Lane pointers in insertion order (pi's getLanes). */
+    /** Lane pointers in insertion order. */
     fun getLanes(): List<LanePointer> = lanes.map { (lane, leafId) -> LanePointer(lane, leafId) }
 
     fun entry(id: String): SessionEntry? = entriesById[id]
@@ -53,11 +49,6 @@ internal class SessionState {
     val nextSequence: Long
         get() = sequence + 1
 
-    /**
-     * pi's getStats(): the incremental fold of message entries and usage
-     * records (state.ts's applyMutation accumulation). messageCount counts
-     * message entries; the token/cost fields sum usage records.
-     */
     fun stats(): SessionStats = SessionStats(
         messageCount = statsMessageCount,
         cachedTokens = statsCachedTokens,
@@ -66,10 +57,9 @@ internal class SessionState {
         costTotal = statsCostTotal,
     )
 
-    /** Number of message entries (pi's SessionStats.messageCount fold). */
     fun messageCount(): Int = statsMessageCount
 
-    /** The lane's current leaf; throws when the lane does not exist (pi's requireLane). */
+    /** The lane's current leaf; throws when the lane does not exist. */
     fun requireLane(lane: String): String? =
         if (lanes.containsKey(lane)) {
             lanes[lane]
@@ -77,17 +67,17 @@ internal class SessionState {
             throw SessionError(SessionErrorCode.INVALID_LANE, "Lane not found: $lane")
         }
 
-    /** Throws when [id] is already used by an entry or record (pi's validateUnusedId). */
+    /** Throws when [id] is already used by an entry or record. */
     fun validateUnusedId(id: String) {
         if (id in usedIds) throw SessionError(SessionErrorCode.ALREADY_EXISTS, "Session id already exists: $id")
     }
 
-    /** Throws when [lane] already exists (pi's validateNewLane). */
+    /** Throws when [lane] already exists. */
     fun validateNewLane(lane: String) {
         if (lanes.containsKey(lane)) throw SessionError(SessionErrorCode.ALREADY_EXISTS, "Lane already exists: $lane")
     }
 
-    /** Throws when [targetId] is not an existing entry (pi's validateTarget). */
+    /** Throws when [targetId] is not an existing entry. */
     fun validateTarget(targetId: String?) {
         if (targetId != null && !entriesById.containsKey(targetId)) {
             throw SessionError(SessionErrorCode.NOT_FOUND, "Entry not found: $targetId")
@@ -95,13 +85,12 @@ internal class SessionState {
     }
 
     /**
-     * Folds [mutation] into the state, enforcing pi's applyMutation
-     * validation order: seq must be exactly the next consecutive number,
-     * then per-kind checks (duplicate ids, lane existence, lane chaining,
-     * parent/label-target existence). Record mutations track
-     * openOperationsByLane (operation_started opens, operation_finished
-     * closes by runId — abort_requested does not close) and accumulate
-     * usage records into the stats fold.
+     * Folds [mutation] into the state: the seq must be exactly the next
+     * consecutive number, then per-kind checks run (duplicate ids, lane
+     * existence, lane chaining, parent/label-target existence). Records
+     * track each lane's open operations — operation_started opens,
+     * operation_finished closes by runId; abort_requested does not close —
+     * and usage records accumulate into [SessionStats].
      */
     fun applyMutation(mutation: SessionMutation) {
         val seq = when (mutation) {
@@ -143,8 +132,6 @@ internal class SessionState {
                     is LaneRecord.OperationFinishedRecord ->
                         openOperationsByLane[record.lane]?.remove(record.runId)
                     is LaneRecord.UsageRecord -> {
-                        // pi's applyMutation usage fold: cacheRead is cached;
-                        // input + cacheWrite is uncached; costTotal sums cost.total.
                         statsCachedTokens += record.usage.cacheRead
                         statsUncachedTokens += record.usage.input + record.usage.cacheWrite
                         statsTotalTokens += record.usage.totalTokens
@@ -179,10 +166,7 @@ internal class SessionState {
         }
     }
 
-    /**
-     * pi's getLog (state.ts): the log items after [afterSeq] (exclusive),
-     * oldest first, up to [limit]. Incremental tail reads for observers.
-     */
+    /** Log items after [afterSeq] (exclusive), oldest first, up to [limit]. */
     fun getLog(afterSeq: Long? = null, limit: Int? = null): List<LogItem> {
         if (limit != null && limit <= 0) {
             throw SessionError(SessionErrorCode.INVALID_QUERY, "limit must be a positive integer")
@@ -199,11 +183,11 @@ internal class SessionState {
         return results
     }
 
-    /** pi's findOpenOperations: the lane's unfinished operation starts,
-     * newest first. Recovery uses `limit: 2` — zero results mean the lane is
-     * idle, one means it is suspended, and two mean at least two operations
-     * are open, which is corruption; further results provide no additional
-     * recovery state.
+    /**
+     * The lane's unfinished operation starts, newest first. Recovery uses
+     * `limit: 2`: zero results mean the lane is idle, one means it is
+     * suspended, and two mean at least two operations are open, which is
+     * corruption; further results provide no additional recovery state.
      */
     fun findOpenOperations(lane: String, limit: Int? = null): List<LaneRecord.OperationStartedRecord> {
         if (limit != null && limit <= 0) {
@@ -216,9 +200,6 @@ internal class SessionState {
     private fun invalid(message: String): Nothing =
         throw SessionError(SessionErrorCode.INVALID_ENTRY, "Invalid session mutation: $message")
 
-    // ---- queries (pi's state.ts findEntries/findEntriesOnBranch/findRecords) ----
-
-    /** pi's findEntries: filters, order (default newestFirst), limit, cursor. */
     fun findEntries(query: EntryQuery = EntryQuery()): List<SessionEntry> {
         assertValidLimit(query.limit)
         assertValidCursor(query.cursor?.afterSeq)
@@ -232,11 +213,10 @@ internal class SessionState {
     }
 
     /**
-     * pi's findEntriesOnBranch (storage-level signature,
-     * `EntryQuery & BranchBounds & { start: string }`): walks from
-     * [BranchEntryQuery.start] toward the root, honoring stopAtId /
-     * stopAtType (inclusive), filters, order, limit, and cursor.
-     * oldestFirst returns root→start; newestFirst (default) start→root.
+     * Walks from [BranchEntryQuery.start] toward the root, honoring
+     * stopAtId/stopAtType as inclusive bounds alongside filters, order,
+     * limit, and cursor. oldestFirst returns root→start; newestFirst
+     * (default) start→root.
      */
     fun findEntriesOnBranch(query: BranchEntryQuery): List<SessionEntry> {
         assertValidLimit(query.limit)
@@ -260,7 +240,6 @@ internal class SessionState {
         return results
     }
 
-    /** pi's findRecords: lane/type/runId/operationKind filters, afterSeq, order, limit. */
     fun findRecords(query: RecordQuery = RecordQuery()): List<LaneRecord> {
         assertValidLimit(query.limit)
         assertValidCursor(query.afterSeq)
@@ -273,19 +252,14 @@ internal class SessionState {
         return results
     }
 
-    // ---- fork (pi's state.ts createForkMutations) ----
-
     /**
-     * pi's createForkMutations: the mutation batch that seeds a forked
-     * session's log, seq'd from 1. Tree scope copies every entry (oldest
-     * first) plus all lane pointers; branch scope copies the root→target
-     * path for a message-entry target ([ForkOptions.Branch.entryId]
-     * defaults to the "main" lane leaf; position defaults to "at" when
-     * entryId is omitted, "before" otherwise) and forks only the "main"
-     * lane at the target. The name fact and the copied entries' label
-     * facts follow. Entries are copied with rebound seq only — the payloads
-     * are immutable values, so pi's structuredClone has no Kotlin
-     * counterpart (documented divergence).
+     * The mutation batch that seeds a forked session's log, seq'd from 1.
+     * Tree scope copies every entry (oldest first) plus all lane pointers;
+     * branch scope copies the root→target path for a message-entry target
+     * and forks only the "main" lane at the target
+     * ([ForkOptions.Branch.entryId] defaults to the main lane's leaf;
+     * position defaults to "at" when entryId is omitted, "before"
+     * otherwise). The name fact and the copied entries' label facts follow.
      *
      * @throws SessionError [SessionErrorCode.INVALID_FORK_TARGET] when a
      * branch scope targets an entry that is not a message entry.
@@ -342,7 +316,7 @@ internal class SessionState {
         return mutations
     }
 
-    /** pi's walkToRoot: leaf→root walk with a cycle guard and inclusive bounds. */
+    /** Leaf→root walk with a cycle guard and inclusive bounds. */
     private fun walkToRoot(start: String, stopAtId: String? = null, stopAtType: EntryType? = null): Sequence<SessionEntry> = sequence {
         val visited = HashSet<String>()
         var current = entriesById[start]
@@ -378,7 +352,7 @@ internal class SessionState {
             is LaneRecord.OperationStartedRecord -> record.id == query.runId
             is LaneRecord.AbortRequestedRecord -> record.runId == query.runId
             is LaneRecord.OperationFinishedRecord -> record.runId == query.runId
-            // Records without an operation identity do not match (pi's `"runId" in record`).
+            // Records without a runId do not match.
             else -> false
         }
         val operationKindMatches = query.operationKind == null ||
@@ -388,17 +362,14 @@ internal class SessionState {
     }
 
     companion object {
-        /** pi's default lane (state.ts lanes map seeded with `main`). */
         const val LANE_MAIN = "main"
 
-        /** pi's assertValidLimit (invalid_query: limit must be a positive integer). */
         private fun assertValidLimit(limit: Int?) {
             if (limit != null && limit <= 0) {
                 throw SessionError(SessionErrorCode.INVALID_QUERY, "limit must be a positive integer")
             }
         }
 
-        /** pi's assertValidCursor (invalid_query: cursor sequence must be a non-negative integer). */
         private fun assertValidCursor(afterSeq: Long?) {
             if (afterSeq != null && afterSeq < 0) {
                 throw SessionError(SessionErrorCode.INVALID_QUERY, "cursor sequence must be a non-negative integer")
@@ -407,7 +378,7 @@ internal class SessionState {
     }
 }
 
-/** pi's SessionStats (session/types.ts), folded incrementally by [SessionState]. */
+/** Session stats, folded incrementally from message entries and usage records by [SessionState]. */
 data class SessionStats(
     val messageCount: Int,
     val cachedTokens: Long,

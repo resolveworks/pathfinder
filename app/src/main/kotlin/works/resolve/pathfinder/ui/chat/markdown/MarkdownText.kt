@@ -42,23 +42,17 @@ import org.commonmark.node.Paragraph
 import org.commonmark.node.ThematicBreak
 
 /**
- * Prose styling for rendered text blocks: text color and italics. A block-level
- * analog of pi's thinking/quote overrides (`{ color, italic }`); [Color.Unspecified]
- * with [italic] false renders with theme defaults.
+ * Prose styling for a rendered block: the block-level analog of pi's
+ * thinking/quote style overrides.
  */
 private data class ProseStyle(val color: Color = Color.Unspecified, val italic: Boolean = false, val dimmed: Boolean = false)
 
 /**
- * Renders a markdown string as structured Compose content, porting pi's block-level
- * markdown rendering (`Markdown.render()` / `renderToken()`) to Material 3.
+ * Renders a markdown string as structured Compose content. Inline styling is
+ * delegated to [buildInlineMarkdown][Node.buildInlineMarkdown]; this layer owns
+ * block structure only.
  *
- * Inline styling (emphasis, links, code spans) is delegated to the pure
- * [buildInlineMarkdown][Node.buildInlineMarkdown] builder with values resolved from
- * [MaterialTheme] here; this layer owns block structure: headings, lists, quotes,
- * tables, code blocks, and rules.
- *
- * @param color prose text color override; [Color.Unspecified] keeps theme defaults.
- * @param italic renders prose in italics (e.g. thinking traces); quotes force this on.
+ * @param italic thinking-trace styling; quotes force italics on regardless.
  */
 @Composable
 fun MarkdownText(
@@ -78,7 +72,6 @@ fun MarkdownText(
     }
 }
 
-/** Walks [parent]'s children and renders each block, mirroring pi's token loop. */
 @Composable
 private fun RenderBlocks(parent: Node, styles: InlineMarkdownStyles, prose: ProseStyle) {
     for (child in parent.children()) {
@@ -106,7 +99,7 @@ private fun RenderBlock(node: Node, styles: InlineMarkdownStyles, prose: ProseSt
             color = prose.resolveColor(),
         )
 
-        // Info string (node.info) is available; syntax highlighting is out of scope.
+        // node.info is available; syntax highlighting is not ported.
         is FencedCodeBlock -> CodeBlock(node.literal)
         is IndentedCodeBlock -> CodeBlock(node.literal)
 
@@ -157,11 +150,6 @@ private fun RenderBlock(node: Node, styles: InlineMarkdownStyles, prose: ProseSt
     }
 }
 
-/**
- * Resolves the effective prose color: an explicit override wins, otherwise quoted
- * (dimmed) content falls back to [MaterialTheme.colorScheme.onSurfaceVariant] and
- * normal content keeps [Color.Unspecified] (theme default text color).
- */
 @Composable
 private fun ProseStyle.resolveColor(): Color =
     when {
@@ -188,12 +176,6 @@ private fun CodeBlock(literal: String) {
     }
 }
 
-/**
- * Renders a bullet/ordered list, one [ListItem] per row: a fixed-width marker column
- * (• / "n." / task checkbox) plus the item's block children. Task list items replace
- * the bullet with ☑/☐, matching pi. [RenderBlocks] already skips the
- * [TaskListItemMarker] node itself.
- */
 @Composable
 private fun ListBlock(listNode: Node, ordered: Boolean, styles: InlineMarkdownStyles, prose: ProseStyle) {
     val startNumber = (listNode as? OrderedList)?.markerStartNumber ?: 1
@@ -229,7 +211,6 @@ private fun ListBlock(listNode: Node, ordered: Boolean, styles: InlineMarkdownSt
     }
 }
 
-/** Tables: Column of Rows; header row bold with a divider beneath it. */
 @Composable
 private fun Table(table: TableBlock, styles: InlineMarkdownStyles, prose: ProseStyle) {
     Column {

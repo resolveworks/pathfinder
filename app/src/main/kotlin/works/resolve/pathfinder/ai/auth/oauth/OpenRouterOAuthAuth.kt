@@ -25,55 +25,36 @@ import java.net.URI
 import java.net.URLDecoder
 
 /**
- * OpenRouter OAuth PKCE flow, ported from pi
- * `packages/ai/src/auth/oauth/openrouter.ts`.
+ * OpenRouter OAuth PKCE flow: OpenRouter exchanges an authorization code for
+ * a permanent user-controlled API key rather than an expiring
+ * access/refresh pair, so [refresh] is a no-op and the credential never
+ * expires.
  *
- * OpenRouter exchanges an authorization code for a permanent user-controlled
- * API key rather than an expiring access/refresh pair, so [refresh] is a
- * no-op and the credential is effectively non-expiring.
+ * Login races a one-shot loopback callback server against a manual-code
+ * prompt. OpenRouter has no pre-registered redirect, so the authorize URL's
+ * `callback_url` names the server's ephemeral `http://127.0.0.1:<port><path>`
+ * endpoint, and the token exchange runs *inside* the request handler so the
+ * browser sees the exchange outcome as its response page.
  *
- * Like pi's `loginOpenRouter`, login races a one-shot loopback callback
- * server ([LoopbackOAuthServer]) against a manual-code prompt: the server
- * binds an ephemeral port with a random `/oauth/callback/<uuid>` path, the
- * authorize URL passes the resulting `http://127.0.0.1:<port><path>` as the
- * `callback_url` parameter (OpenRouter has no pre-registered redirect), and
- * the token exchange runs *inside* the request handler via the injected
- * [OAuthHttpClient] so the browser sees the exchange outcome as its response
- * page. A five-minute [loginTimeoutMs] races the callback result (pi's
- * `LOGIN_TIMEOUT_MS`); bind failure — practically impossible on an ephemeral
- * port, but mirroring pi's listen-error rejection — throws instead of
- * degrading to manual entry. When the callback wins, the manual-prompt child
- * coroutine is cancelled so the pending UI sheet clears; when manual entry
- * wins, [parseAuthorizationCodeInput] and the exchange mirror pi's manual
- * path exactly.
+ * If Android kills the app process while the browser is foregrounded, the
+ * callback server dies with it and the login must be retried.
  *
- * `waitForResult` can only carry `R?`, while pi's `waitForCredential`
- * rejects on handler failure or timeout and resolves null only on
- * `cancelWait`; [CallbackResult] encodes that distinction: `null` means the
- * login was handed to manual entry, [CallbackResult.Failure] rethrows the
- * encoded error.
- *
- * Divergence caveat (documented per AGENTS.md): Android may kill the app
- * process while the browser is foregrounded, losing the callback server —
- * the same retryable risk class as pi's abortable login.
- *
- * HTTP goes through the injected [OAuthHttpClient]; no network happens in
- * tests. Nothing secret is ever logged: exceptions carry only statuses and
+ * Nothing secret is ever logged: exceptions carry only statuses and
  * server-provided error details, never the code, verifier, or key.
  */
 class OpenRouterOAuthAuth(
     private val http: OAuthHttpClient,
     private val pkce: PkceGenerator = PkceGenerator(),
-    /** pi `LOGIN_TIMEOUT_MS`; injectable seam so tests can exercise the timeout race quickly. */
+    /** Injectable seam so tests can exercise the timeout race quickly. */
     private val loginTimeoutMs: Long = LOGIN_TIMEOUT_MS,
-    /** Android foreground gate for the loopback wait; `null` = pi parity. */
+    /** Android foreground gate for the loopback wait. */
     private val gate: OAuthForegroundGate? = null,
 ) : OAuthAuth {
 
     /**
-     * pi's credential promise resolves a credential, resolves null (manual
-     * handover via `cancelWait`), or rejects — encoded here because
-     * `waitForResult()` can only carry `R?`.
+     * The login outcome: a credential, a failure to rethrow, or null (the
+     * login was handed to manual entry). Encoded because `waitForResult()`
+     * can only carry `R?`.
      */
     private sealed interface CallbackResult {
         data class Credential(val credential: OAuthCredential) : CallbackResult
@@ -88,8 +69,6 @@ class OpenRouterOAuthAuth(
         val challenge = pkce.generate()
         val callbackPath = "/oauth/callback/${UUID.randomUUID()}"
 
-        // pi `startCallbackServer` guards reuse with `claimed`/`settled` in
-        // the request-handler closure; the same state lives here.
         val claimed = AtomicBoolean(false)
         val settled = AtomicBoolean(false)
 
@@ -103,14 +82,12 @@ class OpenRouterOAuthAuth(
                 }, callbackPath, challenge.verifier, claimed, settled)
             },
         ).start()
-            // pi's listen error rejects the login; the shared server reports
-            // bind failure as null. Ephemeral port, so this is practically
-            // unreachable — mirror pi and throw.
+            // The shared server reports bind failure as null; like pi's
+            // listen error, the login fails rather than degrading to manual
+            // entry. Practically unreachable on an ephemeral port.
             ?: throw IllegalStateException("Could not bind the OpenRouter OAuth callback server")
 
         try {
-            // pi builds the authorize URL from the bound port before any
-            // notification; `callback_url` carries the dynamic loopback URL.
             val callbackUrl = "http://127.0.0.1:${handle.port}$callbackPath"
             val authorizeUrl = buildString {
                 append(AUTHORIZE_URL)
@@ -131,11 +108,7 @@ class OpenRouterOAuthAuth(
             var manualInput: String? = null
             var manualError: Throwable? = null
 
-            /**
-             * pi `cancelWait`: hands the login to manual code entry unless a
-             * callback already claimed the exchange (a claimed callback lets
-             * its exchange settle the login).
-             */
+            /** Hands the login to manual code entry unless a callback already claimed the exchange; that callback settles the login. */
             fun cancelWaitUnlessClaimed() {
                 if (!claimed.get()) handle.cancelWait()
             }
@@ -150,8 +123,6 @@ class OpenRouterOAuthAuth(
                             ),
                         )
                     } catch (error: CancellationException) {
-                        // The callback won (or the login was cancelled); pi
-                        // abandons the pending manual promise via `manualAbort`.
                         throw error
                     } catch (error: Throwable) {
                         manualError = error
@@ -162,8 +133,8 @@ class OpenRouterOAuthAuth(
                 val result = try {
                     withTimeout(loginTimeoutMs) { handle.waitForResult() }
                 } catch (error: TimeoutCancellationException) {
-                    // Only the timeout race maps to pi's message; cancellation
-                    // of the login itself propagates as CancellationException.
+                    // Only the timeout race becomes an error; cancellation of
+                    // the login itself propagates as CancellationException.
                     throw IllegalStateException("OpenRouter OAuth login timed out", error)
                 }
 
@@ -186,17 +157,10 @@ class OpenRouterOAuthAuth(
                 }
             }
         } finally {
-            // pi's `finally`: abort the manual prompt and close the server.
             handle.close()
         }
     }
 
-    /**
-     * Port of pi's `createServer` request handler: route check, reuse guard,
-     * error-param denial, code extraction, then the token exchange *inside*
-     * the handler so only a finished exchange settles the login and the
-     * browser sees the exchange outcome as its response page.
-     */
     private suspend fun handleCallback(
         request: LoopbackCallbackRequest,
         settle: (CallbackResult?) -> Unit,
@@ -213,8 +177,6 @@ class OpenRouterOAuthAuth(
         }
 
         val oauthError = request.query["error"]
-        // pi `if (oauthError)` — an empty string is falsy in JS, so an empty
-        // `error=` param is not a denial.
         if (!oauthError.isNullOrEmpty()) {
             val description = request.query["error_description"] ?: oauthError
             settle(CallbackResult.Failure(IllegalStateException("OpenRouter authorization failed: $description")))
@@ -244,14 +206,7 @@ class OpenRouterOAuthAuth(
 
     override suspend fun toAuth(credential: OAuthCredential): ModelAuth = ModelAuth(apiKey = credential.access)
 
-    /**
-     * POSTs the code/verifier pair to OpenRouter's key endpoint and shapes
-     * the response credential, mirroring pi's `exchangeAuthorizationCode`
-     * (messages verbatim). Cancellation propagates as [CancellationException];
-     * a bounded connect/read timeout becomes pi's timeout error; other
-     * network failures propagate as [IOException] for the login orchestration
-     * to wrap.
-     */
+    /** POSTs the code/verifier pair and shapes the response credential; error message wording mirrors pi verbatim. */
     internal suspend fun exchangeAuthorizationCode(code: String, verifier: String): OAuthCredential {
         val request = OAuthHttpRequest(
             method = "POST",
@@ -291,31 +246,23 @@ class OpenRouterOAuthAuth(
     }
 
     companion object {
-        /** pi: `Number.MAX_SAFE_INTEGER` marks the non-expiring OpenRouter key. */
+        /** JS `Number.MAX_SAFE_INTEGER`: the sentinel for a non-expiring key. */
         const val NON_EXPIRING_EPOCH_MS: Long = 9_007_199_254_740_991L
         const val AUTHORIZE_URL: String = "https://openrouter.ai/auth"
         const val TOKEN_URL: String = "https://openrouter.ai/api/v1/auth/keys"
 
-        /** pi `LOGIN_TIMEOUT_MS`: 5 minutes. */
         const val LOGIN_TIMEOUT_MS: Long = 5 * 60 * 1000
         const val TOKEN_EXCHANGE_TIMEOUT_MS: Int = 30_000
 
         private val json = lenientJson
 
-        /**
-         * Extracts the authorization code from any user input form, mirroring
-         * pi's `parseAuthorizationInput`: a full URL returns its `code` query
-         * parameter (possibly null); a bare query string containing `code=`
-         * is parsed as one; anything else is taken as the raw code.
-         */
+        /** Extracts the code from a pasted URL, a bare `code=` query string, or raw code. */
         internal fun parseAuthorizationCodeInput(input: String): String? {
             val value = input.trim()
             if (value.isEmpty()) return null
             try {
                 val uri = URI(value)
                 if (uri.scheme != null) {
-                    // Parsed as an absolute URL like pi's `new URL(value)`:
-                    // the result is whatever its `code` parameter says (or null).
                     return uri.rawQuery?.let(::parseQueryString)?.get("code")
                 }
             } catch (_: Exception) {
@@ -327,7 +274,6 @@ class OpenRouterOAuthAuth(
             return value
         }
 
-        /** Minimal query-string parser with pi's `URLSearchParams` semantics (`&`/`=` pairs, form decoding). */
         private fun parseQueryString(query: String): Map<String, String>? {
             val result = mutableMapOf<String, String>()
             for (pair in query.split('&')) {
@@ -357,13 +303,9 @@ class OpenRouterOAuthAuth(
         }
 
         /**
-         * Parses the response body as a JSON object. Lenient by design, like
-         * pi openrouter.ts's exchange: pi wraps `response.json()` in a catch
-         * that only throws for ok responses (`OpenRouter OAuth returned
-         * invalid JSON`); an unparseable error body keeps pi's empty `body =
-         * {}` default, and non-object values (arrays, scalars, null — pi's
-         * `typeof parsed === "object" && !Array.isArray(parsed)` check) also
-         * leave the empty object so the non-2xx path reports status only.
+         * Lenient like pi's exchange: an unparseable non-2xx body becomes an
+         * empty object so the failure path reports status only, while a bad
+         * body on a 2xx response throws invalid-JSON.
          */
         private fun parseBody(response: OAuthHttpResponse): JsonObject {
             val text = response.body.toString(Charsets.UTF_8)

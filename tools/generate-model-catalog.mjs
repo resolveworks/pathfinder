@@ -1,21 +1,6 @@
 #!/usr/bin/env node
-// Generates app/src/main/assets/models-catalog.json for pathfinder.
-//
-// Runs pi's model-catalog generator (models.dev et al.) from a local pi
-// checkout, keeps every static pi-ai provider and ALL of each provider's
-// model APIs (not just openai-completions), and merges each provider's
-// hand-curated identity — display name and API-key auth metadata —
-// mirroring how pi splits generated model data (src/providers/data/*.json)
-// from hand-written provider files (src/providers/*.ts).
-//
-// Dynamic providers (radius), llama.cpp, Amazon Bedrock, Google Vertex AI,
-// and image-generation providers are deliberately excluded.
-// OAuth capability metadata is emitted declaratively for retained providers;
-// their native flows are composed separately in ProductionCatalogAuthRegistry.
-//
-// Usage:
-//   node tools/generate-model-catalog.mjs          # PI_REPO_DIR or ~/Projects/pi
-//   PI_REPO_DIR=/path/to/pi node tools/generate-model-catalog.mjs
+// Generates app/src/main/assets/models-catalog.json from a local pi checkout
+// (PI_REPO_DIR, default ~/Projects/pi).
 //
 // pi's env-var auth model maps onto Android GUI inputs: each auth prompt
 // (env key, message, secret/plain) becomes one input field, and the stored
@@ -33,7 +18,6 @@ const repoRoot = resolve(__dirname, "..");
 const piRepo = process.env.PI_REPO_DIR ?? join(process.env.HOME ?? "", "Projects", "pi");
 const output = join(repoRoot, "app/src/main/assets/models-catalog.json");
 
-/** Cloudflare login prompts (pi: providers/cloudflare-auth.ts). */
 const CLOUDFLARE_ACCOUNT = {
 	envKey: "CLOUDFLARE_ACCOUNT_ID",
 	message: "Enter Cloudflare account ID",
@@ -46,25 +30,11 @@ const CLOUDFLARE_GATEWAY = {
 };
 
 /**
- * Provider identity, mirroring pi's hand-written providers/*.ts entries.
- * Must cover every static provider in pi's generated models.json EXCEPT
- * the deliberately excluded ones in EXCLUDED_PROVIDERS (buildCatalog fails
- * otherwise). `label` is the envApiKeyAuth display name,
- * `envKey` its environment variable, `promptMessage` overrides the default
- * "Enter <label>" prompt text, `extraPrompts` adds non-key env prompts.
- * OAuth-only providers (openai-codex) have no identity entry; their
- * capability lives in OAUTH_METADATA. Flow implementations remain outside
- * this generated data and are wired by the native auth registry.
- */
-
-/**
- * OAuth capability metadata for the retained providers that offer OAuth
- * login (pi's lazyOAuth({...}) blocks in providers/*.ts): display name,
- * login-button label (defaults to the name), and whether the login is a
- * paid subscription. This stays purely declarative; native flow wiring lives
- * in ProductionCatalogAuthRegistry. `oauthOnly: true` marks providers whose
- * ONLY auth is OAuth (openai-codex): they carry no API-key prompts and no
- * placeholder env key.
+ * Declarative OAuth capability for retained providers: display name,
+ * login-button label (defaults to the name), paid-subscription flag.
+ * Native flows are composed separately in ProductionCatalogAuthRegistry.
+ * `oauthOnly: true` (openai-codex) marks providers with no
+ * PROVIDER_IDENTITY entry and no API-key auth at all.
  */
 const OAUTH_METADATA = {
 	anthropic: { name: "Anthropic (Claude Pro/Max)", isSubscription: true },
@@ -78,16 +48,11 @@ const OAUTH_METADATA = {
 /** Static pi providers deliberately excluded from the pathfinder catalog. */
 const EXCLUDED_PROVIDERS = new Set(["amazon-bedrock", "google-vertex"]);
 
-/** Display names for OAuth-only providers (no PROVIDER_IDENTITY entry). */
 const OAUTH_ONLY_NAME = { "openai-codex": "OpenAI Codex" };
 
 const PROVIDER_IDENTITY = {
-	// Env-key mapping verified against pi's packages/ai/src/env-api-keys.ts
-	// (values match value-for-value).
-
-	// Only the API-key path is emitted: pi's ANTHROPIC_AUTH_TOKEN (Bearer header) and
-	// ANTHROPIC_OAUTH_TOKEN paths (providers/anthropic.ts:24-36) are deliberately
-	// reduced.
+	// Only the API-key path is emitted: pi's ANTHROPIC_AUTH_TOKEN and
+	// ANTHROPIC_OAUTH_TOKEN paths are deliberately reduced.
 	anthropic: { name: "Anthropic", label: "Anthropic API key", envKey: "ANTHROPIC_API_KEY" },
 	"ant-ling": { name: "Ant Ling", label: "Ant Ling API key", envKey: "ANT_LING_API_KEY" },
 	"azure-openai-responses": {
@@ -150,11 +115,8 @@ const PROVIDER_IDENTITY = {
 };
 
 /**
- * Builds the pathfinder catalog from pi's generated models. Pure: takes pi's
- * models.json plus provenance and returns the catalog object. Every static
- * provider and every model API is kept; the identity map must exactly cover
- * the providers pi generated (37 at the time of writing) after the excluded
- * ones.
+ * Builds the pathfinder catalog from pi's generated models: every static
+ * provider except EXCLUDED_PROVIDERS, with all of each provider's model APIs.
  */
 function buildCatalog(piModels, { piRevision = null } = {}) {
 	const providers = [];
@@ -217,8 +179,6 @@ function buildCatalog(piModels, { piRevision = null } = {}) {
 		providers.push(entry);
 	}
 
-	// OAuth-only providers (openai-codex): no API-key prompts, no placeholder
-	// env key — the auth entry carries OAuth capability metadata only.
 	for (const [providerId, oauth] of Object.entries(OAUTH_METADATA)) {
 		if (oauth.oauthOnly !== true) continue;
 		const models = Object.values(piModels[providerId] ?? {});
@@ -240,8 +200,6 @@ function buildCatalog(piModels, { piRevision = null } = {}) {
 
 	providers.sort((a, b) => a.id.localeCompare(b.id));
 	return {
-		// Provenance: the pi git revision the models were generated from, so
-		// the asset is byte-stable across regenerations from one checkout.
 		piRevision,
 		providers,
 	};

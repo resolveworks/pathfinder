@@ -33,27 +33,20 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.JsonObject
 
 /**
- * Streaming engine for the Google Generative AI adapter. This is the loop
- * body of pi's google-generative-ai.ts `stream` function; Pathfinder keeps it
- * as one object parameterized by the request plan.
+ * Streaming engine for the Google Generative AI adapter. Each SSE data
+ * payload is a GenerateContentResponse JSON object with
+ * `candidates[0].content.parts[]`, `finishReason`, `usageMetadata`, and
+ * `responseId`.
  *
- * The wire protocol is the Generative Language
- * `streamGenerateContent?alt=sse` REST streaming shape the `@google/genai`
- * SDK drives upstream: each SSE data payload is a GenerateContentResponse
- * JSON object with `candidates[0].content.parts[]`, `finishReason`,
- * `usageMetadata`, and `responseId`.
- *
- * Abort semantics divergence: pi checks `options.signal.aborted` after the
- * loop and emits an `aborted` error event; the Kotlin core has no AbortSignal,
- * so cancellation propagates through coroutine cancellation and no Error
- * event is produced (per the core's Events contract).
+ * Divergence from pi: pi checks `options.signal.aborted` after the loop and
+ * emits an `aborted` error event; the Kotlin core has no AbortSignal, so
+ * cancellation propagates as coroutine cancellation and produces no Error
+ * event.
  */
 internal object GoogleStreamEngine {
 
-    /** Module-level tool call ID counter, pi's `toolCallCounter`. */
     private val toolCallCounter = AtomicLong()
 
-    /** A fully shaped HTTP request plan built by a Google adapter. */
     data class Plan(
         val url: String,
         val headers: Map<String, String>,
@@ -76,8 +69,7 @@ internal object GoogleStreamEngine {
     ): Flow<AssistantMessageEvent> = flow {
         val state = State(model, clock.now().toEpochMilliseconds())
         try {
-            // Retries only cover failures before SSE content begins, pi's
-            // retryGoogleRequest around generateContentStream.
+            // Retries cover only the request, never the SSE stream.
             val response = retry.retryProviderRequest<TransportResponse>(
                 plan.maxRetries,
                 plan.maxRetryDelayMs,
@@ -121,20 +113,16 @@ internal object GoogleStreamEngine {
         }
     }
 
-    /** pi's module-level tool call id generator: `name_${Date.now()}_${++counter}`. */
     fun nextToolCallId(name: String, nowMs: Long): String =
         "${name}_${nowMs}_${toolCallCounter.incrementAndGet()}"
 
     /**
-     * Port of pi's google-generative-ai.ts catch block (~288). Upstream
-     * surfaces the `@google/genai` SDK's `error.message`, which already
-     * carries the body, so the shared formatter keeps the message; the raw
-     * transport body is the port's stand-in, so the output is the composed
-     * `"<status>: <body>"` (no prefix upstream).
+     * Upstream surfaces the `@google/genai` SDK's `error.message`, which
+     * already carries the response body; here the shared formatter composes
+     * `"<status>: <body>"` from the raw transport response instead.
      */
     private fun formatProviderError(error: Exception): String = when (error) {
         is ProviderHttpException -> formatProviderError(normalizeProviderError(error))
-        // Non-HTTP exceptions keep the port's `message ?: simpleName` handling;
         // pi's safeJsonStringify fallback for non-Error throws is moot in Kotlin.
         is ProviderStreamException -> error.message ?: "Provider stream error"
         else -> error.message ?: error::class.simpleName ?: "Unknown error"
@@ -178,7 +166,6 @@ internal object GoogleStreamEngine {
             return blocks
         }
 
-        /** The current open block as it stands mid-stream, if any. */
         private fun openBlockSnapshot(): Content? {
             val text = currentText
             if (text != null) {
@@ -206,8 +193,7 @@ internal object GoogleStreamEngine {
                 throw ProviderStreamException("Malformed SSE JSON payload: expected a JSON object")
             }
 
-            // @google/genai documents responseId as an output-only identifier;
-            // keep the first non-empty one from the stream.
+            // responseId is output-only per the API; keep the first non-empty value.
             if (responseId.isNullOrEmpty()) {
                 responseId = chunk["responseId"].strOrNull()?.takeIf { it.isNotEmpty() }
             }
@@ -316,7 +302,6 @@ internal object GoogleStreamEngine {
             return events
         }
 
-        /** Closes the currently open text/thinking block, if any. */
         fun closeOpenBlock(): AssistantMessageEvent? {
             val text = currentText
             if (text != null) {

@@ -5,48 +5,33 @@ import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.UserMessage
 
 /**
- * Reductions from pi's `packages/agent/src/harness/messages.ts`, limited to
- * the compaction-summary message machinery needed by the compaction port.
- *
- * Upstream synthesizes a distinct `compactionSummary` agent-message role
- * (packages/agent/src/types.ts CustomAgentMessages,
- * `createCompactionSummaryMessage`), which `convertToLlm` later projects to
- * a user message wrapped in [COMPACTION_SUMMARY_PREFIX]/
- * [COMPACTION_SUMMARY_SUFFIX]. Pathfinder has no agent-message union
- * layered over the core `Message` hierarchy (and cannot extend the sealed
- * core roles without touching out-of-scope exhaustive dispatch in
- * ai/utils/ui), so the port collapses the agent role into its
- * `convertToLlm` projection: [createCompactionSummaryMessage] returns the
- * wrapped user message directly. `convertToLlm` itself becomes the identity
- * for pathfinder messages and is therefore omitted; compaction callers
- * already hold LLM-ready messages.
+ * pi's harness synthesizes `compactionSummary` and `branchSummary`
+ * agent-message roles that `convertToLlm` later projects to user messages
+ * wrapped (verbatim) in the prefix/suffix constants below. Pathfinder
+ * cannot extend the sealed core [Message] roles (that would touch
+ * out-of-scope exhaustive dispatch in ai/utils/ui), so each role is
+ * collapsed into its projection: the create functions here return the
+ * wrapped user message directly, and `convertToLlm` is omitted — it is the
+ * identity for pathfinder messages, and compaction callers already hold
+ * LLM-ready messages.
  */
 
-/** Wrapping prefix for a compaction summary in LLM context (messages.ts `COMPACTION_SUMMARY_PREFIX`), verbatim. */
 const val COMPACTION_SUMMARY_PREFIX =
     "The conversation history before this point was compacted into the following summary:\n" +
         "\n" +
         "<summary>\n"
 
-/** Wrapping suffix for a compaction summary in LLM context (messages.ts `COMPACTION_SUMMARY_SUFFIX`), verbatim. */
 const val COMPACTION_SUMMARY_SUFFIX =
     "\n" +
         "</summary>"
 
-/** Wrapping prefix for a branch summary in LLM context (messages.ts `BRANCH_SUMMARY_PREFIX`), verbatim. */
 const val BRANCH_SUMMARY_PREFIX =
     "The following is a summary of a branch that this conversation came back from:\n" +
         "\n" +
         "<summary>\n"
 
-/** Wrapping suffix for a branch summary in LLM context (messages.ts `BRANCH_SUMMARY_SUFFIX`), verbatim. */
 const val BRANCH_SUMMARY_SUFFIX = "</summary>"
 
-/**
- * Build the context message a harness compaction entry contributes
- * (messages.ts `createCompactionSummaryMessage`, projected as its
- * convertToLlm form — see file docs).
- */
 fun createCompactionSummaryMessage(
     summary: String,
     tokensBefore: Int,
@@ -57,10 +42,8 @@ fun createCompactionSummaryMessage(
 )
 
 /**
- * Build the context message a harness branch-summary entry contributes
- * (messages.ts `createBranchSummaryMessage`, projected as its convertToLlm
- * form — see file docs). Upstream accepts a string timestamp and converts;
- * pathfinder entries carry epoch millis already.
+ * Upstream accepts a string timestamp and converts; pathfinder entries
+ * carry epoch millis already.
  */
 fun createBranchSummaryMessage(
     summary: String,

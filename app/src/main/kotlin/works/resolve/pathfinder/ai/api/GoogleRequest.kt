@@ -16,9 +16,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * Request construction for the Google Generative AI adapter: pi's
- * google-generative-ai.ts `buildParams` plus its model-class thinking
- * helpers (Gemini 3 / Gemma 4 / 2.5 budgets).
+ * Request construction for the Google Generative AI adapter.
  *
  * Wire shape: where pi hands `config` to the `@google/genai` SDK, Pathfinder
  * writes the documented GenerateContentRequest REST shape directly —
@@ -28,7 +26,6 @@ import kotlinx.serialization.json.put
  */
 object GoogleRequest {
 
-    /** pi's GoogleOptions.thinking. */
     data class GoogleThinking(
         val enabled: Boolean,
         /** -1 for dynamic, 0 to disable. */
@@ -36,7 +33,6 @@ object GoogleRequest {
         val level: GoogleShared.GoogleApiThinkingLevel? = null,
     )
 
-    /** pi's GoogleOptions (StreamOptions plus toolChoice and thinking). */
     data class CommonOptions(
         val apiKey: String? = null,
         val sessionId: String? = null,
@@ -67,7 +63,6 @@ object GoogleRequest {
         )
     }
 
-    /** pi's buildParams, on the REST wire. */
     fun buildGenerateContentRequest(
         model: Model,
         context: Context,
@@ -138,11 +133,10 @@ object GoogleRequest {
     }
 
     /**
-     * pi's getDisabledThinkingConfig: Gemini 3.1 Pro cannot disable thinking
-     * and Gemini 3 Flash/Flash-Lite (and Gemma 4, where in scope) do not
-     * support full thinking-off either, so use the lowest supported
-     * thinkingLevel without includeThoughts; Gemini 2.x disables via
-     * thinkingBudget = 0.
+     * Google docs: Gemini 3.1 Pro cannot disable thinking, and Gemini 3
+     * Flash/Flash-Lite (and Gemma 4, where in scope) do not support full
+     * thinking-off either, so use the lowest supported thinkingLevel without
+     * includeThoughts; Gemini 2.x disables via thinkingBudget = 0.
      */
     private fun getDisabledThinkingConfig(model: Model, gemmaSupported: Boolean): JsonObject = when {
         isGemini3ProModel(model.id) ->
@@ -158,10 +152,10 @@ object GoogleRequest {
     }
 
     /**
-     * pi's streamSimple thinking resolution: the provider-neutral reasoning
-     * level becomes a Gemini 3 `thinkingLevel` or a Gemini 2.5
-     * `thinkingBudget`. Returns `thinking { enabled: false }` when reasoning
-     * is absent, exactly like upstream.
+     * The provider-neutral reasoning level becomes a Gemini 3 `thinkingLevel`
+     * or a Gemini 2.5 `thinkingBudget`. A null reasoning still resolves to
+     * `thinking { enabled: false }` — an explicit disabled thinkingConfig on
+     * the wire — exactly like upstream.
      */
     fun thinkingForSimpleStream(
         model: Model,
@@ -183,7 +177,6 @@ object GoogleRequest {
         return GoogleThinking(enabled = true, budgetTokens = getGoogleBudget(model, resolvedLevel, budgets))
     }
 
-    /** pi's getThinkingLevel. */
     private fun getThinkingLevel(
         effort: GoogleShared.ResolvedGoogleThinkingLevel,
         model: Model,
@@ -215,16 +208,14 @@ object GoogleRequest {
         }
     }
 
-    /** pi's getGoogleBudget: model-specific default budgets, -1 (dynamic) otherwise. */
+    /** Model-specific default budgets; -1 (dynamic) otherwise. */
     private fun getGoogleBudget(
         model: Model,
         level: GoogleShared.ResolvedGoogleThinkingLevel,
         customBudgets: Map<ThinkingLevel, Int>,
     ): Int {
         // ResolvedGoogleThinkingLevel names are a subset of ModelThinkingLevel
-        // (no off/xhigh/max); map to the shared ThinkingLevel for the custom
-        // budget lookup. valueOf is acceptable here per conventions: the
-        // input is a config-derived enum, so drift fails fast.
+        // (no off/xhigh/max), so valueOf is safe; drift fails fast.
         val asThinkingLevel = ModelThinkingLevel.valueOf(level.name).toThinkingLevelOrNull()
         asThinkingLevel?.let { customBudgets[it] }?.let { return it }
 

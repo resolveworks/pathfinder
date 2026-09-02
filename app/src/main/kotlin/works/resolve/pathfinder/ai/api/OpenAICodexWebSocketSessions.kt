@@ -20,22 +20,21 @@ import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.arr
 
 /**
- * Port of pi's Codex WebSocket connection pool, debug stats, and SSE-fallback
- * session state (packages/ai/src/api/openai-codex-responses.ts
- * `websocketSessionCache` / `websocketDebugStats` / `websocketSseFallbackSessions`
- * module-level state, ~:828-927, plus `acquireWebSocket` ~:1116-1211).
+ * pi's Codex WebSocket session state: the `websocketSessionCache` /
+ * `websocketDebugStats` / `websocketSseFallbackSessions` module-level state
+ * plus `acquireWebSocket`, pooled per session/account with cached-context
+ * continuation.
  *
- * Divergences from pi (documented at this boundary):
+ * Divergences from pi:
  * - pi keeps this state in module-level variables on the single-threaded JS
  *   event loop; here it is a process-wide singleton guarded by a [Mutex], and
  *   idle expiry uses a timer coroutine instead of `setTimeout` (pi's
  *   `scheduleSessionWebSocketExpiry`).
- * - pi registers cleanup through `registerSessionResourceCleanup`
- *   (session-resources.ts, a Node session-lifecycle hook with no Android
- *   counterpart); here the public [closeOpenAICodexWebSocketSessions] plus the
- *   idle TTL / max connection age own cleanup.
- * - pi's clock reads `Date.now()`; [clock] (kotlin.time.Clock, per the
- *   translation conventions) is constructor-injected for tests.
+ * - pi registers cleanup through `registerSessionResourceCleanup` (a Node
+ *   session-lifecycle hook with no Android counterpart); the public
+ *   [closeOpenAICodexWebSocketSessions] plus the idle TTL / max connection age
+ *   own cleanup.
+ * - pi's clock reads `Date.now()`; [clock] is constructor-injected for tests.
  */
 class OpenAICodexWebSocketSessions(
     val clock: Clock = Clock.System,
@@ -44,29 +43,21 @@ class OpenAICodexWebSocketSessions(
     private fun nowMs(): Long = clock.now().toEpochMilliseconds()
 
     companion object {
-        /** pi SESSION_WEBSOCKET_CACHE_TTL_MS (openai-codex-responses.ts ~:830). */
         const val SESSION_WEBSOCKET_CACHE_TTL_MS: Long = 5 * 60 * 1000
 
-        /** pi SESSION_WEBSOCKET_MAX_AGE_MS (openai-codex-responses.ts ~:831). */
         const val SESSION_WEBSOCKET_MAX_AGE_MS: Long = 55 * 60 * 1000
 
-        /** pi OPENAI_BETA_RESPONSES_WEBSOCKETS (openai-codex-responses.ts ~:829). */
         const val OPENAI_BETA_RESPONSES_WEBSOCKETS = "responses_websockets=2026-02-06"
     }
 
     private val mutex = Mutex()
     private val timerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    /** sessionId -> accountId -> pooled connection (pi's nested maps). */
     private val sessionCache = mutableMapOf<String, MutableMap<String, CachedWebSocketEntry>>()
     private val debugStats = mutableMapOf<String, OpenAICodexWebSocketDebugStats>()
     private val sseFallbackSessions = mutableSetOf<String>()
 
-    /**
-     * pi's CachedWebSocketConnection: one pooled socket per session/account
-     * with busy state, creation time, idle timer, and cached-context
-     * continuation.
-     */
+    /** pi's CachedWebSocketConnection. */
     internal class CachedWebSocketEntry(val connection: WebSocketConnection, val createdAt: Long) {
         var busy = false
         var idleJob: Job? = null
@@ -91,7 +82,6 @@ class OpenAICodexWebSocketSessions(
     fun isSseFallbackActive(sessionId: String?): Boolean =
         sessionId != null && sessionId in sseFallbackSessions
 
-    /** pi's recordWebSocketSseFallback. */
     fun recordSseFallback(sessionId: String?) {
         if (sessionId == null) return
         val stats = getOrCreateStats(sessionId)
@@ -99,7 +89,7 @@ class OpenAICodexWebSocketSessions(
         stats.websocketFallbackActive = isSseFallbackActive(sessionId)
     }
 
-    /** pi's recordWebSocketFailure: makes SSE sticky for the session. */
+    /** Makes SSE sticky for the session until reset. */
     fun recordWebSocketFailure(sessionId: String?, error: Throwable) {
         if (sessionId == null) return
         sseFallbackSessions.add(sessionId)
@@ -124,7 +114,6 @@ class OpenAICodexWebSocketSessions(
         sseFallbackSessions.clear()
     }
 
-    /** pi's closeOpenAICodexWebSocketSessions close path (closes, no stats touched). */
     fun closeSessions(sessionId: String?) {
         timerScope.launch {
             mutex.withLock {
@@ -146,11 +135,11 @@ class OpenAICodexWebSocketSessions(
     }
 
     /**
-     * pi's acquireWebSocket (~:1116-1211). No [sessionId] gives a one-shot
-     * socket (release closes it); expired-by-age, busy, or non-reusable cached
-     * entries fall back to fresh connections exactly as upstream. The connect
-     * itself happens outside the lock; insertion afterwards mirrors pi's
-     * post-await map insert (last writer wins per session/account).
+     * pi's acquireWebSocket. No [sessionId] gives a one-shot socket (release
+     * closes it); expired-by-age, busy, or non-reusable cached entries fall
+     * back to fresh connections exactly as upstream. The connect happens
+     * outside the lock; insertion afterwards mirrors pi's post-await map
+     * insert (last writer wins per session/account).
      */
     internal suspend fun acquire(
         transport: WebSocketStreamingTransport,
@@ -210,7 +199,6 @@ class OpenAICodexWebSocketSessions(
         }
     }
 
-    /** pi's release({ keep }) closure. */
     private suspend fun release(sessionId: String, accountId: String, entry: CachedWebSocketEntry, keep: Boolean) {
         mutex.withLock {
             if (!keep || !entry.connection.isOpen) {
@@ -225,7 +213,6 @@ class OpenAICodexWebSocketSessions(
         }
     }
 
-    /** pi's scheduleSessionWebSocketExpiry (~:1003). */
     private fun scheduleIdleExpiry(sessionId: String, accountId: String, entry: CachedWebSocketEntry) {
         entry.idleJob?.cancel()
         entry.idleJob = timerScope.launch {
@@ -244,30 +231,23 @@ class OpenAICodexWebSocketSessions(
         if (accountEntries.isEmpty()) sessionCache.remove(sessionId)
     }
 
-    /** pi's getOpenAICodexWebSocketDebugStats (~:875): a copy, or null. */
     fun getOpenAICodexWebSocketDebugStats(sessionId: String): OpenAICodexWebSocketDebugStats? =
         getStats(sessionId)
 
-    /**
-     * pi's resetOpenAICodexWebSocketDebugStats (~:882): drops the session's
-     * stats and SSE-fallback stickiness, or everything when null.
-     */
     fun resetOpenAICodexWebSocketDebugStats(sessionId: String? = null) {
         resetStats(sessionId)
     }
 
     /**
-     * pi's closeOpenAICodexWebSocketSessions (~:904): closes the session's
-     * pooled sockets with 1000/"debug_close" (all of them when null). Note
-     * upstream does NOT clear the SSE-fallback set here (only
-     * [resetOpenAICodexWebSocketDebugStats] does); this port preserves that.
+     * Closes the session's pooled sockets, all of them when null. Upstream
+     * does NOT clear the SSE-fallback set here (only
+     * [resetOpenAICodexWebSocketDebugStats] does); preserved.
      */
     fun closeOpenAICodexWebSocketSessions(sessionId: String? = null) {
         closeSessions(sessionId)
     }
 }
 
-/** pi's OpenAICodexWebSocketDebugStats (openai-codex-responses.ts ~:845). */
 data class OpenAICodexWebSocketDebugStats(
     var requests: Int = 0,
     var connectionsCreated: Int = 0,
@@ -285,11 +265,6 @@ data class OpenAICodexWebSocketDebugStats(
     var lastWebSocketError: String? = null,
 )
 
-// ---------------------------------------------------------------------------
-// Cached-context helpers (openai-codex-responses.ts ~:1389-1442)
-// ---------------------------------------------------------------------------
-
-/** pi's requestBodyWithoutInput: body minus `input`/`previous_response_id`. */
 internal fun requestBodyWithoutInput(body: JsonObject): JsonObject = buildJsonObject {
     body.forEach { (key, value) ->
         if (key != "input" && key != "previous_response_id") put(key, value)
@@ -297,21 +272,20 @@ internal fun requestBodyWithoutInput(body: JsonObject): JsonObject = buildJsonOb
 }
 
 /**
- * pi's responseInputsEqual: JSON-string equality. Kotlinx JsonObject/
- * JsonArray toString() is insertion-ordered like JSON.stringify, so canonical
- * string comparison mirrors pi byte-for-byte for identically-built arrays.
+ * JSON-string equality: kotlinx JsonObject/JsonArray toString() is
+ * insertion-ordered like JSON.stringify, so string comparison matches pi's
+ * JSON.stringify equality for identically-built arrays.
  */
 internal fun responseInputsEqual(a: JsonArray?, b: JsonArray?): Boolean {
     val empty = JsonArray(emptyList())
     return (a ?: empty).toString() == (b ?: empty).toString()
 }
 
-/** pi's requestBodiesMatchExceptInput. */
 internal fun requestBodiesMatchExceptInput(a: JsonObject, b: JsonObject): Boolean =
     requestBodyWithoutInput(a).toString() == requestBodyWithoutInput(b).toString()
 
-/** pi's getCachedWebSocketInputDelta: the suffix when the new input extends
- *  the previous input + assistant response items with an equal prefix. */
+/** The input suffix when the new input extends the previous input plus
+ *  assistant response items with an equal prefix. */
 internal fun getCachedWebSocketInputDelta(
     body: JsonObject,
     continuation: OpenAICodexWebSocketSessions.CachedWebSocketContinuation,
@@ -327,9 +301,9 @@ internal fun getCachedWebSocketInputDelta(
 }
 
 /**
- * pi's buildCachedWebSocketRequestBody: sends `previous_response_id` + the
- * input delta when the cached continuation applies; any mismatch invalidates
- * the continuation and sends the full body.
+ * Sends `previous_response_id` plus the input delta when the cached
+ * continuation applies; any mismatch invalidates the continuation and sends
+ * the full body.
  */
 internal fun buildCachedWebSocketRequestBody(
     entry: OpenAICodexWebSocketSessions.CachedWebSocketEntry,

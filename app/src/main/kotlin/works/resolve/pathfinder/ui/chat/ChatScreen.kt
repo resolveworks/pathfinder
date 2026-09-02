@@ -68,7 +68,6 @@ import works.resolve.pathfinder.data.sessions.SessionSummary
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 import kotlinx.coroutines.launch
 
-/** Collects [ChatViewModel.uiState], owns the Nav3 back stack, and forwards intents from the pure [ChatScreen]. */
 @Composable
 fun ChatRoute(
     viewModel: ChatViewModel,
@@ -77,7 +76,7 @@ fun ChatRoute(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     // The initial stack comes from the first collected state (Loading with
     // startKey = Chat); initialize() soon swaps it via the reset effect in
-    // ChatScreen. Loading still renders LoadingContent, never a flash of Chat.
+    // ChatScreen, so Loading never flashes Chat.
     val backStack = rememberNavBackStack(uiState.startKey)
     ChatScreen(
         uiState = uiState,
@@ -114,22 +113,9 @@ fun ChatRoute(
 }
 
 /**
- * Pure, state-hoisted chat surface rendering [ChatUiState] behind a Nav3
- * back stack ([backStack], navigation chrome hoisted like drawerState). The
- * ViewModel signals navigation through the state ([ChatUiState.startKey] and
- * [ChatUiState.navigationEpoch]); whenever either changes, the stack is reset
- * to exactly [ChatUiState.startKey], which makes an unconfigured app a
- * dead-end settings surface and returns the user to the chat after a
- * successful save or session adoption. Every user action is forwarded through
- * an intent callback; the composable owns only ephemeral, non-sensitive UI
- * state (configuration form inputs, dropdown/menu visibility, drawer state).
- *
- * The API-key input lives exclusively in Compose memory: it is never saved
- * across process death, logged, or written to any state that outlives the
- * configuration form. Submitting does not clear it — the form is popped
- * (and its inputs disposed) only after the save is confirmed successful
- * via the state's credential-success epoch, so a failed save retains the
- * typed inputs for correction.
+ * Pure, state-hoisted chat surface. The API-key input lives exclusively in
+ * Compose memory: it is never saved across process death, logged, or written
+ * to any state that outlives the configuration form.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -172,15 +158,14 @@ fun ChatScreen(
     // Reading currentPage keeps the top bar in sync with swipes.
     val onTreePage = pagerState.currentPage == TreePageIndex
 
-    // Back handling: while the pager shows the tree page, the system back
-    // gesture returns to the chat page instead of leaving the Chat root
-    // (BackHandler wins over Nav3's onBack while enabled).
+    // On the tree page, system back returns to the chat page instead of
+    // leaving the Chat root (BackHandler wins over Nav3's onBack while
+    // enabled).
     BackHandler(enabled = onTreePage) {
         scope.launch { pagerState.animateScrollToPage(ChatPageIndex) }
     }
 
-    // Session switch: land on the chat page. Also covers the initial state
-    // after init (activeSessionId goes null -> real id).
+    // A session switch (or init's null -> real id) lands on the chat page.
     LaunchedEffect(uiState.activeSessionId) {
         pagerState.scrollToPage(ChatPageIndex)
     }
@@ -193,21 +178,18 @@ fun ChatScreen(
     }
 
     // Reset signal from the ViewModel: rebuild the stack to exactly the
-    // current root. A single-entry stack means NavDisplay's onBack does
-    // nothing on it, so NeedsConfiguration is a dead end, and a bumped epoch
-    // (session adopted / configuration saved) always lands back on the root.
+    // current root. A single-entry stack makes NavDisplay's onBack a no-op,
+    // so NeedsConfiguration is a dead end; a bumped epoch (session adopted /
+    // configuration saved) lands back on the root.
     LaunchedEffect(uiState.startKey, uiState.navigationEpoch) {
         backStack.clear()
         backStack.add(uiState.startKey)
     }
 
     // Successful credential save: pop exactly one credential form
-    // (state-driven — no ViewModel navigation callback). Guarded so it
-    // composes safely with the reset above, which runs first: first-run
-    // saves bump both epochs and the reset already rebuilt the stack to a
-    // single-entry root, which is never popped; a
-    // Ready-state save bumps only this epoch, returning the user from
-    // ProviderAuth to Providers. A failed or incomplete save never bumps
+    // (state-driven — no ViewModel navigation callback). On first-run saves
+    // both epochs bump, so the reset above runs first and leaves a
+    // single-entry root the guard never pops. A failed save never bumps
     // this epoch, so the form and its typed inputs stay intact.
     LaunchedEffect(uiState.credentialSuccessEpoch) {
         if (backStack.size > 1 && backStack.lastOrNull() is ProviderAuthNavKey) {
@@ -233,7 +215,7 @@ fun ChatScreen(
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
     val topKey = backStack.lastOrNull() ?: ChatNavKey
-    // Pager navigation helpers, explicitly () -> Unit (launch returns a Job).
+    // Explicit () -> Unit: launch returns a Job.
     val openTreePage: () -> Unit = { scope.launch { pagerState.animateScrollToPage(TreePageIndex) } }
     val backToChatPage: () -> Unit = { scope.launch { pagerState.animateScrollToPage(ChatPageIndex) } }
     val openDrawer: () -> Unit = { scope.launch { drawerState.open() } }
@@ -288,9 +270,7 @@ fun ChatScreen(
                         },
                         // The drawer belongs to the Chat root; nested
                         // destinations navigate up instead. A forced root
-                        // (unconfigured app) is a dead end: no Up arrow. On
-                        // the tree page the menu icon is replaced by a back
-                        // arrow returning to the chat page.
+                        // (unconfigured app) is a dead end: no Up arrow.
                         onOpenDrawer = if (topKey == ChatNavKey &&
                             uiState.status == ChatStatus.Ready &&
                             !onTreePage
@@ -419,10 +399,10 @@ fun ChatScreen(
                                 val option = uiState.searchProviderOptions
                                     .firstOrNull { it.id == key.providerId }
                                 if (option != null) {
-                                    // Search providers offer only API-key auth, so
-                                    // this reuses the plain all-fields form with the
-                                    // search catalog's prompts; the form is API-key
-                                    // only and env inputs are not forwarded.
+                                    // Search providers offer only API-key auth:
+                                    // reuse the all-fields form with the search
+                                    // catalog's prompts; env inputs are not
+                                    // forwarded.
                                     ProviderAuthContent(
                                         provider = option,
                                         prompts = searchAuthPrompts(key.providerId),
@@ -467,14 +447,6 @@ fun ChatScreen(
     }
 }
 
-// ---- navigation drawer ----
-
-/**
- * Default sessions sidebar: a header row pairing the app title with a
- * settings icon on the trailing edge, a new-chat button and the lazily
- * rendered session list — stock M3 pieces per the developer.android.com
- * drawer guidance.
- */
 @Composable
 private fun ChatDrawerContent(
     uiState: ChatUiState,
@@ -538,8 +510,6 @@ private fun ChatDrawerContent(
     }
 }
 
-// ---- top bar ----
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatTopBar(
@@ -570,8 +540,6 @@ private fun ChatTopBar(
     )
 }
 
-// ---- status contents ----
-
 @Composable
 private fun LoadingContent() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -600,8 +568,6 @@ private fun FailedContent(error: String, onOpenProviders: () -> Unit) {
         }
     }
 }
-
-// ---- previews ----
 
 private val PREVIEW_MODEL_OPTIONS = listOf(
     ModelOption(

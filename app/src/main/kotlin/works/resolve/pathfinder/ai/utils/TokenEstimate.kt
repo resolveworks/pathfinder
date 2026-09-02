@@ -13,9 +13,8 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Rough context token estimation, ported from pi's
- * packages/ai/src/utils/estimate.ts. Uses ~4 chars per token and a fixed
- * 4800-char estimate per image. No tokenizer dependency, matching pi.
+ * Rough context token estimation: ~4 chars per token and a fixed 4800-char
+ * estimate per image; no tokenizer dependency.
  */
 
 private const val CHARS_PER_TOKEN = 4
@@ -26,17 +25,12 @@ private const val CONTEXT_SAFETY_TOKENS = 4096
 private const val MIN_MAX_TOKENS = 1
 
 data class ContextUsageEstimate(
-    /** Estimated total context tokens. */
     val tokens: Int,
-    /** Tokens reported by the most recent applicable assistant usage block. */
     val usageTokens: Int,
-    /** Estimated tokens after the most recent applicable assistant usage block. */
     val trailingTokens: Int,
-    /** Index of the applicable message that provided usage, or null when none exists. */
     val lastUsageIndex: Int?,
 )
 
-/** Total context tokens for a usage block; prefers totalTokens, falls back to component sums. */
 fun calculateContextTokens(usage: Usage): Int =
     usage.totalTokens.takeIf { it > 0 } ?: usage.input + usage.output + usage.cacheRead + usage.cacheWrite
 
@@ -63,7 +57,6 @@ fun estimateMessageTokens(message: Message): Int {
                     is works.resolve.pathfinder.ai.core.TextContent -> chars += block.text.length
                     is works.resolve.pathfinder.ai.core.ThinkingContent -> chars += block.thinking.length
                     is works.resolve.pathfinder.ai.core.ToolCall ->
-                        // arguments is the raw JSON string; use it directly.
                         chars += block.name.length + block.arguments.length
                     else -> {}
                 }
@@ -83,7 +76,7 @@ private fun Message.contentList(): List<Content> = when (this) {
  * Finds the latest assistant message whose usage describes the current
  * prefix: its timestamp must not be older than any preceding message (a
  * newer inserted prefix message, e.g. a compaction summary, invalidates
- * earlier usage), and aborted/error responses are skipped.
+ * earlier usage).
  */
 private fun getLastAssistantUsageInfo(messages: List<Message>): Pair<Usage, Int>? {
     var latestPrefixTimestamp = Long.MIN_VALUE
@@ -132,9 +125,8 @@ fun estimateContextTokens(context: Context): ContextUsageEstimate {
     val estimate = estimateMessages(context.messages)
 
     if (estimate.lastUsageIndex != null) {
-        // When usage applies, it already covers the system prompt and tools.
-        // pi re-adds tools introduced after the usage point via trailing
-        // ToolResultMessage.addedToolNames (estimate.ts estimateContextTokens).
+        // Tools introduced after the usage point aren't covered by its
+        // snapshot; re-add them via trailing ToolResultMessage.addedToolNames.
         val addedNames = context.messages
             .drop(estimate.lastUsageIndex + 1)
             .filterIsInstance<works.resolve.pathfinder.ai.core.ToolResultMessage>()
@@ -161,8 +153,7 @@ fun estimateContextTokens(context: Context): ContextUsageEstimate {
 /**
  * Clamps a requested max output token limit to the room left in the model's
  * context window, keeping [CONTEXT_SAFETY_TOKENS] tokens of headroom and at
- * least [MIN_MAX_TOKENS] for the answer. A non-positive context window means
- * no clamping. Mirrors pi's clampMaxTokensToContext.
+ * least [MIN_MAX_TOKENS] for the answer.
  */
 fun clampMaxTokensToContext(model: Model, context: Context, maxTokens: Int): Int {
     if (model.contextWindow <= 0) return max(MIN_MAX_TOKENS, maxTokens)

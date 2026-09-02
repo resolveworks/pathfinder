@@ -40,14 +40,12 @@ import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 private const val STREAMING_PLACEHOLDER = "…"
 
-/** Concatenated text of the text blocks; the displayable body for user (plain-text) messages. */
 private fun ChatMessage.displayText(): String =
     blocks.filterIsInstance<ChatBlock.Text>().joinToString("\n\n") { it.text }
 
 /**
- * Persists per-thinking-block expanded overrides across process death as two
- * parallel flat lists (key, value, key, value, …); both [String] and [Boolean]
- * are Bundle-saveable.
+ * [listSaver] needs flat Bundle-saveable values, so the map is saved as an
+ * alternating key, value, … list.
  */
 private fun thinkingOverridesSaver() = listSaver<MutableMap<String, Boolean>, Any>(
     save = { map ->
@@ -89,10 +87,9 @@ internal fun ConversationContent(
         }
     }
 
-    // A reversed lazy list makes index 0 the bottom of the viewport. Reset to
-    // that valid index whenever a session opens, a message is added, or the
-    // streaming item grows. Including activeSessionId matters when switching
-    // between transcripts that happen to contain the same number of messages.
+    // A reversed lazy list makes index 0 the bottom of the viewport;
+    // including activeSessionId matters when switching between transcripts
+    // that happen to contain the same number of messages.
     LaunchedEffect(uiState.activeSessionId, messageCount, uiState.pendingTools.size, streamingId, streamingLength) {
         if (messageCount > 0 || uiState.pendingTools.isNotEmpty() || streamingId != null) {
             listState.requestScrollToItem(0)
@@ -120,8 +117,8 @@ internal fun ConversationContent(
             reverseLayout = true,
             modifier = Modifier.fillMaxSize(),
         ) {
-            // reverseLayout places the first item at the bottom, so emit the
-            // newest item first while preserving chronological visual order.
+            // Emitted newest-first; reverseLayout puts it at the bottom,
+            // preserving chronological visual order.
             uiState.streamingMessage?.let { streaming ->
                 item(key = streaming.id) {
                     val hasVisibleText = streaming.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() }
@@ -130,14 +127,10 @@ internal fun ConversationContent(
                         message = if (hasVisibleText || hasThinking || streaming.error != null) {
                             streaming
                         } else {
-                            // No visible content yet: same "…" placeholder as
-                            // before. A thinking-only stream renders its real
-                            // blocks (thinking header + loader) instead; a
-                            // tool-call-only stream keeps it too — pi renders
-                            // such assistant messages as zero lines (the
-                            // execution shows as its own row), so the placeholder
-                            // bridges until the call commits and the pending
-                            // tool row appears.
+                            // pi renders tool-call-only assistant messages as
+                            // zero lines (the execution shows as its own row);
+                            // the placeholder bridges until the call commits
+                            // and the pending tool row appears.
                             streaming.copy(blocks = listOf(ChatBlock.Text(STREAMING_PLACEHOLDER)))
                         },
                         isStreaming = true,
@@ -187,11 +180,7 @@ internal fun ConversationContent(
     }
 }
 
-/**
- * Minimal divider marking a compaction cut in the active path (pi's
- * CompactionEntry): centered label between rules; the summary itself lives
- * in LLM context only.
- */
+/** Marks a compaction cut; the summary itself lives in LLM context only. */
 @Composable
 private fun CompactedDivider() {
     Row(
@@ -210,11 +199,9 @@ private fun CompactedDivider() {
 }
 
 /**
- * Whether the message renders a row at all. Pi's AssistantMessageComponent
- * renders zero lines for a tool-call-only assistant message — `toolCall`
- * blocks never render in the parent message; the executions render as their
- * own tool rows — so such messages are filtered out here. A message carrying
- * an error keeps its row (the error text shows in it).
+ * Whether the message renders a row at all: pi renders tool-call-only
+ * assistant messages as zero lines (the executions show as their own tool
+ * rows), so they are filtered out here; an error keeps its row.
  */
 private fun ChatMessage.hasRenderableContent(): Boolean =
     isCompactionMarker ||
@@ -222,15 +209,6 @@ private fun ChatMessage.hasRenderableContent(): Boolean =
         error != null ||
         blocks.any { it is ChatBlock.Text || it is ChatBlock.Thinking }
 
-/**
- * One chat row. User messages render plain concatenated text; assistant
- * messages render their blocks in content order — text blocks as markdown,
- * thinking blocks as collapsible [ThinkingBlock]s whose default expanded
- * state follows [showThinking] until the user taps one (then the per-block
- * [thinkingOverrides] entry wins, surviving changes to the setting). Tool
- * call blocks render nothing (pi's AssistantMessageComponent skips them:
- * executions render as their own tool rows).
- */
 @Composable
 private fun MessageItem(
     message: ChatMessage,
@@ -240,16 +218,14 @@ private fun MessageItem(
 ) {
     ListItem(
         // pi renders user markdown literally (markers preserved, not parsed);
-        // the MVP equivalent here is plain text, so only the assistant path
-        // goes through MarkdownText.
+        // user messages stay plain text here, so only the assistant path goes
+        // through MarkdownText.
         headlineContent = {
             if (message.role == ChatRole.Assistant) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     message.blocks.forEachIndexed { index, block ->
                         when (block) {
                             is ChatBlock.Text -> MarkdownText(markdown = block.text)
-                            // Pi skips toolCall blocks in the assistant message;
-                            // the execution renders as its own tool row.
                             is ChatBlock.ToolCall -> Unit
                             is ChatBlock.Thinking -> {
                                 val key = "${message.id}:$index"
@@ -291,37 +267,23 @@ private fun MessageItem(
     )
 }
 
-/**
- * Collapsed preview cap (pi's FALLBACK_PREVIEW_LINES, tool-execution.ts, and
- * Scry's PREVIEW_LINES, index.ts — both 10): the first 10 output lines plus
- * a "... (N more lines)" continuation hint; the expansion flag lifts the cap.
- */
+/** Collapsed preview cap, matching pi's tool output. */
 private const val FALLBACK_PREVIEW_LINES = 10
 
-/** How one tool's result output renders (see [ToolResultRenderers]). */
 internal enum class ToolResultFormat {
-    /** pi's generic fallback (createResultFallback): raw, unparsed text. */
     RAW,
 
-    /** Rendered as Markdown (pi's `Markdown` TUI component). */
     MARKDOWN,
 }
 
 /**
- * Per-tool result rendering (pi's ToolExecutionComponent renderer
- * resolution, tool-execution.ts, native adaptation): pi resolves custom
- * renderCall/renderResult by tool name — the extension-registered tool
- * definition first, then the built-in definition table
- * (`createAllToolDefinitions(cwd)[toolName]`) — and tools without a
- * renderer fall back to the generic raw-text output. The Android port
- * replaces TUI Component renderers with this name-keyed format table:
- * tools listed here render their result output as Markdown (the native
- * equivalent of Scry's `renderResult: renderMarkdownResult`); every other
- * tool renders pi's generic raw-text fallback. Keep tool names in KDoc
- * provenance as tools are added.
+ * pi resolves per-tool result renderers by tool name, falling back to
+ * generic raw text; the port's equivalent is this name-keyed table —
+ * listed tools render their output as Markdown, everything else keeps
+ * pi's raw fallback.
  */
 internal object ToolResultRenderers {
-    /** Scry web_search: `renderResult: renderMarkdownResult` (index.ts). */
+    /** Scry renders web_search results as Markdown. */
     private val formats: Map<String, ToolResultFormat> = mapOf(
         BraveWebSearchTool.NAME to ToolResultFormat.MARKDOWN,
     )
@@ -330,24 +292,9 @@ internal object ToolResultRenderers {
 }
 
 /**
- * One tool row (pi's ToolExecutionComponent semantics, native adaptation):
- * tool name first, the result output below — rendered per tool through
- * [ToolResultRenderers] (Markdown for tools whose upstream definition
- * renders its result through Markdown, raw text otherwise), bounded to a
- * [FALLBACK_PREVIEW_LINES] raw-line preview with a remaining-lines hint
- * until the global expand flag lifts the cap to the full output; a loader
- * while the execution is running and a done/failed label after, error-
- * colored when the result is an error. Tapping a row with output flips the
- * global flag (pi's Ctrl+O, `app.tools.expand`, exposed here as a tap on
- * the tool output itself); running rows carry no output and stay inert.
- *
- * Capping divergences, each at its upstream boundary: pi's fallback caps
- * error results too (createResultFallback has no isError case), while
- * Scry's markdown renderer skips capping errors — each format follows its
- * upstream. Pi's `isPartial` (mid-execution renderer updates) is not
- * applicable: partial executions render no output here. Error coloring is
- * a native adaptation (pi signals errors through the shell, not the
- * output text color).
+ * One tool row: tapping a row with output flips the global expand flag
+ * (pi's Ctrl+O, exposed as a tap on the tool output). Error coloring is a
+ * native adaptation (pi signals errors through the shell, not text color).
  */
 @Composable
 private fun ToolResultRow(
@@ -359,8 +306,7 @@ private fun ToolResultRow(
     onToggleExpansion: () -> Unit,
 ) {
     ListItem(
-        // The whole row is the toggle's touch target (Android 48dp-target
-        // convention); only rows that render output respond.
+        // The whole row is the toggle's touch target (48dp convention).
         modifier =
             if (output != null) {
                 Modifier.clickable(onClickLabel = stringResource(R.string.tool_output_toggle)) { onToggleExpansion() }
@@ -401,8 +347,8 @@ private fun ToolResultRow(
                         )
                     }
                     if (remaining > 0) {
-                        // pi: `... (${remaining} more lines, <key> to
-                        // expand)`; the row tap replaces the keybinding hint.
+                        // pi's hint names a keybinding to expand; the row tap
+                        // replaces it.
                         Text(
                             text = stringResource(R.string.tool_output_more_lines, remaining),
                             style = MaterialTheme.typography.labelSmall,
@@ -431,12 +377,6 @@ private fun ToolResultRow(
     )
 }
 
-/**
- * Collapsible unit for one thinking run (pi's assistant-message thinking):
- * a tappable header row — lowercase "thinking" label, a small loader only
- * while the owning message is still streaming, and an expand chevron — plus,
- * when expanded, the reasoning rendered as dimmed italic markdown.
- */
 @Composable
 private fun ThinkingBlock(
     text: String,

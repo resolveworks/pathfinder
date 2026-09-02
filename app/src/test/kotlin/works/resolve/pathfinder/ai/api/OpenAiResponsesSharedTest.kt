@@ -40,12 +40,6 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
 
-/**
- * Canned tests for the shared OpenAI Responses machinery, ported alongside
- * pi's openai-responses-shared.ts and its test suite
- * (openai-responses-terminal-event.test.ts,
- * openai-responses-foreign-toolcall-id.test.ts, message-id, tool-result, ...)
- */
 class OpenAiResponsesSharedTest {
 
     private val json = lenientJson
@@ -70,10 +64,6 @@ class OpenAiResponsesSharedTest {
         maxTokens = 128_000,
         responsesCompat = compat,
     )
-
-    // -----------------------------------------------------------------------
-    // Utilities
-    // -----------------------------------------------------------------------
 
     @Test
     fun `shortHash matches pi's reference values`() {
@@ -117,14 +107,9 @@ class OpenAiResponsesSharedTest {
             OpenAiResponsesShared.parseTextSignature("""{"v":1,"id":"msg_1","phase":"final_answer"}"""),
         )
         assertEquals("msg_1" to null, OpenAiResponsesShared.parseTextSignature("""{"v":1,"id":"msg_1"}"""))
-        // Non-v1 JSON falls back to the legacy plain string.
         assertEquals("""{"v":2}""" to null, OpenAiResponsesShared.parseTextSignature("""{"v":2}"""))
         assertNull(OpenAiResponsesShared.parseTextSignature(null))
     }
-
-    // -----------------------------------------------------------------------
-    // convertResponsesMessages
-    // -----------------------------------------------------------------------
 
     @Test
     fun `system prompt maps to developer role for reasoning models`() {
@@ -537,10 +522,6 @@ class OpenAiResponsesSharedTest {
         assertEquals(2, transformed.size)
     }
 
-    // -----------------------------------------------------------------------
-    // Tool conversion
-    // -----------------------------------------------------------------------
-
     @Test
     fun `tools convert to function tools with strict only when supported`() {
         val tool = Tool("t", "desc", buildJsonObject { put("type", "object") })
@@ -561,10 +542,6 @@ class OpenAiResponsesSharedTest {
         assertEquals(true, strictOn["strict"]!!.jsonPrimitive.content.toBoolean())
         assertEquals("t", strictOn["name"]!!.jsonPrimitive.content)
     }
-
-    // -----------------------------------------------------------------------
-    // Stream processing
-    // -----------------------------------------------------------------------
 
     private fun event(jsonText: String): JsonObject =
         json.parseToJsonElement(jsonText).jsonObject
@@ -818,8 +795,6 @@ class OpenAiResponsesSharedTest {
 
     @Test
     fun `function namespace received only on output_item_done replays`() {
-        // openai-responses-namespace.test.ts: a namespace seen only on the
-        // done item round-trips back on replay for the same model.
         val s = state()
         s.onEvent(
             event(
@@ -853,7 +828,8 @@ class OpenAiResponsesSharedTest {
         assertEquals("call_test", replayed["call_id"]!!.jsonPrimitive.content)
         assertEquals("dynamic_tools", replayed["namespace"]!!.jsonPrimitive.content)
 
-        // A different target model drops the namespace (and the fc_ item id).
+        // A different target model drops the namespace and fc_ id to avoid
+        // pairing validation.
         val replayedOther = OpenAiResponsesShared.convertResponsesMessages(
             model(id = "gpt-5.2"),
             Context(messages = listOf(output)),
@@ -865,8 +841,6 @@ class OpenAiResponsesSharedTest {
 
     @Test
     fun `text signature omits a null id like json stringify drops undefined`() {
-        // Pi's JSON.stringify drops an undefined id, so a malformed done item
-        // without an id encodes {"v":1}, not {"v":1,"id":""}.
         assertEquals("""{"v":1}""", OpenAiResponsesShared.encodeTextSignatureV1(null, null))
         assertEquals(
             """{"v":1,"id":"msg_1","phase":"final_answer"}""",
@@ -922,10 +896,6 @@ class OpenAiResponsesSharedTest {
         assertEquals(StopReason.STOP to null, OpenAiResponsesShared.mapStopReason("queued", null))
         assertEquals(StopReason.ERROR to null, OpenAiResponsesShared.mapStopReason("cancelled", null))
     }
-
-    // -----------------------------------------------------------------------
-    // Compat / cache retention / client options
-    // -----------------------------------------------------------------------
 
     @Test
     fun `session affinity format detection and defaults`() {
@@ -1007,10 +977,6 @@ class OpenAiResponsesSharedTest {
         assertTrue(OpenAiResponsesShared.sessionAffinityHeaders(null, OpenAiResponsesShared.getCompat(model())).isEmpty())
     }
 
-    // -----------------------------------------------------------------------
-    // Constrained sampling (pi constrained-sampling.test.ts adapter cases)
-    // -----------------------------------------------------------------------
-
     private fun sampleTool(
         constrainedSampling: works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig? = null,
     ): Tool = Tool(
@@ -1050,7 +1016,6 @@ class OpenAiResponsesSharedTest {
         assertEquals("lark", format["syntax"]!!.jsonPrimitive.content)
         assertEquals("start: /[a-z]+/", format["definition"]!!.jsonPrimitive.content)
 
-        // lark wins when both variants are provided; regex is used otherwise.
         val both = OpenAiResponsesShared.convertResponsesTools(
             listOf(
                 sampleTool(
@@ -1120,7 +1085,6 @@ class OpenAiResponsesSharedTest {
         ).single()
         assertEquals("function", converted["type"]!!.jsonPrimitive.content)
         assertEquals(true, converted["strict"]!!.jsonPrimitive.content.toBoolean())
-        // The strict rewrite clones: the tool's own schema keeps required=[payload].
         val parameters = converted["parameters"]!!.jsonObject
         assertEquals(false, parameters["additionalProperties"]!!.jsonPrimitive.content.toBoolean())
 

@@ -21,49 +21,16 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 
 /**
- * Lane-state reducer, porting pi's
- * `packages/agent/src/harness/reducer.ts` (audit P1-5): [validateRecordLog]
- * validates a bounded lane recovery slice without reading or mutating
- * session state, and [reduceLaneState] purely reconstructs one lane's
- * orchestration state from it. This is what makes the record log a recovery
- * log rather than telemetry.
- *
- * Adaptation boundaries (per-record-kind, documented at each reduction):
- * - Pathfinder's typed record surface covers the operation lifecycle trio
- *   and usage records; the remaining upstream kinds (step_attempt,
- *   tool_started, queue_enqueued, queue_cancelled, write_deferred) decode
- *   as [LaneRecord.DeferredRecord]s, and this reducer reads their payload
- *   fields from the preserved [JsonObject] exactly where upstream reads the
- *   typed members — same fields, same rules.
- * - `invalid_deferred_handle` is never raised: pathfinder's
- *   `AssistantMessage` carries no deferred-handle member (no adapter
- *   produces `DEFERRED` responses; see `ai/core/Types.kt`), so upstream's
- *   handle check has no comparable input. The reason stays in
- *   [RecordLogCorruptionReason] for shape parity.
- * - Provisioned entries (run intents' initialMessages, queue targets,
- *   write_deferred targets) are preserved as JSON payloads; comparison with
- *   a persisted entry round-trips the typed entry through the JSONL codec
- *   (see [matchesProvisionedEntry]).
- * - `deriveEffectiveConfiguration` is not duplicated: the configuration
- *   fold is [Conversation.effectiveConfiguration], applied to the slice's
- *   configuration + own entries rooted at [LaneReductionInput.leafId]
- *   (upstream folds the same entries in seq order; for the bounded slices
- *   recovery passes, the active-path fold is the same entries in the same
- *   order).
- * - Not reduced (documented exclusions matching the ported scope):
- *   `toolBatch` (pathfinder registers no tools, so no assistant entry
- *   carries tool calls to batch — `tool_started` records are still
- *   validated), and the open operation's `deferred` handle (no deferred
- *   producers; see above).
+ * Reduces a lane's durable record log back into orchestration state. This is
+ * what makes the record log a recovery log rather than telemetry.
  */
 
 /**
  * Machine-readable category for a contradiction in a lane's durable recovery
- * slice (reducer.ts `RecordLogCorruptionReason`): states the single-writer
- * record protocol cannot produce, not ordinary operation failures or
- * incomplete-but-recoverable intent/result prefixes. Restore must reject
- * such states rather than repair or continue them; the accompanying error
- * message supplies human-readable detail.
+ * slice: a state the single-writer record protocol cannot produce, not an
+ * ordinary operation failure or an incomplete-but-recoverable
+ * intent/result prefix. Restore must reject such states rather than repair
+ * or continue them; the accompanying message supplies human-readable detail.
  */
 enum class RecordLogCorruptionReason {
     MULTIPLE_OPEN_OPERATIONS,
@@ -77,16 +44,16 @@ enum class RecordLogCorruptionReason {
     TOOL_CALL_MISMATCH,
     DUPLICATE_TOOL_INVOCATION,
     PROVISIONED_ENTRY_MISMATCH,
+
+    /** Never raised: no adapter produces DEFERRED responses, so no entry carries a deferred handle. */
     INVALID_DEFERRED_HANDLE,
 }
 
-/** Reducer.ts `RecordLogCorruption`. */
 class RecordLogCorruption(
     val reason: RecordLogCorruptionReason,
     message: String,
 ) : Exception(message)
 
-/** Reducer.ts `RecordLogSlice`. */
 data class RecordLogSlice(
     val lane: String,
     val openOperations: List<LaneRecord.OperationStartedRecord>,
@@ -95,7 +62,6 @@ data class RecordLogSlice(
     val entries: List<SessionEntry>,
 )
 
-/** Reducer.ts `TerminalFailureState`. */
 data class TerminalFailureState(
     val entryId: String,
     val source: Source,
@@ -104,7 +70,6 @@ data class TerminalFailureState(
     enum class Source { STEP, DEFERRED_FETCH }
 }
 
-/** Reducer.ts `LaneState.operation.step`. */
 data class LaneStepState(
     val kind: Kind,
     val attempts: Int,
@@ -114,27 +79,24 @@ data class LaneStepState(
     enum class Kind { ASSISTANT, COMPACTION, BRANCH_SUMMARY }
 }
 
-/** Reducer.ts `LaneState.operation.newestOwn`. */
 data class NewestOwnState(
     val entryId: String,
-    /** The entry's wire `type` (reducer.ts carries pi's Entry["type"]). */
+    /** The entry's wire type (e.g. "message"). */
     val type: String,
     val role: MessageRole? = null,
     val stopReason: StopReason? = null,
 )
 
-/** Reducer.ts `LaneState.operation.targets`. */
 data class LaneOperationTargets(
     val result: Boolean? = null,
     val summary: Boolean? = null,
 )
 
 /**
- * Reducer.ts `LaneState.operation` reduced to the computable fields (see
- * file KDoc: `toolBatch` and `deferred` are not reduced). Provisioned-entry
- * lists ([missingInitialMessages], [pendingSteer], [pendingFollowUp],
- * [pendingWrites], [LaneState.pendingNextRun]) keep their upstream shape as
- * the preserved provisioned JSON payloads.
+ * Provisioned-entry lists — [missingInitialMessages], [pendingSteer],
+ * [pendingFollowUp], [pendingWrites], [LaneState.pendingNextRun] — hold
+ * their targets as the preserved provisioned JSON payloads, not decoded
+ * entries.
  */
 data class LaneOperationState(
     val id: String,
@@ -150,7 +112,6 @@ data class LaneOperationState(
     val targets: LaneOperationTargets = LaneOperationTargets(),
 )
 
-/** Reducer.ts `LaneState` (see [LaneOperationState] for reductions). */
 data class LaneState(
     val lane: String,
     val leafId: String?,
@@ -158,7 +119,6 @@ data class LaneState(
     val pendingNextRun: List<JsonObject> = emptyList(),
 )
 
-/** Reducer.ts `LaneReductionInput`. */
 data class LaneReductionInput(
     val lane: String,
     val openOperations: List<LaneRecord.OperationStartedRecord>,
@@ -169,15 +129,15 @@ data class LaneReductionInput(
     val ownEntries: List<SessionEntry> = emptyList(),
     /**
      * Bounded effective-state lookups at the operation anchor or idle leaf,
-     * oldest first. Folded by [Conversation.effectiveConfiguration] (see
-     * file KDoc — reducer.ts `deriveEffectiveConfiguration`).
+     * oldest first. Folded by [Conversation.effectiveConfiguration]; for
+     * recovery's bounded slices this fold sees the same entries in the same
+     * order as the active-path fold.
      */
     val configurationEntries: List<SessionEntry> = emptyList(),
     /** Harness option fallbacks used when no persisted value exists. */
     val defaults: Conversation.EffectiveConfiguration = Conversation.EffectiveConfiguration(),
 )
 
-/** Reducer.ts `LaneReductionResult`. */
 data class LaneReductionResult(
     val laneState: LaneState,
     val effectiveConfiguration: Conversation.EffectiveConfiguration,
@@ -185,12 +145,10 @@ data class LaneReductionResult(
 )
 
 /**
- * Load-time lane classification over `findOpenOperations`' `limit: 2`
- * recovery contract (harness/session/types.ts:237): zero open operations
- * mean the lane is idle, one means it is suspended/interrupted, and two or
- * more mean at least two operations are open — corruption (the reducer's
- * `multiple_open_operations`). This is the minimal classification surface
- * when only the open-operation seed (not the record log) has been read.
+ * Load-time lane classification from only the open-operation seed, before
+ * the record log is read. Recovery reads at most two open operations: zero
+ * means idle, one means suspended/interrupted, and two already mean
+ * multiple open operations — corruption.
  */
 sealed interface LaneRecovery {
     data object Idle : LaneRecovery
@@ -200,7 +158,7 @@ sealed interface LaneRecovery {
     data class Corrupt(val reason: RecordLogCorruptionReason) : LaneRecovery
 }
 
-/** Classifies [openOperations] (newest first) per the contract above. */
+/** Classifies [openOperations] (newest first). */
 fun classifyLaneRecovery(openOperations: List<LaneRecord.OperationStartedRecord>): LaneRecovery = when {
     openOperations.isEmpty() -> LaneRecovery.Idle
     openOperations.size == 1 -> LaneRecovery.Suspended(openOperations[0].intent.kind)
@@ -209,8 +167,6 @@ fun classifyLaneRecovery(openOperations: List<LaneRecord.OperationStartedRecord>
 
 private fun corrupt(reason: RecordLogCorruptionReason, message: String): Nothing =
     throw RecordLogCorruption(reason, message)
-
-// ---- deferred record payload access (see file KDoc) ----
 
 private fun LaneRecord.runIdOrNull(): String? = when (this) {
     is LaneRecord.AbortRequestedRecord -> runId
@@ -221,11 +177,10 @@ private fun LaneRecord.runIdOrNull(): String? = when (this) {
 }
 
 /**
- * Reducer.ts `matchesProvisionedEntry`: the entry's payload (everything but
- * parentId/seq/timestamp) deep-equals the provisioned target. Adaptation:
- * the typed entry is round-tripped through the JSONL codec's wire shape
- * (pi compares JSON objects directly; pathfinder holds typed entries, so the
- * entry is re-encoded and the storage-assigned keys dropped).
+ * The entry's payload — everything but storage-assigned keys — deep-equals
+ * the provisioned target. pi compares JSON objects directly, so the typed
+ * entry is round-tripped through the JSONL codec's wire shape and its
+ * storage-assigned keys dropped before comparing.
  */
 private fun matchesProvisionedEntry(entry: SessionEntry, target: JsonObject): Boolean {
     val line = JsonlCodec.encodeMutation(SessionMutation.Entry(lane = null, entry = entry))
@@ -236,10 +191,7 @@ private fun matchesProvisionedEntry(entry: SessionEntry, target: JsonObject): Bo
 
 private val PROVISION_EXCLUDED_KEYS = setOf("kind", "lane", "parentId", "seq", "timestamp")
 
-/**
- * Reducer.ts `validateExactProvisionedEntry`: when an entry with the
- * target's id exists, it must carry exactly the provisioned content.
- */
+/** An entry with the target's id must carry exactly the provisioned content. */
 private fun validateExactProvisionedEntry(entriesById: Map<String, SessionEntry>, target: JsonObject) {
     val id = target.string("id") ?: return
     val entry = entriesById[id]
@@ -251,7 +203,6 @@ private fun validateExactProvisionedEntry(entriesById: Map<String, SessionEntry>
     }
 }
 
-/** Reducer.ts `validateResultEntry`. */
 private fun validateResultEntry(
     entriesById: Map<String, SessionEntry>,
     resultEntryId: String,
@@ -276,7 +227,6 @@ private fun intentInitialMessages(record: LaneRecord.OperationStartedRecord): Li
 private fun isAssistantMessage(entry: SessionEntry): Boolean =
     entry is MessageEntry && entry.message is AssistantMessage
 
-/** Reducer.ts `validateOperationResult`. */
 private fun validateOperationResult(entriesById: Map<String, SessionEntry>, record: LaneRecord.OperationStartedRecord) {
     when (record.intent.kind) {
         OperationIntent.Kind.RUN ->
@@ -313,7 +263,6 @@ private class StepAttemptSeries(
     val seq: Long = record.seq
 }
 
-/** Reducer.ts `validateAttemptReason`. */
 private fun validateAttemptReason(attempt: StepAttemptSeries) {
     val reason = attempt.compactionReason
     if (attempt.step == "compaction") {
@@ -331,7 +280,6 @@ private fun validateAttemptReason(attempt: StepAttemptSeries) {
     }
 }
 
-/** Reducer.ts `validateAttemptSequence`. */
 private fun validateAttemptSequence(
     attempt: StepAttemptSeries,
     previous: StepAttemptSeries?,
@@ -364,7 +312,6 @@ private fun validateAttemptSequence(
     }
 }
 
-/** Reducer.ts `validateAttemptResult`. */
 private fun validateAttemptResult(entriesById: Map<String, SessionEntry>, attempt: StepAttemptSeries) {
     when (attempt.step) {
         "assistant" -> validateResultEntry(
@@ -388,7 +335,6 @@ private fun validateAttemptResult(entriesById: Map<String, SessionEntry>, attemp
     }
 }
 
-/** Reducer.ts `validateToolStart`. */
 private fun validateToolStart(
     record: LaneRecord.DeferredRecord,
     entriesById: Map<String, SessionEntry>,
@@ -438,12 +384,7 @@ private fun validateToolStart(
     )
 }
 
-/** Reducer.ts `validateDeferredHandles` — see file KDoc (not reducible; no deferred handles exist). */
-
-/**
- * Validates a bounded lane recovery slice without reading or mutating
- * session state (reducer.ts `validateRecordLog`).
- */
+/** Validates a bounded lane recovery slice without reading or mutating session state. */
 fun validateRecordLog(input: RecordLogSlice) {
     if (input.openOperations.size > 1) {
         corrupt(
@@ -551,7 +492,6 @@ private fun entryType(entry: SessionEntry): String = when (entry) {
     else -> "custom"
 }
 
-/** Reducer.ts `deriveNewestOwn`. */
 private fun deriveNewestOwn(entry: SessionEntry?): NewestOwnState? {
     if (entry == null) return null
     if (entry !is MessageEntry) return NewestOwnState(entryId = entry.id, type = entryType(entry))
@@ -562,11 +502,7 @@ private fun deriveNewestOwn(entry: SessionEntry?): NewestOwnState? {
     return NewestOwnState(entryId = entry.id, type = "message", role = message.role, stopReason = message.stopReason)
 }
 
-/**
- * Purely reconstructs one lane's orchestration state from its bounded
- * recovery inputs (reducer.ts `reduceLaneState`); see the file KDoc for the
- * documented reductions.
- */
+/** Purely reconstructs one lane's orchestration state from its bounded recovery inputs. */
 fun reduceLaneState(input: LaneReductionInput): LaneReductionResult {
     validateRecordLog(RecordLogSlice(input.lane, input.openOperations, input.records, input.entries))
 
@@ -600,9 +536,6 @@ fun reduceLaneState(input: LaneReductionInput): LaneReductionResult {
         .filter { (record, _) -> record.fields.string("queue") == "nextRun" }
         .map { (_, target) -> target }
         .filterNot { it.string("id") in capturedInitialMessageIds }
-    // Reducer.ts deriveEffectiveConfiguration — reuse the ported fold (see
-    // file KDoc) instead of duplicating it here, seeding unset fields from
-    // the harness defaults (upstream starts the fold from `input.defaults`).
     val folded = Conversation(
         entries = input.configurationEntries + ownEntries,
         leafId = input.leafId,

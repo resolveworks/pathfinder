@@ -4,11 +4,8 @@ import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.StopReason
 
 /**
- * Regex patterns to detect context overflow errors from different providers,
- * ported from pi's `packages/ai/src/utils/overflow.ts` (`OVERFLOW_PATTERNS`).
- *
- * These patterns match error messages returned when the input exceeds the
- * model's context window. Provider-specific examples:
+ * Regex patterns matching the error messages providers return when the input
+ * exceeds the model's context window. Provider-specific examples:
  *
  * - Anthropic: "prompt is too long: 213462 tokens > 200000 maximum"
  * - Anthropic: "413 {\"error\":{\"type\":\"request_too_large\",...}}"
@@ -52,12 +49,11 @@ private val OVERFLOW_PATTERNS = listOf(
 )
 
 /**
- * Patterns that indicate non-overflow errors (e.g. rate limiting, server
- * errors), ported from pi's `NON_OVERFLOW_PATTERNS`. Error messages matching
- * any of these are excluded from overflow detection even if they also match an
- * overflow pattern: Bedrock formats throttling errors as "ThrottlingException:
- * Too many tokens, please wait before trying again." which would match the
- * "too many tokens" overflow pattern without this exclusion.
+ * Error messages matching any of these are excluded from overflow detection
+ * even if they also match an overflow pattern: Bedrock formats throttling
+ * errors as "ThrottlingException: Too many tokens, please wait before trying
+ * again." which would match the "too many tokens" overflow pattern without
+ * this exclusion.
  */
 private val NON_OVERFLOW_PATTERNS = listOf(
     Regex("^(Throttling error|Service unavailable):", RegexOption.IGNORE_CASE), // AWS Bedrock non-overflow errors (formatBedrockError prefixes)
@@ -66,8 +62,8 @@ private val NON_OVERFLOW_PATTERNS = listOf(
 )
 
 /**
- * Check if an assistant message represents a context overflow error; pi's
- * `isContextOverflow`. Three cases:
+ * Check if an assistant message represents a context overflow error. Three
+ * cases:
  *
  * 1. Error-based overflow: most providers return stopReason ERROR with a
  *    specific error message pattern.
@@ -76,31 +72,23 @@ private val NON_OVERFLOW_PATTERNS = listOf(
  * 3. Length-stop overflow: Xiaomi MiMo can return LENGTH with zero output when
  *    the input fills the context window.
  *
- * Reliability by provider: reliable error-based detection for Anthropic,
- * OpenAI, Google Gemini, xAI, Groq, Cerebras, Mistral, OpenRouter,
- * Together AI, llama.cpp, LM Studio, Kimi For Coding, DS4, DashScope/Qwen.
- * Unreliable: z.ai (sometimes silent — pass [contextWindow] to detect),
- * Xiaomi MiMo (truncates then LENGTH/output=0 — pass [contextWindow]),
- * Ollama (may truncate silently; silent truncation is undetectable because
- * the expected token count is unknown).
+ * Cases 2 and 3 need a non-zero [contextWindow]; silent truncation (some
+ * Ollama deployments) remains undetectable because the expected token count
+ * is unknown.
  *
- * @param message the assistant message to check.
- * @param contextWindow optional context window size for detecting silent
- *   overflow. A null/zero/`0` value disables cases 2 and 3, mirroring pi's
- *   JS truthiness check `if (contextWindow && ...)`.
+ * @param contextWindow optional context window size enabling cases 2 and 3; a
+ *   null or zero value disables them, mirroring pi's JS truthiness check
+ *   `if (contextWindow && ...)`.
  */
 fun isContextOverflow(message: AssistantMessage, contextWindow: Int? = null): Boolean {
-    // Case 1: Check error message patterns
     if (message.stopReason == StopReason.ERROR && message.errorMessage != null) {
         val errorMessage = message.errorMessage!!
-        // Skip messages matching known non-overflow patterns (e.g. throttling / rate-limit)
         val isNonOverflow = NON_OVERFLOW_PATTERNS.any { it.containsMatchIn(errorMessage) }
         if (!isNonOverflow && OVERFLOW_PATTERNS.any { it.containsMatchIn(errorMessage) }) {
             return true
         }
     }
 
-    // Case 2: Silent overflow (z.ai style) - successful but usage exceeds context
     if (contextWindow != null && contextWindow > 0 && message.stopReason == StopReason.STOP) {
         val inputTokens = message.usage.input + message.usage.cacheRead
         if (inputTokens > contextWindow) {
@@ -108,9 +96,6 @@ fun isContextOverflow(message: AssistantMessage, contextWindow: Int? = null): Bo
         }
     }
 
-    // Case 3: Length-stop overflow (Xiaomi MiMo style) - server truncates oversized input
-    // to fit the context window, leaving no room for output. Returns stopReason "length"
-    // with output=0 and input+cacheRead filling the context window.
     if (contextWindow != null && contextWindow > 0 &&
         message.stopReason == StopReason.LENGTH && message.usage.output == 0
     ) {
@@ -125,16 +110,12 @@ fun isContextOverflow(message: AssistantMessage, contextWindow: Int? = null): Bo
 
 /**
  * Check whether a length stop ended below the caller or model's intended
- * output limit; pi's `isRecoverableLength`. Such responses may be caused by
- * context pressure or provider-side truncation, so callers can make one
- * bounded compact-and-retry attempt. [desiredMaxOutput] must be the original
- * limit before any context-based clamping.
+ * output limit. Such responses may be caused by context pressure or
+ * provider-side truncation, so callers can make one bounded compact-and-retry
+ * attempt. [desiredMaxOutput] must be the original limit before any
+ * context-based clamping.
  */
 fun isRecoverableLength(message: AssistantMessage, desiredMaxOutput: Int): Boolean =
     message.stopReason == StopReason.LENGTH && desiredMaxOutput > 0 && message.usage.output < desiredMaxOutput
 
-/**
- * Get the overflow patterns for testing purposes; pi's `getOverflowPatterns`
- * (returns a copy of the pattern list).
- */
 internal fun getOverflowPatterns(): List<Regex> = OVERFLOW_PATTERNS.toList()

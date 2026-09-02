@@ -55,7 +55,6 @@ class OpenAiCompletionsStreamTest {
     fun `cloudflare placeholders resolve from env before transport`() = runTest {
         val transport = FakeTransport()
         val cfModel = TestCatalogs.CLOUDFLARE.models.single()
-        // Complete credential values resolve the URL and reach the transport.
         transport.enqueueResponse(
             sse(
                 """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
@@ -110,11 +109,11 @@ class OpenAiCompletionsStreamTest {
         val request = transport.requests.single()
         assertNull(request.bearerToken)
         assertEquals("Bearer cf-key", request.headers["cf-aig-authorization"])
-        // Case-insensitive: the explicit request value replaced the model's
-        // differently-cased header, and no Authorization header is sent.
+        // Header matching is case-insensitive: the request value replaced the
+        // model's differently-cased header.
         assertEquals("request-value", request.headers["x-model-header"])
         assertTrue(request.headers.keys.none { it.equals("authorization", ignoreCase = true) })
-        // Mandatory Accept header survives and cannot be overridden.
+        // The mandatory Accept header cannot be overridden.
         assertEquals("text/event-stream", request.headers["Accept"])
     }
 
@@ -231,9 +230,6 @@ class OpenAiCompletionsStreamTest {
 
     @Test
     fun `reasoning_details accumulate into the thinking signature and replay on the next request`() = runTest {
-        // pi test/openai-completions-reasoning-details.test.ts "preserves
-        // reasoning_details in the thinking signature": encrypted details open a
-        // thinking block with no visible delta and serialize into the signature.
         val detail = """{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}"""
         val transport = FakeTransport()
         transport.enqueueResponse(
@@ -262,8 +258,6 @@ class OpenAiCompletionsStreamTest {
         assertEquals("read", toolCall.name)
         assertEquals("""{"path":"README.md"}""", toolCall.arguments)
 
-        // Replay the stored assistant message: the serialized details come
-        // back as assistant reasoning_details.
         api(transport)
             .stream(
                 model,
@@ -279,8 +273,6 @@ class OpenAiCompletionsStreamTest {
 
     @Test
     fun `consecutive text and summary reasoning_details deltas merge before replay`() = runTest {
-        // pi test/openai-completions-reasoning-details.test.ts "merges
-        // consecutive text and summary reasoning_details deltas before replay".
         val transport = FakeTransport()
         transport.enqueueResponse(
             sse(
@@ -312,8 +304,6 @@ class OpenAiCompletionsStreamTest {
 
     @Test
     fun `reasoning field plus reasoning_details keep visible thinking and structured signature`() = runTest {
-        // pi test/openai-completions-reasoning-details.test.ts "preserves
-        // signed text and summary reasoning_details in their original sequence".
         val signedText =
             """{"type":"reasoning.text","text":"I should call the read tool.","signature":"sha256:signed-text","id":"reasoning-text-1","format":"anthropic-claude-v1","index":0}"""
         val encrypted = """{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}"""
@@ -381,7 +371,6 @@ class OpenAiCompletionsStreamTest {
         assertEquals("call_1", call.id)
         assertEquals("read_file", call.name)
         assertEquals("""{"path":"/tmp"}""", call.arguments)
-        // ToolCallEnd emits the complete accumulated raw string.
         val end = assertIs<AssistantMessageEvent.ToolCallEnd>(events.filter { it is AssistantMessageEvent.ToolCallEnd }.single())
         assertEquals("""{"path":"/tmp"}""", end.toolCall.arguments)
     }
@@ -404,7 +393,6 @@ class OpenAiCompletionsStreamTest {
         assertIs<TextContent>(done.message.content[0])
         assertEquals("a", assertIs<ToolCall>(done.message.content[1]).name)
         assertEquals("b", assertIs<ToolCall>(done.message.content[2]).name)
-        // Tool call end events carry their own block index.
         val toolEnds = events.filterIsInstance<AssistantMessageEvent.ToolCallEnd>()
         assertEquals(listOf(1, 2), toolEnds.map { it.contentIndex })
     }
@@ -696,7 +684,6 @@ class OpenAiCompletionsStreamTest {
                 "[DONE]",
             ),
         )
-        // take() cancels collection mid-stream, deterministically.
         val events = api(transport)
             .stream(model, context, OpenAiCompletionsOptions(apiKey = "k"))
             .take(3) // Start, TextStart, first TextDelta
@@ -740,8 +727,6 @@ class OpenAiCompletionsStreamTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
         api(transport)
-            // The simple API carries only pi's narrow ToolChoice (types.ts:82);
-            // "required" lives only on OpenAiCompletionsOptions.
             .streamSimple(model, context, SimpleStreamOptions(apiKey = "k", toolChoice = SimpleToolChoice.None))
             .toList()
         val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
@@ -844,8 +829,8 @@ class OpenAiCompletionsStreamTest {
     fun `explicit null effort map omits reasoning_effort for unsupported level`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
-        // glm-5.3 has minimal explicitly null; direct request for it enables
-        // thinking but omits reasoning_effort (pi's null semantics).
+        // glm-5.3 maps MINIMAL to explicit null: thinking enabled but no
+        // reasoning_effort sent.
         api(transport).stream(
             TestCatalogs.GLM_5_3,
             context,
@@ -855,10 +840,6 @@ class OpenAiCompletionsStreamTest {
         assertEquals("enabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertTrue(!body.containsKey("reasoning_effort"))
     }
-
-    // Session-affinity headers, ported from pi's
-    // test/openai-completions-prompt-cache.test.ts (createClient,
-    // openai-completions.ts:760-770).
 
     private fun affinityModel(
         format: works.resolve.pathfinder.ai.core.SessionAffinityFormat? = null,
@@ -1051,8 +1032,8 @@ class OpenAiCompletionsStreamTest {
         assertEquals("hmm", thinking.thinking)
         assertEquals("reasoning_content", thinking.thinkingSignature)
 
-        // Replay: the stored signature round-trips as the literal wire field
-        // for opencode-go (pi openai-completions.ts:1304-1306).
+        // Replay: opencode-go round-trips the stored signature as the literal
+        // reasoning_content wire field.
         val replay = OpenAiCompletionsPayload.convertMessages(
             goModel,
             Context(messages = listOf(context.messages.single(), done.message)),
@@ -1082,8 +1063,8 @@ class OpenAiCompletionsStreamTest {
 
     @Test
     fun `openrouter metadata raw is appended when missing from the error message`() = runTest {
-        // Long error body: the body is truncated at pi's cap before the raw
-        // metadata, so the manual append surfaces it exactly once.
+        // The long body is truncated at the cap before the raw metadata is
+        // appended, so the append is what surfaces it exactly once.
         val padding = "x".repeat(5000)
         val transport = FakeTransport()
         transport.enqueueError(

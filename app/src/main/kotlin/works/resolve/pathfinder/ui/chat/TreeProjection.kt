@@ -10,9 +10,7 @@ import works.resolve.pathfinder.data.sessions.SessionEntry
 
 /**
  * Pure projection of a [Conversation] into flat, renderable [TreeRow]s,
- * porting pi's tree-selector semantics (coding-agent
- * modes/interactive/components/tree-selector.ts, reduced to pathfinder's two
- * filters):
+ * mirroring pi's tree selector (reduced to pathfinder's two filters):
  *
  * - Ordering: depth-first; among siblings the subtree containing the active
  *   leaf comes first, then oldest-first (so the active path always reads as
@@ -28,13 +26,8 @@ import works.resolve.pathfinder.data.sessions.SessionEntry
  * - Multiple roots behave as children of a virtual branching root: roots
  *   render unshifted and without connectors, and their descendants indent
  *   one level.
- * - [TreeFilter.USER_ONLY] hides non-user rows and recomputes the visual
- *   structure over the visible set: a hidden node's visible descendants
- *   re-parent to their nearest visible ancestor (pi's
- *   recalculateVisualStructure idea).
- *
- * The function is pure: it reads only its arguments and never touches UI or
- * persistence state.
+ * - [TreeFilter.USER_ONLY] hides non-user rows; in either filter a hidden
+ *   entry's visible descendants re-parent to their nearest visible ancestor.
  */
 internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List<TreeRow> {
     if (conversation.entries.isEmpty()) return emptyList()
@@ -44,15 +37,12 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
     val leafId = conversation.leafId
 
     fun isVisible(entry: SessionEntry): Boolean = when (filter) {
-        // Non-message entries (compaction cuts, model_change and the other
-        // configuration/bookkeeping kinds) are elided in both filters, pi's
-        // "settings entries hidden in default view" rule (tree-selector.ts).
+        // Bookkeeping entries (compaction cuts, model_change, ...) are
+        // elided in both filters, as in pi's default view.
         TreeFilter.DEFAULT -> entry is MessageEntry
         TreeFilter.USER_ONLY -> entry is MessageEntry && entry.message is UserMessage
     }
 
-    // Visible tree: each visible entry attaches to its nearest visible
-    // ancestor (skipping hidden ancestors), roots keep tree() order.
     val visibleChildren = HashMap<String?, MutableList<SessionEntry>>()
     val roots = ArrayList<SessionEntry>()
     for (entry in conversation.entries) {
@@ -105,7 +95,6 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
     fun displayIndent(internalIndent: Int): Int =
         if (multipleRoots) internalIndent - 1 else internalIndent
 
-    // Iterative pre-order DFS mirroring pi's flattenTree stack frames.
     data class Frame(
         val entry: SessionEntry,
         val path: List<String>,
@@ -130,7 +119,7 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
                 justBranched = multipleRoots,
                 isRoot = true,
                 // Roots render without a connector even under the virtual
-                // branching root (pi's isVirtualRootChild).
+                // branching root.
                 connector = TreeConnector.NONE,
                 isLast = index == orderedRoots.lastIndex,
                 gutters = emptyList(),
@@ -149,22 +138,16 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
             gutters = frame.gutters,
             isOnActivePath = frame.entry.id in activePathIds,
             isCurrentLeaf = frame.entry.id == leafId,
-            // Pi's isFoldable: foldable rows start a segment — a root, or a
-            // child of a branch point — and have visible children. Folding
-            // hides the row's own descendants.
+            // Pi's isFoldable: a segment start (root or child of a branch
+            // point) with visible children; folding hides its descendants.
             isFoldable = children.isNotEmpty() && (frame.isRoot || frame.justBranched),
             preview = frame.entry.previewOf(),
         )
-        // Pi's indentation: branch points indent their children, and the
-        // first generation below a branch indents once more (visual
-        // grouping); other single-child chains stay at their parent's level.
         val childIndent = when {
             multipleChildren -> frame.internalIndent + 1
             frame.justBranched && frame.internalIndent > 0 -> frame.internalIndent + 1
             else -> frame.internalIndent
         }
-        // Descendants keep a │ guide at a connector's display level while
-        // the later siblings below it follow (pi's GutterInfo show = !isLast).
         val childGutters = if (frame.connector != TreeConnector.NONE && !frame.isLast) {
             frame.gutters + (displayIndent(frame.internalIndent) - 1)
         } else {
@@ -194,7 +177,6 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
     return rows
 }
 
-/** Whitespace-normalized first line of the entry's text content, bounded. */
 private fun SessionEntry.previewOf(): String {
     if (this !is MessageEntry) return "(no content)"
     val prefix = when (message) {

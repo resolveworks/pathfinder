@@ -12,35 +12,26 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.string
 
 /**
- * Compaction support utilities, ported from pi's
- * `packages/agent/src/harness/compaction/utils.ts`.
- *
- * Adaptation at the message-type boundary: pi's `AgentMessage` union is
- * replaced by pathfinder's `works.resolve.pathfinder.ai.core.Message`
- * hierarchy. Pathfinder's [ToolCall.arguments] is the raw JSON argument
- * string exactly as the provider streamed it (pi stores a parsed object), so
- * the argument-object accesses below parse that string; unparsable arguments
- * are treated as absent, mirroring pi's `if (!args) continue` guards.
+ * [ToolCall.arguments] is the raw JSON argument string exactly as the
+ * provider streamed it (pi stores a parsed object), so argument access
+ * below parses that string; unparsable arguments are treated as absent,
+ * mirroring pi's `if (!args) continue` guards.
  */
 
-/** File paths touched by a session branch or compaction range (utils.ts `FileOperations`). */
+/** File paths touched by a session branch or compaction range. */
 data class FileOperations(
     /** Files read but not necessarily modified. */
     val read: MutableSet<String>,
-    /** Files written by full-file write operations. */
     val written: MutableSet<String>,
-    /** Files modified by edit operations. */
     val edited: MutableSet<String>,
 )
 
-/** Create an empty file-operation accumulator (utils.ts `createFileOps`). */
 fun createFileOps(): FileOperations = FileOperations(mutableSetOf(), mutableSetOf(), mutableSetOf())
 
 private fun parseToolCallArguments(toolCall: ToolCall): JsonObject? =
     // runCatching is policy-compliant here: non-suspending, expected-failure parse.
     runCatching { lenientJson.parseToJsonElement(toolCall.arguments) }.getOrNull() as? JsonObject
 
-/** Add file operations from assistant tool calls to an accumulator (utils.ts `extractFileOpsFromMessage`). */
 fun extractFileOpsFromMessage(message: Message, fileOps: FileOperations) {
     if (message !is AssistantMessage) return
 
@@ -58,7 +49,6 @@ fun extractFileOpsFromMessage(message: Message, fileOps: FileOperations) {
     }
 }
 
-/** Compute sorted read-only and modified file lists from accumulated operations (utils.ts `computeFileLists`). */
 fun computeFileLists(fileOps: FileOperations): Pair<List<String>, List<String>> {
     val modified = mutableSetOf<String>()
     modified.addAll(fileOps.edited)
@@ -68,7 +58,6 @@ fun computeFileLists(fileOps: FileOperations): Pair<List<String>, List<String>> 
     return readOnly to modifiedFiles
 }
 
-/** Format file lists as summary metadata tags (utils.ts `formatFileOperations`). */
 fun formatFileOperations(readFiles: List<String>, modifiedFiles: List<String>): String {
     val sections = mutableListOf<String>()
     if (readFiles.isNotEmpty()) {
@@ -91,15 +80,10 @@ private fun truncateForSummary(text: String, maxChars: Int): String {
     return "${text.substring(0, maxChars)}\n\n[... $truncatedChars more characters truncated]"
 }
 
-/**
- * Concatenate text blocks of a content list, mirroring pi's
- * `contentText(content, separator)` (packages/ai/src/utils/text.ts) for the
- * array form; pathfinder's content is always structured.
- */
+/** pi's `contentText` also accepts a plain string; pathfinder content is always structured. */
 internal fun contentText(content: List<Content>, separator: String = "\n"): String =
     content.filter { it.type == ContentType.TEXT }.joinToString(separator) { (it as TextContent).text }
 
-/** Serialize LLM messages to plain text for summarization prompts (utils.ts `serializeConversation`). */
 fun serializeConversation(messages: List<Message>): String {
     val parts = mutableListOf<String>()
 

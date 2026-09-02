@@ -5,22 +5,16 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Ported from pi `packages/ai/src/auth/types.ts` (`CredentialStore`).
- *
  * App-owned credential storage, keyed by provider id, one credential per
  * provider. `modify` is the only write path, so every mutation is a
  * serialized read-modify-write; OAuth refresh runs inside `modify` so
  * concurrent requests cannot double-refresh a rotated token. Login/logout
  * orchestration is app-owned.
  *
- * Error semantics: [read] returns null for missing entries. Methods throw
- * only on storage failure. All operations are cancellation-friendly suspend
- * functions (Kotlin structured cancellation replaces pi's `AbortSignal`).
- *
- * Per pi's porting rule: synchronization is per provider id, cross-process
- * where the backing store supports it. The Android app is single-process, so
- * an in-process per-provider lock suffices (see [InMemoryCredentialStore] and
- * `EncryptedCredentialStore`).
+ * [read] returns null for missing entries; methods throw only on storage
+ * failure, and pi's `AbortSignal` parameters become coroutine cancellation.
+ * pi allows implementations to lock cross-process too; the single-process
+ * app needs only per-provider in-process exclusion.
  */
 interface CredentialStore {
     /**
@@ -52,11 +46,7 @@ interface CredentialStore {
     suspend fun delete(providerId: String)
 }
 
-/**
- * Ported from pi `packages/ai/src/auth/credential-store.ts`
- * (`InMemoryCredentialStore`). Default credential store; apps inject
- * persistent stores. Writes are serialized per provider through a mutex.
- */
+/** Default credential store; apps inject persistent stores. */
 class InMemoryCredentialStore : CredentialStore {
     private val credentials = ConcurrentHashMap<String, Credential>()
     private val locks = ConcurrentHashMap<String, Mutex>()

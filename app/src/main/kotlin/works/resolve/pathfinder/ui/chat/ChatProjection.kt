@@ -13,18 +13,13 @@ import works.resolve.pathfinder.data.sessions.CompactionEntry
 import works.resolve.pathfinder.data.sessions.Conversation
 import works.resolve.pathfinder.data.sessions.MessageEntry
 
-// ---- transcript projections (pure; pi's session branch → chat rows) ----
-
 /**
- * UI projection of the committed transcript as ordered blocks: the active
- * conversation path is the structural source (pi's session branch) but only
- * entries still live in the agent transcript render — auto-retry and
- * overflow recovery remove failed assistant messages from agent state while
- * the append-only tree keeps them in history, exactly like pi's UI.
- * Text parts stay separate, runs of consecutive thinking parts merge into
- * one block (pi's assistant-message semantics), and blank parts drop. Keys
- * are stable per path index+role+timestamp so that same-millisecond
- * user/assistant messages can never collide.
+ * UI projection of the committed transcript: the active conversation path is
+ * the structural source (pi's session branch), but only entries still live
+ * in the agent transcript render — auto-retry and overflow recovery remove
+ * failed assistant messages from agent state while the append-only tree
+ * keeps them in history, exactly like pi's UI. Keys are stable per path
+ * index+role+timestamp so same-millisecond messages can never collide.
  */
 internal fun projectCommitted(liveMessages: List<Message>, conversation: Conversation): List<ChatMessage> {
     val live = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Message, Boolean>())
@@ -32,9 +27,8 @@ internal fun projectCommitted(liveMessages: List<Message>, conversation: Convers
     val projected = mutableListOf<ChatMessage>()
     conversation.activeEntries().forEachIndexed { index, entry ->
         when {
-            // A compaction cut renders as a minimal divider marker (pi's UI
-            // shows the summary in a collapsible; pathfinder keeps the marker
-            // minimal — the summary itself lives in LLM context only).
+            // pi shows the compaction summary in a collapsible; the marker
+            // stays minimal — the summary lives in LLM context only.
             entry is CompactionEntry -> projected.add(
                 ChatMessage(id = "compacted-${entry.id}", role = ChatRole.Assistant, blocks = emptyList(), isCompactionMarker = true),
             )
@@ -53,14 +47,8 @@ internal fun projectCommitted(liveMessages: List<Message>, conversation: Convers
                         blocks = message.content.toChatBlocks(),
                         error = message.errorMessage,
                     )
-                    // Pi's tool-result messages render as tool rows (pi's
-                    // ToolExecutionComponent semantics: tool name first,
-                    // result text below, bounded to a preview until expanded).
-                    // Only UI-safe fields cross the boundary: the structured
-                    // `details` JSON is never projected (pi's TUI renders rich
-                    // per-tool details; pathfinder stays minimal until real
-                    // tools define needs). Distinct id namespace so a tool row
-                    // can never collide with a message row.
+                    // Distinct id namespace so a tool row can never collide
+                    // with a message row.
                     is ToolResultMessage -> ChatMessage(
                         id = "tool-$index-${message.timestamp}-${message.toolCallId}",
                         role = ChatRole.Tool,
@@ -80,10 +68,10 @@ internal fun projectCommitted(liveMessages: List<Message>, conversation: Convers
     return projected
 }
 
-/** UI projection of the in-flight partial; distinct key namespace from committed messages.
- * Pi's `streamingMessage` is role-generic (user/tool-result message_starts
- * transiently occupy it); the chat's streaming contract stays assistant-only,
- * so non-assistant partials project to nothing at the call site. */
+/** UI projection of the in-flight partial; distinct key namespace from committed rows.
+ * Pi's streaming message is role-generic (user/tool-result starts transiently
+ * occupy it); this contract is assistant-only, so non-assistant partials
+ * project to nothing at the call site. */
 internal fun projectStreaming(message: AssistantMessage): ChatMessage =
     ChatMessage(
         id = "streaming-${message.timestamp}",
@@ -92,12 +80,7 @@ internal fun projectStreaming(message: AssistantMessage): ChatMessage =
         error = message.errorMessage,
     )
 
-/**
- * Projects content into ordered blocks: each non-blank [TextContent] becomes
- * its own [ChatBlock.Text]; runs of consecutive [ThinkingContent] merge into
- * one [ChatBlock.Thinking] joined with "\n\n" and trimmed (dropped when the
- * merged result is blank).
- */
+/** Ordered blocks: consecutive thinking parts merge into one, blank parts drop. */
 internal fun List<Content>.toChatBlocks(): List<ChatBlock> {
     val blocks = mutableListOf<ChatBlock>()
     var thinkingRun: MutableList<String>? = null
@@ -117,8 +100,6 @@ internal fun List<Content>.toChatBlocks(): List<ChatBlock> {
                 part.text.takeIf { it.isNotBlank() }?.let { blocks.add(ChatBlock.Text(it)) }
             }
             is ToolCall -> {
-                // Name-only label in content order; raw JSON arguments are
-                // deliberately never projected into UI state.
                 flushThinking()
                 blocks.add(ChatBlock.ToolCall(part.id, part.name))
             }
@@ -130,10 +111,9 @@ internal fun List<Content>.toChatBlocks(): List<ChatBlock> {
 }
 
 /**
- * Full text output of a tool result (pi's getTextOutput, render-utils.ts —
- * text parts joined with newlines, no truncation at the projection
- * boundary; renderers bound the collapsed preview the way pi's renderers
- * cap preview lines). Null when the result carries no text at all.
+ * Full text output: text parts joined with newlines. No truncation at the
+ * projection boundary — renderers bound the collapsed preview, the way
+ * pi's renderers cap preview lines.
  */
 internal fun toolResultOutput(message: ToolResultMessage): String? {
     val parts = message.content.filterIsInstance<TextContent>()
@@ -159,8 +139,8 @@ internal fun pendingToolExecutions(state: AgentState): List<PendingToolExecution
             }
         }
     }
-    // Defensive fallback: a malformed or out-of-order event must still show
-    // an in-flight indicator rather than disappearing from the UI.
+    // A malformed or out-of-order event must still show an in-flight
+    // indicator rather than disappearing from the UI.
     for (id in state.pendingToolCalls) {
         if (resolved.add(id)) rows.add(PendingToolExecution(id, UNKNOWN_TOOL_NAME))
     }

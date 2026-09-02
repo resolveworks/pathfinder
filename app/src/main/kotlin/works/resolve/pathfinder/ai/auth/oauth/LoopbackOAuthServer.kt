@@ -16,30 +16,18 @@ import java.net.SocketException
 import java.net.URLDecoder
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * One parsed loopback callback request. Mirrors what pi's inline callback
- * servers derive from `req.url`/`req.method` (a `URL` plus `searchParams`).
- */
 internal data class LoopbackCallbackRequest(
     val method: String,
     val path: String,
     val query: Map<String, String>,
 )
 
-/**
- * The response a flow's handler produces for a callback request. Mirrors pi's
- * `res.statusCode = ...; res.end(html)` pairs.
- */
 internal data class LoopbackCallbackResponse(
     val status: Int,
     val html: String,
 )
 
-/**
- * Handle over a running loopback OAuth callback server. Mirrors the object pi's
- * provider flows get back from their `startCallbackServer`/`startLocalOAuthServer`
- * helpers (`waitForCode`, `cancelWait`, `close`, and the bound port).
- */
+/** Handle over a running loopback OAuth callback server. */
 internal interface LoopbackCallbackHandle<R> {
     /** The actual bound port (OpenRouter builds its callback URL from this before the authorize URL). */
     val port: Int
@@ -47,7 +35,7 @@ internal interface LoopbackCallbackHandle<R> {
     /** Completes with the value passed to `settle`; `null` after [cancelWait]. */
     suspend fun waitForResult(): R?
 
-    /** pi `cancelWait`: hands the login to the manual path without failing. */
+    /** Hands the login to the manual path without failing. */
     fun cancelWait()
 
     /** Idempotent; releases the socket and the accept coroutine. */
@@ -56,60 +44,43 @@ internal interface LoopbackCallbackHandle<R> {
 
 /**
  * Generic JDK-only loopback HTTP callback server consolidating pi's three
- * inline `node:http` callback servers:
+ * inline `node:http` callback servers. This class owns only the transport —
+ * bind, accept, parse, respond, settle-once; all provider semantics (fixed vs
+ * ephemeral port, route checks, state validation, exchange inside the handler,
+ * 409 reuse guards) stay in flow code via [handler].
  *
- * - `openai-codex.ts` `startLocalOAuthServer` — fixed port 1455, validates
- *   state and extracts the code inside the request handler, returns HTML from
- *   [oauthSuccessHtml]/[oauthErrorHtml], bind errors degrade the flow to
- *   manual-code login.
- * - `anthropic.ts` `startCallbackServer` — fixed port 53692, settles
- *   `{code, state}`.
- * - `openrouter.ts` `startCallbackServer` — ephemeral port 0 with a random
- *   callback path, runs the token exchange *inside* the request handler and
- *   settles only after it finishes, guards reuse with 409s.
- *
- * Consolidation: this class owns only the transport (bind, accept, parse,
- * respond, settle-once). All provider semantics — fixed vs ephemeral port,
- * route checks, state validation, error/description handling, exchange inside
- * the handler, 409 reuse guards — stay in flow code via [handler].
- *
- * Deliberate divergences from pi (documented per AGENTS.md):
- * - Responses always carry `Cache-Control: no-store`; upstream sets it only in
- *   OpenRouter's `sendHtml`. Harmless consolidation.
+ * Divergences from pi:
+ * - Responses always carry `Cache-Control: no-store`; upstream sets it only
+ *   in OpenRouter's `sendHtml`.
  * - Android apps share the device network namespace, so a socket bound on
- *   `127.0.0.1` is reachable from the on-device browser, which allows cleartext
- *   `http://localhost`; the earlier "Android cannot own a loopback port"
- *   assumption was wrong.
+ *   `127.0.0.1` is reachable from the on-device browser, which allows
+ *   cleartext `http://localhost`.
+ * - An optional [OAuthForegroundGate] defers [LoopbackCallbackHandle.waitForResult]
+ *   until the app is foregrounded: the server keeps serving while backgrounded
+ *   (the on-device browser must still be able to deliver the redirect), but
+ *   the flow does not proceed into a token exchange that background-restricted
+ *   Android would kill.
  *
- * This class is provider-neutral and secret-free: nothing from a request is
- * echoed into a response except through the flow handler's decision, and it
- * performs no logging of any kind.
- *
- * - **Foreground gate** (Android-only divergence from pi, documented per
- *   AGENTS.md): an optional [OAuthForegroundGate] defers [LoopbackCallbackHandle.waitForResult]
- *   until the app is foregrounded. The server itself keeps serving while
- *   backgrounded — the on-device browser must still be able to deliver the
- *   redirect — but the flow does not proceed (into a token exchange that
- *   background-restricted Android would kill) until Pathfinder is back in
- *   the foreground. `null` (the default) is pi parity.
+ * Provider-neutral and secret-free: nothing from a request is echoed into a
+ * response except through the flow handler's decision, and the server logs
+ * nothing.
  */
 internal class LoopbackOAuthServer<R>(
-    /** Fixed port (1455 / 53692) or 0 for an ephemeral port (OpenRouter). */
+    /** Fixed port, or 0 for an ephemeral port (OpenRouter). */
     val port: Int,
-    /** pi `getCallbackHost()` — loopback by default. */
     val host: String = "127.0.0.1",
     /** Optional Android foreground gate for `waitForResult`; `null` = pi parity. */
     val gate: OAuthForegroundGate? = null,
     /**
      * Invoked per request. May call [settle] at most once, from any coroutine
      * (OpenRouter settles only after an in-handler token exchange completes);
-     * the first call wins, mirroring pi's `settled` guards.
+     * the first call wins.
      */
     val handler: suspend (request: LoopbackCallbackRequest, settle: (R?) -> Unit) -> LoopbackCallbackResponse,
 ) {
     /**
-     * Bind and listen. Returns `null` when the port cannot be bound — pi's
-     * `server.on("error")` path; flows degrade to manual-code login.
+     * Bind and listen. Returns `null` when the port cannot be bound; flows
+     * degrade to manual-code login.
      */
     suspend fun start(): LoopbackCallbackHandle<R>? = withContext(Dispatchers.IO) {
         val serverSocket = try {
@@ -142,9 +113,8 @@ internal class LoopbackOAuthServer<R>(
                 } catch (_: IOException) {
                     continue
                 }
-                // One connection must never kill the accept loop — but
-                // cancellation must propagate (runCatching would swallow it,
-                // see the runCatching rule in AGENTS.md).
+                // One connection must never kill the accept loop, but
+                // cancellation must propagate (runCatching would swallow it).
                 try {
                     serveConnection(socket, ::settle)
                 } catch (e: CancellationException) {
@@ -170,11 +140,10 @@ internal class LoopbackOAuthServer<R>(
                 scope.cancel()
             }
         }
-        // The accept loop lives in `scope`; no job reference is needed.
         handle
     }
 
-    /** Read one request, run the handler, write the response, close. Malformed/unparseable requests get a minimal 400 page (the server keeps serving). */
+    /** Malformed or unparseable requests get a minimal 400 page; the server keeps serving. */
     private suspend fun serveConnection(socket: Socket, settle: (R?) -> Unit) {
         socket.soTimeout = SOCKET_TIMEOUT_MS
         socket.use { s ->
@@ -205,7 +174,7 @@ internal class LoopbackOAuthServer<R>(
         val parts = requestLine.split(" ")
         if (parts.size < 3) error("malformed request line")
 
-        // Drain headers (a body, if any, is ignored like pi's servers).
+        // Drain headers; any body is ignored.
         while (true) {
             val line = readLine(input) ?: break
             if (line.isEmpty()) break
@@ -263,8 +232,7 @@ internal class LoopbackOAuthServer<R>(
 
 /**
  * Parse `a=1&b=2` with form decoding (so `+` means space) and first-occurrence
- * semantics, matching `URLSearchParams.get`. Port of how pi's servers consume
- * `new URL(...).searchParams`.
+ * semantics, matching `URLSearchParams.get`.
  */
 internal fun parseQuery(rawQuery: String): Map<String, String> {
     if (rawQuery.isEmpty()) return emptyMap()

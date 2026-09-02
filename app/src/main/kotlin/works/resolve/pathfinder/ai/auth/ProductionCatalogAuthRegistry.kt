@@ -12,26 +12,14 @@ import works.resolve.pathfinder.ai.auth.oauth.UrlConnectionOAuthHttpClient
 import works.resolve.pathfinder.ai.auth.oauth.XaiOAuthAuth
 
 /**
- * Production [CatalogAuthRegistry]: the app's single composition point
- * wiring catalog providers to their concrete OAuth flow ports (pi wires the
- * flows directly inside its provider definitions; Pathfinder composes them
- * here because the flows are injected ports with an HTTP boundary).
+ * OAuth flows are registered here by provider id; provider knowledge stays
+ * out of the catalog bridge.
  *
- * Registers `anthropic` → [AnthropicOAuthAuth], `openrouter` →
- * [OpenRouterOAuthAuth], `kimi-coding` → [KimiCodingOAuthAuth], `xai` →
- * [XaiOAuthAuth], `openai-codex` → [OpenAiCodexOAuthAuth], and
- * `github-copilot` → [GitHubCopilotOAuthAuth] (its static model-id set — pi's
- * `GITHUB_COPILOT_MODELS` — is taken from the catalog entry passed to
- * [oauthAuth], the same generated asset), all over the JDK
- * [UrlConnectionOAuthHttpClient]. New flows are added by extending the map
- * — never by leaking provider knowledge into the catalog bridge.
- *
- * Android foreground gating (deliberate divergence, see
- * [OAuthForegroundGate]): every flow's HTTP client is wrapped in
- * [ForegroundGatedOAuthHttpClient] and the three loopback flows pass [gate]
- * to their callback server, so no OAuth network work runs while the app is
- * backgrounded. [OAuthForegroundGate.NONE] (the default) restores pi parity
- * exactly.
+ * Both OAuth network seams are foreground-gated: every flow's HTTP client is
+ * wrapped in [ForegroundGatedOAuthHttpClient] and the loopback flows also
+ * pass [gate] to their callback server, so no OAuth network work runs while
+ * the app is backgrounded (see [OAuthForegroundGate];
+ * [OAuthForegroundGate.NONE], the default, is exact pi parity).
  */
 class ProductionCatalogAuthRegistry(
     private val gate: OAuthForegroundGate = OAuthForegroundGate.NONE,
@@ -50,10 +38,9 @@ class ProductionCatalogAuthRegistry(
     )
 
     override fun oauthAuth(provider: works.resolve.pathfinder.ai.providers.CatalogProvider): OAuthAuth? {
-        // The Copilot flow's policy-enablement check needs the provider's
-        // static model ids (pi GITHUB_COPILOT_MODELS); the catalog entry is
-        // the same generated asset pi generates that list from, so the ids
-        // are read straight from it.
+        // Constructed per provider because the flow's policy-enablement
+        // check needs the entry's static model ids — the same generated
+        // asset pi derives its GITHUB_COPILOT_MODELS list from.
         if (provider.id == "github-copilot") {
             return GitHubCopilotOAuthAuth(
                 http = client(),

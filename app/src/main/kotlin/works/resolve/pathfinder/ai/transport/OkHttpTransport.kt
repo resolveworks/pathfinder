@@ -21,19 +21,16 @@ import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 
 /**
- * Production [HttpStreamingTransport] backed by OkHttp and Square's okhttp-sse.
+ * [HttpStreamingTransport] over OkHttp and okhttp-sse. Never logs the bearer
+ * token, headers, or message content.
  *
- * - Sends JSON POST requests with a Bearer Authorization token; the token is
- *   never logged.
- * - Applies the request timeout via OkHttp's per-call timeout (using a
- *   [Call.Factory] wrapper so the SSE factory still honors it).
- * - Delegates SSE framing (UTF-8, CR/LF, comments, BOM, multiline data) to
- *   okhttp-sse; only complete `data:` payloads cross this boundary.
- * - [post] suspends until response headers arrive so non-2xx bodies are
- *   captured (capped at [MAX_PROVIDER_ERROR_BODY_CHARS]) and status/headers
- *   surface for retry classification before any content is consumed.
- * - Cancels the underlying [EventSource] promptly when the caller's event
- *   collection is cancelled or the stream completes. Never auto-reconnects.
+ * SSE framing (UTF-8, CR/LF, comments, BOM, multiline data) is delegated to
+ * okhttp-sse; only complete `data:` payloads cross this boundary. [post]
+ * suspends until response headers arrive so non-2xx bodies are captured
+ * (capped at [MAX_PROVIDER_ERROR_BODY_CHARS]) and status/headers are
+ * available for retry classification before any content is consumed. The
+ * underlying [EventSource] is cancelled promptly when the event collection
+ * is cancelled or ends; there is no auto-reconnect.
  */
 class OkHttpTransport(
     private val client: OkHttpClient = OkHttpClient(),
@@ -81,9 +78,9 @@ class OkHttpTransport(
                         // huge error body is never fully buffered just to be
                         // truncated.
                         val readLimit = MAX_PROVIDER_ERROR_BODY_CHARS.toLong() * 4
-                        // pi's extractBody trims before truncating; trim
-                        // here so the captured body matches (the shared
-                        // normalizer in utils/ErrorBody.kt caps it).
+                        // Trim before truncating so the captured body
+                        // matches the shared error-body normalizer's
+                        // convention.
                         val errorBody = try {
                             val source = response.body.source()
                             source.request(readLimit)
@@ -141,7 +138,7 @@ class OkHttpTransport(
         )
     }
 
-    /** Latch for the first response headers; completes once, from listener callbacks. */
+    /** Latch for the first response headers; later completions are ignored. */
     private class HeadersResult {
         private val deferred = CompletableDeferred<Unit>()
 
@@ -159,7 +156,6 @@ class OkHttpTransport(
 
         fun completeWithoutResponse() = complete(0, emptyMap())
 
-        /** Fails the latch if headers were not delivered yet; false if already completed. */
         fun failBeforeOpen(error: Throwable): Boolean {
             if (deferred.isCompleted) return false
             deferred.completeExceptionally(error)

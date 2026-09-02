@@ -53,16 +53,11 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.put
 
-/** pi's MistralReasoningEffort. */
 typealias MistralReasoningEffort = String // "none" | "high"
 
-/** pi's MistralOptions.promptMode; only "reasoning" exists. */
+/** Only "reasoning" exists. */
 enum class MistralPromptMode(val wire: String) { REASONING("reasoning") }
 
-/**
- * Provider-specific options for the Mistral API, ported from pi's
- * MistralOptions (an extension of StreamOptions).
- */
 data class MistralOptions(
     /** Explicit API key; never included in toString(). */
     val apiKey: String? = null,
@@ -73,37 +68,29 @@ data class MistralOptions(
     val maxRetries: Int = 0,
     val maxRetryDelayMs: Long = works.resolve.pathfinder.ai.core.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     val env: Map<String, String> = emptyMap(),
-    /** Explicit request headers; a null value removes the header (pi semantics). */
+    /** Explicit request headers; a null value removes the header. */
     val headers: Map<String, String?> = emptyMap(),
     val toolChoice: ToolChoice? = null,
     val promptMode: MistralPromptMode? = null,
     val reasoningEffort: MistralReasoningEffort? = null,
     val cacheRetention: CacheRetention? = null,
     /**
-     * pi's onPayload request hook (ProviderRequestOptions, types.ts:145-149;
-     * mistral-conversations.ts:142): replaces the payload object before
-     * serialization when it returns non-null. Divergence: upstream's hook sees
-     * the internal camelCase payload before `toMistralWirePayload` remaps it;
-     * this port builds the snake_case wire payload directly, so the hook
-     * sees the wire object. Receives full message content; installers must
-     * not log it. Never included in toString().
+     * Request hook that may return a replacement for the outgoing payload.
+     * Divergence: it sees the snake_case wire object, where pi's hook sees
+     * the internal payload before wire remapping. Receives full message
+     * content; installers must not log it. Never included in toString().
      */
     val onPayload: (suspend (payload: JsonObject, model: Model) -> JsonObject?)? = null,
     /**
-     * pi's onResponse request hook (types.ts:184; mistral-conversations.ts:306):
-     * invoked after response headers arrive — including non-2xx, since
-     * upstream fires it before the `response.ok` check (the transport here
+     * Invoked after response headers arrive — including non-2xx, as in pi,
+     * whose hook fires before the response.ok check. The transport here
      * throws for non-2xx, so the error path invokes it from the exception's
-     * status/headers). Never included in toString().
+     * status/headers. Never included in toString().
      */
     val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
     /**
-     * pi's ProviderRequestOptions.telemetryContext (types.ts:126-127),
-     * inherited via StreamOptions (MistralOptions extends StreamOptions,
-     * mistral-conversations.ts): explicit parent context for telemetry
-     * produced by this logical request. Dormant in this port — carried for
-     * shape fidelity, preserved through the streamSimple conversion
-     * (buildBaseOptions). Presence boolean only in toString().
+     * Explicit parent telemetry context for this request. Dormant in this
+     * port — carried for shape fidelity.
      */
     val telemetryContext: TelemetryContext? = null,
 ) {
@@ -128,12 +115,6 @@ data class MistralOptions(
     )
 }
 
-/**
- * pi's streamSimple options conversion for mistral-conversations:
- * buildBaseOptions plus the clamped thinking level and per-model prompt-mode
- * vs reasoning-effort selection. Extracted as a named function so the
- * conversion (including telemetryContext identity) is directly testable.
- */
 internal fun buildMistralOptions(
     model: Model,
     context: Context,
@@ -168,14 +149,6 @@ internal fun buildMistralOptions(
     )
 }
 
-/**
- * pi's manual OpenAI-completions-style options conversion for the mistral
- * adapter's `stream(model, context, OpenAiCompletionsOptions)` overload
- * (mistral-conversations.ts accepts StreamOptions-shaped input): maps the
- * shared surface plus per-model prompt-mode vs reasoning-effort selection
- * onto [MistralOptions]. Extracted as a named function so the conversion
- * (including telemetryContext identity) is directly testable.
- */
 internal fun toMistralOptions(
     model: Model,
     options: OpenAiCompletionsOptions,
@@ -206,24 +179,13 @@ internal fun toMistralOptions(
 }
 
 /**
- * Native Mistral Chat Completions streaming adapter, ported from pi's
- * `src/api/mistral-conversations.ts`: wire payload, header/x-affinity
- * handling, native thinking/text/tool-call chunk parsing with pi's block
- * event ordering, cached-token usage accounting with cost, raw finish reasons,
- * and provider error formatting.
+ * Native Mistral Chat Completions streaming adapter.
  *
- * Divergences from pi, at the narrowest boundary:
- * - Abort: pi maps an aborted `signal` to a terminal error event with
- *   stopReason "aborted"; here coroutine cancellation propagates normally and
- *   produces no error event, per this codebase's stream contract.
- * - pi applies `AbortSignal.timeout(options?.timeoutMs ?? 60_000)` here; this
- *   port forwards the same 60s default to the transport as the per-call
- *   timeout when `timeoutMs` is unset.
- *
- * Retry divergence: pi's `requestMistralStream` uses a raw `fetch` with no
- * retry wrapper — Mistral effectively ignores `maxRetries`. This port is
- * aligned: `transport.post` is called directly, so retryable transport
- * errors surface immediately even when `maxRetries > 0`.
+ * Divergences from pi: aborts surface as coroutine cancellation and end the
+ * flow without an error event (pi emits a terminal "aborted" error), and
+ * requests are not retried — pi calls raw `fetch` with no retry wrapper, so
+ * Mistral effectively ignores `maxRetries`; `transport.post` is called
+ * directly for the same behavior.
  */
 class MistralConversationsApi(
     private val transport: HttpStreamingTransport,
@@ -236,10 +198,6 @@ class MistralConversationsApi(
         options: OpenAiCompletionsOptions,
     ): Flow<AssistantMessageEvent> = stream(model, context, toMistralOptions(model, options))
 
-    /**
-     * Streams with native Mistral options, pi's `stream` entry point. The
-     * payload is built first, so API-key failures surface before any request.
-     */
     fun stream(
         model: Model,
         context: Context,
@@ -262,8 +220,6 @@ class MistralConversationsApi(
                     works.resolve.pathfinder.ai.api.buildMistralSystemMessage(context.systemPrompt),
                 ) + wireMessages
             }
-            // pi mistral-conversations.ts:142: onPayload inspects/replaces the
-            // payload object before serialization; null keeps the payload.
             var payload = MistralConversationsPayload.buildRequestBody(model, context, wireMessages, options)
             options.onPayload?.let { hook -> hook(payload, model)?.let { payload = it } }
 
@@ -274,13 +230,9 @@ class MistralConversationsApi(
                 bearerToken = bearerToken,
                 headers = headers,
                 body = payload.toString().toByteArray(Charsets.UTF_8),
-                // pi: AbortSignal.timeout(options?.timeoutMs ?? 60_000)
                 timeoutMs = options.timeoutMs ?: DEFAULT_TIMEOUT_MS,
             )
 
-            // pi mistral-conversations.ts:306: onResponse fires right after
-            // response headers arrive, before the !ok check — so it also runs
-            // for non-2xx (surfaced from ProviderHttpException here).
             val response = try {
                 transport.post(request)
             } catch (error: ProviderHttpException) {
@@ -321,12 +273,6 @@ class MistralConversationsApi(
         }
     }
 
-    /**
-     * Maps provider-agnostic [SimpleStreamOptions] to Mistral options, pi's
-     * `streamSimple`: clamps thinking level, selects prompt_mode vs
-     * reasoning_effort per model, clamps max tokens against the context, and
-     * forwards the tool choice.
-     */
     override fun streamSimple(
         model: Model,
         context: Context,
@@ -342,7 +288,6 @@ class MistralConversationsApi(
         )
     }
 
-    /** Parses one complete SSE data payload; null means the stream is done. */
     private fun processSseEvent(
         event: SseEvent,
         model: Model,
@@ -410,13 +355,13 @@ class MistralConversationsApi(
         return events
     }
 
-    /** pi's usage handling: cached tokens reduce the input count; writes are always 0. */
+    /** Cached tokens reduce the input count; cache writes are always 0. */
     private fun parseChunkUsage(raw: JsonObject, model: Model): Usage {
         val promptTokens = raw.int("prompt_tokens") ?: 0
         val cachedPromptTokens = cachedPromptTokens(raw, promptTokens)
         val input = maxOf(0, promptTokens - cachedPromptTokens)
         val output = raw.int("completion_tokens") ?: 0
-        // pi: total_tokens || input+output+cacheRead (0 falls back to the sum)
+        // total_tokens || input+output+cacheRead; 0 falls back to the sum
         val totalTokens = (raw.int("total_tokens") ?: 0).takeIf { it != 0 }
             ?: (input + output + cachedPromptTokens)
         val usage = Usage(
@@ -429,7 +374,7 @@ class MistralConversationsApi(
         return usage.copy(cost = calculateCost(model, usage))
     }
 
-    /** pi's getMistralCachedPromptTokens: several provider spellings, clamped to prompt tokens. */
+    /** Handles the several provider spellings of the cached-token count, clamped to prompt tokens. */
     private fun cachedPromptTokens(raw: JsonObject, promptTokens: Int): Int {
         val rawCached = raw.obj("promptTokensDetails")?.int("cachedTokens")
             ?: raw.obj("prompt_tokens_details")?.int("cached_tokens")
@@ -441,7 +386,6 @@ class MistralConversationsApi(
         return minOf(promptTokens, maxOf(0, rawCached))
     }
 
-    /** pi's mapChatStopReason. */
     internal fun mapChatStopReason(reason: String): Pair<StopReason, String?> = when (reason) {
         "stop" -> StopReason.STOP to null
         "length", "model_length" -> StopReason.LENGTH to null
@@ -450,14 +394,7 @@ class MistralConversationsApi(
         else -> StopReason.ERROR to "Provider stopped with: $reason"
     }
 
-    /**
-     * pi's formatMistralError (mistral-conversations.ts:261-272): a Mistral-specific
-     * formatter, kept as such upstream too — pi composes the body/message itself
-     * instead of going through formatProviderError. Upstream also duplicates
-     * `truncateErrorText` and `MAX_PROVIDER_ERROR_BODY_CHARS` inline
-     * (mistral-conversations.ts:274-278, 257); the port consolidates them into the
-     * shared utils/ErrorBody.kt.
-     */
+    /** Mistral-specific error formatting, as in pi — not the shared provider error formatter. */
     internal fun formatMistralError(error: Exception): String = when (error) {
         is ProviderHttpException -> {
             val bodyText = error.body.trim()
@@ -473,16 +410,6 @@ class MistralConversationsApi(
         else -> error.message ?: error::class.simpleName ?: "Unknown error"
     }
 
-
-    /**
-     * pi's buildMistralHeaders: Accept + Authorization (via the transport's
-     * bearer token unless explicitly overridden) + model headers, then request
-     * headers (null removes), then x-affinity from the session id when prompt
-     * caching is active and not explicitly overridden.
-     *
-     * The User-Agent is pi's getPiUserAgent() (ai/utils/PiUserAgent.kt);
-     * only its platform-string details diverge.
-     */
     private fun buildMistralHeaders(
         model: Model,
         apiKey: String,
@@ -538,7 +465,7 @@ class MistralConversationsApi(
 
     private companion object {
         const val DONE = "[DONE]"
-        /** pi's AbortSignal.timeout default (mistral-conversations.ts). */
+        /** pi's AbortSignal.timeout default. */
         const val DEFAULT_TIMEOUT_MS = 60_000L
     }
 }
@@ -549,27 +476,20 @@ internal fun buildMistralSystemMessage(systemPrompt: String): JsonObject =
         put("content", sanitizeSurrogates(systemPrompt))
     }
 
-
-/** pi's usesReasoningEffort model list. */
 internal fun usesReasoningEffort(model: Model): Boolean =
     model.id == "mistral-small-2603" || model.id == "mistral-small-latest" || model.id == "mistral-medium-3.5"
 
 internal fun usesPromptModeReasoning(model: Model): Boolean = model.reasoning && !usesReasoningEffort(model)
 
-/** pi's mapReasoningEffort: thinkingLevelMap entry, defaulting to "high". */
 internal fun mapReasoningEffort(model: Model, level: ModelThinkingLevel): MistralReasoningEffort =
     model.thinkingLevelMap?.forLevel(level) ?: "high"
 
-
 /**
- * Accumulates streamed Mistral content with pi's exact block semantics: one
- * open text/thinking block at a time, closed when a block of another type (or
- * a tool call) starts, tool blocks keyed by `index ?? callId` (pi commit
- * 6c87d9a02, issue #8387: "fix(ai): merge indexed Mistral tool call
- * chunks" — indexed fragments merge regardless of whether later chunks
- * carry the same or any id, and id/name are set only at block creation),
- * and toolcall_end events emitted (in first-seen order) after the final
- * text/thinking block closes.
+ * Accumulates streamed Mistral content with pi's block semantics: one open
+ * text/thinking block at a time, closed when a block of another type (or a
+ * tool call) starts; tool-call fragments merged by `index ?? callId` even
+ * when later chunks carry no id; toolcall_end events emitted (in first-seen
+ * order) after the final text/thinking block closes.
  */
 internal class MistralStreamingState(private val model: Model, private val timestampMs: Long) {
     private sealed interface Block {
@@ -653,9 +573,7 @@ internal class MistralStreamingState(private val model: Model, private val times
         } else {
             deriveMistralToolCallId("toolcall:${index ?: 0}", 0)
         }
-        // pi 6c87d9a02 (#8387): `const key = toolCall.index ?? callId` —
-        // indexed chunks merge even when later fragments carry no id. Id and
-        // name are only set at block creation (upstream), so a later chunk's
+        // Id and name are set only at block creation, so a later chunk's
         // derived id never overwrites the block's id.
         val key: Any = index ?: callId
         val function = toolCall.obj("function")
@@ -682,7 +600,6 @@ internal class MistralStreamingState(private val model: Model, private val times
         return events
     }
 
-    /** pi's stream-end sequence: close the open block, then end each tool call. */
     fun finishOpenBlocks(): List<AssistantMessageEvent> {
         val events = mutableListOf<AssistantMessageEvent>()
         events += closeCurrentBlock()

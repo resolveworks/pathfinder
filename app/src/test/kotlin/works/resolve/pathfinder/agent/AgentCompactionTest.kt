@@ -33,18 +33,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Automatic-compaction wiring of [AgentSession], porting pi's agent-session
- * `_checkCompaction`/`_runAutoCompaction` scenarios (agent-session.ts
- * ~1960/~2104): threshold and overflow triggers, the one-shot overflow
- * recovery, the same-model and pre-compaction-boundary guards, aborted
- * skips, prompt rejection while compacting, and the event payloads
- * (`compaction_start`/`compaction_end`, summarization retries).
- *
- * The main agent runs on a scripted [StreamFn] (AgentAutoRetryTest pattern);
- * the summarization provider is a fake [Models] behind a fake [ChatApi]
- * (CompactionLlmTest pattern).
- */
 class AgentCompactionTest {
 
     private val model = Model(
@@ -76,7 +64,6 @@ class AgentCompactionTest {
         timestamp = timestamp,
     )
 
-    /** Fake summarization ChatApi serving queued terminal responses (CompactionLlmTest's FauxApi). */
     private class FauxApi : ChatApi {
         val responses = ArrayDeque<AssistantMessage>()
         var gate: CompletableDeferred<Unit>? = null
@@ -111,7 +98,6 @@ class AgentCompactionTest {
                 ),
             ),
         )
-        // The summarization calls route the main model through the fake API.
         return api to models
     }
 
@@ -150,8 +136,6 @@ class AgentCompactionTest {
         events
     }
 
-    // ---- threshold ----
-
     @Test
     fun `threshold usage triggers compaction, rebuild, and a full end event`() = runTest {
         val (api, models) = fauxModels()
@@ -184,14 +168,10 @@ class AgentCompactionTest {
         assertTrue(result.estimatedTokensAfter < result.tokensBefore)
         assertEquals(150, result.usage!!.totalTokens)
 
-        // No continue: exactly one agent run.
         assertEquals(1, streams.seenContexts.size)
-        // The tree gained the compaction entry as its leaf...
         val entries = agent.conversation.activeEntries()
         val compaction = entries.last() as works.resolve.pathfinder.data.sessions.CompactionEntry
         assertEquals("SUMMARY", compaction.summary)
-        // ...and the agent transcript was rebuilt from the session context:
-        // summary message first, then the retained tail.
         val rebuilt = agent.state.value.messages
         assertEquals(compaction.retainedTail.size + 1, rebuilt.size)
         val summaryMessage = rebuilt.first() as works.resolve.pathfinder.ai.core.UserMessage
@@ -256,8 +236,6 @@ class AgentCompactionTest {
         assertTrue(events.filterIsInstance<AgentEvent.CompactionEnd>().isEmpty())
     }
 
-    // ---- overflow ----
-
     private fun overflowError() =
         assistant("", StopReason.ERROR, "prompt is too long: 300000 tokens > 200000 maximum")
 
@@ -300,10 +278,8 @@ class AgentCompactionTest {
                 "Try reducing context or switching to a larger-context model.",
             failure.errorMessage,
         )
-        // Initial run + one recovery continuation; no infinite loop.
         assertEquals(2, streams.seenContexts.size)
-        // The first overflow error left agent state (removed before the retry);
-        // the second stays as the final message.
+        // The first overflow error is removed before the retry; the second stays as the final message.
         val last = agent.state.value.messages.last() as AssistantMessage
         assertEquals(overflowError().errorMessage, last.errorMessage)
     }
@@ -325,14 +301,11 @@ class AgentCompactionTest {
 
         val events = collectEvents(agent)
 
-        // One compact-and-retry, then a clean recovery.
         val end = events.filterIsInstance<AgentEvent.CompactionEnd>().single()
         assertTrue(end.willRetry)
         val last = agent.state.value.messages.last() as AssistantMessage
         assertEquals("recovered", (last.content.single() as TextContent).text)
-        // The retried run continued from a context whose trailing message is
-        // NOT the overflow error (it was removed twice: pre-compaction and
-        // post-rebuild).
+        // The overflow error was removed twice: pre-compaction and post-rebuild.
         val retryContext = streams.seenContexts[1]
         assertFalse(
             retryContext.any { it is AssistantMessage && it.stopReason == StopReason.ERROR },
@@ -363,8 +336,6 @@ class AgentCompactionTest {
         assertTrue(end.willRetry)
         assertEquals(2, streams.seenContexts.size)
     }
-
-    // ---- guards ----
 
     @Test
     fun `overflow error from a different model never compacts`() = runTest {
@@ -405,7 +376,6 @@ class AgentCompactionTest {
     @Test
     fun `stale pre-compaction usage does not retrigger after a compaction`() = runTest {
         val (api, models) = fauxModels()
-        // Turn 1: huge usage crosses the threshold and compacts.
         val streams = ScriptedStreams().apply {
             streams.add(
                 flowOf(
@@ -415,9 +385,8 @@ class AgentCompactionTest {
                     ),
                 ),
             )
-            // Turn 2: an error with zero usage — the estimate falls back to the
-            // retained (pre-compaction) assistant's huge usage, which must not
-            // compact again.
+            // The zero-usage error estimate falls back to the retained
+            // (pre-compaction) assistant's huge usage, which must not compact again.
             streams.add(flowOf(AssistantMessageEvent.Error(StopReason.ERROR, assistant("", StopReason.ERROR, "boom"))))
         }
         api.responses.add(assistant("SUMMARY"))
@@ -436,8 +405,6 @@ class AgentCompactionTest {
         assertEquals(1, events.filterIsInstance<AgentEvent.CompactionStart>().size)
         assertEquals(1, events.filterIsInstance<AgentEvent.CompactionEnd>().size)
     }
-
-    // ---- failures and rejections ----
 
     @Test
     fun `summarization failure emits the formatted threshold failure event`() = runTest {
@@ -461,7 +428,6 @@ class AgentCompactionTest {
         assertFalse(end.aborted)
         assertNull(end.result)
         assertEquals("Auto-compaction failed: Summarization failed: boom", end.errorMessage)
-        // No compaction entry was appended; the tree is untouched.
         assertTrue(agent.conversation.activeEntries().none { it is works.resolve.pathfinder.data.sessions.CompactionEntry })
     }
 
@@ -492,7 +458,6 @@ class AgentCompactionTest {
             agent.prompt("hi")
         }
         started.await()
-        // Wait until compaction is in progress (the summary call is gated).
         while (!events.any { it is AgentEvent.CompactionStart }) yield()
         try {
             agent.prompt("second")
@@ -544,7 +509,6 @@ class AgentCompactionTest {
             events.filterIsInstance<AgentEvent.SummarizationRetryAttemptStart>().map { it.source },
         )
         assertEquals(1, events.filterIsInstance<AgentEvent.SummarizationRetryFinished>().size)
-        // The retried summary succeeded, so compaction completed.
         assertTrue(events.filterIsInstance<AgentEvent.CompactionEnd>().single().result != null)
     }
 }

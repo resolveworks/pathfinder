@@ -37,28 +37,21 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.string
 
-/**
- * One credential prompt from the catalog, mirroring pi's auth prompt
- * definitions: which env slot the value fills, the user-facing message, and
- * whether the input is a secret.
- */
 data class AuthPrompt(
     val envKey: String,
     val message: String,
     val secret: Boolean = true,
 )
 
-/** OAuth capability metadata from pi's lazyOAuth blocks. Flow wiring stays
- * in [works.resolve.pathfinder.ai.auth.CatalogAuthRegistry]; [loginLabel]
- * defaults to the name in pi. */
+/** OAuth capability metadata only; flow wiring lives in
+ * [works.resolve.pathfinder.ai.auth.CatalogAuthRegistry]. A null
+ * [loginLabel] means the OAuth provider's [name]. */
 data class ProviderOAuth(
     val name: String,
     val loginLabel: String? = null,
     val isSubscription: Boolean = false,
 )
 
-/** Provider auth metadata: a label, OAuth capability for providers that
- * offer account login, and the prompts that fill its env slots. */
 data class ProviderAuth(
     val label: String? = null,
     val oauth: ProviderOAuth? = null,
@@ -66,11 +59,10 @@ data class ProviderAuth(
 )
 
 /**
- * A provider as described by the generated models-catalog asset: identity,
- * base URL, auth prompts, optional bearer-header override (Cloudflare AI
- * Gateway's `cf-aig-authorization`, resolved into a request header), and its
- * model list. Pure data; the transport/API pair is injected when a runtime
- * [Provider] is built.
+ * A provider as described by the generated models-catalog asset. Pure data;
+ * the transport/API pair is injected when a runtime [Provider] is built.
+ * [bearerHeaderName] is Cloudflare AI Gateway's `cf-aig-authorization`,
+ * resolved into a request header rather than an apiKey.
  */
 class CatalogProvider(
     val id: String,
@@ -82,25 +74,21 @@ class CatalogProvider(
 ) {
     fun model(id: String): Model? = models.firstOrNull { it.id == id }
 
-    /** The distinct model API ids this provider's models use (pi's provider
-     * api-map keys), regardless of whether a Kotlin implementation exists. */
+    /** Distinct model API ids, including APIs with no Kotlin implementation. */
     val apis: Set<String> get() = models.mapTo(mutableSetOf()) { it.api }
 
     /**
-     * Auth prompts still missing values given a candidate credential: the
-     * first prompt maps to the API key ([key]); every later prompt maps to
-     * its [env] slot. All catalog auth prompts are required (pi's Cloudflare
-     * auth resolution returns unconfigured unless every value exists), so an
-     * empty list means the credential is complete. Values are never echoed —
-     * only the prompt metadata is.
+     * Auth prompts still missing values: the first prompt maps to the API
+     * key ([key]), later prompts to their [env] slot. Empty means the
+     * credential is complete. Values are never echoed — only prompt
+     * metadata is.
      */
     fun missingAuthPrompts(key: String?, env: Map<String, String>): List<AuthPrompt> {
         val missing = auth.prompts.mapIndexedNotNull { index, prompt ->
             val value = if (index == 0) key else env[prompt.envKey]
             if (value.isNullOrBlank()) prompt else null
         }.toMutableList()
-        // API-key completeness is false for providers with no key prompts
-        // (OAuth-only providers such as openai-codex). OAuth configuration is
+        // OAuth-only providers have no key prompts; their OAuth state is
         // evaluated separately by ProviderAuthService and the auth registry.
         if (auth.prompts.isEmpty() && key.isNullOrBlank()) {
             missing += AuthPrompt("API_KEY", "API key")
@@ -108,16 +96,14 @@ class CatalogProvider(
         return missing
     }
 
-    /** True iff every auth prompt has a nonblank value ([missingAuthPrompts] is empty). */
     fun isCredentialComplete(key: String?, env: Map<String, String>): Boolean =
         missingAuthPrompts(key, env).isEmpty()
 
     /**
-     * Resolves a complete credential's key into the auth-layer request shape
-     * (pi's cloudflare-auth.ts): ordinary providers resolve to a normal
-     * apiKey; a bearer-header provider (Cloudflare AI Gateway) resolves to a
-     * `Bearer <key>` request header on its named header with the default
-     * Authorization/x-api-key paths removed and no apiKey.
+     * Cloudflare AI Gateway authenticates via its named bearer header, so its
+     * credential becomes a `Bearer <key>` header with the default
+     * Authorization/x-api-key paths removed and no apiKey; ordinary providers
+     * resolve to a plain apiKey.
      */
     fun toModelAuth(key: String, env: Map<String, String>): ModelAuth {
         val bearerHeaderName = bearerHeaderName
@@ -138,13 +124,11 @@ class CatalogProvider(
     }
 
     /**
-     * Builds the runtime provider for this catalog entry, wiring an API
-     * implementation per model API id (pi's `Record<ApiId, Api>` provider
-     * shape) and the auth resolver. Catalog generation is required to emit
-     * only [ChatApiRegistry] APIs; an unknown id remains absent so the models
-     * layer reports a clear unsupported-API error. Base-URL overrides are not
-     * stamped here: callers create their effective model once via
-     * `Model.copy(baseUrl = ...)` and stream that model (pi's requestModel).
+     * Builds the runtime provider, wiring an API implementation per model API
+     * id; an unknown id stays absent from [Provider.apis] so the models layer
+     * reports a clear unsupported-API error. Base-URL overrides are not
+     * stamped here: callers stream an effective model created once via
+     * `Model.copy(baseUrl = ...)`.
      */
     fun toRuntimeProvider(
         transport: HttpStreamingTransport,
@@ -165,14 +149,12 @@ class CatalogProvider(
 }
 
 /**
- * The parsed models-catalog asset: Pathfinder's retained static pi providers,
- * with all supported model APIs for each provider (see [ChatApiRegistry]).
- * Parsing is lenient about unknown object fields, with one deliberate
- * exception: unknown `compat` keys fail at parse (pi's compat surface grows
- * flags over time — e.g. supportsMaxOutputTokens — and silently dropping
- * them hides real behavioral gaps). Enum values also fail fast — the asset
- * ships inside the APK, so a mismatch is a build bug, not a runtime
- * condition to paper over.
+ * The parsed models-catalog asset. Parsing is lenient about unknown object
+ * fields, with one deliberate exception: unknown `compat` keys fail at parse,
+ * because the generator emits pi's compat flags verbatim and silently
+ * dropping them hides upstream drift. Unknown enum values also fail fast —
+ * the asset ships inside the APK, so a mismatch is a build bug, not a
+ * runtime condition to paper over.
  */
 class ProviderCatalog(val providers: List<CatalogProvider>) {
 
@@ -191,14 +173,6 @@ class ProviderCatalog(val providers: List<CatalogProvider>) {
             throw IllegalArgumentException("Malformed model catalog: ${error.message}", error)
         }
 
-        /**
-         * Fails loudly when a model `compat` object carries a key the DTO
-         * does not model: pi's compat is an open surface that grows flags,
-         * and the generator (tools/generate-model-catalog.mjs) emits pi's
-         * compat verbatim, so an unknown key means upstream drift that would
-         * otherwise silently disable behavior. The allowed set is derived
-         * from [CompatDto]'s serializer so DTO and check cannot drift apart.
-         */
         @OptIn(ExperimentalSerializationApi::class)
         private fun rejectUnknownCompatKeys(text: String) {
             val root = json.parseToJsonElement(text) as? JsonObject ?: return
@@ -223,7 +197,8 @@ class ProviderCatalog(val providers: List<CatalogProvider>) {
 
         private val json = lenientJson
 
-        /** Keys modeled by [CompatDto], derived from its serializer. */
+        /** Derived from [CompatDto]'s serializer so this check cannot drift
+         * from the DTO. */
         @OptIn(ExperimentalSerializationApi::class)
         private val COMPAT_KEYS = CompatDto.serializer().descriptor.let { d ->
             (0 until d.elementsCount).map { d.getElementName(it) }.toSet()
@@ -232,10 +207,9 @@ class ProviderCatalog(val providers: List<CatalogProvider>) {
 }
 
 /**
- * Normalizes a base URL: trimmed, with all trailing slashes dropped.
- * App-boundary addition: pi never normalizes base URLs (only pi-messages.ts
- * strips trailing slashes at join time); this normalization is deliberate and
- * used by NativeAgentFactory before requests are built.
+ * Deliberate divergence from pi, which never normalizes base URLs (only
+ * pi-messages.ts strips trailing slashes at join time): Pathfinder normalizes
+ * once here, and NativeAgentFactory applies it before requests are built.
  */
 internal fun normalizeBaseUrl(url: String): String {
     val effective = url.trim().trimEnd('/')
@@ -244,8 +218,6 @@ internal fun normalizeBaseUrl(url: String): String {
     }
     return effective
 }
-
-// ---- lenient serialization DTOs (asset shape) ----
 
 @Serializable
 private data class CatalogDto(
@@ -322,9 +294,6 @@ private data class ModelDto(
 ) {
     fun toDomain(owner: ProviderDto): Model {
         val resolvedProvider = provider.ifEmpty { owner.id }
-        // pi detectCompat (openai-completions.ts:1633): cacheControlFormat is
-        // "anthropic" only for openrouter anthropic/* models; getCompat merges
-        // an explicit model.compat override on top (:1700).
         val detectedCacheControlFormat =
             if (resolvedProvider == "openrouter" && id.startsWith("anthropic/")) {
                 CacheControlFormat.ANTHROPIC
@@ -351,7 +320,7 @@ private data class ModelDto(
     }
 
     private companion object {
-        /** pi models carry OpenAIResponsesCompat only for the Responses family. */
+        /** Only Responses-family APIs carry [OpenAiResponsesCompat]. */
         val RESPONSES_FAMILY_APIS = setOf(
             "openai-responses",
             "openai-codex-responses",
@@ -360,7 +329,6 @@ private data class ModelDto(
     }
 }
 
-/** pi's AnthropicAllowedFallbackModel (types.ts:307-311). */
 @Serializable
 private data class AllowedFallbackModelDto(
     val provider: String,
@@ -376,13 +344,11 @@ private data class CostDto(
     val output: Double = 0.0,
     val cacheRead: Double = 0.0,
     val cacheWrite: Double = 0.0,
-    /** pi's ModelCost.tiers pass-through; pi's generated data currently ships none. */
     val tiers: List<CostTierDto> = emptyList(),
 ) {
     fun toDomain() = ModelCost(input, output, cacheRead, cacheWrite, tiers.map { it.toDomain() })
 }
 
-/** pi's ModelCostTier. */
 @Serializable
 private data class CostTierDto(
     val input: Double,
@@ -407,8 +373,8 @@ private data class CompatDto(
     val thinkingFormat: String? = null,
     val zaiToolStream: Boolean? = null,
     val chatTemplateArgs: Map<String, kotlinx.serialization.json.JsonElement>? = null,
-    // Anthropic Messages compat (pi's AnthropicMessagesCompat): consumed by
-    // the anthropic-messages adapter via Model.anthropicCompat.
+    // Consumed via [Model.anthropicCompat] (toAnthropicDomain), not the
+    // completions compat.
     val supportsEagerToolInputStreaming: Boolean? = null,
     val supportsLongCacheRetention: Boolean? = null,
     val sendSessionAffinityHeaders: Boolean? = null,
@@ -418,9 +384,8 @@ private data class CompatDto(
     val supportsStrictTools: Boolean? = null,
     val forceAdaptiveThinking: Boolean? = null,
     val allowedFallbackModels: List<AllowedFallbackModelDto>? = null,
-    // OpenAI Responses-family compat (pi's OpenAIResponsesCompat), consumed
-    // via Model.responsesCompat; also the completions strict-mode flag (pi's
-    // OpenAICompletionsCompat.supportsStrictMode) via Model.compat.
+    // Consumed via [Model.responsesCompat]; [supportsStrictMode] also maps
+    // to the completions compat via [Model.compat].
     val supportsStrictMode: Boolean? = null,
     val supportsOpenAIGrammarTools: Boolean? = null,
     val cacheControlFormat: String? = null,
@@ -428,12 +393,8 @@ private data class CompatDto(
     val supportsAdditionalTools: Boolean? = null,
     val supportsToolSearch: Boolean? = null,
     val supportsExplicitPromptCacheMode: Boolean? = null,
-    // pi b8b873b98 (#8941): OpenAI Responses gate on max_output_tokens.
     val supportsMaxOutputTokens: Boolean? = null,
-    // pi openai-completions.ts:1344-1349: replayed assistant messages carry
-    // reasoning_content: "" on DeepSeek-style reasoning models.
     val requiresReasoningContentOnAssistantMessages: Boolean? = null,
-    // pi types.ts:620: deferred tool serialization mode ("kimi").
     val deferredToolsMode: String? = null,
 ) {
     fun toDomain(where: String, detectedCacheControlFormat: CacheControlFormat?) = OpenAiCompletionsCompat(
@@ -456,8 +417,6 @@ private data class CompatDto(
         supportsLongCacheRetention = supportsLongCacheRetention ?: true,
         supportsStrictMode = supportsStrictMode ?: true,
         supportsOpenAIGrammarTools = supportsOpenAIGrammarTools ?: false,
-        // pi getCompat (openai-completions.ts:1700):
-        // `model.compat.cacheControlFormat ?? detected.cacheControlFormat`.
         cacheControlFormat = cacheControlFormat
             ?.let { parseCacheControlFormat(it, where) }
             ?: detectedCacheControlFormat,
@@ -466,7 +425,7 @@ private data class CompatDto(
         deferredToolsMode = deferredToolsMode?.let { parseDeferredToolsMode(it, where) },
     )
 
-    /** pi's getCompat (openai-responses) defaults apply per field when absent. */
+    /** Per-field defaults mirror pi's openai-responses getCompat. */
     fun toResponsesDomain(where: String) = OpenAiResponsesCompat(
         supportsDeveloperRole = supportsDeveloperRole ?: true,
         sessionAffinityFormat = sessionAffinityFormat?.let { parseSessionAffinityFormat(it, where) },
@@ -479,7 +438,7 @@ private data class CompatDto(
         supportsMaxOutputTokens = supportsMaxOutputTokens ?: true,
     )
 
-    /** pi's getAnthropicCompat defaults apply per field when absent. */
+    /** Per-field defaults mirror pi's getAnthropicCompat. */
     fun toAnthropicDomain() = AnthropicMessagesCompat(
         supportsEagerToolInputStreaming = supportsEagerToolInputStreaming ?: true,
         supportsLongCacheRetention = supportsLongCacheRetention ?: true,
@@ -545,7 +504,7 @@ private fun parseThinkingLevel(
 
 private fun parseThinkingLevelMap(raw: Map<String, String?>, where: String): ThinkingLevelMap {
     val pairs = raw.entries
-        // Unknown level keys are ignored leniently (fields, not enum values).
+        // Unknown level keys are ignored leniently, unlike enum values elsewhere.
         .mapNotNull { (key, value) ->
             val level = runCatching { parseThinkingLevel(key, where) }.getOrNull()
                 ?: return@mapNotNull null

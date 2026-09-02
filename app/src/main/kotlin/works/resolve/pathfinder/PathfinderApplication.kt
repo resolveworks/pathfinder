@@ -28,35 +28,12 @@ import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 
 /**
- * Application-level manual dependency graph. Everything is process-wide
- * single-instance and created lazily on first use; there is no DI framework
- * and no shared mutable coroutine scope (the single Preferences DataStore
- * owns its own scope per the documented factory contract).
- *
- * The graph is deliberately flat and conventional:
- *
- * - one shared [OkHttpClient]/[OkHttpTransport] for all provider requests,
- *   plus an [OkHttpWebSocketTransport] on the same client for the Codex
- *   WebSocket transport family;
- * - [CredentialStore] (pi's credential contract) on the Android-Keystore-backed
- *   [KeystoreAeadCipher];
- * - [SettingsRepository] on a single Preferences DataStore file;
- * - [SessionStore] rooted under app-private `filesDir/sessions`;
- * - the generated multi-provider model catalog, parsed once from assets;
- * - [SearchProviderService] (web-search credentials, `search_`-namespaced
- *   in the same store) and one shared [BraveWebSearchTool] on the same
- *   OkHttp client, resolving its key lazily so a key stored later in the
- *   app's lifetime is picked up without rebuilding the tool;
- * - [NativeAgentFactory] wiring the native runtime to any catalog provider
- *   with the web-search tool registered.
+ * Application-level manual dependency graph: every property is a lazy,
+ * process-wide singleton owned here (no DI framework). No shared mutable
+ * coroutine scope — the Preferences DataStore delegate owns its own scope.
  */
 class PathfinderApplication : Application() {
 
-    /**
-     * The app's single diagnostics facade over the Logcat telemetry backend
-     * (spans rendered as structured Logcat lines): the one owner of the
-     * `pf.*` span vocabulary and sanitization policy.
-     */
     val diagnostics: PathfinderDiagnostics by lazy { PathfinderDiagnostics(LogcatTelemetryContext()) }
 
     private val okHttpClient: OkHttpClient by lazy {
@@ -70,10 +47,9 @@ class PathfinderApplication : Application() {
     }
 
     /**
-     * WebSocket seam for the Codex adapter, sharing the HTTP client's
-     * connection pool and timeouts. Wired here, Codex requests default to
-     * pi's `"auto"` transport: WebSocket-first with per-session SSE fallback
-     * and cached context over the pooled connection.
+     * Lets Codex requests use pi's default "auto" transport: WebSocket-first
+     * with per-session SSE fallback and cached context over the pooled
+     * connection.
      */
     val webSocketTransport: OkHttpWebSocketTransport by lazy {
         OkHttpWebSocketTransport(client = okHttpClient)
@@ -84,16 +60,15 @@ class PathfinderApplication : Application() {
     }
 
     /**
-     * Process-wide app foreground state, fed from MainActivity's
-     * onResume/onPause through the ChatViewModel; the OAuth registry gates
-     * loopback waits and all OAuth network work on it (see AppForegroundGate).
+     * App foreground state, fed from MainActivity's onResume/onPause via
+     * [ChatViewModel]; OAuth flows gate loopback waits and all OAuth network
+     * work on it.
      */
     val appForegroundGate: AppForegroundGate by lazy { AppForegroundGate() }
 
-    /** Concrete OAuth flows shared by login UI and runtime auth resolution. */
+    /** OAuth flows shared by the login UI and runtime auth resolution. */
     val authRegistry: CatalogAuthRegistry by lazy { ProductionCatalogAuthRegistry(appForegroundGate) }
 
-    /** Login/logout orchestration over the catalog, registry, and credential store. */
     val authService: ProviderAuthService by lazy {
         ProviderAuthService(
             catalog = modelCatalog,
@@ -102,12 +77,11 @@ class PathfinderApplication : Application() {
         )
     }
 
-    /** Web-search provider credentials (Brave only, Scry parity) in the shared store. */
     val searchProviderService: SearchProviderService by lazy {
         SearchProviderService(credentials)
     }
 
-    /** The app's single web-search agent tool; the key is resolved per call. */
+    /** Resolves the key per call, so a key stored later in the app's lifetime is picked up. */
     val webSearchTool: BraveWebSearchTool by lazy {
         BraveWebSearchTool(
             client = okHttpClient,
@@ -123,7 +97,7 @@ class PathfinderApplication : Application() {
         SessionStore(File(filesDir, SESSIONS_DIRECTORY), diagnostics = diagnostics)
     }
 
-    /** Generated model catalog, parsed once from the bundled asset. */
+    /** Generated from pi; never hand-edit the bundled asset. */
     val modelCatalog: ProviderCatalog by lazy {
         assets.open("models-catalog.json").bufferedReader().use { it.readText() }
             .let(ProviderCatalog.Companion::parse)
@@ -140,7 +114,6 @@ class PathfinderApplication : Application() {
         )
     }
 
-    /** Conventional creation point for the chat controller. */
     val chatViewModelFactory = viewModelFactory {
         initializer {
             ChatViewModel(
@@ -167,8 +140,4 @@ class PathfinderApplication : Application() {
     }
 }
 
-/**
- * Single Preferences DataStore instance for settings, created via the
- * documented Context delegate (one instance per file per process).
- */
 private val Context.settingsDataStore by preferencesDataStore(name = "settings")

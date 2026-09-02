@@ -35,12 +35,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/**
- * Focused JVM tests for the production factory: validation, transcript
- * copying, and end-to-end wiring through the native stack against a fake
- * transport and the shared catalog fixture. The fake key is a distinctive
- * test value and is never printed.
- */
 class NativeAgentFactoryTest {
 
     /** Compaction off: URL/auth tests are single-request and not about compaction. */
@@ -48,7 +42,6 @@ class NativeAgentFactoryTest {
 
     private fun emptyConversation(): works.resolve.pathfinder.data.sessions.Conversation =
         works.resolve.pathfinder.data.sessions.Conversation(emptyList(), null)
-
 
     private class FakeCredentialStore(initialCredential: Credential? = null) : CredentialStore {
         val credential = MutableStateFlow(initialCredential)
@@ -105,8 +98,6 @@ class NativeAgentFactoryTest {
         modelId: String = "glm-4.7",
     ) = ModelSettings(providerId = providerId, modelId = modelId)
 
-    // ---- validation ----
-
     @Test
     fun `rejects an unsupported provider`() {
         assertFailsWith<IllegalArgumentException> {
@@ -123,8 +114,6 @@ class NativeAgentFactoryTest {
         }
     }
 
-    // ---- transcript ----
-
     @Test
     fun `copies the initial transcript into the agent`() {
         val transcript: MutableList<works.resolve.pathfinder.ai.core.Message> = mutableListOf(
@@ -134,7 +123,6 @@ class NativeAgentFactoryTest {
         val agent = factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
             .create(settings(), "s1", works.resolve.pathfinder.data.sessions.Conversation.fromMessages(transcript))
         assertEquals(transcript, agent.state.value.messages)
-        // Copied defensively: later mutation of the source list is invisible.
         transcript.clear()
         assertEquals(2, agent.state.value.messages.size)
     }
@@ -189,30 +177,24 @@ class NativeAgentFactoryTest {
             tools = configured,
         ).create(settings(), "s1", emptyConversation())
 
-        // Registry default: all configured tools active, prompt built.
         assertEquals(listOf("web_search"), agent.getActiveToolNames())
         assertEquals(buildSystemPrompt(listOf(webSearch)), agent.state.value.systemPrompt)
 
-        // Disabling empties the set and nulls the prompt (no-tools divergence).
         agent.setActiveToolsByName(emptyList())
         assertEquals(emptyList<String>(), agent.getActiveToolNames())
         assertEquals(emptyList<AgentTool>(), agent.state.value.tools)
         assertNull(agent.state.value.systemPrompt)
 
-        // Re-enabling by name rebuilds the prompt from the session's registry.
         agent.setActiveToolsByName(listOf("web_search", "unknown"))
         assertEquals(listOf("web_search"), agent.getActiveToolNames())
         assertEquals(buildSystemPrompt(listOf(webSearch)), agent.state.value.systemPrompt)
 
-        // The registry is a defensive copy: caller mutation after creation is invisible.
         configured.clear()
         assertEquals(listOf("web_search"), agent.getActiveToolNames())
         agent.setActiveToolsByName(emptyList())
         agent.setActiveToolsByName(listOf("web_search"))
         assertEquals(listOf("web_search"), agent.getActiveToolNames())
     }
-
-    // ---- wiring through the native stack ----
 
     @Test
     fun `prompt uses the selected model, effective base URL, and the lazily resolved current credential`() {
@@ -236,7 +218,6 @@ class NativeAgentFactoryTest {
 
             assertEquals(1, store.readCalls)
             val request = transport.requests.single()
-            // Catalog base URL, normalized (trailing slashes dropped) + endpoint.
             assertEquals("https://api.z.ai/api/coding/paas/v4/chat/completions", request.url)
             assertEquals("factory-test-key-2", request.bearerToken)
             assertTrue(request.timeoutMs != null && request.timeoutMs > 0)
@@ -273,7 +254,6 @@ class NativeAgentFactoryTest {
                 request.url,
                 "credential env must be substituted into the base URL placeholders",
             )
-            // Header-based auth: cf-aig-authorization only, no bearer token.
             assertNull(request.bearerToken)
             assertEquals("Bearer cf-factory-test-key", request.headers["cf-aig-authorization"])
             assertFalse(request.headers.containsKey("Authorization"))
@@ -284,9 +264,6 @@ class NativeAgentFactoryTest {
     @Test
     fun `incomplete explicit cloudflare key env is unconfigured with no api call`() {
         runBlocking {
-            // Explicit key but the required gateway env is missing: the
-            // resolver must reject it (null), producing a single unconfigured
-            // Error event and no network request.
             val store = FakeCredentialStore(null)
             val entry = catalog.getProvider("cloudflare-ai-gateway")!!
             val transport = RecordingTransport()
@@ -315,9 +292,6 @@ class NativeAgentFactoryTest {
     @Test
     fun `explicit env overrides stored env before auth shaping`() {
         runBlocking {
-            // Stored credential carries account/gateway ids; the explicit
-            // request env must win per field before completeness/shaping
-            // (pi's stored-credential env override).
             val store = FakeCredentialStore(
                 ApiKeyCredential(
                     key = "cf-factory-test-key",
@@ -334,7 +308,6 @@ class NativeAgentFactoryTest {
                 mapOf("CLOUDFLARE_ACCOUNT_ID" to "explicit-acct"),
             )!!
 
-            // Explicit account id won; stored gateway id survived.
             assertEquals(
                 mapOf(
                     "CLOUDFLARE_ACCOUNT_ID" to "explicit-acct",
@@ -344,7 +317,6 @@ class NativeAgentFactoryTest {
             )
             assertEquals("Bearer cf-factory-test-key", auth.headers["cf-aig-authorization"])
 
-            // End to end: the merged env substitutes into the base URL via Models.
             val transport = RecordingTransport()
             val provider = entry.toRuntimeProvider(
                 transport = transport,
@@ -365,8 +337,7 @@ class NativeAgentFactoryTest {
     @Test
     fun `effective base URL defaults from the model, not the provider`() {
         runBlocking {
-            // A catalog whose model carries its own base URL (the pi invariant
-            // we honor: request-model selection defaults from model.baseUrl).
+            // pi invariant: the request base URL defaults from model.baseUrl.
             val modelBaseUrlModel = Model(
                 id = "m",
                 name = "M",
@@ -460,8 +431,6 @@ class NativeAgentFactoryTest {
         }
     }
 
-    // ---- live model switching (pi agent-session setModel) ----
-
     @Test
     fun `resolveModel validates and normalizes a catalog model for switching`() {
         val factory = NativeAgentFactory(FakeCredentialStore(ApiKeyCredential("k")), catalog, RecordingTransport())
@@ -496,8 +465,6 @@ class NativeAgentFactoryTest {
             val body = Json.parseToJsonElement(String(switched.body)).jsonObject
             assertEquals("gpt-4.1", body["model"]!!.jsonPrimitive.content)
 
-            // Transcript preserved across the provider switch, and the tree
-            // recorded the model_change between the two turns.
             val state = agent.state.value
             assertEquals(4, state.messages.size)
             val entries = agent.conversation.entries
@@ -509,7 +476,6 @@ class NativeAgentFactoryTest {
     @Test
     fun `setModel rejects a provider without a stored credential`() {
         runBlocking {
-            // No credential stored at all; github-copilot is unconfigured.
             val store = FakeCredentialStore(null)
             val native = NativeAgentFactory(credentials = store, catalog = catalog, transport = RecordingTransport())
             val agent = native.create(settings(), "s1", emptyConversation())

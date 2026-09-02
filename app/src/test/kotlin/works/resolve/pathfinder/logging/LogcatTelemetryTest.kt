@@ -19,23 +19,10 @@ import works.resolve.pathfinder.telemetry.TelemetryError
 import works.resolve.pathfinder.telemetry.TelemetrySpan
 import works.resolve.pathfinder.telemetry.attr
 
-/**
- * Adapter conformance tests for [LogcatTelemetryContext], ported from pi
- * `packages/telemetry/src/testing/conformance.ts` (callback lifecycle,
- * status, recording, parentage, passivity) plus the app adapter's
- * security-specific behavior: no `Throwable` reaches the sink, no free-form
- * error messages are rendered, stack output is bounded and type-only, and a
- * failing sink never changes the business result.
- *
- * Lines are captured through the injectable [LogSink]; the fake time source
- * makes durations deterministic. `android.util.Log` is never touched.
- */
 class LogcatTelemetryTest {
 
-    /** One captured line: error level flag, tag, and rendered message. */
     private data class Line(val isError: Boolean, val tag: String, val message: String)
 
-    /** A sink that records lines; optionally throws on every call. */
     private class RecordingSink(val fail: Boolean = false) : LogSink {
         val lines = mutableListOf<Line>()
         val messages: List<String> get() = lines.map { it.message }
@@ -45,7 +32,6 @@ class LogcatTelemetryTest {
         }
     }
 
-    /** Deterministic nanosecond source: advances by [step] per read. */
     private class FakeTime(var now: Long = 0L, private val step: Long = 1_000_000L) {
         val read: () -> Long = {
             val value = now
@@ -56,9 +42,6 @@ class LogcatTelemetryTest {
 
     private fun context(sink: RecordingSink, time: FakeTime = FakeTime()) =
         Pair(LogcatTelemetryContext(tag = "PF", sink = sink, nanoTime = time.read), sink)
-
-
-    // ---- callback lifecycle (conformance: "callback lifecycle") ----
 
     @Test
     fun `admits once and preserves the result identity`() = runBlocking {
@@ -110,8 +93,6 @@ class LogcatTelemetryTest {
         assertTrue("status=error error_name=RuntimeException" in end.message)
     }
 
-    // ---- status (conformance: "status") ----
-
     @Test
     fun `uses last explicit status without automatic overwrite`() = runBlocking {
         val (telemetry, sink) = context(RecordingSink())
@@ -160,8 +141,6 @@ class LogcatTelemetryTest {
         assertEquals("< detail-less id=1 status=error duration_ms=1", end.message)
     }
 
-    // ---- recording (conformance: "recording") ----
-
     @Test
     fun `merges attributes with later values winning and records ordered events`() = runBlocking {
         val (telemetry, sink) = context(RecordingSink())
@@ -197,8 +176,7 @@ class LogcatTelemetryTest {
     fun `ignores failed attribute calls atomically`() = runBlocking {
         val (telemetry, sink) = context(RecordingSink())
 
-        // A list whose iteration throws mirrors pi's "unreadable" payload:
-        // the whole call is ignored, previously retained data survives.
+        // Every read throws, mirroring pi conformance's "unreadable" payload.
         val throwingList = object : AbstractList<String>() {
             override val size: Int get() = throw IllegalStateException("read")
             override fun get(index: Int): String = throw IllegalStateException("read")
@@ -230,8 +208,6 @@ class LogcatTelemetryTest {
         assertFalse("mutated-after-recording" in end)
     }
 
-    // ---- settlement (conformance: "makes calls after settlement inert") ----
-
     @Test
     fun `makes calls after settlement inert and routes late children through noop`() = runBlocking {
         val (telemetry, sink) = context(RecordingSink())
@@ -254,12 +230,9 @@ class LogcatTelemetryTest {
 
         assertTrue(childAdmitted)
         assertEquals(7, childResult)
-        // No additional lines: two for the settled span, nothing else.
         assertEquals(before, sink.lines)
         assertEquals(2, sink.lines.size)
     }
-
-    // ---- parentage (conformance: "records nested and concurrent child relationships") ----
 
     @Test
     fun `records nested child relationships with end ordering`() = runBlocking {
@@ -276,7 +249,6 @@ class LogcatTelemetryTest {
         assertEquals("> parent id=1 parent=-", messages[0])
         assertEquals("> child id=2 parent=1", messages[1])
         assertEquals("+ child id=2 event=step", messages[2])
-        // The child ends before its parent.
         assertTrue(messages[3].startsWith("< child id=2 status=ok"))
         assertTrue(messages[4].startsWith("< parent id=1 status=ok"))
     }
@@ -296,13 +268,10 @@ class LogcatTelemetryTest {
         assertEquals("> parent id=1 parent=-", messages.first())
         assertEquals("> first-child id=2 parent=1", messages[1])
         assertEquals("> second-child id=3 parent=1", messages[2])
-        // Parent ends after both children.
         assertTrue(messages.last().startsWith("< parent id=1 status=ok"))
         assertTrue(messages.indexOfFirst { it.startsWith("< first-child") } < messages.indexOfFirst { it.startsWith("< parent") })
         assertTrue(messages.indexOfFirst { it.startsWith("< second-child") } < messages.indexOfFirst { it.startsWith("< parent") })
     }
-
-    // ---- passivity (conformance: "passivity" + app security policy) ----
 
     @Test
     fun `a failing sink never prevents or replaces the business result`() = runBlocking {
@@ -351,11 +320,8 @@ class LogcatTelemetryTest {
 
         assertEquals(9, result)
         assertEquals(1, calls)
-        // Nothing was admitted, so nothing was logged.
         assertTrue(sink.lines.isEmpty())
     }
-
-    // ---- safe stack output (app security policy) ----
 
     @Test
     fun `error end lines carry bounded type-only stack metadata, never messages`() = runBlocking {
@@ -370,7 +336,6 @@ class LogcatTelemetryTest {
         val end = sink.lines.last()
         assertTrue(end.isError)
         assertTrue("stack=" in end.message)
-        // Frames render as bounded, type-only class.method(File:line) metadata.
         val stack = end.message.substringAfter("stack=").removeSurrounding("\"")
         val frames = stack.split(";")
         assertTrue(frames.size in 1..8)
@@ -396,8 +361,6 @@ class LogcatTelemetryTest {
         assertTrue(end.isError)
         assertEquals("< type-only id=1 status=error error_name=ProviderAuthException duration_ms=1", end.message)
     }
-
-    // ---- rendering unit tests ----
 
     @Test
     fun `values with whitespace or quotes are quoted and escaped`() {

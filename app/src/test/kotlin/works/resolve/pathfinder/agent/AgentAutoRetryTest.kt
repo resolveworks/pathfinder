@@ -29,14 +29,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Auto-retry wiring of [AgentSession], porting pi's agent-session auto-retry
- * tests' scenarios (agent-session.ts `_handlePostAgentRun` / `_prepareRetry` /
- * success-reset at ~684): transient errors are retried as continuations with
- * exponential backoff, non-retryable and overflow errors are not, the budget
- * is capped, abort cancels the backoff, and the error message leaves agent
- * state while the session tree keeps it (asserted in ChatViewModelTest).
- */
 class AgentAutoRetryTest {
 
     private val model = Model(
@@ -122,9 +114,8 @@ class AgentAutoRetryTest {
             events.filterIsInstance<AgentEvent.AutoRetryStart>() + events.filterIsInstance<AgentEvent.AutoRetryEnd>(),
         )
 
-        // The retried run is a continue: no new user message, and the error
-        // assistant message was removed from the agent-transcript snapshot,
-        // so both runs see exactly the same single-message context.
+        // pi drops the errored assistant message from agent state before the
+        // retry, so both runs see the same single-message context.
         assertEquals(1, streams.seenContexts[0].size)
         assertEquals(listOf(streams.seenContexts[0].single()), streams.seenContexts[1])
 
@@ -185,7 +176,6 @@ class AgentAutoRetryTest {
 
         val events = collectEvents(agent)
 
-        // Initial run plus 3 retries; backoff 2s/4s/8s.
         assertEquals(4, streams.seenContexts.size)
         assertEquals(listOf(2000L, 4000L, 8000L), delays)
         val starts = events.filterIsInstance<AgentEvent.AutoRetryStart>()
@@ -194,19 +184,15 @@ class AgentAutoRetryTest {
             listOf(AgentEvent.AutoRetryEnd(success = false, attempt = 3, finalError = "terminated")),
             events.filterIsInstance<AgentEvent.AutoRetryEnd>(),
         )
-        // The final error assistant message stays in agent state.
         assertEquals("terminated", (agent.state.value.messages.last() as AssistantMessage).errorMessage)
     }
 
     @Test
     fun `retry after tool results continues from the toolResult without replaying the partial tool turn`() = runTest {
-        // Multi-turn compatibility of the auto-retry path (plan step 7):
-        // an assistant ERROR mid-run (after tool results) retries from the
-        // trailing toolResult. Pi's _prepareRetry (agent-session.ts ~2866)
-        // drops only the trailing assistant error from agent state, and
-        // agent.continue() resumes from the trailing tool result — the
-        // partial tool turn is neither replayed nor duplicated, and the
-        // session tree keeps everything (append-only).
+        // pi drops only the trailing assistant error from agent state and
+        // continues from the trailing toolResult: the partial tool turn is
+        // neither replayed nor duplicated, and the session tree keeps
+        // everything (append-only).
         val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
             content = listOf(ToolCall("call-1", "get_weather", "{}")),
         )
@@ -247,15 +233,10 @@ class AgentAutoRetryTest {
             events.filterIsInstance<AgentEvent.AutoRetryStart>() + events.filterIsInstance<AgentEvent.AutoRetryEnd>(),
         )
 
-        // The retried run continues from the trailing toolResult exactly:
-        // same tool-turn prefix as the errored turn, error assistant
-        // dropped, nothing replayed (second and third contexts identical).
         assertEquals(3, streams.seenContexts.size)
         assertEquals(streams.seenContexts[1], streams.seenContexts[2])
         assertTrue(streams.seenContexts[1].last() is works.resolve.pathfinder.ai.core.ToolResultMessage)
 
-        // Agent state: user, tool-call assistant, tool result, recovered
-        // assistant — the error assistant is gone.
         val state = agent.state.value.messages
         assertEquals(4, state.size)
         assertTrue(state[1] is AssistantMessage)
@@ -264,7 +245,6 @@ class AgentAutoRetryTest {
         assertEquals("recovered", (recovered.content.single() as TextContent).text)
         assertNull(agent.state.value.errorMessage)
 
-        // Session tree stays append-only and keeps the error assistant.
         val tree = agent.conversation.activeMessages()
         assertEquals(5, tree.size)
         val errored = tree[3] as AssistantMessage
@@ -280,9 +260,8 @@ class AgentAutoRetryTest {
         val agent = session(streams, sleep = { })
         agent.prompt("hi")
 
-        // The prompt text becomes the user message (pi's AgentSession.prompt)
-        // and every message_end lands in the session tree, including the
-        // error removed from agent state by the retry.
+        // Every message_end lands in the session tree, including the error
+        // removed from agent state by the retry.
         val entries = agent.conversation.activeEntries()
         assertEquals(3, entries.size)
         val user = entries[0] as works.resolve.pathfinder.data.sessions.MessageEntry
@@ -291,7 +270,6 @@ class AgentAutoRetryTest {
         val failed = (entries[1] as works.resolve.pathfinder.data.sessions.MessageEntry).message as AssistantMessage
         assertEquals(StopReason.ERROR, failed.stopReason)
         assertEquals(StopReason.STOP, (entries[2] as works.resolve.pathfinder.data.sessions.MessageEntry).message.let { (it as AssistantMessage).stopReason })
-        // Agent state keeps only the live transcript (user + recovered).
         assertEquals(2, agent.state.value.messages.size)
     }
 
@@ -326,8 +304,8 @@ class AgentAutoRetryTest {
             ),
             events.filterIsInstance<AgentEvent.AutoRetryStart>() + events.filterIsInstance<AgentEvent.AutoRetryEnd>(),
         )
-        // The continue run never started, and the error message was removed
-        // from agent state before the backoff (it stays in the session layer).
+        // The error message was removed from agent state before the backoff;
+        // it stays in the session layer.
         assertEquals(1, streams.seenContexts.size)
         assertEquals(1, agent.state.value.messages.size)
         assertFalse(agent.state.value.isStreaming)

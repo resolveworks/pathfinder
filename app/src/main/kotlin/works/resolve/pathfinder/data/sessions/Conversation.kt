@@ -14,22 +14,15 @@ data class SessionTreeNode(
 )
 
 /**
- * Immutable conversation tree porting pi's SessionManager semantics.
- * Operations return new instances (UDF-friendly). The invariant shared by all
- * append methods: a new entry's parentId is the current [leafId]; appending
- * advances the leaf to the new entry. Entry ids default to time-ordered
- * UUIDv7, pi's Session idGenerator default `{ next: () => uuidv7() }`
- * (agent/src/harness/session/session.ts).
+ * Immutable conversation tree; all operations return new instances. The
+ * invariant shared by every append method: the new entry's parentId is the
+ * current [leafId], and appending advances the leaf to the new entry.
  *
- * Seq-assignment seam (pi's storage split, packages/agent/src/harness/
- * session/jsonl/storage.ts appendEntry): pi's storage assigns an entry's
- * parentId (the appending lane's leaf), seq, and timestamp on append. Here
- * the [Conversation] is the live tree and mints id/parentId/timestamp at
- * append time (its leaf is the single "main" lane's leaf, so parentId
- * matches what pi's storage would assign); the storage-assigned seq stays
- * 0 until [SessionStore] persists the entry. The store validates the same
- * invariants pi's storage enforces (unused id, parent existence, chaining
- * to the lane leaf).
+ * Seq-assignment seam: pi's storage assigns an entry's parentId, seq, and
+ * timestamp on append, while here [Conversation] is the live tree and mints
+ * id/parentId/timestamp at append time (its leaf is the main lane's leaf, so
+ * parentId is what pi's storage would assign); seq stays 0 until
+ * [SessionStore] persists the entry (see [SessionEntry.seq]).
  */
 class Conversation(
     val entries: List<SessionEntry>,
@@ -40,8 +33,7 @@ class Conversation(
     private val nextId: () -> String = idGenerator
     private val clock: Clock = clock
 
-    /** Appends [message] as a child of the current leaf (or as a root when the
-     * leaf is null) and advances the leaf to the new entry. */
+    /** Appends [message] as a child of the current leaf, or as a root when the leaf is null. */
     fun append(message: Message): Conversation {
         val entry = MessageEntry(
             id = nextId(),
@@ -53,11 +45,10 @@ class Conversation(
     }
 
     /**
-     * Appends a compaction cut as a child of the current leaf and advances
-     * the leaf to it (pi's sessionManager.appendCompaction, session-manager.ts
-     * ~1098). Divergences: upstream stores `firstKeptEntryId`/`fromHook` on
-     * the entry — pathfinder's [CompactionEntry] keeps the retained tail
-     * directly (harness entry shape) and has no extension producers, so both
+     * Appends a compaction cut as a child of the current leaf. Divergence
+     * from pi's appendCompaction: upstream stores `firstKeptEntryId` and
+     * `fromHook` on the entry, while [CompactionEntry] keeps the retained
+     * tail directly and there are no extension producers, so both
      * parameters are absent.
      */
     fun appendCompaction(
@@ -66,7 +57,7 @@ class Conversation(
         tokensBefore: Int,
         details: CompactionDetails? = null,
         usage: Usage? = null,
-        /** Pre-minted entry id, for producers that record it up front (pi's compaction operation intent names its resultEntryId before the work runs). */
+        /** Pre-minted entry id for producers that record it up front (pi's compaction names its resultEntryId before the work runs). */
         id: String? = null,
     ): Conversation {
         val entry = CompactionEntry(
@@ -82,11 +73,6 @@ class Conversation(
         return Conversation(entries + entry, entry.id, nextId, clock)
     }
 
-    /**
-     * Appends a model change as child of the current leaf and advances the
-     * leaf to it (pi's sessionManager.appendModelChange, session-manager.ts
-     * ~1084).
-     */
     fun appendModelChange(provider: String, modelId: String): Conversation {
         val entry = ModelChangeEntry(
             id = nextId(),
@@ -98,12 +84,7 @@ class Conversation(
         return Conversation(entries + entry, entry.id, nextId, clock)
     }
 
-    /**
-     * Appends a thinking-level change as child of the current leaf and
-     * advances the leaf to it (pi's sessionManager.appendThinkingLevelChange,
-     * session-manager.ts ~1071). [thinkingLevel] is pi's wire string
-     * (see [works.resolve.pathfinder.ai.core.ModelThinkingLevel.wire]).
-     */
+    /** Appends a thinking-level change as child of the current leaf; [thinkingLevel] is pi's wire string (see [works.resolve.pathfinder.ai.core.ModelThinkingLevel.wire]). */
     fun appendThinkingLevelChange(thinkingLevel: String): Conversation {
         val entry = ThinkingLevelEntry(
             id = nextId(),
@@ -114,7 +95,6 @@ class Conversation(
         return Conversation(entries + entry, entry.id, nextId, clock)
     }
 
-    /** Moves the leaf to [entryId]; throws [IllegalArgumentException] when unknown. */
     fun branch(entryId: String): Conversation {
         require(entries.any { it.id == entryId }) { "Unknown entry id: $entryId" }
         return Conversation(entries, entryId, nextId, clock)
@@ -123,7 +103,7 @@ class Conversation(
     /** Clears the leaf; the next append starts a new root. */
     fun resetLeaf(): Conversation = Conversation(entries, null, nextId, clock)
 
-    /** Root→leaf path (pi's getBranch), in conversation order. */
+    /** The active branch's root→leaf path. */
     fun activeEntries(): List<SessionEntry> {
         val byId = entries.associateBy { it.id }
         val path = ArrayDeque<SessionEntry>()
@@ -136,25 +116,17 @@ class Conversation(
         return path.toList()
     }
 
-    /** Messages along the active root→leaf path, in order. */
     fun activeMessages(): List<Message> =
         activeEntries().filterIsInstance<MessageEntry>().map { it.message }
 
-    /**
-     * The provider+model pair a configuration entry selects (pi's inline
-     * `{ provider, modelId }` in harness session types).
-     */
+    /** The provider+model pair a configuration entry selects. */
     data class SessionModelSelection(val provider: String, val modelId: String)
 
     /**
-     * Branch-effective session configuration, pi's deriveSessionContextState
-     * (harness/session/context.ts) — the same fold as the reducer's
-     * deriveEffectiveConfiguration (harness/reducer.ts ~398): scanning the
-     * root→leaf path in order, model_change / thinking_level_change /
-     * active_tools_change entries overwrite the corresponding field, and
-     * assistant message entries also update the model (their provider/model
-     * is what actually ran). Defaults mirror pi's: thinkingLevel "off",
-     * model and activeToolNames unset.
+     * Branch-effective session configuration: scanning the root→leaf path in
+     * order, model/thinking-level/tools entries overwrite their field — and
+     * assistant messages also update the model, since their provider/model is
+     * what actually ran.
      */
     data class EffectiveConfiguration(
         val model: SessionModelSelection? = null,
@@ -184,18 +156,14 @@ class Conversation(
         return configuration
     }
 
-
-    /** Entry lookup by id. */
     fun entry(id: String): SessionEntry? = entries.firstOrNull { it.id == id }
 
     /**
      * Tree over all entries. Roots are entries with null or self parentId, or
-     * whose parent is missing (orphans get promoted to roots, like pi).
-     * Children are sorted oldest-first by timestamp.
-     *
-     * Built iteratively (leaves-first) rather than with recursion: a linear
-     * session makes the tree as deep as the transcript, and pi's getTree()
-     * documents the stack overflow that recursion causes on deep trees.
+     * whose parent is missing (orphans are promoted to roots, like pi).
+     * Built iteratively rather than by recursion: a linear session makes the
+     * tree as deep as the transcript, and pi's getTree() documents the stack
+     * overflow recursion causes on deep trees.
      */
     fun tree(): List<SessionTreeNode> {
         val byId = entries.associateBy { it.id }
@@ -205,14 +173,11 @@ class Conversation(
             return pid == null || pid == entry.id || byId[pid] == null
         }
 
-        // Children grouped by (existing) parent id.
         val childrenOf = HashMap<String?, MutableList<SessionEntry>>()
         for (entry in entries) {
             if (!isRoot(entry)) childrenOf.getOrPut(entry.parentId!!) { mutableListOf() } += entry
         }
 
-        // Leaves-first pass: create each node once all of its children's
-        // subtrees exist, so no recursion is needed regardless of depth.
         val pending = childrenOf.mapValues { it.value.size }.toMutableMap()
         val subtrees = HashMap<String, SessionTreeNode>()
         val rootNodes = ArrayList<SessionTreeNode>()
@@ -237,9 +202,7 @@ class Conversation(
     }
 
     companion object {
-        /** Builds a linearly chained conversation from a flat transcript
-         * (each message parented to the previous, leaf = last); used by
-         * callers that still hold flat transcripts. */
+        /** Builds a linearly chained conversation from a flat transcript (each message parented to the previous, leaf = last). */
         fun fromMessages(messages: List<Message>): Conversation {
             var conversation = Conversation(emptyList(), null)
             for (message in messages) {

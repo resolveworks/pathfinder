@@ -11,29 +11,17 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 
 /**
- * OpenRouter structured `reasoning_details` support, ported from pi's
- * packages/ai/src/api/openai-completions.ts:
- *
- * - `isOpenAIReasoningDetail` (openai-completions.ts:144)
- * - `parseOpenAIReasoningDetails` (openai-completions.ts:225)
- * - `parseLegacyEncryptedReasoningDetail` (openai-completions.ts:236)
- * - `fillMissingCommonReasoningDetailFields` (openai-completions.ts:246)
- * - `appendOpenAIReasoningDetail` (openai-completions.ts:259)
- *
- * A reasoning detail is one of `reasoning.summary`, `reasoning.encrypted`, or
- * `reasoning.text`; OpenRouter streams them as deltas that consecutive
- * text/summary entries merge into, while encrypted entries stay opaque and
- * discrete. Accumulated details are serialized as a JSON array into the
- * thinking block's `thinkingSignature` slot, and replayed as
+ * OpenRouter structured `reasoning_details`: one of `reasoning.summary`,
+ * `reasoning.encrypted`, or `reasoning.text`, streamed as deltas that
+ * consecutive text/summary entries merge into while encrypted entries stay
+ * opaque and discrete. Accumulated details are serialized as a JSON array into
+ * the thinking block's `thinkingSignature` slot and replayed as
  * `assistantMsg.reasoning_details` on the next request.
  */
 
-/** pi's isReasoningDetailObject (openai-completions.ts:128): a JSON object. */
 private fun isReasoningDetailObject(detail: JsonElement): Boolean =
     detail is JsonObject
 
-/** pi's hasValidCommonReasoningDetailFields (openai-completions.ts:134):
- * id is string|null|absent, format is string|absent, index is number|absent. */
 private fun hasValidCommonReasoningDetailFields(detail: JsonObject): Boolean {
     val id = detail["id"]
     if (id != null && id !is JsonNull && id.stringOrNull() == null) return false
@@ -49,7 +37,6 @@ private fun hasValidCommonReasoningDetailFields(detail: JsonObject): Boolean {
     return true
 }
 
-/** pi's isOpenAIReasoningDetail (openai-completions.ts:144). */
 internal fun isOpenAiReasoningDetail(detail: JsonElement): Boolean {
     if (!isReasoningDetailObject(detail) || !hasValidCommonReasoningDetailFields(detail as JsonObject)) {
         return false
@@ -64,10 +51,6 @@ internal fun isOpenAiReasoningDetail(detail: JsonElement): Boolean {
     }
 }
 
-/**
- * pi's parseOpenAIReasoningDetails (openai-completions.ts:225): parses a
- * thinkingSignature as a non-empty array of valid reasoning details.
- */
 internal fun parseOpenAIReasoningDetails(signature: String?): JsonArray? {
     if (signature == null) return null
     val parsed = try {
@@ -81,11 +64,8 @@ internal fun parseOpenAIReasoningDetails(signature: String?): JsonArray? {
     return parsed
 }
 
-/**
- * pi's parseLegacyEncryptedReasoningDetail (openai-completions.ts:236): an
- * encrypted detail with a non-empty id and data, stored on a tool call's
- * `thoughtSignature` by older stored assistant messages.
- */
+/** Legacy format: an encrypted detail stored on a tool call's
+ * `thoughtSignature` by older assistant messages. */
 internal fun parseLegacyEncryptedReasoningDetail(signature: String?): JsonObject? {
     if (signature == null) return null
     val parsed = try {
@@ -100,7 +80,7 @@ internal fun parseLegacyEncryptedReasoningDetail(signature: String?): JsonObject
     return if (id.isNotEmpty() && data.isNotEmpty()) parsed else null
 }
 
-/** JS `??=`: set only when the target value is absent or null and source has one. */
+/** JS `??=` semantics: a present-but-null value counts as missing. */
 private fun fillMissing(target: MutableMap<String, JsonElement>, key: String, source: Map<String, JsonElement>) {
     val current = target[key]
     if ((target.containsKey(key) && current !is JsonNull)) return
@@ -108,7 +88,6 @@ private fun fillMissing(target: MutableMap<String, JsonElement>, key: String, so
     if (value != null && value !is JsonNull) target[key] = value
 }
 
-/** pi's fillMissingCommonReasoningDetailFields (openai-completions.ts:246). */
 private fun fillMissingCommonReasoningDetailFields(
     target: MutableMap<String, JsonElement>,
     source: Map<String, JsonElement>,
@@ -123,11 +102,6 @@ private fun fillMissingCommonReasoningDetailFields(
     fillMissing(target, "index", source)
 }
 
-/**
- * pi's appendOpenAIReasoningDetail (openai-completions.ts:259): merges
- * consecutive text/summary deltas into the last entry; everything else
- * (including encrypted entries) is appended as a discrete copy.
- */
 internal fun appendOpenAIReasoningDetail(
     details: MutableList<MutableMap<String, JsonElement>>,
     detail: Map<String, JsonElement>,

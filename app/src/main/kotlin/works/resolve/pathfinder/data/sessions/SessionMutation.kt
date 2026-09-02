@@ -6,11 +6,10 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * One append-only mutation of a session's persisted log, porting pi's
- * SessionMutation union (packages/agent/src/harness/session/state.ts): an
- * appended [entry] (optionally lane-addressed), a lane [record] mutation, a
- * [lane] pointer move, or a global [fact] (session name / entry label).
- * Every persisted mutation consumes exactly one storage-assigned seq.
+ * One append-only mutation of a session's persisted log: an appended
+ * [entry] (optionally lane-addressed), a lane [record] mutation, a [lane]
+ * pointer move, or a global [fact] (session name / entry label). Every
+ * persisted mutation consumes exactly one storage-assigned seq.
  */
 sealed class SessionMutation {
 
@@ -22,27 +21,27 @@ sealed class SessionMutation {
      */
     data class Entry(val lane: String?, val entry: SessionEntry) : SessionMutation()
 
-    /** A lane record mutation (pi's `kind: "record"`). */
+    /** A lane record mutation (`kind: "record"`). */
     data class Record(val record: LaneRecord) : SessionMutation()
 
-    /** A lane pointer mutation (pi's `kind: "lane"`). */
+    /** A lane pointer mutation (`kind: "lane"`). */
     data class Lane(val seq: Long, val lane: String, val leafId: String?) : SessionMutation()
 
-    /** A global fact mutation; latest wins (pi's `kind: "fact"`). */
+    /** A global fact mutation (`kind: "fact"`); latest wins. */
     sealed class Fact : SessionMutation() {
         abstract val seq: Long
 
-        /** The session display name (pi's `fact: "name"`); null clears it. */
+        /** The session display name (`fact: "name"`); null clears it. */
         data class Name(override val seq: Long, val name: String?) : Fact()
 
-        /** An entry label (pi's `fact: "label"`); null clears it. */
+        /** An entry label (`fact: "label"`); null clears it. */
         data class Label(override val seq: Long, val targetId: String, val label: String?) : Fact()
     }
 }
 
 /**
- * pi's LogItem (session/types.ts): one replayed log item per mutation —
- * the shape returned by [SessionState.getLog] for incremental tail reads.
+ * One replayed log item per mutation: the shape returned by
+ * [SessionState.getLog] for incremental tail reads.
  */
 sealed class LogItem {
     abstract val seq: Long
@@ -53,50 +52,36 @@ sealed class LogItem {
 
     data class Lane(override val seq: Long, val lane: String, val leafId: String?) : LogItem()
 
-    /** pi's `fact: "name"` log item; null clears the name. */
+    /** The `fact: "name"` log item; null clears the name. */
     data class FactName(override val seq: Long, val name: String?) : LogItem()
 
-    /** pi's `fact: "label"` log item; null clears the label. */
+    /** The `fact: "label"` log item; null clears the label. */
     data class FactLabel(override val seq: Long, val targetId: String, val label: String?) : LogItem()
 }
 
 /**
- * A lane record, porting pi's LaneRecord union
- * (packages/agent/src/harness/session/types.ts RecordBase + union): the
- * operation lifecycle trio ([OperationStartedRecord], [AbortRequestedRecord],
- * [OperationFinishedRecord]) plus [UsageRecord]; the remaining upstream kinds
- * (step_attempt, tool_started, queue_enqueued, queue_cancelled,
- * write_deferred) decode as structurally-applied [DeferredRecord]s until
- * their producers land (audit P1-5 rider — the reducer is their consumer).
- *
- * Like pi's NewRecord, producers build records without seq/timestamp (the
- * [seq]/[timestamp] defaults); the storage's appendRecord assigns both and
- * returns the stored copy via [withAssigned].
- *
- * RECORD/ENTRY ORDERING (pi's actual invariant): state.ts's applyMutation
- * validates only that a record's lane exists and its id is unused — it never
- * validates payload references such as sourceLeafId, and pi's own compaction
- * intent names a resultEntryId whose entry is appended only when the
- * operation succeeds. Records may therefore legally precede, in seq order,
- * the entries they reference. Pathfinder's producers rely on exactly that:
- * records append to the log immediately (storage-assigned seq) while entries
- * buffer in the live Conversation until save() diff-syncs them, so an
+ * Records may legally precede, in seq order, the entries they reference:
+ * upstream validates a record only for lane existence and id uniqueness,
+ * and producers append records to the log immediately while entries buffer
+ * in the live [Conversation] until save() diff-syncs them — an
  * operation_started may name a sourceLeafId whose entry mutation carries a
- * later seq. No flush is required or performed; a crash in that window
- * leaves a record referencing an entry that never persisted, which the
- * future reducer (P1-5) classifies like any other interrupted operation.
+ * later seq. A crash in that window leaves a record referencing an entry
+ * that never persisted, which the reducer classifies like any other
+ * interrupted operation.
+ *
+ * Producers build records without seq/timestamp (the 0 defaults); the
+ * storage's append assigns both and returns the stored copy via
+ * [withAssigned].
  */
 sealed class LaneRecord {
-    /** pi's RecordBase. */
     abstract val id: String
     abstract val lane: String
     abstract val seq: Long
     abstract val timestamp: Long
 
-    /** Storage assignment (pi's appendRecord spreading `seq`/`timestamp`). */
     abstract fun withAssigned(seq: Long, timestamp: Long): LaneRecord
 
-    /** pi's OperationStartedRecord; [id] is the operation's runId. */
+    /** [id] is the operation's runId. */
     data class OperationStartedRecord(
         override val id: String,
         override val lane: String,
@@ -109,7 +94,6 @@ sealed class LaneRecord {
         override fun withAssigned(seq: Long, timestamp: Long) = copy(seq = seq, timestamp = timestamp)
     }
 
-    /** pi's AbortRequestedRecord. */
     data class AbortRequestedRecord(
         override val id: String,
         override val lane: String,
@@ -121,7 +105,6 @@ sealed class LaneRecord {
         override fun withAssigned(seq: Long, timestamp: Long) = copy(seq = seq, timestamp = timestamp)
     }
 
-    /** pi's OperationFinishedRecord. */
     data class OperationFinishedRecord(
         override val id: String,
         override val lane: String,
@@ -136,10 +119,9 @@ sealed class LaneRecord {
     }
 
     /**
-     * pi's UsageRecord. The [usage] payload is typed (SessionState's stats
-     * fold consumes it); the cause discriminant and its fields (cause,
-     * runId, entryId, attempt, stopReason, toolCallId, details, …) stay
-     * opaque in [fields] until the reducer (P1-5) gives them typed shapes.
+     * The [usage] payload is typed ([SessionState]'s stats fold consumes
+     * it); the cause discriminant and its remaining fields stay opaque in
+     * [fields], which the reducer reads by key.
      */
     data class UsageRecord(
         override val id: String,
@@ -153,20 +135,18 @@ sealed class LaneRecord {
     }
 
     /**
-     * The deferred LaneRecord kinds (step_attempt, tool_started,
-     * queue_enqueued, queue_cancelled, write_deferred): validated like pi's
-     * codec (type discriminant only) and structurally applied on replay, but
-     * payload-typed only when their producers land (P1-5's reducer consumes
-     * them; queue kinds wait on steer/follow-up queues).
+     * Catch-all for the remaining upstream record kinds (step_attempt,
+     * tool_started, queue_enqueued, queue_cancelled, write_deferred): only
+     * the [type] discriminant is validated; the payload stays untyped in
+     * [fields], which the reducer reads by key where upstream reads typed
+     * members.
      */
     data class DeferredRecord(
         override val id: String,
         override val lane: String,
         override val seq: Long = 0L,
         override val timestamp: Long = 0L,
-        /** pi's LaneRecord `type` discriminant. */
         val type: String,
-        /** The record line's payload fields, minus the `kind` marker. */
         val fields: JsonObject,
     ) : LaneRecord() {
         override fun withAssigned(seq: Long, timestamp: Long) = copy(seq = seq, timestamp = timestamp)
@@ -174,12 +154,10 @@ sealed class LaneRecord {
 }
 
 /**
- * pi's OperationStartedRecord intent union (run/compaction/navigation),
- * kept as the validated `kind` discriminant plus the full intent object:
- * upstream intent payloads (run's originalPrompt/initialMessages/
- * systemPromptOverride/resumeData, navigation's summarize flag and friends)
- * are preserved verbatim for the future reducer, and Pathfinder's producers
- * currently write only the minimal shape they can honor.
+ * The validated `kind` discriminant plus the full intent [payload]:
+ * upstream intent objects are preserved verbatim (fields pathfinder never
+ * writes included), while pathfinder's producers write only the minimal
+ * shape they can honor.
  */
 data class OperationIntent(
     val kind: Kind,
@@ -193,13 +171,11 @@ data class OperationIntent(
     }
 
     companion object {
-        /** Producer helper: the minimal run intent (see class KDoc). */
         fun run(): OperationIntent = OperationIntent(
             kind = Kind.RUN,
             payload = buildJsonObject { put("kind", "run") },
         )
 
-        /** Producer helper: the compaction intent naming its [resultEntryId]. */
         fun compaction(resultEntryId: String): OperationIntent = OperationIntent(
             kind = Kind.COMPACTION,
             payload = buildJsonObject {
@@ -210,7 +186,6 @@ data class OperationIntent(
     }
 }
 
-/** pi's OperationFinishedRecord outcome union. */
 enum class OperationOutcome(val wire: String) {
     COMPLETED("completed"),
     ABORTED("aborted"),
@@ -218,5 +193,5 @@ enum class OperationOutcome(val wire: String) {
     DECLINED("declined"),
 }
 
-/** pi's OperationFinishedRecord error shape. */
+/** The error payload of an [OperationFinishedRecord]. */
 data class RecordError(val code: String, val message: String)

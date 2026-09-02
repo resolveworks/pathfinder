@@ -20,29 +20,20 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * Request construction for the native Mistral Chat Completions API, ported
- * from pi's `src/api/mistral-conversations.ts` (`buildChatPayload`,
- * `toChatMessages`, `toFunctionTools`, and the Mistral tool-call ID
- * normalizer).
+ * Request construction for the native Mistral Chat Completions API.
  *
- * Divergences from pi, all at narrow boundaries:
- * - The wire payload is built directly in snake_case; pi builds an internal
- *   camelCase payload and remaps it in `toMistralWirePayload` so an
- *   `onPayload` hook can add SDK-style fields. This port builds the wire
- *   payload directly, so the ported onPayload hook (see [MistralOptions])
- *   sees and returns the snake_case wire object.
- * - pi's `stripSymbolKeys` exists to strip TypeBox symbol metadata; Kotlin
- *   tool parameters are already plain JSON.
+ * Divergence from pi: the wire payload is built directly in snake_case; pi
+ * builds an internal camelCase payload and remaps it in `toMistralWirePayload`
+ * so its onPayload hook can add SDK-style fields. This port builds the wire
+ * payload directly, so the ported onPayload hook (see [MistralOptions]) sees
+ * and returns the snake_case wire object.
  */
 object MistralConversationsPayload {
 
     /** Mistral tool call IDs must be 9 alphanumeric characters. */
     const val MISTRAL_TOOL_CALL_ID_LENGTH = 9
 
-    /**
-     * Builds the wire-format request body (`v1/chat/completions`).
-     * Field presence matches pi: optional fields are only set when defined.
-     */
+    /** Builds the `v1/chat/completions` request body. */
     fun buildRequestBody(
         model: Model,
         context: Context,
@@ -66,7 +57,6 @@ object MistralConversationsPayload {
         }
     }
 
-    /** pi's shouldUsePromptCaching: caching unless explicitly disabled and a session exists. */
     fun shouldUsePromptCaching(options: MistralOptions): Boolean =
         options.cacheRetention != CacheRetention.NONE && options.sessionId != null
 
@@ -81,13 +71,7 @@ object MistralConversationsPayload {
         }
     }
 
-    /**
-     * pi's toFunctionTools (mistral-conversations.ts:747-762): Mistral always
-     * supports strict mode (`resolveJsonSchemaStrictSampling(tool, true)`), so
-     * the rewritten schema is used when strict applies and `strict` is always
-     * sent as `strict ?: false`. pi's `stripSymbolKeys` has no Kotlin
-     * counterpart because parameters are plain JSON.
-     */
+    /** Mistral always supports strict mode, so the schema is rewritten when strict applies. */
     private fun toFunctionTool(tool: Tool): JsonObject {
         val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictMode = true)
         return buildJsonObject {
@@ -105,11 +89,10 @@ object MistralConversationsPayload {
     }
 
     /**
-     * Converts already-transformed conversation messages (see [transformMessages])
- * to Mistral wire messages, ported from pi's `toChatMessages`, which receives
- * the output of pi's transformMessages: foreign thinking has already become
- * plain text, tool call IDs are already normalized (with tool results
-     * remapped), and synthetic results already exist for orphaned tool calls.
+     * Converts transformed messages (see [transformMessages]) to Mistral wire
+     * messages: thinking is already plain text, tool call IDs are already
+     * normalized (with tool results remapped), and orphaned tool calls already
+     * have synthetic results.
      */
     fun toChatMessages(
         messages: List<Message>,
@@ -121,8 +104,8 @@ object MistralConversationsPayload {
             when (msg.role) {
                 MessageRole.USER -> {
                     val content = (msg as works.resolve.pathfinder.ai.core.UserMessage).content
-                    // pi stores plain text user prompts as a content string; a
-                    // single-text-block message is the equivalent Kotlin shape.
+                    // A single-text-block message is the Kotlin equivalent of
+                    // pi's plain-text content string for user prompts.
                     if (content.size == 1 && content[0].type == ContentType.TEXT) {
                         result.add(
                             buildJsonObject {
@@ -271,7 +254,6 @@ object MistralConversationsPayload {
             put("image_url", "data:${image.mimeType};base64,${image.data}")
         }
 
-    /** pi's buildToolResultText, including the non-vision image placeholders. */
     internal fun buildToolResultText(
         text: String,
         hasImages: Boolean,
@@ -306,11 +288,7 @@ object MistralConversationsPayload {
     private fun sanitizeText(text: String): String = sanitizeSurrogates(text)
 }
 
-/**
- * Normalizes arbitrary tool call IDs to Mistral's 9-character alphanumeric
- * format with collision avoidance, ported from pi's
- * `createMistralToolCallIdNormalizer` and `deriveMistralToolCallId`.
- */
+/** Normalizes arbitrary tool call IDs to Mistral's 9-character alphanumeric format, avoiding collisions. */
 class MistralToolCallIdNormalizer {
     private val idMap = mutableMapOf<String, String>()
     private val reverseMap = mutableMapOf<String, String>()
@@ -332,7 +310,6 @@ class MistralToolCallIdNormalizer {
     }
 }
 
-/** pi's deriveMistralToolCallId. */
 internal fun deriveMistralToolCallId(id: String, attempt: Int): String {
     val normalized = id.replace(Regex("[^a-zA-Z0-9]"), "")
     if (attempt == 0 && normalized.length == MistralConversationsPayload.MISTRAL_TOOL_CALL_ID_LENGTH) {

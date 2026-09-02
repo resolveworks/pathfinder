@@ -28,12 +28,6 @@ import java.net.ServerSocket
 import java.net.SocketTimeoutException
 import java.net.URL
 
-/**
- * Ports the semantics of pi `packages/ai/src/auth/oauth/anthropic.ts` and its
- * `test/anthropic-oauth.test.ts`: authorize-URL/PKCE shapes, manual-code
- * input parsing incl. state validation, token exchange and refresh payloads,
- * the five-minute expiry skew, error envelopes, and cancellation.
- */
 class AnthropicOAuthAuthTest {
 
     private class RecordingInteraction(
@@ -52,10 +46,6 @@ class AnthropicOAuthAuthTest {
         }
     }
 
-    /**
-     * Interaction whose manual prompt suspends on a deferred, so tests decide
-     * when (and whether) the manual leg of the race answers.
-     */
     private class PendingInteraction(
         val answer: CompletableDeferred<String> = CompletableDeferred(),
     ) : AuthInteraction {
@@ -84,7 +74,6 @@ class AnthropicOAuthAuthTest {
         }
     }
 
-    /** Deterministic PKCE: fixed bytes make verifier/challenge stable reference vectors. */
     private fun fixedPkce(): PkceGenerator = PkceGenerator(randomBytes = { count -> ByteArray(count) { it.toByte() } })
 
     private fun pkce(): Pkce = fixedPkce().generate()
@@ -102,8 +91,6 @@ class AnthropicOAuthAuthTest {
 
     private fun jsonResponse(status: Int, body: String): OAuthHttpResponse =
         OAuthHttpResponse(status, emptyMap(), body.toByteArray())
-
-    // --- authorize URL (pi `loginAnthropic` URLSearchParams) ---
 
     @Test
     fun `authorize URL carries pi's exact params, pkce challenge and verifier state`() = runBlocking {
@@ -130,7 +117,6 @@ class AnthropicOAuthAuthTest {
             "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.",
             urlEvent.instructions,
         )
-        // Login issues exactly one network request: the token exchange.
         assertEquals(1, http.requests.size)
     }
 
@@ -149,19 +135,13 @@ class AnthropicOAuthAuthTest {
         assertEquals(AnthropicOAuthAuth.REDIRECT_URI, prompt.placeholder)
     }
 
-    // --- authorization input parsing (pi `parseAuthorizationInput`) ---
-
     @Test
     fun `redirect URL, code-state, query string, and raw code inputs all resolve`() = runBlocking {
         val pair = pkce()
         val inputs = mapOf(
-            // Full redirect URL with matching state (pi's test shape).
             "http://localhost:53692/callback?code=manual-code&state=${pair.verifier}" to "manual-code",
-            // code#state
             "manual-code#${pair.verifier}" to "manual-code",
-            // bare query string
             "code=the-code&state=${pair.verifier}" to "the-code",
-            // raw code (state defaults to the verifier like pi)
             "  raw-code  " to "raw-code",
         )
         for ((input, expected) in inputs) {
@@ -182,7 +162,6 @@ class AnthropicOAuthAuthTest {
 
         assertEquals("access", credential.access)
         val sent = Json.parseToJsonElement(http.requests.single().body.decodeToString()).jsonObject
-        // The third segment is discarded: state stays the verifier, not "verifier#ignored".
         assertEquals(pair.verifier, sent["state"]!!.jsonPrimitive.content)
     }
 
@@ -220,8 +199,6 @@ class AnthropicOAuthAuthTest {
         assertTrue(http.requests.isEmpty())
     }
 
-    // --- token exchange (pi `exchangeAuthorizationCode`) ---
-
     @Test
     fun `exchange posts pi's payload and applies the five minute expiry skew`() = runBlocking {
         val (auth, http) = flow(clock = FakeClock(1_000_000L))
@@ -254,8 +231,6 @@ class AnthropicOAuthAuthTest {
         assertEquals("Exchanging authorization code for tokens...", progress.message)
     }
 
-    // --- refresh (pi `refreshAnthropicToken`) ---
-
     @Test
     fun `refresh posts pi's payload without scope and rotates both tokens`() = runBlocking {
         val (auth, http) = flow(clock = FakeClock(2_000_000L))
@@ -274,8 +249,6 @@ class AnthropicOAuthAuthTest {
         assertEquals(2_000_000L + 3_600_000L - 300_000L, credential.expires)
     }
 
-    // --- toAuth (pi `anthropicOAuth.toAuth`) ---
-
     @Test
     fun `toAuth derives request auth from the access token`() = runBlocking {
         val (auth, _) = flow()
@@ -285,8 +258,6 @@ class AnthropicOAuthAuthTest {
         assertEquals(null, modelAuth.baseUrl)
     }
 
-    // --- metadata ---
-
     @Test
     fun `labels and subscription metadata mirror pi's anthropicOAuth`() {
         val (auth, _) = flow()
@@ -294,8 +265,6 @@ class AnthropicOAuthAuthTest {
         assertTrue(auth.isSubscription)
         assertEquals(null, auth.loginLabel)
     }
-
-    // --- malformed JSON / field types ---
 
     @Test
     fun `invalid JSON on exchange fails with pi's invalid JSON message`() {
@@ -349,8 +318,6 @@ class AnthropicOAuthAuthTest {
         }
     }
 
-    // --- non-2xx (pi `postJson` error, wrapped by each caller) ---
-
     @Test
     fun `non-2xx exchange carries pi's shape with a sanitized structured error`() {
         val auth = AnthropicOAuthAuth(
@@ -385,8 +352,6 @@ class AnthropicOAuthAuthTest {
         )
     }
 
-    // --- bounded request / cancellation ---
-
     @Test
     fun `bounded exchange timeout surfaces in pi's request failed details`() {
         val auth = AnthropicOAuthAuth(
@@ -418,8 +383,6 @@ class AnthropicOAuthAuthTest {
         assertEquals("cancelled", error.message)
     }
 
-    // --- secret safety ---
-
     @Test
     fun `error messages and request tostring never carry secrets`() {
         val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(403, """{"error":"denied"}""") }), fixedPkce(), callbackPort = 0)
@@ -434,13 +397,10 @@ class AnthropicOAuthAuthTest {
     @Test
     fun `unparseable non-2xx bodies carrying secrets are never interpolated`() {
         val bodies = listOf(
-            // A truncated token error echoing credentials in plain text.
             "access_token=sk-ant-oat-distinctive-access refresh_token=distinctive-refresh",
-            // Garbage that happens to embed a code/verifier.
             "<html>bad code the-secret-code verifier the-secret-verifier</html>",
             // Valid JSON but no error envelope: other fields are not echoed.
             """{"access_token":"sk-ant-oat-distinctive-access","refresh_token":"distinctive-refresh"}""",
-            // Non-object JSON.
             "[\"sk-ant-oat-distinctive-access\"]",
         )
         for (body in bodies) {
@@ -495,8 +455,6 @@ class AnthropicOAuthAuthTest {
 
     @Test
     fun `formEncode matches URLSearchParams including tilde`() {
-        // pi: new URLSearchParams({x: '~ *'}).toString() === "x=%7E+*",
-        // which is exactly JDK URLEncoder's output for the same input.
         assertEquals("x=%7E+*", AnthropicOAuthAuth.formEncode(mapOf("x" to "~ *")))
     }
 
@@ -506,9 +464,6 @@ class AnthropicOAuthAuthTest {
         }
     }
 
-    // --- loopback callback server (pi `startCallbackServer` / `loginAnthropic`) ---
-
-    /** GET a callback URL against the loopback server; returns status + body. */
     private fun httpGet(url: String): Pair<Int, String> {
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.connectTimeout = 5_000
@@ -541,8 +496,7 @@ class AnthropicOAuthAuthTest {
         val interaction = PendingInteraction()
 
         val loginJob = async { auth.login(interaction) }
-        // Let the login run on this runBlocking event loop until it parks at
-        // waitForResult with the server bound.
+        // Yield so the login coroutine binds its server before the callback is sent.
         delay(100)
 
         val (status, body) = httpGetOnceUp(port, "/callback?code=server-code&state=${pair.verifier}")
@@ -570,7 +524,7 @@ class AnthropicOAuthAuthTest {
         val interaction = PendingInteraction()
 
         val loginJob = launch { auth.login(interaction) }
-        // Give the login time to reach the race, then answer manually.
+        // Let the login reach the race before answering.
         delay(200)
         interaction.answer.complete("manual-code#${pair.verifier}")
         loginJob.join()

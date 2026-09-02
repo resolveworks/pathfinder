@@ -32,15 +32,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.doubleOrNull
 
-/**
- * Request-hook tests for the ported pi `onPayload`/`onResponse` hooks and
- * `samplingParams` (packages/ai/src/types.ts:145-149, :184-193): per-adapter
- * presence mirrors upstream exactly (see each test), including the negative
- * assertions for adapters whose upstream buildParams never applies
- * samplingParams (anthropic, google, mistral, codex) and the adapters whose
- * upstream never invokes onResponse (google) or fires it before the !ok check
- * (mistral, codex).
- */
 class RequestHooksTest {
 
     private val retry = ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 })
@@ -69,10 +60,6 @@ class RequestHooksTest {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // openai-completions
-    // -----------------------------------------------------------------------
-
     @Test
     fun `completions onPayload observes the serialized payload and replaces the wire body`() = runTest {
         val transport = FakeTransport()
@@ -96,9 +83,7 @@ class RequestHooksTest {
             ),
         ).toList()
         assertIs<AssistantMessageEvent.Done>(events.last())
-        // The hook saw the fully built params (pre-replacement)...
         assertEquals(0.5, seen.single()["temperature"]?.jsonPrimitive?.doubleOrNull)
-        // ...and the replacement reached the wire.
         assertEquals(4, bodyOf(transport)["top_k"]?.jsonPrimitive?.content?.toInt())
     }
 
@@ -170,10 +155,8 @@ class RequestHooksTest {
             ),
         ).toList()
         val body = bodyOf(transport)
-        // Request key wins per key; untouched model default passes through.
         assertEquals(0.5, body["top_p"]?.jsonPrimitive?.doubleOrNull)
         assertEquals(2.0, body["repetition_penalty"]?.jsonPrimitive?.doubleOrNull)
-        // Named fields stay intact unless explicitly overridden.
         assertEquals(0.5, body["temperature"]?.jsonPrimitive?.doubleOrNull)
     }
 
@@ -191,10 +174,6 @@ class RequestHooksTest {
         assertNull(bodyOf(transport)["top_p"])
         assertNull(bodyOf(transport)["repetition_penalty"])
     }
-
-    // -----------------------------------------------------------------------
-    // anthropic-messages
-    // -----------------------------------------------------------------------
 
     private val claude = Model(
         id = "claude-sonnet-4-5",
@@ -238,7 +217,6 @@ class RequestHooksTest {
                 samplingParams = mapOf("top_k" to JsonPrimitive(9)),
             ),
         ).toList()
-        // The hook saw the params object that reached the wire unchanged.
         assertEquals(bodyOf(transport), seen.single())
         assertEquals(200, responses.single().status)
         // Upstream anthropic-messages buildParams never applies samplingParams.
@@ -272,10 +250,6 @@ class RequestHooksTest {
         ).toList()
         assertTrue(responses.isEmpty())
     }
-
-    // -----------------------------------------------------------------------
-    // google-generative-ai
-    // -----------------------------------------------------------------------
 
     @Test
     fun `google onPayload fires, onResponse never fires, samplingParams are ignored`() = runTest {
@@ -314,10 +288,6 @@ class RequestHooksTest {
         assertTrue(responses.isEmpty())
         assertNull(bodyOf(transport)["top_k"])
     }
-
-    // -----------------------------------------------------------------------
-    // mistral-conversations
-    // -----------------------------------------------------------------------
 
     private val mistral = Model(
         id = "mistral-large-latest",
@@ -369,10 +339,6 @@ class RequestHooksTest {
         assertEquals(500, responses.single().status)
     }
 
-    // -----------------------------------------------------------------------
-    // openai-responses
-    // -----------------------------------------------------------------------
-
     private val gpt = Model(
         id = "gpt-5-mini",
         name = "GPT-5 Mini",
@@ -413,16 +379,11 @@ class RequestHooksTest {
         ).toList()
         assertEquals(200, responses.single().status)
         val body = bodyOf(transport)
-        // The hook saw the params before the hook ran (post-samplingParams).
+        // onPayload sees the payload after the samplingParams merge.
         assertEquals(body, seen.single())
-        // samplingParams merged last: named field overridden, custom key added.
         assertEquals(7, body["max_output_tokens"]?.jsonPrimitive?.content?.toInt())
         assertEquals(0.1, body["min_p"]?.jsonPrimitive?.doubleOrNull)
     }
-
-    // -----------------------------------------------------------------------
-    // azure-openai-responses
-    // -----------------------------------------------------------------------
 
     @Test
     fun `azure onPayload and onResponse fire and samplingParams override named fields`() = runTest {
@@ -463,10 +424,6 @@ class RequestHooksTest {
         assertEquals(0.9, body["temperature"]?.jsonPrimitive?.doubleOrNull)
     }
 
-    // -----------------------------------------------------------------------
-    // openai-codex-responses
-    // -----------------------------------------------------------------------
-
     @Test
     fun `codex onPayload fires, onResponse fires for non-2xx, samplingParams are ignored`() = runTest {
         val transport = FakeTransport()
@@ -501,10 +458,6 @@ class RequestHooksTest {
         assertEquals(429, responses.single().status)
         assertNull(bodyOf(transport)["top_k"])
     }
-
-    // -----------------------------------------------------------------------
-    // redaction
-    // -----------------------------------------------------------------------
 
     @Test
     fun `hook presence and sampling keys never leak payload or parameter values into toString`() {

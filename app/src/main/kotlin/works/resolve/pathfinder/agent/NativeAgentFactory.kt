@@ -25,32 +25,25 @@ import works.resolve.pathfinder.data.settings.ModelSettings
  * Production [AgentFactory]: builds the native agent from the persisted
  * configuration, serving any provider/model pair the generated catalog knows.
  *
- * All credential ownership lives behind the ported auth resolution (pi's
- * auth.resolve): credentials are read once per request inside Models.stream's
- * lazy flow, so a rotated or completed credential takes effect on the next
- * prompt. Both stored API-key and OAuth credentials resolve through
- * [resolveProviderAuth] with the catalog-backed provider auth; explicit
- * request overrides keep pi's precedence (explicit key wins, explicit env
- * merges over stored env per field). The credential never enters the agent,
- * its options, or any log; an incomplete or unhandled credential resolves to
- * null (defense in depth on top of the UI's CatalogProvider.isCredentialComplete
- * gate) and surfaces as a single safe Error event from Models.
+ * Credentials are read once per request inside Models.stream's lazy flow, so
+ * a rotated or completed credential takes effect on the next prompt. Stored
+ * API-key and OAuth credentials resolve through [resolveProviderAuth] with
+ * the catalog-backed provider auth. The credential never enters the agent,
+ * its options, or any log; an incomplete or unhandled credential resolves
+ * to null (defense in depth beyond [CatalogProvider.isCredentialComplete])
+ * and surfaces as a single safe Error event from Models.
  */
 class NativeAgentFactory(
     private val credentials: CredentialStore,
     private val catalog: ProviderCatalog,
     private val transport: HttpStreamingTransport,
     private val retry: ProviderRetry = ProviderRetry(),
-    /**
-     * WebSocket transport for the Codex adapter (pi's WebSocket constructor).
-     * Null disables the WebSocket path (SSE fallback only).
-     */
+    /** WebSocket transport for the Codex adapter; null disables the WebSocket path. */
     private val webSocketTransport: WebSocketStreamingTransport? = null,
     /** Android has no ambient env; tests inject real [AuthContext]s. */
     private val authContext: AuthContext = NoopAuthContext,
-    /** Maps catalog OAuth-capable providers to concrete flows (empty for now). */
     private val authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
-    /** Tools made available to every created agent (pi's agent tool registry). Copied per agent. */
+    /** Tools available to every created agent; copied per agent. */
     private val tools: List<AgentTool> = emptyList(),
 ) : AgentFactory {
 
@@ -65,20 +58,17 @@ class NativeAgentFactory(
             ?: throw IllegalArgumentException(
                 "Unknown model '${settings.modelId}' for provider '${settings.providerId}'",
             )
-        // Fail fast on APIs without a Kotlin implementation (the catalog
-        // carries all of pi's model APIs); streaming would reject it too.
+        // Fail fast on APIs without a Kotlin implementation; streaming
+        // would reject them too.
         require(ChatApiRegistry.isSupported(model.api)) {
             "Unsupported API '${model.api}' for provider '${settings.providerId}' (model '${settings.modelId}')"
         }
-        // The selected effective model is created once (pi's requestModel):
-        // the catalog model with its normalized base URL.
         val effectiveModel = model.copy(baseUrl = normalizeBaseUrl(model.baseUrl))
 
-        // Register EVERY catalog provider, not just the initial one: the
-        // models stack is what makes live model switching (AgentSession.setModel)
-        // work across providers — the next prompt resolves auth and the API
-        // from the same stack. Credential resolution stays lazy per request
-        // via each provider's resolver, exactly as for the initial provider.
+        // Register every catalog provider, not just the initial one: the
+        // models stack is what makes live model switching
+        // (AgentSession.setModel) work across providers — the next prompt
+        // resolves auth and the API from the same stack.
         val models = Models(
             catalog.providers.map { entry ->
                 entry.toRuntimeProvider(
@@ -90,8 +80,6 @@ class NativeAgentFactory(
             },
         )
 
-        // Session facade over the single-run agent (pi's AgentSession over
-        // Agent): retry budget from settings, tree ownership included.
         return AgentSession(
             agent = Agent(
                 model = effectiveModel,
@@ -114,12 +102,10 @@ class NativeAgentFactory(
     }
 
     /**
-     * Resolve a catalog provider/model pair to the effective request model
-     * (pi's requestModel): validates provider, model, and API support with
-     * the same errors as [create], and stamps the normalized base URL. This
-     * is the seam for live switching — callers obtain the target model here
-     * and pass it to [AgentSession.setModel]; the created session's models
-     * stack serves any catalog provider, not just the initial one.
+     * Resolves a catalog provider/model pair to the effective request model,
+     * validating provider, model, and API support with the same errors as
+     * [create] and stamping the normalized base URL. The seam for live
+     * switching: callers pass the result to [AgentSession.setModel].
      */
     fun resolveModel(providerId: String, modelId: String): Model {
         val entry = catalog.getProvider(providerId)
@@ -134,8 +120,7 @@ class NativeAgentFactory(
 }
 
 /**
- * The factory's provider auth resolver (pi's auth.resolve with overrides):
- * an explicit request key/env is shaped by the provider's auth semantics
+ * An explicit request key/env is shaped by the provider's auth semantics
  * without reading stored credentials; otherwise the stored credential is
  * read per request with explicit env merged over stored env per field before
  * completeness and shaping. A stored OAuth credential resolves (and

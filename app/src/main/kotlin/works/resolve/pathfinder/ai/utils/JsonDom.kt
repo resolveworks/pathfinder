@@ -11,35 +11,13 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 
-/**
- * Shared JSON-DOM access surface (TS→Kotlin translation conventions, see the
- * AGENTS.md at the Kotlin source root). All hand-ported wire formats and
- * persisted codecs read JSON through these helpers — never through private
- * per-file accessor families; extend this surface instead.
- *
- * The surface composes kotlinx.serialization's own primitive accessors
- * (`contentOrNull`, `intOrNull`, …) rather than re-implementing parsing. It
- * adds only key-based access, the strict/lenient distinction, and the
- * throwing reads codecs need:
- *
- * - **Lenient** reads mirror TS `String(x)` / pi's SDK-typed field reads:
- *   any primitive's content counts, quoted numerals parse as numbers, and
- *   floats are rejected for int reads (kotlinx semantics).
- * - **Strict** reads mirror TS `typeof x === "string"` / `Number.isFinite`
- *   guards used by pi's auth code: string reads require a string primitive,
- *   numeric reads reject string-encoded numbers.
- * - **Codec** (`require*`) reads are strict and throw the caller's exception
- *   on anything missing or malformed — nothing is silently dropped.
- */
-
-/** The shared Json instance for wire and codec DOM parsing (no per-file builders). */
 internal val lenientJson: Json = Json { ignoreUnknownKeys = true }
 
 private fun JsonElement?.primitiveOrNull(): JsonPrimitive? = this as? JsonPrimitive
 
-// --- Lenient reads: TS `String(x)` semantics; any primitive's content counts ---
+// --- Lenient reads: TS `String(x)` semantics ---
 
-/** [key]'s content as a string regardless of primitive kind; null when absent or JSON null. */
+/** [key]'s content regardless of primitive kind; null when absent or JSON null. */
 internal fun JsonObject?.str(key: String): String? = this?.get(key).primitiveOrNull()?.contentOrNull
 
 /** [key] as an Int (kotlinx semantics: quoted numerals accepted, floats rejected). */
@@ -48,10 +26,8 @@ internal fun JsonObject?.int(key: String): Int? = this?.get(key).primitiveOrNull
 /** [key] as a Long (kotlinx semantics: quoted numerals accepted, floats rejected). */
 internal fun JsonObject?.long(key: String): Long? = this?.get(key).primitiveOrNull()?.longOrNull
 
-/** [key] as a Double (kotlinx semantics). */
 internal fun JsonObject?.double(key: String): Double? = this?.get(key).primitiveOrNull()?.doubleOrNull
 
-/** [key] as a boolean primitive per kotlinx semantics. */
 internal fun JsonObject?.boolean(key: String): Boolean? = this?.get(key).primitiveOrNull()?.booleanOrNull
 
 /**
@@ -105,25 +81,19 @@ private inline fun <N> JsonObject?.strictNumeric(key: String, parse: (JsonPrimit
 
 // --- Codec reads: strict, throw on missing/malformed ---
 // [error] receives the field name and returns the codec's own exception, so
-// JsonlCodec/CredentialCodec keep their exception types without the shared
-// surface depending on them.
+// this surface never depends on codec exception types.
 
-/** Strict string field; throws [error]'s result when absent or not a string primitive. */
 internal fun JsonObject.requireString(key: String, error: (String) -> Throwable): String =
     string(key) ?: throw error(key)
 
-/** Strict Int field; throws [error]'s result when absent or malformed. */
 internal fun JsonObject.requireInt(key: String, error: (String) -> Throwable): Int =
     strictInt(key) ?: throw error(key)
 
-/** Strict Long field; throws [error]'s result when absent or malformed. */
 internal fun JsonObject.requireLong(key: String, error: (String) -> Throwable): Long =
     strictLong(key) ?: throw error(key)
 
-/** Strict Double field; throws [error]'s result when absent or malformed. */
 internal fun JsonObject.requireDouble(key: String, error: (String) -> Throwable): Double =
     strictDouble(key) ?: throw error(key)
 
-/** Strict Boolean field; throws [error]'s result when absent or malformed. */
 internal fun JsonObject.requireBoolean(key: String, error: (String) -> Throwable): Boolean =
     strictBoolean(key) ?: throw error(key)
