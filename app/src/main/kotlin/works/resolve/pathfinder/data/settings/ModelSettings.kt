@@ -2,6 +2,7 @@ package works.resolve.pathfinder.data.settings
 
 import works.resolve.pathfinder.agent.compaction.CompactionSettings
 import works.resolve.pathfinder.agent.compaction.DEFAULT_COMPACTION_SETTINGS
+import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 
 /**
  * Model configuration shown in the UI. The API key is intentionally not part
@@ -16,6 +17,14 @@ data class ModelSettings(
      * The agent layer ignores this for now; nothing renders thinking yet.
      */
     val showThinking: Boolean = false,
+    /**
+     * The persisted default thinking level (pi's settings
+     * `defaultThinkingLevel`, set by the thinking picker's Ctrl+S): applied
+     * to sessions without a recorded branch level and re-applied on model
+     * switches. Null = unset — pi's `getDefaultThinkingLevel() ??
+     * DEFAULT_THINKING_LEVEL` then resolves "medium" at use sites.
+     */
+    val defaultThinkingLevel: ModelThinkingLevel? = null,
     /** Auto-retry of failed agent runs (pi's settings.retry; see [RetrySettings]). */
     val retry: RetrySettings = RetrySettings(),
     /**

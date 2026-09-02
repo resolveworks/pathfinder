@@ -9,9 +9,12 @@ import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.Content
 import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.Model
+import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.core.clampThinkingLevel
+import works.resolve.pathfinder.ai.core.getSupportedThinkingLevels
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.agent.AgentFactory
@@ -42,6 +45,7 @@ import works.resolve.pathfinder.data.sessions.Session
 import works.resolve.pathfinder.data.sessions.SessionEntry
 import works.resolve.pathfinder.data.sessions.SessionState
 import works.resolve.pathfinder.data.sessions.SessionRepository
+import works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
 import works.resolve.pathfinder.data.sessions.SessionSummary
 import works.resolve.pathfinder.logging.PathfinderDiagnostics
 import kotlinx.coroutines.CancellationException
@@ -73,7 +77,7 @@ import kotlinx.coroutines.withContext
  * `filterModels` (GitHub Copilot's `availableModelIds` extra; pi's
  * getAvailable).
  *
- * Model selection is split exactly like pi: Settings ▸ Models curates the
+ * Model selection is split exactly like pi: Settings ▸ Scoped models curates the
  * scoped models (pi's /scoped-models — which models are *offered*),
  * persisted as the ordered `enabledModels` setting, while the chat's model
  * chip switches the model that *runs* on the live session (pi's /model):
@@ -244,6 +248,73 @@ class ChatViewModel(
      */
     fun toggleModelScope(providerId: String, modelId: String, checked: Boolean) {
         viewModelScope.launch { toggleModelScopeInternal(providerId, modelId, checked) }
+    }
+
+    /**
+     * Switches the live session's thinking level (pi's thinking-selector
+     * pick, Enter in the selector): [AgentSession.setThinkingLevel] clamps
+     * to the model's supported levels and appends a thinking_level_change
+     * entry to the tree only when the level changes.
+     *
+     * Not busy-rejected: like pi, a mid-stream pick is safe — the active run
+     * keeps its start-of-run level (the agent snapshots it per prompt) and
+     * the switch applies to the next prompt. This does NOT persist the
+     * default (pi's Ctrl+S is a separate action, [setThinkingLevelDefault]).
+     */
+    fun selectThinkingLevel(level: ModelThinkingLevel) {
+        viewModelScope.launch {
+            val session = agent ?: return@launch
+            try {
+                session.setThinkingLevel(level)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(ERROR_THINKING_SWITCH, e)
+                return@launch
+            }
+            updateState { it.copy(treeRows = buildTreeRows(session.conversation, it.treeFilter)) }
+            // The thinking_level_change may have grown the tree: persist it.
+            enqueuePersist()
+        }
+    }
+
+    /**
+     * Persists the default thinking level (pi's thinking-selector Ctrl+S:
+     * one `setThinkingLevel(level, { persist: true })` call). Pi applies
+     * first and persists after; the same order here means a failed settings
+     * write leaves the session switched, exactly like pi. The stored default
+     * seeds sessions without a recorded branch level
+     * ([seededSettingsFor]) and is re-applied on model switches
+     * ([selectModelInternal]).
+     */
+    fun setThinkingLevelDefault(level: ModelThinkingLevel) {
+        viewModelScope.launch {
+            val session = agent
+            if (session != null) {
+                try {
+                    session.setThinkingLevel(level)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    setError(ERROR_THINKING_SWITCH, e)
+                    return@launch
+                }
+            }
+            try {
+                settingsRepository.setDefaultThinkingLevel(level)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(ERROR_SETTINGS_SAVE, e)
+                return@launch
+            }
+            currentSettings = currentSettings.copy(defaultThinkingLevel = level)
+            updateState { it.copy(defaultThinkingLevel = level) }
+            if (session != null) {
+                updateState { it.copy(treeRows = buildTreeRows(session.conversation, it.treeFilter)) }
+                enqueuePersist()
+            }
+        }
     }
 
     /**
@@ -428,11 +499,11 @@ class ChatViewModel(
                 }
                 val session = sessionStore.create(DEFAULT_SESSION_TITLE)
                 // pi seeds every new session with the initial model selection
-                // (coding-agent sdk.ts: appendModelChange before first use),
-                // so the branch's configuration fold restores it on resume.
-                val conversation = Conversation(emptyList(), null)
-                    .appendModelChange(currentSettings.providerId, currentSettings.modelId)
-                val newAgent = tryCreateAgent(currentSettings, session.id, conversation) ?: return@launch
+                // and thinking level (coding-agent sdk.ts: appendModelChange +
+                // appendThinkingLevelChange before first use), so the branch's
+                // configuration fold restores both on resume.
+                val (seeded, conversation) = seededSettingsFor(session, currentSettings)
+                val newAgent = tryCreateAgent(seeded, session.id, conversation) ?: return@launch
                 if (!activateSession(session, newAgent)) return@launch
             } catch (e: CancellationException) {
                 throw e
@@ -710,16 +781,36 @@ class ChatViewModel(
      * deriveSessionContextState) overrides the provider/model when it
      * recorded one; new (entry-less) sessions are seeded with the initial
      * model selection (pi's sdk.ts new-session path) so the fold can
-     * restore it on resume. Non-empty sessions record nothing on load,
-     * matching pi (which only appends a missing thinking level, a concept
-     * pathfinder has no selection point for).
+     * restore it on resume. A branch with no thinking_level_change entry is
+     * seeded with the default thinking level (pi's sdk.ts load path:
+     * `hasExistingSession && !hasThinkingEntry → appendThinkingLevelChange`,
+     * and the new-session append below it) — the stored default, else pi's
+     * DEFAULT_THINKING_LEVEL "medium", clamped to the effective model.
      */
     private fun seededSettingsFor(session: Session, settings: ModelSettings): Pair<ModelSettings, Conversation> {
         var conversation = Conversation(session.entries, session.leafId)
         if (conversation.entries.isEmpty() && settings.providerId.isNotBlank() && settings.modelId.isNotBlank()) {
             conversation = conversation.appendModelChange(settings.providerId, settings.modelId)
         }
-        return settingsSeededFromFold(settings, conversation) to conversation
+        val seeded = settingsSeededFromFold(settings, conversation)
+        if (conversation.entries.none { it is ThinkingLevelEntry } &&
+            seeded.providerId.isNotBlank() && seeded.modelId.isNotBlank()
+        ) {
+            // Clamped before storing, exactly like pi's sdk.ts:253 clamp
+            // preceding the append. An unresolvable model fails agent
+            // creation anyway (the safe ERROR_CONFIG_INVALID path), so the
+            // tree stays unseeded rather than gaining a second error path.
+            val seededLevel = try {
+                val model = modelResolver(seeded.providerId, seeded.modelId)
+                clampThinkingLevel(model, seeded.defaultThinkingLevel ?: DEFAULT_THINKING_LEVEL)
+            } catch (e: Exception) {
+                null
+            }
+            if (seededLevel != null) {
+                conversation = conversation.appendThinkingLevelChange(seededLevel.wire)
+            }
+        }
+        return seeded to conversation
     }
 
     /**
@@ -818,6 +909,11 @@ class ChatViewModel(
                 messages = projectCommitted(state.messages, activeConversation),
                 streamingMessage = (state.streamingMessage as? AssistantMessage)?.let(::projectStreaming),
                 isStreaming = state.isStreaming,
+                // The thinking surfaces follow the live session (pi's footer
+                // reads state.thinkingLevel and the model's supported
+                // levels); both re-project on level picks and model switches.
+                thinkingLevel = state.thinkingLevel,
+                availableThinkingLevels = getSupportedThinkingLevels(state.model),
                 error = agentError ?: it.error?.takeIf { e -> e != lastAgentError },
             )
         }
@@ -991,6 +1087,15 @@ class ChatViewModel(
             setError(ERROR_MODEL_SWITCH, e)
             return
         }
+        // pi's setModel then applies the thinking level for the new model
+        // (_getThinkingLevelForModelSwitch → setThinkingLevel,
+        // agent-session.ts:1663-1674): the stored global default, else the
+        // session's current level (per-model overrides are not ported).
+        // Applied here — after the model_change, like pi's order — because
+        // the default is app-owned settings the session facade holds none of;
+        // setThinkingLevel clamps to the new model and appends only on
+        // change, so this usually records nothing.
+        session.setThinkingLevel(currentSettings.defaultThinkingLevel ?: session.thinkingLevel)
         updateState {
             it.copy(
                 selectedModel = selectedModelProjection(model),
@@ -1382,6 +1487,7 @@ class ChatViewModel(
                 providerOptions = providerOptions,
                 modelOptions = modelOptions,
                 selectedModel = selectedModel,
+                defaultThinkingLevel = currentSettings.defaultThinkingLevel,
             )
         }
         projectScope(modelOptions)
@@ -1509,6 +1615,7 @@ class ChatViewModel(
             "That model is no longer available for this account — pick another model"
         const val ERROR_MODEL_SWITCH =
             "Could not switch to that model — check the provider sign-in"
+        const val ERROR_THINKING_SWITCH = "Could not switch the thinking level"
         const val ERROR_UNKNOWN_PROVIDER = "Unknown provider"
         const val ERROR_CREDENTIAL_SAVE = "Could not store the API key"
         const val ERROR_SETTINGS_SAVE = "Could not save the configuration"
@@ -1523,6 +1630,9 @@ class ChatViewModel(
         const val ERROR_ALREADY_STREAMING = "A response is already streaming"
         const val ERROR_ALREADY_AT_POINT = "Already at this point"
         const val ERROR_ENTRY_MISSING = "Message not found"
+
+        /** pi's DEFAULT_THINKING_LEVEL (coding-agent defaults.ts: "medium"). */
+        val DEFAULT_THINKING_LEVEL = ModelThinkingLevel.MEDIUM
 
         /** Actionable, secret-free message naming the still-missing auth prompts. */
         fun missingCredentialError(missing: List<AuthPrompt>): String =

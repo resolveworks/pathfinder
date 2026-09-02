@@ -101,8 +101,8 @@ class Conversation(
     /**
      * Appends a thinking-level change as child of the current leaf and
      * advances the leaf to it (pi's sessionManager.appendThinkingLevelChange,
-     * session-manager.ts ~1071). No producer yet in pathfinder (no
-     * thinking-level selection point).
+     * session-manager.ts ~1071). [thinkingLevel] is pi's wire string
+     * (see [works.resolve.pathfinder.ai.core.ModelThinkingLevel.wire]).
      */
     fun appendThinkingLevelChange(thinkingLevel: String): Conversation {
         val entry = ThinkingLevelEntry(

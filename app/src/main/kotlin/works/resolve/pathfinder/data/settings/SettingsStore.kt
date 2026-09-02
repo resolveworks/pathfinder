@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.data.settings
 
+import works.resolve.pathfinder.ai.core.ModelThinkingLevel
+
 /**
  * Narrow settings boundary used by UI-layer code: read the current settings
  * and write individual fields. Keeping this interface separate from
@@ -15,6 +17,12 @@ interface SettingsStore {
     suspend fun setActiveSessionId(sessionId: String?)
 
     suspend fun setShowThinking(showThinking: Boolean)
+
+    /**
+     * Persists the default thinking level (pi's `defaultThinkingLevel`
+     * setting). `null` clears it so the pi default ("medium") applies.
+     */
+    suspend fun setDefaultThinkingLevel(level: ModelThinkingLevel?)
 
     /** Persists the agent auto-retry settings wholesale (pi's settings.retry). */
     suspend fun setRetrySettings(settings: RetrySettings)

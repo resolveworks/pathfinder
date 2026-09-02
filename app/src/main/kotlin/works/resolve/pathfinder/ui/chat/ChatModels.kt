@@ -6,6 +6,7 @@ import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
+import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.agent.LaneRecovery
 import works.resolve.pathfinder.data.sessions.SessionSummary
 
@@ -243,6 +244,24 @@ data class ChatUiState(
     val scopedModelOptions: List<ModelOption> = emptyList(),
     /** The live model of the bound session, or null when unbound/unknown. */
     val selectedModel: SelectedModel? = null,
+    /**
+     * The live thinking level of the bound session (pi's session
+     * thinkingLevel), or null when unbound. Display-only twin of the level
+     * the agent snapshots per prompt.
+     */
+    val thinkingLevel: ModelThinkingLevel? = null,
+    /**
+     * The levels the current model supports (pi's getAvailableThinkingLevels
+     * over the agent's model); drives the thinking chip's visibility (pi's
+     * footer shows the thinking state only for reasoning models, for which
+     * this list is never just OFF) and the picker rows.
+     */
+    val availableThinkingLevels: List<ModelThinkingLevel> = emptyList(),
+    /**
+     * The persisted default thinking level mirror (pi's `defaultThinkingLevel`
+     * setting; the picker marks it · default like pi's selector).
+     */
+    val defaultThinkingLevel: ModelThinkingLevel? = null,
     val activeSessionId: String? = null,
     val sessionSummaries: List<SessionSummary> = emptyList(),
     val messages: List<ChatMessage> = emptyList(),
