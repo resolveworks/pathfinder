@@ -109,6 +109,7 @@ class NativeAgentFactory(
             retrySettings = settings.retry,
             compactionSettings = settings.compaction,
             models = models,
+            tools = tools.toList(),
         )
     }
 
