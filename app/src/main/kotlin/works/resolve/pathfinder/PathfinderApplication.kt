@@ -19,6 +19,8 @@ import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
 import works.resolve.pathfinder.data.sessions.SessionStore
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.logging.LogcatTelemetryContext
+import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
+import works.resolve.pathfinder.tools.websearch.SearchProviderService
 import works.resolve.pathfinder.logging.PathfinderDiagnostics
 import works.resolve.pathfinder.ui.chat.ChatViewModel
 import java.io.File
@@ -41,7 +43,12 @@ import okhttp3.OkHttpClient
  * - [SettingsRepository] on a single Preferences DataStore file;
  * - [SessionStore] rooted under app-private `filesDir/sessions`;
  * - the generated multi-provider model catalog, parsed once from assets;
- * - [NativeAgentFactory] wiring the native runtime to any catalog provider.
+ * - [SearchProviderService] (web-search credentials, `search_`-namespaced
+ *   in the same store) and one shared [BraveWebSearchTool] on the same
+ *   OkHttp client, resolving its key lazily so a key stored later in the
+ *   app's lifetime is picked up without rebuilding the tool;
+ * - [NativeAgentFactory] wiring the native runtime to any catalog provider
+ *   with the web-search tool registered.
  */
 class PathfinderApplication : Application() {
 
@@ -95,6 +102,19 @@ class PathfinderApplication : Application() {
         )
     }
 
+    /** Web-search provider credentials (Brave only, Scry parity) in the shared store. */
+    val searchProviderService: SearchProviderService by lazy {
+        SearchProviderService(credentials)
+    }
+
+    /** The app's single web-search agent tool; the key is resolved per call. */
+    val webSearchTool: BraveWebSearchTool by lazy {
+        BraveWebSearchTool(
+            client = okHttpClient,
+            apiKeyResolver = { searchProviderService.apiKey(SearchProviderService.BRAVE_PROVIDER_ID) },
+        )
+    }
+
     val settingsRepository: SettingsRepository by lazy {
         SettingsRepository(settingsDataStore)
     }
@@ -116,9 +136,7 @@ class PathfinderApplication : Application() {
             transport = transport,
             webSocketTransport = webSocketTransport,
             authRegistry = authRegistry,
-            // Production tool registry is intentionally empty for now; pi's
-            // tool surface lands with the tool-execution change.
-            tools = emptyList(),
+            tools = listOf(webSearchTool),
         )
     }
 
@@ -131,6 +149,7 @@ class PathfinderApplication : Application() {
                 authService = authService,
                 sessionStore = sessionStore,
                 agentFactory = agentFactory,
+                searchProviderService = searchProviderService,
                 modelResolver = agentFactory::resolveModel,
                 diagnostics = diagnostics,
                 appForegroundGate = appForegroundGate,
