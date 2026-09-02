@@ -117,6 +117,13 @@ class AgentSession(
     /** Compaction thresholds (pi's settings compaction object, `DEFAULT_COMPACTION_SETTINGS`). */
     val compactionSettings: CompactionSettings = DEFAULT_COMPACTION_SETTINGS,
     /**
+     * Tool registry available for per-session activation (pi's harness
+     * `options.tools`, agent-harness.ts:249 — copied, like the harness's
+     * `this.tools = [...(options.tools ?? [])]`). Default empty keeps
+     * pathfinder's current no-tools behavior byte-identical.
+     */
+    private val tools: List<AgentTool> = emptyList(),
+    /**
      * Provider stack used for compaction summarization (pi's
      * `_getSummarizationRequestAuth` + `this.agent.streamFunction`). Null
      * disables automatic compaction — the trigger checks then decline
@@ -211,6 +218,9 @@ class AgentSession(
      */
     private val conversationMutex = Mutex()
 
+    /** Name→tool registry over the copied constructor list (pi's `_toolRegistry`). */
+    private val toolRegistry: Map<String, AgentTool> = tools.associateBy { it.definition.name }
+
     private val _events = MutableSharedFlow<AgentEvent>()
 
     /**
@@ -250,7 +260,63 @@ class AgentSession(
                     ?: ModelThinkingLevel.OFF,
             ),
         )
+        // Seed the active tool set from the branch's configuration fold, else
+        // the harness default of all registered tools (agent-harness.ts:330:
+        // `options.activeToolNames ?? options.tools?.map((tool) => tool.name)
+        // ?? []`, seeded into session rebuild via create-harness.ts:137/149).
+        // Adoption applies the fold without persisting: no session entry is
+        // appended, mirroring pi, where the core never records tool-set
+        // changes (pathfinder likewise — `active_tools_change` entries are
+        // only ever consumed here, never produced). An empty registry leaves
+        // the agent untouched entirely (folded names could only resolve to
+        // nothing anyway), so callers seeding agent tools outside this
+        // registry — today's factory wiring — keep today's behavior exactly.
+        if (tools.isNotEmpty()) {
+            val foldedToolNames = conversation.effectiveConfiguration().activeToolNames
+            val activeTools = resolveTools(foldedToolNames ?: tools.map { it.definition.name })
+            agent.setTools(activeTools)
+            agent.setSystemPrompt(buildSystemPrompt(activeTools))
+        }
     }
+
+    /**
+     * Names of the currently active tools, ported from pi's
+     * `getActiveToolNames` (agent-session.ts:944): the agent state's tool
+     * list, in order.
+     */
+    fun getActiveToolNames(): List<String> = agent.state.value.tools.map { it.definition.name }
+
+    /**
+     * Set active tools by name, ported from pi's `setActiveToolsByName`
+     * (agent-session.ts:971-984): only tools in the registry can be enabled,
+     * unknown tool names are ignored, and the agent state's tools and system
+     * prompt are reassigned (the prompt rebuilt from the resolved tool set,
+     * pi's `_rebuildSystemPrompt` composed here as [buildSystemPrompt]).
+     * Takes effect on the next run — the agent snapshots tools and system
+     * prompt per run (see [Agent.setTools]).
+     *
+     * Iteration semantics mirror pi exactly: tools are pushed in request
+     * order, and a name appearing twice resolves to two entries (no dedupe).
+     *
+     * Exclusions (documented divergences): pi's `systemPromptOverride` has no
+     * analog (no extension runner), so the rebuilt prompt is assigned
+     * unconditionally; and — like pi's core — no session entry is appended,
+     * because adoption re-seeds from the fold above and pathfinder has no
+     * producer of `active_tools_change` entries.
+     */
+    fun setActiveToolsByName(toolNames: List<String>) {
+        val validTools = toolNames.mapNotNull(toolRegistry::get)
+        agent.setTools(validTools)
+        agent.setSystemPrompt(buildSystemPrompt(validTools))
+    }
+
+    /**
+     * Resolve tool names through the registry in request order (pi's
+     * setActiveToolsByName loop: push when found, skip when not; duplicates
+     * push twice).
+     */
+    private fun resolveTools(toolNames: List<String>): List<AgentTool> =
+        toolNames.mapNotNull(toolRegistry::get)
 
     /**
      * Submit one prompt, pi's `AgentSession.prompt(text)` reduced: the user
