@@ -37,12 +37,16 @@ import kotlinx.coroutines.withContext
  * ids of tool calls whose execution has started but not ended.
  * [thinkingLevel] is pi's AgentState.thinkingLevel (agent.ts:77), default
  * `"off"`; the run loop snapshots it into its request options (see
- * [Agent.prompt]).
+ * [Agent.prompt]). [systemPrompt] is pi's AgentState.systemPrompt
+ * (createMutableAgentState, agent.ts:75: `initialState?.systemPrompt ?? ""`),
+ * diverging from upstream's required `""` default only in keeping
+ * pathfinder's nullable Context.systemPrompt.
  */
 data class AgentState(
     val model: Model,
     val messages: List<Message> = emptyList(),
     val tools: List<AgentTool> = emptyList(),
+    val systemPrompt: String? = null,
     val streamingMessage: Message? = null,
     val pendingToolCalls: Set<String> = emptySet(),
     val isStreaming: Boolean = false,
@@ -69,7 +73,8 @@ data class AgentState(
 class Agent(
     /** Initial model (pi's AgentOptions.initialState.model); mutable via [setModel]. */
     model: Model,
-    val systemPrompt: String? = null,
+    /** Initial system prompt (pi's AgentOptions.initialState.systemPrompt); mutable via [setSystemPrompt]. */
+    systemPrompt: String? = null,
     val streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
     /** Tools available to every run (pi's AgentOptions.initialState.tools). Copied into state. */
     tools: List<AgentTool> = emptyList(),
@@ -102,7 +107,9 @@ class Agent(
      */
     internal var eventSink: suspend (AgentEvent) -> Unit = {}
 
-    private val _state = MutableStateFlow(AgentState(model = model, tools = tools.toList()))
+    private val _state = MutableStateFlow(
+        AgentState(model = model, tools = tools.toList(), systemPrompt = systemPrompt),
+    )
     val state: StateFlow<AgentState> = _state.asStateFlow()
 
     /**
@@ -117,6 +124,12 @@ class Agent(
      * accessor, agent-session.ts:916). Reassigned, never mutated.
      */
     val thinkingLevel: ModelThinkingLevel get() = _state.value.thinkingLevel
+
+    /**
+     * The current system prompt (pi's `agent.state.systemPrompt`,
+     * createMutableAgentState agent.ts:75). Reassigned, never mutated.
+     */
+    val systemPrompt: String? get() = _state.value.systemPrompt
 
     /**
      * Select the model for subsequent runs (pi's harness `setModel`,
@@ -144,6 +157,33 @@ class Agent(
      */
     fun setThinkingLevel(level: ModelThinkingLevel) {
         reduce { it.copy(thinkingLevel = level) }
+    }
+
+    /**
+     * Assign the tools for subsequent runs. Mirrors pi's copying `tools`
+     * setter in `createMutableAgentState` (agent.ts:68–96: the setter stores
+     * `nextTools.slice()`); the caller's list is copied via [toList] on
+     * assignment. Motivating consumer: pi's `setActiveToolsByName`
+     * (agent-session.ts:971) assigns `this.agent.state.tools = tools` between
+     * runs. Safe during an in-flight run: [prompt] snapshots the tools into
+     * its context snapshot at run start (pi's createContextSnapshot, agent.ts:437),
+     * so the active run keeps its start-of-run tool set and the next prompt
+     * uses the new one.
+     */
+    fun setTools(tools: List<AgentTool>) {
+        reduce { it.copy(tools = tools.toList()) }
+    }
+
+    /**
+     * Assign the system prompt for subsequent runs, mirroring pi's
+     * `agent.state.systemPrompt = …` assignment in `setActiveToolsByName`
+     * (agent-session.ts:971–984). Safe during an in-flight run: [prompt]
+     * snapshots the system prompt into its context snapshot at run start
+     * (pi's createContextSnapshot, agent.ts:437), so the active run keeps its
+     * start-of-run prompt and the next prompt uses the new one.
+     */
+    fun setSystemPrompt(value: String?) {
+        reduce { it.copy(systemPrompt = value) }
     }
 
     /**
@@ -199,15 +239,17 @@ class Agent(
             // (pi's createLoopConfig builds the loop config — including
             // `this._state.model` and `reasoning: this._state.thinkingLevel
             // === "off" ? undefined : this._state.thinkingLevel`
-            // (agent.ts:450-453) — once per run, agent.ts:509-515): a
-            // setModel/setThinkingLevel during the run changes only later
-            // runs.
+            // (agent.ts:450-453) — once per run, agent.ts:509-515), and the
+            // context snapshot — `systemPrompt`, `messages.slice()`,
+            // `tools.slice()` from `this._state` (createContextSnapshot,
+            // agent.ts:437-443): a setModel/setThinkingLevel/setTools/
+            // setSystemPrompt during the run changes only later runs.
             val runModel = _state.value.model
             val runOptions = streamOptions.copy(
                 reasoning = _state.value.thinkingLevel.toThinkingLevelOrNull(),
             )
             val contextSnapshot = AgentContext(
-                systemPrompt = systemPrompt,
+                systemPrompt = _state.value.systemPrompt,
                 messages = _state.value.messages.toList(),
                 tools = _state.value.tools.toList(),
             )
