@@ -98,7 +98,9 @@ class AgentSessionToolsTest {
 
     /**
      * pi setActiveToolsByName: unknown names ignored, valid tools applied
-     * in request order, the system prompt rebuilt, and the next run's\n     * provider context carrying the new tool set and prompt.\n     */
+     * in request order, the system prompt rebuilt, and the next run's
+     * provider context carrying the new tool set and prompt.
+     */
     @Test
     fun `setActiveToolsByName applies registry-filtered tools and rebuilds the prompt`() = runTest {
         val webSearch = tool("web_search")
