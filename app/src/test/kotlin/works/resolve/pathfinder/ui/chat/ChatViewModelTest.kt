@@ -1338,6 +1338,29 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun searchEnabled_newSession_agentCreatedWithWebSearchActive() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val firstId = vm.uiState.value.activeSessionId!!
+        vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
+        vm.uiState.first { it.searchCredentialSuccessEpoch == 1L }
+        assertTrue(BraveWebSearchTool.NAME in h.createdAgents.single().getActiveToolNames())
+
+        // Every tryCreateAgent path synchronizes web_search: a newly created
+        // session's agent is created with the tool already active.
+        vm.newSession()
+        val fresh = vm.uiState.first { it.activeSessionId != firstId }
+        val newAgent = h.createdAgents.single { it !== h.createdAgents.first() }
+        assertEquals(1, newAgent.getActiveToolNames().count { it == BraveWebSearchTool.NAME })
+        assertEquals(BraveWebSearchTool.NAME, newAgent.getActiveToolNames().last())
+
+        vm.closeForTest()
+    }
+
+    @Test
     fun invalidModel_andResolverValidation_areRejectedSafely() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()

@@ -51,6 +51,18 @@ import kotlin.coroutines.resumeWithException
  *   ported; the agent loop handles cancellation instead.
  * - Network failures: upstream rethrows non-abort fetch errors; this port
  *   likewise throws the [IOException] from the OkHttp call.
+ * - Error bodies: upstream reads the whole non-2xx body and uses JS
+ *   truthiness on the raw text (`body || statusText`); this port trims
+ *   and caps the body via the shared provider error-body helpers
+ *   ([MAX_PROVIDER_ERROR_BODY_CHARS]/[truncateErrorText]) so a huge
+ *   error page is never fully buffered, and a whitespace-only body falls
+ *   back to the status phrase (Android/network-reason divergence at the
+ *   read boundary).
+ * - Registration gating: upstream registers the tool unconditionally
+ *   and errors at execute time when `BRAVE_API_KEY` is unset; here the
+ *   application layer registers the tool on every agent but activates it
+ *   (`AgentSession.setActiveToolsByName`) only while a key is stored, so
+ *   the system prompt never advertises an unusable tool.
  * - Scry's TUI rendering (`renderCall`/`renderResult`, preview-line
  *   collapsing) is terminal-only and not ported.
  *
@@ -219,7 +231,8 @@ class BraveWebSearchTool(
             val lines = results.mapIndexed { i, element ->
                 val r = element as? JsonObject ?: JsonObject(emptyMap())
                 val parts = mutableListOf("${i + 1}. **[${r.str("title") ?: ""}](${r.str("url") ?: ""})**")
-                r.str("description")?.let { parts.add("   $it") }
+                // Scry's `if (r.description)` truthiness: skip empty strings too.
+                r.str("description")?.takeIf { it.isNotEmpty() }?.let { parts.add("   $it") }
                 r.arr("extra_snippets")?.forEach { snippet ->
                     snippet.strOrNull()?.let { parts.add("   > $it") }
                 }

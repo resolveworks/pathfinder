@@ -112,7 +112,8 @@ class BraveWebSearchToolTest {
                 """
                 {"web":{"results":[
                   {"title":"First","url":"https://a.example","description":"Desc one","extra_snippets":["s1","s2"]},
-                  {"title":"Second","url":"https://b.example"}
+                  {"title":"Second","url":"https://b.example"},
+                  {"title":"Third","url":"https://c.example","description":""}
                 ]}}
                 """.trimIndent(),
             ),
@@ -124,7 +125,11 @@ class BraveWebSearchToolTest {
                 "   > s1\n" +
                 "   > s2\n" +
                 "\n" +
-                "2. **[Second](https://b.example)**",
+                "2. **[Second](https://b.example)**\n" +
+                "\n" +
+                // Scry's `if (r.description)`: an empty description string is
+                // skipped (no whitespace-only line).
+                "3. **[Third](https://c.example)**",
             resultText(result),
         )
         assertEquals("{}", result.details.toString())
