@@ -34,6 +34,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import works.resolve.pathfinder.R
+import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.ui.chat.markdown.MarkdownText
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
@@ -291,23 +292,62 @@ private fun MessageItem(
 }
 
 /**
- * Collapsed preview cap (pi's FALLBACK_PREVIEW_LINES, tool-execution.ts):
- * the generic fallback renders the first 10 output lines plus a
- * "... (N more lines)" continuation hint; the expansion flag lifts the cap.
+ * Collapsed preview cap (pi's FALLBACK_PREVIEW_LINES, tool-execution.ts, and
+ * Scry's PREVIEW_LINES, index.ts — both 10): the first 10 output lines plus
+ * a "... (N more lines)" continuation hint; the expansion flag lifts the cap.
  */
 private const val FALLBACK_PREVIEW_LINES = 10
 
+/** How one tool's result output renders (see [ToolResultRenderers]). */
+internal enum class ToolResultFormat {
+    /** pi's generic fallback (createResultFallback): raw, unparsed text. */
+    RAW,
+
+    /** Rendered as Markdown (pi's `Markdown` TUI component). */
+    MARKDOWN,
+}
+
+/**
+ * Per-tool result rendering (pi's ToolExecutionComponent renderer
+ * resolution, tool-execution.ts, native adaptation): pi resolves custom
+ * renderCall/renderResult by tool name — the extension-registered tool
+ * definition first, then the built-in definition table
+ * (`createAllToolDefinitions(cwd)[toolName]`) — and tools without a
+ * renderer fall back to the generic raw-text output. The Android port
+ * replaces TUI Component renderers with this name-keyed format table:
+ * tools listed here render their result output as Markdown (the native
+ * equivalent of Scry's `renderResult: renderMarkdownResult`); every other
+ * tool renders pi's generic raw-text fallback. Keep tool names in KDoc
+ * provenance as tools are added.
+ */
+internal object ToolResultRenderers {
+    /** Scry web_search: `renderResult: renderMarkdownResult` (index.ts). */
+    private val formats: Map<String, ToolResultFormat> = mapOf(
+        BraveWebSearchTool.NAME to ToolResultFormat.MARKDOWN,
+    )
+
+    fun formatFor(toolName: String): ToolResultFormat = formats[toolName] ?: ToolResultFormat.RAW
+}
+
 /**
  * One tool row (pi's ToolExecutionComponent semantics, native adaptation):
- * tool name first, the result output below — parsed as markdown, matching
- * Scry's web_search renderer (renderMarkdownResult renders the result text
- * through Markdown), bounded to a [FALLBACK_PREVIEW_LINES] raw-line preview
- * with a remaining-lines hint until the global expand flag lifts the cap to
- * the full output; a loader while the execution is running and a done/failed
- * label after, error-colored when the result is an error. Tapping a row with
- * output flips the global flag (pi's Ctrl+O, `app.tools.expand`, exposed
- * here as a tap on the tool output itself); running rows carry no output and
- * stay inert.
+ * tool name first, the result output below — rendered per tool through
+ * [ToolResultRenderers] (Markdown for tools whose upstream definition
+ * renders its result through Markdown, raw text otherwise), bounded to a
+ * [FALLBACK_PREVIEW_LINES] raw-line preview with a remaining-lines hint
+ * until the global expand flag lifts the cap to the full output; a loader
+ * while the execution is running and a done/failed label after, error-
+ * colored when the result is an error. Tapping a row with output flips the
+ * global flag (pi's Ctrl+O, `app.tools.expand`, exposed here as a tap on
+ * the tool output itself); running rows carry no output and stay inert.
+ *
+ * Capping divergences, each at its upstream boundary: pi's fallback caps
+ * error results too (createResultFallback has no isError case), while
+ * Scry's markdown renderer skips capping errors — each format follows its
+ * upstream. Pi's `isPartial` (mid-execution renderer updates) is not
+ * applicable: partial executions render no output here. Error coloring is
+ * a native adaptation (pi signals errors through the shell, not the
+ * output text color).
  */
 @Composable
 private fun ToolResultRow(
@@ -335,20 +375,31 @@ private fun ToolResultRow(
         },
         supportingContent = output?.let { text ->
             {
+                val format = ToolResultRenderers.formatFor(toolName)
                 val lines = text.lines()
-                val display = if (expanded) lines else lines.take(FALLBACK_PREVIEW_LINES)
+                // pi's fallback caps every collapsed result; Scry's markdown
+                // renderer caps only non-error results.
+                val capped = !expanded && !(isError && format == ToolResultFormat.MARKDOWN)
+                val display = if (capped) lines.take(FALLBACK_PREVIEW_LINES) else lines
                 val remaining = lines.size - display.size
+                val color = if (isError) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
                 Column {
                     // Scry's renderMarkdownResult caps the raw markdown
                     // lines first, then renders the kept lines as Markdown.
-                    MarkdownText(
-                        markdown = display.joinToString("\n"),
-                        color = if (isError) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
+                    when (format) {
+                        ToolResultFormat.MARKDOWN -> MarkdownText(
+                            markdown = display.joinToString("\n"),
+                            color = color,
+                        )
+                        ToolResultFormat.RAW -> Text(
+                            text = display.joinToString("\n"),
+                            color = color,
+                        )
+                    }
                     if (remaining > 0) {
                         // pi: `... (${remaining} more lines, <key> to
                         // expand)`; the row tap replaces the keybinding hint.
