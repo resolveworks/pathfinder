@@ -25,8 +25,34 @@ enum class CacheRetention { SHORT, LONG, NONE }
  */
 enum class Transport { SSE, WEBSOCKET, WEBSOCKET_CACHED, AUTO }
 
-/** Thinking level including the "off" state. */
-enum class ModelThinkingLevel { OFF, MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX }
+/**
+ * Thinking level including the "off" state. [wire] is pi's wire name
+ * (the persisted `thinking_level_change` entry value and settings value).
+ */
+enum class ModelThinkingLevel(val wire: String) {
+    OFF("off"),
+    MINIMAL("minimal"),
+    LOW("low"),
+    MEDIUM("medium"),
+    HIGH("high"),
+    XHIGH("xhigh"),
+    MAX("max"),
+}
+
+/**
+ * Decodes a pi thinking-level wire string (session entries, settings);
+ * null for anything unknown — decode never `valueOf`s untrusted input.
+ */
+fun modelThinkingLevelFromWire(wire: String): ModelThinkingLevel? = when (wire) {
+    "off" -> ModelThinkingLevel.OFF
+    "minimal" -> ModelThinkingLevel.MINIMAL
+    "low" -> ModelThinkingLevel.LOW
+    "medium" -> ModelThinkingLevel.MEDIUM
+    "high" -> ModelThinkingLevel.HIGH
+    "xhigh" -> ModelThinkingLevel.XHIGH
+    "max" -> ModelThinkingLevel.MAX
+    else -> null
+}
 
 /**
  * pi models these levels as the union `"off" | ThinkingLevel`

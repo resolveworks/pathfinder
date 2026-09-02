@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
+import works.resolve.pathfinder.ai.core.ModelThinkingLevel
+import works.resolve.pathfinder.ai.core.modelThinkingLevelFromWire
 import works.resolve.pathfinder.ai.utils.lenientJson
 
 /** Persistence boundary for model settings, backed by Preferences DataStore. */
@@ -24,6 +26,12 @@ class SettingsRepository(
         val MODEL_ID = stringPreferencesKey("model_id")
         val ACTIVE_SESSION_ID = stringPreferencesKey("active_session_id")
         val SHOW_THINKING = booleanPreferencesKey("show_thinking")
+
+        /**
+         * `defaultThinkingLevel` as pi's wire string ("off"…"max"); absent
+         * means unset (null).
+         */
+        val DEFAULT_THINKING_LEVEL = stringPreferencesKey("default_thinking_level")
         val RETRY_ENABLED = booleanPreferencesKey("retry_enabled")
         val RETRY_MAX_RETRIES = intPreferencesKey("retry_max_retries")
         val RETRY_BASE_DELAY_MS = longPreferencesKey("retry_base_delay_ms")
@@ -45,6 +53,7 @@ class SettingsRepository(
             modelId = prefs[Keys.MODEL_ID] ?: "",
             activeSessionId = prefs[Keys.ACTIVE_SESSION_ID]?.takeIf { it.isNotBlank() },
             showThinking = prefs[Keys.SHOW_THINKING] ?: false,
+            defaultThinkingLevel = prefs[Keys.DEFAULT_THINKING_LEVEL]?.let { modelThinkingLevelFromWire(it) },
             retry = RetrySettings(
                 enabled = prefs[Keys.RETRY_ENABLED] ?: true,
                 maxRetries = prefs[Keys.RETRY_MAX_RETRIES] ?: 3,
@@ -121,6 +130,14 @@ class SettingsRepository(
 
     override suspend fun setShowThinking(showThinking: Boolean) {
         dataStore.edit { it[Keys.SHOW_THINKING] = showThinking }
+    }
+
+    /** Stores pi's wire string; `null` removes the key (unset). */
+    override suspend fun setDefaultThinkingLevel(level: ModelThinkingLevel?) {
+        dataStore.edit { prefs ->
+            if (level == null) prefs.remove(Keys.DEFAULT_THINKING_LEVEL)
+            else prefs[Keys.DEFAULT_THINKING_LEVEL] = level.wire
+        }
     }
 
     /** One-shot read; convenient for non-reactive callers. */

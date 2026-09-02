@@ -22,6 +22,7 @@ import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.Model
+import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
@@ -424,10 +425,15 @@ class ChatViewModelTest {
             require(settings.modelId !in rejectedModelIds) { "model rejected" }
             createdSettings += settings
             AgentSession(
-                // The bound agent mirrors the selected provider/model so
-                // fold-seed rebuilds are observable via agent.model.
+                // pi's harness registers its faux models in the ModelRuntime
+                // and every consumer — resolver, session, setModel — resolves
+                // the same objects; here the test catalog plays that role,
+                // so the agent's model resolves through the same production
+                // seam as modelResolver. Never a parallel hand-written
+                // Model: capabilities (reasoning, thinkingLevelMap) are
+                // behavior, and a duplicate shape diverges silently.
                 agent = Agent(
-                    model = testModel.copy(id = settings.modelId, provider = settings.providerId),
+                    model = nativeFactory.resolveModel(settings.providerId, settings.modelId),
                     streamFn = StreamFn { requestedModel, _, _ ->
                         streamedModels.add(requestedModel)
                         scriptedStreams.poll() ?: flow { kotlinx.coroutines.awaitCancellation() }
@@ -2147,10 +2153,11 @@ class ChatViewModelTest {
         assertEquals("world", truncated.messages[1].singleText())
 
         // Entries + leafId persist (branch structure survives the save); the
-        // seed model_change entry rides along as a fifth (elided) entry.
+        // seed model_change and thinking_level_change entries ride along as
+        // sixth and seventh (elided) entries.
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         val saved = h.sessionStore.load(sessionId)!!
-        assertEquals(5, saved.entries.size)
+        assertEquals(6, saved.entries.size)
         assertEquals(assistantEntryId, saved.leafId)
 
         // A new exchange from here forks: the second user message becomes a
@@ -2158,7 +2165,7 @@ class ChatViewModelTest {
         vm.exchange(h, "Third", "forked")
         vm.uiState.first { it.messages.size == 4 && it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 4 }
         val forked = h.sessionStore.load(sessionId)!!
-        assertEquals(7, forked.entries.size)
+        assertEquals(8, forked.entries.size)
         assertEquals(4, forked.messages.size)
         val childrenOfTarget = forked.entries.filter { it.parentId == assistantEntryId }
         assertEquals(2, childrenOfTarget.map { it.id }.toSet().size)
@@ -2207,12 +2214,13 @@ class ChatViewModelTest {
         vm.exchange(h, "Hello edited", "rewritten")
         vm.uiState.first { it.messages.size == 2 && it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         val saved = h.sessionStore.load(sessionId)!!
-        // Five entries: the seed model_change root, the original pair, and
-        // the re-sent sibling pair (its user message a second root).
-        assertEquals(5, saved.entries.size)
+        // Six entries: the seed model_change + thinking_level_change roots,
+        // the original pair, and the re-sent sibling pair (its user message
+        // forking under the thinking seed).
+        assertEquals(6, saved.entries.size)
         // The seed model_change is the only root: the re-edited user message
-        // forks as a sibling of the original under it (re-edit branches to
-        // the target's parent, which now exists).
+        // forks as a sibling of the original under the thinking seed entry
+        // (re-edit branches to the target's parent, which now exists).
         val seedChange = saved.entries.filterIsInstance<ModelChangeEntry>().single()
         val roots = saved.entries.filter { it.parentId == null }
         assertEquals(listOf(seedChange.id), roots.map { it.id })
@@ -2280,16 +2288,26 @@ class ChatViewModelTest {
 
         // A live re-selection (pi's /model pick) switches the SAME session —
         // no agent rebuild — and appends a model_change after the leaf.
+        // (The thinking re-application after the switch appends nothing:
+        // no stored default, so the session's current level is re-applied.)
         vm.selectModel("zai", "glm-5.3")
         vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
         assertEquals(agentsBefore, h.createdAgents.size)
-        vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 4 }
+        vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 6 }
         val saved = h.sessionStore.load(sessionId)!!
-        val switch = saved.entries.last() as ModelChangeEntry
+        val switch = saved.entries[4] as ModelChangeEntry
         assertEquals("zai", switch.provider)
         assertEquals("glm-5.3", switch.modelId)
-        assertEquals(saved.entries[2].id, switch.parentId)
-        assertEquals(switch.id, saved.leafId)
+        assertEquals(saved.entries[3].id, switch.parentId)
+        // pi's setModel re-applies the session's thinking level for the new
+        // model (_getThinkingLevelForModelSwitch → setThinkingLevel), clamped
+        // to its capabilities: glm-5.3's map supports only low/high/max, so
+        // the session's seeded medium clamps up to high and a
+        // thinking_level_change lands beneath the model_change.
+        val switchThinking = saved.entries[5] as works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
+        assertEquals("high", switchThinking.thinkingLevel)
+        assertEquals(switch.id, switchThinking.parentId)
+        assertEquals(switchThinking.id, saved.leafId)
         // The next prompt runs on the switched model (no rebuild involved).
         vm.exchange(h, "Again", "fine")
         assertEquals(listOf("glm-4.7", "glm-5.3"), h.streamedModels.map { it.id })
@@ -2297,9 +2315,208 @@ class ChatViewModelTest {
         vm.closeForTest()
     }
 
+    // ---- thinking level (pi's thinking selector + setThinkingLevel) ----
+
     /**
-     * pi's setModel has no idle guard: a mid-stream pick keeps the active
-     * run on its start-of-run model and applies the switch to the next
+     * pi's sdk.ts session initialization: a new session seeds the default
+     * thinking level (getDefaultThinkingLevel() ?? DEFAULT "medium"),
+     * clamped to the model; the chip surfaces fold onto the live session
+     * state (footer reads state.thinkingLevel and the model's supported
+     * levels).
+     */
+    @Test
+    fun newSession_seedsDefaultThinkingLevel_andProjectsTheChipSurfaces() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        val ready = vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = ready.activeSessionId!!
+
+        // glm-4.7 is a reasoning model without a thinkingLevelMap: every
+        // level off..high is supported (xhigh/max need explicit mappings).
+        assertEquals(ModelThinkingLevel.MEDIUM, ready.thinkingLevel)
+        assertEquals(
+            listOf(
+                ModelThinkingLevel.OFF,
+                ModelThinkingLevel.MINIMAL,
+                ModelThinkingLevel.LOW,
+                ModelThinkingLevel.MEDIUM,
+                ModelThinkingLevel.HIGH,
+            ),
+            ready.availableThinkingLevels,
+        )
+        assertNull(ready.defaultThinkingLevel)
+
+        // The seed lands on the tree and persists (pi's appendModelChange +
+        // appendThinkingLevelChange new-session path).
+        vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 2 }
+        val seeded = h.sessionStore.load(sessionId)!!
+        assertEquals(
+            listOf("medium"),
+            seeded.entries.filterIsInstance<works.resolve.pathfinder.data.sessions.ThinkingLevelEntry>()
+                .map { it.thinkingLevel },
+        )
+
+        vm.closeForTest()
+    }
+
+    /**
+     * pi's selector pick (Enter): one setThinkingLevel call switches the
+     * session, appends thinking_level_change only when the level changes,
+     * and never persists the default.
+     */
+    @Test
+    fun selectThinkingLevel_switchesTheSession_appendingOnlyOnChange() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        vm.selectThinkingLevel(ModelThinkingLevel.HIGH)
+        val switched = vm.uiState.first { it.thinkingLevel == ModelThinkingLevel.HIGH }
+        assertNull("no default persisted by a pick (pi persists only via Ctrl+S)", switched.defaultThinkingLevel)
+        assertNull(h.settings.currentSettings().defaultThinkingLevel)
+        vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 3 }
+
+        // Re-picking the current level appends nothing (pi: only when the
+        // level actually changes).
+        vm.selectThinkingLevel(ModelThinkingLevel.HIGH)
+        vm.uiState.first { it.thinkingLevel == ModelThinkingLevel.HIGH }
+        assertTrue(h.sessionStore.load(sessionId)!!.entries.size == 3)
+        assertEquals(
+            listOf("medium", "high"),
+            h.sessionStore.load(sessionId)!!.entries
+                .filterIsInstance<works.resolve.pathfinder.data.sessions.ThinkingLevelEntry>()
+                .map { it.thinkingLevel },
+        )
+
+        vm.closeForTest()
+    }
+
+    /**
+     * pi's setThinkingLevel clamps to the model's capabilities
+     * (agent-session.ts:1795): glm-5.3's map supports only low/high/max, so
+     * a minimal pick rounds up to low.
+     */
+    @Test
+    fun selectThinkingLevel_clampsToTheModelSupportedLevels() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        vm.selectModel("zai", "glm-5.3")
+        val switched = vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
+        // The switch re-applied the session's medium clamped to the new map.
+        assertEquals(ModelThinkingLevel.HIGH, switched.thinkingLevel)
+        assertEquals(
+            listOf(ModelThinkingLevel.LOW, ModelThinkingLevel.HIGH, ModelThinkingLevel.MAX),
+            switched.availableThinkingLevels,
+        )
+
+        vm.selectThinkingLevel(ModelThinkingLevel.MINIMAL)
+        vm.uiState.first { it.thinkingLevel == ModelThinkingLevel.LOW }
+
+        vm.closeForTest()
+    }
+
+    /**
+     * pi's Ctrl+S (setThinkingLevel(level, { persist: true })): applies to
+     * the live session clamped, but "persists the requested default thinking
+     * level even when the current model clamps it" — glm-4.7 supports at
+     * most high, so xhigh runs as high while the setting stores xhigh.
+     */
+    @Test
+    fun setThinkingLevelDefault_persistsTheRequestedLevel_andRunsItClamped() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+
+        vm.setThinkingLevelDefault(ModelThinkingLevel.XHIGH)
+        val defaulted = vm.uiState.first { it.defaultThinkingLevel == ModelThinkingLevel.XHIGH }
+
+        assertEquals(ModelThinkingLevel.XHIGH, h.settings.currentSettings().defaultThinkingLevel)
+        assertEquals("the session runs the clamped level", ModelThinkingLevel.HIGH, defaulted.thinkingLevel)
+        assertEquals("the thinking chip projects the clamped session level", ModelThinkingLevel.HIGH, h.createdAgents.last().thinkingLevel)
+
+        vm.closeForTest()
+    }
+
+    /**
+     * pi's model-switch thinking re-application
+     * (_getThinkingLevelForModelSwitch): the stored global default wins over
+     * the session's current level (pi's "switch back to faux-1 → uses global
+     * default"), clamped to the new model.
+     */
+    @Test
+    fun selectModel_reappliesTheStoredDefaultThinkingLevel() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        vm.setThinkingLevelDefault(ModelThinkingLevel.LOW)
+        vm.uiState.first { it.thinkingLevel == ModelThinkingLevel.LOW }
+        vm.selectThinkingLevel(ModelThinkingLevel.HIGH)
+        vm.uiState.first { it.thinkingLevel == ModelThinkingLevel.HIGH }
+        vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 4 }
+
+        vm.selectModel("zai", "glm-5.3")
+        vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
+        // The switch re-applied the stored default (low), clamped into the
+        // new model's low/high/max map, appending beneath the model_change.
+        val reapply = vm.uiState.first { it.thinkingLevel == ModelThinkingLevel.LOW }
+        assertEquals(ModelThinkingLevel.LOW, reapply.thinkingLevel)
+        vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 6 }
+        val saved = h.sessionStore.load(sessionId)!!
+        val reapplyEntry = saved.entries.last() as works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
+        assertEquals("low", reapplyEntry.thinkingLevel)
+        assertEquals((saved.entries[4] as ModelChangeEntry).id, reapplyEntry.parentId)
+
+        vm.closeForTest()
+    }
+
+    /**
+     * pi's session-load restore (sdk.ts: hasThinkingEntry → the branch's
+     * level, not the global default): a reload keeps the recorded branch
+     * level and does not re-seed over it.
+     */
+    @Test
+    fun sessionReload_restoresTheBranchThinkingLevel() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        vm.selectThinkingLevel(ModelThinkingLevel.HIGH)
+        vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 3 }
+        vm.closeForTest()
+
+        val vm2 = h.newViewModel()
+        val restored = vm2.uiState.first { it.status == ChatStatus.Ready && it.activeSessionId == sessionId }
+        assertEquals(ModelThinkingLevel.HIGH, restored.thinkingLevel)
+        assertEquals(
+            "the branch entry survives reload; no re-seed over it",
+            listOf("medium", "high"),
+            h.sessionStore.load(sessionId)!!.entries
+                .filterIsInstance<works.resolve.pathfinder.data.sessions.ThinkingLevelEntry>()
+                .map { it.thinkingLevel },
+        )
+
+        vm2.closeForTest()
+    }
+
+    /**
      * prompt (agent.ts snapshots the model per run).
      */
     @Test
@@ -2835,8 +3052,8 @@ class ChatViewModelTest {
         assertTrue(after.startsWith(before))
         // Three appended lines: the navigation operation's durable record
         // pair (operation_started navigation + operation_finished) plus the
-        // lane mutation back to the seed model_change entry (the re-edit
-        // target's parent).
+        // lane mutation back to the seed thinking_level_change entry (the
+        // re-edit target's parent).
         assertEquals(before.count { it == '\n' } + 3, after.count { it == '\n' })
         val appended = after.substring(before.length)
         assertTrue(appended.contains("\"kind\":\"lane\""))
@@ -2845,10 +3062,10 @@ class ChatViewModelTest {
         assertTrue(appended.contains("\"type\":\"operation_finished\""))
 
         // A fresh store (process restart) replays the lane move: same
-        // entries, empty active transcript, leaf on the seed entry.
+        // entries, empty active transcript, leaf on the seed thinking entry.
         val reloaded = h.sessionStore.load(sessionId)!!
-        assertEquals(3, reloaded.entries.size) // seed model_change + user + assistant
-        assertEquals(reloaded.entries.first().id, reloaded.leafId)
+        assertEquals(4, reloaded.entries.size) // seed model_change + thinking_level_change + user + assistant
+        assertEquals(reloaded.entries[1].id, reloaded.leafId)
         assertTrue(reloaded.messages.isEmpty())
     }
 

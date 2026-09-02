@@ -3,9 +3,13 @@ package works.resolve.pathfinder.agent
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.Model
+import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.ai.core.clampThinkingLevel
+import works.resolve.pathfinder.ai.core.getSupportedThinkingLevels
+import works.resolve.pathfinder.ai.core.modelThinkingLevelFromWire
 import works.resolve.pathfinder.ai.models.Models
 import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
@@ -147,6 +151,12 @@ class AgentSession(
 
     val model: Model get() = agent.model
 
+    /**
+     * The session's current thinking level (pi's `get thinkingLevel`,
+     * agent-session.ts:916: the agent state's level, never session-local).
+     */
+    val thinkingLevel: ModelThinkingLevel get() = agent.thinkingLevel
+
     val state: StateFlow<AgentState> get() = agent.state
 
     /** Guards [active]; all critical sections are brief and non-suspending. */
@@ -226,6 +236,20 @@ class AgentSession(
         if (conversation.entries.isNotEmpty()) {
             agent.replaceTranscript(conversation.activeMessages())
         }
+        // Seed the thinking level from the branch's configuration fold (pi's
+        // sdk.ts sets agent.state.thinkingLevel before constructing the
+        // session: the thinking_level_change fold, clamped to the model,
+        // sdk.ts:253). A branch without a thinking entry folds "off"; the
+        // app layer seeds the default-level entry before adoption
+        // (ChatViewModel.seededSettingsFor), mirroring pi's sdk.ts appends
+        // below the initial state.
+        agent.setThinkingLevel(
+            clampThinkingLevel(
+                agent.model,
+                modelThinkingLevelFromWire(conversation.effectiveConfiguration().thinkingLevel)
+                    ?: ModelThinkingLevel.OFF,
+            ),
+        )
     }
 
     /**
@@ -324,7 +348,11 @@ class AgentSession(
      * Exclusions (no surface here): pi's `options.persist` global-default
      * write (settings persistence is out of scope), the `model_select`
      * extension event and `cycleModel` (no extension runner / no model
-     * cycler), and thinking-level re-application (not ported). Auth checking
+     * cycler). Thinking-level re-application for the new model (pi's
+     * `_getThinkingLevelForModelSwitch` → `setThinkingLevel` inside setModel)
+     * is applied by the app layer after a successful switch, because the
+     * global default it consults is app-owned settings this facade does not
+     * hold (see ChatViewModel.selectModelInternal). Auth checking
      * goes through the injected [models] stack ([Models.checkAuth]); a
      * session without one (previews) cannot switch and throws.
      *
@@ -339,6 +367,38 @@ class AgentSession(
         }
         agent.setModel(model)
         updateConversation { it.appendModelChange(model.provider, model.id) }
+    }
+
+    /**
+     * Select the thinking level for subsequent prompts, ported from pi's
+     * `AgentSession.setThinkingLevel` (agent-session.ts:1792): the requested
+     * level is clamped to what the current model supports (pi's
+     * getAvailableThinkingLevels over getSupportedThinkingLevels), the agent
+     * state is assigned unconditionally, and a `thinking_level_change` entry
+     * is appended to the session tree — child of the current leaf, advancing
+     * it, exactly like a model_change — only when the effective level actually
+     * changes.
+     *
+     * In-flight behavior follows pi: there is no idle guard — the active run
+     * keeps its start-of-run level (the agent snapshots it per prompt, see
+     * [Agent.setThinkingLevel]) and the entry lands wherever the leaf is when
+     * the switch happens.
+     *
+     * Exclusion (no surface here): pi's `options.persist` global-default write
+     * (settings persistence is out of scope — the app layer persists the
+     * default itself, pi's Ctrl+S) and the `thinking_level_changed` /
+     * `thinking_level_select` events (no extension runner; the state flow
+     * already carries the level). pi's per-model thinking-level overrides
+     * (settingsManager.getModelThinkingLevel) are not ported.
+     */
+    suspend fun setThinkingLevel(level: ModelThinkingLevel) {
+        val available = getSupportedThinkingLevels(agent.model)
+        val effective = if (available.contains(level)) level else clampThinkingLevel(agent.model, level)
+        val previous = agent.thinkingLevel
+        agent.setThinkingLevel(effective)
+        if (effective != previous) {
+            updateConversation { it.appendThinkingLevelChange(effective.wire) }
+        }
     }
 
     /**
@@ -860,6 +920,11 @@ class AgentSession(
                     preparation,
                     summarizationModels,
                     model,
+                    // pi passes the session's current thinking level into
+                    // compaction (agent-session.ts:1916): the summary request
+                    // reasons at the level the user selected, when the
+                    // summarization model supports it.
+                    thinkingLevel = agent.thinkingLevel,
                     retry = RetryPolicy(
                         enabled = retrySettings.enabled,
                         maxRetries = retrySettings.maxRetries,

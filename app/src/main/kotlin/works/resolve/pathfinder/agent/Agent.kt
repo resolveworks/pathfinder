@@ -3,8 +3,10 @@ package works.resolve.pathfinder.agent
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.Model
+import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
+import works.resolve.pathfinder.ai.core.toThinkingLevelOrNull
 import works.resolve.pathfinder.data.settings.RetrySettings
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
@@ -33,6 +35,9 @@ import kotlinx.coroutines.withContext
  * role, since user and tool-result `message_start`s transiently occupy it
  * too (pi types it `AgentMessage | undefined`) — and [pendingToolCalls] the
  * ids of tool calls whose execution has started but not ended.
+ * [thinkingLevel] is pi's AgentState.thinkingLevel (agent.ts:77), default
+ * `"off"`; the run loop snapshots it into its request options (see
+ * [Agent.prompt]).
  */
 data class AgentState(
     val model: Model,
@@ -42,6 +47,7 @@ data class AgentState(
     val pendingToolCalls: Set<String> = emptySet(),
     val isStreaming: Boolean = false,
     val errorMessage: String? = null,
+    val thinkingLevel: ModelThinkingLevel = ModelThinkingLevel.OFF,
 )
 
 /**
@@ -107,6 +113,12 @@ class Agent(
     val model: Model get() = _state.value.model
 
     /**
+     * The currently selected thinking level (pi's `agent.state.thinkingLevel`
+     * accessor, agent-session.ts:916). Reassigned, never mutated.
+     */
+    val thinkingLevel: ModelThinkingLevel get() = _state.value.thinkingLevel
+
+    /**
      * Select the model for subsequent runs (pi's harness `setModel`,
      * agent-harness.ts:425, and coding-agent's state assignment). Safe during
      * an in-flight run: [prompt] snapshots the model into its loop config at
@@ -118,6 +130,20 @@ class Agent(
      */
     fun setModel(model: Model) {
         reduce { it.copy(model = model) }
+    }
+
+    /**
+     * Select the thinking level for subsequent runs (pi's agent-session
+     * assigning `agent.state.thinkingLevel`, agent-session.ts:1800). Safe
+     * during an in-flight run: [prompt] snapshots the level into its loop
+     * config's request options at run start (pi's createLoopConfig reads
+     * `this._state.thinkingLevel`, agent.ts:450), so the active run keeps its
+     * start-of-run level and the next prompt uses the new one. Pure state
+     * assignment — clamping and the session-tree thinking_level_change record
+     * are [AgentSession.setThinkingLevel]'s job, exactly like pi's layering.
+     */
+    fun setThinkingLevel(level: ModelThinkingLevel) {
+        reduce { it.copy(thinkingLevel = level) }
     }
 
     /**
@@ -169,11 +195,17 @@ class Agent(
         sawAgentEnd = false
 
         try {
-            // Snapshot the selected model for this run (pi's createLoopConfig
-            // builds the loop config — including `this._state.model` — once
-            // per run, agent.ts:509-515): a setModel during the run changes
-            // only later runs.
+            // Snapshot the selected model and thinking level for this run
+            // (pi's createLoopConfig builds the loop config — including
+            // `this._state.model` and `reasoning: this._state.thinkingLevel
+            // === "off" ? undefined : this._state.thinkingLevel`
+            // (agent.ts:450-453) — once per run, agent.ts:509-515): a
+            // setModel/setThinkingLevel during the run changes only later
+            // runs.
             val runModel = _state.value.model
+            val runOptions = streamOptions.copy(
+                reasoning = _state.value.thinkingLevel.toThinkingLevelOrNull(),
+            )
             val contextSnapshot = AgentContext(
                 systemPrompt = systemPrompt,
                 messages = _state.value.messages.toList(),
@@ -181,7 +213,7 @@ class Agent(
             )
             val config = AgentLoopConfig(
                 model = runModel,
-                options = streamOptions,
+                options = runOptions,
                 streamFn = streamFn,
                 toolExecution = toolExecution,
                 clock = clock,

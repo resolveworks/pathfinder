@@ -13,7 +13,7 @@
 
     <string name="action_new_chat">New chat</string>
     <string name="settings_title">Settings</string>
-    <string name="settings_model">Models</string>
+    <string name="settings_model">Scoped models</string>
     <string name="settings_model_scope_hint">Choose which models the chat offers</string>
     <string name="settings_show_thinking">Show thinking</string>
     <string name="settings_show_thinking_hint">Show the model\'s reasoning as it thinks</string>
@@ -30,10 +30,25 @@
     <string name="model_picker_empty">Pick a model</string>
     <string name="model_picker_scoped">Scoped</string>
     <string name="model_picker_all">All</string>
-    <string name="models_scope_hint">Checked models appear in the chat picker — the running model never changes here</string>
     <string name="models_scope_empty">No models are in scope — switch to All to see every available model</string>
     <string name="action_set_default">Set as startup default</string>
     <string name="models_empty_configured_hint">Only showing models from configured providers</string>
+    <string name="thinking_chip_off">thinking off</string>
+    <string name="thinking_level_off">off</string>
+    <string name="thinking_level_minimal">minimal</string>
+    <string name="thinking_level_low">low</string>
+    <string name="thinking_level_medium">medium</string>
+    <string name="thinking_level_high">high</string>
+    <string name="thinking_level_xhigh">xhigh</string>
+    <string name="thinking_level_max">max</string>
+    <string name="thinking_level_desc_off">No reasoning</string>
+    <string name="thinking_level_desc_minimal">Very brief reasoning (~1k tokens)</string>
+    <string name="thinking_level_desc_low">Light reasoning (~2k tokens)</string>
+    <string name="thinking_level_desc_medium">Moderate reasoning (~8k tokens)</string>
+    <string name="thinking_level_desc_high">Deep reasoning (~16k tokens)</string>
+    <string name="thinking_level_desc_xhigh">Extra-high reasoning (~32k tokens)</string>
+    <string name="thinking_level_desc_max">Maximum reasoning</string>
+    <string name="thinking_level_default_marker">%1$s · default</string>
     <string name="action_set_up_providers">Set up providers</string>
     <string name="action_configure">Configure</string>
     <string name="action_save">Save</string>

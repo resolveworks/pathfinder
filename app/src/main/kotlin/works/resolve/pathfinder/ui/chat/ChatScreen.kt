@@ -98,6 +98,7 @@ import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthType
+import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.data.sessions.SessionSummary
 import works.resolve.pathfinder.ui.openInCustomTab
 import works.resolve.pathfinder.ui.chat.markdown.MarkdownText
@@ -131,6 +132,8 @@ fun ChatRoute(
         onSelectModel = viewModel::selectModel,
         onSetStartupDefault = viewModel::saveStartupDefault,
         onToggleModelScope = viewModel::toggleModelScope,
+        onSelectThinkingLevel = viewModel::selectThinkingLevel,
+        onSetDefaultThinkingLevel = viewModel::setThinkingLevelDefault,
         onSaveProviderCredential = viewModel::saveProviderCredential,
         onRemoveProviderCredential = viewModel::removeProviderCredential,
         authPrompts = viewModel::providerAuthPrompts,
@@ -178,6 +181,8 @@ fun ChatScreen(
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onSetStartupDefault: (providerId: String, modelId: String) -> Unit,
     onToggleModelScope: (providerId: String, modelId: String, checked: Boolean) -> Unit,
+    onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
+    onSetDefaultThinkingLevel: (ModelThinkingLevel) -> Unit,
     onSaveProviderCredential: (providerId: String, apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
     onRemoveProviderCredential: (providerId: String) -> Unit,
     authPrompts: (providerId: String) -> List<ProviderAuthPrompt>,
@@ -361,6 +366,8 @@ fun ChatScreen(
                                         onStop = onStop,
                                         onSelectModel = onSelectModel,
                                         onSetStartupDefault = onSetStartupDefault,
+                                        onSelectThinkingLevel = onSelectThinkingLevel,
+                                        onSetDefaultThinkingLevel = onSetDefaultThinkingLevel,
                                         onNavigateTreeEntry = onNavigateTreeEntry,
                                         onTreeFilterChange = onTreeFilterChange,
                                     )
@@ -372,6 +379,8 @@ fun ChatScreen(
                                         onStop = onStop,
                                         onSelectModel = onSelectModel,
                                         onSetStartupDefault = onSetStartupDefault,
+                                        onSelectThinkingLevel = onSelectThinkingLevel,
+                                        onSetDefaultThinkingLevel = onSetDefaultThinkingLevel,
                                     )
                                 }
                             }
@@ -653,11 +662,6 @@ private fun ModelsContent(
                 Text(stringResource(R.string.action_set_up_providers))
             }
         } else {
-            Text(
-                text = stringResource(R.string.models_scope_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             LazyColumn(modifier = Modifier.weight(1f)) {
                 items(filteredOptions, key = { "${it.providerId}/${it.modelId}" }) { option ->
                     val modelRef = "${option.providerId}/${option.modelId}"
@@ -1170,6 +1174,8 @@ private fun ConversationPager(
     onStop: () -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onSetStartupDefault: (providerId: String, modelId: String) -> Unit,
+    onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
+    onSetDefaultThinkingLevel: (ModelThinkingLevel) -> Unit,
     onNavigateTreeEntry: (entryId: String) -> Unit,
     onTreeFilterChange: (TreeFilter) -> Unit,
 ) {
@@ -1189,6 +1195,8 @@ private fun ConversationPager(
                 onStop = onStop,
                 onSelectModel = onSelectModel,
                 onSetStartupDefault = onSetStartupDefault,
+                onSelectThinkingLevel = onSelectThinkingLevel,
+                onSetDefaultThinkingLevel = onSetDefaultThinkingLevel,
             )
         }
     }
@@ -1209,6 +1217,8 @@ private fun ChatSurface(
     onStop: () -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onSetStartupDefault: (providerId: String, modelId: String) -> Unit,
+    onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
+    onSetDefaultThinkingLevel: (ModelThinkingLevel) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ConversationContent(
@@ -1227,6 +1237,11 @@ private fun ChatSurface(
                 scopeConfigured = !uiState.enabledModels.isNullOrEmpty(),
                 onSelectModel = onSelectModel,
                 onSetStartupDefault = onSetStartupDefault,
+                thinkingLevel = uiState.thinkingLevel,
+                availableThinkingLevels = uiState.availableThinkingLevels,
+                defaultThinkingLevel = uiState.defaultThinkingLevel,
+                onSelectThinkingLevel = onSelectThinkingLevel,
+                onSetDefaultThinkingLevel = onSetDefaultThinkingLevel,
             )
             uiState.retryStatus?.let { retry ->
                 RetryStatusRow(
@@ -1250,13 +1265,17 @@ private fun ChatSurface(
 }
 
 /**
- * The model selector row between the transcript and the composer (pi's /model
- * bar). The chip shows the live session model and opens the searchable
+ * The selector row between the transcript and the composer (pi's /model and
+ * /thinking bars). The model chip shows the live session model and opens the
  * [ModelPickerSheet]: rows over the scoped models by default (All view when
  * no scope is configured) with an All/Scoped toggle — pi's selector scope
  * toggle; the scope is what's offered, never a hard constraint. One tap
  * selects; "Set as startup default" is the separate persistence action
- * (pi's Ctrl+S), not part of the pick.
+ * (pi's Ctrl+S), not part of the pick. Next to it, the thinking chip (pi's
+ * footer thinking state, footer.ts:184-188 — shown only for reasoning
+ * models, whose supported levels are never just OFF) shows the live thinking
+ * level and opens the [ThinkingLevelPickerSheet] with the same pick vs.
+ * set-default split.
  */
 @Composable
 private fun SelectionBar(
@@ -1266,9 +1285,18 @@ private fun SelectionBar(
     scopeConfigured: Boolean,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onSetStartupDefault: (providerId: String, modelId: String) -> Unit,
+    thinkingLevel: ModelThinkingLevel?,
+    availableThinkingLevels: List<ModelThinkingLevel>,
+    defaultThinkingLevel: ModelThinkingLevel?,
+    onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
+    onSetDefaultThinkingLevel: (ModelThinkingLevel) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var sheetOpen by rememberSaveable { mutableStateOf(false) }
+    var thinkingSheetOpen by rememberSaveable { mutableStateOf(false) }
+    // pi's footer condition `state.model?.reasoning`: a non-reasoning model's
+    // only supported level is OFF, so >1 level means reasoning.
+    val showThinkingChip = availableThinkingLevels.size > 1
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -1285,6 +1313,25 @@ private fun SelectionBar(
                 )
             },
         )
+        if (showThinkingChip) {
+            Spacer(Modifier.width(8.dp))
+            AssistChip(
+                onClick = { thinkingSheetOpen = true },
+                label = {
+                    // pi's footer label (footer.ts:185-187): "thinking off"
+                    // at OFF, otherwise the bare level name.
+                    val level = thinkingLevel ?: ModelThinkingLevel.OFF
+                    Text(
+                        text = if (level == ModelThinkingLevel.OFF) {
+                            stringResource(R.string.thinking_chip_off)
+                        } else {
+                            thinkingLevelLabel(level)
+                        },
+                        maxLines = 1,
+                    )
+                },
+            )
+        }
     }
     if (sheetOpen) {
         ModelPickerSheet(
@@ -1303,10 +1350,124 @@ private fun SelectionBar(
             onDismiss = { sheetOpen = false },
         )
     }
+    if (thinkingSheetOpen) {
+        ThinkingLevelPickerSheet(
+            availableLevels = availableThinkingLevels,
+            selectedLevel = thinkingLevel ?: ModelThinkingLevel.OFF,
+            defaultLevel = defaultThinkingLevel,
+            onSelect = { level ->
+                thinkingSheetOpen = false
+                onSelectThinkingLevel(level)
+            },
+            onSetDefault = { level ->
+                thinkingSheetOpen = false
+                onSetDefaultThinkingLevel(level)
+            },
+            onDismiss = { thinkingSheetOpen = false },
+        )
+    }
+}
+
+/** pi's level display names (lowercase wire vocabulary, selector labels). */
+@Composable
+private fun thinkingLevelLabel(level: ModelThinkingLevel): String = when (level) {
+    ModelThinkingLevel.OFF -> stringResource(R.string.thinking_level_off)
+    ModelThinkingLevel.MINIMAL -> stringResource(R.string.thinking_level_minimal)
+    ModelThinkingLevel.LOW -> stringResource(R.string.thinking_level_low)
+    ModelThinkingLevel.MEDIUM -> stringResource(R.string.thinking_level_medium)
+    ModelThinkingLevel.HIGH -> stringResource(R.string.thinking_level_high)
+    ModelThinkingLevel.XHIGH -> stringResource(R.string.thinking_level_xhigh)
+    ModelThinkingLevel.MAX -> stringResource(R.string.thinking_level_max)
 }
 
 /**
- * The model picker sheet (pi's /model selector): a searchable list with the
+ * One level's row description: pi's LEVEL_DESCRIPTIONS
+ * (thinking-selector.ts:26-34) with the "· default" suffix on the effective
+ * default — pi marks `getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL`,
+ * so an unset default marks "medium" (interactive-mode.ts:4817).
+ */
+@Composable
+private fun thinkingLevelDescription(level: ModelThinkingLevel, defaultLevel: ModelThinkingLevel?): String {
+    val description = when (level) {
+        ModelThinkingLevel.OFF -> stringResource(R.string.thinking_level_desc_off)
+        ModelThinkingLevel.MINIMAL -> stringResource(R.string.thinking_level_desc_minimal)
+        ModelThinkingLevel.LOW -> stringResource(R.string.thinking_level_desc_low)
+        ModelThinkingLevel.MEDIUM -> stringResource(R.string.thinking_level_desc_medium)
+        ModelThinkingLevel.HIGH -> stringResource(R.string.thinking_level_desc_high)
+        ModelThinkingLevel.XHIGH -> stringResource(R.string.thinking_level_desc_xhigh)
+        ModelThinkingLevel.MAX -> stringResource(R.string.thinking_level_desc_max)
+    }
+    return if (level == (defaultLevel ?: ModelThinkingLevel.MEDIUM)) {
+        stringResource(R.string.thinking_level_default_marker, description)
+    } else {
+        description
+    }
+}
+
+/**
+ * The thinking-level picker sheet (pi's thinking selector,
+ * ThinkingSelectorComponent): one row per level the model supports with the
+ * current level marked by a check, plus the separate persistence action —
+ * the model picker's "Set as startup default" standing in for pi's Ctrl+S.
+ * A tap picks (pi's Enter); the bottom action persists the current level as
+ * the default (pi's Ctrl+S applies the highlighted row and persists — here
+ * the highlighted row is the session's current level).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ThinkingLevelPickerSheet(
+    availableLevels: List<ModelThinkingLevel>,
+    selectedLevel: ModelThinkingLevel,
+    defaultLevel: ModelThinkingLevel?,
+    onSelect: (ModelThinkingLevel) -> Unit,
+    onSetDefault: (ModelThinkingLevel) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .navigationBarsPadding(),
+        ) {
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .heightIn(max = 480.dp),
+            ) {
+                items(availableLevels, key = { it.wire }) { level ->
+                    ListItem(
+                        headlineContent = { Text(thinkingLevelLabel(level)) },
+                        supportingContent = { Text(thinkingLevelDescription(level, defaultLevel)) },
+                        trailingContent = if (level == selectedLevel) {
+                            {
+                                // pi's thinking selector marks the current
+                                // level with a check.
+                                Icon(
+                                    Icons.Default.Check,
+                                    contentDescription = stringResource(R.string.model_selected),
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        modifier = Modifier.clickable { onSelect(level) },
+                    )
+                }
+            }
+            TextButton(
+                onClick = { onSetDefault(selectedLevel) },
+                modifier = Modifier.padding(vertical = 8.dp),
+            ) {
+                Text(stringResource(R.string.action_set_default))
+            }
+        }
+    }
+}
+
+/**
+ * The model picker sheet (pi's /model selector): a list with the
  * current selection marked by a check. Shows the Scoped view when a scope is
  * configured (All otherwise), with an All/Scoped toggle — pi's scope toggle;
  * the All view keeps the scope a soft constraint. The bottom action persists
@@ -1324,15 +1485,8 @@ private fun ModelPickerSheet(
     onSetStartupDefault: (providerId: String, modelId: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var query by rememberSaveable { mutableStateOf("") }
     var allView by rememberSaveable { mutableStateOf(!scopeConfigured) }
     val options = if (allView) allOptions else scopedOptions
-    val filtered = options.filter { option ->
-        val q = query.trim()
-        q.isEmpty() || option.name.contains(q, ignoreCase = true) ||
-            option.modelId.contains(q, ignoreCase = true) ||
-            option.providerName.contains(q, ignoreCase = true)
-    }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -1340,13 +1494,6 @@ private fun ModelPickerSheet(
                 .padding(horizontal = 16.dp)
                 .navigationBarsPadding(),
         ) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                label = { Text(stringResource(R.string.model_search_hint)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
             if (scopeConfigured) {
                 Row(
                     modifier = Modifier.padding(vertical = 8.dp),
@@ -1377,7 +1524,7 @@ private fun ModelPickerSheet(
                         .weight(1f, fill = false)
                         .heightIn(max = 480.dp),
                 ) {
-                    items(filtered, key = { "${it.providerId}/${it.modelId}" }) { option ->
+                    items(options, key = { "${it.providerId}/${it.modelId}" }) { option ->
                         val isSelected = selectedModel?.let {
                             option.providerId == it.providerId && option.modelId == it.modelId
                         } == true
@@ -1782,6 +1929,8 @@ private fun PreviewChatScreen(
             onSelectModel = { _, _ -> },
             onSetStartupDefault = { _, _ -> },
             onToggleModelScope = { _, _, _ -> },
+            onSelectThinkingLevel = { },
+            onSetDefaultThinkingLevel = { },
             onSaveProviderCredential = { _, _, _ -> },
             onRemoveProviderCredential = { },
             authPrompts = authPrompts,
