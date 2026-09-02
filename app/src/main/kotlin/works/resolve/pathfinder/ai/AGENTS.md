@@ -140,8 +140,9 @@ the catalog or UI.
 When concrete agent tools are eventually ported, mirror pi's coding-agent
 `constrainedSampling` usage (read/write/edit/bash behind experimental strict
 mode) so the ported constrained/strict tool sampling gets end-to-end
-prefer/require coverage; the production tool registry is intentionally empty
-until then.
+prefer/require coverage; concrete production tools are registered
+selectively, gated on configuration, rather than populating the registry
+broadly.
 
 ## Reconsidering scope
 

@@ -164,6 +164,54 @@ class NativeAgentFactoryTest {
         assertTrue(default.state.value.tools.isEmpty())
     }
 
+    /** Fake production tool with a prompt snippet so prompt rebuild is observable. */
+    private class FakeFactoryTool(
+        override val definition: works.resolve.pathfinder.ai.core.Tool = works.resolve.pathfinder.ai.core.Tool("web_search", "search", JsonPrimitive("object")),
+        override val label: String = "web_search",
+        override val promptSnippet: String? = "does web_search",
+    ) : AgentTool {
+        override fun validateArguments(arguments: kotlinx.serialization.json.JsonObject) = arguments
+        override suspend fun execute(
+            toolCallId: String,
+            arguments: kotlinx.serialization.json.JsonObject,
+            onUpdate: AgentToolUpdateCallback,
+        ) = AgentToolResult(content = listOf(TextContent("done")))
+    }
+
+    @Test
+    fun `a factory-created session can disable and re-enable configured tools by name`() = runBlocking {
+        val webSearch = FakeFactoryTool()
+        val configured = mutableListOf<AgentTool>(webSearch)
+        val agent = NativeAgentFactory(
+            credentials = FakeCredentialStore(ApiKeyCredential("k")),
+            catalog = catalog,
+            transport = RecordingTransport(),
+            tools = configured,
+        ).create(settings(), "s1", emptyConversation())
+
+        // Registry default: all configured tools active, prompt built.
+        assertEquals(listOf("web_search"), agent.getActiveToolNames())
+        assertEquals(buildSystemPrompt(listOf(webSearch)), agent.state.value.systemPrompt)
+
+        // Disabling empties the set and nulls the prompt (no-tools divergence).
+        agent.setActiveToolsByName(emptyList())
+        assertEquals(emptyList<String>(), agent.getActiveToolNames())
+        assertEquals(emptyList<AgentTool>(), agent.state.value.tools)
+        assertNull(agent.state.value.systemPrompt)
+
+        // Re-enabling by name rebuilds the prompt from the session's registry.
+        agent.setActiveToolsByName(listOf("web_search", "unknown"))
+        assertEquals(listOf("web_search"), agent.getActiveToolNames())
+        assertEquals(buildSystemPrompt(listOf(webSearch)), agent.state.value.systemPrompt)
+
+        // The registry is a defensive copy: caller mutation after creation is invisible.
+        configured.clear()
+        assertEquals(listOf("web_search"), agent.getActiveToolNames())
+        agent.setActiveToolsByName(emptyList())
+        agent.setActiveToolsByName(listOf("web_search"))
+        assertEquals(listOf("web_search"), agent.getActiveToolNames())
+    }
+
     // ---- wiring through the native stack ----
 
     @Test
