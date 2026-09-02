@@ -17,6 +17,8 @@
     <string name="settings_default_model">Default model</string>
     <string name="settings_default_thinking">Default thinking level</string>
     <string name="settings_not_set">Not set</string>
+    <string name="settings_model_scope_hint">Choose which models the chat offers</string>
+    <string name="settings_providers_hint">Manage sign-ins and API keys</string>
     <string name="settings_show_thinking">Show thinking</string>
     <string name="settings_show_thinking_hint">Show the model\'s reasoning as it thinks</string>
     <string name="thinking_label">thinking</string>

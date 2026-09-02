@@ -646,6 +646,7 @@ private fun SettingsContent(
         }
         ListItem(
             headlineContent = { Text(stringResource(R.string.settings_model)) },
+            supportingContent = { Text(stringResource(R.string.settings_model_scope_hint)) },
             trailingContent = {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },
@@ -653,6 +654,7 @@ private fun SettingsContent(
         )
         ListItem(
             headlineContent = { Text(stringResource(R.string.providers_title)) },
+            supportingContent = { Text(stringResource(R.string.settings_providers_hint)) },
             trailingContent = {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },
