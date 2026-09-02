@@ -2258,7 +2258,6 @@ private val PREVIEW_PROVIDER_OPTIONS = listOf(
 
 private val PREVIEW_SEARCH_PROVIDER_OPTIONS = listOf(
     ProviderOption("brave", "Brave Search", configured = true),
-    ProviderOption("exa", "Exa", configured = false),
 )
 
 private val PREVIEW_CLOUDFLARE_PROMPTS = listOf(
@@ -2406,11 +2405,11 @@ private fun ChatScreenSearchProviderAuthPreview() {
         extraKeys = listOf(
             SettingsNavKey,
             SearchProvidersNavKey,
-            SearchProviderAuthNavKey("exa"),
+            SearchProviderAuthNavKey("brave"),
         ),
         searchAuthPrompts = { providerId ->
-            if (providerId == "exa") {
-                listOf(ProviderAuthPrompt("EXA_API_KEY", "Enter Exa API key", secret = true))
+            if (providerId == "brave") {
+                listOf(ProviderAuthPrompt("BRAVE_API_KEY", "Enter Brave Search API key", secret = true))
             } else {
                 emptyList()
             }
