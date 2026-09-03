@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ai.models
 
 import kotlin.time.Clock
 import works.resolve.pathfinder.ai.api.ChatApi
+import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Context
@@ -9,6 +10,9 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.mergeHeaders
+import works.resolve.pathfinder.ai.providers.CatalogProvider
+import works.resolve.pathfinder.ai.providers.GITHUB_COPILOT_PROVIDER_ID
+import works.resolve.pathfinder.ai.providers.filterGitHubCopilotModels
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import kotlinx.coroutines.CancellationException
@@ -227,3 +231,18 @@ class Models(
         )
     }
 }
+
+/**
+ * pi's per-provider `filterModels` hook dispatch, which `getAvailable`
+ * applies as `provider.filterModels?.(models, credential) ?? models`
+ * (models.ts L538 at pin b8b873b98); GitHub Copilot alone defines the hook.
+ * The dispatch lives in this free function instead of a `filterModels`
+ * field on [CatalogProvider] because the catalog is generated data, while
+ * the filter is runtime behavior tied to the credential shape.
+ */
+fun filterCatalogModels(provider: CatalogProvider, credential: Credential?): List<Model> =
+    if (provider.id == GITHUB_COPILOT_PROVIDER_ID) {
+        filterGitHubCopilotModels(provider.models, credential)
+    } else {
+        provider.models
+    }

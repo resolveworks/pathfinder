@@ -1,9 +1,9 @@
 package works.resolve.pathfinder.ai.auth
 
 import works.resolve.pathfinder.ai.core.Model
+import works.resolve.pathfinder.ai.models.filterCatalogModels
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
-import works.resolve.pathfinder.ai.providers.filterCatalogModels
 import kotlinx.coroutines.CancellationException
 
 /** One selectable auth method for a provider; never carries secret material. */

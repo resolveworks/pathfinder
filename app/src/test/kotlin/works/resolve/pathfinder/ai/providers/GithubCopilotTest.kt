@@ -4,13 +4,14 @@ import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.core.Model
+import works.resolve.pathfinder.ai.models.filterCatalogModels
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-class GithubCopilotModelsTest {
+class GithubCopilotTest {
 
     private val models = listOf(
         model("gpt-4.5"),
