@@ -45,6 +45,14 @@ import works.resolve.pathfinder.ai.utils.stringOrNull
  * - Entry payloads decode into Pathfinder's typed [SessionEntry] hierarchy
  *   (rejecting unknown/malformed fields) rather than pi's permissive field
  *   spread; the line shapes are otherwise identical.
+ * - Old formats are rejected, never migrated (AGENTS.md): a header whose
+ *   `version` is not 4 fails the version check ("has unsupported session
+ *   version", exactly pi's pin-era codec message), and a genuine v3 header
+ *   line (`{"type":"session",...}`, no `kind:"header"`) fails the earlier
+ *   kind check — both [JsonlDecodeError.Kind.SCHEMA]. pi's v3→v4 migration
+ *   (`jsonl/legacy-v3.ts`) is post-pin drift (absent at b8b873b98) and is
+ *   deliberately not ported; the `legacyParentSessionPath` field a migrated
+ *   file carries is still decoded and preserved verbatim.
  */
 internal object JsonlCodec {
 

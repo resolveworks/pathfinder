@@ -18,6 +18,22 @@ private fun normalizePromptSnippet(text: String?): String? {
  * - pi always sends a default persona prompt; pathfinder sends no system
  *   prompt for a no-tools chat, so this returns null when [activeTools] is
  *   empty.
+ *
+ * Verified at pin b8b873b98 (differences.md §5.1): upstream's
+ * `packages/ai/src/session-resources.ts` is NOT a system-prompt resources
+ * concept — it is a session-scoped cleanup registry
+ * (`registerSessionResourceCleanup`/`cleanupSessionResources`) whose only
+ * registration closes the Codex adapter's cached WebSockets on session
+ * dispose. That omission is documented on the Codex adapter's own KDoc
+ * (its connection pool owns cleanup via idle TTL / max connection age);
+ * nothing here is un-ported. The system-prompt-adjacent "resources" pi
+ * does have — skill and prompt-template invocation formatting
+ * (`harness/skills.ts`, `harness/prompt-templates.ts`, tested by
+ * `resource-formatting.test.ts`; loaded at HEAD by coding-agent's
+ * fs-based `resource-loader.ts`) — belong to the unported harness skills /
+ * prompt-template surface, which this file's first divergence bullet already
+ * covers. Not planned unless pi's interactive path starts feeding loaded
+ * resources into the agent-level system prompt.
  */
 fun buildSystemPrompt(activeTools: List<AgentTool>): String? {
     if (activeTools.isEmpty()) {

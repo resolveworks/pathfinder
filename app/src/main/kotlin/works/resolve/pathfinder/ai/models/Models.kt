@@ -24,8 +24,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.last
 
-// Pathfinder uses a bundled static catalog rather than pi's dynamic model store.
-
 /**
  * A resolved provider credential: the API key (or, for header-auth providers,
  * resolved auth headers), plus provider env values (e.g. Cloudflare
@@ -85,6 +83,19 @@ class Provider(
     ) : this(id, name, baseUrl, authResolver, models, mapOf(apiId to api))
 }
 
+/**
+ * The ported `models.ts` runtime: a fixed provider→API→models registry with
+ * credential-resolved streaming. Divergence from pi: the dynamic half of
+ * `models.ts` is not ported — no `MutableModels` (setProvider/
+ * deleteProvider/clearProviders) and no `models-store.ts` `ModelsStore`/
+ * `InMemoryModelsStore`, the persistence layer behind upstream
+ * `refreshModels` publications (a provider fetches a remote catalog at
+ * runtime and persists it with etag/lastModified for conditional
+ * revalidation). Pathfinder's catalog is a bundled generated asset
+ * (AGENTS.md); providers are registered once at construction and never
+ * refreshed or replaced. Runtime-published model lists would need an
+ * explicit decision (a store + refresh surface) if ever needed.
+ */
 class Models(
     providers: List<Provider>,
     private val clock: Clock = Clock.System,

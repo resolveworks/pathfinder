@@ -22,6 +22,23 @@ import works.resolve.pathfinder.ai.core.StopReason
  * transform plus optional caller-supplied `entryTransforms`
  * (`SessionContextBuildOptions`), which no pi caller passes at the pin —
  * so only the default selection is ported.
+ *
+ * Deferred-response scope (differences.md §5.1): the ported surface keeps
+ * only the request side and the session-bookkeeping side of pi's deferred
+ * tool/response machinery — the request-side split
+ * (`splitDeferredTools`/`DeferredToolPlacement` in
+ * `ai/utils/DeferredTools.kt`, driven by the adapters' mode selects),
+ * `StopReason.DEFERRED` with the context drop
+ * below, and the reducer's `write_deferred`/deferred-fetch failure
+ * attribution. The fetch/cancel lifecycle is intentionally absent: pi's
+ * `DeferredHandle` (a resumable-response handle carried on
+ * `AssistantMessage.deferred`) plus `fetchDeferred`/`cancelDeferred` on the
+ * Api/Models surface (`ai/src/types.ts`, `models.ts`, `lazy.ts`) exist so a
+ * host can resume a deferred response later; no pathfinder adapter produces
+ * a deferred response and no host surface exists to fetch one, so there is
+ * nothing to resume — the drop below is the only observable consequence in
+ * this port. Port the handle plus fetch/cancel seam if a provider that
+ * pathfinder supports end to end starts returning deferred responses.
  */
 fun defaultContextEntryTransform(pathEntries: List<SessionEntry>): List<SessionEntry> {
     var compactionIndex = -1

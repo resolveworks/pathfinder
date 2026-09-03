@@ -58,6 +58,23 @@ class JsonlCodecTest {
     }
 
     @Test
+    fun `header explicitly rejects legacy v3 session files`() {
+        // A genuine v3 header line (pi's legacy format: type "session",
+        // version 3, no kind field) is rejected at the kind check — never
+        // migrated (AGENTS.md: reject old formats).
+        assertDecodeHeaderSchemaError(
+            """{"type":"session","version":3,"id":"a","timestamp":"2024-01-01T00:00:00Z","cwd":"/x"}""",
+        )
+        // A v4-shaped header claiming version 3 is rejected by the version
+        // check with pi's pin-era message.
+        val error = assertFailsWith<JsonlCodec.JsonlDecodeError> {
+            JsonlCodec.decodeHeader("""{"kind":"header","version":3,"id":"a","createdAt":0}""")
+        }
+        assertEquals(JsonlCodec.JsonlDecodeError.Kind.SCHEMA, error.kind)
+        assertEquals("has unsupported session version", error.message)
+    }
+
+    @Test
     fun `header tolerates pi cwd and missing parentage`() {
         // A pi-written session carries a required cwd; Pathfinder ignores it.
         val decoded = JsonlCodec.decodeHeader(
