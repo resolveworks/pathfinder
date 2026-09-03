@@ -81,12 +81,16 @@ import works.resolve.pathfinder.telemetry.TelemetryContext
  *   the Anthropic adapter.
  * - pi flushes unterminated SSE frames at EOF (fix for pi #9047: a server
  *   closing the stream without a trailing blank line after the terminal
- *   event). SSE framing here is delegated to okhttp-sse, which drops a
- *   trailing unterminated frame (verified against okhttp-sse 5.5.0 — see
- *   [works.resolve.pathfinder.ai.transport.OkHttpTransport]); the accepted
+ *   event). SSE framing here is delegated to okhttp-sse, which never
+ *   dispatches such a frame and fails the stream with an internal okio
+ *   error instead — or, on an idle keep-alive connection, blocks the read
+ *   indefinitely (verified against okhttp-sse 5.5.0 — see
+ *   [works.resolve.pathfinder.ai.transport.OkHttpTransport] for the full
+ *   characterization and the probe pinning it). The accepted
  *   transport-boundary divergence (differences.md §7) means the terminal
- *   event of such a truncated Codex stream surfaces as "stream ended
- *   before a terminal response event" instead.
+ *   event of a truncated Codex stream surfaces as a mid-stream transport
+ *   failure (or a stall until the call is cancelled), never as the
+ *   flushed terminal event.
  * - pi's Node session-lifecycle cleanup hook has no counterpart; the public
  *   close/reset API ([closeOpenAICodexWebSocketSessions]) plus the pool's
  *   idle TTL and max connection age own cleanup.

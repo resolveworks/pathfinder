@@ -34,11 +34,16 @@ import okhttp3.sse.EventSources
  *
  * Divergence (accepted, differences.md §7): okhttp-sse 5.5.0 does not flush
  * an unterminated SSE frame at EOF — a stream whose final `data:` line lacks
- * a trailing newline is dropped instead of dispatched. pi's adapters work
- * around this at EOF (e.g. the Codex adapter's #9047 fix); because framing
- * lives below this boundary here, such a truncated stream surfaces as a
- * premature end to the collector. Pinned by OkHttpTransportTest's
- * unterminated-terminal-frame probe.
+ * a trailing newline is never dispatched, and the stream does not end
+ * cleanly either: the reader throws an internal okio
+ * `IllegalArgumentException("byteCount < 0: -1")`, surfaced here as a
+ * mid-stream [NetworkException] failure of the event flow. When the server
+ * instead keeps an idle keep-alive connection open, that same read can block
+ * indefinitely (okhttp-sse cancels the call timeout before reading, so no
+ * read timeout rescues it) until the collector cancels. pi's adapters flush
+ * the residual buffer at EOF (Codex's #9047 fix); because framing lives
+ * below this boundary here, no parity workaround is attempted. Pinned by
+ * OkHttpTransportTest's unterminated-terminal-frame probe.
  */
 class OkHttpTransport(
     private val client: OkHttpClient = OkHttpClient(),

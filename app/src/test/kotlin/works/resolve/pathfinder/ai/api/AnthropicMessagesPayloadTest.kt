@@ -810,6 +810,11 @@ class AnthropicMessagesPayloadTest {
     }
 
     // ---- Mid-conversation effort (ports anthropic-mid-conversation-effort.test.ts) ----
+    // Upstream also runs "generates exact model and transport gates", which
+    // reads the regenerated model catalog (getModel("anthropic",
+    // "claude-fable-5-1") etc. asserting supportsMidConvoEffort/openrouter
+    // registration). This asset predates that generation — the catalog is
+    // E9's chunk — so the gate case is deliberately not ported here.
 
     private fun managedModel(provider: String = "anthropic"): Model = claude.copy(
         id = "claude-fable-5-1",
@@ -1021,8 +1026,12 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `deferred tools split into defer_loading definitions and tool_reference results`() {
+        // Ports deferred-tools.test.ts "loads an Anthropic tool at its tool-result
+        // marker": the loaded tool must differ from the called tool — a tool the
+        // assistant already used stays immediate ("keeps a tool immediate when
+        // it was used before its marker").
         val search = tool.copy(name = "search", description = "Search the web.")
-        val call = ToolCall(id = "toolu_search", name = "search", arguments = """{"q":"pi"}""")
+        val call = ToolCall(id = "toolu_edit", name = "edit", arguments = "{}")
         val context = Context(
             messages = listOf(
                 AssistantMessage(
@@ -1033,8 +1042,8 @@ class AnthropicMessagesPayloadTest {
                     stopReason = StopReason.TOOL_USE,
                 ),
                 ToolResultMessage(
-                    toolCallId = "toolu_search",
-                    toolName = "search",
+                    toolCallId = "toolu_edit",
+                    toolName = "edit",
                     content = listOf(TextContent("search results")),
                     addedToolNames = listOf("search"),
                 ),
@@ -1049,13 +1058,13 @@ class AnthropicMessagesPayloadTest {
         assertEquals(true, tools[1]["defer_loading"]!!.jsonPrimitive.content.toBoolean())
 
         val messages = json["messages"]!!.jsonArray.map { it.jsonObject }
-        // Assistant tool_use, then the tool-result user message: the
-        // tool_reference replaces the ordinary content and the displaced text
-        // follows after the tool_result block.
+        // Assistant tool_use for the base tool, then the grouped tool-result
+        // user message: the tool_reference replaces the ordinary content and
+        // the displaced text follows after the tool_result block.
         val resultBlocks = messages[1]["content"]!!.jsonArray.map { it.jsonObject }
-        assertEquals("tool_use", messages[0]["content"]!!.jsonArray[0].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("edit", messages[0]["content"]!!.jsonArray[0].jsonObject["name"]!!.jsonPrimitive.content)
         assertEquals(
-            """{"type":"tool_result","tool_use_id":"toolu_search","content":[{"type":"tool_reference","tool_name":"search"}],"is_error":false}""",
+            """{"type":"tool_result","tool_use_id":"toolu_edit","content":[{"type":"tool_reference","tool_name":"search"}],"is_error":false}""",
             resultBlocks[0].wire(),
         )
         assertEquals("""{"type":"text","text":"search results"}""", resultBlocks[1].wire())

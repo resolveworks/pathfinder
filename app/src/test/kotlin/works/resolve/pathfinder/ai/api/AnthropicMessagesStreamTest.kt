@@ -1312,9 +1312,11 @@ clock = FakeClock(1_770_000_000_000L),
             api(transport).stream(managedClaude(), context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
         )
         // message_delta's list replaces message_start's.
+        val diagnostic = done.message.diagnostics.single()
+        assertEquals("anthropic_input_transformations", diagnostic.type)
         assertEquals(
-            """{"type":"anthropic_input_transformations","timestamp":${done.message.diagnostics.single().timestamp},"details":{"transformations":[{"type":"thinking_dropped","path":"messages.3.content.0","reason":"model_binding_mismatch"}]}}""",
-            done.message.diagnostics.single().toString(),
+            """{"transformations":[{"type":"thinking_dropped","path":"messages.3.content.0","reason":"model_binding_mismatch"}]}""",
+            diagnostic.details.toString(),
         )
 
         // Streams without transformations carry no diagnostics.
@@ -1410,7 +1412,12 @@ clock = FakeClock(1_770_000_000_000L),
             .toList()
         assertNull(suppressed.requests.single().headers["anthropic-beta"])
 
-        // Model headers participate too: split, trimmed, deduped.
+        // Model headers participate too. The raw string wins on the wire,
+        // exactly as upstream: the SDK puts its joined-betas header first in
+        // build order and the client's defaultHeaders (model/options headers)
+        // override it, so no re-normalization happens at the header layer.
+        // getBetaFeatures' split/trim/dedupe only shapes the betas payload
+        // (visible to onPayload), which the explicit header then overrides.
         val modelOverride = FakeTransport()
         modelOverride.enqueueNamedResponse(textStream("ok"))
         api(modelOverride)
@@ -1420,6 +1427,6 @@ clock = FakeClock(1_770_000_000_000L),
                 AnthropicMessagesOptions(apiKey = "k"),
             )
             .toList()
-        assertEquals("b,a", modelOverride.requests.single().headers["anthropic-beta"])
+        assertEquals(" b ,,a ", modelOverride.requests.single().headers["anthropic-beta"])
     }
 }
