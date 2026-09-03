@@ -109,6 +109,35 @@ class TokenEstimateTest {
     }
 
     @Test
+    fun `ignores stale assistant usage after a newer message is inserted before it`() {
+        // Twin of pi context-estimate.test.ts "ignores stale assistant usage after
+        // a newer message is inserted before it" (upstream also asserts
+        // buildBaseOptions clamping there; that lives in simple-options.ts and is
+        // covered by the clamp tests below).
+        val assistant = AssistantMessage(
+            content = listOf(TextContent("kept")),
+            api = "openai-responses",
+            provider = "openai",
+            model = "test-model",
+            usage = Usage(input = 9_500, totalTokens = 9_500),
+            stopReason = StopReason.STOP,
+            timestamp = 100L,
+        )
+        val context = Context(
+            systemPrompt = "system", // 6 chars → 2 tokens
+            messages = listOf(
+                UserMessage.ofText("summary", 200L), // inserted after the response
+                assistant, // stale: timestamp 100 < 200 → usage cannot apply
+                UserMessage.ofText("x".repeat(4_000), 300L), // 1000 tokens
+            ),
+        )
+        assertEquals(
+            ContextUsageEstimate(tokens = 1_005, usageTokens = 0, trailingTokens = 1_005, lastUsageIndex = null),
+            estimateContextTokens(context),
+        )
+    }
+
+    @Test
     fun `usage applies again after a newer assistant response`() {
         fun assistant(timestamp: Long, totalTokens: Int) = AssistantMessage(
             content = listOf(TextContent("kept")),
