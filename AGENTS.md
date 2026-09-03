@@ -1,102 +1,92 @@
 # pathfinder
 
 A minimal native Android client for [pi](https://pi.dev). Pathfinder ports the
-relevant pi runtime to pure Kotlin and keeps the Android application around it
-as thin as possible.
+required pi runtime to Kotlin and keeps the Android application thin.
 
 ## Direction
 
-- Pi is the behavioral source of truth. Mirror the current implementation in
-  `~/Projects/pi` as closely as Kotlin and Android allow: preserve concepts,
+- Pi is the behavioral source of truth for the runtime. Preserve its concepts,
   data shapes, event ordering, provider behavior, session semantics, and error
-  handling rather than designing Pathfinder-specific equivalents.
-- Provider coverage is intentionally selective. Weigh expected use against
-  implementation and maintenance cost; full provider parity is not a goal.
-- Android is the source of truth for the application layer. Use current
-  platform guidance, Jetpack Compose, Material 3, and stock Android components
-  and interactions. Translate pi behavior into native Android UX; do not copy
-  terminal UI literally or build a custom design system where Android already
-  provides the answer.
-- Optimize for low maintenance. Avoid parallel domain models, speculative
-  abstractions, bespoke UI primitives, compatibility shims, and dependencies
-  whose value does not justify their upkeep.
-- Treat Pathfinder app data as disposable during development. Implement only pi's
-  current data shapes and the app's current storage formats; reject old formats
-  instead of adding migrations or backward-compatibility paths unless explicitly
-  requested.
-- Target the latest GrapheneOS release and the latest Android platform and
-  toolchain. Keep Kotlin, AGP, Compose, and AndroidX current; move forward to
-  resolve compatibility problems rather than downgrading.
+  handling; do not silently reinterpret or improve them.
+- Keep the port selective. Unsupported behavior is the default, and full
+  provider parity is not a goal.
+- Android is the source of truth for the application layer. Use current Android,
+  Jetpack Compose, and Material 3 patterns rather than copying pi's terminal UI.
+- Optimize for low maintenance: avoid parallel models, speculative abstractions,
+  custom UI primitives, compatibility shims, and unjustified dependencies.
+- Development data is disposable. Support only current pi and Pathfinder data
+  shapes; reject old formats unless migration is explicitly requested.
+- Target the latest GrapheneOS, Android platform, and toolchain. Resolve
+  compatibility issues by moving forward rather than downgrading.
 
-## Sources of truth
+## Scope
 
-Before changing ported behavior, read the corresponding source and package
-README under `~/Projects/pi/packages/`; do not work from remembered APIs. The
-main mappings are:
+Port only:
 
-- `works.resolve.pathfinder.ai` mirrors `packages/ai`.
-- `works.resolve.pathfinder.agent` mirrors `packages/agent`.
-- Conversation and session-tree behavior mirrors pi's session semantics.
-- Android UI behavior may adapt useful interaction semantics from
-  `packages/coding-agent`, while remaining native Android UI.
+- The `packages/ai` chat runtime needed by APIs registered in
+  `ChatApiRegistry`: messages, models, streaming, tool calls, reasoning, usage,
+  errors, auth, and shared provider behavior. A provider using an existing API
+  may be added cheaply; a new wire protocol or complex auth flow requires an
+  explicit decision.
+- The classic `packages/agent` Agent and agent loop, plus the retry, compaction,
+  conversation-tree, persistence, and recovery behavior used by the app.
+- Selected `packages/coding-agent` interaction semantics, implemented as native
+  Android UX rather than ported application code.
+- The minimum telemetry contract required by those runtime pieces.
 
-When Android or Kotlin requires a divergence, make the adaptation at the
-narrowest boundary, document the upstream behavior and reason for the
-divergence, and test it. Do not silently “improve” or reinterpret pi while
-porting it.
+Do not port:
 
-Follow current official Android documentation for platform APIs and UI
-patterns. Prefer documented current APIs over remembered ones.
+- The experimental AgentHarness, lane runtime, durable session substrate, or
+  worker architecture. The existing partial port under `agent/harness` and
+  `data/sessions/substrate` is slated for removal; do not extend or depend on it.
+- Extensions, hooks for third-party customization, Chord plugins/facets, pi
+  packages, skills, prompt templates, themes, or resource discovery.
+- The TUI, CLI, print/JSON/RPC/SDK modes, terminal keybindings, project trust,
+  context-file discovery, or built-in coding tools.
+- The remote Chord/client/protocol/server stack, Node session backends, image
+  generation, dynamic model stores, or legacy compatibility APIs.
 
-## Naming and style
+Pathfinder-owned Android code may provide app-specific tools such as web search
+and web fetch.
 
-Follow pi's naming for ported code; follow modern Kotlin and Android
-defaults for everything pi does not dictate.
+## Working with upstream
 
-- A ported pi module keeps its name, and exported symbols keep their upstream
-  names: `utils/error-body.ts` ports to `ai/utils/ErrorBody.kt` with
-  `normalizeProviderError`; `overflow.ts` would port to `Overflow.kt` with
-  `isContextOverflow`. Do not rename ported behavior to Kotlin-idiomatic
-  alternatives. Non-exported upstream symbols become `internal`/`private` per
-  their module scope.
-- Where pi does not dictate, use current idiomatic Kotlin and platform
-  defaults: data classes, expression bodies, nullability, nullable function
-  types instead of optional-method interfaces, kotlinx.coroutines patterns,
-  and the standard library over hand-rolled equivalents.
+Before changing ported behavior, read the corresponding implementation and
+package README under `~/Projects/pi/packages/`; do not work from remembered
+APIs. Keep upstream module and exported-symbol names where behavior is ported.
+Use idiomatic Kotlin only where pi does not dictate the shape. Keep required
+Android or Kotlin adaptations narrow, documented, and tested.
 
-The TS→Kotlin translation conventions — the standard idioms for unions,
-JSON access, error encoding, async, and redaction in ported code — are
-recorded in the `AGENTS.md` at
-`app/src/main/kotlin/works/resolve/pathfinder/`; follow them in all code
-under that root.
+Keep provider-opaque data as `JsonElement`; reuse the shared JSON codecs and
+accessors rather than introducing serializable mirror DTOs or private helper
+families. Streaming uses `Flow`: preserve pi's event contract and always
+propagate coroutine cancellation unchanged.
 
-## Architecture
+The generated model catalog includes only providers supported end to end and
+must not be hand-edited.
 
-- The native runtime owns models, providers, streaming, agent state, and
-  conversation semantics. Keep it platform-neutral Kotlin where practical.
+## Android architecture
+
+- The platform-neutral runtime owns models, providers, streaming, agent state,
+  and conversation semantics.
 - The Android layer owns presentation, lifecycle, navigation, input, settings,
-  secure credential storage, and platform adapters. It should project runtime
-  state rather than duplicate runtime behavior.
-- UI follows single-activity Compose with MVVM/UDF: ViewModels expose immutable
-  state through `StateFlow`; composables stay state-hoisted apart from
-  ephemeral UI state and forward user intents.
-- Prefer Material 3 defaults, dynamic system color, edge-to-edge layout, and
-  standard navigation and back behavior. Custom UI should exist only where the
-  chat interaction has no adequate platform component.
-- `PathfinderApplication` is the manual composition root. Keep the dependency
-  graph direct; add a DI framework only if the graph's complexity clearly
-  justifies its maintenance cost.
-
-The model catalog asset is generated from pi, includes only providers supported
-end to end, and must never be hand-edited.
+  credentials, and platform adapters. It projects runtime state rather than
+  duplicating it.
+- Use single-activity Compose with MVVM/UDF, immutable `StateFlow` UI state, and
+  state-hoisted composables.
+- `PathfinderApplication` is the manual composition root. Add a DI framework
+  only if the dependency graph clearly justifies it.
+- Follow current official Android documentation and prefer stock Material 3
+  behavior and components.
 
 ## Security
 
-Never log API keys, credential values, message text, or model responses. Secret
-form values may live only in ephemeral UI memory, and persisted credentials
-must remain inside the Android Keystore-backed credential boundary.
+Never log API keys, credentials, message text, or model responses. Secret form
+values remain ephemeral, secret-bearing types must redact their string
+representations, and persisted credentials stay behind the Android
+Keystore-backed boundary.
 
-## Commands
+## Check
 
 ```bash
 ./gradlew test assembleDebug
