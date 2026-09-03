@@ -325,6 +325,74 @@ class AgentTest {
     }
 
     @Test
+    fun `continueRun on an empty transcript is rejected`() = runTest {
+        var streams = 0
+        val agent = agent(streamFn = StreamFn { _, _, _ ->
+            streams++
+            okStream()
+        })
+
+        try {
+            agent.continueRun()
+            fail("expected IllegalStateException")
+        } catch (e: IllegalStateException) {
+            assertEquals("No messages to continue from", e.message)
+        }
+        assertEquals(0, streams)
+        assertTrue(agent.state.value.messages.isEmpty())
+        assertFalse(agent.state.value.isStreaming)
+    }
+
+    @Test
+    fun `continueRun from an assistant tail without queued messages is rejected`() = runTest {
+        var streams = 0
+        val agent = agent(streamFn = StreamFn { _, _, _ ->
+            streams++
+            okStream()
+        })
+        // Upstream drains steer()/followUp() queues from an assistant tail;
+        // those queues are unported, so the tail is never continuable.
+        agent.replaceTranscript(listOf(UserMessage.ofText("hi"), assistant()))
+
+        try {
+            agent.continueRun()
+            fail("expected IllegalStateException")
+        } catch (e: IllegalStateException) {
+            assertEquals("Cannot continue from message role: assistant", e.message)
+        }
+        assertEquals(0, streams)
+        assertEquals(2, agent.state.value.messages.size)
+        assertFalse(agent.state.value.isStreaming)
+    }
+
+    @Test
+    fun `continueRun from a tool-result tail streams a follow-up assistant`() = runTest {
+        val contexts = CopyOnWriteArrayList<List<Message>>()
+        val agent = agent(streamFn = StreamFn { _, context, _ ->
+            contexts.add(context.messages)
+            okStream()
+        })
+        agent.replaceTranscript(
+            listOf(
+                UserMessage.ofText("weather?"),
+                assistant(text = "", stopReason = StopReason.TOOL_USE),
+                toolResult("call-1"),
+            ),
+        )
+
+        agent.continueRun()
+
+        // The continuation adds no prompt messages: the provider sees exactly
+        // the committed transcript.
+        assertEquals(1, contexts.size)
+        assertEquals(3, contexts.single().size)
+        val final = agent.state.value
+        assertEquals(4, final.messages.size)
+        assertTrue(final.messages.last() is AssistantMessage)
+        assertFalse(final.isStreaming)
+    }
+
+    @Test
     fun `abort synthesizes ABORTED message and cancels the caller`() = runTest {
         val events = mutableListOf<AgentEvent>()
         val providerStarted = CompletableDeferred<Unit>()
