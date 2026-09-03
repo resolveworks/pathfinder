@@ -27,25 +27,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Immutable public state of an [Agent], exposed as a [StateFlow].
- * [streamingMessage] is the partial message currently being streamed — of any
- * role, since user and tool-result message starts transiently occupy it too —
- * and [pendingToolCalls] the ids of tool calls whose execution has started
- * but not ended.
- */
-data class AgentState(
-    val model: Model,
-    val messages: List<Message> = emptyList(),
-    val tools: List<AgentTool> = emptyList(),
-    val systemPrompt: String? = null,
-    val streamingMessage: Message? = null,
-    val pendingToolCalls: Set<String> = emptySet(),
-    val isStreaming: Boolean = false,
-    val errorMessage: String? = null,
-    val thinkingLevel: ModelThinkingLevel = ModelThinkingLevel.OFF,
-)
-
-/**
  * Stateful wrapper around the low-level agent loop: owns the agent
  * transcript, reduces loop events into [AgentState] before notifying
  * [events] observers, and synthesizes terminal lifecycle when a run fails at
