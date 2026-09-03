@@ -8,18 +8,12 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
-import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Content
 import works.resolve.pathfinder.ai.core.Context
-import works.resolve.pathfinder.ai.core.Cost
 import works.resolve.pathfinder.ai.core.ImageContent
 import works.resolve.pathfinder.ai.core.InputModality
-import works.resolve.pathfinder.ai.core.Message
-import works.resolve.pathfinder.ai.core.MessageRole
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
-import works.resolve.pathfinder.ai.core.OpenAiResponsesCompat
-import works.resolve.pathfinder.ai.core.SessionAffinityFormat
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
@@ -29,8 +23,6 @@ import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.core.calculateCost
-import works.resolve.pathfinder.ai.core.hasHeader
-import works.resolve.pathfinder.ai.core.mergeHeaders
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
@@ -57,21 +49,7 @@ import works.resolve.pathfinder.ai.utils.stringOrNull
  */
 object OpenAiResponsesShared {
 
-    /** OpenAI Responses rejects max_output_tokens below 16. */
-    const val OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16
-
-    const val OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH = 64
-
     val BASE_TOOL_CALL_PROVIDERS = setOf("openai", "openai-codex", "opencode")
-
-    val AZURE_TOOL_CALL_PROVIDERS = BASE_TOOL_CALL_PROVIDERS + "azure-openai-responses"
-
-    fun clampOpenAIPromptCacheKey(key: String?): String? {
-        if (key == null) return null
-        val chars = key.codePoints().toArray()
-        if (chars.size <= OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH) return key
-        return String(chars, 0, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH)
-    }
 
     /** `{"v":1,"id":...,"phase":...?}`; a null id is omitted because
      * JSON.stringify drops undefined (malformed events). */
@@ -843,103 +821,6 @@ object OpenAiResponsesShared {
         // These two are wonky upstream too; treated as stop.
         "in_progress", "queued" -> StopReason.STOP to null
         else -> throw ProviderStreamException("Unhandled stop reason: $status")
-    }
-
-    fun getServiceTierCostMultiplier(modelId: String, serviceTier: String?): Double = when (serviceTier) {
-        "flex" -> 0.5
-        "priority" -> if (modelId == "gpt-5.5") 2.5 else 2.0
-        else -> 1.0
-    }
-
-    fun applyServiceTierPricing(usage: Usage, serviceTier: String?, modelId: String): Usage {
-        val multiplier = getServiceTierCostMultiplier(modelId, serviceTier)
-        val cost = usage.cost
-        if (multiplier == 1.0) return usage
-        val scaled = Cost(
-            input = cost.input * multiplier,
-            output = cost.output * multiplier,
-            cacheRead = cost.cacheRead * multiplier,
-            cacheWrite = cost.cacheWrite * multiplier,
-        )
-        return usage.copy(
-            cost = scaled.copy(total = scaled.input + scaled.output + scaled.cacheRead + scaled.cacheWrite),
-        )
-    }
-
-    fun detectSessionAffinityFormat(model: Model): SessionAffinityFormat =
-        if (model.provider == "openrouter" || model.baseUrl.contains("openrouter.ai")) {
-            SessionAffinityFormat.OPENROUTER
-        } else {
-            SessionAffinityFormat.OPENAI
-        }
-
-    fun getCompat(model: Model): ResolvedResponsesCompat {
-        val compat = model.responsesCompat
-        return ResolvedResponsesCompat(
-            supportsDeveloperRole = compat?.supportsDeveloperRole ?: true,
-            sessionAffinityFormat = compat?.sessionAffinityFormat ?: detectSessionAffinityFormat(model),
-            supportsLongCacheRetention = compat?.supportsLongCacheRetention ?: true,
-            supportsStrictMode = compat?.supportsStrictMode ?: false,
-            supportsOpenAIGrammarTools = compat?.supportsOpenAIGrammarTools ?: false,
-            supportsAdditionalTools = compat?.supportsAdditionalTools ?: false,
-            supportsToolSearch = compat?.supportsToolSearch ?: false,
-            supportsExplicitPromptCacheMode = compat?.supportsExplicitPromptCacheMode ?: false,
-            supportsMaxOutputTokens = compat?.supportsMaxOutputTokens ?: true,
-        )
-    }
-
-    data class ResolvedResponsesCompat(
-        val supportsDeveloperRole: Boolean,
-        val sessionAffinityFormat: SessionAffinityFormat,
-        val supportsLongCacheRetention: Boolean,
-        val supportsStrictMode: Boolean,
-        val supportsOpenAIGrammarTools: Boolean,
-        val supportsAdditionalTools: Boolean,
-        val supportsToolSearch: Boolean,
-        val supportsExplicitPromptCacheMode: Boolean,
-        /** Default true; when false, `max_output_tokens` is not sent (some gateways reject it). */
-        val supportsMaxOutputTokens: Boolean,
-    )
-
-    fun resolveCacheRetention(cacheRetention: CacheRetention?, env: Map<String, String>): CacheRetention = when {
-        cacheRetention != null -> cacheRetention
-        env["PI_CACHE_RETENTION"] == "long" -> CacheRetention.LONG
-        else -> CacheRetention.SHORT
-    }
-
-    fun getPromptCacheRetention(compat: ResolvedResponsesCompat, cacheRetention: CacheRetention): String? =
-        if (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention) "24h" else null
-
-    /** Header-based auth stands in for a key ("unused" sentinel). */
-    fun getClientApiKey(provider: String, apiKey: String?, headers: Map<String, String?>): String {
-        if (apiKey != null) return apiKey
-        if (hasHeader(headers, "authorization") || hasHeader(headers, "cf-aig-authorization")) return "unused"
-        throw ProviderAuthException("No API key for provider: $provider")
-    }
-
-    fun sessionAffinityHeaders(sessionId: String?, compat: ResolvedResponsesCompat): Map<String, String> {
-        if (sessionId == null) return emptyMap()
-        return when (compat.sessionAffinityFormat) {
-            SessionAffinityFormat.OPENROUTER -> mapOf("x-session-id" to sessionId)
-            SessionAffinityFormat.OPENAI_NOSESSION -> mapOf("x-client-request-id" to sessionId)
-            SessionAffinityFormat.OPENAI -> mapOf(
-                "session_id" to sessionId,
-                "x-client-request-id" to sessionId,
-            )
-        }
-    }
-
-    fun mergeClientHeaders(
-        modelHeaders: Map<String, String>,
-        sessionId: String?,
-        compat: ResolvedResponsesCompat,
-        optionsHeaders: Map<String, String?>,
-    ): Map<String, String> {
-        val merged = mergeHeaders(
-            mergeHeaders(modelHeaders, sessionAffinityHeaders(sessionId, compat)),
-            optionsHeaders,
-        )
-        return merged.filterValues { it != null }.mapValues { it.value!! }
     }
 
     fun resolveReasoningEffort(model: Model, requested: ModelThinkingLevel?, defaultEffort: String): String =

@@ -90,13 +90,13 @@ class OpenAiResponsesSharedTest {
 
     @Test
     fun `clampOpenAIPromptCacheKey truncates at 64 characters`() {
-        assertNull(OpenAiResponsesShared.clampOpenAIPromptCacheKey(null))
-        assertEquals("short", OpenAiResponsesShared.clampOpenAIPromptCacheKey("short"))
+        assertNull(clampOpenAIPromptCacheKey(null))
+        assertEquals("short", clampOpenAIPromptCacheKey("short"))
         val long = "s".repeat(100)
-        assertEquals(64, OpenAiResponsesShared.clampOpenAIPromptCacheKey(long)!!.length)
+        assertEquals(64, clampOpenAIPromptCacheKey(long)!!.length)
         // pi clamps by Unicode code points, so 64 emoji survive as 128 chars.
         val emoji = "🙈".repeat(100)
-        assertEquals(128, OpenAiResponsesShared.clampOpenAIPromptCacheKey(emoji)!!.length)
+        assertEquals(128, clampOpenAIPromptCacheKey(emoji)!!.length)
     }
 
     @Test
@@ -864,7 +864,7 @@ class OpenAiResponsesSharedTest {
 
     @Test
     fun `service tier pricing scales cost`() {
-        val flex = OpenAiResponsesShared.applyServiceTierPricing(
+        val flex = applyServiceTierPricing(
             Usage(cost = works.resolve.pathfinder.ai.core.Cost(input = 10.0, output = 20.0)),
             "flex",
             "gpt-5",
@@ -873,14 +873,14 @@ class OpenAiResponsesSharedTest {
         assertEquals(10.0, flex.cost.output, 1e-9)
         assertEquals(15.0, flex.cost.total, 1e-9)
 
-        val priority = OpenAiResponsesShared.applyServiceTierPricing(
+        val priority = applyServiceTierPricing(
             Usage(cost = works.resolve.pathfinder.ai.core.Cost(input = 10.0, output = 20.0)),
             "priority",
             "gpt-5",
         )
         assertEquals(20.0, priority.cost.input, 1e-9)
 
-        val priorityGpt55 = OpenAiResponsesShared.applyServiceTierPricing(
+        val priorityGpt55 = applyServiceTierPricing(
             Usage(cost = works.resolve.pathfinder.ai.core.Cost(input = 10.0)),
             "priority",
             "gpt-5.5",
@@ -901,19 +901,19 @@ class OpenAiResponsesSharedTest {
     fun `session affinity format detection and defaults`() {
         assertEquals(
             SessionAffinityFormat.OPENROUTER,
-            OpenAiResponsesShared.getCompat(model(provider = "openrouter")).sessionAffinityFormat,
+            getCompat(model(provider = "openrouter")).sessionAffinityFormat,
         )
         assertEquals(
             SessionAffinityFormat.OPENROUTER,
-            OpenAiResponsesShared.getCompat(
+            getCompat(
                 model().copy(baseUrl = "https://openrouter.ai/api/v1"),
             ).sessionAffinityFormat,
         )
         assertEquals(
             SessionAffinityFormat.OPENAI,
-            OpenAiResponsesShared.getCompat(model()).sessionAffinityFormat,
+            getCompat(model()).sessionAffinityFormat,
         )
-        val explicit = OpenAiResponsesShared.getCompat(
+        val explicit = getCompat(
             model(compat = OpenAiResponsesCompat(sessionAffinityFormat = SessionAffinityFormat.OPENROUTER)),
         )
         assertEquals(SessionAffinityFormat.OPENROUTER, explicit.sessionAffinityFormat)
@@ -923,26 +923,26 @@ class OpenAiResponsesSharedTest {
     fun `cache retention resolves explicit then env then short`() {
         assertEquals(
             CacheRetention.LONG,
-            OpenAiResponsesShared.resolveCacheRetention(CacheRetention.LONG, emptyMap()),
+            OpenAiResponsesApi.resolveCacheRetention(CacheRetention.LONG, emptyMap()),
         )
         assertEquals(
             CacheRetention.LONG,
-            OpenAiResponsesShared.resolveCacheRetention(null, mapOf("PI_CACHE_RETENTION" to "long")),
+            OpenAiResponsesApi.resolveCacheRetention(null, mapOf("PI_CACHE_RETENTION" to "long")),
         )
         assertEquals(
             CacheRetention.SHORT,
-            OpenAiResponsesShared.resolveCacheRetention(null, mapOf("PI_CACHE_RETENTION" to "short")),
+            OpenAiResponsesApi.resolveCacheRetention(null, mapOf("PI_CACHE_RETENTION" to "short")),
         )
         assertEquals(
             "24h",
-            OpenAiResponsesShared.getPromptCacheRetention(
-                OpenAiResponsesShared.getCompat(model()),
+            getPromptCacheRetention(
+                getCompat(model()),
                 CacheRetention.LONG,
             ),
         )
         assertNull(
-            OpenAiResponsesShared.getPromptCacheRetention(
-                OpenAiResponsesShared.getCompat(
+            getPromptCacheRetention(
+                getCompat(
                     model(compat = OpenAiResponsesCompat(supportsLongCacheRetention = false)),
                 ),
                 CacheRetention.LONG,
@@ -952,29 +952,29 @@ class OpenAiResponsesSharedTest {
 
     @Test
     fun `client api key falls back to header auth`() {
-        assertEquals("k", OpenAiResponsesShared.getClientApiKey("p", "k", emptyMap()))
+        assertEquals("k", getClientApiKey("p", "k", emptyMap()))
         assertEquals(
             "unused",
-            OpenAiResponsesShared.getClientApiKey("p", null, mapOf("authorization" to "Bearer x")),
+            getClientApiKey("p", null, mapOf("authorization" to "Bearer x")),
         )
         assertFailsWith<ProviderAuthException> {
-            OpenAiResponsesShared.getClientApiKey("p", null, emptyMap())
+            getClientApiKey("p", null, emptyMap())
         }
     }
 
     @Test
     fun `affinity headers follow the compat format`() {
-        val openai = OpenAiResponsesShared.sessionAffinityHeaders(
+        val openai = sessionAffinityHeaders(
             "s1",
-            OpenAiResponsesShared.getCompat(model()),
+            getCompat(model()),
         )
         assertEquals(mapOf("session_id" to "s1", "x-client-request-id" to "s1"), openai)
-        val openrouter = OpenAiResponsesShared.sessionAffinityHeaders(
+        val openrouter = sessionAffinityHeaders(
             "s1",
-            OpenAiResponsesShared.getCompat(model(provider = "openrouter")),
+            getCompat(model(provider = "openrouter")),
         )
         assertEquals(mapOf("x-session-id" to "s1"), openrouter)
-        assertTrue(OpenAiResponsesShared.sessionAffinityHeaders(null, OpenAiResponsesShared.getCompat(model())).isEmpty())
+        assertTrue(sessionAffinityHeaders(null, getCompat(model())).isEmpty())
     }
 
     private fun sampleTool(
