@@ -98,6 +98,11 @@ private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
 /**
  * [BranchSummaryEntry.details] stays the raw persisted JSON, so the file
  * lists are read leniently and malformed fields are skipped, as upstream.
+ * Upstream declares this shape as the `BranchSummaryDetails` interface
+ * (`readFiles`/`modifiedFiles`) and casts `entry.details` to it under
+ * `Array.isArray` guards; per the JsonElement convention pathfinder keeps
+ * `details` untyped and reads the same fields leniently here instead of a
+ * parallel details type.
  */
 private fun carryBranchSummaryDetails(details: JsonObject?, fileOps: FileOperations) {
     fun strings(name: String): List<String> =
@@ -222,6 +227,15 @@ sealed interface BranchSummaryCallResult {
 
 private val BRANCH_SUMMARY_MAX_TOKENS = 2048
 
+/**
+ * Mirrors upstream `generateBranchSummary` from pi's
+ * `packages/agent/src/harness/compaction/branch-summarization.ts` at pin
+ * b8b873b98. Upstream's `PreparedBranchSummaryOptions` and
+ * `generateBranchSummaryWithRequest` do not exist at the pin (they were
+ * added afterwards, visible at e44d75c20, as request-injection seams) and
+ * are out of scope per the freeze: the pin's behavior lives entirely in
+ * this function.
+ */
 suspend fun generateBranchSummary(
     entries: List<SessionEntry>,
     options: GenerateBranchSummaryOptions,
