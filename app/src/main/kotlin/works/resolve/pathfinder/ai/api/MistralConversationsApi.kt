@@ -320,7 +320,10 @@ class MistralConversationsApi(
 
         val choice = data.arr("choices")!!.firstOrNull() as? JsonObject ?: return emptyList()
 
-        choice["finish_reason"].strOrNull()?.let { raw ->
+        // pi guards with truthiness (`if (choice.finish_reason)`), so an empty
+        // string counts as absent and the stream must still yield a finish
+        // reason — same lenient read as the responseId check above.
+        choice["finish_reason"].strOrNull()?.takeIf { it.isNotEmpty() }?.let { raw ->
             state.rawStopReason = raw
             val (stopReason, errorMessage) = mapChatStopReason(raw)
             state.stopReason = stopReason
