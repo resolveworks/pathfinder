@@ -64,8 +64,8 @@ class BraveWebSearchToolTest {
         assertFailsWith<IllegalArgumentException> {
             tool.validateArguments(buildJsonObject { put("query", 5) })
         }
-        // Type.String allows an empty/blank query (upstream TypeBox schema);
-        // do not strengthen the upstream schema.
+        // Scry's `Type.String` has no minLength: a blank query is valid, and
+        // the port must not strengthen the upstream schema.
         tool.validateArguments(args(query = "  "))
     }
 
@@ -127,8 +127,7 @@ class BraveWebSearchToolTest {
                 "\n" +
                 "2. **[Second](https://b.example)**\n" +
                 "\n" +
-                // Scry's `if (r.description)`: an empty description string is
-                // skipped (no whitespace-only line).
+                // Scry's `if (r.description)`: empty descriptions are skipped.
                 "3. **[Third](https://c.example)**",
             resultText(result),
         )
@@ -210,7 +209,6 @@ class BraveWebSearchToolTest {
             job.await()
             kotlin.test.fail("expected CancellationException")
         } catch (_: CancellationException) {
-            // cancellation propagated out of execute, not converted to content
         }
         // Scry's "Search aborted." content path is deliberately not ported:
         // cancellation must propagate (see BraveWebSearchTool KDoc).

@@ -3,7 +3,6 @@ package works.resolve.pathfinder.ui.chat
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** Tests for [filterTreeRows] and [treeGuideCells]. */
 class TreePanelLogicTest {
 
     private fun row(
@@ -29,7 +28,7 @@ class TreePanelLogicTest {
         row("a2", listOf("u1", "a1", "u2", "a2"), "Assistant: here is a ViewModel"),
     )
 
-    // ---- search and fold visibility (pi: TreeList.applyFilter) ----
+    // ---- search and fold visibility ----
 
     @Test
     fun `empty query and no folds return all rows`() {
@@ -71,15 +70,13 @@ class TreePanelLogicTest {
         val result = filterTreeRows(tree, "", setOf("a1"))
         assertEquals(listOf("u1", "a1"), result.map { it.id })
 
-        // Folding u2 keeps everything except its own child.
         val deeper = filterTreeRows(tree, "", setOf("u2"))
         assertEquals(listOf("u1", "a1", "u2"), deeper.map { it.id })
     }
 
     @Test
     fun `folded ancestor also hides search matches beneath it`() {
-        // a2 matches "ViewModel" but is hidden under folded u2; u2 itself
-        // stays visible but does not match the query.
+        // u2 itself stays visible but does not match the query.
         val result = filterTreeRows(tree, "ViewModel", setOf("u2"))
         assertEquals(emptyList<TreeRow>(), result)
     }
@@ -90,7 +87,7 @@ class TreePanelLogicTest {
         assertEquals(listOf("u1", "a1", "u2", "a2"), result.map { it.id })
     }
 
-    // ---- guide layout (pi: TreeList.render prefix) ----
+    // ---- guide layout ----
 
     private fun guideRow(
         indent: Int,

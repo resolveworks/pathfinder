@@ -15,12 +15,9 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Ports the semantics of pi `packages/ai/src/auth/resolve.ts`. */
 class ResolveProviderAuthTest {
-    /** Fixed epoch base so expiry boundaries never depend on the wall clock. */
     private val nowMs = 1_770_000_000_000L
     private val clock = works.resolve.pathfinder.ai.testing.FakeClock(nowMs)
-
 
     private class RecordingAuthContext(val env: Map<String, String> = emptyMap()) : AuthContext {
         override suspend fun env(name: String): String? = env[name]
@@ -226,7 +223,6 @@ class ResolveProviderAuthTest {
     fun `stored credential without matching handler resolves null`() = runTest {
         val store = InMemoryCredentialStore()
         store.modify("openai") { OAuthCredential("a", "r", nowMs + 60 * 60 * 1000L) }
-        // OAuth credential stored, but only apiKey handler configured.
         val apiKey = StubApiKeyAuth(resolved = AuthResult(ModelAuth(apiKey = "ambient")))
         assertNull(resolveProviderAuth(provider(apiKey = apiKey), store, RecordingAuthContext(), clock = clock))
     }
@@ -323,17 +319,14 @@ class ResolveProviderAuthTest {
                 error("outer cancellation must not be wrapped: ${e.message}")
             }
         }
-        // The caller's shorter timeout wins and surfaces as cancellation,
-        // not as an OAUTH ModelsError.
         assertNull(thrown)
     }
 
     @Test
     fun `blank override env value falls through to ambient`() = runTest {
         val store = InMemoryCredentialStore()
-        // Ambient path: overrides.env overlays the context (pi's
-        // overlayEnvAuthContext `env[name] || base.env(name)`), so a blank
-        // override must not suppress the ambient value.
+        // pi's overlayEnvAuthContext reads `env[name] || base.env(name)`, so a
+        // blank override must fall through to the ambient value.
         val apiKey = object : ApiKeyAuth {
             override val name = "stub"
             override suspend fun resolve(ctx: AuthContext, credential: ApiKeyCredential?): AuthResult? =

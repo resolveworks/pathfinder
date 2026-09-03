@@ -20,12 +20,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * AgentSession.setModel tests (pi agent-session.ts:1657): auth validation,
- * the model_change tree entry with pi's branch ordering (child of the
- * current leaf, leaf advanced), next-prompt routing, and in-flight switch
- * semantics.
- */
 class AgentSessionModelSwitchTest {
 
     private val modelA = Model(
@@ -111,7 +105,6 @@ class AgentSessionModelSwitchTest {
 
         assertEquals(listOf(modelA, modelB), streamedModels)
 
-        // Transcript preserved across the switch: both turns, in order.
         val messages = session.state.value.messages
         assertEquals(4, messages.size)
         assertEquals("first", ((messages[0] as works.resolve.pathfinder.ai.core.UserMessage).content.single() as TextContent).text)
@@ -142,9 +135,8 @@ class AgentSessionModelSwitchTest {
         session = AgentSession(
             agent = Agent(model = modelA) { m, _, _ ->
                 streamedModels.add(m)
-                // Live switch from inside the run (the UI equivalent: a
-                // switch fired while a response streams). StreamFn itself is
-                // not suspending, so the switch runs in the flow body.
+                // StreamFn is not suspending, so the mid-run switch is
+                // initiated from the flow body.
                 flow {
                     session.setModel(modelB)
                     okStream(m).collect { emit(it) }
@@ -155,25 +147,20 @@ class AgentSessionModelSwitchTest {
 
         session.prompt("hi")
 
-        // The in-flight run kept its start-of-run model.
         assertEquals(listOf(modelA), streamedModels)
         assertEquals(modelB, session.model)
 
-        // Branch ordering (pi's appendModelChange at whatever the leaf is):
-        // user entry, model_change (child of the user entry — the switch
-        // happened before the assistant message_end), then the assistant
-        // response as a child of the model_change.
+        // pi appends the model_change under whatever the leaf is: the switch
+        // fired before the assistant message_end, so the change hangs off the
+        // user entry and the assistant response becomes its child.
         val entries = session.conversation.entries
         assertEquals(3, entries.size)
         val user = entries[0]
         val change = entries[1] as ModelChangeEntry
         assertEquals(user.id, change.parentId)
         assertEquals(change.id, entries[2].parentId)
-        // The run finished after the switch, so the leaf advanced past the
-        // model_change to the assistant response appended beneath it.
         assertEquals(entries[2].id, session.conversation.leafId)
 
-        // The whole turn stayed in the transcript.
         assertEquals(2, session.state.value.messages.size)
     }
 

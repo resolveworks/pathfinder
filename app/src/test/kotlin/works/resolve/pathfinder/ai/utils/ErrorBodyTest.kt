@@ -8,12 +8,6 @@ import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import kotlin.test.assertEquals
 
-/**
- * Golden tests for the shared error formatting ported from pi's
- * packages/ai/src/utils/error-body.ts, plus the per-adapter compositions that
- * pi builds from it (openai-responses.ts:89, azure-openai-responses.ts:53,
- * openai-codex-responses.ts:483, mistral-conversations.ts:261).
- */
 class ErrorBodyTest {
     private fun httpError(status: Int, body: String) =
         ProviderHttpException(status = status, headers = emptyMap(), body = body)
@@ -83,8 +77,7 @@ class ErrorBodyTest {
                 "OpenAI API error",
             ),
         )
-        // Narrow divergence from pi: a blank body emits only "prefix (status)";
-        // pi appends the SDK message, which does not exist in this port.
+        // Documented divergence: a blank body emits only "prefix (status)".
         assertEquals(
             "OpenAI API error (429)",
             formatResponsesProviderError(httpError(429, "  "), "OpenAI API error"),
@@ -108,7 +101,6 @@ class ErrorBodyTest {
             """503: {"error":{"message":"quota exceeded"}}""",
             formatCodexError(httpError(503, """{"error":{"message":"quota exceeded"}}""")),
         )
-        // No prefix and no body: the composition rule returns the message.
         assertEquals(
             "Provider returned HTTP 503",
             formatCodexError(httpError(503, "")),

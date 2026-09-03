@@ -25,7 +25,6 @@ import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
 
-/** Ports the semantics of pi `packages/ai/src/auth/oauth/openrouter.ts`. */
 class OpenRouterOAuthAuthTest {
 
     private class RecordingInteraction(
@@ -86,7 +85,7 @@ class OpenRouterOAuthAuthTest {
 
     private fun pkce(): Pkce = fixedPkce().generate()
 
-    /** Drives the loopback callback with a real HTTP GET (server transport itself is covered by LoopbackOAuthServerTest). */
+    /** Real HTTP GET; the loopback server transport itself is covered by LoopbackOAuthServerTest. */
     private fun httpGet(url: String): Pair<Int, String> = runBlocking {
         withContext(Dispatchers.IO) {
             val connection = URL(url).openConnection() as HttpURLConnection
@@ -137,7 +136,6 @@ class OpenRouterOAuthAuthTest {
         assertEquals("Listening for OpenRouter OAuth callback on $callbackUrl", progress.message)
         assertTrue(interaction.events.indexOf(progress) < interaction.events.indexOf(urlEvent))
 
-        // Manual fallback completes the login; only the key-exchange request happens.
         assertEquals(1, http.requests.size)
     }
 
@@ -280,7 +278,6 @@ class OpenRouterOAuthAuthTest {
         assertEquals(200, httpGet("$callbackUrl?code=or-v1-late").first)
 
         assertEquals("sk-or-key", login.await().access)
-        // Only the valid callback exchanged.
         assertEquals(1, http.requests.size)
         assertEquals("or-v1-late", parseCode(http.requests.single()))
     }

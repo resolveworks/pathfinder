@@ -7,10 +7,9 @@ import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
 
 /**
- * Opens an OAuth login URL in a Chrome Custom Tab, keeping the browser
- * user-agent session separate from the app's default browser (RFC 8252).
- * Falls back to a plain [Intent.ACTION_VIEW] when no Custom Tab provider is
- * available; if no handler exists either, does nothing.
+ * Opens a URL in a Chrome Custom Tab (RFC 8252's external browser user-agent
+ * for OAuth) rather than an embedded view; deliberately does nothing when no
+ * browser is installed.
  */
 fun Context.openInCustomTab(url: String) {
     val uri = Uri.parse(url)
@@ -18,13 +17,11 @@ fun Context.openInCustomTab(url: String) {
         CustomTabsIntent.Builder().build().launchUrl(this, uri)
         return
     } catch (_: ActivityNotFoundException) {
-        // No Custom Tab provider; try the default VIEW intent below.
     }
     try {
         startActivity(Intent(Intent.ACTION_VIEW, uri).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         })
     } catch (_: ActivityNotFoundException) {
-        // No browser available; nothing to do.
     }
 }

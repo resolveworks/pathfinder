@@ -1,22 +1,18 @@
 package works.resolve.pathfinder.data.sessions
 
 /**
- * Narrow session boundary used by UI-layer code. Keeping this interface
- * separate from [SessionStore] lets JVM tests substitute a failing store.
+ * Narrow session boundary used by UI-layer code, kept separate from
+ * [SessionStore] so JVM tests can substitute a failing store.
  *
- * [save] is an append-only sync (pi's JSONL v4 mutation log): the store
- * appends the snapshot's unpersisted entries, the lane move to its leaf,
- * and the title fact — never rewriting the file. Saving an unchanged
- * snapshot is a no-op, so failed saves are safely retryable.
+ * [save] is an append-only sync: the store appends the snapshot's
+ * unpersisted entries, the lane move to its leaf, and the title fact —
+ * never rewriting the file. Saving an unchanged snapshot is a no-op, so
+ * failed saves are safely retryable.
  *
- * [appendRecord]/[openOperations]/[stats] are the lane-record surface
- * (pi's Session.appendRecord/findOpenOperations/getStats): producers
- * append operation-lifecycle records immediately — a record's seq may
- * precede the entries it references (see [LaneRecord]) — and recovery
- * reads unfinished operations with the `limit: 2` contract.
- *
- * [fork] is pi's SessionRepo.fork: a new session whose log is the source's
- * fork mutation batch, with the source id as its parent (lineage).
+ * [appendRecord]/[openOperations]/[stats] are the lane-record surface:
+ * producers append operation-lifecycle records immediately — a record's
+ * seq may precede the entries it references (see [LaneRecord]) — and
+ * recovery reads unfinished operations with the `limit: 2` contract.
  */
 interface SessionRepository {
     suspend fun create(title: String = "New chat"): Session
@@ -30,19 +26,18 @@ interface SessionRepository {
     /** Appends [record] to the session's log; storage assigns seq/timestamp. */
     suspend fun appendRecord(sessionId: String, record: LaneRecord): LaneRecord
 
-    /** pi's findOpenOperations: unfinished operation starts, newest first. */
+    /** Unfinished operation starts, newest first (pi's findOpenOperations). */
     suspend fun openOperations(
         sessionId: String,
         lane: String,
         limit: Int?,
     ): List<LaneRecord.OperationStartedRecord>
 
-    /** pi's Session.findRecords (see [SessionStore.findRecords]). */
     suspend fun findRecords(sessionId: String, query: RecordQuery = RecordQuery()): List<LaneRecord>
 
-    /** pi's getStats: the incremental message/usage fold of the log. */
+    /** The incremental message/usage fold of the log (pi's getStats). */
     suspend fun stats(sessionId: String): SessionStats
 
-    /** pi's SessionRepo.fork: forks the source session; see [SessionStore.fork]. */
+    /** A new session whose log is the source's fork mutation batch, with the source id as its parent (pi's SessionRepo.fork). */
     suspend fun fork(sourceId: String, options: ForkOptions): Session
 }

@@ -19,12 +19,6 @@ import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
 
-/**
- * Runtime proof (pi's `applyAuth`: `auth.baseUrl ? { ...model, baseUrl:
- * auth.baseUrl } : model`) that an auth-derived base URL — GitHub Copilot's
- * per-account proxy endpoint — changes the actual request endpoint, while a
- * null base URL leaves the model's catalog base URL in place.
- */
 class ModelsAuthBaseUrlTest {
 
     private val catalogServer = MockWebServer()
@@ -98,11 +92,9 @@ class ModelsAuthBaseUrlTest {
         assertEquals(1, authServer.requestCount)
         val recorded = authServer.takeRequest()
         assertTrue(recorded.path!!.endsWith("/v1/messages"))
-        // pi's Copilot branch of anthropic-messages createClient: Bearer auth,
-        // no x-api-key (port of github-copilot-anthropic.test.ts).
+        // pi's Copilot branch of anthropic-messages createClient: Bearer auth, no x-api-key.
         assertEquals("Bearer copilot-token", recorded.getHeader("Authorization"))
         assertNull(recorded.getHeader("x-api-key"))
-        // The model's own (catalog) endpoint was never contacted.
         assertEquals(0, catalogServer.requestCount)
     }
 

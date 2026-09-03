@@ -16,7 +16,6 @@ import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.modelThinkingLevelFromWire
 import works.resolve.pathfinder.ai.utils.lenientJson
 
-/** Persistence boundary for model settings, backed by Preferences DataStore. */
 class SettingsRepository(
     private val dataStore: DataStore<Preferences>,
 ) : SettingsStore {
@@ -27,10 +26,7 @@ class SettingsRepository(
         val ACTIVE_SESSION_ID = stringPreferencesKey("active_session_id")
         val SHOW_THINKING = booleanPreferencesKey("show_thinking")
 
-        /**
-         * `defaultThinkingLevel` as pi's wire string ("off"…"max"); absent
-         * means unset (null).
-         */
+        /** Stored as pi's wire string ("off"…"max"); absent means unset. */
         val DEFAULT_THINKING_LEVEL = stringPreferencesKey("default_thinking_level")
         val RETRY_ENABLED = booleanPreferencesKey("retry_enabled")
         val RETRY_MAX_RETRIES = intPreferencesKey("retry_max_retries")
@@ -42,7 +38,7 @@ class SettingsRepository(
         /**
          * `enabledModels` as a JSON array string; Preferences DataStore has no
          * ordered collection type, so `stringSetPreferencesKey` would lose the
-         * order pi relies on for Ctrl+P cycling.
+         * order pi's model cycling relies on.
          */
         val ENABLED_MODELS = stringPreferencesKey("enabled_models")
     }
@@ -84,13 +80,7 @@ class SettingsRepository(
         }
     }
 
-    /**
-     * Decodes the stored `enabledModels` JSON array of string primitives.
-     * The stored format is current-only (no legacy migrations): malformed
-     * JSON, a non-array value, or a non-string element is rejected with
-     * [IllegalArgumentException] rather than degraded. An absent preference
-     * key yields no configured scope.
-     */
+    /** Rejects malformed stored values rather than degrading; the format is current-only. */
     internal fun decodeEnabledModels(encoded: String): List<String> {
         val array = lenientJson.parseToJsonElement(encoded) as? JsonArray
             ?: throw IllegalArgumentException(
@@ -132,7 +122,6 @@ class SettingsRepository(
         dataStore.edit { it[Keys.SHOW_THINKING] = showThinking }
     }
 
-    /** Stores pi's wire string; `null` removes the key (unset). */
     override suspend fun setDefaultThinkingLevel(level: ModelThinkingLevel?) {
         dataStore.edit { prefs ->
             if (level == null) prefs.remove(Keys.DEFAULT_THINKING_LEVEL)
@@ -140,6 +129,5 @@ class SettingsRepository(
         }
     }
 
-    /** One-shot read; convenient for non-reactive callers. */
     override suspend fun currentSettings(): ModelSettings = settings.first()
 }

@@ -11,18 +11,14 @@ import works.resolve.pathfinder.ai.utils.strictLong
 import works.resolve.pathfinder.ai.utils.stringOrNull
 
 /**
- * Pure (JVM-testable) codec between [Credential] and its on-disk form, ported
- * to pi's type-tagged `auth.json` shape (`packages/ai/src/auth/types.ts`).
+ * Codec between [Credential] and its on-disk form: pi's type-tagged
+ * `auth.json` shape.
  *
  * Encoded shapes:
  * - `{"type":"api_key","key":...,"env":{...}}`
  * - `{"type":"oauth","access":...,"refresh":...,"expires":...,...extras}` —
  *   provider-specific extra JSON fields are preserved verbatim and round trip
  *   through [OAuthCredential.extras].
- *
- * Decoded input must be a type-tagged JSON object; any other shape
- * (blank text, bare key string, untagged object) throws
- * [CredentialFormatException].
  */
 object CredentialCodec {
 

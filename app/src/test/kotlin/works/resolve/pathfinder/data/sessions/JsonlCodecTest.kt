@@ -19,13 +19,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/**
- * Roundtrips and rejection cases for the JSONL v4 codec, porting pi's
- * session/jsonl/codec.ts decodeHeader/decodeMutation contract: header shape
- * (version 4, mutually exclusive parentage, free-form metadata), all four
- * mutation kinds, and the syntax/schema error distinction used for
- * torn-tail repair.
- */
+/** The syntax/schema error distinction exists for torn-tail repair. */
 class JsonlCodecTest {
 
     private fun assistant(text: String, ts: Long) = AssistantMessage(
@@ -37,8 +31,6 @@ class JsonlCodecTest {
         stopReason = StopReason.STOP,
         timestamp = ts,
     )
-
-    // ---- header ----
 
     @Test
     fun `header roundtrips with lineage and metadata`() {
@@ -55,16 +47,13 @@ class JsonlCodecTest {
     @Test
     fun `header rejects wrong kind version and malformed fields`() {
         assertDecodeHeaderSchemaError("""{"kind":"nope","version":4,"id":"a","createdAt":0}""")
-        // Wrong version: format 3 and older are rejected outright.
         assertDecodeHeaderSchemaError("""{"kind":"header","version":3,"id":"a","createdAt":0}""")
         assertDecodeHeaderSchemaError("""{"kind":"header","version":4,"createdAt":0}""")
         assertDecodeHeaderSchemaError("""{"kind":"header","version":4,"id":"a","createdAt":-1}""")
         assertDecodeHeaderSchemaError("""{"kind":"header","version":4,"id":"a","createdAt":"0"}""")
-        // Mutually exclusive parentage.
         assertDecodeHeaderSchemaError(
             """{"kind":"header","version":4,"id":"a","createdAt":0,"parentSessionId":"p","legacyParentSessionPath":"/x"}""",
         )
-        // Metadata must be an object.
         assertDecodeHeaderSchemaError("""{"kind":"header","version":4,"id":"a","createdAt":0,"metadata":[1]}""")
     }
 
@@ -84,11 +73,8 @@ class JsonlCodecTest {
         val syntax = assertFailsWith<JsonlCodec.JsonlDecodeError> { JsonlCodec.decodeHeader("{ torn") }
         assertEquals(JsonlCodec.JsonlDecodeError.Kind.SYNTAX, syntax.kind)
         val schema = assertFailsWith<JsonlCodec.JsonlDecodeError> { JsonlCodec.decodeMutation("""{"kind":"x"}""") }
-        // A non-object line is also a schema error; invalid seq is schema too.
         assertEquals(JsonlCodec.JsonlDecodeError.Kind.SCHEMA, schema.kind)
     }
-
-    // ---- entry mutations: every entry kind roundtrips ----
 
     private fun roundtripEntry(entry: SessionEntry): SessionEntry {
         val lane = SessionMutation.Entry(lane = "main", entry = entry)
@@ -143,7 +129,7 @@ class JsonlCodecTest {
 
     @Test
     fun `message entry terminate flag and deferred stop reason roundtrip`() {
-        // pi's MessageEntry.terminate is `true`-only (harness/session/types.ts:27).
+        // pi's MessageEntry.terminate is `true`-only.
         val terminated = MessageEntry(
             id = "t0",
             seq = 1,
@@ -168,8 +154,8 @@ class JsonlCodecTest {
         assertTrue("terminate" !in plainLine)
         assertEquals(plain.copy(terminate = null), roundtripEntry(plain))
 
-        // Deferred stop reason survives the wire (context.ts drops deferred
-        // assistant messages from context; the value must stay persistable).
+        // Deferred stop reason survives the wire: deferred assistant messages
+        // are dropped from context, so the value must stay persistable.
         val deferred = MessageEntry(
             id = "d0",
             seq = 3,
@@ -214,11 +200,8 @@ class JsonlCodecTest {
         assertMutationSchemaError("""{"kind":"zzz","seq":1}""")
     }
 
-    // ---- record, lane, and fact mutations decode ----
-
     @Test
     fun `record mutation decodes every record type`() {
-        // Deferred kinds stay opaque; abort_requested carries its runId.
         for (type in listOf("step_attempt", "tool_started", "queue_enqueued", "queue_cancelled", "write_deferred")) {
             val line = """{"kind":"record","seq":1,"id":"r1","lane":"main","type":"$type","timestamp":1,"step":"assistant"}"""
             val record = assertIs<SessionMutation.Record>(JsonlCodec.decodeMutation(line)).record
@@ -235,21 +218,17 @@ class JsonlCodecTest {
 
     @Test
     fun `record mutation validates payload discriminants`() {
-        // Unknown record type.
         assertMutationSchemaError("""{"kind":"record","seq":1,"id":"r","lane":"main","type":"zzz","timestamp":1}""")
-        // operation_started requires an intent object with a known kind.
         assertMutationSchemaError("""{"kind":"record","seq":1,"id":"r","lane":"main","type":"operation_started","timestamp":1}""")
         assertMutationSchemaError(
             """{"kind":"record","seq":1,"id":"r","lane":"main","type":"operation_started","timestamp":1,"intent":{"kind":"zzz"}}""",
         )
-        // operation_finished requires a runId and a known outcome.
         assertMutationSchemaError(
             """{"kind":"record","seq":1,"id":"r","lane":"main","type":"operation_finished","timestamp":1,"outcome":"completed"}""",
         )
         assertMutationSchemaError(
             """{"kind":"record","seq":1,"id":"r","lane":"main","type":"operation_finished","timestamp":1,"runId":"op1","outcome":"zzz"}""",
         )
-        // usage requires a usage payload.
         assertMutationSchemaError("""{"kind":"record","seq":1,"id":"r","lane":"main","type":"usage","timestamp":1}""")
     }
 

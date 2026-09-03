@@ -32,18 +32,8 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Operation-lifecycle record producers of [AgentSession] (audit P0-3):
- * operation_started/abort_requested/operation_finished around the run
- * boundary, the compaction operation (intent naming its pre-minted
- * resultEntryId), and the compact-and-retry continuation opening a fresh run
- * operation. Upstream defines the LaneRecord shapes and the recovery
- * contract but its run loop does not append records yet — these producers
- * are Pathfinder's first (documented at the recorder).
- */
 class AgentOperationRecordsTest {
 
-    /** Deterministic recorder capturing records in append order. */
     private class RecordingSink : OperationLifecycleRecorder {
         val records = CopyOnWriteArrayList<LaneRecord>()
         val operations = mutableListOf<String>()
@@ -80,7 +70,6 @@ class AgentOperationRecordsTest {
         timestamp = 42L,
     )
 
-    /** Fake summarization ChatApi serving queued terminal responses (AgentCompactionTest's FauxApi). */
     private class FauxApi : ChatApi {
         val responses = ArrayDeque<AssistantMessage>()
         var failSummaries = false
@@ -139,7 +128,6 @@ class AgentOperationRecordsTest {
         assertEquals(started.id, finished.runId)
         assertEquals(OperationOutcome.COMPLETED, finished.outcome)
 
-        // The second prompt starts from the first turn's leaf.
         streams.add(
             flowOf(
                 AssistantMessageEvent.Start(assistant("")),
@@ -163,7 +151,6 @@ class AgentOperationRecordsTest {
             },
         )
         val job = launch { agent.prompt("hi") }
-        // Wait for the run to be streaming, then abort.
         withTimeout(5_000) { while (!agent.state.value.isStreaming) yield() }
         agent.abort()
         job.cancelAndJoin()
@@ -201,8 +188,6 @@ class AgentOperationRecordsTest {
         )
         agent.prompt("hi")
 
-        // run started → run finished (completed) → compaction started →
-        // compaction finished (completed). No continuation (willRetry false).
         assertEquals(4, sink.records.size)
         val runStarted = sink.records[0] as LaneRecord.OperationStartedRecord
         assertEquals(OperationIntent.Kind.RUN, runStarted.intent.kind)
@@ -249,7 +234,6 @@ class AgentOperationRecordsTest {
         assertNotNull(error)
         assertTrue(error!!.code.isNotBlank())
         assertTrue(error.message.isNotEmpty())
-        // The tree never gained the compaction entry.
         assertTrue(agent.conversation.entries.none { it is CompactionEntry })
     }
 }

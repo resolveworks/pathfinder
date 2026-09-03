@@ -63,7 +63,6 @@ class AgentLoopTest {
             stopReason = stopReason,
         )
 
-    /** StreamFn serving scripted assistant messages, one per provider call, recording each request context. */
     private fun scriptedStream(
         vararg messages: AssistantMessage,
         contexts: MutableList<Context> = mutableListOf(),
@@ -100,10 +99,6 @@ class AgentLoopTest {
     }
 
     private fun typeLabels(events: List<AgentEvent>) = events.map { it::class.simpleName }
-
-    // ------------------------------------------------------------------
-    // No-tools behavior (unchanged one-turn sequence)
-    // ------------------------------------------------------------------
 
     @Test
     fun `success path emits full lifecycle in order and returns new messages`() = runTest {
@@ -347,10 +342,6 @@ class AgentLoopTest {
         assertTrue(events.none { it is AgentEvent.AgentEnd })
     }
 
-    // ------------------------------------------------------------------
-    // Tool execution: single call lifecycle
-    // ------------------------------------------------------------------
-
     @Test
     fun `tool definitions reach the provider in first and follow-up contexts`() = runTest {
         val tool1 = FakeTool(Tool("t1", "one", buildJsonObject {}))
@@ -372,7 +363,6 @@ class AgentLoopTest {
         assertEquals(2, contexts.size)
         assertEquals(listOf(tool1.definition, tool2.definition), contexts[0].tools)
         assertEquals(listOf(tool1.definition, tool2.definition), contexts[1].tools)
-        // Follow-up context carries prompt, first assistant message, then the tool result.
         assertEquals("t1", ((contexts[1].messages[2]) as ToolResultMessage).toolName)
     }
 
@@ -433,7 +423,6 @@ class AgentLoopTest {
         assertEquals(assistant2, turnEnd2.message)
         assertTrue(turnEnd2.toolResults.isEmpty())
 
-        // Tool executed once with the validated (normalized) arguments.
         assertEquals(listOf("c1" to buildJsonObject { put("a", 1); put("x", 0) }), tool.executedCalls)
 
         assertEquals(listOf<Message>(prompt, assistant1, trm, assistant2), result)
@@ -459,7 +448,6 @@ class AgentLoopTest {
         val turnEnds = events.filterIsInstance<AgentEvent.TurnEnd>()
         assertEquals(listOf(2, 1, 0), turnEnds.map { it.toolResults.size })
         assertEquals(listOf("c1", "c2", "c3"), tool.executedCalls.map { it.first })
-        // Source order across turns: prompt, a1, c1-result, c2-result, a2, c3-result, a3
         val roles = result.map { it.role }
         assertEquals(7, result.size)
         assertEquals("c1", (result[2] as ToolResultMessage).toolCallId)
@@ -542,7 +530,6 @@ class AgentLoopTest {
         assertTrue(ends.all { (it.result.content.single() as TextContent).text == expectedText })
         assertTrue(ends.all { it.result.details == JsonObject(emptyMap()) })
 
-        // Both tool results are error messages in source order, and a follow-up turn happens.
         val turnEnds = events.filterIsInstance<AgentEvent.TurnEnd>()
         assertEquals(2, turnEnds.size)
         assertEquals(2, turnEnds[0].toolResults.size)
@@ -552,10 +539,6 @@ class AgentLoopTest {
         assertEquals(5, result.size) // prompt, assistant, two tool results, follow-up assistant
         assertEquals("redone", ((result[4] as AssistantMessage).content.single() as TextContent).text)
     }
-
-    // ------------------------------------------------------------------
-    // Preparation failures
-    // ------------------------------------------------------------------
 
     @Test
     fun `malformed json arguments fail validation with stable message`() = runTest {
@@ -706,10 +689,6 @@ class AgentLoopTest {
         assertTrue("timestamp set", trm.timestamp > 0)
     }
 
-    // ------------------------------------------------------------------
-    // Parallel execution
-    // ------------------------------------------------------------------
-
     @Test
     fun `parallel batch starts in source order, ends in completion order, results in source order`() = runTest {
         val gate1 = CompletableDeferred<Unit>()
@@ -746,7 +725,6 @@ class AgentLoopTest {
                 AgentLoopConfig(model, streamFn = streamFn, toolExecution = ToolExecutionMode.PARALLEL),
             ) { event -> mutex.withLock { events.add(event) } }
         }
-        // Both executions are suspended at their gates concurrently.
         started1.await()
         started2.await()
         // Release the second first: its end event must precede the first's.
@@ -757,7 +735,6 @@ class AgentLoopTest {
 
         assertEquals(listOf("c1", "c2"), events.filterIsInstance<AgentEvent.ToolExecutionStart>().map { it.toolCallId })
         assertEquals(listOf("c2", "c1"), events.filterIsInstance<AgentEvent.ToolExecutionEnd>().map { it.toolCallId })
-        // Message pairs, TurnEnd.toolResults, and the return value stay in source order.
         val trms = events.mapNotNull { (it as? AgentEvent.MessageStart)?.message }.filterIsInstance<ToolResultMessage>()
         assertEquals(listOf("c1", "c2"), trms.map { it.toolCallId })
         assertEquals(listOf("c1", "c2"), events.filterIsInstance<AgentEvent.TurnEnd>().first().toolResults.map { it.toolCallId })
@@ -821,7 +798,6 @@ class AgentLoopTest {
             AgentLoopConfig(model, streamFn = streamFn, toolExecution = ToolExecutionMode.PARALLEL),
         ) { events.add(it) }
 
-        // Fully serialized: start/end/message-pair of c1 all precede c2's start.
         val interesting = events.dropWhile { it !is AgentEvent.ToolExecutionStart }
             .takeWhile { it !is AgentEvent.TurnEnd }
             .map { ev ->
@@ -844,10 +820,6 @@ class AgentLoopTest {
             interesting,
         )
     }
-
-    // ------------------------------------------------------------------
-    // Update callbacks
-    // ------------------------------------------------------------------
 
     @Test
     fun `updates are emitted in callback order before the end event`() = runTest {
@@ -936,10 +908,6 @@ class AgentLoopTest {
         assertEquals(before, events.size)
     }
 
-    // ------------------------------------------------------------------
-    // Cancellation during tool execution
-    // ------------------------------------------------------------------
-
     @Test
     fun `cancellation during tool execution propagates without late events`() = runTest {
         val toolEntered = CompletableDeferred<Unit>()
@@ -972,8 +940,6 @@ class AgentLoopTest {
 
         assertTrue("tool must observe coroutine cancellation", toolObservedCancellation)
         assertTrue(job.isCancelled)
-        // Lifecycle stops at the tool_execution_start: no end, no result message,
-        // no turn_end, no agent_end, no synthetic error result.
         assertEquals(
             listOf(
                 "AgentStart", "TurnStart",

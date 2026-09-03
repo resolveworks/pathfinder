@@ -27,14 +27,7 @@ import kotlin.test.assertEquals
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 
-/**
- * Port of pi's test/telemetry-options.test.ts, reduced to the ported option
- * surface: ProviderRequestOptions.telemetryContext (packages/ai/src/types.ts:126-127)
- * is inherited by every request option surface and carried by object identity
- * through every conversion equivalent to upstream buildBaseOptions
- * (packages/ai/src/api/simple-options.ts:20-56). Upstream has no consumer; the
- * port is likewise dormant — no adapter reads it and none may emit spans.
- */
+/** telemetryContext is dormant: no adapter reads it, and none may emit spans. */
 class TelemetryOptionsTest {
 
     private val telemetry = InMemoryTelemetryContext()
@@ -77,7 +70,6 @@ class TelemetryOptionsTest {
     @Test
     fun `telemetryContext survives every simple to base conversion by identity`() {
         val options = SimpleStreamOptions(telemetryContext = telemetry)
-        // pi: buildBaseOptions(model, context, { telemetryContext }).telemetryContext === telemetryContext
         assertSame(telemetry, options.toStreamOptions(null).telemetryContext)
         assertSame(telemetry, buildBaseOptions(model, context, options).telemetryContext)
         assertSame(telemetry, buildOpenAiResponsesOptions(model, context, options, null).telemetryContext)
@@ -89,8 +81,6 @@ class TelemetryOptionsTest {
 
     @Test
     fun `telemetryContext survives the mistral manual completions conversion by identity`() {
-        // Mistral's manual stream(model, OpenAiCompletionsOptions) overload
-        // (mistral-conversations.ts accepts StreamOptions-shaped input).
         val options = SimpleStreamOptions(telemetryContext = telemetry).toStreamOptions(null)
         assertSame(telemetry, toMistralOptions(model, options).telemetryContext)
     }
@@ -112,7 +102,7 @@ class TelemetryOptionsTest {
             assertTrue("telemetryContext=true" in text, text)
             assertFalse("InMemoryTelemetryContext" in text, text)
         }
-        // Absent context renders as false, matching the onPayload/onResponse presence convention.
+        // Same presence-only convention as onPayload/onResponse.
         assertTrue("telemetryContext=false" in SimpleStreamOptions().toString())
     }
 

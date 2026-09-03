@@ -4,12 +4,6 @@ import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 
-/**
- * Shared inline catalog fixture: the Z.AI provider reproducing the values of
- * the retired hand-written ZaiModels port (so payload/stream/VM tests keep
- * identical model metadata), plus a Cloudflare-style gateway provider used to
- * exercise placeholder substitution and the bearer-header override.
- */
 object TestCatalogs {
 
     private const val ZAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
@@ -214,14 +208,12 @@ object TestCatalogs {
 
     val CLOUDFLARE: CatalogProvider = CATALOG.getProvider("cloudflare-ai-gateway")!!
 
-    /** Promptless provider: OAuth-only (pi's openai-codex shape). */
+    /** Mirrors pi's OAuth-only openai-codex provider. */
     val OAUTH_ONLY: CatalogProvider = CATALOG.getProvider("oauth-only")!!
 
-    /** GitHub Copilot fixture mirroring the generated catalog entry's shape
-     * (API-key prompt + subscription OAuth, three static models). */
     val GITHUB_COPILOT: CatalogProvider = CATALOG.getProvider("github-copilot")!!
 
-    /** OpenAI fixture (vision-capable, provider "openai" for tool-call id truncation). */
+    /** Provider id "openai" keys the 40-char tool-call id truncation. */
     val OPENAI: CatalogProvider = CATALOG.getProvider("openai")!!
 
     val GPT_4O: Model = OPENAI.model("gpt-4o")!!

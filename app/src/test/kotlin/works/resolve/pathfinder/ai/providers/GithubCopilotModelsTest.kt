@@ -10,11 +10,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/**
- * Tests for [filterGitHubCopilotModels] / [filterCatalogModels] — pi's
- * GitHub Copilot `filterModels` (`packages/ai/src/providers/github-copilot.ts`),
- * one test per credential shape.
- */
 class GithubCopilotModelsTest {
 
     private val models = listOf(

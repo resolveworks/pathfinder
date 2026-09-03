@@ -110,7 +110,6 @@ class SettingsRepositoryTest {
             listOf("anthropic/claude-opus-4-8", "gpt-5.5", "gemini-3.1-pro-preview"),
             repository.settings.first().enabledModels,
         )
-        // Order survives a reorder, not just persistence.
         repository.setEnabledModels(listOf("gpt-5.5", "anthropic/claude-opus-4-8"))
         assertEquals(
             listOf("gpt-5.5", "anthropic/claude-opus-4-8"),
@@ -139,13 +138,11 @@ class SettingsRepositoryTest {
 
     @Test
     fun enabledModels_malformedStoredData_isRejected() = runTest {
-        // Current-format-only storage: malformed payloads are rejected, not degraded.
         for (malformed in listOf("{not json", "[\"a\",42]", "{\"k\":\"v\"}", "\"just a string\"", "")) {
             try {
                 repository.decodeEnabledModels(malformed)
                 org.junit.Assert.fail("Expected rejection of malformed enabled_models: $malformed")
             } catch (expected: IllegalArgumentException) {
-                // rejected
             }
         }
     }

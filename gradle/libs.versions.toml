@@ -13,7 +13,7 @@ okhttp = "5.5.0"
 okhttpSse = "5.5.0"
 commonmark = "0.30.0"
 serializationJson = "1.11.0"
-# zstd request-body compression for the Codex SSE path (see ai/utils/ZstdCompression.kt)
+# zstd request-body compression for the Codex SSE path
 zstd = "1.5.7-15"
 
 [libraries]

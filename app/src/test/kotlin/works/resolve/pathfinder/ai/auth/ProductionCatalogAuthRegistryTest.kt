@@ -14,7 +14,6 @@ import works.resolve.pathfinder.ai.auth.oauth.XaiOAuthAuth
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 
-/** Verifies Pathfinder's concrete registry uses pi's exact static provider ids. */
 class ProductionCatalogAuthRegistryTest {
 
     @Test
@@ -25,8 +24,6 @@ class ProductionCatalogAuthRegistryTest {
         assertIs<XaiOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(provider("xai")))
         assertIs<OpenAiCodexOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(provider("openai-codex")))
 
-        // The Copilot flow receives the catalog entry's model ids as pi's
-        // GITHUB_COPILOT_MODELS equivalent.
         val copilot = assertIs<GitHubCopilotOAuthAuth>(
             ProductionCatalogAuthRegistry().oauthAuth(
                 provider("github-copilot", listOf(model("gpt-4.1"), model("claude-sonnet-5"))),
@@ -35,11 +32,6 @@ class ProductionCatalogAuthRegistryTest {
         assertEquals(setOf("gpt-4.1", "claude-sonnet-5"), copilot.knownModelIdsForTest())
     }
 
-    /**
-     * Over the real generated asset: the registered Copilot flow carries the
-     * catalog's model ids, and the login-method projection surfaces both the
-     * API-key and OAuth methods for the provider.
-     */
     @Test
     fun `generated catalog copilot entry projects API key and OAuth login methods`() {
         val catalog = ProviderCatalog.parse(File("src/main/assets/models-catalog.json").readText())

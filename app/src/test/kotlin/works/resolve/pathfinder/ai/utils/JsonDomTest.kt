@@ -11,12 +11,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/**
- * Semantics of the shared JSON-DOM access surface: lenient reads accept any
- * primitive's content, strict reads require the matching primitive kind, and
- * codec reads throw. kotlinx numeric semantics are the standard: quoted
- * numerals parse, floats do not coerce to int.
- */
 class JsonDomTest {
 
     private val obj: JsonObject = Json.parseToJsonElement(
@@ -88,8 +82,7 @@ class JsonDomTest {
 
     @Test
     fun strictStringAlsoAcceptsQuotedNumeralsAsStrings() {
-        // A quoted numeral is still a string primitive; strictness is about
-        // primitive kind, not content.
+        // Strictness is about primitive kind, not content.
         assertEquals("12", obj.string("q"))
     }
 

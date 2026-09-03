@@ -25,9 +25,9 @@ import org.commonmark.node.StrongEmphasis
 import org.commonmark.node.Text
 
 /**
- * Concrete styling inputs for inline markdown rendering. The composable layer reads
- * [androidx.compose.material3.MaterialTheme] and passes resolved values here; the
- * builder itself is pure and JVM-testable.
+ * Styling inputs for inline markdown, resolved by the composable layer from
+ * [androidx.compose.material3.MaterialTheme]; the builder itself is pure and
+ * JVM-testable.
  */
 data class InlineMarkdownStyles(
     val linkColor: Color,
@@ -36,10 +36,6 @@ data class InlineMarkdownStyles(
     val monospaceFontFamily: FontFamily = FontFamily.Monospace,
 )
 
-/**
- * Renders the inline subtree of [this] node (typically a Paragraph, Heading, or
- * table cell) into an [AnnotatedString], mirroring pi's `renderInlineTokens`.
- */
 fun Node.buildInlineMarkdown(styles: InlineMarkdownStyles): AnnotatedString =
     buildAnnotatedString { renderChildren(this@buildInlineMarkdown, styles) }
 
@@ -110,7 +106,6 @@ private fun AnnotatedString.Builder.renderLink(node: Link, styles: InlineMarkdow
     }
 }
 
-/** Flattens a node subtree to unstyled image alt text. */
 private fun plainText(node: Node): String = buildString {
     var child = node.firstChild
     while (child != null) {

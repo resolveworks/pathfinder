@@ -15,10 +15,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Secrets must never surface in toString(): a distinctive key value must not
- * occur in string output, while data-class copy/equality stays intact.
- */
 class SecretRedactionTest {
 
     private val secret = "sk-SECRET-9f8e7d6c5b4a"
@@ -39,9 +35,8 @@ class SecretRedactionTest {
 
     @Test
     fun `options toString output is exactly the redacted field list`() {
-        // Byte-identical regression guards for the optionsToString-based
-        // implementations: null apiKey renders "null", secrets render
-        // "<redacted>", maps render as keys only, hooks as booleans.
+        // These classes share one optionsToString() implementation; the exact
+        // strings lock its format.
         assertEquals(
             "StreamOptions(apiKey=<redacted>, sessionId=s1, temperature=0.5, maxTokens=null, " +
                 "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, telemetryContext=false)",

@@ -35,14 +35,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
 
-/**
- * Ports of the LLM-calling cases from pi's
- * packages/agent/test/harness/compaction.test.ts, plus
- * completeSimpleWithRetries/combineUsage coverage (upstream exercises those
- * through faux providers and stubbed completeSimple; here the fakes queue
- * terminal AssistantMessages behind a fake ChatApi served through
- * Models.completeSimple, matching upstream's faux streaming path).
- */
 class CompactionLlmTest {
 
     private var nextId = 0
@@ -89,8 +81,6 @@ class CompactionLlmTest {
         details = details,
     )
 
-    // ---- Fake models (upstream fauxProvider / stubbed completeSimple) ----
-
     private class FauxApi : ChatApi {
         val seenContexts = mutableListOf<Context>()
         val seenOptions = mutableListOf<SimpleStreamOptions>()
@@ -125,7 +115,7 @@ class CompactionLlmTest {
 
     private var fauxCount = 0
 
-    /** Upstream createFauxModel: unique provider id per fake so coexisting fakes route correctly. */
+    /** Unique provider id per fake so coexisting fakes route correctly. */
     private fun createFauxModel(reasoning: Boolean, maxTokens: Int = 8192): Faux {
         val api = FauxApi()
         val providerId = "faux-${++fauxCount}"
@@ -147,9 +137,7 @@ class CompactionLlmTest {
                         providerId,
                         providerId,
                         "https://faux.test",
-                        // Ambient credential so stored-credential resolution is
-                        // not exercised by these tests (upstream faux
-                        // providers are auth-free).
+                        // Ambient credential so these tests don't exercise stored-credential resolution.
                         authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
                         models = listOf(model),
                         apis = mapOf("faux-api" to api),
@@ -160,7 +148,6 @@ class CompactionLlmTest {
         )
     }
 
-    /** Upstream fauxAssistantMessage: a terminal assistant message with reported usage. */
     private fun fauxAssistantMessage(
         text: String,
         stopReason: StopReason = StopReason.STOP,
@@ -176,13 +163,8 @@ class CompactionLlmTest {
         errorMessage = errorMessage,
     )
 
-    // ---- Session context ----
-
     @Test
     fun `builds session context with a compaction entry`() {
-        // Upstream expects a leading "compactionSummary" role; pathfinder
-        // projects it as its convertToLlm form — a user message wrapped in
-        // the summary tags (see Messages.kt).
         val u1 = createMessageEntry(createUserMessage("1"))
         val a1 = createMessageEntry(createAssistantMessage("a"), u1.id)
         val u2 = createMessageEntry(createUserMessage("2"), a1.id)
@@ -204,8 +186,6 @@ class CompactionLlmTest {
             loaded.map { it.role },
         )
     }
-
-    // ---- prepareCompaction ----
 
     private fun preparationValue(result: CompactionResult<CompactionPreparation?>): CompactionPreparation? =
         when (result) {
@@ -285,8 +265,6 @@ class CompactionLlmTest {
         assertNull(preparationValue(prepareCompaction(listOf<SessionEntry>(compaction), DEFAULT_COMPACTION_SETTINGS)))
         assertNull(preparationValue(prepareCompaction(emptyList(), DEFAULT_COMPACTION_SETTINGS)))
     }
-
-    // ---- generateSummary / generateSummaryWithUsage ----
 
     private fun firstPrompt(faux: Faux): String {
         val message = faux.api.seenContexts.first().messages.single() as UserMessage
@@ -383,8 +361,6 @@ class CompactionLlmTest {
         }
     }
 
-    // ---- combineUsage ----
-
     @Test
     fun `combines usage across all reported fields`() {
         val first = Usage(
@@ -400,14 +376,11 @@ class CompactionLlmTest {
         assertEquals(7, combined.output)
         assertEquals(6, combined.cacheRead)
         assertEquals(6, combined.cacheWrite)
-        // Divergence vs upstream's conditional fields: summed unconditionally.
         assertEquals(1, combined.cacheWrite1h)
         assertEquals(10, combined.reasoning)
         assertEquals(30, combined.totalTokens)
         assertEquals(12.0, combined.cost.total)
     }
-
-    // ---- completeSimpleWithRetries ----
 
     @Test
     fun `completeSimpleWithRetries retries transient errors, isolates requests, and reports callbacks`() = runTest {
@@ -440,10 +413,8 @@ class CompactionLlmTest {
         assertEquals(listOf(1), scheduled)
         assertEquals(1, attemptStarted)
         assertEquals(Triple(true, 1, null), finished)
-        // Upstream requestOptions tweaks: no cache writes; retries of one call
-        // share that call's fresh sessionId (the uuid is drawn once per
-        // completeSimpleWithRetries invocation, like upstream), and separate
-        // invocations draw distinct ids.
+        // The sessionId is drawn once per completeSimpleWithRetries invocation:
+        // retries share it, separate calls don't.
         assertEquals(
             listOf(CacheRetention.NONE, CacheRetention.NONE),
             faux.api.seenOptions.map { it.cacheRetention },
@@ -485,8 +456,6 @@ class CompactionLlmTest {
         assertEquals(2, faux.api.seenOptions.size)
         assertEquals(Triple(false, 1, "503 service unavailable"), finished)
     }
-
-    // ---- compact ----
 
     private fun preparation(
         messagesToSummarize: List<works.resolve.pathfinder.ai.core.Message>,

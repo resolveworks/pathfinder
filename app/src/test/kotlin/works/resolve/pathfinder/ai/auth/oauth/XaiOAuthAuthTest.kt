@@ -14,13 +14,6 @@ import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 
-/**
- * Tests for the xAI OAuth device-code flow, ported from pi
- * `packages/ai/src/auth/oauth/xai.ts`.
- *
- * All HTTP goes through a fake [OAuthHttpClient] (no network); the clock seam
- * is bound to fixed values so expiry math is deterministic.
- */
 class XaiOAuthAuthTest {
 
     private class RecordingInteraction : AuthInteraction {
@@ -77,8 +70,6 @@ class XaiOAuthAuthTest {
 
     private fun lastRequest(http: FakeHttpClient): OAuthHttpRequest = http.requests.last()
 
-    // --- labels / metadata (pi `xaiOAuth`) ---
-
     @Test
     fun `metadata mirrors pi xaiOAuth`() {
         val auth = XaiOAuthAuth(FakeHttpClient())
@@ -86,8 +77,6 @@ class XaiOAuthAuthTest {
         assertEquals("Sign in with SuperGrok or X Premium", auth.loginLabel)
         assertTrue(auth.isSubscription)
     }
-
-    // --- device authorization request (pi `requestDeviceCode`) ---
 
     @Test
     fun `device code request is form-encoded with pi fields`() = runTest {
@@ -125,15 +114,12 @@ class XaiOAuthAuthTest {
         )
     }
 
-    // --- notification (pi `loginXai` notify) ---
-
     @Test
     fun `device_code event fields mirror the response`() = runTest {
         val http = FakeHttpClient()
         val auth = XaiOAuthAuth(http, clock = FakeClock(1_000L))
         val interaction = RecordingInteraction()
         http.respond = { json(200, deviceCodeBody()) }
-        // Login will poll after the event; complete on the token request.
         http.respond = { request ->
             if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
             else json(200, tokenBody())
@@ -147,8 +133,6 @@ class XaiOAuthAuthTest {
         assertEquals(4, event.intervalSeconds)
         assertEquals(900, event.expiresInSeconds)
     }
-
-    // --- verification URI trust (pi `validateVerificationUri`) ---
 
     @Test
     fun `non-https verification URI is rejected`() = runTest {
@@ -169,8 +153,6 @@ class XaiOAuthAuthTest {
         }
         assertEquals("Untrusted verification URI in xAI OAuth response", error.message)
     }
-
-    // --- field validation (pi `requiredString` / `positiveNumber` / interval fallback) ---
 
     @Test
     fun `missing or non-string fields throw invalid-field errors`() = runTest {
@@ -198,8 +180,6 @@ class XaiOAuthAuthTest {
         )
         assertNull(device.intervalSeconds) // RFC 8628 interval 0 → poller default
     }
-
-    // --- credential shaping (pi `credentialsFromTokenResponse`) ---
 
     @Test
     fun `expiry uses lifetime minus 5-minute skew`() {
@@ -244,8 +224,6 @@ class XaiOAuthAuthTest {
         }
         assertEquals("Invalid xAI OAuth response field: refresh_token", error.message)
     }
-
-    // --- polling outcomes (pi `pollForTokens`) ---
 
     @Test
     fun `pending then complete succeeds and posts the device grant`() = runTest {
@@ -341,8 +319,6 @@ class XaiOAuthAuthTest {
         )
     }
 
-    // --- JSON robustness (pi `postForm`) ---
-
     @Test
     fun `invalid JSON throws pi message with status`() = runTest {
         val http = FakeHttpClient()
@@ -351,8 +327,6 @@ class XaiOAuthAuthTest {
         val error = assertFailsWith<IllegalStateException> { auth.login(RecordingInteraction()) }
         assertEquals("xAI OAuth returned invalid JSON (HTTP 200)", error.message)
     }
-
-    // --- refresh (pi `refreshXaiToken`) ---
 
     @Test
     fun `refresh posts the refresh grant and keeps the previous token when omitted`() = runTest {
@@ -382,8 +356,6 @@ class XaiOAuthAuthTest {
         }
         assertEquals("xAI OAuth token refresh failed (HTTP 401): invalid_grant", error.message)
     }
-
-    // --- form encoding ---
 
     @Test
     fun `form encoding matches URLSearchParams semantics`() {

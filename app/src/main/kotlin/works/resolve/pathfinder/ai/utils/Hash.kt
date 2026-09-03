@@ -1,13 +1,5 @@
 package works.resolve.pathfinder.ai.utils
 
-/**
- * Fast deterministic hash to shorten long strings, ported verbatim from pi's
- * shortHash (packages/ai/src/utils/hash.ts).
- *
- * Math.imul-equivalent 32-bit multiply with 2654435761=0x9E3779B1,
- * 1597334677=0x5F356495, 2246822507=0x85EBCA6B, 3266489909=0xC2B2AE35;
- * avalanche; unsigned base36, h2 then h1.
- */
 internal fun shortHash(str: String): String {
     var h1 = 0xdeadbeef.toInt()
     var h2 = 0x41c6ce57.toInt()

@@ -1,20 +1,14 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
 /**
- * Shared OAuth success/error HTML pages, ported from pi
- * `packages/ai/src/auth/oauth/oauth-page.ts`.
- *
- * The pages are served by loopback OAuth callback servers (see
- * [LoopbackOAuthServer]) into the on-device browser after the provider
- * redirects back. Rendering is byte-for-byte equivalent to upstream: same
- * markup, CSS, and escaping.
+ * OAuth success/error pages for the loopback callback servers
+ * ([LoopbackOAuthServer]) to serve into the on-device browser. Rendering
+ * must stay byte-for-byte identical to pi's `oauth-page.ts`: same markup,
+ * CSS, and escaping.
  */
-
-/** Port of pi `LOGO_SVG`. */
 private const val LOGO_SVG =
     "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 800 800\" aria-hidden=\"true\"><path fill=\"#fff\" fill-rule=\"evenodd\" d=\"M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z\"/><path fill=\"#fff\" d=\"M517.36 400 H634.72 V634.72 H517.36 Z\"/></svg>"
 
-/** Port of pi `escapeHtml`. */
 internal fun escapeHtml(value: String): String {
     return value
         .replace("&", "&amp;")
@@ -24,7 +18,6 @@ internal fun escapeHtml(value: String): String {
         .replace("'", "&#39;")
 }
 
-/** Port of pi `renderPage(options)`. */
 private fun renderPage(title: String, heading: String, message: String, details: String? = null): String {
     val escapedTitle = escapeHtml(title)
     val escapedHeading = escapeHtml(heading)
@@ -107,7 +100,6 @@ private fun renderPage(title: String, heading: String, message: String, details:
 </html>"""
 }
 
-/** Port of pi `oauthSuccessHtml(message)`. */
 fun oauthSuccessHtml(message: String): String {
     return renderPage(
         title = "Authentication successful",
@@ -116,7 +108,6 @@ fun oauthSuccessHtml(message: String): String {
     )
 }
 
-/** Port of pi `oauthErrorHtml(message, details?)`. */
 fun oauthErrorHtml(message: String, details: String? = null): String {
     return renderPage(
         title = "Authentication failed",

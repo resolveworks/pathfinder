@@ -41,12 +41,10 @@ class ConversationTest {
         val branchA = base.append(msg("b1"))
         val branchB = branchA.branch(base.leafId!!).append(msg("b2"))
 
-        // Both siblings are children of the root entry in the tree.
         val root = branchB.tree().single()
         assertEquals(base.leafId, root.entry.id)
         assertEquals(2, root.children.size)
 
-        // The active path excludes the abandoned branch.
         assertEquals(listOf("a", "b2"), branchB.activeMessages().texts())
         assertEquals(listOf("a", "b1"), branchA.activeMessages().texts())
     }
@@ -148,11 +146,6 @@ class ConversationTest {
         assertEquals(conversation.leafId, node.entry.id)
     }
 
-    /**
-     * pi's sessionManager.appendModelChange / appendThinkingLevelChange
-     * (session-manager.ts ~1071/~1084): the entry is a child of the current
-     * leaf and the leaf advances to it.
-     */
     @Test
     fun appendModelAndThinkingLevelChangesAdvanceTheLeaf() {
         val c = newConversation()
@@ -169,17 +162,9 @@ class ConversationTest {
         assertEquals("e2", c.leafId)
     }
 
-    /**
-     * pi's deriveSessionContextState / deriveEffectiveConfiguration fold:
-     * configuration entries and assistant messages update the effective
-     * model, thinking level, and active tools root→leaf; defaults mirror pi
-     * (thinking "off", model and tools unset).
-     */
     @Test
     fun effectiveConfigurationFoldsRootToLeaf() {
         val c = newConversation()
-
-        // Defaults on an empty branch.
         assertEquals(Conversation.EffectiveConfiguration(), c.effectiveConfiguration())
 
         val assistant = works.resolve.pathfinder.ai.core.AssistantMessage(
@@ -197,7 +182,6 @@ class ConversationTest {
             .append(msg("hello"))
             .appendModelChange("zai", "glm-5.3")
             .appendThinkingLevelChange("high")
-        // Append the assistant message through a copy that keeps the test clock:
         conversation = Conversation(conversation.entries, conversation.leafId, { "assistant" }, FakeClock())
             .append(assistant)
 
@@ -211,7 +195,6 @@ class ConversationTest {
         val afterSwitch = conversation.appendModelChange("zai", "glm-4.7")
         assertEquals("glm-4.7", afterSwitch.effectiveConfiguration().model!!.modelId)
 
-        // Active tools fold too, and branching away drops later entries.
         val withTools = afterSwitch.appendActiveTools()
         assertEquals(listOf("read"), withTools.effectiveConfiguration().activeToolNames)
         val rewound = withTools.branch(afterSwitch.leafId!!)

@@ -11,11 +11,6 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 
-/**
- * Ported from pi `packages/ai/test/retry.test.ts`. Upstream builds messages with
- * `fauxAssistantMessage` (src/providers/faux.ts); this repo has no shared factory,
- * so a minimal private helper stands in.
- */
 class RetryTest {
 
     private fun fauxAssistantMessage(

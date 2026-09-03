@@ -24,12 +24,6 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/**
- * End-to-end tests over the real OkHttp SSE transport against a
- * [MockWebServer], verifying wire-level auth headers, endpoint, and named
- * SSE event parsing (pi's `event:`/`data:` framing) for the
- * anthropic-messages port. No live credentials.
- */
 class AnthropicMessagesMockWebServerTest {
 
     private val server = MockWebServer()

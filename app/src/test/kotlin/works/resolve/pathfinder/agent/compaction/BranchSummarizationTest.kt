@@ -37,13 +37,6 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/**
- * Ports of pi's branch-summarization tests
- * (packages/agent/test/harness/branch-summarization.test.ts cases:
- * common-ancestor collection, budget-limited preparation, prompt shape,
- * error mapping) plus the session-context projections the feature depends on
- * (branch-summary message synthesis, deferred-assistant filtering).
- */
 class BranchSummarizationTest {
 
     private var nextId = 0
@@ -90,8 +83,6 @@ class BranchSummarizationTest {
         summary = summary,
         details = details,
     )
-
-    // ---- collectEntriesForBranchSummary (common-ancestor walk) ----
 
     @Test
     fun `collects nothing when there is no old leaf`() {
@@ -141,8 +132,6 @@ class BranchSummarizationTest {
         assertTrue(result.entries.isEmpty())
     }
 
-    // ---- prepareBranchEntries (token budget) ----
-
     @Test
     fun `preparation projects message branch_summary and compaction entries`() {
         val root = messageEntry(user("root"))
@@ -166,19 +155,16 @@ class BranchSummarizationTest {
 
         assertEquals(4, preparation.messages.size)
         assertEquals(user("root").content, preparation.messages[0].let { (it as UserMessage).content })
-        // branch_summary and compaction project as wrapped user messages.
         val branch = preparation.messages[1] as UserMessage
         assertTrue(
             (branch.content[0] as TextContent).text.startsWith(BRANCH_SUMMARY_PREFIX.trimStart().substringBefore("<")),
         )
         assertTrue((branch.content[0] as TextContent).text.contains("explored elsewhere"))
         assertTrue((branch.content[0] as TextContent).text.endsWith(BRANCH_SUMMARY_SUFFIX))
-        // The plain assistant message sits between the two summaries.
         assertEquals("answer", ((preparation.messages[2] as AssistantMessage).content[0] as TextContent).text)
         val compaction = preparation.messages[3] as UserMessage
         assertTrue((compaction.content[0] as TextContent).text.contains("compacted"))
         assertTrue((compaction.content[0] as TextContent).text.startsWith(COMPACTION_SUMMARY_PREFIX.trimStart().substringBefore("<")))
-        // The model_change entry contributes nothing (the count asserts it).
         assertEquals(preparation.messages.map(::estimateTokens).sum(), preparation.totalTokens)
     }
 
@@ -195,8 +181,7 @@ class BranchSummarizationTest {
 
     @Test
     fun `token budget keeps the newest messages and stops`() {
-        // ~50 tokens per message under the char/8 heuristic used by
-        // estimateMessageTokens.
+        // ~100 tokens per message under estimateMessageTokens' char/4 heuristic.
         val big = "x".repeat(400)
         val e1 = messageEntry(user(big))
         val e2 = messageEntry(user(big), e1.id)
@@ -215,7 +200,7 @@ class BranchSummarizationTest {
         val userEntry = messageEntry(user(big))
         val summary = branchSummaryEntry(big.padEnd(500, 'y'), userEntry.id, fromId = "x")
 
-        // Budget 60: the branch summary (~62 tokens) exceeds it, but the
+        // Budget 60: the branch summary (~125 tokens) exceeds it, but the
         // running total is 0 < 54 (90%), so it is kept and the walk stops —
         // the older user message is dropped.
         val preparation = prepareBranchEntries(listOf(userEntry, summary), tokenBudget = 60)
@@ -237,8 +222,6 @@ class BranchSummarizationTest {
         assertEquals(listOf("a.txt"), readFiles)
         assertEquals(listOf("b.txt", "c.txt"), modifiedFiles)
     }
-
-    // ---- generateBranchSummary (fixed prompt format) ----
 
     private class FauxApi : ChatApi {
         val seenContexts = mutableListOf<Context>()
@@ -430,8 +413,6 @@ class BranchSummarizationTest {
         assertTrue(failed.error.message.orEmpty().startsWith("Branch summary failed: boom"))
     }
 
-    // ---- session-context projection (context.ts) ----
-
     @Test
     fun `branch summary entries project a wrapped branch-summary context message`() {
         val root = messageEntry(user("root"))
@@ -470,7 +451,6 @@ class BranchSummarizationTest {
         val messages = buildSessionContext(listOf(root, deferred, final, toolResult))
 
         assertEquals(3, messages.size)
-        // The deferred assistant message is absent; the final one kept.
         assertEquals("root", ((messages[0] as UserMessage).content[0] as TextContent).text)
         assertEquals("done", ((messages[1] as AssistantMessage).content[0] as TextContent).text)
         assertEquals("r", ((messages[2] as ToolResultMessage).content[0] as TextContent).text)
@@ -478,8 +458,8 @@ class BranchSummarizationTest {
 
     @Test
     fun `terminated message entries still project into context`() {
-        // The terminate flag marks session-terminal messages but does not
-        // change context projection (pi's context.ts has no terminate check).
+        // The terminate flag marks session-terminal entries but does not
+        // change context projection — pi has no terminate check here.
         val root = messageEntry(user("root"))
         val terminal = messageEntry(assistant("the end"), root.id, terminate = true)
         val messages = buildSessionContext(listOf(root, terminal))

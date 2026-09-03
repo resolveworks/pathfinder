@@ -13,22 +13,18 @@ import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.utils.stringOrNull
 
 /**
- * Ported from pi packages/ai/src/api/constrained-sampling.ts.
- *
- * pi's Tool.parameters is a TypeBox TSchema; this port's [Tool.parameters] is a
- * kotlinx.serialization [JsonElement]. The strict-schema rewriting below
- * therefore operates on a mutable deep copy of the JSON tree (the analogue of
- * pi's `structuredClone` + in-place mutation) instead of plain JS objects.
- * All validation, error messages, and output shapes match pi exactly.
+ * pi's Tool.parameters is a TypeBox TSchema; this port's [Tool.parameters] is
+ * a [JsonElement]. pi's rewriting mutates a `structuredClone` of the schema,
+ * so this port rewrites a mutable deep copy of the JSON tree and freezes it
+ * back afterwards.
  */
 
 internal class UnsupportedStrictJsonSchemaError(message: String) : Exception(message)
 
 /**
- * pi throws plain `Error` for grammar-constrained-sampling failures
- * (constrained-sampling.ts:152, :165, :168, :192-203, :219, :223, :248, :261);
- * per the error conventions this port throws a domain [Exception] instead
- * (never subclass [kotlin.Error] for domain logic). Messages match pi exactly.
+ * pi throws plain `Error` for constrained-sampling failures; this port throws
+ * a domain [Exception] instead (never [kotlin.Error] for domain logic).
+ * Messages match pi exactly.
  */
 internal class ConstrainedSamplingError(message: String) : Exception(message)
 
@@ -52,9 +48,8 @@ internal val UNSUPPORTED_STRICT_SCHEMA_KEYS = listOf(
 )
 
 /**
- * Mutable JSON-schema node used while rewriting a schema strict: values are
- * [MutableSchema] maps, [MutableList]s (arrays), or [JsonElement] leaves.
- * The analogue of pi's plain JS objects after `structuredClone`.
+ * Mutable JSON-schema node: values are [MutableSchema] maps, [MutableList]s
+ * (arrays), or [JsonElement] leaves.
  */
 private typealias MutableSchema = LinkedHashMap<String, Any>
 

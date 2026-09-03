@@ -11,15 +11,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-/**
- * JVM tests for the Android-only OAuth foreground gate (see
- * [OAuthForegroundGate]): the HTTP decorator defers exchanges while the app
- * is backgrounded, resumes them on foreground, and preserves coroutine
- * cancellation; [AppForegroundGate] itself waits on its own flag; and the
- * gated loopback wait blocks, resumes, and cancels the same way. None of
- * this exists in pi — the default [OAuthForegroundGate.NONE] keeps ported
- * semantics untouched.
- */
 class OAuthForegroundGateTest {
 
     private class ControllableGate : OAuthForegroundGate {
@@ -56,7 +47,6 @@ class OAuthForegroundGateTest {
         val gated = ForegroundGatedOAuthHttpClient(client, gate)
 
         val job = launch { gated.execute(request()) }
-        // While backgrounded the exchange has not run...
         withTimeout(100) {
             while (gate.awaited == 0) kotlinx.coroutines.delay(1)
         }
@@ -78,7 +68,6 @@ class OAuthForegroundGateTest {
 
     @Test
     fun `cancelling the caller cancels a gated exchange`() = runBlocking {
-        // A gate that never proceeds (permanently backgrounded).
         val never = OAuthForegroundGate { CompletableDeferred<Unit>().await() }
         val gated = ForegroundGatedOAuthHttpClient(RecordingClient(), never)
         val job = async { gated.execute(request()) }

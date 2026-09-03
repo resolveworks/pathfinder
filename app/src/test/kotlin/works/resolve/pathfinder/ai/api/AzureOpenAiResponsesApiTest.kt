@@ -27,11 +27,6 @@ import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 
-/**
- * Canned tests for [AzureOpenAiResponsesApi], ported alongside pi's
- * azure-openai-responses.ts (base-URL normalization from
- * azure-openai-base-url.test.ts).
- */
 class AzureOpenAiResponsesApiTest {
 
     private val model = Model(
@@ -77,7 +72,6 @@ class AzureOpenAiResponsesApiTest {
             "https://my-resource.services.ai.azure.com/openai/v1",
             normalizeAzureBaseUrlFor("https://my-resource.services.ai.azure.com/openai/v1/responses"),
         )
-        // Non-Azure hosts are preserved as-is.
         assertEquals(
             "https://proxy.example.com/azure",
             normalizeAzureBaseUrlFor("https://proxy.example.com/azure/"),
@@ -125,7 +119,6 @@ class AzureOpenAiResponsesApiTest {
                 ),
             ),
         )
-        // Explicit options beat env.
         assertEquals(
             AzureConfig("https://opt.openai.azure.com/openai/v1", "v2"),
             resolveAzureConfig(
@@ -218,8 +211,7 @@ class AzureOpenAiResponsesApiTest {
 
     @Test
     fun `custom gateway base urls keep their query string`() {
-        // pi preserves the query on non-Azure hosts (URL.toString()); only
-        // the Azure-host normalization branch strips it.
+        // Only the Azure-host branch strips the query; other hosts keep it, as in pi.
         assertEquals(
             "https://my-proxy.example.com/v1?custom=true",
             normalizeAzureBaseUrlFor("https://my-proxy.example.com/v1?custom=true"),
@@ -282,8 +274,6 @@ class AzureOpenAiResponsesApiTest {
         }
         assertTrue(collected.any { it is AssistantMessageEvent.Start })
         job.cancelAndJoin()
-        // Abort maps to coroutine cancellation and rethrows CancellationException
-        // instead of emitting an Error event (adapter KDoc divergence).
         assertTrue(collected.none { it is AssistantMessageEvent.Error })
         assertTrue(transport.cancelled.value)
     }

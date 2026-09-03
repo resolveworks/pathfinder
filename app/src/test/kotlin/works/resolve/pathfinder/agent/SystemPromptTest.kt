@@ -8,10 +8,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-/**
- * Tests for [buildSystemPrompt], the port of the tool-section composition in
- * pi's `buildSystemPrompt` (packages/coding-agent/src/core/system-prompt.ts).
- */
 class SystemPromptTest {
 
     private class FakeTool(

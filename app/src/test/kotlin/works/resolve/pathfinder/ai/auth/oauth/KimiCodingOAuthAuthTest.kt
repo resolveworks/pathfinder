@@ -12,15 +12,6 @@ import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 
-/**
- * Ports the semantics of pi `packages/ai/src/auth/oauth/kimi-coding.ts`
- * (and its use of `packages/ai/src/auth/oauth/device-code.ts`).
- *
- * Time is deterministic: `runTest` virtualizes [kotlinx.coroutines.delay]
- * (used by the poller and the refresh backoff), and the flow's `now` clock is
- * bound to the test scheduler's virtual clock so `expires` computations are
- * stable. Virtual request timestamps are recorded for interval assertions.
- */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class KimiCodingOAuthAuthTest {
 
@@ -33,7 +24,6 @@ class KimiCodingOAuthAuthTest {
         }
     }
 
-    /** Scripted [OAuthHttpClient] that records virtual-time request timestamps. */
     private class FakeHttpClient(
         private val scheduler: kotlinx.coroutines.test.TestCoroutineScheduler,
         private val respond: suspend (request: OAuthHttpRequest) -> OAuthHttpResponse,
@@ -72,8 +62,6 @@ class KimiCodingOAuthAuthTest {
         return flow to http
     }
 
-    // --- login: device authorization + poll ---
-
     @Test
     fun `login happy path sends correct requests and notifies device code event`() = runTest {
         val (flow, http) = newFlow { request ->
@@ -93,7 +81,6 @@ class KimiCodingOAuthAuthTest {
         // expires_in=3600 measured at poll time, which is t=2s (after wait-before-first-poll)
         assertEquals(OAuthCredential(access = "acc-1", refresh = "ref-1", expires = 3_602_000), credential)
 
-        // device authorization request: pi's form body, headers, and 30s bound
         val auth = http.requests.first().second
         assertEquals("POST", auth.method)
         assertEquals("https://auth.kimi.com/api/oauth/device_authorization", auth.url)
@@ -104,7 +91,6 @@ class KimiCodingOAuthAuthTest {
         assertEquals("client_id=17e5f671-d194-4dfb-9706-5516cb48c098", auth.body.toString(Charsets.UTF_8))
         assertEquals(KimiCodingOAuthAuth.REQUEST_TIMEOUT_MS, auth.timeoutMs)
 
-        // pi notifies verification_uri_complete + server interval/expiry
         assertEquals(
             AuthEvent.DeviceCode(
                 userCode = "ABCD-EFGH",
@@ -117,7 +103,6 @@ class KimiCodingOAuthAuthTest {
 
         // waitBeforeFirstPoll: the first token poll happens after one 2s interval
         assertEquals(2_000, http.requests[1].first)
-        // device_code grant body
         assertEquals(
             "client_id=17e5f671-d194-4dfb-9706-5516cb48c098&device_code=dev-1&" +
                 "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code",
@@ -138,7 +123,6 @@ class KimiCodingOAuthAuthTest {
 
         flow.login(interaction)
 
-        // pi falls back to DEFAULT_POLL_INTERVAL_SECONDS / DEVICE_CODE_TIMEOUT_SECONDS
         assertEquals(5, interaction.events.single().let { (it as AuthEvent.DeviceCode).intervalSeconds })
         assertEquals(15 * 60, (interaction.events.single() as AuthEvent.DeviceCode).expiresInSeconds)
         assertEquals(5_000, http.requests[1].first)
@@ -186,7 +170,6 @@ class KimiCodingOAuthAuthTest {
         val credential = flow.login(RecordingInteraction())
 
         assertEquals("a", credential.access)
-        // first poll after 1s wait, then 1s intervals between polls
         assertEquals(listOf(1_000L, 2_000L, 3_000L), http.requests.drop(1).map { it.first })
     }
 
@@ -205,7 +188,6 @@ class KimiCodingOAuthAuthTest {
 
         flow.login(RecordingInteraction())
 
-        // poll at 1s (after wait-before-first-poll), then the server-provided 4s interval
         assertEquals(listOf(1_000L, 5_000L), http.requests.drop(1).map { it.first })
     }
 
@@ -224,7 +206,7 @@ class KimiCodingOAuthAuthTest {
 
         flow.login(RecordingInteraction())
 
-        // 1s wait, then RFC 8628 section 3.5: 1s + 5s
+        // RFC 8628 section 3.5: slow_down adds 5s to the interval
         assertEquals(listOf(1_000L, 7_000L), http.requests.drop(1).map { it.first })
     }
 
@@ -300,8 +282,6 @@ class KimiCodingOAuthAuthTest {
         assertEquals("Device flow timed out", error.message)
     }
 
-    // --- refresh ---
-
     @Test
     fun `refresh exchanges the refresh token and computes expiry`() = runTest {
         val (flow, http) = newFlow {
@@ -356,9 +336,9 @@ class KimiCodingOAuthAuthTest {
         val error = assertFailsWith<IllegalStateException> {
             flow.refresh(OAuthCredential(access = "", refresh = "ref", expires = 0))
         }
-        // pi renders the JSON body via JSON.stringify: "{}" is truthy, so ": {}" is appended
+        // pi appends JSON.stringify of the parsed body; "{}" still renders
         assertEquals("Kimi Code token refresh failed with status 503: {}", error.message)
-        // pi: attempt 0..REFRESH_MAX_RETRIES = 4 requests, backoff 1s/2s/4s
+        // attempts 0..REFRESH_MAX_RETRIES: 4 requests, backoff 1s/2s/4s
         assertEquals(listOf(0L, 1_000L, 3_000L, 7_000L), http.requests.map { it.first })
     }
 
@@ -432,8 +412,6 @@ class KimiCodingOAuthAuthTest {
         assertTrue(job.isCancelled)
     }
 
-    // --- toAuth / constants ---
-
     @Test
     fun `toAuth shapes the Bearer authorization header`() = runTest {
         val (flow, _) = newFlow { throw UnsupportedOperationException() }
@@ -451,11 +429,8 @@ class KimiCodingOAuthAuthTest {
         assertEquals("https://auth.kimi.com", KimiCodingOAuthAuth.OAUTH_HOST)
     }
 
-    // --- form encoding / URL trust ---
-
     @Test
     fun `formUrlEncode matches URLSearchParams percent-encoding`() {
-        // URLSearchParams.toString() encodes spaces as '+' on the wire
         assertEquals(
             "a=1&b=hello+world&c=x%2By",
             KimiCodingOAuthAuth.formUrlEncode(
@@ -499,7 +474,7 @@ class KimiCodingOAuthAuthTest {
 
     @Test
     fun `quoted numeric interval and expires_in fall back to defaults`() = runTest {
-        // pi requires typeof number: '"interval":"2"' is a string, so the fallback applies
+        // typeof number is required: '"interval":"2"' is a string, so the fallback applies
         val (flow, http) = newFlow { request ->
             if (request.url.endsWith("device_authorization")) {
                 json(200, deviceAuthorizationBody(interval = "\"interval\":\"2\"", expires = "\"expires_in\":\"600\""))
@@ -536,8 +511,8 @@ class KimiCodingOAuthAuthTest {
 
     @Test
     fun `array device authorization body renders in the malformed-response error`() = runTest {
-        // JS typeof [] === "object", so pi's readJson keeps the array and
-        // JSON.stringify renders it; field lookup fails like json?.field → undefined
+        // JS typeof [] === "object", so readJson keeps the array; field lookups
+        // fail and JSON.stringify renders it in the error
         val (flow, _) = newFlow { json(200, "[\"device_code\"]") }
 
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }

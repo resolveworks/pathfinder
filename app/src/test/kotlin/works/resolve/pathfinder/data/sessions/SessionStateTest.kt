@@ -7,11 +7,6 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/**
- * Replay validation of SessionState, porting pi's SessionState.applyMutation
- * tests (packages/agent/src/harness/session/state.ts): consecutive seq,
- * duplicate ids, parent existence, lane chaining, lane/fact application.
- */
 class SessionStateTest {
 
     private fun entry(seq: Long, id: String, parentId: String? = null) =
@@ -20,7 +15,6 @@ class SessionStateTest {
     @Test
     fun `seq must start at one and stay consecutive`() {
         val state = SessionState()
-        // seq 0 (unassigned) is invalid on replay, as is skipping 1.
         assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(0, "a")))
         }
@@ -60,7 +54,7 @@ class SessionStateTest {
         assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Entry(lane = "main", entry = entry(3, "c", parentId = "a")))
         }
-        // Non-lane-addressed entries skip the chaining check (pi's lane === undefined).
+        // Non-lane-addressed entries skip the chaining check.
         state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(3, "c", parentId = "a")))
     }
 
@@ -78,11 +72,9 @@ class SessionStateTest {
         state.applyMutation(SessionMutation.Entry(lane = "main", entry = entry(1, "a")))
         state.applyMutation(SessionMutation.Lane(seq = 2, lane = "main", leafId = "a"))
         assertEquals("a", state.requireLane("main"))
-        // Pointer to a missing entry is rejected.
         assertFailsWith<SessionError> {
             state.applyMutation(SessionMutation.Lane(seq = 3, lane = "main", leafId = "ghost"))
         }
-        // A new lane can be created at null (pi's createLane).
         state.applyMutation(SessionMutation.Lane(seq = 3, lane = "side", leafId = null))
         assertEquals(listOf(LanePointer("main", "a"), LanePointer("side", null)), state.getLanes())
     }

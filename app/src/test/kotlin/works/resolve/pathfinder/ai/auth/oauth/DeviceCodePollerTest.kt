@@ -13,23 +13,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-/**
- * Tests for the RFC 8628 device-code poller, ported from pi
- * `packages/ai/src/auth/oauth/device-code.ts`.
- *
- * Time is deterministic: `runTest` virtualizes [kotlinx.coroutines.delay], and
- * the poller's [Clock] is bound to the test scheduler's virtual clock,
- * mirroring how `Date.now()` advances as the upstream sleeps resolve.
- */
+/** Virtual time (`runTest` + a scheduler-bound [Clock]) keeps the poll sleeps and deadline checks instant. */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class DeviceCodePollerTest {
 
-    /** Clock bound to the scheduler's virtual time (pi: `Date.now()` as sleeps resolve). */
     private fun TestScope.virtualClock(): Clock = object : Clock {
         override fun now(): Instant = Instant.fromEpochMilliseconds(testScheduler.currentTime)
     }
-
-    // --- complete / pending / interval behavior ---
 
     @Test
     fun `complete on first poll returns value`() = runTest {
@@ -97,8 +87,6 @@ class DeviceCodePollerTest {
         assertEquals(listOf(2000L, 4000L), times)
     }
 
-    // --- failure and timeout ---
-
     @Test
     fun `failed poll result throws the server message`() = runTest {
         val error = assertFailsWith<IllegalStateException> {
@@ -149,8 +137,6 @@ class DeviceCodePollerTest {
         )
     }
 
-    // --- slow_down interval handling ---
-
     @Test
     fun `slow_down without server interval adds 5 seconds (RFC 8628 section 3_5)`() = runTest {
         val times = mutableListOf<Long>()
@@ -171,7 +157,6 @@ class DeviceCodePollerTest {
             ),
         clock = virtualClock(),
         )
-        // t=0 slow_down; sleep 1s+5s; t=6000 pending; sleep 6s; t=12000 complete
         assertEquals(listOf(0L, 6000L, 12000L), times)
     }
 
@@ -195,7 +180,6 @@ class DeviceCodePollerTest {
             ),
         clock = virtualClock(),
         )
-        // t=0 slow_down(interval=10); t=10000 pending; t=20000 complete
         assertEquals(listOf(0L, 10000L, 20000L), times)
     }
 
@@ -220,11 +204,8 @@ class DeviceCodePollerTest {
             ),
         clock = virtualClock(),
         )
-        // t=0 slow_down(NaN) -> 2s+5s; t=7000 slow_down(-1) -> 7s+5s; t=19000 complete
         assertEquals(listOf(0L, 7000L, 19000L), times)
     }
-
-    // --- deadline edge cases ---
 
     @Test
     fun `sleep is clamped to the remaining deadline`() = runTest {
@@ -244,14 +225,11 @@ class DeviceCodePollerTest {
                 clock = virtualClock(),
             )
         }
-        // Only t=0 poll fits; after it the remaining 3s elapse and the loop exits.
         assertEquals(listOf(0L), times)
     }
 
     @Test
     fun `flow without expiresInSeconds never times out`() = runTest {
-        // Upstream: no expiresInSeconds -> deadline is +Infinity. Verify a
-        // pending flow keeps polling rather than timing out.
         var calls = 0
         val value = pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(
@@ -264,8 +242,6 @@ class DeviceCodePollerTest {
         )
         assertEquals("ok", value)
     }
-
-    // --- cancellation (AbortSignal equivalent) ---
 
     @Test
     fun `cancelling during sleep throws CancellationException with the cancel message`() = runTest {

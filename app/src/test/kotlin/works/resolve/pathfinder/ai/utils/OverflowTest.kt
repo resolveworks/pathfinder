@@ -8,10 +8,6 @@ import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.Usage
 
-/**
- * Port of pi's `packages/ai/test/overflow.test.ts` (vitest) for the overflow
- * classification ported from `packages/ai/src/utils/overflow.ts`.
- */
 class OverflowTest {
     private fun createErrorMessage(errorMessage: String): AssistantMessage = AssistantMessage(
         content = emptyList(),

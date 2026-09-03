@@ -18,10 +18,6 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 
-/**
- * Deterministic tests for the okhttp-sse backed transport adapter, using
- * MockWebServer. These never touch a live provider.
- */
 class OkHttpTransportTest {
 
     private fun transport() = OkHttpTransport()
@@ -116,7 +112,6 @@ class OkHttpTransportTest {
     @Test
     fun `cancelling event collection closes the connection promptly`() {
         val server = MockWebServer()
-        // Keep the stream open indefinitely.
         server.enqueue(
             MockResponse()
                 .setResponseCode(200)
@@ -129,9 +124,6 @@ class OkHttpTransportTest {
             val response = transport().post(request(server))
             val first = withTimeout(5_000) { response.events.first() }
             assertEquals(SseEvent("one"), first)
-            // The first() collection stopped after one element, cancelling the
-            // source; collecting again must complete promptly and empty rather
-            // than block on the still-open socket.
             val remaining = withTimeout(2_000) { response.events.toList() }
             assertTrue(remaining.isEmpty(), "stream must be closed after collection stops")
         }

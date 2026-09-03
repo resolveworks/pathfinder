@@ -1,10 +1,7 @@
-// Top-level build file. Plugin versions come from gradle/libs.versions.toml.
-//
-// Note on Kotlin: with AGP 9 the app module does NOT apply
-// org.jetbrains.kotlin.android — AGP ships built-in Kotlin support
-// (see developer.android.com/build/migrate-to-built-in-kotlin).
-// The only Kotlin plugin declared here is the Compose compiler
-// subplugin, versioned with the Kotlin release it ships with.
+// AGP 9 ships built-in Kotlin support, so there is no
+// org.jetbrains.kotlin.android plugin. The compose and serialization
+// plugins are Kotlin compiler subplugins: their version must match the
+// Kotlin version built into AGP.
 plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.compose) apply false

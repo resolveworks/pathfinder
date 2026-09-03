@@ -10,7 +10,6 @@ import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 
-/** The registry resolves exactly the APIs with a Kotlin port. */
 class ChatApiRegistryTest {
 
     private val transport = FakeTransport()

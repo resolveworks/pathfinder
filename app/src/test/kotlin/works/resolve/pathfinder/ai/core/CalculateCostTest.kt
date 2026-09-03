@@ -3,11 +3,6 @@ package works.resolve.pathfinder.ai.core
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-/**
- * Tests for calculateCost, porting pi's pricing semantics
- * (packages/ai/src/models.ts:879-899): base per-component math, the Anthropic
- * 1h cache-write split (2x base input), tier selection, and Cost.total.
- */
 class CalculateCostTest {
 
     private fun model(cost: ModelCost = ModelCost()) = Model(
@@ -34,7 +29,6 @@ class CalculateCostTest {
 
     @Test
     fun `no 1h split reduces to plain cacheWrite pricing`() {
-        // longWrite = 0 -> shortWrite = cacheWrite; identical to pre-split math.
         val plain = calculateCost(
             model(ModelCost(input = 5.0, cacheWrite = 6.25)),
             Usage(cacheWrite = 1_000_000),
@@ -44,12 +38,11 @@ class CalculateCostTest {
 
     @Test
     fun `1h cache writes are priced at 2x base input`() {
-        // claude-opus-4-8 rates: input 5, cacheWrite (5m) 6.25 per Mtok.
+        // claude-opus-4-8 rates; cacheWrite is the 5m tier.
         val cost = calculateCost(
             model(ModelCost(input = 5.0, cacheWrite = 6.25)),
             Usage(cacheWrite = 1_000_000, cacheWrite1h = 400_000),
         )
-        // 600k * 6.25/Mtok + 400k * 10/Mtok = 3.75 + 4.0 = 7.75
         assertEquals(7.75, cost.cacheWrite, 1e-10)
     }
 
@@ -83,7 +76,6 @@ class CalculateCostTest {
                     tiers = listOf(ModelCostTier(input = 1.0, output = 5.0, cacheRead = 0.1, cacheWrite = 1.25, inputTokensAbove = 100)),
                 ),
             ),
-            // input tokens exactly at the threshold: base rates still apply.
             Usage(input = 100),
         )
         assertEquals(100 * 3.0 / 1_000_000, cost.input, 1e-12)
@@ -98,7 +90,6 @@ class CalculateCostTest {
                     tiers = listOf(
                         ModelCostTier(input = 1.0, output = 5.0, cacheRead = 0.1, cacheWrite = 1.25, inputTokensAbove = 100),
                         ModelCostTier(input = 0.5, output = 2.5, cacheRead = 0.05, cacheWrite = 0.625, inputTokensAbove = 1_000),
-                        // Below threshold; must not match.
                         ModelCostTier(input = 0.1, output = 0.5, cacheRead = 0.01, cacheWrite = 0.125, inputTokensAbove = 10_000_000),
                     ),
                 ),

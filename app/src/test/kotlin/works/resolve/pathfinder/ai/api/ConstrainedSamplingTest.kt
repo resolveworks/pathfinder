@@ -17,11 +17,6 @@ import works.resolve.pathfinder.ai.core.GrammarFormat
 import works.resolve.pathfinder.ai.core.StrictJsonSchemaMode
 import works.resolve.pathfinder.ai.core.Tool
 
-/**
- * Ported from pi packages/ai/test/constrained-sampling.test.ts, reduced to the
- * constrained-sampling core (adapter-side integration tests live with their
- * adapters). Case intent and names follow upstream.
- */
 class ConstrainedSamplingTest {
 
     private fun schema(json: String) = Json.parseToJsonElement(json)
@@ -58,7 +53,6 @@ class ConstrainedSamplingTest {
 
         val strict = makeStrictJsonSchema(parameters)
 
-        // Original is untouched.
         assertTrue(!(parameters.jsonObject.containsKey("additionalProperties")))
         assertEquals(
             listOf("path", "metadata"),
@@ -192,7 +186,6 @@ class ConstrainedSamplingTest {
             failure.message,
         )
 
-        // Without grammar support the config is ignored entirely.
         assertNull(resolveGrammarConstrainedSampling(both, supportsOpenAIGrammarTools = false))
         assertNull(resolveGrammarConstrainedSampling(plain(), supportsOpenAIGrammarTools = true))
     }

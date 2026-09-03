@@ -20,18 +20,13 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 
-/**
- * Deterministic tests for the OkHttp-backed WebSocket transport primitive
- * (the pi `connectWebSocket`/`WebSocketLike` port), using MockWebServer's
- * WebSocket upgrade. These never touch a live provider.
- */
 class OkHttpWebSocketTransportTest {
 
     private fun transport() = OkHttpWebSocketTransport()
 
     private fun url(server: MockWebServer) = server.url("/v1/ws").toString()
 
-    /** Echo server: sends one greeting on open, echoes messages, records closes. */
+    /** Sends one greeting on open, then echoes messages back. */
     private class EchoServerListener : WebSocketListener() {
         val serverClosed = CountDownLatch(1)
         val sent = CompletableDeferred<Unit>()
@@ -73,7 +68,6 @@ class OkHttpWebSocketTransportTest {
         runBlocking {
             val connection = transport().connect(url(server), mapOf("Authorization" to "Bearer secret-token"))
             assertTrue(connection.isOpen)
-            // Greeting sent by the server on open.
             assertEquals(WebSocketEvent.Message("hello"), withTimeout(5_000) { connection.events.receive() })
             connection.send("ping")
             assertEquals(WebSocketEvent.Message("ping"), withTimeout(5_000) { connection.events.receive() })
@@ -105,7 +99,6 @@ class OkHttpWebSocketTransportTest {
                 WebSocketEvent.Closed(code = 4408, reason = "session expired", wasClean = null, message = "WebSocket closed 4408 session expired"),
                 event,
             )
-            // Channel closes after the terminal event.
             assertTrue(withTimeout(5_000) { connection.events.isClosedForReceive })
             assertFalse(connection.isOpen)
         }
@@ -138,15 +131,12 @@ class OkHttpWebSocketTransportTest {
     @Test
     fun `failure before open rejects connect with the shaped error`() {
         val server = MockWebServer()
-        // Handshake response that is not a 101 upgrade: OkHttp reports
-        // onFailure before onOpen.
+        // Non-101 response: OkHttp reports onFailure instead of onOpen.
         server.enqueue(MockResponse().setResponseCode(500))
         server.start()
         val error = assertFailsWith<java.io.IOException> {
             runBlocking { transport().connect(url(server), emptyMap()) }
         }
-        // extractWebSocketError shape: the throwable's message when present,
-        // else the "WebSocket error" fallback — never blank.
         assertTrue(!error.message.isNullOrBlank())
         server.shutdown()
     }
@@ -174,7 +164,6 @@ class OkHttpWebSocketTransportTest {
             val job = launch {
                 val connection = transport().connect(url(server), emptyMap(), connectTimeoutMs = 60_000)
                 connected.complete(connection)
-                // Keep consuming until cancelled.
                 while (true) {
                     connection.events.receive()
                 }
@@ -236,9 +225,7 @@ class OkHttpWebSocketTransportTest {
         val server = upgradeServer(serverListener)
         runBlocking {
             val connection = transport().connect(url(server), emptyMap())
-            // Consume the open greeting.
             withTimeout(5_000) { connection.events.receive() }
-            // Double close must not throw and settles into the same terminal state.
             connection.close(1000, "done")
             connection.close(1000, "done")
             val event = withTimeout(5_000) { connection.events.receive() }

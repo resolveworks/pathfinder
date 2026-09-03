@@ -32,13 +32,6 @@ import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
 
-/**
- * Runtime request test for the Anthropic OAuth port: a stored Anthropic OAuth
- * credential resolves (and, when expired, refreshes with rotation) through
- * the ported resolution pipeline, and the resolved token selects the Claude
- * OAuth bearer request headers/betas already implemented by the
- * anthropic-messages API — never an `x-api-key` header.
- */
 class AnthropicOAuthRuntimeTest {
 
     private class FakeHttpClient : OAuthHttpClient {
@@ -107,7 +100,6 @@ class AnthropicOAuthRuntimeTest {
         val http = FakeHttpClient()
         val oauth = AnthropicOAuthAuth(http)
         val credentials = InMemoryCredentialStore()
-        // Expired: less than the five-minute window remains.
         credentials.modify("anthropic") {
             OAuthCredential(access = "sk-ant-oat-old", refresh = "stored-refresh", expires = 0)
         }
@@ -122,7 +114,6 @@ class AnthropicOAuthRuntimeTest {
         assertEquals("OAuth", resolved.source)
         assertEquals("sk-ant-oat-new", resolved.auth.apiKey)
 
-        // The refresh used the stored refresh token and persisted the rotation.
         val refreshBody = Json.parseToJsonElement(http.requests.single().body.decodeToString()).jsonObject
         assertEquals("refresh_token", refreshBody["grant_type"]!!.jsonPrimitive.content)
         assertEquals("stored-refresh", refreshBody["refresh_token"]!!.jsonPrimitive.content)

@@ -60,7 +60,6 @@ class AgentTest {
         timestamp = 42L,
     )
 
-    /** Successful stream: Start, one TextDelta, Done. */
     private fun okStream(): Flow<AssistantMessageEvent> = flowOf(
         AssistantMessageEvent.Start(assistant(text = "")),
         AssistantMessageEvent.TextDelta(0, "he", assistant(text = "he")),
@@ -122,8 +121,6 @@ class AgentTest {
         assertFalse(final.isStreaming)
         assertNull(final.errorMessage)
 
-        // A second prompt is sent against the committed transcript snapshot;
-        // the context may contain AssistantMessages, so text is read generically.
         fun textOf(msg: Message) = when (msg) {
             is UserMessage -> (msg.content.single() as TextContent).text
             is AssistantMessage -> (msg.content.single() as TextContent).text
@@ -149,8 +146,6 @@ class AgentTest {
 
         agent.prompt(listOf(UserMessage.ofText("hi")))
         val observed = sawAssistantEnd.await()
-        // The assistant message is committed and streaming cleared before the
-        // event reaches observers; the run itself is still streaming.
         assertTrue(observed.messages.any { it is AssistantMessage })
         assertNull(observed.streamingMessage)
         assertTrue(observed.isStreaming)
@@ -159,8 +154,8 @@ class AgentTest {
 
     @Test
     fun `replace and reset transcript copy caller lists while idle`() = runTest {
-        // Mutation while active is rejected. Gate on provider start, not
-        // merely isStreaming, so the run is deterministically established.
+        // Gate on provider start, not merely isStreaming, so the run is
+        // deterministically established.
         val providerStarted = CompletableDeferred<Unit>()
         val agent = Agent(model, null, SimpleStreamOptions()) { _, _, _ ->
             providerStarted.complete(Unit)
@@ -176,7 +171,6 @@ class AgentTest {
         assertTrue(agent.state.value.messages.isEmpty())
         assertNull(agent.state.value.errorMessage)
 
-        // Mutation while active is rejected.
         val job = launch { agent.prompt(listOf(UserMessage.ofText("hi"))) }
         agent.state.first { it.isStreaming }
         try {
@@ -189,12 +183,9 @@ class AgentTest {
             agent.resetTranscript()
             fail("expected IllegalStateException")
         } catch (_: IllegalStateException) {
-            // expected
         }
         providerStarted.await()
         job.cancelAndJoin()
-        // Caller cancellation still synthesizes the ABORTED terminal message
-        // (transcript was reset above, so: user prompt + synthesized message).
         assertEquals(2, agent.state.value.messages.size)
         assertEquals(
             StopReason.ABORTED,
@@ -245,7 +236,6 @@ class AgentTest {
             withTimeout(1_000) { deferred.await() }
             fail("expected CancellationException")
         } catch (_: CancellationException) {
-            // expected
         }
         withTimeout(1_000) { agent.state.first { !it.isStreaming } }
         collector.cancelAndJoin()
@@ -298,8 +288,6 @@ class AgentTest {
         agent.prompt(listOf(UserMessage.ofText("hi")))
         collector.cancelAndJoin()
 
-        // Full lifecycle, mirroring pi: agent_start/turn_start, user prompt pair,
-        // then the synthesized failure message through message_start/end, turn_end, agent_end.
         assertEquals(
             listOf(
                 "AgentStart", "TurnStart",
@@ -344,9 +332,6 @@ class AgentTest {
         assertTrue(agent.state.value.messages.isEmpty())
     }
 
-    // ---- tool-aware state (pi agent.ts AgentState/processEvents/finishRun) ----
-
-    /** Minimal fake tool (pi agent.test.ts uses similar object literals). */
     private fun fakeTool(name: String): AgentTool = object : AgentTool {
         override val definition = Tool(name, "fake $name", JsonPrimitive("object"))
         override val label = name
@@ -367,8 +352,6 @@ class AgentTest {
         val tools = mutableListOf(fakeTool("a"))
         val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() }, tools = tools)
         assertEquals(1, agent.state.value.tools.size)
-        // Pi's copying accessor (createMutableAgentState, agent.ts:76-82):
-        // later caller mutation never reaches agent state.
         tools.add(fakeTool("b"))
         assertEquals(1, agent.state.value.tools.size)
     }
@@ -452,8 +435,6 @@ class AgentTest {
         agent.processEvent(AgentEvent.ToolExecutionStart("call-1", "t", JsonObject(emptyMap())))
         agent.abort()
         job.join()
-        // Pi's finishRun (agent.ts:529-534) clears pendingToolCalls and
-        // streamingMessage on every exit path.
         val final = agent.state.value
         assertTrue(final.pendingToolCalls.isEmpty())
         assertNull(final.streamingMessage)
@@ -471,11 +452,6 @@ class AgentTest {
 
     @Test
     fun `full tool run persists user toolCall toolResult and follow-up assistant in source order`() = runTest {
-        // End-to-end against the real loop, mirroring pi's multi-turn
-        // message lifecycle (agent-loop.ts runLoop): one prompt whose first
-        // response is TOOL_USE, tool execution, then a follow-up assistant
-        // turn; AgentState.messages must hold the run's messages in source
-        // order (pi's processEvents appends on every message_end).
         val tool = fakeTool("get_weather")
         val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
             content = listOf(ToolCall("call-1", "get_weather", "{}")),
@@ -525,8 +501,6 @@ class AgentTest {
         assertNull(final.streamingMessage)
         assertFalse(final.isStreaming)
 
-        // Tool lifecycle flowed through the public events flow with state
-        // already reduced: pendingToolCalls is empty again at AgentEnd.
         assertTrue(pendingAtAgentEnd.await().isEmpty())
         val toolStarts = events.filterIsInstance<AgentEvent.ToolExecutionStart>()
         val toolEnds = events.filterIsInstance<AgentEvent.ToolExecutionEnd>()

@@ -3,8 +3,7 @@ package works.resolve.pathfinder.ai.auth
 import kotlinx.serialization.json.JsonElement
 
 /**
- * Ported from pi `packages/ai/src/auth/types.ts` (one type-tagged credential
- * per provider — the shape of pi's `auth.json`).
+ * One type-tagged credential per provider — the shape of pi's `auth.json`.
  *
  * `toString` of every subtype redacts secret material; never log credentials.
  */
@@ -18,12 +17,9 @@ enum class CredentialType {
 }
 
 /**
- * Stored api-key credential (pi `ApiKeyCredential`). `env` holds
- * provider-scoped environment/config values such as Cloudflare account or
- * gateway ids. `key` may be null when only env values are stored.
- *
- * Port note: pi types `key` as optional; the previous Pathfinder-only shape
- * required it, so [key] is nullable now.
+ * Stored api-key credential. `env` holds provider-scoped environment/config
+ * values such as Cloudflare account or gateway ids; `key` is null for
+ * env-only credentials.
  */
 data class ApiKeyCredential(
     val key: String? = null,
@@ -36,12 +32,11 @@ data class ApiKeyCredential(
 }
 
 /**
- * Stored canonical OAuth credential (pi `OAuthCredential`): `access`,
- * `refresh`, `expires` (epoch milliseconds) plus any provider-specific extra
- * fields, preserved verbatim in [extras] so unknown JSON round trips safely.
- *
- * Port note: pi models extras as an index signature on the interface;
- * Kotlin's sealed types keep them in an explicit map of raw JSON elements.
+ * Stored canonical OAuth credential: `access`, `refresh`, `expires` (epoch
+ * milliseconds) plus provider-specific extra fields, preserved verbatim in
+ * [extras] so unknown JSON round trips safely. Pi models extras as an index
+ * signature; the sealed type keeps them in an explicit map of raw JSON
+ * elements.
  */
 data class OAuthCredential(
     val access: String,
@@ -66,7 +61,7 @@ data class OAuthCredential(
     }
 }
 
-/** Non-secret credential metadata for account/status enumeration (pi `CredentialInfo`). */
+/** Non-secret credential metadata for account/status enumeration. */
 data class CredentialInfo(
     val providerId: String,
     val type: CredentialType,

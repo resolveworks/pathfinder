@@ -17,12 +17,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Focused registry tests for auth resolution: resolver failures and missing
- * credentials become a terminal Error event, cancellation propagates,
- * explicit keys bypass the resolver, and env/bearer-header merging follows
- * pi's applyAuth precedence.
- */
 class ModelsTest {
     private fun model() = Model(
         id = "m1",
@@ -299,7 +293,6 @@ class ModelsTest {
         assertEquals(1, api.calls)
         assertEquals("explicit", api.lastApiKey)
         assertTrue(events.single() is AssistantMessageEvent.Done)
-        // The resolver received the explicit key and env (pi's overrides).
         assertEquals(
             "explicit" to mapOf("A" to "explicit-a"),
             api.lastResolverOverrides,
@@ -351,7 +344,6 @@ class ModelsTest {
 
         assertEquals(0, storeReads)
         assertTrue(events.single() is AssistantMessageEvent.Done)
-        // No apiKey path: the explicit key became a resolved header only.
         assertEquals(null, api.lastApiKey)
         assertEquals(
             mapOf(
@@ -406,7 +398,6 @@ class ModelsTest {
         ).toList()
 
         assertTrue(events.single() is AssistantMessageEvent.Done)
-        // Resolver supplies the key; env merges per field with the request on top.
         assertEquals("resolved-key", api.lastApiKey)
         assertEquals(mapOf("A" to "resolved-a", "B" to "explicit-b", "C" to "explicit-c"), api.lastEnv)
         // Explicit request headers win over resolved auth headers case-insensitively.
@@ -421,8 +412,6 @@ class ModelsTest {
 
     @Test
     fun `modelsAreEqual compares id and provider, null never equal`() {
-        // pi's models.ts modelsAreEqual: same id+provider only; null on
-        // either side is never equal.
         val m = model()
         assertTrue(Models.modelsAreEqual(m, m))
         assertTrue(Models.modelsAreEqual(m, m.copy(name = "renamed")))

@@ -30,7 +30,6 @@ class CredentialCodecTest {
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{bad}") }
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{}") }
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{\"type\":\"api_key\",\"key\":}") }
-        // Truncated object JSON (missing closing brace) must throw too.
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{\"type\":\"oauth\"") }
     }
 

@@ -5,13 +5,8 @@ import org.junit.Test
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 
 /**
- * Tests for [ToolResultRenderers], pinning the per-tool renderer resolution
- * (pi's ToolExecutionComponent resolves custom renderResult by tool name;
- * tools without one use the generic raw-text fallback):
- * - Scry's web_search renders its result as Markdown
- *   (`renderResult: renderMarkdownResult`, index.ts).
- * - Every other tool name — the generic path — renders raw text
- *   (pi's createResultFallback).
+ * Pins pi's renderer resolution: a custom renderResult is looked up by tool
+ * name, and every other tool falls back to raw text.
  */
 class ToolResultRenderersTest {
     @Test

@@ -40,15 +40,6 @@ import works.resolve.pathfinder.ai.transport.WebSocketEvent
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import java.io.IOException
 
-/**
- * WebSocket-transport tests for [OpenAICodexResponsesApi], ported from pi's
- * openai-codex-stream.test.ts WebSocket suite (~:1227-2330): auto transport
- * with cached context, account scoping, one-shot sockets on cacheRetention
- * none, SSE fallback on connect timeout (sticky per session), one-shot
- * connection-limit reconnect, idle timeouts before/after the first event,
- * connection age limit, previous_response_not_found recovery, debug stats,
- * and abort closing the pooled socket.
- */
 class OpenAICodexWebSocketStreamTest {
 
     private val model = Model(
@@ -64,7 +55,7 @@ class OpenAICodexWebSocketStreamTest {
         responsesCompat = OpenAiResponsesCompat(supportsStrictMode = true),
     )
 
-    /** Fresh pooled-session state per test (pi's tests reset module state between cases). */
+    /** Fresh session pool per test; pi resets module state between cases instead. */
     private fun cleanSlate() = OpenAICodexWebSocketSessions(FakeClock())
 
     private fun jwt(accountId: String): String {
@@ -75,10 +66,6 @@ class OpenAICodexWebSocketStreamTest {
         return "${encode("""{"alg":"none"}""")}.${encode(payload)}.sig"
     }
 
-    // ------------------------------------------------------------------
-    // Fakes
-    // ------------------------------------------------------------------
-
     private class FakeWebSocketConnection : WebSocketConnection {
         override val events = Channel<WebSocketEvent>(Channel.UNLIMITED)
         val sent = mutableListOf<String>()
@@ -86,7 +73,6 @@ class OpenAICodexWebSocketStreamTest {
         @Volatile
         private var open = true
 
-        /** Scripted per-frame server reaction. */
         var onSend: ((String) -> Unit)? = null
 
         override fun send(text: String) {
@@ -124,13 +110,10 @@ class OpenAICodexWebSocketStreamTest {
         val requests = mutableListOf<Pair<String, Map<String, String>>>()
         val connections = mutableListOf<FakeWebSocketConnection>()
 
-        /** Thrown from connect (e.g. "WebSocket connect timeout after 50ms"). */
         var connectError: Exception? = null
 
-        /** Scriptable hook fired when a connection is created. */
         var onConnect: ((FakeWebSocketConnection) -> Unit)? = null
 
-        /** When set, connect returns this connection instead of a fresh one. */
         var connectStub: FakeWebSocketConnection? = null
 
         override suspend fun connect(
@@ -152,10 +135,6 @@ class OpenAICodexWebSocketStreamTest {
         ws: WebSocketStreamingTransport,
         sessions: OpenAICodexWebSocketSessions = cleanSlate(),
     ) = OpenAICodexResponsesApi(http, webSocketTransport = ws, webSocketSessions = sessions)
-
-    // ------------------------------------------------------------------
-    // Server event fixtures (pi's buildSSEPayload / mock shapes)
-    // ------------------------------------------------------------------
 
     private fun textEvents(responseId: String, text: String = "Hello", endTurn: Boolean? = false) = listOf(
         buildJsonObject {
@@ -236,17 +215,12 @@ class OpenAICodexWebSocketStreamTest {
             else -> error("expected a terminal event, got $last")
         }
 
-
     private fun sseChunks(text: String = "Hello") = listOf(
         """{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
         """{"type":"response.output_text.delta","output_index":0,"delta":"$text"}""",
         """{"type":"response.done","response":{"id":"resp_sse","status":"completed","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}""",
         "[DONE]",
     )
-
-    // ------------------------------------------------------------------
-    // Tests
-    // ------------------------------------------------------------------
 
     @Test
     fun `auto transport uses websocket with cached context`() = runTest {
@@ -389,8 +363,6 @@ class OpenAICodexWebSocketStreamTest {
         runOnce(jwt("account-b"))
         runOnce(jwt("account-a"))
 
-        // account-b must not reuse account-a's socket, but the third request
-        // reuses the pooled account-a connection.
         assertEquals(2, ws.connections.size)
         assertEquals(
             listOf("account-a", "account-b"),
@@ -463,7 +435,6 @@ class OpenAICodexWebSocketStreamTest {
         assertEquals(true, stats.websocketFallbackActive)
         assertEquals("WebSocket connect timeout after 50ms", stats.lastWebSocketError)
 
-        // The session is sticky: the second request skips the WS path entirely.
         api.stream(
             model,
             context,
@@ -552,7 +523,6 @@ class OpenAICodexWebSocketStreamTest {
                         }
                     },
                 )
-                // then nothing: idle timeout fires
             }
         }
 
@@ -651,8 +621,6 @@ class OpenAICodexWebSocketStreamTest {
         assertEquals(StopReason.STOP, messageOf(second).stopReason)
         assertEquals(1, second.count { it is AssistantMessageEvent.Start })
 
-        // Connection 1 carried the full body and the failed delta; the retry
-        // happened on a fresh connection with a full body (no prev id).
         assertEquals(2, ws.connections.size)
         assertEquals(2, ws.connections[0].sent.size)
         assertEquals(1, ws.connections[1].sent.size)
@@ -677,7 +645,6 @@ class OpenAICodexWebSocketStreamTest {
         val http = FakeTransport()
         val connection = FakeWebSocketConnection()
         connection.onSend = { _ ->
-            // One non-terminal event, then stall.
             connection.server(
                 buildJsonObject {
                     put("type", "response.output_item.added")

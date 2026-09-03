@@ -18,13 +18,6 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/**
- * JVM tests for [LoopbackOAuthServer], the consolidation of pi's three inline
- * loopback callback servers (`openai-codex.ts` `startLocalOAuthServer`,
- * `anthropic.ts` `startCallbackServer`, `openrouter.ts` `startCallbackServer`).
- * Drives the server with real sockets on 127.0.0.1, mirroring the on-device
- * browser.
- */
 class LoopbackOAuthServerTest {
 
     private val handles = mutableListOf<LoopbackCallbackHandle<*>>()
@@ -43,7 +36,6 @@ class LoopbackOAuthServerTest {
         handle
     }
 
-    /** Perform one GET against the server and return status, headers, and body. */
     private fun get(
         port: Int,
         path: String,
@@ -65,8 +57,6 @@ class LoopbackOAuthServerTest {
         }
     }
 
-    // --- request parsing ---
-
     @Test
     fun `handler receives method path and form-decoded query parameters`() {
         var received: LoopbackCallbackRequest? = null
@@ -79,8 +69,6 @@ class LoopbackOAuthServerTest {
         val request = assertNotNull(received)
         assertEquals("GET", request.method)
         assertEquals("/auth/callback", request.path)
-        // URLSearchParams.get semantics: form-decoded ('+' is space, percent
-        // escapes resolved), first occurrence wins.
         assertEquals("a+b=c", request.query["code"])
         assertEquals("hello world", request.query["state"])
         assertEquals("first", request.query["dup"])
@@ -97,8 +85,6 @@ class LoopbackOAuthServerTest {
         assertEquals(emptyMap(), assertNotNull(received).query)
     }
 
-    // --- response wire format ---
-
     @Test
     fun `response carries status html content-type content-length no-store and close`() {
         val html = oauthSuccessHtml("You can close this window.")
@@ -109,7 +95,7 @@ class LoopbackOAuthServerTest {
         assertEquals(html, body)
         assertEquals("text/html; charset=utf-8", headers["content-type"])
         assertEquals(html.toByteArray(Charsets.UTF_8).size.toString(), headers["content-length"])
-        // Consolidation divergence: always no-store (upstream: OpenRouter only).
+        // Divergence: always no-store (upstream: OpenRouter only).
         assertEquals("no-store", headers["cache-control"])
     }
 
@@ -121,8 +107,6 @@ class LoopbackOAuthServerTest {
         assertEquals(200, status)
         assertEquals("ok", body)
     }
-
-    // --- settle / waitForResult / cancelWait ---
 
     @Test
     fun `settle completes waitForResult with the settled value`() = runBlocking {
@@ -147,8 +131,7 @@ class LoopbackOAuthServerTest {
 
     @Test
     fun `handler may settle from its own coroutine after the response`() = runBlocking {
-        // OpenRouter pattern: the token exchange runs inside the handler; the
-        // result settles only after it finishes.
+        // OpenRouter pattern: the token exchange runs inside the handler.
         val handle = started<String> { request, settle ->
             launch(Dispatchers.Default) {
                 delay(50)
@@ -201,8 +184,6 @@ class LoopbackOAuthServerTest {
         assertTrue(body2.contains("already been used"))
     }
 
-    // --- bind lifecycle ---
-
     @Test
     fun `bind conflict returns null from start`() = runBlocking {
         ServerSocket().use { occupier ->
@@ -217,7 +198,6 @@ class LoopbackOAuthServerTest {
 
     @Test
     fun `close is idempotent and the same fixed port can be rebound`() = runBlocking {
-        // Reserve a fixed port, then release it so both servers can use it.
         val fixedPort = ServerSocket().use { reserve ->
             reserve.reuseAddress = true
             reserve.bind(InetSocketAddress("127.0.0.1", 0))
@@ -241,13 +221,10 @@ class LoopbackOAuthServerTest {
         assertEquals("second", body)
     }
 
-    // --- robustness ---
-
     @Test
     fun `malformed request line gets a 400 and the server keeps serving`() {
         val handle = started<String> { _, _ -> LoopbackCallbackResponse(200, "ok") }
 
-        // Not a valid request-target line ("GET" with no target/version).
         Socket("127.0.0.1", handle.port).use { socket ->
             socket.soTimeout = 5_000
             socket.getOutputStream().apply {
@@ -266,7 +243,6 @@ class LoopbackOAuthServerTest {
             assertTrue(response.contains("400 Bad Request"))
         }
 
-        // The accept loop survived.
         assertEquals(200, get(handle.port, "/").first)
     }
 

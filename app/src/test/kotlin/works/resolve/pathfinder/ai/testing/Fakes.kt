@@ -11,7 +11,6 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 
-/** Scripted transport; records requests and replays scripted outcomes as complete SSE events. */
 internal class FakeTransport : HttpStreamingTransport {
     val requests = mutableListOf<TransportRequest>()
     var outcomes: MutableList<suspend () -> TransportResponse> = mutableListOf()
@@ -45,7 +44,6 @@ internal class FakeTransport : HttpStreamingTransport {
         }
     }
 
-    /** Anthropic-style responses that also carry an `event:` name. */
     fun enqueueNamedResponse(vararg events: Pair<String?, String>, status: Int = 200) {
         enqueueNamedResponse(events.toList(), status)
     }
@@ -101,9 +99,8 @@ internal class FakeTransport : HttpStreamingTransport {
 internal fun sse(vararg payloads: String): List<String> = payloads.toList()
 
 /**
- * A runtime whose WebSocket connects never succeed: transport-level connect
- * failures, so AUTO-transport Codex requests fall back to SSE — the same
- * externally observable path as any real WebSocket connect failure.
+ * WebSocket connects always fail, so AUTO-transport Codex requests fall back
+ * to SSE — the same externally observable path as a real connect failure.
  */
 internal object NoWebSocketTransport : WebSocketStreamingTransport {
     override suspend fun connect(

@@ -22,11 +22,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/**
- * Ports of pi's test/google-shared-signed-empty-blocks.test.ts and
- * test/google-shared-image-tool-result-routing.test.ts (convertMessages in
- * src/api/google-shared.ts), plus the tool-call-id and merged-turn rules.
- */
 class GoogleSharedConvertMessagesTest {
 
     private fun model(
@@ -142,10 +137,6 @@ class GoogleSharedConvertMessagesTest {
         assertNull(part["thought"])
     }
 
-    // ------------------------------------------------------------------
-    // image tool result routing (test/google-shared-image-tool-result-routing.test.ts)
-    // ------------------------------------------------------------------
-
     private fun imageToolContext() = Context(
         messages = listOf(
             UserMessage.ofText("read the files"),
@@ -244,8 +235,8 @@ class GoogleSharedConvertMessagesTest {
             Context(
                 messages = listOf(
                     UserMessage.ofText("go"),
-                    // Foreign assistant: transformMessages normalizes tool call
-                    // IDs only when replaying across models (transform-messages.ts).
+                    // Tool call IDs are normalized only when replaying across
+                    // models, hence the foreign assistant message.
                     AssistantMessage(
                         content = listOf(ToolCall(weird, "t", "{}")),
                         api = "openai-completions", provider = "openai", model = "gpt-x",
@@ -287,15 +278,8 @@ class GoogleSharedConvertMessagesTest {
         assertNull(partsOf(turns.last()).single()["functionResponse"]!!.jsonObject["id"])
     }
 
-    // ------------------------------------------------------------------
-    // transformMessages
-    // ------------------------------------------------------------------
-
     @Test
     fun `empty-string thinking signature falls through to the blank-drop path`() {
-        // pi's transform-messages.ts truthiness check `if (block.thinkingSignature)`:
-        // an empty-string signature is falsy, so same-model blank thinking is
-        // dropped rather than kept for replay.
         val model = model()
         val transformed = transformMessages(
             listOf(
@@ -372,7 +356,6 @@ class GoogleSharedConvertMessagesTest {
     }
 }
 
-/** Port of pi's test/google-shared-convert-tools.test.ts (src/api/google-shared.ts convertTools). */
 class GoogleSharedConvertToolsTest {
 
     private val tool = works.resolve.pathfinder.ai.core.Tool(
@@ -415,7 +398,6 @@ class GoogleSharedConvertToolsTest {
 
     @Test
     fun `mode resolution ports resolveGoogleFunctionCallingMode`() {
-        // No toolChoice and no constrained sampling: no toolConfig is emitted.
         assertNull(GoogleShared.resolveGoogleFunctionCallingMode(listOf(tool), null, true))
         assertEquals("NONE", GoogleShared.resolveGoogleFunctionCallingMode(listOf(tool), "none", true))
         assertEquals("ANY", GoogleShared.resolveGoogleFunctionCallingMode(listOf(tool), "any", true))
@@ -431,7 +413,6 @@ class GoogleSharedConvertToolsTest {
         assertTrue(!GoogleShared.supportsGoogleStrictToolSampling("gpt-oss-120b"))
     }
 
-    /** Port of "uses validated function calling for strict tools on Gemini 3". */
     @Test
     fun `uses validated function calling for strict tools on gemini3`() {
         val strictTool = tool.copy(
@@ -451,7 +432,6 @@ class GoogleSharedConvertToolsTest {
         )
     }
 
-    /** Strict schema wrap mirrors pi's convertTools + constrained-sampling.ts. */
     @Test
     fun `convertTools wraps parametersJsonSchema strict for strict tools`() {
         val strictTool = tool.copy(
@@ -460,7 +440,6 @@ class GoogleSharedConvertToolsTest {
             ),
         )
 
-        // Without a config the schema is passed through untouched.
         val plain = GoogleShared.convertTools(listOf(tool))!!
             .let { it[0].jsonObject["functionDeclarations"]!!.jsonArray[0].jsonObject }
         assertEquals(
@@ -468,14 +447,12 @@ class GoogleSharedConvertToolsTest {
             plain["parametersJsonSchema"],
         )
 
-        // With a config and strict support the schema is wrapped strict.
         val strict = GoogleShared.convertTools(listOf(strictTool), useParameters = false, supportsStrictMode = true)!!
             .let { it[0].jsonObject["functionDeclarations"]!!.jsonArray[0].jsonObject }
         val parameters = strict["parametersJsonSchema"]!!.jsonObject
         assertEquals(false, parameters["additionalProperties"]!!.jsonPrimitive.content.toBoolean())
         assertEquals("cmd", parameters["required"]!!.jsonArray[0].jsonPrimitive.content)
 
-        // Without strict support the prefer config downgrades silently.
         val downgraded = GoogleShared.convertTools(listOf(strictTool), useParameters = false, supportsStrictMode = false)!!
             .let { it[0].jsonObject["functionDeclarations"]!!.jsonArray[0].jsonObject }
         assertEquals(tool.parameters, downgraded["parametersJsonSchema"])

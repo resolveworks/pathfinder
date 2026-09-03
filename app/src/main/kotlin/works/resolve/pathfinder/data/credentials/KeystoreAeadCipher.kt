@@ -11,10 +11,6 @@ import javax.crypto.spec.GCMParameterSpec
 /**
  * AES-256-GCM cipher whose key lives in the Android Keystore and never
  * leaves it. Ciphertext layout: [ivLength (1 byte)][iv][ciphertext+tag].
- *
- * This replaces the deprecated androidx.security:security-crypto
- * (EncryptedSharedPreferences) with direct platform Keystore usage, per
- * current developer.android.com guidance.
  */
 class KeystoreAeadCipher {
 

@@ -12,12 +12,6 @@ import works.resolve.pathfinder.ai.testing.TestCatalogs
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 
-/**
- * Focused tests for the catalog→auth bridge (`CatalogProviderAuth` and the
- * factory's `catalogAuthResolver`): the pi `auth.resolve` semantics applied
- * to generated catalog providers, including OAuth composition through the
- * registry.
- */
 class CatalogProviderAuthTest {
 
     private class RecordingAuthContext(val env: Map<String, String> = emptyMap()) : AuthContext {
@@ -55,7 +49,6 @@ class CatalogProviderAuthTest {
         }
     }
 
-    /** OAuth-capable, prompt-less catalog provider (pi's openai-codex shape). */
     private val oauthCatalog: ProviderCatalog = ProviderCatalog.parse(
         """
         {
@@ -88,8 +81,6 @@ class CatalogProviderAuthTest {
     private fun oauthCredential(expiresInMs: Long): OAuthCredential =
         OAuthCredential(access = "stale", refresh = "r1", expires = System.currentTimeMillis() + expiresInMs)
 
-    // ---- stored API key ----
-
     @Test
     fun `stored api key resolves with stored-credential source`() = runTest {
         val store = InMemoryCredentialStore()
@@ -108,8 +99,8 @@ class CatalogProviderAuthTest {
 
     @Test
     fun `ambient env fills missing prompt values per field`() = runTest {
-        // Pi's per-field merge: a stored key with missing env slots picks up
-        // ambient values for those slots only; the stored key wins over env.
+        // pi's per-field merge: the stored credential wins; missing env
+        // slots fall back to ambient values.
         val store = InMemoryCredentialStore()
         store.modify("cloudflare-ai-gateway") {
             ApiKeyCredential(key = "cf-key", env = mapOf("CLOUDFLARE_ACCOUNT_ID" to "acct"))
@@ -118,7 +109,6 @@ class CatalogProviderAuthTest {
 
         val result = resolveProviderAuth(CatalogAuthProviderRef(TestCatalogs.CLOUDFLARE), store, ctx)!!
 
-        // Stored key won; gateway id came from ambient; account id from stored env.
         assertEquals("Bearer cf-key", result.auth.headers["cf-aig-authorization"])
         assertEquals(mapOf("CLOUDFLARE_ACCOUNT_ID" to "acct", "CLOUDFLARE_GATEWAY_ID" to "gw"), result.env)
         assertEquals("CLOUDFLARE_GATEWAY_ID", ctx.envLookups.single())
@@ -132,8 +122,6 @@ class CatalogProviderAuthTest {
         assertEquals("ambient-key", result.auth.apiKey)
         assertEquals("ZAI_API_KEY", result.source)
     }
-
-    // ---- explicit key/env overrides ----
 
     @Test
     fun `explicit key and env shape cloudflare headers without reading the store`() = runTest {
@@ -162,8 +150,6 @@ class CatalogProviderAuthTest {
         )("cf-explicit-key", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acct-only"))
         assertNull(auth)
     }
-
-    // ---- stored OAuth through a registered flow ----
 
     @Test
     fun `valid stored oauth credential derives auth without refresh`() = runTest {
@@ -194,19 +180,16 @@ class CatalogProviderAuthTest {
         assertEquals(rotated, store.read("codex"), "the refreshed credential must be persisted")
     }
 
-    // ---- naming and composition shape ----
-
     @Test
     fun `api key auth name uses the catalog label verbatim`() {
-        // pi's auth names like "Anthropic API key" already carry the suffix;
-        // appending would yield "Anthropic API key API key".
+        // pi's auth names already carry the suffix; appending would yield
+        // "Anthropic API key API key".
         assertEquals("Z.AI API key", CatalogApiKeyAuth(TestCatalogs.ZAI).name)
         assertEquals("Cloudflare API key", CatalogApiKeyAuth(TestCatalogs.CLOUDFLARE).name)
     }
 
     @Test
     fun `api key auth name falls back to provider name plus API key without a label`() {
-        // Label-less catalog entry: pi's envApiKeyAuth names are "<provider> API key".
         val unlabeled = CatalogProvider(
             id = "unlabeled",
             name = "Unlabeled",
@@ -221,16 +204,14 @@ class CatalogProviderAuthTest {
 
     @Test
     fun `oauth-only promptless provider has no api key handler`() = runTest {
-        // Pi's openai-codex carries no apiKey auth: a prompt-less catalog
-        // provider must expose ProviderAuth.apiKey == null, and a stray stored
-        // API-key credential resolves as unconfigured (no matching handler).
+        // pi's openai-codex carries no apiKey auth: stored or explicit
+        // API-key credentials have no handler to match and resolve unconfigured.
         val auth = CatalogProviderAuth(codex)
         assertNull(auth.apiKey)
 
         val store = InMemoryCredentialStore()
         store.modify("codex") { ApiKeyCredential(key = "stray-key") }
         assertNull(resolveProviderAuth(CatalogAuthProviderRef(codex), store, NoopAuthContext))
-        // Even an explicit key override has no apiKey handler to shape it.
         assertNull(
             resolveProviderAuth(
                 CatalogAuthProviderRef(codex),
@@ -246,8 +227,6 @@ class CatalogProviderAuthTest {
         assertNull(CatalogProviderAuth(codex).apiKey)
         assertTrue(CatalogProviderAuth(TestCatalogs.ZAI).apiKey != null)
     }
-
-    // ---- mismatched/unregistered OAuth ----
 
     @Test
     fun `stored oauth credential without a registered flow resolves unconfigured`() = runTest {
@@ -269,8 +248,6 @@ class CatalogProviderAuthTest {
         assertEquals("zai-key", result.auth.apiKey)
         assertEquals("stored credential", result.source)
     }
-
-    // ---- error and cancellation safety ----
 
     @Test
     fun `failing oauth refresh surfaces as a ModelsError oauth failure`() = runTest {

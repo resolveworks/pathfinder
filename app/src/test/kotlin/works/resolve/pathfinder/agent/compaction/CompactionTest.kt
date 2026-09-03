@@ -19,13 +19,6 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/**
- * Ports of the pure-scope cases from pi's
- * packages/agent/test/harness/compaction.test.ts. Test data builders mirror
- * the upstream helpers adapted to pathfinder types; cases for LLM-calling
- * parts (generateSummary/prepareCompaction/compact) are out of scope for this
- * chunk.
- */
 class CompactionTest {
 
     private var nextId = 0
@@ -59,8 +52,6 @@ class CompactionTest {
 
     @Test
     fun `calculates total context tokens from usage`() {
-        // calculateContextTokens is reused from ai.utils.TokenEstimate; same
-        // expectations as upstream.
         assertEquals(1800, calculateContextTokens(createMockUsage(1000, 500, 200, 100)))
         assertEquals(0, calculateContextTokens(createMockUsage(0, 0, 0, 0)))
     }
@@ -94,10 +85,6 @@ class CompactionTest {
 
     @Test
     fun `covers cut-point and turn-start edge cases`() {
-        // Upstream subcases using thinking_level/model_change/branch_summary/
-        // compaction entries are omitted: those SessionEntry kinds do not
-        // exist in pathfinder yet (see Compaction.kt adaptation notes).
-
         val toolResult = createMessageEntry(
             ToolResultMessage(
                 toolCallId = "call-1",
@@ -110,11 +97,9 @@ class CompactionTest {
             findCutPoint(listOf(toolResult), 0, 1, 1),
         )
 
-        // findTurnStartIndex returns -1 when no user message precedes.
         val assistantOnly = createMessageEntry(createAssistantMessage("assistant"))
         assertEquals(-1, findTurnStartIndex(listOf(assistantOnly), 0, 0))
 
-        // A cut on an assistant entry splits the turn started by its user message.
         val user = createMessageEntry(createUserMessage("user"))
         val assistant = createMessageEntry(createAssistantMessage("assistant"), user.id)
         val result = findCutPoint(listOf(user, assistant), 0, 2, 1)
@@ -156,8 +141,6 @@ class CompactionTest {
             ),
         )
 
-        // Upstream also covers custom/bashExecution/branchSummary/
-        // compactionSummary roles, which do not exist in pathfinder's Message.
         assertTrue(estimateTokens(UserMessage.ofText("plain user")) > 0)
         assertTrue(estimateTokens(assistantWithThinkingAndTool) > 0)
         assertTrue(estimateTokens(toolResultWithImage) > 1000)

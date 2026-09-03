@@ -3,31 +3,25 @@ package works.resolve.pathfinder.ai.utils
 import com.github.luben.zstd.Zstd
 
 /**
- * Pi's REQUEST_COMPRESSION_ZSTD_LEVEL (openai-codex-responses.ts:54): the
- * Codex backend accepts zstd-compressed request bodies on the SSE responses
- * endpoint (the same endpoint the official Codex client compresses against).
+ * The Codex backend accepts zstd-compressed request bodies on the SSE
+ * responses endpoint (the same endpoint the official Codex client compresses
+ * against).
  */
 internal const val REQUEST_COMPRESSION_ZSTD_LEVEL = 3
 
 /**
- * Pi's compressRequestBodyZstd (openai-codex-responses.ts:208-223): compress
- * the serialized request body at [REQUEST_COMPRESSION_ZSTD_LEVEL] and return
- * the compressed bytes, or null when compression fails — callers fall back to
- * sending the uncompressed JSON, exactly as pi falls back when
- * `zlib.zstdCompressSync` throws. Never throws; never logs the body.
+ * Compresses the serialized request body, or returns null when compression
+ * fails — callers fall back to sending the uncompressed JSON, as pi does when
+ * `zlib.zstdCompressSync` throws.
  *
- * Divergence: pi's other null case — Node's zlib being absent entirely
- * (browser/Vite builds) — is not modeled. zstd-jni is an ordinary runtime
- * dependency on Android; a native-library failure is simply a compression
- * failure that falls back to the uncompressed request.
+ * Divergence: pi's other null case — Node's zlib being absent in browser
+ * builds — is not modeled; zstd-jni is an ordinary Android runtime dependency,
+ * so a native-library failure is just a compression failure.
  *
- * zstd-jni's [Zstd.compress] is a blocking JNI call. It stays synchronous
- * (not `suspend`) because the null-on-failure contract makes it trivially
- * wrappable; callers run it under an injected IO dispatcher instead —
- * OpenAiCodexResponsesApi wraps the call site in
- * `withContext(ioDispatcher)` per the repo's blocking-IO convention. Making
- * this function itself suspend would force a real-dispatch hop into virtual-
- * time-ordered stream tests without changing the fallback semantics.
+ * [Zstd.compress] is a blocking JNI call, but this stays synchronous (not
+ * `suspend`): callers run it under an injected IO dispatcher, and making it
+ * suspend would force a real-dispatch hop into virtual-time-ordered stream
+ * tests without changing the fallback semantics.
  */
 fun compressRequestBodyZstd(
     bodyJson: String,

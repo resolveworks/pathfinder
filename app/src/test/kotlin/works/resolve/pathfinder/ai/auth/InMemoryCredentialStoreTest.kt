@@ -10,7 +10,6 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 
-/** Ports the semantics of pi's `InMemoryCredentialStore` tests + contract. */
 class InMemoryCredentialStoreTest {
 
     @Test
@@ -69,7 +68,6 @@ class InMemoryCredentialStoreTest {
                 }
             }
         }.awaitAll()
-        // Every update saw exactly its predecessor's write (serialized RMW).
         assertEquals((0L..31L).toList(), updates.map { (it as OAuthCredential).expires })
     }
 
@@ -78,7 +76,6 @@ class InMemoryCredentialStoreTest {
         val store = InMemoryCredentialStore()
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         val blocked = async { store.modify("openai") { gate.await(); ApiKeyCredential("k") } }
-        // A different provider can write while `openai`'s modify is in flight.
         store.modify("anthropic") { ApiKeyCredential("other") }
         assertEquals(ApiKeyCredential("other"), store.read("anthropic"))
         gate.complete(Unit)
@@ -112,9 +109,8 @@ class InMemoryCredentialStoreTest {
                 }
             }
         }.awaitAll()
-        // No lost updates within a single modify chain, no exceptions, and the
-        // final state is one of the serialized outcomes (an OAuth credential
-        // left by the last modify, or absent after the last delete+no-write).
+        // The final state legitimately depends on interleaving: an OAuth
+        // credential left by the last modify, or absent after the last delete.
         val final = store.read("openai")
         if (final is OAuthCredential) {
             assertTrue(final.expires in 0..25) // 25 modify operations at most

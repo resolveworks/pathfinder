@@ -7,13 +7,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Record folding of [SessionState], porting pi's state.ts record cases
- * (audit P0-3): openOperationsByLane tracking (operation_started opens,
- * operation_finished closes by runId, abort_requested does not close),
- * findOpenOperations with the limit-2 recovery contract, and the SessionStats
- * usage fold.
- */
 class SessionStateRecordsTest {
 
     private fun started(seq: Long, id: String, lane: String = "main") =
@@ -41,7 +34,6 @@ class SessionStateRecordsTest {
         state.applyMutation(started(1, "op1"))
         assertEquals(listOf("op1"), state.findOpenOperations("main").map { it.id })
 
-        // abort_requested does not close the operation.
         state.applyMutation(
             SessionMutation.Record(LaneRecord.AbortRequestedRecord(id = "a2", lane = "main", seq = 2, timestamp = 2, runId = "op1")),
         )
@@ -50,7 +42,6 @@ class SessionStateRecordsTest {
         state.applyMutation(finished(3, "op1"))
         assertEquals(emptyList<LaneRecord.OperationStartedRecord>(), state.findOpenOperations("main"))
 
-        // A finish for an unknown runId is a no-op, not an error (pi's map delete).
         state.applyMutation(finished(4, "ghost"))
         assertEquals(4, state.records().size)
     }
@@ -62,13 +53,12 @@ class SessionStateRecordsTest {
         state.applyMutation(started(2, "op2"))
         state.applyMutation(started(3, "op3"))
         state.applyMutation(finished(4, "op3"))
-        // Two open operations is the corruption signal; newest first.
+        // Two open operations is the corruption signal.
         assertEquals(listOf("op2", "op1"), state.findOpenOperations("main").map { it.id })
         assertEquals(listOf("op2", "op1"), state.findOpenOperations("main", limit = 2).map { it.id })
         assertEquals(listOf("op2"), state.findOpenOperations("main", limit = 1).map { it.id })
         assertFailsWith<SessionError> { state.findOpenOperations("main", limit = 0); Unit }
         assertFailsWith<SessionError> { state.findOpenOperations("main", limit = -1); Unit }
-        // Unknown lanes are simply empty (pi's map lookup).
         assertEquals(emptyList<LaneRecord.OperationStartedRecord>(), state.findOpenOperations("ghost"))
     }
 
@@ -84,14 +74,12 @@ class SessionStateRecordsTest {
         state.applyMutation(usageRecord(2, usage(cacheRead = 100, cacheWrite = 20, input = 10, totalTokens = 130, costTotal = 0.1)))
         state.applyMutation(usageRecord(3, usage(cacheRead = 1, cacheWrite = 2, input = 3, totalTokens = 6, costTotal = 0.2)))
 
-        // messageCount counts message entries; tokens/cost sum usage records
-        // (cacheRead cached, input + cacheWrite uncached).
+        // cacheRead folds into cachedTokens; input + cacheWrite into uncachedTokens.
         assertEquals(
             SessionStats(messageCount = 1, cachedTokens = 101, uncachedTokens = 35, totalTokens = 136, costTotal = 0.30000000000000004),
             state.stats(),
         )
         assertEquals(1, state.messageCount())
-        // Non-usage records do not touch the fold.
         state.applyMutation(started(4, "op1"))
         assertEquals(136L, state.stats().totalTokens)
     }
@@ -107,8 +95,7 @@ class SessionStateRecordsTest {
         assertEquals("later-entry", open.sourceLeafId)
         assertEquals(OperationIntent.Kind.COMPACTION, open.intent.kind)
         assertTrue(open.intent.payload["resultEntryId"]!!.toString().contains("e9"))
-        // The record references an entry that does not exist (yet) — legal
-        // per pi's invariants; the fold does not validate it.
+        // "later-entry" does not exist (yet); the fold never validates record payload references.
         assertEquals(record, state.records().single())
     }
 }

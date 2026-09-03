@@ -15,13 +15,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
-/**
- * The lane-record surface of [SessionStore] (audit P0-3): appendRecord
- * persistence with storage-assigned seq/timestamp, the single-open-operation
- * invariant, recovery of open operations across reload (the limit-2
- * contract), the stats fold, and the entry/record ordering — a record may
- * precede, in seq order, the entry its sourceLeafId names.
- */
 class SessionStoreRecordsTest {
 
     @get:Rule
@@ -62,7 +55,6 @@ class SessionStoreRecordsTest {
         )
         assertEquals(4L, finished.seq)
 
-        // A fresh store (process death) replays the records; the lane is idle again.
         val reopened = newStore()
         assertEquals(emptyList<LaneRecord.OperationStartedRecord>(), reopened.openOperations(session.id, "main", null))
         assertEquals(0, reopened.load(session.id)!!.entries.size)
@@ -73,8 +65,6 @@ class SessionStoreRecordsTest {
         val store = newStore()
         val session = store.create("t")
 
-        // An interrupted run: operation_started with no finish. A fresh
-        // store (process death) reads it back — the recovery contract.
         store.appendRecord(
             session.id,
             LaneRecord.OperationStartedRecord(id = "op1", lane = "main", sourceLeafId = null, intent = OperationIntent.run()),
@@ -82,7 +72,6 @@ class SessionStoreRecordsTest {
         val reopened = newStore()
         assertEquals(listOf("op1"), reopened.openOperations(session.id, "main", 2).map { it.id })
 
-        // Finishing the operation clears it, durably.
         store.appendRecord(
             session.id,
             LaneRecord.OperationFinishedRecord(id = "f1", lane = "main", runId = "op1", outcome = OperationOutcome.COMPLETED),
@@ -105,8 +94,6 @@ class SessionStoreRecordsTest {
             )
         }
         assertTrue(error.message!!.contains("already has an open operation"))
-        // The rejected start never persisted; the lane still holds exactly
-        // the one open operation.
         assertEquals(1, store.openOperations(session.id, "main", 2).size)
     }
 
@@ -115,20 +102,14 @@ class SessionStoreRecordsTest {
         val store = newStore()
         val session = store.create("t")
 
-        // The conversation holds an entry that has not been saved yet; the
-        // producer records operation_started naming it as sourceLeafId
-        // immediately (pi's invariants permit forward references).
         val conversation = Conversation(listOf(userEntry("u1", null, "hi")), "u1")
         store.appendRecord(
             session.id,
             LaneRecord.OperationStartedRecord(id = "op1", lane = "main", sourceLeafId = "u1", intent = OperationIntent.run()),
         )
-        // The buffered entry syncs afterwards and takes a later seq.
         val saved = store.save(session.copy(entries = conversation.entries, leafId = conversation.leafId))
         assertEquals(1, saved.entries.size)
 
-        // Replay validates both orderings: the record's seq precedes the
-        // entry's, and no validation rejects the forward reference.
         val reopened = newStore()
         val reloaded = reopened.load(session.id)!!
         assertEquals("u1", reloaded.leafId)
@@ -207,7 +188,6 @@ class SessionStoreRecordsTest {
         }
         assertEquals(SessionErrorCode.INVALID_PAYLOAD, error.code)
         assertEquals("Durable payload contains a non-finite number", error.message)
-        // Nothing was appended for the rejected mutation.
         assertEquals(1, store.getLog(session.id).size)
     }
 

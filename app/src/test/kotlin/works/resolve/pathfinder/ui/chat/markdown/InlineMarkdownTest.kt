@@ -52,7 +52,6 @@ class InlineMarkdownTest {
     fun nestedStrongInsideEmphasisStacksSpans() {
         val result = render("*a **b** c*")
         assertEquals("a b c", result.text)
-        // "b" at 2..3 gets both italic (outer) and bold (inner) spans.
         val overlapping = result.spanStyles.filter { it.start <= 2 && it.end >= 3 }
         assertEquals(2, overlapping.size)
         val italics = result.spanStyles.filter { it.item.fontStyle == FontStyle.Italic }

@@ -32,11 +32,6 @@ import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 
-/**
- * Canned transport-level tests for [OpenAiResponsesApi], ported alongside pi's
- * openai-responses.ts (compat/payload/header behavior from
- * openai-responses-compat.test.ts and the e2e cache-affinity tests).
- */
 class OpenAiResponsesApiTest {
 
     private val model = Model(
@@ -345,7 +340,6 @@ class OpenAiResponsesApiTest {
         assertEquals(10, done.message.usage.input)
         assertEquals(5, done.message.usage.output)
         assertEquals(0.00001, done.message.usage.cost.output, 1e-9)
-        // Start arrives before block events.
         assertIs<AssistantMessageEvent.Start>(events.first())
     }
 }

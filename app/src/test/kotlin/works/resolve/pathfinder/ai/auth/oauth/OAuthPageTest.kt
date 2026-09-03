@@ -5,12 +5,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/**
- * Tests for the OAuth result pages, ported from pi
- * `packages/ai/src/auth/oauth/oauth-page.ts`. Upstream has no dedicated tests
- * for `oauth-page.ts`; these assert the template structure and the escaping
- * that pi's callback servers depend on.
- */
 class OAuthPageTest {
 
     @Test

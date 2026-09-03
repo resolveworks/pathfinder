@@ -40,16 +40,13 @@ android {
 }
 
 dependencies {
-    // AndroidX base
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel)
 
-    // Navigation 3 (Compose-first navigation)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
 
-    // Compose (versions managed by the BOM)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.tooling.preview)
@@ -57,16 +54,14 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.core)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
-    // Coroutines (used directly by production code; version shared with coroutines-test)
     implementation(libs.kotlinx.coroutines.android)
 
-    // OAuth login URLs open in a Custom Tab (ui/CustomTab.kt)
+    // OAuth login URLs open in a Custom Tab.
     implementation(libs.androidx.browser)
 
-    // Settings persistence
     implementation(libs.androidx.datastore.preferences)
 
-    // HTTP + JSON for the native provider layer (works.resolve.pathfinder.ai)
+    // HTTP + JSON for the native provider layer.
     implementation(libs.okhttp)
     implementation(libs.okhttp.sse)
     implementation(libs.kotlinx.serialization.json)
@@ -76,13 +71,12 @@ dependencies {
     implementation(libs.zstd.jni) { artifact { type = "aar" } }
     testImplementation(libs.zstd.jni)
 
-    // Markdown parsing for message rendering (CommonMark + GFM extensions)
+    // Markdown parsing for message rendering.
     implementation(libs.commonmark)
     implementation(libs.commonmark.ext.gfm.tables)
     implementation(libs.commonmark.ext.gfm.strikethrough)
     implementation(libs.commonmark.ext.task.list.items)
 
-    // Unit tests
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)

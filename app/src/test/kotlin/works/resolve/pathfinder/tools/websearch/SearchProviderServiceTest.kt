@@ -26,7 +26,6 @@ class SearchProviderServiceTest {
         SearchProviderService(store).saveApiKey("brave", "key-1")
         val stored = store.read(SearchProviderService.BRAVE_CREDENTIAL_ID)
         assertTrue(stored is ApiKeyCredential && stored.key == "key-1")
-        // Not stored under a bare provider id.
         assertNull(store.read("brave"))
     }
 

@@ -19,9 +19,8 @@ import works.resolve.pathfinder.telemetry.SpanStatus
 import works.resolve.pathfinder.telemetry.attr
 
 /**
- * [EncryptedCredentialStore] semantics tested on the JVM through the pure
- * (dir + cipher function) constructor; the Android Keystore path is a thin
- * production wiring of the same functions.
+ * The Android Keystore path is a thin production wiring of the same pure
+ * (dir + cipher function) constructor these tests exercise.
  */
 class EncryptedCredentialStoreTest {
 
@@ -124,7 +123,6 @@ class EncryptedCredentialStoreTest {
         writeRaw(dir, "zai", "{bad}") // object-looking malformed record
         assertFailsWith<CredentialFormatException> { store.list() }
 
-        // A decrypt failure (storage-level) also rejects.
         val failing = EncryptedCredentialStore(
             dir = dir,
             encrypt = { it },
@@ -174,13 +172,11 @@ class EncryptedCredentialStoreTest {
             diagnostics = PathfinderDiagnostics(telemetry),
         )
 
-        // Absent file: ok span with an absent outcome.
         assertNull(failing.read("openai"))
         val absent = telemetry.getSpans().single()
         assertEquals("pf.credentials.read", absent.name)
         assertEquals(attr("absent"), absent.attributes["pf.credentials.outcome"])
 
-        // Decrypt failure: error status with the exception type only, never the message.
         writeRaw(dir, "zai", "{}")
         assertFailsWith<IllegalStateException> { failing.read("zai") }
         val readFailed = telemetry.getSpans().last()
@@ -201,7 +197,6 @@ class EncryptedCredentialStoreTest {
             diagnostics = PathfinderDiagnostics(telemetry),
         )
 
-        // Malformed stored credential: decode span rejects with the type only.
         writeRaw(dir, "openai", "sk-legacy")
         assertFailsWith<CredentialFormatException> { store.read("openai") }
         val decodeFailed = telemetry.getSpans().last()
@@ -210,7 +205,6 @@ class EncryptedCredentialStoreTest {
         assertEquals("CredentialFormatException", decodeError.error?.name)
         assertEquals("", decodeError.error?.message)
 
-        // Persist failure: write span rejects with the type only.
         val failingWrite = EncryptedCredentialStore(
             dir = dir,
             encrypt = { error("keystore failure") },

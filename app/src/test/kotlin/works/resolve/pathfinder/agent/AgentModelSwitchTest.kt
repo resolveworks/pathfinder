@@ -15,10 +15,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Model-as-state seam tests for [Agent] (pi agent.ts:76 `_state.model`,
- * createLoopConfig agent.ts:509-515, handleRunFailure agent.ts:515): the
- * selected model is AgentState, each prompt snapshots it at run start, and
- * setModel during a run affects only subsequent runs.
+ * The selected model is agent state: each prompt snapshots it at run start,
+ * so a mid-run switch affects only subsequent runs.
  */
 class AgentModelSwitchTest {
 
@@ -61,7 +59,6 @@ class AgentModelSwitchTest {
         agent.setModel(modelB)
         assertEquals(modelB, agent.model)
         assertEquals(modelB, agent.state.value.model)
-        // Transcript untouched by the switch.
         assertEquals(2, agent.state.value.messages.size)
     }
 
@@ -71,8 +68,6 @@ class AgentModelSwitchTest {
         lateinit var agent: Agent
         agent = Agent(model = modelA) { requested, _, _ ->
             streamedModels.add(requested)
-            // Switch mid-run, exactly like a live model switch during a
-            // response: the current run must keep streaming from modelA.
             agent.setModel(modelB)
             okStream(requested)
         }
@@ -80,7 +75,6 @@ class AgentModelSwitchTest {
         agent.prompt(listOf(UserMessage.ofText("hi")))
 
         assertEquals(listOf(modelA), streamedModels)
-        // The switch took effect for state and the next run.
         assertEquals(modelB, agent.model)
         agent.prompt(listOf(UserMessage.ofText("again")))
         assertEquals(listOf(modelA, modelB), streamedModels)
@@ -99,16 +93,15 @@ class AgentModelSwitchTest {
         val second = messages[3] as AssistantMessage
         assertEquals(modelB.id, second.model)
         assertEquals(modelB.provider, second.provider)
-        // First response still present, from the original model.
         val first = messages[1] as AssistantMessage
         assertEquals(modelA.provider, first.provider)
     }
 
     @Test
     fun `a facade-level failure after a mid-run switch is labeled with the live model`() = runTest {
-        // pi's handleRunFailure reads `this._state.model` (agent.ts:515) at
-        // failure time, so a mid-run switch relabels the synthesized error
-        // message even though the failed run used its start-of-run snapshot.
+        // Failure labeling reads the live model at failure time (pi's
+        // handleRunFailure), so the mid-run switch relabels the synthesized
+        // error message even though the failed run used its snapshot model.
         lateinit var agent: Agent
         agent = Agent(model = modelA) { _, _, _ ->
             agent.setModel(modelB)

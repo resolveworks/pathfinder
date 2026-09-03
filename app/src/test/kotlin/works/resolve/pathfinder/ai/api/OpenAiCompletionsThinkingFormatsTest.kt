@@ -17,11 +17,6 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/**
- * Mirrors pi's thinking-format wire semantics (openai-completions.ts branches
- * and baseten-models.test.ts / together-models.test.ts assertions) for every
- * format carried by the generated catalog.
- */
 class OpenAiCompletionsThinkingFormatsTest {
 
     private fun model(
@@ -54,8 +49,6 @@ class OpenAiCompletionsThinkingFormatsTest {
         OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = effort),
     )
 
-    // ---- qwen ----
-
     @Test
     fun `qwen enables thinking and maps effort`() {
         val b = body(model(ThinkingFormat.QWEN), ModelThinkingLevel.HIGH)
@@ -76,8 +69,6 @@ class OpenAiCompletionsThinkingFormatsTest {
         assertEquals(true, b["enable_thinking"]!!.jsonPrimitive.booleanOrNull)
         assertFalse(b.containsKey("reasoning_effort"))
     }
-
-    // ---- deepseek ----
 
     @Test
     fun `deepseek enabled thinking`() {
@@ -126,8 +117,6 @@ class OpenAiCompletionsThinkingFormatsTest {
         assertFalse(b.containsKey("reasoning_effort"))
     }
 
-    // ---- openrouter ----
-
     @Test
     fun `openrouter sends mapped effort`() {
         val b = body(
@@ -169,8 +158,6 @@ class OpenAiCompletionsThinkingFormatsTest {
         assertFalse(b.containsKey("reasoning_effort"))
     }
 
-    // ---- together ----
-
     @Test
     fun `together enables reasoning with effort`() {
         val b = body(
@@ -197,8 +184,6 @@ class OpenAiCompletionsThinkingFormatsTest {
         assertEquals(true, b["reasoning"]!!.jsonObject["enabled"]!!.jsonPrimitive.booleanOrNull)
         assertFalse(b.containsKey("reasoning_effort"))
     }
-
-    // ---- ant-ling ----
 
     @Test
     fun `ant-ling sends reasoning only with explicit mapped effort`() {
@@ -230,8 +215,6 @@ class OpenAiCompletionsThinkingFormatsTest {
         )
         assertFalse(b.containsKey("reasoning"))
     }
-
-    // ---- baseten (mirrors pi's baseten-models.test.ts) ----
 
     private fun basetenModel() = model(
         ThinkingFormat.BASETEN,

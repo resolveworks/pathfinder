@@ -3,7 +3,6 @@ package works.resolve.pathfinder.ai.utils
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-/** Options toString redaction: never secret values, maps as keys only. */
 class OptionsToStringTest {
 
     @Test

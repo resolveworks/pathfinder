@@ -5,10 +5,10 @@ import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 
 /**
- * Creates [ChatApi] implementations for the API ids in Pathfinder's generated
- * model catalog (pi: providers register `Record<ApiId, Api>` maps). Catalog
- * generation must select only ids registered here. Unknown ids return null so
- * a catalog/runtime mismatch produces the models layer's unsupported-API error.
+ * Creates [ChatApi] implementations for the API ids in the generated model
+ * catalog; catalog generation must select only ids registered here. Unknown
+ * ids return null so a catalog/runtime mismatch produces the models layer's
+ * unsupported-API error.
  */
 object ChatApiRegistry {
 
@@ -20,7 +20,6 @@ object ChatApiRegistry {
     const val OPENAI_CODEX_RESPONSES = "openai-codex-responses"
     const val AZURE_OPENAI_RESPONSES = "azure-openai-responses"
 
-    /** API ids with a runtime implementation. */
     val SUPPORTED_API_IDS: Set<String> = setOf(
         OPENAI_COMPLETIONS,
         ANTHROPIC_MESSAGES,
@@ -33,7 +32,6 @@ object ChatApiRegistry {
 
     fun isSupported(apiId: String): Boolean = apiId in SUPPORTED_API_IDS
 
-    /** Builds the registered API implementation for [apiId], or null for an unknown id. */
     fun create(
         apiId: String,
         transport: HttpStreamingTransport,
@@ -46,8 +44,6 @@ object ChatApiRegistry {
             GOOGLE_GENERATIVE_AI -> GoogleGenerativeAiApi(transport, retry)
             MISTRAL_CONVERSATIONS -> MistralConversationsApi(transport) // pi: no retry wrapper for Mistral
             OPENAI_RESPONSES -> OpenAiResponsesApi(transport, retry)
-            // Android always wires a WebSocket transport (pi's no-WebSocket
-            // browser runtimes do not exist here); fail fast on missing wiring.
             OPENAI_CODEX_RESPONSES -> OpenAICodexResponsesApi(
                 transport,
                 webSocketTransport = webSocketTransport

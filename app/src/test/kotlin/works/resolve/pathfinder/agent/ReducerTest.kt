@@ -23,11 +23,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Lane-state reducer tests (pi packages/agent/src/harness/reducer.ts; audit
- * P1-5): the idle/suspended fold, every corruption reason the typed record
- * surface can express, and the load-time recovery classification.
- */
 class ReducerTest {
 
     private var nextSeq = 0L
@@ -128,8 +123,6 @@ class ReducerTest {
             e.reason
         }
 
-    // ---- classification (findOpenOperations limit-2 contract) ----
-
     @Test
     fun `classifyLaneRecovery distinguishes idle, suspended, and corrupt`() {
         assertEquals(LaneRecovery.Idle, classifyLaneRecovery(emptyList()))
@@ -146,8 +139,6 @@ class ReducerTest {
             classifyLaneRecovery(listOf(started(), started(id = "op2"))),
         )
     }
-
-    // ---- reduction fold ----
 
     @Test
     fun `idle lane reduces with no operation and no failure`() {
@@ -283,11 +274,8 @@ class ReducerTest {
             ),
         )
         assertEquals("glm-4.6", result.effectiveConfiguration.model!!.modelId)
-        // No thinking_level entry on the path: the harness default survives.
         assertEquals("high", result.effectiveConfiguration.thinkingLevel)
     }
-
-    // ---- corruption reasons ----
 
     @Test
     fun `two open operations are multiple_open_operations`() {
@@ -617,7 +605,6 @@ class ReducerTest {
             ),
         )
         val wrongResult = messageEntry(ToolResultMessage("tc1", "read", listOf(TextContent("x")), timestamp = 2L), id = "r")
-        // A user message occupying the result slot corrupts.
         assertEquals(
             RecordLogCorruptionReason.PROVISIONED_ENTRY_MISMATCH,
             reasonOf {
@@ -644,7 +631,6 @@ class ReducerTest {
                 )
             },
         )
-        // The matching tool-result entry passes.
         validateRecordLog(
             RecordLogSlice(
                 "main",

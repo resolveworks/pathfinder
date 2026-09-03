@@ -24,12 +24,6 @@ import kotlinx.serialization.json.longOrNull
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 
-/**
- * Canned full-stack integration tests: catalog entry -> runtime provider ->
- * Models registry -> OpenAiCompletionsApi -> OkHttpTransport -> MockWebServer.
- * No live credential or network is used; test keys are distinctive values and
- * are never logged.
- */
 class CatalogProviderIntegrationTest {
 
     @Test
@@ -64,14 +58,11 @@ class CatalogProviderIntegrationTest {
 
             val events = runBlocking {
                 models.stream(
-                    // The effective model is the catalog model with the
-                    // normalized base-URL override stamped on (requestModel).
                     TestCatalogs.GLM_4_7.copy(baseUrl = normalizeBaseUrl(server.url("/v4").toString())),
                     Context(messages = listOf(UserMessage.ofText("hi"))),
                 ).toList()
             }
 
-            // Lifecycle reaches Done with the streamed text and identity.
             assertIs<AssistantMessageEvent.Start>(events.first())
             val done = assertIs<AssistantMessageEvent.Done>(events.last())
             assertEquals(StopReason.STOP, done.reason)
@@ -81,7 +72,6 @@ class CatalogProviderIntegrationTest {
             assertEquals("resp-int", done.message.responseId)
             assertEquals(7, done.message.usage.input)
 
-            // The recorded request hit the overridden base URL with ZAI auth/payload.
             val recorded = server.takeRequest()
             assertEquals("/v4/chat/completions", recorded.path)
             assertEquals("POST", recorded.method)
@@ -137,10 +127,8 @@ class CatalogProviderIntegrationTest {
 
             val events = runBlocking {
                 models.stream(
-                    // Placeholder base URL redirected to the mock server; braces
-                    // appended after server.url() so HttpUrl construction does not
-                    // percent-encode them. Placeholders are substituted with the
-                    // resolver's env at request time.
+                    // Braces are appended after server.url() because HttpUrl
+                    // construction would otherwise percent-encode them.
                     entry.model("workers-ai/test-model")!!.copy(
                         baseUrl = server.url("/v1").toString() +
                             "/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat",
@@ -153,8 +141,6 @@ class CatalogProviderIntegrationTest {
             assertEquals(StopReason.STOP, done.reason)
             assertEquals("ok", assertIs<TextContent>(done.message.content.single()).text)
 
-            // Placeholders were substituted into the request URL and the bearer
-            // credential went out on cf-aig-authorization, not Authorization.
             val recorded = server.takeRequest()
             assertEquals(
                 "/v1/acct-123/gw-456/compat/chat/completions",

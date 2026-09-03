@@ -15,13 +15,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
-/**
- * Tests for [ProviderAuthService] and [CatalogApiKeyAuth.login], mirroring
- * pi's `Models.login`/`logout` and `envApiKeyAuth` semantics.
- */
 class ProviderAuthServiceTest {
 
-    /** Records prompts; answers come from a queue of scripted values. */
     private class FakeInteraction(
         val answers: MutableList<String>,
         val events: MutableList<AuthEvent> = mutableListOf(),
@@ -39,7 +34,6 @@ class ProviderAuthServiceTest {
         }
     }
 
-    /** Fake OAuth flow: emits one event, persists nothing itself. */
     private class FakeOAuthAuth(
         override val name: String = "Acme (subscription)",
         override val loginLabel: String? = null,
@@ -56,7 +50,6 @@ class ProviderAuthServiceTest {
         override suspend fun toAuth(credential: OAuthCredential) = ModelAuth(apiKey = credential.access)
     }
 
-    /** Credential store whose writes can be scripted to fail. */
     private class FailingStore(
         private val delegate: CredentialStore = InMemoryCredentialStore(),
         var failModify: Boolean = false,
@@ -214,7 +207,6 @@ class ProviderAuthServiceTest {
             catalog(apiKey = false, oauth = true),
             oauth = FakeOAuthAuth(isSubscription = true),
         ).authMethods("acme")
-        // No loginLabel on the flow: falls back to its name (pi's default).
         assertEquals(listOf(AuthMethodInfo(AuthType.OAUTH, "Acme (subscription)", true)), methods)
     }
 
@@ -298,7 +290,6 @@ class ProviderAuthServiceTest {
             assertEquals("Acme requires a value for ACME_API_KEY", error.message)
         }
         assertEquals(null, store.read("acme"))
-        // Only the first prompt ran before rejection.
         assertEquals(1, interaction.prompts.size)
     }
 
@@ -474,7 +465,6 @@ class ProviderAuthServiceTest {
 
     @Test
     fun `blank answer without prompts script is a login failure not a crash loop`() = runTest {
-        // A provider whose only prompt is answered blank still yields AUTH.
         val singlePrompt = ProviderCatalog(
             listOf(
                 CatalogProvider(

@@ -4,11 +4,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/**
- * Tests for the port of pi's uuidv7 (packages/ai/src/utils/uuid.ts): canonical
- * format, version/variant bits, embeded timestamp, and same-millisecond
- * monotonicity from the seeded sequence counter.
- */
 class Uuidv7Test {
 
     @Test

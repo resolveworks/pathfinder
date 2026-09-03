@@ -4,11 +4,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-/**
- * The ThinkingLevel ↔ ModelThinkingLevel mappers mirror pi's
- * `"off" | ThinkingLevel` union (types.ts:83-85): mapping up is total,
- * mapping down yields null for OFF.
- */
 class ThinkingLevelMappersTest {
 
     @Test
@@ -37,11 +32,6 @@ class ThinkingLevelMappersTest {
         }
     }
 
-    /**
-     * The wire names are pi's level strings (the persisted
-     * thinking_level_change entry value and settings value); decode is an
-     * exhaustive when with a null default, never valueOf on stored input.
-     */
     @Test
     fun wireNamesRoundTripAndUnknownWireDecodesToNull() {
         val piWireNames = mapOf(

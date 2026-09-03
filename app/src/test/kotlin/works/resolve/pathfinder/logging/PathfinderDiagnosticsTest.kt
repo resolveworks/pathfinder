@@ -13,13 +13,6 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
-/**
- * Facade-level policy tests for the app-owned diagnostics boundary: type-only
- * error statuses (short class names, empty messages), the central
- * cancellation-settles-ok policy, fatal-error propagation on the summary
- * path, and the passivity/identity contract of the swallowed-failure
- * recorder.
- */
 class PathfinderDiagnosticsTest {
 
     private fun newFacade() = InMemoryTelemetryContext().let { it to PathfinderDiagnostics(it) }
@@ -83,8 +76,8 @@ class PathfinderDiagnosticsTest {
         assertEquals("IllegalStateException", status.error?.name)
         assertEquals(attr("skipped"), skipped.attributes["pf.session.outcome"])
 
-        // Fatal Throwables (Errors) are recorded but must propagate: the
-        // listing swallows Exceptions only, exactly like the store did.
+        // The listing catches Exceptions only, so an Error swallowed here
+        // would be silently lost.
         val (fatalTelemetry, fatalDiagnostics) = newFacade()
         val fatal = AssertionError("fatal")
         val thrown = assertFailsWith<AssertionError> {
@@ -100,7 +93,7 @@ class PathfinderDiagnosticsTest {
         val (telemetry, diagnostics) = newFacade()
         val cause = RuntimeException("provider body: <secret>")
 
-        // Passive: recording never throws, even though the same cause is
+        // Recording never throws, even though the same cause is deliberately
         // thrown through the span for backend stack frames.
         diagnostics.chatError("Could not complete sign-in", cause)
 

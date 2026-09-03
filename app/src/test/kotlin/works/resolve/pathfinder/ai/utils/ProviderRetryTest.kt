@@ -58,7 +58,6 @@ class ProviderRetryTest {
 
     @Test
     fun `honors x-should-retry header`() = runTest {
-        // 400 is normally final, but the header overrides it.
         run {
             val h = Harness()
             var calls = 0
@@ -69,7 +68,6 @@ class ProviderRetryTest {
             }
             assertEquals(2, calls)
         }
-        // 500 is normally retryable, but the header vetoes it.
         run {
             val h = Harness()
             var calls = 0
@@ -157,12 +155,9 @@ class ProviderRetryTest {
     @Test
     fun `parses numeric prefixes like parseFloat`() = runTest {
         val h = Harness()
-        // pi uses Number.parseFloat, which accepts trailing junk (e.g. "1200ms").
         assertEquals(1200L, h.retry.retryDelayMs(httpError(429, mapOf("retry-after-ms" to listOf("1200ms"))), 0, 60_000))
-        // Unparseable retry-after-ms falls through to retry-after.
         val error = httpError(429, mapOf("Retry-After-Ms" to listOf("soon"), "Retry-After" to listOf("2")))
         assertEquals(2000L, h.retry.retryDelayMs(error, 0, 60_000))
-        // NaN retry-after-ms (pi guards with Number.isNaN) falls through too.
         val nan = httpError(429, mapOf("Retry-After-Ms" to listOf("NaN"), "Retry-After" to listOf("2")))
         assertEquals(2000L, h.retry.retryDelayMs(nan, 0, 60_000))
     }
@@ -195,7 +190,6 @@ class ProviderRetryTest {
     @Test
     fun `parses HTTP-date retry-after relative to injectable clock`() = runTest {
         val h = Harness()
-        // Clock is at 1_000_000 ms; the date is 1s in the future.
         val future = java.time.Instant.ofEpochMilli(1_000_000L + 1000)
             .atZone(java.time.ZoneOffset.UTC)
             .format(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)

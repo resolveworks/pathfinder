@@ -28,12 +28,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
 
-/**
- * Canned streaming tests for the Google Generative AI adapter, ported from
- * pi's google-generative-ai.ts stream loop (exercised upstream via
- * test/google-thinking-signature.test.ts, google-raw-stop-reason.test.ts,
- * and the SDK-mocked adapter tests). No network or live credentials.
- */
 class GoogleGenerativeAiStreamTest {
 
     private val model = geminiModel()
@@ -108,7 +102,6 @@ class GoogleGenerativeAiStreamTest {
         val thinkingStarts = events.filterIsInstance<AssistantMessageEvent.ThinkingStart>()
         val thinkingEnds = events.filterIsInstance<AssistantMessageEvent.ThinkingEnd>()
         val textEnd = events.filterIsInstance<AssistantMessageEvent.TextEnd>().single()
-        // Blocks: thinking(0), text(1), thinking(2); each start/end pairs up.
         assertEquals(listOf(0, 2), thinkingStarts.map { it.contentIndex })
         assertEquals("thinking hard", thinkingEnds[0].content)
         assertEquals(0, thinkingEnds[0].contentIndex)
@@ -373,14 +366,13 @@ class GoogleGenerativeAiStreamTest {
             ).toList()
             val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
             val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
-            // pi's getThinkingLevel: Gemini 3 Pro has no MINIMAL/LOW support below LOW.
+            // Gemini 3 Pro has no MINIMAL level: minimal and low both floor to LOW.
             assertEquals("LOW", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
         }
     }
 
     @Test
     fun `gemini3 flash maps minimal and low levels and disables to MINIMAL`() = runTest {
-        // Enabled levels resolve through the flash mapping (minimal stays MINIMAL).
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
         api(transport).streamSimple(
@@ -395,8 +387,8 @@ class GoogleGenerativeAiStreamTest {
                 .jsonPrimitive.content,
         )
 
-        // Thinking-off: pi's getDisabledThinkingConfig uses the lowest
-        // supported level without includeThoughts for Gemini 3 Flash.
+        // Thinking-off still sends the lowest supported level (Gemini 3 Flash
+        // cannot fully disable thinking) without includeThoughts.
         val disableTransport = FakeTransport()
         disableTransport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
         api(disableTransport).streamSimple(
@@ -473,8 +465,6 @@ class GoogleGenerativeAiStreamTest {
                 headers = mapOf("User-Agent" to "custom-agent"),
             ),
         ).toList()
-        // pi's google-raw-stop-reason.test.ts:191 — explicit headers win over
-        // the default User-Agent.
         assertEquals("custom-agent", transport.requests.single().headers["User-Agent"])
     }
 
@@ -492,18 +482,16 @@ class GoogleGenerativeAiStreamTest {
             .stream(model, context, GoogleGenerativeAiApi.GoogleOptions(apiKey = "k"))
             .take(3) // Start, TextStart, first TextDelta
             .toList()
-        // KDoc'd abort divergence (GoogleStreamEngine): coroutine
-        // cancellation propagates and no Error event is emitted.
         assertTrue(events.none { it is AssistantMessageEvent.Error }, "cancellation must not emit Error")
         assertTrue(transport.cancelled.value, "transport must observe cancellation")
     }
 
     @Test
     fun `usage counts use shared lenient int semantics`() = runTest {
-        // kotlinx numeric semantics via JsonDom (standard for the cluster):
-        // quoted numerals parse; a float yields null (-> 0) rather than
-        // truncating; missing fields are 0. Google sends proper JSON numbers
-        // here, so the float rejection is tightening, not a regression.
+        // Deliberately awkward fixture: quoted numerals parse, a float yields
+        // null (-> 0) rather than truncating, and missing fields are 0. Google
+        // sends proper JSON numbers here, so the float rejection is tightening,
+        // not a regression.
         val transport = FakeTransport()
         transport.enqueueResponse(
             sse(

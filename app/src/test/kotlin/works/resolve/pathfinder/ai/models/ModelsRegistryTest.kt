@@ -17,11 +17,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 
-/**
- * Registry integration tests: the real Z.AI provider wired through
- * OpenAiCompletionsApi and a scripted transport, covering key resolution
- * (explicit vs resolver vs missing) and catalog lookups.
- */
+/** Real Z.AI provider configuration against a scripted [FakeTransport]; no network I/O. */
 class ModelsRegistryTest {
 
     private fun models(transport: FakeTransport, storedKey: String? = null): Models =

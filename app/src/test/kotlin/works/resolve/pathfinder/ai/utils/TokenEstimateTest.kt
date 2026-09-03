@@ -31,7 +31,6 @@ class TokenEstimateTest {
         val user = UserMessage(
             listOf(TextContent("1234"), ImageContent(data = "x", mimeType = "image/png")),
         )
-        // 4 text chars + 4800 image chars = 4804 / 4 = 1201
         assertEquals(1201, estimateMessageTokens(user))
 
         val result = ToolResultMessage("id", "tool", listOf(TextContent("ab")))
@@ -49,7 +48,6 @@ class TokenEstimateTest {
             provider = "zai",
             model = "glm",
         )
-        // name 11 + arguments 13 + text 4 = 28 -> ceil(28/4) = 7
         assertEquals(7, estimateMessageTokens(assistant))
     }
 
@@ -107,14 +105,11 @@ class TokenEstimateTest {
         val laterSummary = UserMessage.ofText("summary", 5L) // inserted after the response
         val estimate = estimateContextTokens(Context(messages = listOf(laterSummary, assistant)))
         assertNull(estimate.lastUsageIndex)
-        // Both messages estimated: ceil(7/4) + 0
         assertEquals(2, estimate.tokens)
     }
 
     @Test
     fun `usage applies again after a newer assistant response`() {
-        // Mirrors pi's context-estimate test: a stale usage is ignored, but a
-        // later assistant response with its own usage describes the new prefix.
         fun assistant(timestamp: Long, totalTokens: Int) = AssistantMessage(
             content = listOf(TextContent("kept")),
             api = "openai-completions",
@@ -149,15 +144,11 @@ class TokenEstimateTest {
         )
         val estimate = estimateContextTokens(context)
         assertNull(estimate.lastUsageIndex)
-        // tools stringified contributes ceil(len/4)
         assertEquals(1 + 2 + estimateTextTokens(context.tools.toString()), estimate.tokens)
     }
 
     @Test
     fun `tools introduced after the usage point are re-added via addedToolNames`() {
-        // pi's estimate.ts estimateContextTokens: when usage applies, tools
-        // added by trailing tool results (addedToolNames) are re-added on top
-        // of the reported prefix.
         val assistant = AssistantMessage(
             content = emptyList(),
             api = "openai-completions",
@@ -195,11 +186,8 @@ class TokenEstimateTest {
         val model = TestCatalogs.GLM_5_2
         val context = Context(messages = listOf(UserMessage.ofText("hi"))) // 1 token
 
-        // Room exists: explicit value retained.
         assertEquals(500, clampMaxTokensToContext(model, context, 500))
-        // Oversized: window 1_000_000 - 1 - 4096.
         assertEquals(1_000_000 - 1 - 4096, clampMaxTokensToContext(model, context, 1_000_000))
-        // Constrained window clamps to the minimum of 1.
         assertEquals(1, clampMaxTokensToContext(model.copy(contextWindow = 4097), context, 5000))
     }
 

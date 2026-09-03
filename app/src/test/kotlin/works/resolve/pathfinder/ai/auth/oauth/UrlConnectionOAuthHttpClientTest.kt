@@ -13,10 +13,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 
-/**
- * Loopback-only tests for the JDK HTTP boundary. No external network is
- * touched: a local [ServerSocket] stands in for the OAuth endpoint.
- */
 class UrlConnectionOAuthHttpClientTest {
 
     private fun request(url: String, timeoutMs: Int = 5_000) = OAuthHttpRequest(
@@ -139,7 +135,6 @@ class UrlConnectionOAuthHttpClientTest {
         assertTrue("frag-" !in rendered)
         assertTrue("url=https://openrouter.ai/api/v1/auth/keys" in rendered)
 
-        // User-info credentials must not surface either.
         val withUserInfo = OAuthHttpRequest(
             "POST",
             "https://user:pass123@openrouter.ai/api/v1/auth/keys",
@@ -151,7 +146,6 @@ class UrlConnectionOAuthHttpClientTest {
         assertTrue("user:pass123@" !in withUserInfo.toString())
         assertTrue("url=https://openrouter.ai/api/v1/auth/keys" in withUserInfo.toString())
 
-        // Non-default ports survive; unparseable URLs degrade to a generic marker.
         val ported = OAuthHttpRequest(
             "POST",
             "http://127.0.0.1:8080/callback?code=$secret",

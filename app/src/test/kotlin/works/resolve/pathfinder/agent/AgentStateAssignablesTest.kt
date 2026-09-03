@@ -19,16 +19,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Assignable-agent-state seam tests for [Agent.setTools] and
- * [Agent.setSystemPrompt] (pi's copying `tools` setter in
- * createMutableAgentState, agent.ts:68–96, and the `agent.state.tools` /
- * `agent.state.systemPrompt` assignments in coding-agent's
- * setActiveToolsByName, agent-session.ts:971–984): each assignment copies the
- * caller's list, and every run snapshots both from state at start
- * (createContextSnapshot, agent.ts:437–443), so mid-run assignment affects
- * only later runs.
- */
 class AgentStateAssignablesTest {
 
     private val model = Model(
@@ -85,8 +75,6 @@ class AgentStateAssignablesTest {
         lateinit var agent: Agent
         agent = Agent(model = model, streamFn = { _, context, _ ->
             captured.add(context)
-            // Assign mid-run, exactly like setActiveToolsByName (agent-session.ts:971)
-            // between turns: the current run must keep its start-of-run snapshot.
             agent.setTools(listOf(fakeTool("late")))
             okStream()
         })
@@ -103,8 +91,6 @@ class AgentStateAssignablesTest {
         val agent = Agent(model = model, streamFn = { _, _, _ -> okStream() })
         val tools = mutableListOf(fakeTool("a"))
         agent.setTools(tools)
-        // Pi's copying setter (`tools = nextTools.slice()`, agent.ts:90-92):
-        // later caller mutation never reaches agent state.
         tools.add(fakeTool("b"))
         assertEquals(1, agent.state.value.tools.size)
     }
@@ -157,8 +143,6 @@ class AgentStateAssignablesTest {
 
     @Test
     fun `prompt snapshots messages and tools together from state`() = runTest {
-        // Sanity: the run start snapshot composes — transcript plus tool set
-        // both come from AgentState (createContextSnapshot, agent.ts:437-443).
         val captured = CopyOnWriteArrayList<Context>()
         val agent = Agent(model = model, tools = listOf(fakeTool("initial")), streamFn = { _, context, _ ->
             captured.add(context)

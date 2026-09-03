@@ -10,15 +10,6 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Tests for the ported telemetry contract
- * (`packages/telemetry/src/index.ts` + `memory.ts` and the adapter
- * conformance semantics of `src/testing/conformance.ts`): no-op passthrough,
- * in-memory recording (ids, parents, settle order, snapshots), automatic
- * error statuses, explicit-status precedence and last-write-wins, attribute
- * merging with defensive array copies, event ordering, nested and concurrent
- * child parentage, post-settle passivity, and callback exception identity.
- */
 class TelemetryContractTest {
 
     @Test
@@ -53,7 +44,6 @@ class TelemetryContractTest {
         assertEquals(1, spans[1].parentId)
         assertEquals(mapOf("a" to attr("1")), spans[0].attributes)
         assertEquals(listOf(InMemoryTelemetryContext.RecordedTelemetryEvent("happened", mapOf("detail" to attr(true)))), spans[1].events)
-        // Both settled, in call order (outer settles after inner).
         assertTrue(spans.all { it.settled })
         assertTrue(spans[0].endSequence!! > spans[1].endSequence!!)
         assertEquals(SpanStatus.Ok, spans[0].status)
@@ -190,7 +180,6 @@ class TelemetryContractTest {
             listOf(InMemoryTelemetryContext.RecordedTelemetryEvent("listed", mapOf("ids" to attr(*arrayOf<Number>(1))))),
             recorded.events,
         )
-        // Snapshots are detached: mutating a recorded array does not affect later snapshots.
         val array = recorded.attributes["codes"] as AttributeValue.Nums
         (array.values as MutableList<Number>).add(99)
         assertEquals(attr(*arrayOf<Number>(4, 2)), context.getSpans().single().attributes["codes"])
@@ -233,7 +222,6 @@ class TelemetryContractTest {
         assertNull(parent.parentId)
         assertEquals(parent.id, first.parentId)
         assertEquals(parent.id, second.parentId)
-        // Second settles before first; the parent settles last.
         val secondEnd = requireNotNull(second.endSequence)
         val firstEnd = requireNotNull(first.endSequence)
         val parentEnd = requireNotNull(parent.endSequence)

@@ -8,10 +8,8 @@ import works.resolve.pathfinder.ai.core.StopReason
 import kotlinx.coroutines.flow.Flow
 
 /**
- * A chat API implementation (the pi "Api" concept). Implementations stream
- * assistant message events and encode failures in the stream itself rather
- * than throwing. The dispatch entry is [streamSimple] (pi's streamSimple
- * ownership in Models): provider-neutral options, translated per API.
+ * Implementations stream assistant message events and encode failures in
+ * the stream itself rather than throwing.
  */
 interface ChatApi {
     fun streamSimple(
@@ -27,11 +25,6 @@ class ProviderStreamException(
     val stopReason: StopReason = StopReason.ERROR,
 ) : Exception(message)
 
-/**
- * Provider credential missing or unresolvable at request time. Replaces the
- * per-adapter inline `IllegalStateException("No API key…")` sites (TS→Kotlin
- * translation conventions: Errors and failure encoding).
- */
 class ProviderAuthException(message: String) : Exception(message)
 
 /**

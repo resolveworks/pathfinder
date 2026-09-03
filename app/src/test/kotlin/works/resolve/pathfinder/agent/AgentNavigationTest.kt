@@ -32,12 +32,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Tree navigation with branch summarization (pi agent-session.ts
- * navigateTree ~3092; audit P1-4): the durable navigation operation record
- * (started intent + finished outcome) and the appended
- * [BranchSummaryEntry] on the target branch, projected into context.
- */
 class AgentNavigationTest {
 
     private val model = Model(
@@ -48,7 +42,6 @@ class AgentNavigationTest {
         baseUrl = "https://example.invalid",
     )
 
-    /** Deterministic recorder capturing records in append order. */
     private class RecordingSink : OperationLifecycleRecorder {
         val records = CopyOnWriteArrayList<LaneRecord>()
         override suspend fun append(record: LaneRecord) {
@@ -59,7 +52,6 @@ class AgentNavigationTest {
         }
     }
 
-    /** Fake summarization ChatApi serving one queued terminal response. */
     private class FauxApi : ChatApi {
         val responses = ArrayDeque<AssistantMessage>()
         override fun streamSimple(
@@ -72,7 +64,6 @@ class AgentNavigationTest {
         }
     }
 
-    /** A forked conversation: root user, assistant A (leaf), sibling assistant B. */
     private fun forkedConversation(): Pair<Conversation, String> {
         var conversation = Conversation(emptyList(), null)
         conversation = conversation.append(works.resolve.pathfinder.ai.core.UserMessage.ofText("hello"))
@@ -141,9 +132,6 @@ class AgentNavigationTest {
         val summary = result.summaryEntry
         assertNotNull(summary)
 
-        // Records: operation_started (navigation intent naming target,
-        // summarize flag, and the pre-minted summaryEntryId) then
-        // operation_finished completed.
         val start = sink.records.filterIsInstance<LaneRecord.OperationStartedRecord>().single()
         assertEquals("navigation", start.intent.payload["kind"]!!.jsonPrimitive.content)
         assertEquals(branchA, start.intent.payload["targetId"]!!.jsonPrimitive.content)
@@ -153,19 +141,15 @@ class AgentNavigationTest {
         assertEquals(start.id, finish.runId)
         assertEquals(OperationOutcome.COMPLETED, finish.outcome)
 
-        // The summary entry sits on the TARGET branch (parent = the target)
-        // and records the abandoned leaf as fromId (pi's branchWithSummary).
         assertEquals(branchA, summary.parentId)
         assertEquals(forked.leafId, summary.fromId)
         assertTrue(summary.summary.contains("## Goal"))
         assertEquals(summary.id, session.conversation.leafId)
 
-        // The summary projects into context on the target branch.
         val context = buildSessionContext(session.conversation.activeEntries())
         val projected = createBranchSummaryMessage(summary.summary, summary.fromId, summary.timestamp)
         val projectedContent = (projected as works.resolve.pathfinder.ai.core.UserMessage).content
         assertTrue(context.any { msg -> msg is works.resolve.pathfinder.ai.core.UserMessage && msg.content == projectedContent })
-        // The abandoned branch's message is gone from the active path.
         assertTrue(context.none { msg -> msg is AssistantMessage && msg.content.any { c -> c is TextContent && c.text == "branch B" } })
     }
 
@@ -290,7 +274,6 @@ class AgentNavigationTest {
             OperationOutcome.FAILED,
             sink.records.filterIsInstance<LaneRecord.OperationFinishedRecord>().single().outcome,
         )
-        // The tree is untouched: no summary entry, leaf unchanged.
         assertTrue(session.conversation.entries.none { it is BranchSummaryEntry })
         assertEquals(forked.leafId, session.conversation.leafId)
     }

@@ -16,14 +16,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
-/**
- * Port of pi's packages/ai/test/anthropic-cache-write-1h-cost.test.ts:
- * an Anthropic stream reporting cache_creation.ephemeral_1h_input_tokens
- * populates Usage.cacheWrite1h and prices it at 2x base input.
- */
 class AnthropicCacheWrite1hCostTest {
 
-    // claude-opus-4-8: input 5, cacheWrite (5m) 6.25 per Mtok. 1h write = 2x input = 10.
+    // 1h write = 2x input = 10 per Mtok.
     private val opus = Model(
         id = "claude-opus-4-8",
         name = "Claude Opus 4.8",
@@ -77,7 +72,6 @@ clock = FakeClock(1_770_000_000_000L),
         )
         assertEquals(1_000_000, usage.cacheWrite)
         assertEquals(400_000, usage.cacheWrite1h)
-        // 600k * 6.25/Mtok + 400k * 10/Mtok = 3.75 + 4.0 = 7.75
         assertEquals(7.75, usage.cost.cacheWrite, 1e-10)
     }
 
@@ -86,7 +80,6 @@ clock = FakeClock(1_770_000_000_000L),
         val usage = streamResult(eventsWithCacheCreation(null))
         assertEquals(1_000_000, usage.cacheWrite)
         assertEquals(0, usage.cacheWrite1h)
-        // 1M * 6.25/Mtok = 6.25
         assertEquals(6.25, usage.cost.cacheWrite, 1e-10)
     }
 }

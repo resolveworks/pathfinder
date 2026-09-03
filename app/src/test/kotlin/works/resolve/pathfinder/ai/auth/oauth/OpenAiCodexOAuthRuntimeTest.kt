@@ -28,18 +28,8 @@ import works.resolve.pathfinder.ai.models.ResolvedAuth
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
 
-/**
- * Runtime proof that a stored OpenAI Codex OAuth credential authenticates an
- * `openai-codex-responses` request: the real generated catalog entry →
- * [resolveProviderAuth] over a stored [OAuthCredential] (with the flow's
- * `accountId` extra) → [OpenAiCodexOAuthAuth.toAuth] → the runtime provider →
- * `OpenAICodexResponsesApi` → OkHttp transport → MockWebServer. The stored
- * access token is a fake JWT carrying the `chatgpt_account_id` claim; no live
- * credential or network is used and nothing secret is logged.
- */
 class OpenAiCodexOAuthRuntimeTest {
 
-    /** The flow must not touch the network: the credential is far from expiry. */
     private object NO_NETWORK : OAuthHttpClient {
         override suspend fun execute(request: OAuthHttpRequest): OAuthHttpResponse =
             error("unexpected OAuth network call: ${request.url}")
@@ -74,8 +64,6 @@ class OpenAiCodexOAuthRuntimeTest {
             val provider = assertNotNull(catalog.getProvider("openai-codex"))
             val model = assertNotNull(provider.models.first { it.id == "gpt-5.3-codex-spark" })
 
-            // A credential exactly as OpenAiCodexOAuthAuth.login stores it:
-            // JWT access token with the account claim, far-future expiry.
             val accountId = "runtime-account"
             val accessJwt = fakeAccessJwt(accountId)
             val credentials = InMemoryCredentialStore()
@@ -126,8 +114,6 @@ class OpenAiCodexOAuthRuntimeTest {
             assertEquals("Hi there", assertIs<TextContent>(done.message.content.single()).text)
             assertEquals("openai-codex", done.message.provider)
 
-            // The recorded request authenticated with the stored access token
-            // and its derived account header.
             val recorded = server.takeRequest()
             assertEquals("/backend-api/codex/responses", recorded.path)
             assertEquals("Bearer $accessJwt", recorded.getHeader("Authorization"))
@@ -139,12 +125,6 @@ class OpenAiCodexOAuthRuntimeTest {
         }
     }
 
-    /**
-     * The same login menu the chat UI projects (ChatViewModel delegates to
-     * [works.resolve.pathfinder.ai.auth.ProviderAuthService.authMethods]): the
-     * real catalog entry plus the production registry expose exactly one
-     * subscription OAuth method named by the flow.
-     */
     @Test
     fun `openai-codex projects a single subscription oauth method`() {
         val catalog = ProviderCatalog.parse(
