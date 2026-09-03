@@ -18,6 +18,21 @@ package works.resolve.pathfinder.telemetry
  *   omitted: its exact-type inference is TypeScript-only. Span vocabularies
  *   are documented constants next to their producers instead.
  *
+ * Scope vs pi (differences.md §3.5, verified at pin b8b873b98): this file and
+ * [InMemoryTelemetryContext] are clean twins of the `pi-telemetry` package core
+ * (`packages/telemetry/src/index.ts` + `memory.ts`) — the runtime contract
+ * only. pi's agent-side `harness/telemetry.ts` is intentionally absent, not
+ * folded in: at the pin it is pure exported vocabulary — `AI_TELEMETRY_SCHEMA`
+ * (the single `pi.ai.request` span), `HARNESS_TELEMETRY_SCHEMA` (the harness
+ * span taxonomy), and the `startAiSpan`/`startHarnessSpan` wrappers — with
+ * zero producer call sites anywhere in packages/ai, packages/agent, or
+ * packages/coding-agent. Porting span-name constants with no producer would
+ * be dead code, and pathfinder matches the pin exactly: the `telemetryContext`
+ * option is plumbed through request options (presence-redacted) but no
+ * adapter starts a span. The app's actual span vocabulary is pathfinder-owned
+ * (`pf.*`, PathfinderDiagnostics). No harness span or attribute is
+ * port-relevant but missing; revisit if post-pin pi wires real producers.
+ *
  * Security: telemetry is operational metadata. Credentials, message text,
  * and model responses must never be passed as attributes or error messages.
  */

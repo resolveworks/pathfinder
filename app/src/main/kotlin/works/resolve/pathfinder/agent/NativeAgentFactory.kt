@@ -25,6 +25,21 @@ import works.resolve.pathfinder.data.settings.ModelSettings
  * Production [AgentFactory]: builds the native agent from the persisted
  * configuration, serving any provider/model pair the generated catalog knows.
  *
+ * Divergences from pi (differences.md §5.1, both accepted):
+ * - pi's agent package resolves its stream function through a module-level
+ *   mutable default (`stream-fn.ts`: `setDefaultStreamFn`/
+ *   `getDefaultStreamFn`, falling back to it when callers omit `streamFn`).
+ *   This port replaces the ambient global with constructor injection: the
+ *   Models-backed [StreamFn] is wired here into [Agent]/[AgentLoopConfig],
+ *   which take it as a required parameter — no process-wide mutable state,
+ *   and a missing stream function is a compile error, not pi's runtime
+ *   `getDefaultStreamFn()` throw.
+ * - pi's `utils/event-stream.ts` (`EventStream`, a queue-backed async
+ *   iterable with an out-of-band final result) is replaced by Kotlin
+ *   `Flow&lt;AssistantMessageEvent&gt;`: the stream contract in
+ *   `ai/core/Types.kt` (failures terminate the flow as a terminal Error
+ *   event) carries both the iteration and the final-result roles.
+ *
  * Credentials are read once per request inside Models.stream's lazy flow, so
  * a rotated or completed credential takes effect on the next prompt. Stored
  * API-key and OAuth credentials resolve through [resolveProviderAuth] with
