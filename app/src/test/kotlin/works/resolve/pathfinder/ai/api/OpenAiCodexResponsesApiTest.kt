@@ -35,7 +35,6 @@ import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.ThinkingLevelMap
 import works.resolve.pathfinder.ai.core.UserMessage
-import works.resolve.pathfinder.ai.utils.compressRequestBodyZstd
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
