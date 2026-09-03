@@ -4,65 +4,77 @@ import java.security.SecureRandom
 
 /**
  * Time-ordered UUIDv7: 48-bit big-endian Unix-millisecond timestamp in bytes
- * 0-5, a process-wide monotonic counter over bytes 6-10 that keeps
- * same-millisecond ids ordered, then random bytes. The lowercase hex string
- * sorts chronologically, which is why pi uses it for session and entry ids.
+ * 0-5, then a 41-bit process-wide monotonic sequence seeded once from random
+ * bytes and incremented on every call, then random bytes. The lowercase hex
+ * string sorts chronologically, which is why pi uses it for session and
+ * entry ids.
+ *
+ * An explicit [timestampMs] is preserved as-is for follower ids (ids minted
+ * to match a leader's ordering) and never participates in the clamp; ordinary
+ * calls clamp the effective timestamp forward so it never regresses. The
+ * sequence is exhausted after 2^41 calls per process.
  *
  * Divergences from pi:
- * - pi's module-level `lastTimestamp`/`sequence` state is protected by the
- *   single-threaded JS event loop; [Uuidv7.next] is `@Synchronized` to keep
- *   the same monotonicity guarantee under Kotlin concurrency.
+ * - pi's module-level state is protected by the single-threaded JS event
+ *   loop; [Uuidv7.next] is `@Synchronized` to keep the same monotonicity
+ *   guarantee under Kotlin concurrency.
  * - pi falls back to `Math.random` when WebCrypto is unavailable;
  *   [SecureRandom] always exists on JVM/Android, so there is no fallback
  *   branch.
+ * - pi throws `RangeError` on invalid timestamps; Kotlin's closest
+ *   programmer-error exception is [IllegalArgumentException].
  *
  * The `System.currentTimeMillis()` call below deliberately breaks the
  * domain-code timing rule: pi's generator is `Date.now()`-based, and reading
  * wall time is this function's entire job.
  */
-fun uuidv7(): String = Uuidv7.next()
+fun uuidv7(timestampMs: Long? = null): String = Uuidv7.next(timestampMs)
 
 private object Uuidv7 {
+    private const val MAX_TIMESTAMP = 0xffffffffffffL
+    private const val MAX_SEQUENCE = (1L shl 41) - 1
+
     private val random = SecureRandom()
-    private var lastTimestamp = Long.MIN_VALUE
-    private var sequence = 0
+    private var lastOrdinaryTimestamp = -1L
+    private var sequence: Long? = null
 
     @Synchronized
-    fun next(): String {
-        val randomBytes = ByteArray(16)
-        random.nextBytes(randomBytes)
-        val timestamp = System.currentTimeMillis()
-
-        if (timestamp > lastTimestamp) {
-            sequence = ((randomBytes[6].toInt() and 0xff) shl 24) or
-                ((randomBytes[7].toInt() and 0xff) shl 16) or
-                ((randomBytes[8].toInt() and 0xff) shl 8) or
-                (randomBytes[9].toInt() and 0xff)
-            lastTimestamp = timestamp
+    fun next(timestampMs: Long?): String {
+        val requestedTimestamp = timestampMs ?: System.currentTimeMillis()
+        require(requestedTimestamp in 0..MAX_TIMESTAMP) {
+            "UUIDv7 timestamp must be an integer between 0 and $MAX_TIMESTAMP"
+        }
+        val effectiveTimestamp = if (timestampMs == null) {
+            maxOf(requestedTimestamp, lastOrdinaryTimestamp).also { lastOrdinaryTimestamp = it }
         } else {
-            // Int bit patterns model pi's uint32: `+` wraps in both, and the
-            // zero check detects the wraparound at 0xffffffff.
-            sequence += 1
-            if (sequence == 0) lastTimestamp++
+            timestampMs
         }
 
         val bytes = ByteArray(16)
-        bytes[0] = ((lastTimestamp ushr 40) and 0xff).toByte()
-        bytes[1] = ((lastTimestamp ushr 32) and 0xff).toByte()
-        bytes[2] = ((lastTimestamp ushr 24) and 0xff).toByte()
-        bytes[3] = ((lastTimestamp ushr 16) and 0xff).toByte()
-        bytes[4] = ((lastTimestamp ushr 8) and 0xff).toByte()
-        bytes[5] = (lastTimestamp and 0xff).toByte()
-        bytes[6] = (0x70 or ((sequence ushr 28) and 0x0f)).toByte()
-        bytes[7] = ((sequence ushr 20) and 0xff).toByte()
-        bytes[8] = (0x80 or ((sequence ushr 14) and 0x3f)).toByte()
-        bytes[9] = ((sequence ushr 6) and 0xff).toByte()
-        bytes[10] = (((sequence and 0x3f) shl 2) or (randomBytes[10].toInt() and 0x03)).toByte()
-        bytes[11] = randomBytes[11]
-        bytes[12] = randomBytes[12]
-        bytes[13] = randomBytes[13]
-        bytes[14] = randomBytes[14]
-        bytes[15] = randomBytes[15]
+        random.nextBytes(bytes)
+        val seeded = sequence
+        sequence = when {
+            seeded == null ->
+                ((bytes[1].toLong() and 0xff) shl 32) or
+                    ((bytes[2].toLong() and 0xff) shl 24) or
+                    ((bytes[3].toLong() and 0xff) shl 16) or
+                    ((bytes[4].toLong() and 0xff) shl 8) or
+                    (bytes[5].toLong() and 0xff)
+            seeded == MAX_SEQUENCE ->
+                throw IllegalArgumentException("UUIDv7 generator sequence exhausted")
+            else -> seeded + 1
+        }
+        val seq = sequence!!
+
+        for (index in 5 downTo 0) {
+            bytes[index] = ((effectiveTimestamp shr ((5 - index) * 8)) and 0xff).toByte()
+        }
+        bytes[6] = (0x70L or ((seq shr 37) and 0x0f)).toByte()
+        bytes[7] = ((seq shr 29) and 0xff).toByte()
+        bytes[8] = (0x80L or ((seq shr 23) and 0x3f)).toByte()
+        bytes[9] = ((seq shr 15) and 0xff).toByte()
+        bytes[10] = ((seq shr 7) and 0xff).toByte()
+        bytes[11] = (((seq and 0x7f) shl 1) or (bytes[11].toLong() and 0x01)).toByte()
 
         val hex = bytes.joinToString("") { "%02x".format(it) }
         return hex.substring(0, 8) + "-" + hex.substring(8, 12) + "-" +

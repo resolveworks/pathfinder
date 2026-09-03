@@ -31,6 +31,14 @@ import okhttp3.sse.EventSources
  * available for retry classification before any content is consumed. The
  * underlying [EventSource] is cancelled promptly when the event collection
  * is cancelled or ends; there is no auto-reconnect.
+ *
+ * Divergence (accepted, differences.md §7): okhttp-sse 5.5.0 does not flush
+ * an unterminated SSE frame at EOF — a stream whose final `data:` line lacks
+ * a trailing newline is dropped instead of dispatched. pi's adapters work
+ * around this at EOF (e.g. the Codex adapter's #9047 fix); because framing
+ * lives below this boundary here, such a truncated stream surfaces as a
+ * premature end to the collector. Pinned by OkHttpTransportTest's
+ * unterminated-terminal-frame probe.
  */
 class OkHttpTransport(
     private val client: OkHttpClient = OkHttpClient(),

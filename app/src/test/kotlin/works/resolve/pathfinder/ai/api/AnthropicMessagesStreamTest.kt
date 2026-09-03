@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -633,17 +635,41 @@ clock = FakeClock(1_770_000_000_000L),
         transport.enqueueNamedResponse(textStream("ok"))
         api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "test-key")).toList()
         val request = transport.requests.single()
-        assertEquals("https://api.anthropic.com/v1/messages", request.url)
+        // The beta-namespace endpoint carries ?beta=true unconditionally.
+        assertEquals("https://api.anthropic.com/v1/messages?beta=true", request.url)
         assertNull(request.bearerToken)
         assertEquals("test-key", request.headers["x-api-key"])
         assertEquals("2023-06-01", request.headers["anthropic-version"])
         assertEquals("application/json", request.headers["accept"])
         // Divergence (owner decision): pi's browser-CORS header is not sent.
         assertNull(request.headers["anthropic-dangerous-direct-browser-access"])
-        // No tools + interleaved thinking default: only the interleaved beta.
-        assertEquals("interleaved-thinking-2025-05-14", request.headers["anthropic-beta"])
+        // No tools and thinking not enabled: no beta features at all.
+        assertNull(request.headers["anthropic-beta"])
         val body = Json.parseToJsonElement(request.body.decodeToString()).jsonObject
         assertEquals("claude-sonnet-4-5", body["model"]!!.jsonPrimitive.content)
+        assertNull(body["betas"])
+    }
+
+    /** Ports anthropic-sse-parsing: interleaved thinking needs thinkingEnabled. */
+    @Test
+    fun `interleaved thinking beta requires thinking to be enabled`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(textStream("ok"))
+        api(transport)
+            .stream(claude, context, AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true))
+            .toList()
+        assertEquals(
+            "interleaved-thinking-2025-05-14",
+            transport.requests.single().headers["anthropic-beta"],
+        )
+
+        // Explicitly disabled: still omitted.
+        val disabled = FakeTransport()
+        disabled.enqueueNamedResponse(textStream("ok"))
+        api(disabled)
+            .stream(claude, context, AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = false))
+            .toList()
+        assertNull(disabled.requests.single().headers["anthropic-beta"])
     }
 
     @Test
@@ -663,9 +689,24 @@ clock = FakeClock(1_770_000_000_000L),
                 AnthropicMessagesOptions(apiKey = "k"),
             )
             .toList()
+        // Thinking not enabled: no interleaved beta.
+        assertEquals(
+            "fine-grained-tool-streaming-2025-05-14",
+            transport.requests.single().headers["anthropic-beta"],
+        )
+
+        val thinking = FakeTransport()
+        thinking.enqueueNamedResponse(textStream("ok"))
+        api(thinking)
+            .stream(
+                legacy,
+                Context(messages = listOf(UserMessage.ofText("hi")), tools = tools),
+                AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true),
+            )
+            .toList()
         assertEquals(
             "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
-            transport.requests.single().headers["anthropic-beta"],
+            thinking.requests.single().headers["anthropic-beta"],
         )
     }
 
@@ -695,10 +736,21 @@ clock = FakeClock(1_770_000_000_000L),
                 ),
             ),
         )
-        api(transport).stream(fable, context, AnthropicMessagesOptions(apiKey = "k")).toList()
+        api(transport)
+            .stream(fable, context, AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true))
+            .toList()
         assertEquals(
             "interleaved-thinking-2025-05-14,server-side-fallback-2026-07-01",
             transport.requests.single().headers["anthropic-beta"],
+        )
+
+        // Without thinking enabled the fallback beta stands alone.
+        val plain = FakeTransport()
+        plain.enqueueNamedResponse(textStream("ok"))
+        api(plain).stream(fable, context, AnthropicMessagesOptions(apiKey = "k")).toList()
+        assertEquals(
+            "server-side-fallback-2026-07-01",
+            plain.requests.single().headers["anthropic-beta"],
         )
     }
 
@@ -788,11 +840,12 @@ clock = FakeClock(1_770_000_000_000L),
         val request = transport.requests.single()
         assertEquals("sk-ant-oat-abc", request.bearerToken)
         assertTrue(request.headers.keys.none { it.equals("x-api-key", ignoreCase = true) })
+        // Thinking not enabled, so no interleaved beta after the OAuth pair.
         assertEquals(
-            "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14",
+            "claude-code-20250219,oauth-2025-04-20",
             request.headers["anthropic-beta"],
         )
-        assertEquals("claude-cli/2.1.75", request.headers["user-agent"])
+        assertEquals("claude-cli/2.1.251", request.headers["user-agent"])
         assertEquals("cli", request.headers["x-app"])
     }
 
@@ -815,7 +868,7 @@ clock = FakeClock(1_770_000_000_000L),
             .stream(copilotClaude, context, AnthropicMessagesOptions(apiKey = "tid_copilot_session_test_token"))
             .toList()
         val request = transport.requests.single()
-        assertEquals("https://api.individual.githubcopilot.com/v1/messages", request.url)
+        assertEquals("https://api.individual.githubcopilot.com/v1/messages?beta=true", request.url)
         assertEquals("tid_copilot_session_test_token", request.bearerToken)
         assertTrue(request.headers.keys.none { it.equals("x-api-key", ignoreCase = true) })
         assertEquals("GitHubCopilotChat/1.0", request.headers["User-Agent"])
@@ -1172,5 +1225,201 @@ clock = FakeClock(1_770_000_000_000L),
         assertEquals("foreign thoughts", assistantBlocks[0].jsonObject["text"]!!.jsonPrimitive.content)
         assertEquals("hello", assistantBlocks[1].jsonObject["text"]!!.jsonPrimitive.content)
         assertEquals("sys", body["system"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content)
+    }
+
+    // ---- Mid-conversation effort stream behavior (ports
+    // anthropic-mid-conversation-effort.test.ts + anthropic-sse-parsing) ----
+
+    private fun managedClaude() = claude.copy(
+        id = "claude-fable-5-1",
+        anthropicCompat = claude.anthropicCompat.copy(
+            forceAdaptiveThinking = true,
+            supportsMidConvoEffort = true,
+        ),
+    )
+
+    /** Ports "sends the effort and binding beta headers". */
+    @Test
+    fun `managed models send the mid-conversation effort and binding beta headers`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(textStream("ok"))
+        api(transport)
+            .stream(
+                managedClaude(),
+                context,
+                AnthropicMessagesOptions(apiKey = "test-key", cacheRetention = CacheRetention.NONE),
+            )
+            .toList()
+        val beta = transport.requests.single().headers["anthropic-beta"]!!
+        assertTrue("mid-conversation-output-config-2026-07-01" in beta, beta)
+        assertTrue("thinking-binding-controls-2026-08-01" in beta, beta)
+        assertEquals("https://api.anthropic.com/v1/messages?beta=true", transport.requests.single().url)
+    }
+
+    /** Ports the providerThinkingLevel assertions of the payload-capture cases. */
+    @Test
+    fun `managed models record the active effort on the response`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(textStream("ok"))
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport)
+                .stream(
+                    managedClaude(),
+                    context,
+                    AnthropicMessagesOptions(apiKey = "k", effort = AnthropicEffort.LOW),
+                )
+                .toList()
+                .last(),
+        )
+        assertEquals("low", done.message.providerThinkingLevel)
+
+        // Default effort is high.
+        val defaulted = FakeTransport()
+        defaulted.enqueueNamedResponse(textStream("ok"))
+        val doneDefault = assertIs<AssistantMessageEvent.Done>(
+            api(defaulted)
+                .stream(managedClaude(), context, AnthropicMessagesOptions(apiKey = "k"))
+                .toList()
+                .last(),
+        )
+        assertEquals("high", doneDefault.message.providerThinkingLevel)
+
+        // Unmanaged models never set it.
+        val plain = FakeTransport()
+        plain.enqueueNamedResponse(textStream("ok"))
+        val donePlain = assertIs<AssistantMessageEvent.Done>(
+            api(plain)
+                .stream(claude, context, AnthropicMessagesOptions(apiKey = "k"))
+                .toList()
+                .last(),
+        )
+        assertNull(donePlain.message.providerThinkingLevel)
+    }
+
+    /** Ports anthropic-sse-parsing "uses the serving model input transformations from the final stream event". */
+    @Test
+    fun `input transformations from the final stream event become a diagnostic`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            "message_start" to """{"type":"message_start","message":{"id":"msg_transformations","model":"claude-fable-5-1","usage":{"input_tokens":12,"output_tokens":0},"input_transformations":[{"type":"thinking_dropped","path":"messages.1.content.0","reason":"prefix_binding_mismatch"}]}}""",
+            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            "message_delta" to """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":12,"output_tokens":5},"input_transformations":[{"type":"thinking_dropped","path":"messages.3.content.0","reason":"model_binding_mismatch"}]}""",
+            messageStop,
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport).stream(managedClaude(), context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+        )
+        // message_delta's list replaces message_start's.
+        assertEquals(
+            """{"type":"anthropic_input_transformations","timestamp":${done.message.diagnostics.single().timestamp},"details":{"transformations":[{"type":"thinking_dropped","path":"messages.3.content.0","reason":"model_binding_mismatch"}]}}""",
+            done.message.diagnostics.single().toString(),
+        )
+
+        // Streams without transformations carry no diagnostics.
+        val plain = FakeTransport()
+        plain.enqueueNamedResponse(textStream("ok"))
+        val donePlain = assertIs<AssistantMessageEvent.Done>(
+            api(plain).stream(managedClaude(), context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+        )
+        assertTrue(donePlain.message.diagnostics.isEmpty())
+    }
+
+    /** Ports anthropic-sse-parsing "fails safely when Anthropic falls back after output begins". */
+    @Test
+    fun `fallback content blocks are skipped before output and fail after it`() = runTest {
+        // A fallback marker before any output: skipped, stream completes.
+        val leading = FakeTransport()
+        leading.enqueueNamedResponse(
+            "message_start" to messageStart(model = "claude-opus-4-8").second,
+            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"fallback","from":{"model":"claude-opus-5"},"to":{"model":"claude-opus-4-8"}}}""",
+            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            messageDelta(output = 5),
+            messageStop,
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(leading).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+        )
+        assertEquals(StopReason.STOP, done.reason)
+
+        // The same marker after output began is a hard failure.
+        val midOutput = FakeTransport()
+        midOutput.enqueueNamedResponse(
+            messageStart(),
+            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"partial"}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            "content_block_start" to """{"type":"content_block_start","index":1,"content_block":{"type":"fallback","from":{"model":"claude-opus-5"},"to":{"model":"claude-opus-4-8"}}}""",
+        )
+        val error = assertIs<AssistantMessageEvent.Error>(
+            api(midOutput).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+        )
+        assertTrue("unsupported mid-output model fallback" in (error.error.errorMessage ?: ""))
+    }
+
+    /** Ports anthropic-sse-parsing "forces streaming after an onPayload replacement". */
+    @Test
+    fun `onPayload replacements cannot turn off streaming and betas leave the body`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(textStream("ok"))
+        api(transport)
+            .stream(
+                claude,
+                context,
+                AnthropicMessagesOptions(
+                    apiKey = "k",
+                    thinkingEnabled = true,
+                    onPayload = { payload, _ ->
+                        JsonObject(payload.toMutableMap().apply { put("stream", JsonPrimitive(false)) })
+                    },
+                ),
+            )
+            .toList()
+        val request = transport.requests.single()
+        val body = Json.parseToJsonElement(request.body.decodeToString()).jsonObject
+        assertEquals(true, body["stream"]!!.jsonPrimitive.content.toBoolean())
+        // betas moved out of the body into the header.
+        assertNull(body["betas"])
+        assertEquals("interleaved-thinking-2025-05-14", request.headers["anthropic-beta"])
+    }
+
+    /** Ports anthropic-auth-token explicit beta header override/suppression. */
+    @Test
+    fun `explicit anthropic-beta headers override or suppress composed betas`() = runTest {
+        val override = FakeTransport()
+        override.enqueueNamedResponse(textStream("ok"))
+        api(override)
+            .stream(
+                claude,
+                context,
+                AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true, headers = mapOf("anthropic-beta" to "custom-beta")),
+            )
+            .toList()
+        assertEquals("custom-beta", override.requests.single().headers["anthropic-beta"])
+
+        val suppressed = FakeTransport()
+        suppressed.enqueueNamedResponse(textStream("ok"))
+        api(suppressed)
+            .stream(
+                claude,
+                context,
+                AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true, headers = mapOf("anthropic-beta" to null)),
+            )
+            .toList()
+        assertNull(suppressed.requests.single().headers["anthropic-beta"])
+
+        // Model headers participate too: split, trimmed, deduped.
+        val modelOverride = FakeTransport()
+        modelOverride.enqueueNamedResponse(textStream("ok"))
+        api(modelOverride)
+            .stream(
+                claude.copy(headers = mapOf("anthropic-beta" to " b ,,a ")),
+                context,
+                AnthropicMessagesOptions(apiKey = "k"),
+            )
+            .toList()
+        assertEquals("b,a", modelOverride.requests.single().headers["anthropic-beta"])
     }
 }
