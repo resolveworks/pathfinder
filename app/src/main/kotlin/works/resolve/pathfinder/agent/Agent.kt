@@ -208,8 +208,37 @@ class Agent(
         }
     }
 
-    /** Continue from the committed transcript without new prompts. */
+    /**
+     * Continue from the committed transcript without new prompts. The last
+     * committed message must be a user or tool-result message.
+     *
+     * Mirrors pi's `continue()` guards, in upstream order: reject an
+     * in-flight run, then an empty transcript, then an assistant tail.
+     * Upstream's assistant-tail branch first drains the steering and
+     * follow-up queues and continues from whichever has items; those queues
+     * are deliberately unported (no `steer()`/`followUp()` here), so an
+     * assistant tail is never continuable in this port. Upstream repeats the
+     * tail guards in `runAgentLoopContinue`; this port continues via
+     * `prompt(emptyList())`, so the guards live here only.
+     *
+     * @throws IllegalStateException when a run is already active, the
+     *   transcript is empty, or its last message is an assistant message.
+     */
     suspend fun continueRun() {
+        val lastMessage = synchronized(lock) {
+            if (active) {
+                throw IllegalStateException(
+                    "Agent is already processing. Wait for completion before continuing.",
+                )
+            }
+            _state.value.messages.lastOrNull()
+        }
+        if (lastMessage == null) {
+            throw IllegalStateException("No messages to continue from")
+        }
+        if (lastMessage is AssistantMessage) {
+            throw IllegalStateException("Cannot continue from message role: assistant")
+        }
         prompt(emptyList())
     }
 
