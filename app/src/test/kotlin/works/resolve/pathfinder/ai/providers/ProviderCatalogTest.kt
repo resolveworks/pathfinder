@@ -405,8 +405,12 @@ class ProviderCatalogTest {
             listOf("claude-opus-4-8", "claude-opus-5"),
             fable.anthropicCompat.allowedFallbackModels.map { it.model },
         )
+        // claude-opus-5 is a mid-conversation-effort model at HEAD, so pi's
+        // generator filters its fallback list to mid-convo-capable targets only;
+        // its declared fallback (claude-opus-4-8) is not one, and the empty list
+        // drops the field entirely.
         assertTrue(
-            realAsset().getModel("anthropic", "claude-opus-5")!!.anthropicCompat.allowedFallbackModels.size > 0,
+            realAsset().getModel("anthropic", "claude-opus-5")!!.anthropicCompat.allowedFallbackModels.isEmpty(),
         )
         assertTrue(
             realAsset().getModel("anthropic", "claude-sonnet-5")!!.anthropicCompat.allowedFallbackModels.isEmpty(),
@@ -645,6 +649,8 @@ class ProviderCatalogTest {
             ),
             catalog.getModel("anthropic", "claude-opus-4-7")!!.anthropicCompat,
         )
+        // glm-5p3 moved to openai-completions at HEAD; deepseek-v4-flash-0731
+        // carries the same non-default anthropic-messages flags.
         assertEquals(
             works.resolve.pathfinder.ai.core.AnthropicMessagesCompat(
                 supportsEagerToolInputStreaming = false,
@@ -652,7 +658,7 @@ class ProviderCatalogTest {
                 sendSessionAffinityHeaders = true,
                 supportsCacheControlOnTools = false,
             ),
-            catalog.getModel("fireworks", "accounts/fireworks/models/glm-5p3")!!.anthropicCompat,
+            catalog.getModel("fireworks", "accounts/fireworks/models/deepseek-v4-flash-0731")!!.anthropicCompat,
         )
     }
 

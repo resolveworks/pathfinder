@@ -10,6 +10,7 @@ import works.resolve.pathfinder.ai.core.ImageContent
 import works.resolve.pathfinder.ai.core.InputModality
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelCost
+import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingLevel
@@ -810,11 +811,27 @@ class AnthropicMessagesPayloadTest {
     }
 
     // ---- Mid-conversation effort (ports anthropic-mid-conversation-effort.test.ts) ----
-    // Upstream also runs "generates exact model and transport gates", which
-    // reads the regenerated model catalog (getModel("anthropic",
-    // "claude-fable-5-1") etc. asserting supportsMidConvoEffort/openrouter
-    // registration). This asset predates that generation — the catalog is
-    // E9's chunk — so the gate case is deliberately not ported here.
+
+    // Upstream "generates exact model and transport gates": the regenerated
+    // catalog gates the managed-effort path — direct anthropic and openrouter
+    // registrations carry supportsMidConvoEffort, older models do not.
+    @Test
+    fun `generates exact model and transport gates`() {
+        val catalog = realAsset()
+        val direct = catalog.getModel("anthropic", "claude-fable-5-1")!!
+        val openRouter = catalog.getModel("openrouter", "anthropic/claude-fable-5.1")!!
+        val unsupported = catalog.getModel("anthropic", "claude-opus-4-8")!!
+        assertTrue(direct.anthropicCompat.supportsMidConvoEffort)
+        assertTrue(direct.thinkingLevelMap!!.isSpecified(ModelThinkingLevel.OFF))
+        assertNull(direct.thinkingLevelMap.forLevel(ModelThinkingLevel.OFF))
+        assertEquals("anthropic-messages", openRouter.api)
+        assertEquals("https://openrouter.ai/api", openRouter.baseUrl)
+        assertTrue(openRouter.anthropicCompat.supportsMidConvoEffort)
+        assertFalse(unsupported.anthropicCompat.supportsMidConvoEffort)
+        assertTrue(
+            catalog.getModel("anthropic", "claude-opus-5")!!.anthropicCompat.allowedFallbackModels.isEmpty(),
+        )
+    }
 
     private fun managedModel(provider: String = "anthropic"): Model = claude.copy(
         id = "claude-fable-5-1",
