@@ -226,13 +226,13 @@ internal class SessionState {
         if (query.order == EntryOrder.OLDEST_FIRST) {
             // Like pi: the oldestFirst scan walks the whole path unbounded;
             // bounds apply as an inclusive break after each entry.
-            for (entry in walkToRoot(query.start).toList().asReversed()) {
+            for (entry in walkToRoot(::entry, query.start).toList().asReversed()) {
                 val reachedBound = entry.id == query.stopAtId || entry.entryType == query.stopAtType
                 if (matchesEntryQuery(entry, entryQuery)) results.add(entry)
                 if (reachedBound || results.size == query.limit) break
             }
         } else {
-            for (entry in walkToRoot(query.start, query.stopAtId, query.stopAtType)) {
+            for (entry in walkToRoot(::entry, query.start, query.stopAtId, query.stopAtType)) {
                 if (matchesEntryQuery(entry, entryQuery)) results.add(entry)
                 if (results.size == query.limit) break
             }
@@ -316,23 +316,6 @@ internal class SessionState {
         return mutations
     }
 
-    /** Leaf→root walk with a cycle guard and inclusive bounds. */
-    private fun walkToRoot(start: String, stopAtId: String? = null, stopAtType: EntryType? = null): Sequence<SessionEntry> = sequence {
-        val visited = HashSet<String>()
-        var current = entriesById[start]
-            ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Entry not found: $start")
-        while (true) {
-            if (!visited.add(current.id)) {
-                throw SessionError(SessionErrorCode.INVALID_ENTRY, "Session branch contains a cycle at ${current.id}")
-            }
-            yield(current)
-            if (current.id == stopAtId || current.entryType == stopAtType || current.parentId == null) break
-            val parentId = current.parentId ?: return@sequence
-            current = entriesById[parentId]
-                ?: throw SessionError(SessionErrorCode.INVALID_ENTRY, "Entry not found: $parentId")
-        }
-    }
-
     private fun <T> ordered(items: List<T>, order: EntryOrder?): Iterable<T> =
         if (order == EntryOrder.OLDEST_FIRST) items else items.asReversed()
 
@@ -375,6 +358,35 @@ internal class SessionState {
                 throw SessionError(SessionErrorCode.INVALID_QUERY, "cursor sequence must be a non-negative integer")
             }
         }
+    }
+}
+
+/**
+ * Leaf→root walk with a cycle guard and inclusive bounds — pi's private
+ * `SessionState.walkToRoot` (`harness/session/state.ts`). Upstream exposes
+ * the walk only through `findEntriesOnBranch`, and its branch summarization
+ * goes through that query; pathfinder's branch summarization walks a
+ * [Conversation], which has no query surface, so the walk is shared from
+ * here instead of duplicated per caller.
+ */
+internal fun walkToRoot(
+    entryById: (String) -> SessionEntry?,
+    start: String,
+    stopAtId: String? = null,
+    stopAtType: EntryType? = null,
+): Sequence<SessionEntry> = sequence {
+    val visited = HashSet<String>()
+    var current = entryById(start)
+        ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Entry not found: $start")
+    while (true) {
+        if (!visited.add(current.id)) {
+            throw SessionError(SessionErrorCode.INVALID_ENTRY, "Session branch contains a cycle at ${current.id}")
+        }
+        yield(current)
+        if (current.id == stopAtId || current.entryType == stopAtType || current.parentId == null) break
+        val parentId = current.parentId ?: return@sequence
+        current = entryById(parentId)
+            ?: throw SessionError(SessionErrorCode.INVALID_ENTRY, "Entry not found: $parentId")
     }
 }
 

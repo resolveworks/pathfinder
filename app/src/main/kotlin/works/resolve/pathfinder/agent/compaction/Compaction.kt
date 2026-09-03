@@ -3,10 +3,7 @@ package works.resolve.pathfinder.agent.compaction
 import kotlin.time.Clock
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.CacheRetention
-import works.resolve.pathfinder.ai.core.Content
-import works.resolve.pathfinder.ai.core.Cost
 import works.resolve.pathfinder.ai.core.Context
-import works.resolve.pathfinder.ai.core.ContentType
 import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.MessageRole
 import works.resolve.pathfinder.ai.core.Model
@@ -24,8 +21,10 @@ import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
 import works.resolve.pathfinder.ai.utils.calculateContextTokens
+import works.resolve.pathfinder.ai.utils.contentText
 import works.resolve.pathfinder.ai.utils.estimateMessageTokens
 import works.resolve.pathfinder.ai.utils.uuidv7
+import works.resolve.pathfinder.agent.utils.addUsage
 import works.resolve.pathfinder.data.sessions.ActiveToolsEntry
 import works.resolve.pathfinder.data.sessions.BranchSummaryEntry
 import works.resolve.pathfinder.data.sessions.CompactionEntry
@@ -287,30 +286,6 @@ data class CompactResult(
     val details: CompactionDetails?,
 )
 
-/**
- * Upstream keeps `cacheWrite1h`/`reasoning` undefined when absent on both
- * sides; pathfinder's [Usage] models them as non-nullable ints (0 =
- * unreported), so they are summed unconditionally.
- */
-fun combineUsage(first: Usage, second: Usage): Usage = Usage(
-    input = first.input + second.input,
-    output = first.output + second.output,
-    cacheRead = first.cacheRead + second.cacheRead,
-    cacheWrite = first.cacheWrite + second.cacheWrite,
-    cacheWrite1h = first.cacheWrite1h + second.cacheWrite1h,
-    reasoning = first.reasoning + second.reasoning,
-    totalTokens = first.totalTokens + second.totalTokens,
-    cost = first.cost + second.cost,
-)
-
-private operator fun Cost.plus(other: Cost): Cost = Cost(
-    input = input + other.input,
-    output = output + other.output,
-    cacheRead = cacheRead + other.cacheRead,
-    cacheWrite = cacheWrite + other.cacheWrite,
-    total = total + other.total,
-)
-
 private val DEFAULT_RETRY = Retry()
 
 /**
@@ -426,9 +401,6 @@ Summarize the prefix to provide context for the retained suffix:
 - [Information needed to understand the retained recent work]
 
 Be concise. Focus on what's needed to understand the kept suffix."""
-
-private fun contentText(content: List<Content>): String =
-    content.filter { it.type == ContentType.TEXT }.joinToString("\n") { (it as TextContent).text }
 
 private fun summaryMaxTokens(reserveTokens: Int, model: Model, fraction: Double): Int {
     val fromReserve = (fraction * reserveTokens).toInt()
@@ -672,7 +644,7 @@ suspend fun compact(
         if (turnPrefixResult is CompactionResult.Err) return err(turnPrefixResult.error)
         turnPrefixResult as CompactionResult.Ok
         summary = "$historyText\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value.text}"
-        summaryUsage = historyUsage?.let { combineUsage(it, turnPrefixResult.value.usage) }
+        summaryUsage = historyUsage?.let { addUsage(it, turnPrefixResult.value.usage) }
             ?: turnPrefixResult.value.usage
     } else {
         val summaryResult = generateSummaryWithUsage(

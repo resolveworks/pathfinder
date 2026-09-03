@@ -3,7 +3,7 @@ package works.resolve.pathfinder.ai.utils
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-class ProviderEnvTest {
+class CloudflareTest {
 
     @Test
     fun `substitutes account id placeholder`() {

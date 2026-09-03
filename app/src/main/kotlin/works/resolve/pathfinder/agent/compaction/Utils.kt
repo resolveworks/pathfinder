@@ -3,11 +3,10 @@ package works.resolve.pathfinder.agent.compaction
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.ai.core.AssistantMessage
-import works.resolve.pathfinder.ai.core.Content
 import works.resolve.pathfinder.ai.core.ContentType
 import works.resolve.pathfinder.ai.core.Message
-import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ToolCall
+import works.resolve.pathfinder.ai.utils.contentText
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.string
 
@@ -79,10 +78,6 @@ private fun truncateForSummary(text: String, maxChars: Int): String {
     val truncatedChars = text.length - maxChars
     return "${text.substring(0, maxChars)}\n\n[... $truncatedChars more characters truncated]"
 }
-
-/** pi's `contentText` also accepts a plain string; pathfinder content is always structured. */
-internal fun contentText(content: List<Content>, separator: String = "\n"): String =
-    content.filter { it.type == ContentType.TEXT }.joinToString(separator) { (it as TextContent).text }
 
 fun serializeConversation(messages: List<Message>): String {
     val parts = mutableListOf<String>()
