@@ -163,6 +163,25 @@ class GoogleGenerativeAiStreamTest {
     }
 
     @Test
+    fun `max tokens finish reason with a tool call stays length`() = runTest {
+        // Mirrors pi's google-raw-stop-reason: only STOP upgrades to toolUse;
+        // MAX_TOKENS keeps length even when a function call was streamed.
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"candidates":[{"content":{"parts":[
+                    {"functionCall":{"id":"call-1","name":"echo","args":{"value":"truncated"}}}
+                    ]},"finishReason":"MAX_TOKENS"}]}""",
+            ),
+        )
+        val events = events(transport)
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(StopReason.LENGTH, done.reason)
+        assertEquals("MAX_TOKENS", done.message.rawStopReason)
+        assertTrue(done.message.content.any { it is ToolCall })
+    }
+
+    @Test
     fun `error finish reason terminates with an error event carrying rawStopReason`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"SAFETY"}]}"""))

@@ -231,6 +231,20 @@ internal object GoogleStreamEngine {
         val state = State(model, clock.now().toEpochMilliseconds())
         try {
             // Retries cover only the request, never the SSE stream.
+            //
+            // Retry-policy equivalence (differences.md §5.1): upstream wraps
+            // the SDK call in `retryGoogleRequest` (google-shared.ts), whose
+            // only Google-specific behavior is normalizing the @google/genai
+            // ApiError (`status` without `headers`) so the generic provider
+            // retry applies; the policy itself — 408/409/429/5xx with backoff
+            // honoring retry-after — is exactly `retryProviderRequest`, which
+            // pi's other adapters use directly. There is no Google SDK here:
+            // transport errors already carry status + headers, so this call IS
+            // the equivalent of `retryGoogleRequest` and no Google-specific
+            // wrapper is ported. (Consequence of the direct-wire divergence:
+            // the SDK strips response headers, so Google retry-after is
+            // effectively ignored upstream; here the transport surfaces them
+            // and the shared policy honors them.)
             val response = retry.retryProviderRequest<TransportResponse>(
                 plan.maxRetries,
                 plan.maxRetryDelayMs,

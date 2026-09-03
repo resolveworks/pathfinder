@@ -109,6 +109,28 @@ class GoogleSharedConvertMessagesTest {
     }
 
     @Test
+    fun `still drops signed empty blocks from a different model`() {
+        val model = model()
+        val turns = contents(
+            model,
+            contextFor(
+                model.copy(id = "other-model"),
+                listOf(
+                    ThinkingContent("", validSig),
+                    TextContent("", validSig),
+                    ToolCall("call_1", "bash", """{"command":"ls"}"""),
+                ),
+            ),
+        )
+        val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
+        val parts = partsOf(modelTurn)
+        assertEquals(1, parts.size)
+        assertTrue(parts[0].containsKey("functionCall"))
+        // The signature is unusable for a different model and must not leak.
+        assertTrue(validSig !in modelTurn.toString())
+    }
+
+    @Test
     fun `invalid base64 signatures are dropped even for the same model`() {
         val model = model()
         val turns = contents(
@@ -279,6 +301,78 @@ class GoogleSharedConvertMessagesTest {
     }
 
     @Test
+    fun `preserves same-model tool call ids in function calls and responses`() {
+        for (modelId in listOf("gemini-3-pro-preview", "gemini-3.6-flash")) {
+            val model = model(id = modelId)
+            val turns = contents(
+                model,
+                Context(
+                    messages = listOf(
+                        UserMessage.ofText("Hi"),
+                        AssistantMessage(
+                            content = listOf(
+                                ToolCall("call_1", "bash", """{"command":"echo hi"}"""),
+                                ToolCall("call_2", "bash", """{"command":"ls -la"}"""),
+                            ),
+                            api = model.api, provider = model.provider, model = model.id,
+                            stopReason = StopReason.TOOL_USE,
+                        ),
+                        ToolResultMessage("call_1", "bash", listOf(TextContent("hi"))),
+                        ToolResultMessage("call_2", "bash", listOf(TextContent("files"))),
+                    ),
+                ),
+            )
+            val functionCallIds = turns.flatMap { partsOf(it) }
+                .mapNotNull { it["functionCall"]?.jsonObject?.get("id")?.jsonPrimitive?.content }
+            val functionResponseIds = turns.flatMap { partsOf(it) }
+                .mapNotNull { it["functionResponse"]?.jsonObject?.get("id")?.jsonPrimitive?.content }
+            assertEquals(listOf("call_1", "call_2"), functionCallIds)
+            assertEquals(listOf("call_1", "call_2"), functionResponseIds)
+        }
+    }
+
+    @Test
+    fun `unsigned gemini3 tool calls get no thought signature and no validator skip`() {
+        val model = model()
+        val turns = contents(
+            model,
+            contextFor(
+                model,
+                listOf(
+                    ToolCall("call_1", "bash", """{"command":"echo hi"}"""),
+                    ToolCall("call_2", "bash", """{"command":"ls -la"}"""),
+                ),
+            ),
+        )
+        val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
+        val functionCallParts = partsOf(modelTurn).filter { it.containsKey("functionCall") }
+        assertEquals(2, functionCallParts.size)
+        assertNull(functionCallParts[0]["thoughtSignature"])
+        assertNull(functionCallParts[1]["thoughtSignature"])
+        assertTrue("skip_thought_signature_validator" !in modelTurn.toString())
+        assertTrue("Historical context" !in modelTurn.toString())
+    }
+
+    @Test
+    fun `preserves tool call thought signature for the same model`() {
+        val model = model()
+        val turns = contents(
+            model,
+            contextFor(
+                model,
+                listOf(
+                    ToolCall("call_1", "bash", """{"command":"ls"}""", thoughtSignature = validSig),
+                    ToolCall("call_2", "bash", """{"command":"ls"}"""),
+                ),
+            ),
+        )
+        val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
+        val functionCallParts = partsOf(modelTurn).filter { it.containsKey("functionCall") }
+        assertEquals(validSig, functionCallParts[0]["thoughtSignature"]!!.jsonPrimitive.content)
+        assertNull(functionCallParts[1]["thoughtSignature"])
+    }
+
+    @Test
     fun `empty-string thinking signature falls through to the blank-drop path`() {
         val model = model()
         val transformed = transformMessages(
@@ -411,6 +505,15 @@ class GoogleSharedConvertToolsTest {
         assertTrue(GoogleShared.supportsGoogleStrictToolSampling("gemini-live-3.0"))
         assertTrue(!GoogleShared.supportsGoogleStrictToolSampling("gemini-2.5-flash"))
         assertTrue(!GoogleShared.supportsGoogleStrictToolSampling("gpt-oss-120b"))
+    }
+
+    /** Mirrors the requiresToolCallId table in pi's gemini3-unsigned-tool-call suite. */
+    @Test
+    fun `requiresToolCallId ports the upstream model table`() {
+        assertTrue(!GoogleShared.requiresToolCallId("gemini-2.5-flash"))
+        assertTrue(GoogleShared.requiresToolCallId("gemini-3.6-flash"))
+        assertTrue(GoogleShared.requiresToolCallId("claude-sonnet-4-5"))
+        assertTrue(GoogleShared.requiresToolCallId("gpt-oss-120b"))
     }
 
     @Test
