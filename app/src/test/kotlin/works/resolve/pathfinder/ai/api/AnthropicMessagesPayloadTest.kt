@@ -33,6 +33,9 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
+import works.resolve.pathfinder.ai.providers.ProviderCatalog
+import org.junit.Assume.assumeTrue
+import java.io.File
 
 class AnthropicMessagesPayloadTest {
 
@@ -62,6 +65,20 @@ class AnthropicMessagesPayloadTest {
         options: AnthropicMessagesOptions = AnthropicMessagesOptions(apiKey = "k"),
         model: Model = claude,
     ): JsonObject = buildRequestBody(model, context, isOAuthToken = false, options)
+
+    private var realCatalog: ProviderCatalog? = null
+
+    /** The generated asset, mirroring ProviderCatalogTest's realAsset(). */
+    private fun realAsset(): ProviderCatalog {
+        val file = File("src/main/assets/models-catalog.json")
+        assumeTrue("real catalog asset not found at ${file.absolutePath}", file.isFile)
+        var cached = realCatalog
+        if (cached == null) {
+            cached = ProviderCatalog.parse(file.readText())
+            realCatalog = cached
+        }
+        return cached
+    }
 
     @Test
     fun `basic request shape matches pi buildParams`() {
@@ -129,6 +146,39 @@ class AnthropicMessagesPayloadTest {
         val message = json["messages"]!!.jsonArray.single().jsonObject
         assertNull((message["content"] as JsonArray).single().jsonObject["cache_control"])
         assertNull(json["tools"]!!.jsonArray.single().jsonObject["cache_control"])
+    }
+
+    /**
+     * Ports cache-retention's default-TTL case: with no explicit retention and
+     * no PI_CACHE_RETENTION env, cache_control carries the type only — no ttl.
+     */
+    @Test
+    fun `default cache retention sends cache_control without a ttl`() {
+        val context = Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi")))
+        val cacheControl = body(context)["system"]!!.jsonArray.single().jsonObject["cache_control"]!!.jsonObject
+        assertEquals("ephemeral", cacheControl["type"]!!.jsonPrimitive.content)
+        assertEquals(setOf("type"), cacheControl.keys)
+    }
+
+    /**
+     * Ports cache-retention's proxy-baseUrl case: a non-api.anthropic.com
+     * baseUrl keeps the default supportsLongCacheRetention=true, so a long
+     * retention resolves to the 1h ttl for proxied models too.
+     */
+    @Test
+    fun `long retention applies the 1h ttl for proxy base urls`() {
+        val context = Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi")))
+        val proxy = claude.copy(baseUrl = "https://my-proxy.example.com/v1")
+        val json = body(
+            context,
+            AnthropicMessagesOptions(apiKey = "fake-key", env = mapOf("PI_CACHE_RETENTION" to "long")),
+            model = proxy,
+        )
+        assertEquals(
+            "1h",
+            json["system"]!!.jsonArray.single().jsonObject["cache_control"]!!
+                .jsonObject["ttl"]!!.jsonPrimitive.content,
+        )
     }
 
     @Test
@@ -232,6 +282,70 @@ class AnthropicMessagesPayloadTest {
         val allowBlock = allowJson["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray[0].jsonObject
         assertEquals("thinking", allowBlock["type"]!!.jsonPrimitive.content)
         assertEquals("", allowBlock["signature"]!!.jsonPrimitive.content)
+    }
+
+    /**
+     * Ports anthropic-empty-thinking-signature-compat: an empty *thinking*
+     * text is preserved as a thinking block as long as the signature is
+     * present, and whitespace-only signatures count as absent (normalized to
+     * "" when allowEmptySignature keeps the block).
+     */
+    @Test
+    fun `empty thinking text is preserved when the signature is present`() {
+        val signedEmptyThinking = AssistantMessage(
+            content = listOf(ThinkingContent("", "signed-thinking")),
+            api = "anthropic-messages",
+            provider = "anthropic",
+            model = "claude-sonnet-4-5",
+            stopReason = StopReason.STOP,
+        )
+        val json = body(Context(messages = listOf(signedEmptyThinking, UserMessage.ofText("next"))))
+        val block = json["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray[0].jsonObject
+        assertEquals("thinking", block["type"]!!.jsonPrimitive.content)
+        assertEquals("", block["thinking"]!!.jsonPrimitive.content)
+        assertEquals("signed-thinking", block["signature"]!!.jsonPrimitive.content)
+
+        val whitespaceSignature = signedEmptyThinking.copy(
+            content = listOf(ThinkingContent("internal reasoning", " ")),
+        )
+        val allowModel = claude.copy(anthropicCompat = claude.anthropicCompat.copy(allowEmptySignature = true))
+        val whitespaceBlock = body(
+            Context(messages = listOf(whitespaceSignature, UserMessage.ofText("next"))),
+            model = allowModel,
+        )["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray[0].jsonObject
+        assertEquals("thinking", whitespaceBlock["type"]!!.jsonPrimitive.content)
+        assertEquals("internal reasoning", whitespaceBlock["thinking"]!!.jsonPrimitive.content)
+        assertEquals("", whitespaceBlock["signature"]!!.jsonPrimitive.content)
+    }
+
+    /** Ports anthropic-empty-thinking-signature-compat's catalog case: Kimi
+     * Coding models are marked allowEmptySignature, so their empty-signature
+     * thinking blocks replay as thinking instead of degrading to text. */
+    @Test
+    fun `catalog kimi coding models keep empty-signature thinking blocks`() {
+        val k3 = realAsset().getModel("kimi-coding", "k3")!!
+        assertTrue(k3.anthropicCompat.allowEmptySignature)
+
+        val assistant = AssistantMessage(
+            content = listOf(ThinkingContent("internal reasoning", " ")),
+            api = "anthropic-messages",
+            provider = "kimi-coding",
+            model = "k3",
+            stopReason = StopReason.STOP,
+        )
+        val block = body(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("first"),
+                    assistant,
+                    UserMessage.ofText("second"),
+                ),
+            ),
+            model = k3,
+        )["messages"]!!.jsonArray[1].jsonObject["content"]!!.jsonArray[0].jsonObject
+        assertEquals("thinking", block["type"]!!.jsonPrimitive.content)
+        assertEquals("internal reasoning", block["thinking"]!!.jsonPrimitive.content)
+        assertEquals("", block["signature"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -388,6 +502,43 @@ class AnthropicMessagesPayloadTest {
         )
         val noTemp = claude.copy(anthropicCompat = claude.anthropicCompat.copy(supportsTemperature = false))
         assertFalse(body(context, AnthropicMessagesOptions(apiKey = "k", temperature = 0.7), model = noTemp).containsKey("temperature"))
+    }
+
+    /**
+     * Ports anthropic-temperature-compat against the generated catalog:
+     * Claude Opus 4.7/4.8 disable supportsTemperature (temperature omitted,
+     * including the default 1), while Opus 4.6 and Sonnet 4.6 keep it.
+     */
+    @Test
+    fun `catalog opus 4 7 and 4 8 omit temperature while opus 4 6 keeps it`() {
+        val catalog = realAsset()
+        val context = Context(messages = listOf(UserMessage.ofText("hi")))
+
+        for (modelId in listOf("claude-opus-4-7", "claude-opus-4-8")) {
+            val model = catalog.getModel("anthropic", modelId)!!
+            for (temperature in listOf(0.0, 1.0)) {
+                assertFalse(
+                    body(
+                        context,
+                        AnthropicMessagesOptions(apiKey = "k", temperature = temperature),
+                        model = model,
+                    ).containsKey("temperature"),
+                    "$modelId temperature=$temperature",
+                )
+            }
+        }
+        for (modelId in listOf("claude-opus-4-6", "claude-sonnet-4-6")) {
+            val model = catalog.getModel("anthropic", modelId)!!
+            assertEquals(
+                0.0,
+                body(
+                    context,
+                    AnthropicMessagesOptions(apiKey = "k", temperature = 0.0),
+                    model = model,
+                )["temperature"]!!.jsonPrimitive.content.toDouble(),
+                modelId,
+            )
+        }
     }
 
     @Test

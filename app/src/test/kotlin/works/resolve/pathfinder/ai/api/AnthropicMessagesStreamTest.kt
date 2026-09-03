@@ -18,6 +18,7 @@ import works.resolve.pathfinder.ai.core.SimpleToolChoice
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeTransport
+import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import kotlinx.coroutines.flow.take
@@ -27,6 +28,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Assume.assumeTrue
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -91,6 +94,20 @@ clock = FakeClock(1_770_000_000_000L),
     }
 
     private val messageStop = "message_stop" to """{"type":"message_stop"}"""
+
+    private var realCatalog: ProviderCatalog? = null
+
+    /** The generated asset, mirroring ProviderCatalogTest's realAsset(). */
+    private fun realAsset(): ProviderCatalog {
+        val file = File("src/main/assets/models-catalog.json")
+        assumeTrue("real catalog asset not found at ${file.absolutePath}", file.isFile)
+        var cached = realCatalog
+        if (cached == null) {
+            cached = ProviderCatalog.parse(file.readText())
+            realCatalog = cached
+        }
+        return cached
+    }
 
     private fun textStream(vararg deltas: String) = listOf(
         messageStart(),
@@ -354,6 +371,58 @@ clock = FakeClock(1_770_000_000_000L),
         assertEquals("Read", assertIs<ToolCall>(done.message.content.single()).name)
     }
 
+    /**
+     * Ports pi's anthropic-tool-name-normalization: the Claude-Code lookup
+     * is case-insensitive matching of CC tool names only — pi's old
+     * find→Glob *name mapping* broke the round-trip because no context tool
+     * is named "glob". Upstream is live-API gated; the wire round-trip runs
+     * here against the fake transport instead.
+     */
+    @Test
+    fun `claude code name normalization is a case-insensitive lookup, never a name mapping`() = runTest {
+        assertEquals("TodoWrite", toClaudeCodeName("todowrite"))
+        // "find" is not a Claude Code tool name: it must pass through unmapped.
+        assertEquals("find", toClaudeCodeName("find"))
+        val tools = listOf(
+            Tool("todowrite", "Write a todo item.", Json.parseToJsonElement("{}")),
+            Tool("find", "Find files by pattern.", Json.parseToJsonElement("{}")),
+            Tool("my_custom_tool", "A custom tool.", Json.parseToJsonElement("{}")),
+        )
+        assertEquals("todowrite", fromClaudeCodeName("TodoWrite", tools))
+        // Unmatched names pass through unchanged in both directions.
+        assertEquals("Glob", fromClaudeCodeName("Glob", tools))
+        assertEquals("my_custom_tool", fromClaudeCodeName("my_custom_tool", tools))
+
+        val toolContext = Context(messages = listOf(UserMessage.ofText("hi")), tools = tools)
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            messageStart(),
+            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_a","name":"TodoWrite"}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            "content_block_start" to """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_b","name":"find"}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":1}""",
+            messageDelta(stopReason = "tool_use"),
+            messageStop,
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport)
+                .stream(claude, toolContext, AnthropicMessagesOptions(apiKey = "sk-ant-oat-abc"))
+                .toList()
+                .last(),
+        )
+        // Inbound calls come back with the tools' original casing.
+        assertEquals(
+            listOf("todowrite", "find"),
+            done.message.content.map { assertIs<ToolCall>(it).name },
+        )
+        // Outbound tool definitions carry the Claude Code casing where one matches.
+        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertEquals(
+            listOf("TodoWrite", "find", "my_custom_tool"),
+            body["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content },
+        )
+    }
+
     @Test
     fun `stop reason mapping covers length refusal pause and sensitive`() = runTest {
         val transport = FakeTransport()
@@ -438,6 +507,68 @@ clock = FakeClock(1_770_000_000_000L),
         transport.enqueueNamedResponse(*(listOf(messageStart(), "ping" to """{}""") + textStream("x").drop(1)).toTypedArray())
         val last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         assertIs<AssistantMessageEvent.Done>(last)
+    }
+
+    /** Ports anthropic-sse-parsing: content_block_start may carry content. */
+    @Test
+    fun `preserves content from content_block_start events`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            messageStart(),
+            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"Initial text"}}""",
+            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" plus delta"}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            "content_block_start" to """{"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":"Initial thinking","signature":"initial signature"}}""",
+            "content_block_delta" to """{"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":" plus delta"}}""",
+            "content_block_delta" to """{"type":"content_block_delta","index":1,"delta":{"type":"signature_delta","signature":" plus delta"}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":1}""",
+            messageDelta(output = 5),
+            messageStop,
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+        )
+        assertEquals("Initial text plus delta", assertIs<TextContent>(done.message.content[0]).text)
+        val thinking = assertIs<ThinkingContent>(done.message.content[1])
+        assertEquals("Initial thinking plus delta", thinking.thinking)
+        assertEquals("initial signature plus delta", thinking.thinkingSignature)
+    }
+
+    /** Ports anthropic-sse-parsing: message_delta without usage is a no-op. */
+    @Test
+    fun `message_delta without usage is a no-op for usage accumulation`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            messageStart(input = 12),
+            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}""",
+            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+            messageDelta(stopReason = "end_turn"),
+            messageStop,
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+        )
+        assertEquals(StopReason.STOP, done.reason)
+        assertNull(done.message.errorMessage)
+        assertEquals("Hello", assertIs<TextContent>(done.message.content.single()).text)
+        assertEquals(12, done.message.usage.input)
+        assertEquals(12, done.message.usage.totalTokens)
+    }
+
+    /** Ports anthropic-sse-parsing: unknown events after message_stop are ignored. */
+    @Test
+    fun `ignores unknown sse events after message_stop`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(
+            *(textStream("Hello") + listOf("done" to "[DONE]", "proxy.stats" to "not json")).toTypedArray(),
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(
+            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+        )
+        assertEquals(StopReason.STOP, done.reason)
+        assertNull(done.message.errorMessage)
+        assertEquals("Hello", assertIs<TextContent>(done.message.content.single()).text)
     }
 
     @Test
@@ -849,6 +980,78 @@ clock = FakeClock(1_770_000_000_000L),
         val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
         assertEquals("adaptive", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("low", body["output_config"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
+    }
+
+    /**
+     * Ports anthropic-thinking-disable: with thinking off, budget-based and
+     * adaptive models alike send `thinking.type=disabled` (and nothing else),
+     * while models whose thinkingLevelMap declares `off: null` omit the
+     * field entirely. Upstream drives this through the live model catalog;
+     * the generated asset provides the same models.
+     */
+    @Test
+    fun `thinking off sends disabled for budget and adaptive models and omits it when off is null`() = runTest {
+        val catalog = realAsset()
+        val budget = catalog.getModel("anthropic", "claude-sonnet-4-5")!!
+        val adaptive = catalog.getModel("anthropic", "claude-opus-4-8")!!
+        val offUnsupported = catalog.getModel("anthropic", "claude-fable-5")!!
+
+        for (model in listOf(budget, adaptive)) {
+            val transport = FakeTransport()
+            transport.enqueueNamedResponse(textStream("ok"))
+            api(transport).streamSimple(model, context, SimpleStreamOptions(apiKey = "fake-key")).toList()
+            val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+            assertEquals(
+                """{"type":"disabled"}""",
+                body["thinking"].toString(),
+                "model ${model.id}",
+            )
+            assertNull(body["output_config"], "model ${model.id}")
+        }
+
+        val transport = FakeTransport()
+        transport.enqueueNamedResponse(textStream("ok"))
+        api(transport).streamSimple(offUnsupported, context, SimpleStreamOptions(apiKey = "fake-key")).toList()
+        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        assertNull(body["thinking"])
+        assertNull(body["output_config"])
+    }
+
+    /**
+     * Ports anthropic-thinking-disable: adaptive models map reasoning levels
+     * to `output_config.effort` — high by default, xhigh through the model's
+     * thinkingLevelMap (Claude Opus 4.8 / Sonnet 5).
+     */
+    @Test
+    fun `adaptive thinking maps high and xhigh reasoning to effort`() = runTest {
+        val catalog = realAsset()
+        val opus48 = catalog.getModel("anthropic", "claude-opus-4-8")!!
+        val sonnet5 = catalog.getModel("anthropic", "claude-sonnet-5")!!
+
+        val cases = mapOf(
+            opus48 to mapOf(ThinkingLevel.HIGH to "high", ThinkingLevel.XHIGH to "xhigh"),
+            sonnet5 to mapOf(ThinkingLevel.HIGH to "high"),
+        )
+        for ((model, levels) in cases) {
+            for ((level, expectedEffort) in levels) {
+                val transport = FakeTransport()
+                transport.enqueueNamedResponse(textStream("ok"))
+                api(transport)
+                    .streamSimple(model, context, SimpleStreamOptions(apiKey = "fake-key", reasoning = level))
+                    .toList()
+                val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+                assertEquals(
+                    """{"type":"adaptive","display":"summarized"}""",
+                    body["thinking"].toString(),
+                    "model ${model.id} level $level",
+                )
+                assertEquals(
+                    expectedEffort,
+                    body["output_config"]!!.jsonObject["effort"]!!.jsonPrimitive.content,
+                    "model ${model.id} level $level",
+                )
+            }
+        }
     }
 
     /**
