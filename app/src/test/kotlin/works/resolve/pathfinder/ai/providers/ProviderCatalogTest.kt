@@ -293,14 +293,14 @@ class ProviderCatalogTest {
                     "id": "p", "name": "P", "baseUrl": "https://p.test/v1",
                     "models": [
                       {"id": "a", "name": "A"},
-                      {"id": "b", "name": "B", "compat": {"supportsToolReferences": true}}
+                      {"id": "b", "name": "B", "compat": {"supportsInfiniteContext": true}}
                     ]
                   }]
                 }
                 """,
             )
         }
-        assertTrue("supportsToolReferences" in (error.message ?: ""))
+        assertTrue("supportsInfiniteContext" in (error.message ?: ""))
         assertTrue("p/b" in (error.message ?: ""))
     }
 

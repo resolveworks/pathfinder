@@ -2,9 +2,13 @@ package works.resolve.pathfinder.ai.utils
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class Uuidv7Test {
+
+    /** First 12 hex chars are the 48-bit big-endian timestamp. */
+    private fun parseTimestamp(id: String): Long = id.replace("-", "").substring(0, 12).toLong(16)
 
     @Test
     fun `produces canonical lowercase uuid format`() {
@@ -24,8 +28,7 @@ class Uuidv7Test {
         val before = System.currentTimeMillis()
         val id = uuidv7()
         val after = System.currentTimeMillis()
-        // First 12 hex chars are the 48-bit big-endian timestamp.
-        val timestamp = id.replace("-", "").substring(0, 12).toLong(16)
+        val timestamp = parseTimestamp(id)
         assertTrue(timestamp in before..after, "timestamp $timestamp outside [$before, $after]")
     }
 
@@ -39,5 +42,38 @@ class Uuidv7Test {
             assertTrue(current > previous, "not increasing: $previous -> $current")
             previous = current
         }
+    }
+
+    /** Ports uuid.test.ts "generates ordered UUIDv7s while preserving follower timestamps". */
+    @Test
+    fun `explicit timestamps are preserved for follower ids`() {
+        val followerTimestamp = System.currentTimeMillis() - 1_000
+        val first = uuidv7(followerTimestamp)
+        val second = uuidv7(followerTimestamp)
+        assertEquals(followerTimestamp, parseTimestamp(first))
+        assertEquals(followerTimestamp, parseTimestamp(second))
+        // The sequence still advances, so same-timestamp followers stay distinct
+        // and ordered.
+        assertTrue(first < second)
+        // Ordinary calls after a follower keep their own wall-clock timestamp.
+        val ordinary = uuidv7()
+        assertTrue(parseTimestamp(ordinary) >= followerTimestamp)
+    }
+
+    /** Ports uuid.test.ts "accepts timestamp boundary %s". */
+    @Test
+    fun `accepts timestamp boundaries`() {
+        assertEquals(0L, parseTimestamp(uuidv7(0)))
+        assertEquals((1L shl 48) - 1, parseTimestamp(uuidv7((1L shl 48) - 1)))
+    }
+
+    /**
+     * Ports uuid.test.ts "rejects invalid timestamp %s". The JS float cases
+     * (1.5, NaN, Infinity) are unrepresentable in the Long parameter.
+     */
+    @Test
+    fun `rejects invalid timestamps`() {
+        assertFailsWith<IllegalArgumentException> { uuidv7(-1) }
+        assertFailsWith<IllegalArgumentException> { uuidv7(1L shl 48) }
     }
 }

@@ -206,4 +206,54 @@ class OkHttpTransportTest {
         assertNull(server.takeRequest().getHeader("Authorization"))
         server.shutdown()
     }
+
+    /**
+     * Probe (E1 drift, pi #9047 class): what does okhttp-sse do with a
+     * terminal SSE frame whose `data:` line is never terminated by a
+     * newline? pi's adapters flush the residual buffer at EOF and dispatch
+     * the frame. okhttp-sse 5.5.0 never dispatches it, and how the stream
+     * breaks is timing- and environment-dependent: either its reader throws
+     * an internal okio `IllegalArgumentException("byteCount < 0: -1")` —
+     * surfaced by this transport as a mid-stream [NetworkException] failure
+     * of the event flow — or the read blocks indefinitely on an open
+     * connection (okhttp-sse cancels the call timeout before reading, so no
+     * read timeout rescues it). Both modes were verified against okhttp-sse
+     * 5.5.0: the crash via a standalone JVM reproduction, the hang via this
+     * suite itself. The test therefore pins the one stable property — the
+     * truncated terminal event is never dispatched and the flow never
+     * completes cleanly — using a bounded collection window. This is the
+     * accepted transport-boundary divergence (differences.md §7,
+     * OkHttpTransport KDoc). If this test ever fails, okhttp changed
+     * truncated-frame handling and both the KDoc and the codex divergence
+     * note should be revisited.
+     */
+    @Test
+    fun `unterminated terminal sse frame never dispatches nor completes cleanly`() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"a\":1}\n\ndata: [DONE]")
+                .setSocketPolicy(SocketPolicy.DISCONNECT_AT_END),
+        )
+        server.start()
+        val events = mutableListOf<SseEvent>()
+        val failure = runBlocking {
+            try {
+                withTimeout(2_000) {
+                    transport().post(request(server)).events.collect { events.add(it) }
+                }
+                null
+            } catch (error: Exception) {
+                error
+            }
+        }
+        // The terminated frame dispatches; the truncated terminal frame never
+        // does — the flow must fail (okhttp-sse internal error) or stall
+        // (timeout) rather than complete as a clean stream end.
+        assertEquals(listOf(SseEvent("""{"a":1}""")), events)
+        assertNotNull(failure, "truncated frame was flushed and dispatched — revisit the divergence notes")
+        server.shutdown()
+    }
 }

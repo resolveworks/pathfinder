@@ -129,7 +129,7 @@ class AnthropicOAuthRuntimeTest {
         assertEquals("Hi", assertIs<TextContent>(done.message.content.single()).text)
 
         val recorded = server.takeRequest()
-        assertEquals("/v1/messages", recorded.path)
+        assertEquals("/v1/messages?beta=true", recorded.path)
         assertEquals("Bearer sk-ant-oat-new", recorded.getHeader("Authorization"))
         assertEquals(null, recorded.getHeader("x-api-key"))
         assertTrue(

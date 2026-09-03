@@ -841,6 +841,8 @@ object OpenAiCompletionsPayload {
 
         mapToolChoice(options.toolChoice)?.let { body["tool_choice"] = it }
 
+        model.compat.vllmPriority?.let { body["priority"] = JsonPrimitive(it) }
+
         applyThinking(model, options, compat)?.let { body.putAll(it) }
 
         options.samplingParams?.let { body.putAll(it) }
@@ -869,7 +871,20 @@ object OpenAiCompletionsPayload {
         val effort = options.reasoningEffort?.takeIf { it != ModelThinkingLevel.OFF }
         val map = model.thinkingLevelMap
 
-        /** Unspecified passes the level through; explicit null omits the field. */
+        /**
+         * Unspecified passes the level through; an explicit null entry omits
+         * the field.
+         *
+         * Divergence (unreachable via [streamSimple]): in pi's zai/baseten
+         * branches an explicit null omits the field (typeof check), matching
+         * this behavior — but its qwen/deepseek/together/openrouter/plain
+         * branches fall back to the raw level name (`map[level] ?? level`).
+         * Those branches can only see an explicitly-null level through a
+         * direct `stream()` call here, because [streamSimple] clamps through
+         * `getSupportedThinkingLevels`, which never selects an explicit-null
+         * level; a direct caller passing one diverges (field omitted instead
+         * of the raw level name).
+         */
         fun mappedEffort(level: ModelThinkingLevel): String? {
             if (map == null) return level.name.lowercase()
             return if (map.isSpecified(level)) map.forLevel(level) else level.name.lowercase()
