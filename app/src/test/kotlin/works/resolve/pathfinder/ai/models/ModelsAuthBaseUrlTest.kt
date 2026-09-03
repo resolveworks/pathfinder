@@ -91,7 +91,7 @@ class ModelsAuthBaseUrlTest {
 
         assertEquals(1, authServer.requestCount)
         val recorded = authServer.takeRequest()
-        assertTrue(recorded.path!!.endsWith("/v1/messages"))
+        assertTrue(recorded.path!!.endsWith("/v1/messages?beta=true"))
         // pi's Copilot branch of anthropic-messages createClient: Bearer auth, no x-api-key.
         assertEquals("Bearer copilot-token", recorded.getHeader("Authorization"))
         assertNull(recorded.getHeader("x-api-key"))

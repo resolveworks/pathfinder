@@ -206,4 +206,30 @@ class OkHttpTransportTest {
         assertNull(server.takeRequest().getHeader("Authorization"))
         server.shutdown()
     }
+
+    /**
+     * Probe (E1 drift, pi #9047 class): does okhttp-sse dispatch a terminal
+     * SSE frame whose `data:` line is never terminated by a newline before
+     * EOF? pi's adapters flush the residual buffer at EOF; okhttp-sse 5.5.0's
+     * ServerSentEventReader returns false on a no-CRLF remainder and the
+     * frame is dropped. This pins the accepted transport-boundary divergence
+     * (differences.md §7, OkHttpTransport KDoc): a truncated terminal frame
+     * surfaces as a premature stream end, not as an event. If this test ever
+     * fails, okhttp started flushing EOF residuals and both the KDoc and the
+     * codex divergence note should be revisited.
+     */
+    @Test
+    fun `unterminated terminal sse frame is dropped at eof by okhttp-sse`() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"a\":1}\n\ndata: [DONE]"),
+        )
+        server.start()
+        val events = runBlocking { transport().post(request(server)).events.toList() }
+        assertEquals(listOf(SseEvent("""{"a":1}""")), events)
+        server.shutdown()
+    }
 }

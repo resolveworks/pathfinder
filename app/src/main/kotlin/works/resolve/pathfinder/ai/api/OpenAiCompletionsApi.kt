@@ -841,6 +841,8 @@ object OpenAiCompletionsPayload {
 
         mapToolChoice(options.toolChoice)?.let { body["tool_choice"] = it }
 
+        model.compat.vllmPriority?.let { body["priority"] = JsonPrimitive(it) }
+
         applyThinking(model, options, compat)?.let { body.putAll(it) }
 
         options.samplingParams?.let { body.putAll(it) }

@@ -808,4 +808,309 @@ class AnthropicMessagesPayloadTest {
         assertEquals(setOf("model"), fallbacks[1].jsonObject.keys)
         assertNull(body(context)["fallbacks"])
     }
+
+    // ---- Mid-conversation effort (ports anthropic-mid-conversation-effort.test.ts) ----
+
+    private fun managedModel(provider: String = "anthropic"): Model = claude.copy(
+        id = "claude-fable-5-1",
+        provider = provider,
+        anthropicCompat = claude.anthropicCompat.copy(
+            forceAdaptiveThinking = true,
+            supportsMidConvoEffort = true,
+        ),
+    )
+
+    private fun managedAssistant(model: Model, level: String? = null): AssistantMessage {
+        val providerLevel = level
+        return AssistantMessage(
+            content = listOf(
+                ThinkingContent("reasoning", thinkingSignature = "signature"),
+                TextContent("answer"),
+            ),
+            api = "anthropic-messages",
+            provider = model.provider,
+            model = model.id,
+            providerThinkingLevel = providerLevel,
+            stopReason = StopReason.STOP,
+            timestamp = 1,
+        )
+    }
+
+    private fun managedOptions(effort: AnthropicEffort? = null) = AnthropicMessagesOptions(
+        apiKey = "k",
+        cacheRetention = CacheRetention.NONE,
+        thinkingEnabled = true,
+        effort = effort,
+    )
+
+    private fun List<JsonObject>.effortMarkers(): List<JsonObject> =
+        filter { it["role"]!!.jsonPrimitive.content == "system" }
+
+    private fun JsonObject.wire(): String = toString()
+
+    @Test
+    fun `managed effort reconstructs the historical marker prefix and appends the current marker`() {
+        val model = managedModel()
+        val first = body(
+            Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
+            managedOptions(AnthropicEffort.LOW),
+            model,
+        )
+        val second = body(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("one", timestamp = 1),
+                    managedAssistant(model, "low"),
+                    UserMessage.ofText("two", timestamp = 2),
+                ),
+            ),
+            managedOptions(AnthropicEffort.HIGH),
+            model,
+        )
+
+        val firstMessages = first["messages"]!!.jsonArray.map { it.jsonObject }
+        val secondMessages = second["messages"]!!.jsonArray.map { it.jsonObject }
+        val lowMarker = """{"role":"system","content":[],"output_config":{"effort":"low"}}"""
+        val highMarker = """{"role":"system","content":[],"output_config":{"effort":"high"}}"""
+        assertEquals(
+            listOf("""{"role":"user","content":[{"type":"text","text":"one"}]}""", lowMarker),
+            firstMessages.map { it.wire() },
+        )
+        // The exact historical prefix reconstructs, and the current marker is last.
+        assertEquals(firstMessages.map { it.wire() }, secondMessages.take(firstMessages.size).map { it.wire() })
+        assertEquals(highMarker, secondMessages.last().wire())
+        // Top-level output_config stays "high"; active effort travels per-message.
+        assertEquals("""{"effort":"high"}""", second["output_config"].toString())
+        assertEquals("""{"effort":"high"}""", first["output_config"].toString())
+        assertEquals(
+            """{"type":"adaptive","display":"summarized","block_binding":{"prefix_mismatch_behavior":"drop_block"}}""",
+            second["thinking"].toString(),
+        )
+    }
+
+    @Test
+    fun `managed effort preserves each native effort level`() {
+        for (effort in AnthropicEffort.entries) {
+            val json = body(
+                Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
+                managedOptions(effort),
+                managedModel(),
+            )
+            val markers = json["messages"]!!.jsonArray.map { it.jsonObject }.effortMarkers()
+            assertEquals(
+                listOf("""{"role":"system","content":[],"output_config":{"effort":"${effort.name.lowercase()}"}}"""),
+                markers.map { it.wire() },
+                "effort $effort",
+            )
+        }
+    }
+
+    @Test
+    fun `managed effort defaults omitted effort to high and still enables drop_block`() {
+        val json = body(
+            Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
+            managedOptions(),
+            managedModel(),
+        )
+        assertEquals(
+            """{"role":"system","content":[],"output_config":{"effort":"high"}}""",
+            json["messages"]!!.jsonArray.map { it.jsonObject }.last().wire(),
+        )
+        assertEquals(
+            "drop_block",
+            json["thinking"]!!.jsonObject["block_binding"]!!.jsonObject["prefix_mismatch_behavior"]!!
+                .jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `managed effort invents no markers for legacy or other-provider assistants`() {
+        val model = managedModel()
+        val legacy = managedAssistant(model)
+        val otherProvider = managedAssistant(model, "low").copy(provider = "other-provider")
+        val json = body(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("one", timestamp = 1),
+                    legacy,
+                    UserMessage.ofText("two", timestamp = 2),
+                    otherProvider,
+                    UserMessage.ofText("three", timestamp = 3),
+                ),
+            ),
+            managedOptions(AnthropicEffort.MEDIUM),
+            model,
+        )
+        assertEquals(
+            listOf("""{"role":"system","content":[],"output_config":{"effort":"medium"}}"""),
+            json["messages"]!!.jsonArray.map { it.jsonObject }.effortMarkers().map { it.wire() },
+        )
+    }
+
+    @Test
+    fun `unsupported models stay on top-level effort`() {
+        val model = managedModel().copy(
+            anthropicCompat = managedModel().anthropicCompat.copy(supportsMidConvoEffort = false),
+        )
+        val json = body(
+            Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
+            managedOptions(AnthropicEffort.LOW),
+            model,
+        )
+        assertEquals(
+            listOf("""{"role":"user","content":[{"type":"text","text":"one"}]}"""),
+            json["messages"]!!.jsonArray.map { it.jsonObject }.map { it.wire() },
+        )
+        assertEquals("""{"effort":"low"}""", json["output_config"].toString())
+        assertEquals("""{"type":"adaptive","display":"summarized"}""", json["thinking"].toString())
+    }
+
+    @Test
+    fun `managed effort suppresses temperature`() {
+        val json = body(
+            Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
+            managedOptions().copy(temperature = 0.5),
+            managedModel(),
+        )
+        assertNull(json["temperature"])
+        // The same options still send temperature on an unmanaged model.
+        val unmanaged = body(
+            Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
+            managedOptions().copy(temperature = 0.5, thinkingEnabled = null),
+            managedModel().copy(anthropicCompat = claude.anthropicCompat.copy(forceAdaptiveThinking = true)),
+        )
+        assertEquals(0.5, unmanaged["temperature"]!!.jsonPrimitive.content.toDouble())
+    }
+
+    // ---- Deferred tools (ports the anthropic wiring of splitDeferredTools) ----
+
+    @Test
+    fun `defaultSupportsToolReferences gates on provider family and version`() {
+        fun model(id: String, provider: String = "anthropic") =
+            claude.copy(id = id, provider = provider)
+
+        assertTrue(defaultSupportsToolReferences(model("claude-sonnet-4-5")))
+        assertTrue(defaultSupportsToolReferences(model("claude-opus-4-6")))
+        assertTrue(defaultSupportsToolReferences(model("claude-fable-5-1")))
+        assertTrue(defaultSupportsToolReferences(model("claude-sonnet-5")))
+        // Haiku rejects client-side tool references.
+        assertFalse(defaultSupportsToolReferences(model("claude-haiku-4-5")))
+        // Claude 3.x and pre-4.5 Opus predate tool search.
+        assertFalse(defaultSupportsToolReferences(model("claude-3-7-sonnet-20250219")))
+        assertFalse(defaultSupportsToolReferences(model("claude-opus-4-1-20250805")))
+        assertFalse(defaultSupportsToolReferences(model("claude-opus-4-0")))
+        // Unknown families and other providers stay off.
+        assertFalse(defaultSupportsToolReferences(model("claude-mythos-preview")))
+        assertFalse(defaultSupportsToolReferences(model("claude-sonnet-4-5", provider = "openrouter")))
+        // An explicit compat value overrides the default in both directions.
+        assertTrue(
+            supportsToolReferences(
+                model("claude-haiku-4-5").copy(
+                    anthropicCompat = claude.anthropicCompat.copy(supportsToolReferences = true),
+                ),
+            ),
+        )
+        assertFalse(
+            supportsToolReferences(
+                model("claude-sonnet-4-5").copy(
+                    anthropicCompat = claude.anthropicCompat.copy(supportsToolReferences = false),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `deferred tools split into defer_loading definitions and tool_reference results`() {
+        val search = tool.copy(name = "search", description = "Search the web.")
+        val call = ToolCall(id = "toolu_search", name = "search", arguments = """{"q":"pi"}""")
+        val context = Context(
+            messages = listOf(
+                AssistantMessage(
+                    content = listOf(call),
+                    api = "anthropic-messages",
+                    provider = "anthropic",
+                    model = "claude-sonnet-4-5",
+                    stopReason = StopReason.TOOL_USE,
+                ),
+                ToolResultMessage(
+                    toolCallId = "toolu_search",
+                    toolName = "search",
+                    content = listOf(TextContent("search results")),
+                    addedToolNames = listOf("search"),
+                ),
+                UserMessage.ofText("next"),
+            ),
+            tools = listOf(tool, search),
+        )
+        val json = body(context, AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE))
+        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(listOf("edit", "search"), tools.map { it["name"]!!.jsonPrimitive.content })
+        assertNull(tools[0]["defer_loading"])
+        assertEquals(true, tools[1]["defer_loading"]!!.jsonPrimitive.content.toBoolean())
+
+        val messages = json["messages"]!!.jsonArray.map { it.jsonObject }
+        // Assistant tool_use, then the tool-result user message: the
+        // tool_reference replaces the ordinary content and the displaced text
+        // follows after the tool_result block.
+        val resultBlocks = messages[1]["content"]!!.jsonArray.map { it.jsonObject }
+        assertEquals("tool_use", messages[0]["content"]!!.jsonArray[0].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals(
+            """{"type":"tool_result","tool_use_id":"toolu_search","content":[{"type":"tool_reference","tool_name":"search"}],"is_error":false}""",
+            resultBlocks[0].wire(),
+        )
+        assertEquals("""{"type":"text","text":"search results"}""", resultBlocks[1].wire())
+        // No marker system messages: unmanaged model.
+        assertNull(json["output_config"])
+    }
+
+    @Test
+    fun `only the first load emits a tool_reference`() {
+        val search = tool.copy(name = "search")
+        val context = Context(
+            messages = listOf(
+                ToolResultMessage(
+                    toolCallId = "toolu_1",
+                    toolName = "search",
+                    content = listOf(TextContent("first load")),
+                    addedToolNames = listOf("search"),
+                ),
+                ToolResultMessage(
+                    toolCallId = "toolu_2",
+                    toolName = "search",
+                    content = listOf(TextContent("plain result")),
+                ),
+            ),
+            tools = listOf(tool, search),
+        )
+        val json = body(context, AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE))
+        val messages = json["messages"]!!.jsonArray.map { it.jsonObject }
+        val blocks = messages[0]["content"]!!.jsonArray.map { it.jsonObject }
+        // The second result has no addedToolNames and stays ordinary content.
+        assertEquals(
+            """{"type":"tool_result","tool_use_id":"toolu_2","content":"plain result","is_error":false}""",
+            blocks[1].wire(),
+        )
+    }
+
+    @Test
+    fun `all-deferred tools fall back to immediate`() {
+        val search = tool.copy(name = "search")
+        // A tool result that loaded "search" without a preceding assistant
+        // call leaves no immediate tools; everything is sent immediate.
+        val context = Context(
+            messages = listOf(
+                ToolResultMessage(
+                    toolCallId = "toolu_1",
+                    toolName = "search",
+                    content = listOf(TextContent("loaded")),
+                    addedToolNames = listOf("search"),
+                ),
+            ),
+            tools = listOf(search),
+        )
+        val json = body(context, AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE))
+        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(listOf("search"), tools.map { it["name"]!!.jsonPrimitive.content })
+        assertNull(tools[0]["defer_loading"])
+    }
 }

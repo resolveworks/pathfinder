@@ -384,6 +384,8 @@ private data class CompatDto(
     val supportsStrictTools: Boolean? = null,
     val forceAdaptiveThinking: Boolean? = null,
     val allowedFallbackModels: List<AllowedFallbackModelDto>? = null,
+    val supportsMidConvoEffort: Boolean? = null,
+    val supportsToolReferences: Boolean? = null,
     // Consumed via [Model.responsesCompat]; [supportsStrictMode] also maps
     // to the completions compat via [Model.compat].
     val supportsStrictMode: Boolean? = null,
@@ -396,6 +398,7 @@ private data class CompatDto(
     val supportsMaxOutputTokens: Boolean? = null,
     val requiresReasoningContentOnAssistantMessages: Boolean? = null,
     val deferredToolsMode: String? = null,
+    val vllmPriority: Int? = null,
 ) {
     fun toDomain(where: String, detectedCacheControlFormat: CacheControlFormat?) = OpenAiCompletionsCompat(
         supportsStore = supportsStore ?: true,
@@ -423,6 +426,7 @@ private data class CompatDto(
         requiresReasoningContentOnAssistantMessages =
             requiresReasoningContentOnAssistantMessages ?: false,
         deferredToolsMode = deferredToolsMode?.let { parseDeferredToolsMode(it, where) },
+        vllmPriority = vllmPriority,
     )
 
     /** Per-field defaults mirror pi's openai-responses getCompat. */
@@ -449,6 +453,8 @@ private data class CompatDto(
         supportsStrictTools = supportsStrictTools ?: false,
         forceAdaptiveThinking = forceAdaptiveThinking,
         allowedFallbackModels = allowedFallbackModels?.map { it.toDomain() } ?: emptyList(),
+        supportsMidConvoEffort = supportsMidConvoEffort ?: false,
+        supportsToolReferences = supportsToolReferences,
     )
 }
 

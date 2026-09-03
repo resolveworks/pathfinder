@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import works.resolve.pathfinder.ai.api.OpenAiCompletionsOptions
+import works.resolve.pathfinder.ai.utils.AssistantMessageDiagnostic
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.telemetry.TelemetryContext
@@ -171,6 +172,10 @@ data class AssistantMessage(
     val rawStopReason: String? = null,
     val responseId: String? = null,
     val responseModel: String? = null,
+    /** Exact provider-native effort level used for this response. Absent for legacy or unmanaged responses. */
+    val providerThinkingLevel: String? = null,
+    /** Redacted provider/runtime diagnostics for failures and recoveries. */
+    val diagnostics: List<AssistantMessageDiagnostic> = emptyList(),
     /** Codex end-of-turn flag from the terminal response. */
     val endTurn: Boolean? = null,
     override val timestamp: Long = 0L,
@@ -299,11 +304,18 @@ data class Context(
 
 /**
  * A successful stream emits `Start` first, then block events carrying
- * immutable partial snapshots, and terminates with `Done`. Failures at any
- * point — including auth or setup failures before anything is emitted — are
- * encoded as a terminal `Error` event, which may therefore arrive without a
- * preceding `Start`. `Done` and `Error` are mutually exclusive terminal
- * events.
+ * immutable partial snapshots, and terminates with `Done`. A stream may
+ * terminate directly with `Error` when request setup fails before generation
+ * starts; after `Start`, failures also terminate with `Error`. `Done` and
+ * `Error` are mutually exclusive terminal events, and updates and `Done`
+ * never appear before `Start`.
+ *
+ * `partial` is the shared live response-so-far helper, not an event-time
+ * snapshot. Text and thinking blocks are empty when their `*_start` event
+ * is emitted and grow only through their corresponding `*_delta` events
+ * until the authoritative `*_end`. Redacted thinking may be complete at
+ * start and emit no deltas. Tool-call arguments at `ToolCallStart` are
+ * provider-specific; `ToolCallDelta` carries subsequent JSON updates.
  *
  * Coroutine cancellation is not a failure: cancelling the collecting
  * coroutine propagates normally (the flow simply stops emitting) and no
@@ -653,6 +665,14 @@ data class OpenAiCompletionsCompat(
      * standard `tools` param entry.
      */
     val deferredToolsMode: DeferredToolsMode? = null,
+    /**
+     * vLLM scheduler priority sent as the top-level `priority` request field
+     * (lower values are handled earlier; server default 0). Only meaningful
+     * when vLLM runs with `--scheduling-policy priority`; useful for keeping
+     * background/batch work from stalling interactive sessions. Off by
+     * default; not set on the generated catalog.
+     */
+    val vllmPriority: Int? = null,
 )
 
 /** Only "kimi" exists upstream. */
@@ -682,6 +702,16 @@ data class AnthropicMessagesCompat(
     val supportsStrictTools: Boolean = false,
     /** null = unset, true/false explicit. */
     val forceAdaptiveThinking: Boolean? = null,
+    /** Whether the exact model transport supports effort-only system messages and thinking binding controls. Default: false. */
+    val supportsMidConvoEffort: Boolean = false,
+    /**
+     * Whether the provider supports deferred tools loaded by `tool_reference`
+     * blocks in tool results. Default is computed per model by
+     * [defaultSupportsToolReferences]: first-party Anthropic models except
+     * Haiku and models that predate tool search (older than Claude 4.5);
+     * false for other providers.
+     */
+    val supportsToolReferences: Boolean? = null,
     /**
      * Models Anthropic accepts in `fallbacks` for server-side refusal fallback,
      * with local pricing metadata for returned fallback responses. When empty,
@@ -751,8 +781,12 @@ enum class SessionAffinityFormat { OPENAI, OPENAI_NOSESSION, OPENROUTER }
  * The uniform stream contract every API adapter module implements (pi
  * `ProviderStreams.streamSimple`).
  *
- * Implementations stream assistant message events and encode failures in
- * the stream itself rather than throwing.
+ * pi's contract allows direct `streamSimple()` calls to throw synchronously
+ * when request auth is missing; once a stream is returned, request/model/
+ * runtime failures are encoded in the stream itself rather than thrown.
+ * Divergence: this port has no sync-throw case — every failure, including
+ * missing auth, is encoded as a terminal [AssistantMessageEvent.Error] in
+ * the returned flow.
  */
 interface ChatApi {
     fun streamSimple(

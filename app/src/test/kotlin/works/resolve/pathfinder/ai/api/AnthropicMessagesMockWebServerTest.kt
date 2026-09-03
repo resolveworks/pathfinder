@@ -86,11 +86,12 @@ class AnthropicMessagesMockWebServerTest {
         assertEquals(2, done.message.usage.output)
 
         val recorded = server.takeRequest()
-        assertEquals("/v1/messages", recorded.path)
+        assertEquals("/v1/messages?beta=true", recorded.path)
         assertEquals("test-key", recorded.getHeader("x-api-key"))
         assertEquals("2023-06-01", recorded.getHeader("anthropic-version"))
         assertEquals("application/json", recorded.getHeader("accept"))
-        assertEquals("interleaved-thinking-2025-05-14", recorded.getHeader("anthropic-beta"))
+        // Thinking not enabled: no composed beta features.
+        assertNull(recorded.getHeader("anthropic-beta"))
         assertNull(recorded.getHeader("Authorization"))
         val body = Json.parseToJsonElement(recorded.body.readUtf8()).jsonObject
         assertEquals("claude-sonnet-4-5", body["model"]!!.jsonPrimitive.content)

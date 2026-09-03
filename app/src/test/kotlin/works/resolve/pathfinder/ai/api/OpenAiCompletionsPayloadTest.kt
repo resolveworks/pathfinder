@@ -1507,4 +1507,20 @@ class OpenAiCompletionsPayloadTest {
         assertEquals("enabled", b["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("high", b["reasoning_effort"]!!.jsonPrimitive.content)
     }
+
+    /** Ports openai-completions-vllm-priority: top-level `priority` request field. */
+    @Test
+    fun `vllm priority sent as the top-level priority field when set`() {
+        val prioritized = model.copy(
+            compat = model.compat.copy(vllmPriority = 10),
+        )
+        val b = body(Context(messages = listOf(UserMessage.ofText("hi"))), model = prioritized)
+        assertEquals(10, b["priority"]!!.jsonPrimitive.longOrNull)
+    }
+
+    @Test
+    fun `priority omitted when vllmPriority is not set`() {
+        val b = body(Context(messages = listOf(UserMessage.ofText("hi"))))
+        assertNull(b["priority"])
+    }
 }

@@ -73,9 +73,20 @@ import works.resolve.pathfinder.telemetry.TelemetryContext
  *   Android always provides a WebSocket transport, so [webSocketTransport]
  *   is required. Real WebSocket connect/transport failures still fall back
  *   to SSE exactly like pi.
- * - AssistantMessage transport-failure diagnostics are not ported
- *   (AssistantMessage has no diagnostics field); the failure/retry behavior
- *   is preserved without the attached diagnostic.
+ * - AssistantMessage transport-failure diagnostics are not ported for the
+ *   Codex adapter's own failures (pi attaches them via
+ *   `createAssistantMessageDiagnostic`; the failure/retry behavior is
+ *   preserved without the attached diagnostic). The diagnostics field
+ *   itself now exists ([AssistantMessage.diagnostics]) and is populated by
+ *   the Anthropic adapter.
+ * - pi flushes unterminated SSE frames at EOF (fix for pi #9047: a server
+ *   closing the stream without a trailing blank line after the terminal
+ *   event). SSE framing here is delegated to okhttp-sse, which drops a
+ *   trailing unterminated frame (verified against okhttp-sse 5.5.0 — see
+ *   [works.resolve.pathfinder.ai.transport.OkHttpTransport]); the accepted
+ *   transport-boundary divergence (differences.md §7) means the terminal
+ *   event of such a truncated Codex stream surfaces as "stream ended
+ *   before a terminal response event" instead.
  * - pi's Node session-lifecycle cleanup hook has no counterpart; the public
  *   close/reset API ([closeOpenAICodexWebSocketSessions]) plus the pool's
  *   idle TTL and max connection age own cleanup.

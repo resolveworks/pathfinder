@@ -30,7 +30,9 @@ import works.resolve.pathfinder.ai.core.mergeHeaders
 import works.resolve.pathfinder.ai.core.toModelThinkingLevel
 import works.resolve.pathfinder.ai.core.toToolChoice
 import works.resolve.pathfinder.ai.models.calculateCost
+import works.resolve.pathfinder.ai.utils.AssistantMessageDiagnostic
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.appendAssistantMessageDiagnostic
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
 import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
@@ -41,6 +43,7 @@ import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
+import works.resolve.pathfinder.ai.utils.splitDeferredTools
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
@@ -78,7 +81,7 @@ internal fun getCacheControl(model: Model, options: AnthropicMessagesOptions): J
 }
 
 // Stealth mode: on OAuth requests, tool names mimic Claude Code's exactly.
-internal const val CLAUDE_CODE_VERSION = "2.1.75"
+internal const val CLAUDE_CODE_VERSION = "2.1.251"
 
 private val CLAUDE_CODE_TOOLS = listOf(
     "Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion",
@@ -87,6 +90,12 @@ private val CLAUDE_CODE_TOOLS = listOf(
 )
 
 private val CC_TOOL_LOOKUP = CLAUDE_CODE_TOOLS.associateBy { it.lowercase() }
+
+internal const val FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
+internal const val INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14"
+internal const val SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+internal const val MID_CONVERSATION_OUTPUT_CONFIG_BETA = "mid-conversation-output-config-2026-07-01"
+internal const val THINKING_BINDING_CONTROLS_BETA = "thinking-binding-controls-2026-08-01"
 
 internal fun toClaudeCodeName(name: String): String = CC_TOOL_LOOKUP[name.lowercase()] ?: name
 
@@ -237,21 +246,38 @@ class AnthropicMessagesApi(
         // Copilot is never OAuth: its Bearer-auth branch is checked first,
         // as in pi's createClient.
         val isOAuth = model.provider != "github-copilot" && options.apiKey?.let { isOAuthToken(it) } == true
-        val state = AnthropicStreamState(model, startedAtMs, isOAuth)
+        val providerThinkingLevel =
+            if (anthropicCompatOf(model).supportsMidConvoEffort) {
+                (options.effort ?: AnthropicEffort.HIGH).name.lowercase()
+            } else {
+                null
+            }
+        val state = AnthropicStreamState(model, startedAtMs, isOAuth, providerThinkingLevel)
         try {
             assertRequestAuth(model.provider, options.apiKey, options.headers)
 
             val retention = resolveCacheRetention(options.cacheRetention, options.env)
             val cacheSessionId = if (retention == CacheRetention.NONE) null else options.sessionId
 
-            val (headers, bearerToken) = buildHeaders(model, isOAuth, options, context, cacheSessionId)
             var params = buildRequestBody(model, context, isOAuth, options)
-            options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
+            options.onPayload?.let { hook ->
+                hook(params, model)?.let { next ->
+                    // A replacement payload must not turn off streaming.
+                    params = JsonObject(next.toMutableMap().apply { put("stream", JsonPrimitive(true)) })
+                }
+            }
+            // The beta namespace moves `betas` out of the body and into the
+            // `anthropic-beta` header (see getBetaFeatures).
+            val betas = (params["betas"] as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.content }
+                ?: emptyList()
+            params = JsonObject(params.toMutableMap().apply { remove("betas") })
             val body = params
                 .toString()
                 .toByteArray(Charsets.UTF_8)
 
-            val url = model.baseUrl.trimEnd('/') + "/v1/messages"
+            val (headers, bearerToken) = buildHeaders(model, isOAuth, options, context, cacheSessionId, betas)
+            val url = model.baseUrl.trimEnd('/') + "/v1/messages?beta=true"
             val request = TransportRequest(
                 url = url,
                 bearerToken = bearerToken,
@@ -282,7 +308,11 @@ class AnthropicMessagesApi(
                 throw ProviderStreamException(state.errorMessage ?: "An unknown error occurred")
             }
 
-            emit(AssistantMessageEvent.Done(state.stopReason, state.snapshot()))
+            var message = state.snapshot()
+            state.inputTransformationsDiagnostic(clock.now().toEpochMilliseconds())?.let { diagnostic ->
+                message = appendAssistantMessageDiagnostic(message, diagnostic)
+            }
+            emit(AssistantMessageEvent.Done(state.stopReason, message))
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             val finalMessage = state.snapshot().copy(
@@ -524,10 +554,94 @@ internal fun isOAuthToken(apiKey: String): Boolean = apiKey.contains("sk-ant-oat
 internal const val ANTHROPIC_VERSION = "2023-06-01"
 
 /**
+ * Default for [AnthropicMessagesCompat.supportsToolReferences]: first-party
+ * Anthropic models except Haiku (rejects client-side `tool_reference`
+ * blocks) and models that predate tool search (Claude 3.x, Opus/Sonnet 4.0,
+ * Opus 4.1).
+ */
+internal fun defaultSupportsToolReferences(model: Model): Boolean {
+    if (model.provider != "anthropic" || model.id.contains("haiku")) return false
+    val version = Regex("^claude-(?:opus|sonnet|fable)-(\\d+)(?:-(\\d+))?(?:-|$)").find(model.id) ?: return false
+    val major = version.groupValues[1].toInt()
+    // A long "minor" (a date suffix, >= 8 chars) is not a version minor.
+    val minor = version.groupValues[2].takeIf { it.isNotEmpty() && it.length < 8 }?.toInt() ?: 0
+    return major > 4 || (major == 4 && minor >= 5)
+}
+
+internal fun supportsToolReferences(model: Model): Boolean =
+    anthropicCompatOf(model).supportsToolReferences ?: defaultSupportsToolReferences(model)
+
+/**
+ * Composes the `anthropic-beta` feature list. An explicit `anthropic-beta`
+ * entry in model or options headers wins: a string replaces the composed
+ * list (split, trimmed, deduped), an explicit null suppresses betas entirely.
+ *
+ * The result travels as the `anthropic-beta` request header. pi passes it
+ * through the Anthropic SDK's beta namespace (`client.beta.messages.create`),
+ * which posts to `/v1/messages?beta=true`, strips `betas` from the JSON body,
+ * and sends `betas.join(",")` as the header — verified against
+ * `@anthropic-ai/sdk` 0.91.1. This port builds the same wire shape directly:
+ * [buildRequestBody] carries `betas` so [AnthropicMessagesOptions.onPayload]
+ * sees the same payload pi's hook sees, then `stream` moves it into the
+ * header.
+ */
+internal fun getBetaFeatures(
+    model: Model,
+    context: Context,
+    isOAuthToken: Boolean,
+    options: AnthropicMessagesOptions?,
+): List<String> {
+    var configuredFeatures: String? = null
+    var configured = false
+    for (headers in listOf<Map<String, String?>>(model.headers, options?.headers ?: emptyMap())) {
+        for ((name, value) in headers) {
+            if (name.lowercase() == "anthropic-beta") {
+                configuredFeatures = value
+                configured = true
+            }
+        }
+    }
+    if (configured) {
+        if (configuredFeatures == null) return emptyList()
+        return configuredFeatures.split(",").map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    }
+
+    val compat = anthropicCompatOf(model)
+    val features = mutableListOf<String>()
+    if (isOAuthToken) {
+        features.add("claude-code-20250219")
+        features.add("oauth-2025-04-20")
+    }
+    if (context.tools.isNotEmpty() && !compat.supportsEagerToolInputStreaming) {
+        features.add(FINE_GRAINED_TOOL_STREAMING_BETA)
+    }
+    if (
+        model.reasoning &&
+        options?.thinkingEnabled == true &&
+        options.interleavedThinking &&
+        compat.forceAdaptiveThinking != true
+    ) {
+        features.add(INTERLEAVED_THINKING_BETA)
+    }
+    if (compat.allowedFallbackModels.isNotEmpty()) {
+        features.add(SERVER_SIDE_FALLBACK_BETA)
+    }
+    if (compat.supportsMidConvoEffort) {
+        features.add(MID_CONVERSATION_OUTPUT_CONFIG_BETA)
+        features.add(THINKING_BINDING_CONTROLS_BETA)
+    }
+    return features.distinct()
+}
+
+/**
  * Divergence (owner decision): pi unconditionally sends
  * `anthropic-dangerous-direct-browser-access: true`, a CORS-relaxation
  * header for browser clients; Pathfinder's OkHttp transport is not a browser
  * client, so the header is deliberately not sent.
+ *
+ * [betas] is the composed feature list (see [getBetaFeatures]); it rides in
+ * the base layer so explicit model/options `anthropic-beta` headers still
+ * win through [mergeHeaders].
  */
 private fun buildHeaders(
     model: Model,
@@ -535,27 +649,15 @@ private fun buildHeaders(
     options: AnthropicMessagesOptions,
     context: Context,
     cacheSessionId: String?,
+    betas: List<String>,
 ): Pair<Map<String, String>, String?> {
     val compat = anthropicCompatOf(model)
-
-    // Adaptive thinking models have interleaved thinking built in.
-    val needsInterleavedBeta = options.interleavedThinking && compat.forceAdaptiveThinking != true
-    val betaFeatures = mutableListOf<String>()
-    if (context.tools.isNotEmpty() && !compat.supportsEagerToolInputStreaming) {
-        betaFeatures.add("fine-grained-tool-streaming-2025-05-14")
-    }
-    if (needsInterleavedBeta) {
-        betaFeatures.add("interleaved-thinking-2025-05-14")
-    }
-    if (compat.allowedFallbackModels.isNotEmpty()) {
-        betaFeatures.add("server-side-fallback-2026-07-01")
-    }
 
     if (model.provider == "github-copilot") {
         val base = buildMap<String, String?> {
             put("accept", "application/json")
             put("anthropic-version", ANTHROPIC_VERSION)
-            if (betaFeatures.isNotEmpty()) put("anthropic-beta", betaFeatures.joinToString(","))
+            if (betas.isNotEmpty()) put("anthropic-beta", betas.joinToString(","))
         }
         val merged = filterNonNull(
             mergeHeaders(
@@ -572,21 +674,16 @@ private fun buildHeaders(
     }
 
     if (isOAuth) {
-        val headers = mergeHeaders(
-            mapOf(
-                "accept" to "application/json",
-                "anthropic-version" to ANTHROPIC_VERSION,
-                "anthropic-beta" to (listOf("claude-code-20250219", "oauth-2025-04-20") + betaFeatures)
-                    .joinToString(","),
-            ),
-            mapOf(
-                "user-agent" to "claude-cli/2.1.75",
-                "x-app" to "cli",
-            ),
-        )
+        val base = buildMap<String, String?> {
+            put("accept", "application/json")
+            put("anthropic-version", ANTHROPIC_VERSION)
+            if (betas.isNotEmpty()) put("anthropic-beta", betas.joinToString(","))
+            put("user-agent", "claude-cli/$CLAUDE_CODE_VERSION")
+            put("x-app", "cli")
+        }
         return filterNonNull(
             mergeHeaders(
-                mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), headers),
+                mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), base),
                 mergeHeaders(model.headers, options.headers),
             ),
         ) to options.apiKey
@@ -604,7 +701,7 @@ private fun buildHeaders(
             put("accept", "application/json")
             put("anthropic-version", ANTHROPIC_VERSION)
             options.apiKey?.let { put("x-api-key", it) }
-            if (betaFeatures.isNotEmpty()) put("anthropic-beta", betaFeatures.joinToString(","))
+            if (betas.isNotEmpty()) put("anthropic-beta", betas.joinToString(","))
         },
         sessionAffinity,
     )
@@ -631,14 +728,44 @@ internal fun buildRequestBody(
     val cacheControl = getCacheControl(model, options)
     val compat = anthropicCompatOf(model)
     val transformed = transformMessages(context.messages, model) { id, _ -> normalizeToolCallId(id) }
+    val normalizeToolName: (String) -> String = if (isOAuthToken) ::toClaudeCodeName else { name -> name }
+    val toolPlacement = splitDeferredTools(
+        context.copy(messages = transformed),
+        supportsToolReferences(model),
+        normalizeToolName,
+    )
+    var immediateTools = toolPlacement.immediate
+    var deferredTools = toolPlacement.deferred.values.toList()
+    if (immediateTools.isEmpty() && deferredTools.isNotEmpty()) {
+        immediateTools = deferredTools
+        deferredTools = emptyList()
+    }
+    val deferredToolNames = deferredTools.map { normalizeToolName(it.name) }.toSet()
+    val managed = compat.supportsMidConvoEffort
+    val converted = convertMessages(
+        transformed,
+        isOAuthToken,
+        cacheControl,
+        compat.allowEmptySignature,
+        deferredToolNames,
+        normalizeToolName,
+        if (managed) model.provider else null,
+    )
+    val activeEffort = options.effort ?: AnthropicEffort.HIGH
+    val betaFeatures = getBetaFeatures(model, context, isOAuthToken, options)
 
     val body = mutableMapOf<String, JsonElement>()
     body["model"] = JsonPrimitive(model.id)
     body["messages"] = JsonArray(
-        convertMessages(transformed, isOAuthToken, cacheControl, compat.allowEmptySignature),
+        if (managed) insertThinkingLevelMessages(converted, activeEffort) else converted.messages,
     )
     body["max_tokens"] = JsonPrimitive(options.maxTokens ?: model.maxTokens)
     body["stream"] = JsonPrimitive(true)
+    // The transport moves `betas` into the anthropic-beta header (see
+    // getBetaFeatures); carried here so onPayload sees pi's payload shape.
+    if (betaFeatures.isNotEmpty()) {
+        body["betas"] = JsonArray(betaFeatures.map { JsonPrimitive(it) })
+    }
 
     // OAuth requests prepend the Claude Code identity to the system prompt.
     val systemBlocks = mutableListOf<JsonObject>()
@@ -652,24 +779,47 @@ internal fun buildRequestBody(
     }
     if (systemBlocks.isNotEmpty()) body["system"] = JsonArray(systemBlocks)
 
-    // Temperature is incompatible with extended thinking.
-    if (options.temperature != null && options.thinkingEnabled != true && compat.supportsTemperature) {
+    // Temperature is incompatible with extended thinking and unsupported on
+    // managed-effort models.
+    if (options.temperature != null &&
+        options.thinkingEnabled != true &&
+        !managed &&
+        compat.supportsTemperature
+    ) {
         body["temperature"] = JsonPrimitive(options.temperature)
     }
 
-    if (context.tools.isNotEmpty()) {
+    if (immediateTools.isNotEmpty() || deferredTools.isNotEmpty()) {
         body["tools"] = JsonArray(
             convertTools(
-                context.tools,
+                immediateTools,
                 isOAuthToken,
                 compat.supportsEagerToolInputStreaming,
                 compat.supportsStrictTools,
                 if (compat.supportsCacheControlOnTools) cacheControl else null,
+            ) + convertTools(
+                deferredTools,
+                isOAuthToken,
+                compat.supportsEagerToolInputStreaming,
+                compat.supportsStrictTools,
+                cacheControl = null,
+                deferLoading = true,
             ),
         )
     }
 
-    if (model.reasoning) {
+    // Managed effort models always use adaptive thinking so prefix mismatches
+    // can be dropped instead of surfacing as persistent 400 responses; the
+    // active effort travels per-message (see insertThinkingLevelMessages), so
+    // the top-level output_config stays "high".
+    if (managed) {
+        body["thinking"] = buildJsonObject {
+            put("type", "adaptive")
+            put("display", options.thinkingDisplay.name.lowercase())
+            put("block_binding", buildJsonObject { put("prefix_mismatch_behavior", "drop_block") })
+        }
+        body["output_config"] = buildJsonObject { put("effort", "high") }
+    } else if (model.reasoning) {
         if (options.thinkingEnabled == true) {
             val display = options.thinkingDisplay
             if (compat.forceAdaptiveThinking == true) {
@@ -743,13 +893,100 @@ private fun imageBlock(block: ImageContent): JsonObject = buildJsonObject {
     })
 }
 
+internal data class ConvertedAnthropicMessages(
+    val messages: List<JsonObject>,
+    /** Per-converted-message-index historical effort for managed models. */
+    val assistantLevels: Map<Int, AnthropicEffort>,
+)
+
+private fun isAnthropicEffort(value: String?): Boolean =
+    value == "low" || value == "medium" || value == "high" || value == "xhigh" || value == "max"
+
+private fun effortMarkerMessage(effort: AnthropicEffort): JsonObject = buildJsonObject {
+    put("role", "system")
+    put("content", JsonArray(emptyList()))
+    put("output_config", buildJsonObject { put("effort", effort.name.lowercase()) })
+}
+
+/**
+ * Managed-effort request shape: an effort-only system message precedes every
+ * assistant message with a recorded historical level, and the active effort
+ * is appended as the final marker.
+ */
+private fun insertThinkingLevelMessages(
+    converted: ConvertedAnthropicMessages,
+    activeEffort: AnthropicEffort,
+): List<JsonObject> {
+    val messages = mutableListOf<JsonObject>()
+    converted.messages.forEachIndexed { index, message ->
+        converted.assistantLevels[index]?.let { historicalEffort ->
+            messages.add(effortMarkerMessage(historicalEffort))
+        }
+        messages.add(message)
+    }
+    messages.add(effortMarkerMessage(activeEffort))
+    return messages
+}
+
+/**
+ * Converts one tool result. When it loads deferred tools, `tool_reference`
+ * blocks replace the ordinary content (Anthropic rejects mixing them), and
+ * the displaced content returns as sibling blocks to append after the whole
+ * consecutive tool-result run.
+ */
+private fun convertToolResult(
+    msg: ToolResultMessage,
+    isOAuthToken: Boolean,
+    deferredToolNames: Set<String>,
+    loadedToolNames: MutableSet<String>,
+    normalizeToolName: (String) -> String,
+): Pair<JsonObject, List<JsonObject>> {
+    val references = mutableListOf<JsonObject>()
+    for (name in msg.addedToolNames) {
+        val normalizedName = normalizeToolName(name)
+        if (normalizedName !in deferredToolNames || normalizedName in loadedToolNames) continue
+        loadedToolNames.add(normalizedName)
+        references.add(
+            buildJsonObject {
+                put("type", "tool_reference")
+                put("tool_name", if (isOAuthToken) toClaudeCodeName(name) else name)
+            },
+        )
+    }
+    val convertedContent = convertContentBlocks(msg.content)
+    val toolResult = buildJsonObject {
+        put("type", "tool_result")
+        put("tool_use_id", msg.toolCallId)
+        put(
+            "content",
+            when {
+                references.isNotEmpty() -> JsonArray(references)
+                convertedContent is JsonArray -> convertedContent
+                else -> JsonPrimitive(convertedContent.toString())
+            },
+        )
+        put("is_error", msg.isError)
+    }
+    val siblingContent: List<JsonObject> = when {
+        references.isEmpty() -> emptyList()
+        convertedContent is JsonArray -> convertedContent.toList().filterIsInstance<JsonObject>()
+        else -> listOf(textBlock(convertedContent.toString()))
+    }
+    return toolResult to siblingContent
+}
+
 internal fun convertMessages(
     transformedMessages: List<Message>,
     isOAuthToken: Boolean,
     cacheControl: JsonObject?,
     allowEmptySignature: Boolean,
-): List<JsonObject> {
+    deferredToolNames: Set<String> = emptySet(),
+    normalizeToolName: (String) -> String = { it },
+    managedProvider: String? = null,
+): ConvertedAnthropicMessages {
     val params = mutableListOf<JsonObject>()
+    val assistantLevels = mutableMapOf<Int, AnthropicEffort>()
+    val loadedToolNames = mutableSetOf<String>()
 
     var i = 0
     while (i < transformedMessages.size) {
@@ -831,40 +1068,49 @@ internal fun convertMessages(
                     }
                 }
                 if (blocks.isNotEmpty()) {
+                    val messageIndex = params.size
                     params.add(
                         buildJsonObject {
                             put("role", "assistant")
                             put("content", JsonArray(blocks))
                         },
                     )
+                    if (
+                        managedProvider != null &&
+                        assistant.api == "anthropic-messages" &&
+                        assistant.provider == managedProvider &&
+                        isAnthropicEffort(assistant.providerThinkingLevel)
+                    ) {
+                        assistantLevels[messageIndex] =
+                            AnthropicEffort.valueOf(assistant.providerThinkingLevel!!.uppercase())
+                    }
                 }
             }
             works.resolve.pathfinder.ai.core.MessageRole.TOOL_RESULT -> {
+                // Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint.
                 val toolResults = mutableListOf<JsonObject>()
+                val siblingContent = mutableListOf<JsonObject>()
                 var j = i
                 while (j < transformedMessages.size &&
                     transformedMessages[j].role == works.resolve.pathfinder.ai.core.MessageRole.TOOL_RESULT
                 ) {
-                    val toolResult = transformedMessages[j] as ToolResultMessage
-                    val convertedContent = convertContentBlocks(toolResult.content)
-                    toolResults.add(
-                        buildJsonObject {
-                            put("type", "tool_result")
-                            put("tool_use_id", toolResult.toolCallId)
-                            put(
-                                "content",
-                                if (convertedContent is JsonArray) convertedContent else JsonPrimitive(convertedContent.toString()),
-                            )
-                            put("is_error", toolResult.isError)
-                        },
+                    val (toolResult, siblings) = convertToolResult(
+                        transformedMessages[j] as ToolResultMessage,
+                        isOAuthToken,
+                        deferredToolNames,
+                        loadedToolNames,
+                        normalizeToolName,
                     )
+                    toolResults.add(toolResult)
+                    siblingContent.addAll(siblings)
                     j++
                 }
                 i = j - 1
+                // Displaced reference-bearing content must follow every tool_result block.
                 params.add(
                     buildJsonObject {
                         put("role", "user")
-                        put("content", JsonArray(toolResults))
+                        put("content", JsonArray(toolResults + siblingContent))
                     },
                 )
             }
@@ -902,7 +1148,7 @@ internal fun convertMessages(
         }
     }
 
-    return params
+    return ConvertedAnthropicMessages(params, assistantLevels)
 }
 
 private fun parseOrEmptyObject(arguments: String): JsonObject {
@@ -921,6 +1167,7 @@ internal fun convertTools(
     supportsEagerToolInputStreaming: Boolean,
     supportsStrictTools: Boolean,
     cacheControl: JsonObject?,
+    deferLoading: Boolean = false,
 ): List<JsonObject> = tools.mapIndexed { index, tool ->
     val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictTools)
     val parameters = getJsonSchemaToolParameters(tool, strict)
@@ -944,6 +1191,7 @@ internal fun convertTools(
         if (supportsEagerToolInputStreaming) put("eager_input_streaming", true)
         if (strict == true) put("strict", true)
         put("input_schema", inputSchema)
+        if (deferLoading) put("defer_loading", true)
         if (cacheControl != null && index == tools.size - 1) put("cache_control", cacheControl)
     }
 }
@@ -956,6 +1204,8 @@ internal class AnthropicStreamState(
     private val model: Model,
     private val timestampMs: Long,
     private val isOAuth: Boolean = false,
+    /** Managed-effort models record the active effort on every response. */
+    private val providerThinkingLevel: String? = null,
 ) {
     private sealed interface Block {
         val streamIndex: Int
@@ -1001,6 +1251,9 @@ internal class AnthropicStreamState(
      */
     private var usageModel: Model = model
 
+    /** `input_transformations` from message_start/message_delta, when arrays. */
+    private var inputTransformations: List<JsonElement>? = null
+
     var sawMessageStart = false
         private set
     var sawMessageStop = false
@@ -1011,6 +1264,7 @@ internal class AnthropicStreamState(
         val message = event.obj("message") ?: return emptyList()
         responseId = message["id"].strOrNull() ?: responseId
         responseModel = message["model"].strOrNull()
+        (message["input_transformations"] as? JsonArray)?.let { inputTransformations = it }
         if (responseModel != null && responseModel != model.id) {
             val fallbackCost = model.anthropicCompat.allowedFallbackModels
                 .find { it.provider == model.provider && it.model == responseModel }?.cost
@@ -1059,6 +1313,14 @@ internal class AnthropicStreamState(
                 if (isOAuth) blockName = fromClaudeCodeName(blockName, context.tools)
                 name = blockName
                 (contentBlock.obj("input"))?.let { seedJson = it.toString() }
+            }
+            // A pre-output fallback marker is expected; once output has begun
+            // it means the server swapped models mid-response.
+            "fallback" -> {
+                if (blocks.isNotEmpty()) {
+                    throw ProviderStreamException("Anthropic performed an unsupported mid-output model fallback")
+                }
+                return emptyList()
             }
             else -> return emptyList()
         }
@@ -1121,6 +1383,7 @@ internal class AnthropicStreamState(
     }
 
     fun onMessageDelta(event: JsonObject, model: Model): List<AssistantMessageEvent> {
+        (event["input_transformations"] as? JsonArray)?.let { inputTransformations = it }
         val delta = event.obj("delta")
         if (delta != null) {
             val stopReason = delta.str("stop_reason")
@@ -1184,6 +1447,34 @@ internal class AnthropicStreamState(
         return withTotal.copy(cost = calculateCost(usageModel, withTotal))
     }
 
+    /**
+     * Diagnostic for thinking-dropped input transformations reported by the
+     * serving model; the final stream event's list wins (message_delta
+     * replaces message_start's).
+     */
+    fun inputTransformationsDiagnostic(timestamp: Long): AssistantMessageDiagnostic? {
+        val transformations = inputTransformations ?: return null
+        if (transformations.isEmpty()) return null
+        return AssistantMessageDiagnostic(
+            type = "anthropic_input_transformations",
+            timestamp = timestamp,
+            details = buildJsonObject {
+                put(
+                    "transformations",
+                    JsonArray(
+                        transformations.map { transformation ->
+                            buildJsonObject {
+                                (transformation as? JsonObject)?.get("type").strOrNull()?.let { put("type", it) }
+                                (transformation as? JsonObject)?.get("path").strOrNull()?.let { put("path", it) }
+                                (transformation as? JsonObject)?.get("reason").strOrNull()?.let { put("reason", it) }
+                            }
+                        },
+                    ),
+                )
+            },
+        )
+    }
+
     fun snapshot(): AssistantMessage = AssistantMessage(
         content = blocks.map { block ->
             when (block) {
@@ -1205,6 +1496,7 @@ internal class AnthropicStreamState(
         rawStopReason = rawStopReason,
         responseId = responseId,
         responseModel = responseModel,
+        providerThinkingLevel = providerThinkingLevel,
         timestamp = timestampMs,
     )
 }
