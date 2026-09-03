@@ -69,6 +69,13 @@ private fun downgradeUnsupportedImages(messages: List<Message>, model: Model): L
  *
  * [ThinkingContent.thinkingSignature] truthiness mirrors pi: an empty-string
  * signature counts as absent and falls through to the blank-drop path.
+ *
+ * Divergence from pi (lax-message-content.test.ts): upstream normalizes
+ * null/missing message `content` from untyped callers to an empty array
+ * before transforming (pi issues #6259, #6276). Kotlin's non-null
+ * `Message.content: List<Content>` makes that laxness unrepresentable
+ * in-domain, and the session codec rejects missing content instead of
+ * repairing it, so no equivalent normalization exists here.
  */
 internal fun transformMessages(
     messages: List<Message>,

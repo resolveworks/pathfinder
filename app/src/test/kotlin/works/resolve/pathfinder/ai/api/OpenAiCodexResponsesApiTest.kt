@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ai.api
 
 import java.util.Base64
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
@@ -22,6 +23,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.put
+import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig
 import works.resolve.pathfinder.ai.core.Context
@@ -33,6 +35,8 @@ import works.resolve.pathfinder.ai.core.OpenAiResponsesCompat
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.Tool
+import works.resolve.pathfinder.ai.core.ToolCall
+import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.ThinkingLevelMap
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
@@ -41,6 +45,9 @@ import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.NetworkException
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
+import works.resolve.pathfinder.ai.providers.ProviderCatalog
+import java.io.File
+import org.junit.Assume.assumeTrue
 
 class OpenAiCodexResponsesApiTest {
 
@@ -642,6 +649,81 @@ class OpenAiCodexResponsesApiTest {
         assertEquals(0.002, done.message.usage.cost.input, 1e-9)
         assertEquals(0.004, done.message.usage.cost.output, 1e-9)
         assertEquals(0.006, done.message.usage.cost.total, 1e-9)
+    }
+
+    // Ports deferred-tools.test.ts "selects additional tools, tool search, or
+    // top-level tools for Codex models": catalog compat flags pick the mode.
+
+    private var realCatalog: ProviderCatalog? = null
+
+    /** The generated asset, mirroring ProviderCatalogTest's realAsset(). */
+    private fun realAsset(): ProviderCatalog {
+        val file = File("src/main/assets/models-catalog.json")
+        assumeTrue("real catalog asset not found at ${file.absolutePath}", file.isFile)
+        var cached = realCatalog
+        if (cached == null) {
+            cached = ProviderCatalog.parse(file.readText())
+            realCatalog = cached
+        }
+        return cached
+    }
+
+    @Test
+    fun `selects additional tools, tool search, or top-level tools for Codex models`() {
+        val catalog = realAsset()
+        val tools = listOf(
+            Tool("base_tool", "The base_tool tool", buildJsonObject { put("type", "object") }),
+            Tool("late_tool", "The late_tool tool", buildJsonObject { put("type", "object") }),
+        )
+        val context = Context(
+            messages = listOf(
+                UserMessage.ofText("Hello", 1),
+                AssistantMessage(
+                    content = listOf(ToolCall("call_1", "base_tool", "{}")),
+                    api = "anthropic-messages",
+                    provider = "anthropic",
+                    model = "claude-opus-4-6",
+                    stopReason = StopReason.TOOL_USE,
+                    timestamp = 2,
+                ),
+                ToolResultMessage(
+                    toolCallId = "call_1",
+                    toolName = "base_tool",
+                    content = listOf(TextContent("done")),
+                    addedToolNames = listOf("late_tool"),
+                    timestamp = 3,
+                ),
+                UserMessage.ofText("again", 4),
+            ),
+            tools = tools,
+        )
+
+        fun inputOf(modelId: String): List<JsonObject> {
+            val model = catalog.getModel("openai-codex", modelId)!!
+            return buildCodexRequestBody(model, context, null, null)["input"]!!.jsonArray.map { it.jsonObject }
+        }
+
+        fun toolNamesOf(modelId: String): List<String> {
+            val model = catalog.getModel("openai-codex", modelId)!!
+            return buildCodexRequestBody(model, context, null, null)["tools"]!!.jsonArray
+                .map { it.jsonObject["name"]!!.jsonPrimitive.content }
+        }
+
+        val additional = inputOf("gpt-5.6-sol")
+        val toolSearch = inputOf("gpt-5.4")
+        val topLevel = inputOf("gpt-5.3-codex-spark")
+
+        fun JsonObject.isType(name: String) = this["type"]?.jsonPrimitive?.content == name
+
+        assertEquals(listOf("base_tool"), toolNamesOf("gpt-5.6-sol"))
+        assertTrue(additional.any { it.isType("additional_tools") })
+        assertTrue(additional.none { it.isType("tool_search_output") })
+        assertEquals(listOf("base_tool"), toolNamesOf("gpt-5.4"))
+        assertTrue(toolSearch.none { it.isType("additional_tools") })
+        assertTrue(toolSearch.any { it.isType("tool_search_output") })
+        assertEquals(listOf("base_tool", "late_tool"), toolNamesOf("gpt-5.3-codex-spark"))
+        assertTrue(topLevel.none { it.isType("additional_tools") })
+        assertTrue(topLevel.none { it.isType("tool_search_output") })
     }
 }
 

@@ -633,6 +633,88 @@ class OpenAiCompletionsPayloadTest {
     }
 
     @Test
+    fun `emits Kimi deferred schemas after all tool results in a batch`() {
+        // Ports deferred-tools.test.ts "emits Kimi deferred schemas after all
+        // tool results in a batch": one bare-tools system message follows the
+        // whole consecutive tool-result run.
+        val kimiModel = TestCatalogs.GPT_4O.copy(
+            compat = TestCatalogs.GPT_4O.compat.copy(deferredToolsMode = DeferredToolsMode.KIMI),
+        )
+        fun deferredTool(name: String) = Tool(name = name, description = "$name tool", parameters = schema)
+        val context = Context(
+            tools = listOf(deferredTool("base_tool"), deferredTool("late_tool"), deferredTool("later_tool")),
+            messages = listOf(
+                UserMessage.ofText("hi", 1),
+                AssistantMessage(
+                    content = listOf(ToolCall("call_1", "base_tool", "{}")),
+                    api = "openai-completions",
+                    provider = "moonshotai",
+                    model = kimiModel.id,
+                    stopReason = StopReason.TOOL_USE,
+                    timestamp = 2,
+                ),
+                ToolResultMessage(
+                    toolCallId = "call_1",
+                    toolName = "base_tool",
+                    content = listOf(TextContent("done")),
+                    addedToolNames = listOf("late_tool"),
+                    timestamp = 3,
+                ),
+                ToolResultMessage(
+                    toolCallId = "call_2",
+                    toolName = "base_tool",
+                    content = listOf(TextContent("done")),
+                    addedToolNames = listOf("later_tool"),
+                    timestamp = 3,
+                ),
+                UserMessage.ofText("next", 4),
+            ),
+        )
+        val b = body(context, model = kimiModel)
+        val messages = b["messages"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(
+            listOf("user", "assistant", "tool", "tool", "system", "user"),
+            messages.map { it["role"]!!.jsonPrimitive.content },
+        )
+        val systemTools = messages[4]["tools"]!!.jsonArray
+            .map { it.jsonObject["function"]!!.jsonObject["name"]!!.jsonPrimitive.content }
+        assertEquals(listOf("late_tool", "later_tool"), systemTools)
+    }
+
+    @Test
+    fun `leaves OpenAI Completions tools unchanged without Kimi mode`() {
+        // Ports deferred-tools.test.ts "leaves OpenAI Completions tools
+        // unchanged without Kimi mode" (upstream uses groq): markers are inert
+        // unless the model's compat opts into deferred tool loading.
+        fun deferredTool(name: String) = Tool(name = name, description = "$name tool", parameters = schema)
+        val context = Context(
+            tools = listOf(deferredTool("base_tool"), deferredTool("late_tool")),
+            messages = listOf(
+                AssistantMessage(
+                    content = listOf(ToolCall("call_1", "base_tool", "{}")),
+                    api = "openai-completions",
+                    provider = "openai",
+                    model = openaiModel.id,
+                    stopReason = StopReason.TOOL_USE,
+                ),
+                ToolResultMessage(
+                    toolCallId = "call_1",
+                    toolName = "base_tool",
+                    content = listOf(TextContent("done")),
+                    addedToolNames = listOf("late_tool"),
+                ),
+            ),
+        )
+        val b = body(context, model = openaiModel)
+        assertEquals(
+            listOf("base_tool", "late_tool"),
+            b["tools"]!!.jsonArray
+                .map { it.jsonObject["function"]!!.jsonObject["name"]!!.jsonPrimitive.content },
+        )
+        assertTrue(b["messages"]!!.jsonArray.none { it.jsonObject.containsKey("tools") })
+    }
+
+    @Test
     fun `assistant thinking replayed in signature wire field`() {
         val b = body(
             Context(

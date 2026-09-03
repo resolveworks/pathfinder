@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ai.api
 
 import works.resolve.pathfinder.ai.testing.FakeClock
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -16,7 +17,9 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
+import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelCost
@@ -27,10 +30,15 @@ import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingLevelMap
 import works.resolve.pathfinder.ai.core.Tool
+import works.resolve.pathfinder.ai.core.ToolCall
+import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.providers.ProviderCatalog
+import java.io.File
+import org.junit.Assume.assumeTrue
 
 class OpenAiResponsesApiTest {
 
@@ -510,5 +518,158 @@ class OpenAiResponsesApiTest {
         val body = body(transport)
         assertEquals("none", body["tool_choice"]!!.jsonPrimitive.content)
         assertEquals(1, body["tools"]!!.jsonArray.size)
+    }
+
+    // ---- Deferred tools (ports deferred-tools.test.ts OpenAI Responses cases) ----
+
+    private var realCatalog: ProviderCatalog? = null
+
+    /** The generated asset, mirroring ProviderCatalogTest's realAsset(). */
+    private fun realAsset(): ProviderCatalog {
+        val file = File("src/main/assets/models-catalog.json")
+        assumeTrue("real catalog asset not found at ${file.absolutePath}", file.isFile)
+        var cached = realCatalog
+        if (cached == null) {
+            cached = ProviderCatalog.parse(file.readText())
+            realCatalog = cached
+        }
+        return cached
+    }
+
+    private fun makeTool(name: String) = Tool(name, "The $name tool", buildJsonObject { put("type", "object") })
+
+    /** Upstream makeContext(): base tool call, then a result that loads late_tool. */
+    private fun deferredContext(tools: List<Tool>): Context = Context(
+        messages = listOf(
+            UserMessage.ofText("Hello", 1),
+            AssistantMessage(
+                content = listOf(ToolCall("call_1", "base_tool", "{}")),
+                api = "anthropic-messages",
+                provider = "anthropic",
+                model = "claude-opus-4-6",
+                stopReason = StopReason.TOOL_USE,
+                timestamp = 2,
+            ),
+            ToolResultMessage(
+                toolCallId = "call_1",
+                toolName = "base_tool",
+                content = listOf(TextContent("done")),
+                addedToolNames = listOf("late_tool"),
+                timestamp = 3,
+            ),
+            UserMessage.ofText("again", 4),
+        ),
+        tools = tools,
+    )
+
+    private fun params(model: Model, context: Context): JsonObject =
+        buildParams(
+            model,
+            context,
+            OpenAiResponsesOptions(apiKey = "k"),
+            getCompat(model),
+            CacheRetention.SHORT,
+        )
+
+    private fun toolNames(json: JsonObject): List<String> =
+        json["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
+
+    private fun JsonObject.typeName(): String? = this["type"]?.jsonPrimitive?.content
+
+    @Test
+    fun `deferred tools load through additional_tools for gpt-5_4`() {
+        val model = realAsset().getModel("openai", "gpt-5.4")!!
+        val json = params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))
+        assertEquals(listOf("base_tool"), toolNames(json))
+        val input = json["input"]!!.jsonArray.map { it.jsonObject }
+        val additional = input.single { it.typeName() == "additional_tools" }
+        assertEquals("developer", additional["role"]!!.jsonPrimitive.content)
+        val tool = additional["tools"]!!.jsonArray.single().jsonObject
+        assertEquals("late_tool", tool["name"]!!.jsonPrimitive.content)
+        assertNull(tool["defer_loading"])
+        assertTrue(input.none { it.typeName()?.startsWith("tool_search") == true })
+    }
+
+    @Test
+    fun `additional_tools marker is preserved after the loaded tool is used`() {
+        val model = realAsset().getModel("openai", "gpt-5.4")!!
+        val messages = deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))).messages.toMutableList()
+        messages.addAll(
+            3,
+            listOf(
+                AssistantMessage(
+                    content = listOf(ToolCall("call_late|fc_late", "late_tool", "{}")),
+                    api = "openai-responses",
+                    provider = "openai",
+                    model = "gpt-5.4",
+                    stopReason = StopReason.TOOL_USE,
+                    timestamp = 3,
+                ),
+                ToolResultMessage(
+                    toolCallId = "call_late|fc_late",
+                    toolName = "late_tool",
+                    content = listOf(TextContent("done")),
+                    addedToolNames = listOf("late_tool"),
+                    timestamp = 3,
+                ),
+            ),
+        )
+        val context = Context(messages = messages, tools = listOf(makeTool("base_tool"), makeTool("late_tool")))
+        val json = params(model, context)
+        assertEquals(listOf("base_tool"), toolNames(json))
+        val input = json["input"]!!.jsonArray.map { it.jsonObject }
+        val additionalIndexes = input.indices.filter { input[it].typeName() == "additional_tools" }
+        val lateCallIndex = input.indexOfFirst {
+            it.typeName() == "function_call" && it["name"]!!.jsonPrimitive.content == "late_tool"
+        }
+        assertEquals(1, additionalIndexes.size)
+        assertTrue(additionalIndexes[0] < lateCallIndex)
+    }
+
+    @Test
+    fun `falls back to client tool search when additional_tools is unsupported`() {
+        val model = this.model.copy(
+            provider = "openai-proxy",
+            responsesCompat = OpenAiResponsesCompat(supportsToolSearch = true),
+        )
+        val json = params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))
+        assertEquals(listOf("base_tool"), toolNames(json))
+        val input = json["input"]!!.jsonArray.map { it.jsonObject }
+        val call = input.single { it.typeName() == "tool_search_call" }
+        val output = input.single { it.typeName() == "tool_search_output" }
+        assertEquals("client", call["execution"]!!.jsonPrimitive.content)
+        assertEquals("completed", call["status"]!!.jsonPrimitive.content)
+        assertEquals(call["call_id"]!!.jsonPrimitive.content, output["call_id"]!!.jsonPrimitive.content)
+        val tool = output["tools"]!!.jsonArray.single().jsonObject
+        assertEquals("late_tool", tool["name"]!!.jsonPrimitive.content)
+        assertEquals(true, tool["defer_loading"]!!.jsonPrimitive.content.toBoolean())
+        assertTrue(input.none { it.typeName() == "additional_tools" })
+    }
+
+    @Test
+    fun `uses the normal tool list for unsupported OpenAI models`() {
+        val catalog = realAsset()
+        for (modelId in listOf("gpt-5.2", "gpt-5.4-nano", "gpt-5.5-pro")) {
+            val model = catalog.getModel("openai", modelId)!!
+            val json = params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))
+            assertEquals(listOf("base_tool", "late_tool"), toolNames(json), modelId)
+            assertTrue(
+                json["input"]!!.jsonArray.map { it.jsonObject }.none { it.typeName() == "tool_search_output" },
+                modelId,
+            )
+        }
+    }
+
+    @Test
+    fun `uses the normal tool list when OpenAI tool search is explicitly disabled`() {
+        val model = realAsset().getModel("openai", "gpt-5.4")!!
+            .copy(provider = "openai-proxy", responsesCompat = OpenAiResponsesCompat())
+        val json = params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))
+        assertEquals(listOf("base_tool", "late_tool"), toolNames(json))
+        assertTrue(
+            json["input"]!!.jsonArray.map { it.jsonObject }.none {
+                it.typeName() == "tool_search_output" || it.typeName() == "additional_tools"
+            },
+        )
     }
 }

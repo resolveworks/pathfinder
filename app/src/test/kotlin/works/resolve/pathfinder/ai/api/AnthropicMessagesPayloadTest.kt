@@ -67,6 +67,15 @@ class AnthropicMessagesPayloadTest {
         model: Model = claude,
     ): JsonObject = buildRequestBody(model, context, isOAuthToken = false, options)
 
+    /** Deferred-tool OAuth cases run with the Claude Code name canonicalizer. */
+    private fun oauthBody(context: Context, model: Model = claude): JsonObject =
+        buildRequestBody(
+            model,
+            context,
+            isOAuthToken = true,
+            AnthropicMessagesOptions(apiKey = "sk-ant-oat-fake", cacheRetention = CacheRetention.NONE),
+        )
+
     private var realCatalog: ProviderCatalog? = null
 
     /** The generated asset, mirroring ProviderCatalogTest's realAsset(). */
@@ -1138,5 +1147,248 @@ class AnthropicMessagesPayloadTest {
         val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
         assertEquals(listOf("search"), tools.map { it["name"]!!.jsonPrimitive.content })
         assertNull(tools[0]["defer_loading"])
+    }
+
+    @Test
+    fun `preserves tool output as sibling content after emitting references across a batch`() {
+        // Ports deferred-tools.test.ts "preserves tool output as sibling content
+        // after emitting references": reference-bearing results emit only
+        // tool_reference content, and the displaced text/image follows every
+        // tool_result block of the consecutive run.
+        val search = tool.copy(name = "search")
+        val context = Context(
+            messages = listOf(
+                AssistantMessage(
+                    content = listOf(ToolCall("toolu_1", "edit", "{}"), ToolCall("toolu_2", "edit", "{}")),
+                    api = "anthropic-messages",
+                    provider = "anthropic",
+                    model = "claude-sonnet-4-5",
+                    stopReason = StopReason.TOOL_USE,
+                ),
+                ToolResultMessage(
+                    toolCallId = "toolu_1",
+                    toolName = "edit",
+                    content = listOf(TextContent("work completed"), ImageContent("aW1hZ2U=", "image/png")),
+                    addedToolNames = listOf("search"),
+                ),
+                ToolResultMessage("toolu_2", "edit", listOf(TextContent("second result"))),
+                UserMessage.ofText("next"),
+            ),
+            tools = listOf(tool, search),
+        )
+        val json = body(context, AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE))
+        val grouped = json["messages"]!!.jsonArray[1].jsonObject["content"]!!.jsonArray.map { it.jsonObject.wire() }
+        assertEquals(
+            listOf(
+                """{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"tool_reference","tool_name":"search"}],"is_error":false}""",
+                """{"type":"tool_result","tool_use_id":"toolu_2","content":"second result","is_error":false}""",
+                """{"type":"text","text":"work completed"}""",
+                """{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aW1hZ2U="}}""",
+            ),
+            grouped,
+        )
+    }
+
+    @Test
+    fun `does not resurrect a marked tool missing from Context tools`() {
+        // Ports deferred-tools.test.ts "does not resurrect a marked tool missing
+        // from Context.tools": without an active definition the marker stays
+        // inert and the ordinary result content survives.
+        val context = Context(
+            messages = listOf(
+                ToolResultMessage(
+                    toolCallId = "toolu_1",
+                    toolName = "edit",
+                    content = listOf(TextContent("done")),
+                    addedToolNames = listOf("search"),
+                ),
+            ),
+            tools = listOf(tool),
+        )
+        val json = body(context, AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE))
+        assertEquals(
+            listOf("edit"),
+            json["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content },
+        )
+        val resultContent = json["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray[0].jsonObject
+        assertEquals("done", (resultContent["content"] as kotlinx.serialization.json.JsonPrimitive).content)
+    }
+
+    @Test
+    fun `keeps a tool immediate when it was used before its marker`() {
+        // Ports deferred-tools.test.ts "keeps a tool immediate when it was used
+        // before its marker": the usedNames guard keeps an already-called tool
+        // out of the deferred set.
+        val search = tool.copy(name = "search")
+        val context = Context(
+            messages = listOf(
+                AssistantMessage(
+                    content = listOf(ToolCall("toolu_1", "search", "{}")),
+                    api = "anthropic-messages",
+                    provider = "anthropic",
+                    model = "claude-sonnet-4-5",
+                    stopReason = StopReason.TOOL_USE,
+                ),
+                ToolResultMessage(
+                    toolCallId = "toolu_1",
+                    toolName = "search",
+                    content = listOf(TextContent("loaded")),
+                    addedToolNames = listOf("search"),
+                ),
+            ),
+            tools = listOf(tool, search),
+        )
+        val json = body(context, AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE))
+        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(listOf("edit", "search"), tools.map { it["name"]!!.jsonPrimitive.content })
+        assertTrue(tools.none { it.containsKey("defer_loading") })
+    }
+
+    @Test
+    fun `loads a tool introduced by OpenAI history after switching to Anthropic`() {
+        // Ports deferred-tools.test.ts "loads a tool introduced by OpenAI
+        // history after switching to Anthropic": the marker travels with the
+        // message list, not the assistant's provider.
+        val search = tool.copy(name = "search")
+        val context = Context(
+            messages = listOf(
+                AssistantMessage(
+                    content = listOf(ToolCall("call_1", "edit", "{}")),
+                    api = "openai-responses",
+                    provider = "openai",
+                    model = "gpt-5.4",
+                    stopReason = StopReason.TOOL_USE,
+                ),
+                ToolResultMessage(
+                    toolCallId = "call_1",
+                    toolName = "edit",
+                    content = listOf(TextContent("done")),
+                    addedToolNames = listOf("search"),
+                ),
+            ),
+            tools = listOf(tool, search),
+        )
+        val json = body(context, AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE))
+        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(listOf("edit", "search"), tools.map { it["name"]!!.jsonPrimitive.content })
+        assertNull(tools[0]["defer_loading"])
+        assertEquals(true, tools[1]["defer_loading"]!!.jsonPrimitive.content.toBoolean())
+        val resultBlock = json["messages"]!!.jsonArray[1].jsonObject["content"]!!.jsonArray[0].jsonObject
+        assertEquals(
+            """{"type":"tool_reference","tool_name":"search"}""",
+            resultBlock["content"]!!.jsonArray[0].jsonObject.wire(),
+        )
+    }
+
+    @Test
+    fun `normalizes OAuth names before checking prior tool usage`() {
+        // Ports deferred-tools.test.ts "normalizes OAuth names before checking
+        // prior tool usage": Read/read canonicalize to one Claude Code name, so
+        // a tool the assistant already used stays immediate.
+        val read = tool.copy(name = "read", description = "Read a file.")
+        val context = Context(
+            messages = listOf(
+                AssistantMessage(
+                    content = listOf(ToolCall("toolu_1", "Read", "{}")),
+                    api = "anthropic-messages",
+                    provider = "anthropic",
+                    model = "claude-sonnet-4-5",
+                    stopReason = StopReason.TOOL_USE,
+                ),
+                ToolResultMessage(
+                    toolCallId = "toolu_1",
+                    toolName = "Read",
+                    content = listOf(TextContent("done")),
+                    addedToolNames = listOf("read"),
+                ),
+            ),
+            tools = listOf(tool, read),
+        )
+        val json = oauthBody(context)
+        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
+        // "edit" itself canonicalizes to the Claude Code "Edit" under OAuth.
+        assertEquals(listOf("Edit", "Read"), tools.map { it["name"]!!.jsonPrimitive.content })
+        assertTrue(tools.none { it.containsKey("defer_loading") })
+        val resultContent = json["messages"]!!.jsonArray[1].jsonObject["content"]!!.jsonArray[0].jsonObject
+        assertEquals("done", (resultContent["content"] as kotlinx.serialization.json.JsonPrimitive).content)
+    }
+
+    @Test
+    fun `matches OAuth-canonicalized markers to active tools`() {
+        // Ports deferred-tools.test.ts "matches OAuth-canonicalized markers to
+        // active tools": a "Read" marker defers the "read" tool and emits the
+        // canonical name in the reference.
+        val read = tool.copy(name = "read")
+        val context = Context(
+            messages = listOf(
+                ToolResultMessage(
+                    toolCallId = "toolu_1",
+                    toolName = "edit",
+                    content = listOf(TextContent("done")),
+                    addedToolNames = listOf("Read"),
+                ),
+            ),
+            tools = listOf(tool, read),
+        )
+        val json = oauthBody(context)
+        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
+        // "edit" itself canonicalizes to the Claude Code "Edit" under OAuth.
+        assertEquals(listOf("Edit", "Read"), tools.map { it["name"]!!.jsonPrimitive.content })
+        assertNull(tools[0]["defer_loading"])
+        assertEquals(true, tools[1]["defer_loading"]!!.jsonPrimitive.content.toBoolean())
+        val resultBlock = json["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray[0].jsonObject
+        assertEquals(
+            """{"type":"tool_reference","tool_name":"Read"}""",
+            resultBlock["content"]!!.jsonArray[0].jsonObject.wire(),
+        )
+    }
+
+    @Test
+    fun `deduplicates active tools after OAuth canonicalization`() {
+        // Ports deferred-tools.test.ts "deduplicates active tools after OAuth
+        // canonicalization": read/Read collapse to the later canonical entry.
+        val context = Context(
+            messages = listOf(UserMessage.ofText("hi")),
+            tools = listOf(
+                tool.copy(name = "read"),
+                tool.copy(name = "Read", description = "Canonical definition"),
+            ),
+        )
+        val json = oauthBody(context)
+        val tools = json["tools"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(1, tools.size)
+        assertEquals("Read", tools[0]["name"]!!.jsonPrimitive.content)
+        assertEquals("Canonical definition", tools[0]["description"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `prefilled pipe-separated tool call ids normalize identically on tool_use and tool_result`() {
+        // Ports the unit essence of tool-call-id-normalization.test.ts
+        // "Prefilled Context" (pi-mono #1022): OpenAI Responses ids
+        // (`{call_id}|{id}`, 400+ chars with +/=) must normalize on both sides
+        // of the exchange when replayed to Anthropic.
+        val failingId =
+            "call_pAYbIr76hXIjncD9UE4eGfnS|t5nnb2qYMFWGSsr13fhCd1CaCu3t3qONEPuOudu4HSVEtA8YJSL6FAZUxvoOoD792VIJWl91g87EdqsCWp9krVsdBysQoDaf9lMCLb8BS4EYi4gQd5kBQBYLlgD71PYwvf+TbMD9J9/5OMD42oxSRj8H+vRf78/l2Xla33LWz4nOgsddBlbvabICRs8GHt5C9PK5keFtzyi3lsyVKNlfduK3iphsZqs4MLv4zyGJnvZo/+QzShyk5xnMSQX/f98+aEoNflEApCdEOXipipgeiNWnpFSHbcwmMkZoJhURNu+JEz3xCh1mrXeYoN5o+trLL3IXJacSsLYXDrYTipZZbJFRPAucgbnjYBC+/ZzJOfkwCs+Gkw7EoZR7ZQgJ8ma+9586n4tT4cI8DEhBSZsWMjrCt8dxKg=="
+        val context = Context(
+            messages = listOf(
+                UserMessage.ofText("Use the echo tool to echo 'hello'"),
+                AssistantMessage(
+                    content = listOf(ToolCall(failingId, "echo", """{"message":"hello"}""")),
+                    api = "openai-responses",
+                    provider = "github-copilot",
+                    model = "gpt-5.2-codex",
+                    stopReason = StopReason.TOOL_USE,
+                ),
+                ToolResultMessage(failingId, "echo", listOf(TextContent("hello"))),
+                UserMessage.ofText("Say hi"),
+            ),
+        )
+        val json = body(context, AnthropicMessagesOptions(apiKey = "k", cacheRetention = CacheRetention.NONE))
+        val messages = json["messages"]!!.jsonArray
+        val toolUseId = messages[1].jsonObject["content"]!!.jsonArray[0].jsonObject["id"]!!.jsonPrimitive.content
+        val toolResultId =
+            messages[2].jsonObject["content"]!!.jsonArray[0].jsonObject["tool_use_id"]!!.jsonPrimitive.content
+        assertTrue(Regex("^[a-zA-Z0-9_-]{1,64}$").matches(toolUseId))
+        assertEquals(toolUseId, toolResultId)
     }
 }
