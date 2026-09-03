@@ -17,6 +17,7 @@ import works.resolve.pathfinder.ai.models.Models
 import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
+import works.resolve.pathfinder.ai.utils.contentText
 import works.resolve.pathfinder.data.sessions.BranchSummaryEntry
 import works.resolve.pathfinder.data.sessions.CompactionEntry
 import works.resolve.pathfinder.data.sessions.Conversation
@@ -28,6 +29,7 @@ import works.resolve.pathfinder.data.sessions.SessionEntry
 import works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
 import works.resolve.pathfinder.data.sessions.ActiveToolsEntry
 import works.resolve.pathfinder.data.sessions.CustomEntry
+import works.resolve.pathfinder.data.sessions.walkToRoot
 
 data class BranchSummaryResult(
     val summary: String,
@@ -47,23 +49,6 @@ data class CollectEntriesResult(
     val commonAncestorId: String?,
 )
 
-private fun walkToRoot(conversation: Conversation, start: String): List<SessionEntry> {
-    val path = mutableListOf<SessionEntry>()
-    val seen = HashSet<String>()
-    var current: SessionEntry? = conversation.entry(start)
-        ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Entry not found: $start")
-    while (current != null) {
-        if (!seen.add(current.id)) {
-            throw SessionError(SessionErrorCode.INVALID_ENTRY, "Session branch contains a cycle at ${current.id}")
-        }
-        path.add(current)
-        val parentId = current.parentId ?: break
-        current = conversation.entry(parentId)
-            ?: throw SessionError(SessionErrorCode.INVALID_ENTRY, "Entry not found: $parentId")
-    }
-    return path
-}
-
 /**
  * The old branch's entries from (exclusive) the deepest common ancestor of
  * [oldLeafId] and [targetId] down to [oldLeafId], in chronological order;
@@ -77,10 +62,10 @@ fun collectEntriesForBranchSummary(
     if (oldLeafId == null) {
         return CollectEntriesResult(entries = emptyList(), commonAncestorId = null)
     }
-    val oldPath = walkToRoot(conversation, oldLeafId).map { it.id }.toHashSet()
+    val oldPath = walkToRoot(conversation::entry, oldLeafId).map { it.id }.toHashSet()
     // The walk is leaf→root, so the first id shared with the old path is
     // the deepest common ancestor.
-    val targetPath = walkToRoot(conversation, targetId)
+    val targetPath = walkToRoot(conversation::entry, targetId)
     var commonAncestorId: String? = null
     for (entry in targetPath) {
         if (entry.id in oldPath) {

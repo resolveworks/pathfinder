@@ -22,6 +22,7 @@ import works.resolve.pathfinder.ai.models.ResolvedAuth
 import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
+import works.resolve.pathfinder.agent.utils.addUsage
 import works.resolve.pathfinder.data.sessions.CompactionEntry
 import works.resolve.pathfinder.data.sessions.MessageEntry
 import works.resolve.pathfinder.data.sessions.SessionEntry
@@ -371,7 +372,7 @@ class CompactionLlmTest {
             input = 1, output = 2, cacheRead = 3, cacheWrite = 4, cacheWrite1h = 0, reasoning = 3,
             totalTokens = 10, cost = Cost(input = 0.5, output = 0.5, cacheRead = 0.5, cacheWrite = 0.5, total = 2.0),
         )
-        val combined = combineUsage(first, second)
+        val combined = addUsage(first, second)
         assertEquals(11, combined.input)
         assertEquals(7, combined.output)
         assertEquals(6, combined.cacheRead)
