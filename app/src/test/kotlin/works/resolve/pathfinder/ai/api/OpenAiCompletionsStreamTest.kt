@@ -535,6 +535,24 @@ class OpenAiCompletionsStreamTest {
     }
 
     @Test
+    fun `empty finish reason is absent like pi truthiness`() = runTest {
+        // pi guards with `if (choice.finish_reason)`: "" is falsy, so the raw
+        // stop-reason mapping never sees it and the stream ends pending — for
+        // finish-reason-supporting models that is the missing-finish-reason error,
+        // not an error-stop with an empty raw reason.
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"choices":[{"delta":{"content":"hi"},"finish_reason":""}]}""",
+                "[DONE]",
+            ),
+        )
+        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val error = assertIs<AssistantMessageEvent.Error>(events.last())
+        assertEquals("Stream ended without finish_reason", error.error.errorMessage)
+    }
+
+    @Test
     fun `stream without finish reason fails`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"choices":[{"delta":{"content":"x"}}]}"""))

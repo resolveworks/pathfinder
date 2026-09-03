@@ -446,7 +446,10 @@ class OpenAiCompletionsApi(
             choice.obj("usage")?.let { state.usage = parseChunkUsage(it, model) }
         }
 
-        choice.str("finish_reason")?.let { raw ->
+        choice
+            .str("finish_reason")
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { raw ->
             state.rawStopReason = raw
             val (stopReason, errorMessage) = mapStopReason(raw)
             state.stopReason = stopReason
