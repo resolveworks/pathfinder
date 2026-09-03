@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.ai.auth
 
+import kotlinx.serialization.json.JsonElement
+
 /**
  * pi's `AbortSignal` parameters map to Kotlin structured concurrency: every
  * suspend function is cancellation-friendly, and flow implementations must
@@ -17,9 +19,77 @@ data class ModelAuth(
     val baseUrl: String? = null,
 )
 
-enum class AuthType(val wire: String) {
-    API_KEY("api_key"),
-    OAUTH("oauth"),
+/**
+ * Stored api-key credential. `env` holds provider-scoped environment/config
+ * values such as Cloudflare account or gateway ids; `key` is null for
+ * env-only credentials.
+ */
+data class ApiKeyCredential(
+    val key: String? = null,
+    val env: Map<String, String> = emptyMap(),
+) : Credential {
+    override val type: CredentialType = CredentialType.API_KEY
+
+    override fun toString(): String =
+        "ApiKeyCredential(key=<redacted>, env=${env.keys})"
+}
+
+/**
+ * Stored canonical OAuth credential: `access`, `refresh`, `expires` (epoch
+ * milliseconds) plus provider-specific extra fields, preserved verbatim in
+ * [extras] so unknown JSON round trips safely. Pi models extras as an index
+ * signature; the sealed type keeps them in an explicit map of raw JSON
+ * elements.
+ */
+data class OAuthCredential(
+    val access: String,
+    val refresh: String,
+    val expires: Long,
+    val extras: Map<String, JsonElement> = emptyMap(),
+) : Credential {
+    init {
+        // Extra fields are written verbatim next to the canonical fields;
+        // reserved names would corrupt the record on encode.
+        val reserved = extras.keys intersect RESERVED_FIELDS
+        require(reserved.isEmpty()) { "OAuth extra fields must not use reserved names: $reserved" }
+    }
+
+    override val type: CredentialType = CredentialType.OAUTH
+
+    override fun toString(): String =
+        "OAuthCredential(access=<redacted>, refresh=<redacted>, expires=$expires, extras=${extras.keys})"
+
+    companion object {
+        val RESERVED_FIELDS: Set<String> = setOf("type", "access", "refresh", "expires")
+    }
+}
+
+/**
+ * One type-tagged credential per provider — the shape of pi's `auth.json`.
+ *
+ * `toString` of every subtype redacts secret material; never log credentials.
+ */
+sealed interface Credential {
+    val type: CredentialType
+}
+
+enum class CredentialType {
+    API_KEY,
+    OAUTH,
+}
+
+/** Non-secret credential metadata for account/status enumeration. */
+data class CredentialInfo(
+    val providerId: String,
+    val type: CredentialType,
+)
+
+/** Environment access for auth resolution; injectable for tests. */
+interface AuthContext {
+    suspend fun env(name: String): String?
+
+    /** Check whether a file exists. Supports a leading `~`. */
+    suspend fun fileExists(path: String): Boolean
 }
 
 data class AuthResult(
@@ -35,18 +105,10 @@ data class AuthCheck(
     val type: AuthType,
 )
 
-/** Environment access for auth resolution; injectable for tests. */
-interface AuthContext {
-    suspend fun env(name: String): String?
-
-    /** Check whether a file exists. Supports a leading `~`. */
-    suspend fun fileExists(path: String): Boolean
+enum class AuthType(val wire: String) {
+    API_KEY("api_key"),
+    OAUTH("oauth"),
 }
-
-data class AuthInfoLink(
-    val url: String,
-    val label: String? = null,
-)
 
 /**
  * Prompt shown to the user during login. pi's per-prompt abort signal is
@@ -69,6 +131,11 @@ sealed interface AuthPrompt {
     /** Manual code entry, e.g. raced against an OAuth callback server. */
     data class ManualCode(val message: String, val placeholder: String? = null) : AuthPrompt
 }
+
+data class AuthInfoLink(
+    val url: String,
+    val label: String? = null,
+)
 
 sealed interface AuthEvent {
     data class Info(val message: String, val links: List<AuthInfoLink> = emptyList()) : AuthEvent
