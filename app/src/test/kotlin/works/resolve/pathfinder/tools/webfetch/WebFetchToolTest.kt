@@ -2,7 +2,7 @@ package works.resolve.pathfinder.tools.webfetch
 
 import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.agent.ToolExecutionMode
-import works.resolve.pathfinder.ai.core.TextContent
+import works.resolve.pathfinder.ai.TextContent
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject

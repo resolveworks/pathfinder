@@ -40,6 +40,11 @@ android {
 }
 
 dependencies {
+    implementation(project(":packages:ai"))
+    implementation(project(":packages:agent"))
+    implementation(project(":packages:coding-agent"))
+    implementation(project(":packages:telemetry"))
+
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel)
@@ -80,6 +85,7 @@ dependencies {
     implementation(libs.commonmark.ext.gfm.strikethrough)
     implementation(libs.commonmark.ext.task.list.items)
 
+    testImplementation(testFixtures(project(":packages:ai")))
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)

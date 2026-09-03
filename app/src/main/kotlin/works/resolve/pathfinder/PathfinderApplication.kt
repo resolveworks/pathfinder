@@ -5,7 +5,7 @@ import android.content.Context
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import works.resolve.pathfinder.agent.NativeAgentFactory
+import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
 import works.resolve.pathfinder.ai.transport.OkHttpWebSocketTransport
@@ -16,7 +16,7 @@ import works.resolve.pathfinder.ai.auth.ProviderAuthService
 import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
 import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
-import works.resolve.pathfinder.data.sessions.SessionStore
+import works.resolve.pathfinder.codingagent.core.session.SessionStore
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.logging.LogcatTelemetryContext
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool

@@ -1,17 +1,17 @@
 package works.resolve.pathfinder.ui.chat
 
 import works.resolve.pathfinder.agent.AgentState
-import works.resolve.pathfinder.ai.core.AssistantMessage
-import works.resolve.pathfinder.ai.core.Content
-import works.resolve.pathfinder.ai.core.Message
-import works.resolve.pathfinder.ai.core.TextContent
-import works.resolve.pathfinder.ai.core.ThinkingContent
-import works.resolve.pathfinder.ai.core.ToolCall
-import works.resolve.pathfinder.ai.core.ToolResultMessage
-import works.resolve.pathfinder.ai.core.UserMessage
-import works.resolve.pathfinder.data.sessions.CompactionEntry
-import works.resolve.pathfinder.data.sessions.Conversation
-import works.resolve.pathfinder.data.sessions.MessageEntry
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.Content
+import works.resolve.pathfinder.ai.Message
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingContent
+import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
+import works.resolve.pathfinder.codingagent.core.session.Conversation
+import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 
 /**
  * UI projection of the committed transcript: the active conversation path is

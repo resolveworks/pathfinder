@@ -63,8 +63,8 @@ import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthType
-import works.resolve.pathfinder.ai.core.ModelThinkingLevel
-import works.resolve.pathfinder.data.sessions.SessionSummary
+import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.codingagent.core.session.SessionSummary
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 import kotlinx.coroutines.launch
 

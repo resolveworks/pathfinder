@@ -32,7 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import works.resolve.pathfinder.R
-import works.resolve.pathfinder.ai.core.ModelThinkingLevel
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 
 /**
  * The "Default thinking level" row hides when the live session's model

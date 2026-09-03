@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.data.settings
 
+import works.resolve.pathfinder.codingagent.core.RetrySettings
+
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -12,8 +14,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
-import works.resolve.pathfinder.ai.core.ModelThinkingLevel
-import works.resolve.pathfinder.ai.core.modelThinkingLevelFromWire
+import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
 import works.resolve.pathfinder.ai.utils.lenientJson
 
 class SettingsRepository(
@@ -55,7 +57,7 @@ class SettingsRepository(
                 maxRetries = prefs[Keys.RETRY_MAX_RETRIES] ?: 3,
                 baseDelayMs = prefs[Keys.RETRY_BASE_DELAY_MS] ?: 2000,
             ),
-            compaction = works.resolve.pathfinder.agent.compaction.CompactionSettings(
+            compaction = works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings(
                 enabled = prefs[Keys.COMPACTION_ENABLED] ?: true,
                 reserveTokens = prefs[Keys.COMPACTION_RESERVE_TOKENS] ?: 16384,
                 keepRecentTokens = prefs[Keys.COMPACTION_KEEP_RECENT_TOKENS] ?: 20000,
@@ -72,7 +74,7 @@ class SettingsRepository(
         }
     }
 
-    override suspend fun setCompactionSettings(settings: works.resolve.pathfinder.agent.compaction.CompactionSettings) {
+    override suspend fun setCompactionSettings(settings: works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings) {
         dataStore.edit { prefs ->
             prefs[Keys.COMPACTION_ENABLED] = settings.enabled
             prefs[Keys.COMPACTION_RESERVE_TOKENS] = settings.reserveTokens

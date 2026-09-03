@@ -45,7 +45,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import works.resolve.pathfinder.R
-import works.resolve.pathfinder.ai.core.ModelThinkingLevel
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 
 internal const val ChatPageIndex = 0
 internal const val TreePageIndex = 1

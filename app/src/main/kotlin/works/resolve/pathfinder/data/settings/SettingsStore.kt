@@ -1,6 +1,8 @@
 package works.resolve.pathfinder.data.settings
 
-import works.resolve.pathfinder.ai.core.ModelThinkingLevel
+import works.resolve.pathfinder.codingagent.core.RetrySettings
+
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 
 /**
  * Settings boundary for UI-layer code, kept separate from
@@ -22,7 +24,7 @@ interface SettingsStore {
 
     suspend fun setRetrySettings(settings: RetrySettings)
 
-    suspend fun setCompactionSettings(settings: works.resolve.pathfinder.agent.compaction.CompactionSettings)
+    suspend fun setCompactionSettings(settings: works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings)
 
     /** `null` clears the model scope so all models are available. */
     suspend fun setEnabledModels(models: List<String>?)

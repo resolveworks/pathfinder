@@ -3,34 +3,34 @@ package works.resolve.pathfinder.ui.chat
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.viewModelScope
 import works.resolve.pathfinder.agent.AgentEvent
-import works.resolve.pathfinder.agent.AgentSession
-import works.resolve.pathfinder.ai.core.ChatApi
-import works.resolve.pathfinder.ai.core.Context
-import works.resolve.pathfinder.ai.core.SimpleStreamOptions
-import works.resolve.pathfinder.ai.models.Models
-import works.resolve.pathfinder.ai.models.Provider
+import works.resolve.pathfinder.codingagent.core.AgentSession
+import works.resolve.pathfinder.ai.ChatApi
+import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.SimpleStreamOptions
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.Provider
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
-import works.resolve.pathfinder.agent.NativeAgentFactory
-import works.resolve.pathfinder.agent.catalogAuthResolver
-import works.resolve.pathfinder.ai.models.ResolvedAuth
+import works.resolve.pathfinder.runtime.NativeAgentFactory
+import works.resolve.pathfinder.runtime.catalogAuthResolver
+import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.agent.Agent
-import works.resolve.pathfinder.agent.AgentFactory
+import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.agent.StreamFn
-import works.resolve.pathfinder.ai.core.AssistantMessage
-import works.resolve.pathfinder.ai.core.AssistantMessageEvent
-import works.resolve.pathfinder.ai.core.Message
-import works.resolve.pathfinder.ai.core.Model
-import works.resolve.pathfinder.ai.core.ModelThinkingLevel
-import works.resolve.pathfinder.ai.core.StopReason
-import works.resolve.pathfinder.ai.core.TextContent
-import works.resolve.pathfinder.ai.core.ThinkingContent
-import works.resolve.pathfinder.ai.core.ToolCall
-import works.resolve.pathfinder.ai.core.ToolResultMessage
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.Message
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingContent
+import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.agent.AgentTool
-import works.resolve.pathfinder.ai.core.Tool
+import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
@@ -52,11 +52,11 @@ import works.resolve.pathfinder.ai.auth.ProviderAuthService
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
-import works.resolve.pathfinder.data.sessions.MessageEntry
-import works.resolve.pathfinder.data.sessions.ModelChangeEntry
-import works.resolve.pathfinder.data.sessions.SessionRepository
-import works.resolve.pathfinder.data.sessions.SessionErrorCode
-import works.resolve.pathfinder.data.sessions.SessionStore
+import works.resolve.pathfinder.codingagent.core.session.MessageEntry
+import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.session.SessionRepository
+import works.resolve.pathfinder.codingagent.core.session.SessionErrorCode
+import works.resolve.pathfinder.codingagent.core.session.SessionStore
 import java.io.File
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
@@ -211,19 +211,19 @@ class ChatViewModelTest {
             private set
         var totalSaves = 0
             private set
-        val appendedRecords = ConcurrentLinkedQueue<works.resolve.pathfinder.data.sessions.LaneRecord>()
+        val appendedRecords = ConcurrentLinkedQueue<works.resolve.pathfinder.codingagent.core.session.LaneRecord>()
         var saveEntered: CompletableDeferred<Unit>? = null
         var saveGate: CompletableDeferred<Unit>? = null
-        override suspend fun appendRecord(sessionId: String, record: works.resolve.pathfinder.data.sessions.LaneRecord): works.resolve.pathfinder.data.sessions.LaneRecord {
+        override suspend fun appendRecord(sessionId: String, record: works.resolve.pathfinder.codingagent.core.session.LaneRecord): works.resolve.pathfinder.codingagent.core.session.LaneRecord {
             appendedRecords.add(record)
             return delegate.appendRecord(sessionId, record)
         }
 
-        override suspend fun save(session: works.resolve.pathfinder.data.sessions.Session): works.resolve.pathfinder.data.sessions.Session {
+        override suspend fun save(session: works.resolve.pathfinder.codingagent.core.session.Session): works.resolve.pathfinder.codingagent.core.session.Session {
             totalSaves += 1
             if (failSave) {
                 failedSaves += 1
-                throw works.resolve.pathfinder.data.sessions.SessionError(SessionErrorCode.STORAGE, "save failed")
+                throw works.resolve.pathfinder.codingagent.core.session.SessionError(SessionErrorCode.STORAGE, "save failed")
             }
             saveEntered?.complete(Unit)
             saveGate?.await()
@@ -722,7 +722,7 @@ class ChatViewModelTest {
 
         val session = h.sessionStore.load(sessionId)!!
         assertEquals(2, session.messages.size)
-        val assistant = session.messages[1] as works.resolve.pathfinder.ai.core.AssistantMessage
+        val assistant = session.messages[1] as works.resolve.pathfinder.ai.AssistantMessage
         assertEquals(StopReason.ABORTED, assistant.stopReason)
 
         vm.closeForTest()
@@ -738,7 +738,7 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.Ready }
 
         // Threshold trigger: usage beyond contextWindow - reserveTokens.
-        val bigUsage = works.resolve.pathfinder.ai.core.Usage(input = 190_000, output = 10, totalTokens = 190_010)
+        val bigUsage = works.resolve.pathfinder.ai.Usage(input = 190_000, output = 10, totalTokens = 190_010)
         h.scriptedStreams.add(
             flowOf(
                 AssistantMessageEvent.Start(h.assistant("")),
@@ -769,7 +769,7 @@ class ChatViewModelTest {
         val restored = vm2.uiState.first { it.status == ChatStatus.Ready }
         assertTrue(restored.messages.any { it.isCompactionMarker })
         val loaded = h.sessionStore.load(sessionId)!!
-        assertTrue(loaded.entries.any { it is works.resolve.pathfinder.data.sessions.CompactionEntry })
+        assertTrue(loaded.entries.any { it is works.resolve.pathfinder.codingagent.core.session.CompactionEntry })
         vm2.closeForTest()
     }
 
@@ -798,10 +798,10 @@ class ChatViewModelTest {
 
             val session = h.sessionStore.load(sessionId)!!
             assertEquals(3, session.messages.size)
-            val failed = session.messages[1] as works.resolve.pathfinder.ai.core.AssistantMessage
+            val failed = session.messages[1] as works.resolve.pathfinder.ai.AssistantMessage
             assertEquals(StopReason.ERROR, failed.stopReason)
             assertEquals("terminated", failed.errorMessage)
-            val recovered = session.messages[2] as works.resolve.pathfinder.ai.core.AssistantMessage
+            val recovered = session.messages[2] as works.resolve.pathfinder.ai.AssistantMessage
             assertEquals(StopReason.STOP, recovered.stopReason)
 
             vm.closeForTest()
@@ -1498,7 +1498,7 @@ class ChatViewModelTest {
         val session = h.sessionStore.create("Collide")
         val saved = h.sessionStore.save(
             session.withMessages(listOf(
-                works.resolve.pathfinder.ai.core.UserMessage.ofText("Hello", 123L),
+                works.resolve.pathfinder.ai.UserMessage.ofText("Hello", 123L),
                 h.assistant("World").copy(timestamp = 123L),
             )),
         )
@@ -1586,7 +1586,7 @@ class ChatViewModelTest {
         val other = h.sessionStore.create("Other")
         h.sessionStore.save(
             other.withMessages(listOf(
-                works.resolve.pathfinder.ai.core.UserMessage.ofText("Old", 1L),
+                works.resolve.pathfinder.ai.UserMessage.ofText("Old", 1L),
                 h.assistant("Stock").copy(timestamp = 2L),
             )),
         )
@@ -2348,9 +2348,12 @@ class ChatViewModelTest {
         assertEquals(6, restored.treeRows.size)
         val forkParent = restored.treeRows.first { it.id == assistantEntryId }        // Active branch reads first among the fork's children.
         val thirdId = (forked.entries.first { e ->
-            e is works.resolve.pathfinder.data.sessions.MessageEntry &&
-                e.message is works.resolve.pathfinder.ai.core.UserMessage &&
-                e.message.content.filterIsInstance<TextContent>().first().text == "Third"
+            e is works.resolve.pathfinder.codingagent.core.session.MessageEntry &&
+                (e.message as? works.resolve.pathfinder.ai.UserMessage)
+                    ?.content
+                    ?.filterIsInstance<TextContent>()
+                    ?.first()
+                    ?.text == "Third"
         }).id
         val childIds = restored.treeRows.filter { it.path.contains(assistantEntryId) && it.path.size == forkParent.path.size + 1 }.map { it.id }
         assertEquals(2, childIds.size)
@@ -2390,7 +2393,7 @@ class ChatViewModelTest {
         val seedChange = saved.entries.filterIsInstance<ModelChangeEntry>().single()
         val roots = saved.entries.filter { it.parentId == null }
         assertEquals(listOf(seedChange.id), roots.map { it.id })
-        assertEquals("Hello edited", (saved.messages[0] as works.resolve.pathfinder.ai.core.UserMessage).content.filterIsInstance<TextContent>().first().text)
+        assertEquals("Hello edited", (saved.messages[0] as works.resolve.pathfinder.ai.UserMessage).content.filterIsInstance<TextContent>().first().text)
 
         val rows = vm.uiState.value.treeRows
         assertEquals(4, rows.size)
@@ -2464,7 +2467,7 @@ class ChatViewModelTest {
         // new model's capabilities: glm-5.3 supports only low/high/max, so
         // the seeded medium clamps up to high and a thinking_level_change
         // lands beneath the model_change.
-        val switchThinking = saved.entries[5] as works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
+        val switchThinking = saved.entries[5] as works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
         assertEquals("high", switchThinking.thinkingLevel)
         assertEquals(switch.id, switchThinking.parentId)
         assertEquals(switchThinking.id, saved.leafId)
@@ -2509,7 +2512,7 @@ class ChatViewModelTest {
         val seeded = h.sessionStore.load(sessionId)!!
         assertEquals(
             listOf("medium"),
-            seeded.entries.filterIsInstance<works.resolve.pathfinder.data.sessions.ThinkingLevelEntry>()
+            seeded.entries.filterIsInstance<works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry>()
                 .map { it.thinkingLevel },
         )
 
@@ -2543,7 +2546,7 @@ class ChatViewModelTest {
         assertEquals(
             listOf("medium", "high"),
             h.sessionStore.load(sessionId)!!.entries
-                .filterIsInstance<works.resolve.pathfinder.data.sessions.ThinkingLevelEntry>()
+                .filterIsInstance<works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry>()
                 .map { it.thinkingLevel },
         )
 
@@ -2626,7 +2629,7 @@ class ChatViewModelTest {
         assertEquals(ModelThinkingLevel.LOW, reapply.thinkingLevel)
         vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 6 }
         val saved = h.sessionStore.load(sessionId)!!
-        val reapplyEntry = saved.entries.last() as works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
+        val reapplyEntry = saved.entries.last() as works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
         assertEquals("low", reapplyEntry.thinkingLevel)
         assertEquals((saved.entries[4] as ModelChangeEntry).id, reapplyEntry.parentId)
 
@@ -2660,7 +2663,7 @@ class ChatViewModelTest {
             "the branch entry survives reload; no re-seed over it",
             listOf("medium", "high"),
             h.sessionStore.load(sessionId)!!.entries
-                .filterIsInstance<works.resolve.pathfinder.data.sessions.ThinkingLevelEntry>()
+                .filterIsInstance<works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry>()
                 .map { it.thinkingLevel },
         )
 
@@ -2955,8 +2958,8 @@ class ChatViewModelTest {
             ),
         )
         h.createdAgents.last().replaceConversation(
-            works.resolve.pathfinder.data.sessions.Conversation.fromMessages(
-                listOf(works.resolve.pathfinder.ai.core.UserMessage.ofText("hi"), assistant),
+            works.resolve.pathfinder.codingagent.core.session.Conversation.fromMessages(
+                listOf(works.resolve.pathfinder.ai.UserMessage.ofText("hi"), assistant),
             ),
         )
 
@@ -3242,9 +3245,9 @@ class ChatViewModelTest {
         val assistantEntryId = vm.uiState.value.treeRows[1].id
         vm.navigateToTreeEntry(assistantEntryId, summarize = true)
 
-        waitUntil { h.sessionStore.load(sessionId)!!.entries.any { it is works.resolve.pathfinder.data.sessions.BranchSummaryEntry } }
+        waitUntil { h.sessionStore.load(sessionId)!!.entries.any { it is works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry } }
         val saved = h.sessionStore.load(sessionId)!!
-        val summary = saved.entries.filterIsInstance<works.resolve.pathfinder.data.sessions.BranchSummaryEntry>().single()
+        val summary = saved.entries.filterIsInstance<works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry>().single()
         assertEquals(assistantEntryId, summary.parentId)
         assertTrue(summary.summary.contains("explored the branch"))
         assertEquals(summary.id, saved.leafId)
@@ -3252,17 +3255,17 @@ class ChatViewModelTest {
         // The durable navigation operation records the summarize flag and the
         // pre-minted summaryEntryId.
         waitUntil {
-            h.sessions.appendedRecords.count { it is works.resolve.pathfinder.data.sessions.LaneRecord.OperationFinishedRecord } >= 3
+            h.sessions.appendedRecords.count { it is works.resolve.pathfinder.codingagent.core.session.LaneRecord.OperationFinishedRecord } >= 3
         }
         val records = h.sessions.appendedRecords.toList()
-        val navStart = records.filterIsInstance<works.resolve.pathfinder.data.sessions.LaneRecord.OperationStartedRecord>()
-            .last { it.intent.kind == works.resolve.pathfinder.data.sessions.OperationIntent.Kind.NAVIGATION }
+        val navStart = records.filterIsInstance<works.resolve.pathfinder.codingagent.core.session.LaneRecord.OperationStartedRecord>()
+            .last { it.intent.kind == works.resolve.pathfinder.codingagent.core.session.OperationIntent.Kind.NAVIGATION }
         assertEquals(assistantEntryId, navStart.intent.payload["targetId"]!!.jsonPrimitiveContent)
         assertEquals("true", navStart.intent.payload["summarize"]!!.jsonPrimitiveContent)
         assertEquals(summary.id, navStart.intent.payload["summaryEntryId"]!!.jsonPrimitiveContent)
-        val navFinish = records.filterIsInstance<works.resolve.pathfinder.data.sessions.LaneRecord.OperationFinishedRecord>().last()
+        val navFinish = records.filterIsInstance<works.resolve.pathfinder.codingagent.core.session.LaneRecord.OperationFinishedRecord>().last()
         assertEquals(navStart.id, navFinish.runId)
-        assertEquals(works.resolve.pathfinder.data.sessions.OperationOutcome.COMPLETED, navFinish.outcome)
+        assertEquals(works.resolve.pathfinder.codingagent.core.session.OperationOutcome.COMPLETED, navFinish.outcome)
 
         vm.closeForTest()
     }
@@ -3284,23 +3287,23 @@ class ChatViewModelTest {
 
         val vm2 = h.newViewModel()
         val finished = vm2.uiState.first { it.status == ChatStatus.Ready && it.activeSessionId == sessionId }
-        assertEquals(works.resolve.pathfinder.agent.LaneRecovery.Idle, finished.laneRecovery)
+        assertEquals(works.resolve.pathfinder.codingagent.core.session.LaneRecovery.Idle, finished.laneRecovery)
         vm2.closeForTest()
 
         // An unfinished operation record suspends the session.
         h.sessionStore.appendRecord(
             sessionId,
-            works.resolve.pathfinder.data.sessions.LaneRecord.OperationStartedRecord(
+            works.resolve.pathfinder.codingagent.core.session.LaneRecord.OperationStartedRecord(
                 id = "suspended-op",
                 lane = "main",
                 sourceLeafId = null,
-                intent = works.resolve.pathfinder.data.sessions.OperationIntent.run(),
+                intent = works.resolve.pathfinder.codingagent.core.session.OperationIntent.run(),
             ),
         )
         val vm3 = h.newViewModel()
         val suspended = vm3.uiState.first { it.status == ChatStatus.Ready && it.activeSessionId == sessionId }
         assertEquals(
-            works.resolve.pathfinder.agent.LaneRecovery.Suspended(works.resolve.pathfinder.data.sessions.OperationIntent.Kind.RUN),
+            works.resolve.pathfinder.codingagent.core.session.LaneRecovery.Suspended(works.resolve.pathfinder.codingagent.core.session.OperationIntent.Kind.RUN),
             suspended.laneRecovery,
         )
         vm3.closeForTest()
@@ -3324,7 +3327,7 @@ class ChatViewModelTest {
         // reducer's full validation classifies this as corruption.
         h.sessionStore.appendRecord(
             sessionId,
-            works.resolve.pathfinder.data.sessions.LaneRecord.AbortRequestedRecord(
+            works.resolve.pathfinder.codingagent.core.session.LaneRecord.AbortRequestedRecord(
                 id = "ghost-abort",
                 lane = "main",
                 runId = "no-such-operation",
@@ -3333,7 +3336,7 @@ class ChatViewModelTest {
         val vm2 = h.newViewModel()
         val corrupt = vm2.uiState.first { it.status == ChatStatus.Ready && it.activeSessionId == sessionId }
         assertEquals(
-            works.resolve.pathfinder.agent.LaneRecovery.Corrupt(works.resolve.pathfinder.agent.RecordLogCorruptionReason.UNKNOWN_OPERATION),
+            works.resolve.pathfinder.codingagent.core.session.LaneRecovery.Corrupt(works.resolve.pathfinder.codingagent.core.session.RecordLogCorruptionReason.UNKNOWN_OPERATION),
             corrupt.laneRecovery,
         )
         vm2.closeForTest()

@@ -6,9 +6,9 @@ import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
-import works.resolve.pathfinder.ai.core.ModelThinkingLevel
-import works.resolve.pathfinder.agent.LaneRecovery
-import works.resolve.pathfinder.data.sessions.SessionSummary
+import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.codingagent.core.session.LaneRecovery
+import works.resolve.pathfinder.codingagent.core.session.SessionSummary
 
 enum class ChatRole {
     User,
@@ -189,7 +189,7 @@ internal fun providerAuthScreenMode(methods: List<AuthMethodInfo>): ProviderAuth
     else -> ProviderAuthScreenMode.NO_METHODS
 }
 
-/** The live model of the bound [works.resolve.pathfinder.agent.AgentSession], or null while unbound. */
+/** The live model of the bound [works.resolve.pathfinder.codingagent.core.AgentSession], or null while unbound. */
 data class SelectedModel(
     val providerId: String,
     val providerName: String,

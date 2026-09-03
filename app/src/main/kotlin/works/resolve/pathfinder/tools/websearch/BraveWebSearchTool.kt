@@ -1,10 +1,10 @@
 package works.resolve.pathfinder.tools.websearch
 
-import works.resolve.pathfinder.agent.AgentSession
+import works.resolve.pathfinder.codingagent.core.AgentSession
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.AgentToolResult
-import works.resolve.pathfinder.ai.core.TextContent
-import works.resolve.pathfinder.ai.core.Tool
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.lenientJson

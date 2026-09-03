@@ -4,12 +4,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import works.resolve.pathfinder.ai.core.AssistantMessage
-import works.resolve.pathfinder.ai.core.StopReason
-import works.resolve.pathfinder.ai.core.TextContent
-import works.resolve.pathfinder.ai.core.UserMessage
-import works.resolve.pathfinder.data.sessions.Conversation
-import works.resolve.pathfinder.data.sessions.MessageEntry
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.codingagent.core.session.Conversation
+import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 
 class TreeProjectionTest {
 
@@ -29,7 +29,7 @@ class TreeProjectionTest {
         timestamp = clock++,
     )
 
-    private fun entry(id: String, parent: String?, message: works.resolve.pathfinder.ai.core.Message) =
+    private fun entry(id: String, parent: String?, message: works.resolve.pathfinder.ai.Message) =
         MessageEntry(id, seq = 0L, parentId = parent, timestamp = clock++, message = message)
 
     private fun rows(conversation: Conversation, filter: TreeFilter = TreeFilter.DEFAULT) =

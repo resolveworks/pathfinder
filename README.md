@@ -33,15 +33,14 @@ evolve.
 
 The codebase has two boundaries:
 
-- The native Kotlin runtime owns model and provider behavior, streaming, agent
-  state, and conversation semantics. `works.resolve.pathfinder.ai` follows pi's
-  `packages/ai`, while `works.resolve.pathfinder.agent` follows
-  `packages/agent`; session behavior likewise follows pi's branching session
-  model.
-- The Android shell owns Compose UI, lifecycle, navigation, settings, secure
-  credentials, persistence adapters, and other platform capabilities. It
-  projects runtime state through a conventional MVVM/UDF flow instead of
-  reimplementing agent behavior in the UI.
+- The native Kotlin runtime lives under `packages/`, with Gradle modules that
+  mirror pi's `packages/ai`, `packages/agent`, `packages/coding-agent`, and
+  `packages/telemetry`. It owns model and provider behavior, streaming, agent
+  state, compaction, persistence, recovery, and conversation semantics.
+- The Android shell lives under `app/` and owns Compose UI, lifecycle,
+  navigation, settings, secure credential storage, platform adapters, and
+  app-specific tools. It projects runtime state through a conventional
+  MVVM/UDF flow instead of reimplementing agent behavior in the UI.
 
 The application uses a single activity, state-hoisted Compose surfaces, and a
 small manually wired dependency graph. Platform defaults are preferred over
@@ -62,7 +61,7 @@ documentation under `packages/`, rather than against remembered pi behavior.
 The bundled model catalog is generated from pi and must not be edited by hand:
 
 ```bash
-node tools/generate-model-catalog.mjs          # PI_REPO_DIR or ~/Projects/pi
+node packages/ai/scripts/generate-model-catalog.mjs  # PI_REPO_DIR or ~/Projects/pi
 ```
 
 Generation selects the catalog surface supported by the Kotlin runtime and

@@ -1,8 +1,10 @@
 package works.resolve.pathfinder.data.settings
 
-import works.resolve.pathfinder.agent.compaction.CompactionSettings
-import works.resolve.pathfinder.agent.compaction.DEFAULT_COMPACTION_SETTINGS
-import works.resolve.pathfinder.ai.core.ModelThinkingLevel
+import works.resolve.pathfinder.codingagent.core.RetrySettings
+
+import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
+import works.resolve.pathfinder.codingagent.core.compaction.DEFAULT_COMPACTION_SETTINGS
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 
 /** Model configuration; the API key is intentionally excluded — it lives in the credential store. */
 data class ModelSettings(

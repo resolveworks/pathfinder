@@ -22,3 +22,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "pathfinder"
 include(":app")
+include(":packages:ai")
+include(":packages:agent")
+include(":packages:coding-agent")
+include(":packages:telemetry")

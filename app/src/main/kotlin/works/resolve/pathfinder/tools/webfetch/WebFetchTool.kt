@@ -3,8 +3,8 @@ package works.resolve.pathfinder.tools.webfetch
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.agent.ToolExecutionMode
-import works.resolve.pathfinder.ai.core.TextContent
-import works.resolve.pathfinder.ai.core.Tool
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.utils.str
 import java.net.URI
 import java.net.URISyntaxException

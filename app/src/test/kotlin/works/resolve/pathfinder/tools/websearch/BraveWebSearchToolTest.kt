@@ -1,6 +1,6 @@
 package works.resolve.pathfinder.tools.websearch
 
-import works.resolve.pathfinder.ai.core.TextContent
+import works.resolve.pathfinder.ai.TextContent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async

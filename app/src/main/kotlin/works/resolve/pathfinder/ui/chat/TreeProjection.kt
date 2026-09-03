@@ -1,12 +1,12 @@
 package works.resolve.pathfinder.ui.chat
 
-import works.resolve.pathfinder.ai.core.AssistantMessage
-import works.resolve.pathfinder.ai.core.TextContent
-import works.resolve.pathfinder.ai.core.ToolResultMessage
-import works.resolve.pathfinder.ai.core.UserMessage
-import works.resolve.pathfinder.data.sessions.Conversation
-import works.resolve.pathfinder.data.sessions.MessageEntry
-import works.resolve.pathfinder.data.sessions.SessionEntry
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.codingagent.core.session.Conversation
+import works.resolve.pathfinder.codingagent.core.session.MessageEntry
+import works.resolve.pathfinder.codingagent.core.session.SessionEntry
 
 /**
  * Pure projection of a [Conversation] into flat, renderable [TreeRow]s,
@@ -179,16 +179,17 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
 
 private fun SessionEntry.previewOf(): String {
     if (this !is MessageEntry) return "(no content)"
-    val prefix = when (message) {
+    val entryMessage = message
+    val prefix = when (entryMessage) {
         is UserMessage -> "You"
         is AssistantMessage -> "Assistant"
         is ToolResultMessage -> "Tool"
     }
     val body = when {
-        message is AssistantMessage && message.errorMessage != null -> message.errorMessage
-        else -> when (val m = message) {
-            is UserMessage -> m.content
-            is AssistantMessage -> m.content
+        entryMessage is AssistantMessage && entryMessage.errorMessage != null -> entryMessage.errorMessage.orEmpty()
+        else -> when (entryMessage) {
+            is UserMessage -> entryMessage.content
+            is AssistantMessage -> entryMessage.content
             is ToolResultMessage -> emptyList()
         }.asSequence()
             .filterIsInstance<TextContent>()
