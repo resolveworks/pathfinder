@@ -9,7 +9,7 @@ import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.models.Models
 import works.resolve.pathfinder.ai.models.Provider
 import works.resolve.pathfinder.ai.models.ResolvedAuth
-import works.resolve.pathfinder.ai.api.ChatApi
+import works.resolve.pathfinder.ai.core.ChatApi
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.data.sessions.CompactionEntry

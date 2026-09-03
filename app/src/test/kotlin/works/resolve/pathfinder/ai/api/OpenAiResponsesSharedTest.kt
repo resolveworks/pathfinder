@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.ai.api
 
+import works.resolve.pathfinder.ai.core.ProviderAuthException
+import works.resolve.pathfinder.ai.core.ProviderStreamException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject

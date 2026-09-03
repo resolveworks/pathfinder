@@ -4,7 +4,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.viewModelScope
 import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.AgentSession
-import works.resolve.pathfinder.ai.api.ChatApi
+import works.resolve.pathfinder.ai.core.ChatApi
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.models.Models

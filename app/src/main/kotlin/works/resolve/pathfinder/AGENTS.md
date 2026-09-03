@@ -74,7 +74,7 @@ Follow Kotlin's canonical split: exceptions for programmer errors and
 I/O, handled at one boundary; expected failures as values.
 
 - The stream boundary converts every non-cancellation failure into a
-  terminal `AssistantMessageEvent.Error` (Events.kt contract); the
+  terminal `AssistantMessageEvent.Error` (Types.kt contract); the
   ViewModel boundary is the UI's single handler. Do not sprinkle try/catch
   at intermediate call sites.
 - Expected failures are values: `null` for a single failure mode, a sealed
@@ -102,7 +102,7 @@ I/O, handled at one boundary; expected failures as values.
 ## Async
 
 - Streams are `Flow<AssistantMessageEvent>` built with `flow {}`;
-  failures terminate the flow per the Events.kt contract.
+  failures terminate the flow per the Types.kt contract.
 - Cooperative-cancellation checks use
   `currentCoroutineContext().ensureActive()`, not `Job?.isActive` probes.
 - Blocking IO runs under an injected dispatcher (SessionStore pattern);

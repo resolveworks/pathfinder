@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ai.api
 
 import works.resolve.pathfinder.ai.core.AssistantMessage
+import works.resolve.pathfinder.ai.core.ProviderAuthException
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ImageContent

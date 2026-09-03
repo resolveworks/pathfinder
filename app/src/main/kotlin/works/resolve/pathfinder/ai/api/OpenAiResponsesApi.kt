@@ -12,10 +12,13 @@ import kotlinx.serialization.json.put
 import kotlin.time.Clock
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.CacheRetention
+import works.resolve.pathfinder.ai.core.ChatApi
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Cost
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
+import works.resolve.pathfinder.ai.core.ProviderAuthException
+import works.resolve.pathfinder.ai.core.ProviderStreamException
 import works.resolve.pathfinder.ai.core.SessionAffinityFormat
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.toModelThinkingLevel
@@ -228,7 +231,7 @@ class OpenAiResponsesApi(
     ): Flow<AssistantMessageEvent> {
         val apiKey = options.apiKey
         val clamped = options.reasoning?.let {
-            works.resolve.pathfinder.ai.core.clampThinkingLevel(model, it.toModelThinkingLevel())
+            works.resolve.pathfinder.ai.models.clampThinkingLevel(model, it.toModelThinkingLevel())
         }
         val reasoningEffort = if (clamped == ModelThinkingLevel.OFF) null else clamped
         return stream(

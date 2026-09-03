@@ -7,8 +7,8 @@ import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.UserMessage
-import works.resolve.pathfinder.ai.core.clampThinkingLevel
-import works.resolve.pathfinder.ai.core.getSupportedThinkingLevels
+import works.resolve.pathfinder.ai.models.clampThinkingLevel
+import works.resolve.pathfinder.ai.models.getSupportedThinkingLevels
 import works.resolve.pathfinder.ai.core.modelThinkingLevelFromWire
 import works.resolve.pathfinder.ai.models.Models
 import works.resolve.pathfinder.ai.utils.Retry

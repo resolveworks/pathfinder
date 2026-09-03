@@ -1,14 +1,18 @@
 package works.resolve.pathfinder.ai.models
 
 import kotlin.time.Clock
-import works.resolve.pathfinder.ai.api.ChatApi
 import works.resolve.pathfinder.ai.auth.Credential
+import works.resolve.pathfinder.ai.core.ChatApi
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Context
+import works.resolve.pathfinder.ai.core.Cost
 import works.resolve.pathfinder.ai.core.Model
+import works.resolve.pathfinder.ai.core.ModelCostRates
+import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
+import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.mergeHeaders
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.GITHUB_COPILOT_PROVIDER_ID
@@ -230,6 +234,80 @@ class Models(
             ),
         )
     }
+}
+
+/**
+ * Reference cost in USD from token usage and per-million rates. The tier with
+ * the highest `inputTokensAbove` threshold that the request's total input
+ * usage strictly exceeds applies its rates to the full request.
+ */
+fun calculateCost(model: Model, usage: Usage): Cost {
+    val inputTokens = usage.input + usage.cacheRead + usage.cacheWrite
+    var rates: ModelCostRates = model.cost
+    var matchedThreshold = -1
+    for (tier in model.cost.tiers) {
+        if (inputTokens > tier.inputTokensAbove && tier.inputTokensAbove > matchedThreshold) {
+            rates = tier
+            matchedThreshold = tier.inputTokensAbove
+        }
+    }
+
+    // Anthropic charges 2x base input for 1h cache writes.
+    val longWrite = usage.cacheWrite1h
+    val shortWrite = usage.cacheWrite - longWrite
+    val cost = Cost(
+        input = (rates.input / 1_000_000.0) * usage.input,
+        output = (rates.output / 1_000_000.0) * usage.output,
+        cacheRead = (rates.cacheRead / 1_000_000.0) * usage.cacheRead,
+        cacheWrite = (rates.cacheWrite * shortWrite + rates.input * 2 * longWrite) / 1_000_000.0,
+    )
+    return cost.copy(total = cost.input + cost.output + cost.cacheRead + cost.cacheWrite)
+}
+
+private val EXTENDED_THINKING_LEVELS = listOf(
+    ModelThinkingLevel.OFF,
+    ModelThinkingLevel.MINIMAL,
+    ModelThinkingLevel.LOW,
+    ModelThinkingLevel.MEDIUM,
+    ModelThinkingLevel.HIGH,
+    ModelThinkingLevel.XHIGH,
+    ModelThinkingLevel.MAX,
+)
+
+fun getSupportedThinkingLevels(model: Model): List<ModelThinkingLevel> {
+    if (!model.reasoning) return listOf(ModelThinkingLevel.OFF)
+    val map = model.thinkingLevelMap
+    return EXTENDED_THINKING_LEVELS.filter { level ->
+        val mapped = map?.forLevel(level)
+        val specified = map?.isSpecified(level) == true
+        // Explicit null means unsupported.
+        if (specified && mapped == null) return@filter false
+        // XHIGH/MAX require an explicit non-null mapping; OFF..HIGH default to supported.
+        if (level == ModelThinkingLevel.XHIGH || level == ModelThinkingLevel.MAX) {
+            return@filter specified && mapped != null
+        }
+        true
+    }
+}
+
+/**
+ * Clamps a requested thinking level to one the model supports, rounding up
+ * first, then down.
+ */
+fun clampThinkingLevel(model: Model, level: ModelThinkingLevel): ModelThinkingLevel {
+    val available = getSupportedThinkingLevels(model)
+    if (available.contains(level)) return level
+
+    val requestedIndex = EXTENDED_THINKING_LEVELS.indexOf(level)
+    if (requestedIndex == -1) return available.firstOrNull() ?: ModelThinkingLevel.OFF
+
+    for (i in requestedIndex until EXTENDED_THINKING_LEVELS.size) {
+        if (available.contains(EXTENDED_THINKING_LEVELS[i])) return EXTENDED_THINKING_LEVELS[i]
+    }
+    for (i in requestedIndex - 1 downTo 0) {
+        if (available.contains(EXTENDED_THINKING_LEVELS[i])) return EXTENDED_THINKING_LEVELS[i]
+    }
+    return available.firstOrNull() ?: ModelThinkingLevel.OFF
 }
 
 /**

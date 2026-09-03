@@ -2,7 +2,7 @@ package works.resolve.pathfinder.ai
 
 import works.resolve.pathfinder.ai.api.AzureOpenAiResponsesOptions
 import works.resolve.pathfinder.ai.api.OpenAiResponsesOptions
-import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
+import works.resolve.pathfinder.ai.api.OpenAiCompletionsOptions
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StreamOptions
 import works.resolve.pathfinder.ai.core.ThinkingLevel

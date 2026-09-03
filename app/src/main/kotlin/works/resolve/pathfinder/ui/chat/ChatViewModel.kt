@@ -15,8 +15,8 @@ import works.resolve.pathfinder.ai.core.ThinkingContent
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
 import works.resolve.pathfinder.ai.core.UserMessage
-import works.resolve.pathfinder.ai.core.clampThinkingLevel
-import works.resolve.pathfinder.ai.core.getSupportedThinkingLevels
+import works.resolve.pathfinder.ai.models.clampThinkingLevel
+import works.resolve.pathfinder.ai.models.getSupportedThinkingLevels
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.agent.AgentFactory

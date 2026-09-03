@@ -1,6 +1,6 @@
 package works.resolve.pathfinder.ai.models
 
-import works.resolve.pathfinder.ai.api.ChatApi
+import works.resolve.pathfinder.ai.core.ChatApi
 import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Context

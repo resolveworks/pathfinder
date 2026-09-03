@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ai.core
 
 import works.resolve.pathfinder.ai.api.AzureOpenAiResponsesOptions
+import works.resolve.pathfinder.ai.api.OpenAiCompletionsOptions
 import works.resolve.pathfinder.ai.api.AnthropicMessagesOptions
 import works.resolve.pathfinder.ai.api.GoogleGenerativeAiApi
 import works.resolve.pathfinder.ai.api.MistralOptions
