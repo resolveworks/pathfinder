@@ -85,6 +85,36 @@ class CompactionTest {
 
     @Test
     fun `covers cut-point and turn-start edge cases`() {
+        val thinking = works.resolve.pathfinder.data.sessions.ThinkingLevelEntry(
+            id = createId(),
+            parentId = null,
+            timestamp = nextId.toLong(),
+            thinkingLevel = "high",
+        )
+        val modelChange = works.resolve.pathfinder.data.sessions.ModelChangeEntry(
+            id = createId(),
+            parentId = thinking.id,
+            timestamp = nextId.toLong(),
+            provider = "openai",
+            modelId = "gpt-4",
+        )
+        assertEquals(
+            CutPointResult(firstKeptEntryIndex = 0, turnStartIndex = -1, isSplitTurn = false),
+            findCutPoint(listOf<SessionEntry>(thinking, modelChange), 0, 2, 1),
+        )
+
+        val branchSummary = works.resolve.pathfinder.data.sessions.BranchSummaryEntry(
+            id = createId(),
+            parentId = modelChange.id,
+            timestamp = nextId.toLong(),
+            fromId = "branch",
+            summary = "branch summary",
+        )
+        assertEquals(1, findTurnStartIndex(listOf(thinking, branchSummary), 1, 0))
+        assertEquals(-1, findTurnStartIndex(listOf(thinking, modelChange), 1, 0))
+
+        assertEquals(0, findCutPoint(listOf(thinking, branchSummary), 0, 2, 1).firstKeptEntryIndex)
+
         val toolResult = createMessageEntry(
             ToolResultMessage(
                 toolCallId = "call-1",
@@ -144,6 +174,13 @@ class CompactionTest {
         assertTrue(estimateTokens(UserMessage.ofText("plain user")) > 0)
         assertTrue(estimateTokens(assistantWithThinkingAndTool) > 0)
         assertTrue(estimateTokens(toolResultWithImage) > 1000)
+        // Upstream also estimates `custom`, `bashExecution`, and unknown roles
+        // (the last asserting 0); pathfinder's sealed Message hierarchy has no
+        // such roles (see estimateTokens in Compaction.kt). `branchSummary`/
+        // `compactionSummary` exist only pre-projected to wrapped user messages
+        // (Messages.kt), so those assertions run over the projection.
+        assertTrue(estimateTokens(createBranchSummaryMessage("branch", "x", timestamp = 1L)) > 0)
+        assertTrue(estimateTokens(createCompactionSummaryMessage("compact", tokensBefore = 123, timestamp = 1L)) > 0)
 
         assertEquals(
             usage,

@@ -497,6 +497,7 @@ class CompactionLlmTest {
         )
 
         assertEquals(listOf(128000, 128000), faux.api.seenOptions.map { it.maxTokens })
+        assertEquals(listOf(CacheRetention.NONE, CacheRetention.NONE), faux.api.seenOptions.map { it.cacheRetention })
         val sessionIds = faux.api.seenOptions.map { it.sessionId }
         assertNotEquals(sessionIds[0], sessionIds[1])
     }
