@@ -487,6 +487,26 @@ class MistralConversationsApiTest {
     }
 
     @Test
+    fun `empty finish reason is absent like pi truthiness`() = runTest {
+        // pi guards with `if (choice.finish_reason)`: "" is falsy, so the
+        // raw-stop-reason mapping never sees it and the stream ends pending.
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"id":"r","choices":[{"index":0,"finish_reason":"","delta":{"content":"hi"}}]}""",
+                "[DONE]",
+            ),
+        )
+        val error = api(transport)
+            .stream(model, context, MistralOptions(apiKey = "test"))
+            .toList()
+            .last()
+        assertIs<AssistantMessageEvent.Error>(error)
+        assertEquals("Mistral stream ended without a finish reason", error.error.errorMessage)
+        assertNull(error.error.rawStopReason)
+    }
+
+    @Test
     fun `preserves raw finish reasons for successful stops`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(terminalEvent("stop"), "[DONE]"))
