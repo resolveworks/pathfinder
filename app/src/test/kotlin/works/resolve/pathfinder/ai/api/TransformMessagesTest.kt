@@ -168,4 +168,41 @@ class TransformMessagesTest {
         assertEquals("bash", synthetic.toolName)
         assertEquals(listOf(TextContent("No result provided")), synthetic.content)
     }
+
+    @Test
+    fun `drops textSignature from text blocks when source model differs`() {
+        val model = makeCopilotClaudeModel()
+        val signed = TextContent("Hi there!", textSignature = "sig-123")
+        val crossModel: List<Message> = listOf(
+            UserMessage.ofText("hello"),
+            AssistantMessage(
+                content = listOf(signed),
+                api = "openai-completions",
+                provider = "github-copilot",
+                model = "gpt-4o",
+                stopReason = StopReason.STOP,
+            ),
+        )
+        val sameModel: List<Message> = listOf(
+            UserMessage.ofText("hello"),
+            AssistantMessage(
+                content = listOf(signed.copy()),
+                api = "anthropic-messages",
+                provider = "github-copilot",
+                model = model.id,
+                stopReason = StopReason.STOP,
+            ),
+        )
+
+        val cross = transformMessages(crossModel, model, anthropicNormalizeToolCallId)
+        val crossText = cross.filterIsInstance<AssistantMessage>().single().content.single()
+        assertIs<TextContent>(crossText)
+        assertEquals("Hi there!", crossText.text)
+        assertNull(crossText.textSignature)
+
+        val same = transformMessages(sameModel, model, anthropicNormalizeToolCallId)
+        val sameText = same.filterIsInstance<AssistantMessage>().single().content.single()
+        assertIs<TextContent>(sameText)
+        assertEquals("sig-123", sameText.textSignature)
+    }
 }

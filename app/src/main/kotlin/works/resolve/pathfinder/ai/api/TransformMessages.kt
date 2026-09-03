@@ -114,7 +114,15 @@ internal fun transformMessages(
                                 listOf(TextContent(block.thinking))
                             }
                         }
-                        is TextContent -> listOf(block)
+                        // Cross-model text is recreated without textSignature: the
+                        // signature is opaque replay data only meaningful for the same
+                        // provider/model (upstream recreates `{type:"text", text}`).
+                        is TextContent ->
+                            if (isSameModel) {
+                                listOf(block)
+                            } else {
+                                listOf(TextContent(block.text))
+                            }
                         is ToolCall -> {
                             var normalized = if (!isSameModel && block.thoughtSignature != null) {
                                 block.copy(thoughtSignature = null)
