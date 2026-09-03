@@ -8,6 +8,7 @@ import works.resolve.pathfinder.ai.providers.ProviderOAuth
 import works.resolve.pathfinder.ai.providers.AuthPrompt as CatalogPrompt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertEquals
@@ -40,12 +41,17 @@ class ProviderAuthServiceTest {
         override val isSubscription: Boolean = false,
         private val onLogin: suspend () -> OAuthCredential = { oauthCredential() },
     ) : OAuthAuth {
+        var refreshCalls = 0
+
         override suspend fun login(interaction: AuthInteraction): OAuthCredential {
             interaction.notify(AuthEvent.Info("fake oauth"))
             return onLogin()
         }
 
-        override suspend fun refresh(credential: OAuthCredential): OAuthCredential = credential
+        override suspend fun refresh(credential: OAuthCredential): OAuthCredential {
+            refreshCalls++
+            return credential
+        }
 
         override suspend fun toAuth(credential: OAuthCredential) = ModelAuth(apiKey = credential.access)
     }
@@ -444,6 +450,101 @@ class ProviderAuthServiceTest {
         service.logout("acme")
         assertEquals(null, service.authStatus("acme").storedType)
         assertEquals(null, store.read("acme"))
+    }
+
+    /**
+     * pi models.ts checkAuth analogue: status checks are side-effect free —
+     * an expired stored OAuth credential is reported as stored/configured
+     * without refreshing it.
+     */
+    @Test
+    fun `status checks perform no oauth refresh`() = runTest {
+        val store = InMemoryCredentialStore()
+        store.modify("acme") { OAuthCredential(access = "expired", refresh = "r", expires = 0) }
+        val oauth = FakeOAuthAuth()
+        val service = service(catalog(apiKey = false, oauth = true), store, oauth)
+
+        assertEquals(CredentialType.OAUTH, service.authStatus("acme").storedType)
+        assertTrue(service.isConfigured("acme"))
+        assertEquals(0, oauth.refreshCalls)
+    }
+
+    /** pi models.ts checkAuth analogue: unconfigured resolves false. */
+    @Test
+    fun `isConfigured reflects stored credential presence and completeness`() = runTest {
+        val store = InMemoryCredentialStore()
+        val service = service(catalog(), store)
+
+        assertTrue(!service.isConfigured("acme"))
+
+        store.modify("acme") { ApiKeyCredential(key = "sk", env = mapOf("ACME_ACCOUNT_ID" to "acct")) }
+        assertTrue(service.isConfigured("acme"))
+
+        // Incomplete prompt values (missing env slot) leave it unconfigured.
+        store.modify("acme") { ApiKeyCredential(key = "sk") }
+        assertTrue(!service.isConfigured("acme"))
+
+        // A stored OAuth credential is configured only with a registered flow.
+        store.modify("acme") { OAuthCredential(access = "a", refresh = "r", expires = Long.MAX_VALUE) }
+        assertTrue(!service(catalog(apiKey = false, oauth = true), store).isConfigured("acme"))
+        assertTrue(service(catalog(apiKey = false, oauth = true), store, FakeOAuthAuth()).isConfigured("acme"))
+    }
+
+    /**
+     * pi models.ts getAvailable analogue: the stored credential filters the
+     * provider's static models through its `filterModels` hook
+     * (`provider.filterModels?.(models, credential) ?? models`), which only
+     * GitHub Copilot defines.
+     */
+    @Test
+    fun `availableModels filters the catalog through the stored credential`() = runTest {
+        val store = InMemoryCredentialStore()
+        store.modify("github-copilot") {
+            OAuthCredential(
+                access = "a",
+                refresh = "r",
+                expires = Long.MAX_VALUE,
+                extras = mapOf(
+                    "availableModelIds" to JsonArray(listOf(JsonPrimitive("gpt-4.1"))),
+                ),
+            )
+        }
+        val service = ProviderAuthService(copilotCatalog(), MapCatalogAuthRegistry(emptyMap()), store)
+
+        assertEquals(listOf("gpt-4.1"), service.availableModels("github-copilot").map { it.id })
+    }
+
+    /**
+     * Divergence from pi's getAvailable (KDoc on
+     * [ProviderAuthService.availableModels]): the configured gate is
+     * composed by callers, so a missing credential still lists the static
+     * catalog models.
+     */
+    @Test
+    fun `availableModels lists the full static catalog without a credential`() = runTest {
+        val service = ProviderAuthService(copilotCatalog(), MapCatalogAuthRegistry(emptyMap()), InMemoryCredentialStore())
+
+        assertEquals(
+            listOf("gpt-4.5", "gpt-4.1", "claude-haiku-4.5"),
+            service.availableModels("github-copilot").map { it.id },
+        )
+    }
+
+    private fun copilotCatalog(): ProviderCatalog {
+        val provider = CatalogProvider(
+            id = "github-copilot",
+            name = "GitHub Copilot",
+            baseUrl = "https://api.individual.githubcopilot.com",
+            auth = CatalogProviderAuthMetadata(
+                oauth = ProviderOAuth("GitHub Copilot", isSubscription = true),
+            ),
+            models = listOf(
+                Model("gpt-4.5", "GPT 4.5", "openai-completions", "github-copilot", "https://api.individual.githubcopilot.com"),
+                Model("gpt-4.1", "GPT 4.1", "openai-completions", "github-copilot", "https://api.individual.githubcopilot.com"),
+                Model("claude-haiku-4.5", "Claude Haiku 4.5", "anthropic-messages", "github-copilot", "https://api.individual.githubcopilot.com"),
+            ),
+        )
+        return ProviderCatalog(listOf(provider))
     }
 
     @Test
