@@ -19,6 +19,8 @@ import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
 import works.resolve.pathfinder.data.sessions.SessionStore
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.logging.LogcatTelemetryContext
+import works.resolve.pathfinder.tools.webfetch.WebFetchTool
+import works.resolve.pathfinder.tools.webfetch.WebViewPageFetcher
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 import works.resolve.pathfinder.logging.PathfinderDiagnostics
@@ -89,6 +91,11 @@ class PathfinderApplication : Application() {
         )
     }
 
+    /** Renders pages in a hidden WebView outside the default (user) WebView profile. */
+    val webFetchTool: WebFetchTool by lazy {
+        WebFetchTool(WebViewPageFetcher(this))
+    }
+
     val settingsRepository: SettingsRepository by lazy {
         SettingsRepository(settingsDataStore)
     }
@@ -110,7 +117,7 @@ class PathfinderApplication : Application() {
             transport = transport,
             webSocketTransport = webSocketTransport,
             authRegistry = authRegistry,
-            tools = listOf(webSearchTool),
+            tools = listOf(webSearchTool, webFetchTool),
         )
     }
 

@@ -59,6 +59,9 @@ dependencies {
     // OAuth login URLs open in a Custom Tab.
     implementation(libs.androidx.browser)
 
+    // The web_fetch tool renders pages in a hidden WebView with its own profile.
+    implementation(libs.androidx.webkit)
+
     implementation(libs.androidx.datastore.preferences)
 
     // HTTP + JSON for the native provider layer.
