@@ -7,6 +7,7 @@ import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class ErrorBodyTest {
     private fun httpError(status: Int, body: String) =
@@ -24,6 +25,30 @@ class ErrorBodyTest {
         val norm = NormalizedProviderError(status = 429, body = "rate limited", message = "msg", messageCarriesBody = false)
         assertEquals("429: rate limited", formatProviderError(norm))
         assertEquals("OpenAI API error (429): rate limited", formatProviderError(norm, "OpenAI API error"))
+    }
+
+    @Test
+    fun `formatProviderError surfaces status and body without a prefix through normalize`() {
+        // Upstream composes from an SDK error whose message is opaque
+        // ("403 status code (no body)"); the Kotlin analog of the opaque
+        // message is the transport exception's "Provider returned HTTP 403".
+        val norm = normalizeProviderError(httpError(403, """{"error":"blocked by gateway WAF"}"""))
+
+        val formatted = formatProviderError(norm)
+
+        assertTrue("403" in formatted)
+        assertTrue("blocked by gateway WAF" in formatted)
+        assertTrue(formatted != "Provider returned HTTP 403")
+    }
+
+    @Test
+    fun `formatProviderError applies a provider prefix with status and body through normalize`() {
+        val norm = normalizeProviderError(httpError(403, """{"error":"blocked by gateway WAF"}"""))
+
+        assertEquals(
+            """OpenAI API error (403): {"error":"blocked by gateway WAF"}""",
+            formatProviderError(norm, "OpenAI API error"),
+        )
     }
 
     @Test
@@ -59,6 +84,19 @@ class ErrorBodyTest {
     }
 
     @Test
+    fun `normalizeProviderError surfaces a JSON error body verbatim`() {
+        // Upstream "still surfaces a plain parsed JSON body object": the SDK's
+        // parsed body is JSON-stringified; the transport body already is the
+        // JSON text and must surface unchanged, messageCarriesBody false.
+        val norm = normalizeProviderError(
+            httpError(400, """{"message":"schema validation failed","field":"tools[0]"}"""),
+        )
+
+        assertEquals("""{"message":"schema validation failed","field":"tools[0]"}""", norm.body)
+        assertEquals(false, norm.messageCarriesBody)
+    }
+
+    @Test
     fun `normalizeProviderError caps the body at the shared limit`() {
         val body = "y".repeat(MAX_PROVIDER_ERROR_BODY_CHARS + 10)
         val norm = normalizeProviderError(httpError(500, body))
@@ -67,6 +105,26 @@ class ErrorBodyTest {
             norm.body,
         )
     }
+
+    // TODO(pi parity; documented divergence in ErrorBody.kt): pi's
+    // normalizeProviderError computes messageCarriesBody =
+    // `body === undefined || error.message.includes(body)`, so it is true when
+    // the SDK already folded the body into the message (upstream "preserves
+    // the message when @google/genai already folds the body into it" and "sets
+    // messageCarriesBody when the message already contains the extracted
+    // body"). Not portable: ProviderHttpException's message is fixed to
+    // "Provider returned HTTP N", so an error whose message contains the body
+    // cannot be constructed here, and the Kotlin port always returns false
+    // (the only constructible near-hit would be a body that is a substring of
+    // the fixed message, e.g. body "HTTP 500"). Upstream case, kept for the
+    // day the message becomes customizable:
+    //
+    // @Test
+    // fun `normalizeProviderError flags a message that already contains the body`() {
+    //     // upstream error: message "500: upstream exploded", body "upstream exploded"
+    //     val norm = normalizeProviderError(httpError(500, "upstream exploded"))
+    //     assertEquals(true, norm.messageCarriesBody)
+    // }
 
     @Test
     fun `openai responses golden format`() {
