@@ -5,12 +5,10 @@ import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Message
 import works.resolve.pathfinder.ai.core.Model
-import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolResultMessage
-import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.utils.lenientJson
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
@@ -22,152 +20,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
-
-/**
- * Stream function used by the agent loop. Must not throw for request/model/
- * runtime failures — failures are encoded in the returned flow via a terminal
- * [AssistantMessageEvent.Error]. The returned flow is collected exactly once
- * per assistant turn.
- */
-fun interface StreamFn {
-    fun stream(model: Model, context: Context, options: SimpleStreamOptions): Flow<AssistantMessageEvent>
-}
-
-data class AgentLoopConfig(
-    val model: Model,
-    val options: SimpleStreamOptions = SimpleStreamOptions(),
-    val streamFn: StreamFn,
-    /**
-     * Batch execution mode; a per-tool `executionMode = SEQUENTIAL` override
-     * forces the whole batch sequential.
-     */
-    val toolExecution: ToolExecutionMode = ToolExecutionMode.PARALLEL,
-    val clock: Clock = Clock.System,
-)
-
-/** Lifecycle events emitted by the agent loop. */
-sealed class AgentEvent {
-    object AgentStart : AgentEvent()
-
-    /** Terminal event carrying every message produced by this run, in source order. */
-    data class AgentEnd(val messages: List<Message>) : AgentEvent()
-
-    object TurnStart : AgentEvent()
-
-    /** Final assistant message of the turn plus its tool results in source order. */
-    data class TurnEnd(val message: AssistantMessage, val toolResults: List<ToolResultMessage> = emptyList()) : AgentEvent()
-
-    data class MessageStart(val message: Message) : AgentEvent()
-
-    /** Only emitted for assistant messages while streaming. */
-    data class MessageUpdate(
-        val message: AssistantMessage,
-        val assistantMessageEvent: AssistantMessageEvent,
-    ) : AgentEvent()
-
-    data class MessageEnd(val message: Message) : AgentEvent()
-
-    /**
-     * [arguments] is the raw parsed JSON of the assistant call; validated
-     * arguments are used only for execution and in [ToolExecutionUpdate].
-     */
-    data class ToolExecutionStart(
-        val toolCallId: String,
-        val toolName: String,
-        val arguments: JsonObject,
-    ) : AgentEvent()
-
-    data class ToolExecutionUpdate(
-        val toolCallId: String,
-        val toolName: String,
-        val arguments: JsonObject,
-        val partialResult: AgentToolResult,
-    ) : AgentEvent()
-
-    data class ToolExecutionEnd(
-        val toolCallId: String,
-        val toolName: String,
-        val result: AgentToolResult,
-        val isError: Boolean,
-    ) : AgentEvent()
-
-    /**
-     * A retryable run is being retried after an exponential-backoff delay.
-     * Emitted by the [Agent] facade; never appears in [runAgentLoop] output.
-     */
-    data class AutoRetryStart(
-        val attempt: Int,
-        val maxAttempts: Int,
-        val delayMs: Long,
-        val errorMessage: String,
-    ) : AgentEvent()
-
-    /**
-     * The retry sequence ended: a retried run succeeded, the budget was
-     * exhausted, or the backoff was cancelled.
-     */
-    data class AutoRetryEnd(
-        val success: Boolean,
-        val attempt: Int,
-        val finalError: String? = null,
-    ) : AgentEvent()
-
-    /**
-     * Trigger of a compaction run. [CompactionReason.MANUAL] is carried for
-     * event-shape fidelity only; this port never emits it.
-     */
-    enum class CompactionReason { MANUAL, THRESHOLD, OVERFLOW }
-
-    sealed interface SummarizationSource {
-        data object BranchSummary : SummarizationSource
-
-        data class Compaction(val reason: CompactionReason) : SummarizationSource
-    }
-
-    /**
-     * Payload of [AgentEvent.CompactionEnd]. Pi's `firstKeptEntryId` is not
-     * ported: [works.resolve.pathfinder.data.sessions.CompactionEntry] stores
-     * the retained tail directly instead of a kept-entry pointer.
-     */
-    data class CompactionResult(
-        val summary: String,
-        val tokensBefore: Int,
-        val estimatedTokensAfter: Int,
-        val usage: Usage?,
-        val details: works.resolve.pathfinder.agent.compaction.CompactionDetails?,
-    )
-
-    /** Automatic compaction started; emitted by [AgentSession] between agent runs. */
-    data class CompactionStart(
-        val reason: CompactionReason,
-    ) : AgentEvent()
-
-    /** Compaction ended — succeeded, was aborted, or failed. */
-    data class CompactionEnd(
-        val reason: CompactionReason,
-        val result: CompactionResult? = null,
-        val aborted: Boolean,
-        val willRetry: Boolean,
-        val errorMessage: String? = null,
-    ) : AgentEvent()
-
-    /** A summarization retry is scheduled: the summary LLM call is backed off. */
-    data class SummarizationRetryScheduled(
-        val attempt: Int,
-        val maxAttempts: Int,
-        val delayMs: Long,
-        val errorMessage: String,
-    ) : AgentEvent()
-
-    data class SummarizationRetryAttemptStart(
-        val source: SummarizationSource,
-    ) : AgentEvent()
-
-    object SummarizationRetryFinished : AgentEvent()
-}
 
 /**
  * Runs the agent loop: streams assistant turns and executes each response's
