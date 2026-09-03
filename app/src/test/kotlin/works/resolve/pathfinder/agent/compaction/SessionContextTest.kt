@@ -1,0 +1,173 @@
+package works.resolve.pathfinder.agent.compaction
+
+import works.resolve.pathfinder.ai.core.AssistantMessage
+import works.resolve.pathfinder.ai.core.Cost
+import works.resolve.pathfinder.ai.core.Message
+import works.resolve.pathfinder.ai.core.StopReason
+import works.resolve.pathfinder.ai.core.TextContent
+import works.resolve.pathfinder.ai.core.Usage
+import works.resolve.pathfinder.ai.core.UserMessage
+import works.resolve.pathfinder.data.sessions.ActiveToolsEntry
+import works.resolve.pathfinder.data.sessions.CompactionEntry
+import works.resolve.pathfinder.data.sessions.Conversation
+import works.resolve.pathfinder.data.sessions.MessageEntry
+import works.resolve.pathfinder.data.sessions.ModelChangeEntry
+import works.resolve.pathfinder.data.sessions.SessionEntry
+import works.resolve.pathfinder.data.sessions.ThinkingLevelEntry
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+
+/**
+ * Pins the entry-selection behavior of [buildSessionContext] against pi's
+ * `packages/agent/src/harness/session/context.ts` at pin b8b873b98: latest
+ * compaction wins, retained tail passes through verbatim, only deferred
+ * assistants drop, config entries project nothing, and the branch-state fold
+ * (`Conversation.effectiveConfiguration`, upstream's
+ * `deriveSessionContextState`) sees the full pre-compaction path.
+ */
+class SessionContextTest {
+
+    private var nextId = 0
+
+    private fun createId(): String = "entry-${nextId++}"
+
+    private val now: Long get() = nextId.toLong()
+
+    private fun user(text: String) = UserMessage.ofText(text, timestamp = now)
+
+    private fun assistant(text: String): AssistantMessage = AssistantMessage(
+        content = listOf(TextContent(text)),
+        api = "anthropic-messages",
+        provider = "anthropic",
+        model = "claude-sonnet-4-5",
+        usage = Usage(
+            input = 1,
+            output = 1,
+            reasoning = 0,
+            totalTokens = 2,
+            cost = Cost(0.0, 0.0, 0.0, 0.0, 0.0),
+        ),
+        stopReason = StopReason.STOP,
+        timestamp = now,
+    )
+
+    private fun messageEntry(message: Message, parentId: String? = null) =
+        MessageEntry(id = createId(), parentId = parentId, timestamp = now, message = message)
+
+    private fun compactionEntry(summary: String, parentId: String?, retainedTail: List<Message>) =
+        CompactionEntry(
+            id = createId(),
+            parentId = parentId,
+            timestamp = now,
+            summary = summary,
+            retainedTail = retainedTail,
+            tokensBefore = 100,
+        )
+
+    private fun modelChangeEntry(parentId: String?, provider: String, modelId: String) =
+        ModelChangeEntry(id = createId(), parentId = parentId, timestamp = now, provider = provider, modelId = modelId)
+
+    private fun thinkingLevelEntry(parentId: String?, thinkingLevel: String) =
+        ThinkingLevelEntry(id = createId(), parentId = parentId, timestamp = now, thinkingLevel = thinkingLevel)
+
+    private fun activeToolsEntry(parentId: String?, toolNames: List<String>) =
+        ActiveToolsEntry(id = createId(), parentId = parentId, timestamp = now, activeToolNames = toolNames)
+
+    private fun textOf(message: Message): String = (message as UserMessage).let { (it.content[0] as TextContent).text }
+
+    @Test
+    fun `context starts at the latest of several compaction entries`() {
+        val u1 = messageEntry(user("old"))
+        val first = compactionEntry("first summary", u1.id, retainedTail = listOf(user("kept one")))
+        val u2 = messageEntry(user("middle"), first.id)
+        val latest = compactionEntry("latest summary", u2.id, retainedTail = listOf(user("kept two")))
+        val u3 = messageEntry(user("tail"), latest.id)
+
+        val messages = buildSessionContext(listOf<SessionEntry>(u1, first, u2, latest, u3))
+
+        // The latest compaction's summary + retained tail + everything after it;
+        // the earlier compaction and its surroundings are already summarized.
+        assertEquals(3, messages.size)
+        assertEquals(COMPACTION_SUMMARY_PREFIX + "latest summary" + COMPACTION_SUMMARY_SUFFIX, textOf(messages[0]))
+        assertEquals("kept two", textOf(messages[1]))
+        assertEquals("tail", textOf(messages[2]))
+
+        assertEquals(latest, getLatestCompactionEntry(listOf(u1, first, u2, latest, u3)))
+        assertNull(getLatestCompactionEntry(listOf(u1, u2)))
+    }
+
+    @Test
+    fun `without compaction the whole path projects in order and config entries project nothing`() {
+        val u1 = messageEntry(user("one"))
+        val model = modelChangeEntry(u1.id, "openai", "gpt-5")
+        val thinking = thinkingLevelEntry(model.id, "high")
+        val tools = activeToolsEntry(thinking.id, listOf("read", "edit"))
+        val u2 = messageEntry(user("two"), tools.id)
+
+        val messages = buildSessionContext(listOf<SessionEntry>(u1, model, thinking, tools, u2))
+
+        assertEquals(listOf("one", "two"), messages.map(::textOf))
+    }
+
+    @Test
+    fun `error and aborted assistant messages stay in context at the pin`() {
+        // Post-pin pi drops error/aborted assistants via isContextMessage; at
+        // pin b8b873b98 — and here — only deferred assistants drop.
+        val u = messageEntry(user("question"))
+        val errored = messageEntry(
+            assistant("boom").copy(stopReason = StopReason.ERROR, errorMessage = "overloaded"),
+            u.id,
+        )
+        val aborted = messageEntry(assistant("cancelled").copy(stopReason = StopReason.ABORTED), errored.id)
+
+        val messages = buildSessionContext(listOf<SessionEntry>(u, errored, aborted))
+
+        assertEquals(listOf("question", "boom", "cancelled"), messages.map { textOfUserOrAssistant(it) })
+    }
+
+    @Test
+    fun `retained tail passes through verbatim including failed assistants`() {
+        val tail = listOf(
+            user("kept"),
+            assistant("failed").copy(stopReason = StopReason.ERROR, errorMessage = "overloaded"),
+        )
+        val compaction = compactionEntry("summary", null, retainedTail = tail)
+        val after = messageEntry(user("after"), compaction.id)
+
+        val messages = buildSessionContext(listOf<SessionEntry>(compaction, after))
+
+        assertEquals(4, messages.size)
+        assertEquals(COMPACTION_SUMMARY_PREFIX + "summary" + COMPACTION_SUMMARY_SUFFIX, textOf(messages[0]))
+        assertEquals(tail[0], messages[1])
+        assertEquals(tail[1], messages[2])
+        assertEquals(after.message, messages[3])
+    }
+
+    @Test
+    fun `effective configuration folds the full path while context starts at compaction`() {
+        // Upstream deriveSessionContextState(pathEntries) reads the ORIGINAL
+        // path, not the post-compaction entries; pathfinder splits that fold
+        // into Conversation.effectiveConfiguration over the same active path.
+        val u1 = messageEntry(user("old"))
+        val model = modelChangeEntry(u1.id, "openai", "gpt-5")
+        val thinking = thinkingLevelEntry(model.id, "high")
+        val compaction = compactionEntry("summary", thinking.id, retainedTail = listOf(user("kept")))
+
+        val conversation = Conversation(listOf<SessionEntry>(u1, model, thinking, compaction), compaction.id)
+
+        val messages = buildSessionContext(conversation.activeEntries())
+        assertEquals(listOf(COMPACTION_SUMMARY_PREFIX + "summary" + COMPACTION_SUMMARY_SUFFIX, "kept"), messages.map(::textOf))
+
+        val configuration = conversation.effectiveConfiguration()
+        assertEquals(Conversation.SessionModelSelection("openai", "gpt-5"), configuration.model)
+        assertEquals("high", configuration.thinkingLevel)
+        assertNull(configuration.activeToolNames)
+    }
+
+    private fun textOfUserOrAssistant(message: Message): String = when (message) {
+        is UserMessage -> (message.content[0] as TextContent).text
+        is AssistantMessage -> (message.content[0] as TextContent).text
+        else -> error("unexpected message in context")
+    }
+}

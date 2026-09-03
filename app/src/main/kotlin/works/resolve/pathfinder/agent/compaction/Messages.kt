@@ -5,6 +5,11 @@ import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.UserMessage
 
 /**
+ * Partial twin of pi's `packages/agent/src/harness/messages.ts` at pin
+ * b8b873b98: only `createCompactionSummaryMessage`/
+ * `createBranchSummaryMessage` and the four prefix/suffix constants are
+ * ported.
+ *
  * pi's harness synthesizes `compactionSummary` and `branchSummary`
  * agent-message roles that `convertToLlm` later projects to user messages
  * wrapped (verbatim) in the prefix/suffix constants below. Pathfinder
@@ -14,6 +19,12 @@ import works.resolve.pathfinder.ai.core.UserMessage
  * wrapped user message directly, and `convertToLlm` is omitted — it is the
  * identity for pathfinder messages, and compaction callers already hold
  * LLM-ready messages.
+ *
+ * The remaining upstream surface is deliberately omitted:
+ * `BashExecutionMessage`/`bashExecutionToText` (pathfinder has no bash
+ * surface) and `CustomMessage`/`createCustomMessage` (no custom-message
+ * producer; `CustomEntry` data exists for wire replay only and projects
+ * nothing into context).
  */
 
 const val COMPACTION_SUMMARY_PREFIX =
