@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.core
 
+import works.resolve.pathfinder.ai.models.calculateCost
 import kotlin.test.Test
 import kotlin.test.assertEquals
 

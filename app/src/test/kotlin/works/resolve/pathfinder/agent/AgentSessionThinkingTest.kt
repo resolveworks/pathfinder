@@ -145,13 +145,13 @@ class AgentSessionThinkingTest {
                 ModelThinkingLevel.MEDIUM,
                 ModelThinkingLevel.HIGH,
             ),
-            works.resolve.pathfinder.ai.core.getSupportedThinkingLevels(s.model),
+            works.resolve.pathfinder.ai.models.getSupportedThinkingLevels(s.model),
         )
 
         val extended = session(extendedModel)
         assertEquals(
             listOf(ModelThinkingLevel.LOW, ModelThinkingLevel.HIGH, ModelThinkingLevel.MAX),
-            works.resolve.pathfinder.ai.core.getSupportedThinkingLevels(extended.model),
+            works.resolve.pathfinder.ai.models.getSupportedThinkingLevels(extended.model),
         )
     }
 

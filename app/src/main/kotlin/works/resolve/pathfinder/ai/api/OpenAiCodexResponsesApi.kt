@@ -27,10 +27,13 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.CacheRetention
+import works.resolve.pathfinder.ai.core.ChatApi
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
+import works.resolve.pathfinder.ai.core.ProviderAuthException
 import works.resolve.pathfinder.ai.core.ProviderResponse
+import works.resolve.pathfinder.ai.core.ProviderStreamException
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.Transport
 import works.resolve.pathfinder.ai.core.headersToRecord
@@ -452,7 +455,7 @@ class OpenAICodexResponsesApi(
         val apiKey = options.apiKey
             ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
         val clamped = options.reasoning?.let {
-            works.resolve.pathfinder.ai.core.clampThinkingLevel(model, it.toModelThinkingLevel())
+            works.resolve.pathfinder.ai.models.clampThinkingLevel(model, it.toModelThinkingLevel())
         }
         val reasoningEffort = if (clamped == ModelThinkingLevel.OFF) null else clamped
         return stream(

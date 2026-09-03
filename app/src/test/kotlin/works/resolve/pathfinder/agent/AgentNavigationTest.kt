@@ -9,7 +9,7 @@ import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.UserMessage
-import works.resolve.pathfinder.ai.api.ChatApi
+import works.resolve.pathfinder.ai.core.ChatApi
 import works.resolve.pathfinder.ai.models.Models
 import works.resolve.pathfinder.ai.models.Provider
 import works.resolve.pathfinder.ai.models.ResolvedAuth

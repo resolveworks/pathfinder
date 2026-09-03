@@ -10,7 +10,6 @@ import kotlin.test.assertFailsWith
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ImageContent
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
-import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
 import works.resolve.pathfinder.ai.core.StopReason
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent

@@ -4,10 +4,12 @@ import works.resolve.pathfinder.ai.core.AssistantMessage
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.CacheControlFormat
 import works.resolve.pathfinder.ai.core.CacheRetention
+import works.resolve.pathfinder.ai.core.ChatApi
 import works.resolve.pathfinder.ai.core.ChatTemplateKwargValue
 import works.resolve.pathfinder.ai.core.Context
 import works.resolve.pathfinder.ai.core.ContentType
 import works.resolve.pathfinder.ai.core.DeferredToolsMode
+import works.resolve.pathfinder.ai.core.DoneSentinel
 import works.resolve.pathfinder.ai.core.InputModality
 import works.resolve.pathfinder.ai.core.MaxTokensField
 import works.resolve.pathfinder.ai.core.Message
@@ -15,25 +17,28 @@ import works.resolve.pathfinder.ai.core.MessageRole
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
 import works.resolve.pathfinder.ai.core.OpenAiCompletionsCompat
-import works.resolve.pathfinder.ai.core.OpenAiCompletionsOptions
+import works.resolve.pathfinder.ai.core.ProviderAuthException
 import works.resolve.pathfinder.ai.core.ProviderResponse
+import works.resolve.pathfinder.ai.core.ProviderStreamException
 import works.resolve.pathfinder.ai.core.SessionAffinityFormat
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
 import works.resolve.pathfinder.ai.core.StopReason
+import works.resolve.pathfinder.ai.core.StreamOptions
 import works.resolve.pathfinder.ai.core.TextContent
 import works.resolve.pathfinder.ai.core.ThinkingContent
 import works.resolve.pathfinder.ai.core.ThinkingFormat
+import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.core.ThinkingLevelMap
 import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.ToolCall
 import works.resolve.pathfinder.ai.core.ToolChoice
 import works.resolve.pathfinder.ai.core.Usage
-import works.resolve.pathfinder.ai.core.calculateCost
 import works.resolve.pathfinder.ai.core.hasHeader
 import works.resolve.pathfinder.ai.core.headersToRecord
 import works.resolve.pathfinder.ai.core.mergeHeaders
 import works.resolve.pathfinder.ai.core.mergeSamplingParams
 import works.resolve.pathfinder.ai.core.toModelThinkingLevel
+import works.resolve.pathfinder.ai.models.calculateCost
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
@@ -47,6 +52,8 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.long
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.optionsToString
+import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.ai.utils.resolveCloudflareBaseUrl
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
@@ -68,6 +75,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import works.resolve.pathfinder.telemetry.TelemetryContext
 import kotlin.time.Clock
 
 /**
@@ -187,6 +195,72 @@ internal fun appendOpenAIReasoningDetail(
     details.add(LinkedHashMap(detail))
 }
 
+data class OpenAiCompletionsOptions(
+    val apiKey: String? = null,
+    val sessionId: String? = null,
+    val temperature: Double? = null,
+    val maxTokens: Int? = null,
+    /** Requested thinking level; null disables reasoning. */
+    val reasoningEffort: ModelThinkingLevel? = null,
+    /** Tool selection forwarded as the Chat Completions `tool_choice` param. */
+    val toolChoice: ToolChoice? = null,
+    /** Prompt-cache retention preference; null resolves from env/default. */
+    val cacheRetention: CacheRetention? = null,
+    val timeoutMs: Long? = null,
+    val maxRetries: Int = 0,
+    val maxRetryDelayMs: Long = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
+    /** Per-request provider env; credential values are merged in. */
+    val env: Map<String, String> = emptyMap(),
+    /** Explicit request headers; merged over resolved auth headers. */
+    val headers: Map<String, String?> = emptyMap(),
+    /** Per-level thinking token budgets; consumed by budget-based adapters. */
+    val thinkingBudgets: Map<ThinkingLevel, Int> = emptyMap(),
+    /**
+     * Replaces the request params object before serialization when it
+     * returns non-null. Receives full message content; installers must not
+     * log it. Never included in toString().
+     */
+    val onPayload: (suspend (payload: JsonObject, model: Model) -> JsonObject?)? = null,
+    /**
+     * Invoked after response headers arrive (2xx only — the SDK path throws
+     * before the hook on non-2xx). Never included in toString().
+     */
+    val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
+    /**
+     * Merged into the params object last so custom keys override the named
+     * request fields. Already merged over [Model.samplingParams] by
+     * [mergeSamplingParams] on the streamSimple path. Only keys appear in
+     * toString().
+     */
+    val samplingParams: Map<String, JsonElement>? = null,
+    /**
+     * Explicit parent context for telemetry produced by this logical request.
+     * Dormant: carried for shape fidelity, preserved through the streamSimple
+     * conversion. Presence boolean only in toString().
+     */
+    val telemetryContext: TelemetryContext? = null,
+) {
+    override fun toString(): String = optionsToString(
+        "OpenAiCompletionsOptions",
+        "apiKey" to redactedSecret(apiKey),
+        "sessionId" to sessionId,
+        "temperature" to temperature,
+        "maxTokens" to maxTokens,
+        "reasoningEffort" to reasoningEffort,
+        "toolChoice" to toolChoice,
+        "cacheRetention" to cacheRetention,
+        "timeoutMs" to timeoutMs,
+        "maxRetries" to maxRetries,
+        "maxRetryDelayMs" to maxRetryDelayMs,
+        "env" to env.keys,
+        "headers" to headers.keys,
+        "onPayload" to (onPayload != null),
+        "onResponse" to (onResponse != null),
+        "samplingParams" to samplingParams?.keys,
+        "telemetryContext" to (telemetryContext != null),
+    )
+}
+
 /**
  * OpenAI Chat Completions streaming adapter.
  *
@@ -207,7 +281,7 @@ class OpenAiCompletionsApi(
         options: SimpleStreamOptions,
     ): Flow<AssistantMessageEvent> {
         val clamped = options.reasoning?.let {
-            works.resolve.pathfinder.ai.core.clampThinkingLevel(model, it.toModelThinkingLevel())
+            works.resolve.pathfinder.ai.models.clampThinkingLevel(model, it.toModelThinkingLevel())
         }
         val effort = if (clamped == ModelThinkingLevel.OFF) null else clamped
         val maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
