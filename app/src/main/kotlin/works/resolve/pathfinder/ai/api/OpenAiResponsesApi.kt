@@ -13,23 +13,25 @@ import kotlin.time.Clock
 import works.resolve.pathfinder.ai.core.AssistantMessageEvent
 import works.resolve.pathfinder.ai.core.CacheRetention
 import works.resolve.pathfinder.ai.core.Context
+import works.resolve.pathfinder.ai.core.Cost
 import works.resolve.pathfinder.ai.core.Model
 import works.resolve.pathfinder.ai.core.ModelThinkingLevel
+import works.resolve.pathfinder.ai.core.SessionAffinityFormat
 import works.resolve.pathfinder.ai.core.SimpleStreamOptions
-import works.resolve.pathfinder.ai.core.SimpleToolChoice
 import works.resolve.pathfinder.ai.core.toModelThinkingLevel
 import works.resolve.pathfinder.ai.core.ProviderResponse
+import works.resolve.pathfinder.ai.core.Usage
 import works.resolve.pathfinder.ai.core.headersToRecord
+import works.resolve.pathfinder.ai.core.hasHeader
 import works.resolve.pathfinder.ai.core.mergeSamplingParams
 import works.resolve.pathfinder.ai.core.StopReason
-import works.resolve.pathfinder.ai.core.ThinkingLevel
 import works.resolve.pathfinder.ai.core.ToolChoice
-import works.resolve.pathfinder.ai.core.Tool
 import works.resolve.pathfinder.ai.core.mergeHeaders
 import works.resolve.pathfinder.ai.core.toToolChoice
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
+import works.resolve.pathfinder.ai.utils.splitDeferredTools
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
@@ -41,12 +43,88 @@ import works.resolve.pathfinder.ai.utils.redactedSecret
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
- * Streaming adapters for the OpenAI Responses API family (OpenAI and Azure).
+ * Streaming adapter for the OpenAI Responses API.
  *
  * Divergence from pi: aborts surface as coroutine cancellation, which ends
  * the flow without an Error event — the established Pathfinder convention
  * (see OpenAiCompletionsApi).
  */
+
+// OpenAI Responses rejects max_output_tokens below 16.
+private const val OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16
+
+/** Header-based auth stands in for a key ("unused" sentinel). */
+internal fun getClientApiKey(provider: String, apiKey: String?, headers: Map<String, String?>): String {
+    if (apiKey != null) return apiKey
+    if (hasHeader(headers, "authorization") || hasHeader(headers, "cf-aig-authorization")) return "unused"
+    throw ProviderAuthException("No API key for provider: $provider")
+}
+
+internal fun detectSessionAffinityFormat(model: Model): SessionAffinityFormat =
+    if (model.provider == "openrouter" || model.baseUrl.contains("openrouter.ai")) {
+        SessionAffinityFormat.OPENROUTER
+    } else {
+        SessionAffinityFormat.OPENAI
+    }
+
+internal fun getCompat(model: Model): ResolvedResponsesCompat {
+    val compat = model.responsesCompat
+    return ResolvedResponsesCompat(
+        supportsDeveloperRole = compat?.supportsDeveloperRole ?: true,
+        sessionAffinityFormat = compat?.sessionAffinityFormat ?: detectSessionAffinityFormat(model),
+        supportsLongCacheRetention = compat?.supportsLongCacheRetention ?: true,
+        supportsStrictMode = compat?.supportsStrictMode ?: false,
+        supportsOpenAIGrammarTools = compat?.supportsOpenAIGrammarTools ?: false,
+        supportsAdditionalTools = compat?.supportsAdditionalTools ?: false,
+        supportsToolSearch = compat?.supportsToolSearch ?: false,
+        supportsExplicitPromptCacheMode = compat?.supportsExplicitPromptCacheMode ?: false,
+        supportsMaxOutputTokens = compat?.supportsMaxOutputTokens ?: true,
+    )
+}
+
+internal data class ResolvedResponsesCompat(
+    val supportsDeveloperRole: Boolean,
+    val sessionAffinityFormat: SessionAffinityFormat,
+    val supportsLongCacheRetention: Boolean,
+    val supportsStrictMode: Boolean,
+    val supportsOpenAIGrammarTools: Boolean,
+    val supportsAdditionalTools: Boolean,
+    val supportsToolSearch: Boolean,
+    val supportsExplicitPromptCacheMode: Boolean,
+    /** Default true; when false, `max_output_tokens` is not sent (some gateways reject it). */
+    val supportsMaxOutputTokens: Boolean,
+)
+
+internal fun getPromptCacheRetention(
+    compat: ResolvedResponsesCompat,
+    cacheRetention: CacheRetention,
+): String? =
+    if (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention) "24h" else null
+
+internal fun sessionAffinityHeaders(sessionId: String?, compat: ResolvedResponsesCompat): Map<String, String> {
+    if (sessionId == null) return emptyMap()
+    return when (compat.sessionAffinityFormat) {
+        SessionAffinityFormat.OPENROUTER -> mapOf("x-session-id" to sessionId)
+        SessionAffinityFormat.OPENAI_NOSESSION -> mapOf("x-client-request-id" to sessionId)
+        SessionAffinityFormat.OPENAI -> mapOf(
+            "session_id" to sessionId,
+            "x-client-request-id" to sessionId,
+        )
+    }
+}
+
+internal fun mergeClientHeaders(
+    modelHeaders: Map<String, String>,
+    sessionId: String?,
+    compat: ResolvedResponsesCompat,
+    optionsHeaders: Map<String, String?>,
+): Map<String, String> {
+    val merged = mergeHeaders(
+        mergeHeaders(modelHeaders, sessionAffinityHeaders(sessionId, compat)),
+        optionsHeaders,
+    )
+    return merged.filterValues { it != null }.mapValues { it.value!! }
+}
 
 data class OpenAiResponsesOptions(
     val apiKey: String? = null,
@@ -109,36 +187,6 @@ data class OpenAiResponsesOptions(
     )
 }
 
-data class DeferredToolPlacement(val immediate: List<Tool>, val deferred: Map<String, Tool>)
-
-fun splitDeferredTools(context: Context, enabled: Boolean): DeferredToolPlacement {
-    val uniqueTools = LinkedHashMap<String, Tool>()
-    for (tool in context.tools) uniqueTools[tool.name] = tool
-    if (!enabled) return DeferredToolPlacement(uniqueTools.values.toList(), emptyMap())
-
-    val deferredNames = mutableSetOf<String>()
-    val usedNames = mutableSetOf<String>()
-    for (message in context.messages) {
-        when (message) {
-            is works.resolve.pathfinder.ai.core.AssistantMessage ->
-                message.content.filterIsInstance<works.resolve.pathfinder.ai.core.ToolCall>()
-                    .forEach { usedNames.add(it.name) }
-            is works.resolve.pathfinder.ai.core.ToolResultMessage ->
-                for (name in message.addedToolNames) {
-                    if (name !in usedNames) deferredNames.add(name)
-                }
-            else -> {}
-        }
-    }
-
-    val immediate = mutableListOf<Tool>()
-    val deferred = LinkedHashMap<String, Tool>()
-    for ((name, tool) in uniqueTools) {
-        if (name in deferredNames) deferred[name] = tool else immediate.add(tool)
-    }
-    return DeferredToolPlacement(immediate, deferred)
-}
-
 internal fun buildOpenAiResponsesOptions(
     model: Model,
     context: Context,
@@ -195,7 +243,7 @@ class OpenAiResponsesApi(
         options: OpenAiResponsesOptions = OpenAiResponsesOptions(),
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = clock.now().toEpochMilliseconds()
-        val compatForGrammar = OpenAiResponsesShared.getCompat(model)
+        val compatForGrammar = getCompat(model)
         val grammarToolInputProperties = createGrammarToolInputProperties(
             context.tools,
             compatForGrammar.supportsOpenAIGrammarTools,
@@ -207,21 +255,21 @@ class OpenAiResponsesApi(
                 serviceTier = options.serviceTier,
                 grammarToolInputProperties = grammarToolInputProperties,
                 applyServiceTierPricing = { usage, tier ->
-                    OpenAiResponsesShared.applyServiceTierPricing(usage, tier, model.id)
+                    applyServiceTierPricing(usage, tier, model.id)
                 },
             ),
         )
         try {
-            val apiKey = OpenAiResponsesShared.getClientApiKey(
+            val apiKey = getClientApiKey(
                 model.provider,
                 options.apiKey,
                 options.headers,
             )
-            val compat = OpenAiResponsesShared.getCompat(model)
-            val cacheRetention = OpenAiResponsesShared.resolveCacheRetention(options.cacheRetention, options.env)
+            val compat = getCompat(model)
+            val cacheRetention = resolveCacheRetention(options.cacheRetention, options.env)
             val cacheSessionId = if (cacheRetention == CacheRetention.NONE) null else options.sessionId
 
-            val headers = OpenAiResponsesShared.mergeClientHeaders(
+            val headers = mergeClientHeaders(
                 // Copilot dynamic headers (github-copilot only) sit between
                 // the model headers and the affinity/options headers.
                 mergeHeaders(
@@ -283,13 +331,35 @@ class OpenAiResponsesApi(
             throw ProviderStreamException(state.errorMessage ?: "An unknown error occurred")
         }
     }
+
+    /**
+     * Resolve cache retention preference.
+     * Defaults to "short" and uses PI_CACHE_RETENTION for backward compatibility.
+     *
+     * Divergence from pi: upstream declares this as a plain module-private
+     * function in `openai-responses.ts` (with per-file copies in the other
+     * adapters). Kotlin forbids a second top-level `resolveCacheRetention`
+     * with this signature in the package — `AnthropicMessagesApi.kt` already
+     * declares an identical internal one — so it lives on the companion
+     * object.
+     */
+    companion object {
+        internal fun resolveCacheRetention(
+            cacheRetention: CacheRetention?,
+            env: Map<String, String>,
+        ): CacheRetention = when {
+            cacheRetention != null -> cacheRetention
+            env["PI_CACHE_RETENTION"] == "long" -> CacheRetention.LONG
+            else -> CacheRetention.SHORT
+        }
+    }
 }
 
 internal fun buildParams(
     model: Model,
     context: Context,
     options: OpenAiResponsesOptions?,
-    compat: OpenAiResponsesShared.ResolvedResponsesCompat,
+    compat: ResolvedResponsesCompat,
     cacheRetention: CacheRetention,
     grammarToolInputProperties: Map<String, String> = createGrammarToolInputProperties(
         context.tools,
@@ -324,11 +394,11 @@ internal fun buildParams(
         put("input", kotlinx.serialization.json.JsonArray(messages))
         put("stream", true)
         if (cacheRetention != CacheRetention.NONE) {
-            OpenAiResponsesShared.clampOpenAIPromptCacheKey(options?.sessionId)?.let {
+            clampOpenAIPromptCacheKey(options?.sessionId)?.let {
                 put("prompt_cache_key", it)
             }
         }
-        OpenAiResponsesShared.getPromptCacheRetention(compat, cacheRetention)?.let {
+        getPromptCacheRetention(compat, cacheRetention)?.let {
             put("prompt_cache_retention", it)
         }
         if (disableImplicitPromptCache) {
@@ -340,7 +410,7 @@ internal fun buildParams(
         if (options?.maxTokens != null && compat.supportsMaxOutputTokens) {
             put(
                 "max_output_tokens",
-                maxOf(options.maxTokens, OpenAiResponsesShared.OPENAI_RESPONSES_MIN_OUTPUT_TOKENS),
+                maxOf(options.maxTokens, OPENAI_RESPONSES_MIN_OUTPUT_TOKENS),
             )
         }
         options?.temperature?.let { put("temperature", it) }
@@ -402,355 +472,25 @@ internal fun buildParams(
     return params
 }
 
-// ---------------------------------------------------------------------------
-// Azure OpenAI Responses
-// ---------------------------------------------------------------------------
+internal fun getServiceTierCostMultiplier(modelId: String, serviceTier: String?): Double = when (serviceTier) {
+    "flex" -> 0.5
+    "priority" -> if (modelId == "gpt-5.5") 2.5 else 2.0
+    else -> 1.0
+}
 
-data class AzureOpenAiResponsesOptions(
-    val apiKey: String? = null,
-    val sessionId: String? = null,
-    val temperature: Double? = null,
-    val maxTokens: Int? = null,
-    val reasoningEffort: ModelThinkingLevel? = null,
-    val reasoningSummary: String? = null,
-    /** Raw `tool_choice` wire passthrough; unlike sibling adapters it stays a
-     * String? because pi forwards the value verbatim. [mapResponsesToolChoice]
-     * maps the sealed [ToolChoice] onto this wire value. */
-    val toolChoice: String? = null,
-    val azureApiVersion: String? = null,
-    val azureResourceName: String? = null,
-    val azureBaseUrl: String? = null,
-    val azureDeploymentName: String? = null,
-    val timeoutMs: Long? = null,
-    val maxRetries: Int = 0,
-    val maxRetryDelayMs: Long = works.resolve.pathfinder.ai.core.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
-    val env: Map<String, String> = emptyMap(),
-    val headers: Map<String, String?> = emptyMap(),
-    /**
-     * Request hook that may return a replacement for the outgoing payload. It
-     * receives full message content — installers must not log it. Never
-     * included in toString().
-     */
-    val onPayload: (suspend (payload: JsonObject, model: Model) -> JsonObject?)? = null,
-    /** Invoked after the 2xx response headers arrive. Never included in toString(). */
-    val onResponse: (suspend (response: ProviderResponse, model: Model) -> Unit)? = null,
-    /**
-     * Merged into the request params last, so custom keys override the named
-     * request fields. Only keys appear in toString().
-     */
-    val samplingParams: Map<String, JsonElement>? = null,
-    /**
-     * Explicit parent telemetry context for this request. Dormant in this
-     * port — carried for shape fidelity.
-     */
-    val telemetryContext: TelemetryContext? = null,
-) {
-    override fun toString(): String = optionsToString(
-        "AzureOpenAiResponsesOptions",
-        "apiKey" to redactedSecret(apiKey),
-        "sessionId" to sessionId,
-        "temperature" to temperature,
-        "maxTokens" to maxTokens,
-        "reasoningEffort" to reasoningEffort,
-        "reasoningSummary" to reasoningSummary,
-        "toolChoice" to toolChoice,
-        "azureApiVersion" to azureApiVersion,
-        "azureResourceName" to azureResourceName,
-        "azureBaseUrl" to azureBaseUrl,
-        "azureDeploymentName" to azureDeploymentName,
-        "timeoutMs" to timeoutMs,
-        "maxRetries" to maxRetries,
-        "maxRetryDelayMs" to maxRetryDelayMs,
-        "env" to env.keys,
-        "headers" to headers.keys,
-        "onPayload" to (onPayload != null),
-        "onResponse" to (onResponse != null),
-        "samplingParams" to samplingParams?.keys,
-        "telemetryContext" to (telemetryContext != null),
+internal fun applyServiceTierPricing(usage: Usage, serviceTier: String?, modelId: String): Usage {
+    val multiplier = getServiceTierCostMultiplier(modelId, serviceTier)
+    val cost = usage.cost
+    if (multiplier == 1.0) return usage
+    val scaled = Cost(
+        input = cost.input * multiplier,
+        output = cost.output * multiplier,
+        cacheRead = cost.cacheRead * multiplier,
+        cacheWrite = cost.cacheWrite * multiplier,
     )
-}
-
-internal fun buildAzureOpenAiResponsesOptions(
-    model: Model,
-    context: Context,
-    options: SimpleStreamOptions,
-    reasoningEffort: ModelThinkingLevel?,
-): AzureOpenAiResponsesOptions = AzureOpenAiResponsesOptions(
-    apiKey = options.apiKey,
-    sessionId = options.sessionId,
-    temperature = options.temperature,
-    maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
-        model,
-        context,
-        options.maxTokens ?: model.maxTokens,
-    ),
-    reasoningEffort = reasoningEffort,
-    toolChoice = options.toolChoice?.toToolChoice()?.let(::mapResponsesToolChoice),
-    timeoutMs = options.timeoutMs,
-    maxRetries = options.maxRetries,
-    maxRetryDelayMs = options.maxRetryDelayMs,
-    env = options.env,
-    headers = options.headers,
-    onPayload = options.onPayload,
-    onResponse = options.onResponse,
-    samplingParams = mergeSamplingParams(model, options),
-    telemetryContext = options.telemetryContext,
-)
-
-private const val DEFAULT_AZURE_API_VERSION = "v1"
-
-/** Parses `modelId=deployment,modelId2=deployment2` entries. */
-internal fun parseDeploymentNameMap(value: String?): Map<String, String> {
-    if (value.isNullOrBlank()) return emptyMap()
-    val map = mutableMapOf<String, String>()
-    for (entry in value.split(",")) {
-        val trimmed = entry.trim()
-        if (trimmed.isEmpty()) continue
-        val modelId = trimmed.substringBefore("=", "").trim()
-        val deploymentName = trimmed.substringAfter("=", "").trim()
-        if (modelId.isEmpty() || deploymentName.isEmpty()) continue
-        map[modelId] = deploymentName
-    }
-    return map
-}
-
-internal fun resolveDeploymentName(model: Model, options: AzureOpenAiResponsesOptions?): String {
-    options?.azureDeploymentName?.let { return it }
-    val mapped = parseDeploymentNameMap(options?.env?.get("AZURE_OPENAI_DEPLOYMENT_NAME_MAP"))[model.id]
-    return mapped ?: model.id
-}
-
-internal data class AzureConfig(val baseUrl: String, val apiVersion: String)
-
-internal fun resolveAzureConfig(model: Model, options: AzureOpenAiResponsesOptions?): AzureConfig {
-    val apiVersion = options?.azureApiVersion
-        ?: options?.env?.get("AZURE_OPENAI_API_VERSION")
-        ?: DEFAULT_AZURE_API_VERSION
-
-    val envBaseUrl = options?.env?.get("AZURE_OPENAI_BASE_URL")?.trim()
-    val baseUrl = options?.azureBaseUrl?.trim() ?: envBaseUrl ?: envBaseUrl
-    val resourceName = options?.azureResourceName ?: options?.env?.get("AZURE_OPENAI_RESOURCE_NAME")
-
-    var resolvedBaseUrl = baseUrl?.takeIf { it.isNotEmpty() }
-    if (resolvedBaseUrl == null && resourceName != null) {
-        resolvedBaseUrl = "https://$resourceName.openai.azure.com/openai/v1"
-    }
-    if (resolvedBaseUrl == null && model.baseUrl.isNotEmpty()) {
-        resolvedBaseUrl = model.baseUrl
-    }
-    if (resolvedBaseUrl == null) {
-        throw IllegalStateException(
-            "Azure OpenAI base URL is required. Set AZURE_OPENAI_BASE_URL or AZURE_OPENAI_RESOURCE_NAME, " +
-                "or pass azureBaseUrl, azureResourceName, or model.baseUrl.",
-        )
-    }
-    return AzureConfig(normalizeAzureBaseUrlFor(resolvedBaseUrl), apiVersion)
-}
-
-/** Query and fragment are preserved for non-Azure hosts; only the Azure-host
- * path rewrite strips the query. */
-internal fun normalizeAzureBaseUrlFor(raw: String): String {
-    val trimmed = raw.trim().trimEnd('/')
-    val url = try {
-        java.net.URI(trimmed)
-    } catch (_: Exception) {
-        throw IllegalArgumentException("Invalid Azure OpenAI base URL: $raw")
-    }
-    val host = url.host ?: throw IllegalArgumentException("Invalid Azure OpenAI base URL: $raw")
-    val isAzureHost = host.endsWith(".openai.azure.com") ||
-        host.endsWith(".cognitiveservices.azure.com") ||
-        host.endsWith(".ai.azure.com")
-    var effectivePath = (url.path ?: "").trimEnd('/')
-    if (isAzureHost && (effectivePath.isEmpty() || effectivePath == "/openai" || effectivePath == "/openai/v1/responses")) {
-        effectivePath = "/openai/v1"
-    }
-    val port = if (url.port != -1) ":${url.port}" else ""
-    val userInfo = url.userInfo?.takeIf { it.isNotEmpty() }?.let { "$it@" } ?: ""
-    val query = if (isAzureHost) "" else url.rawQuery?.takeIf { it.isNotEmpty() }?.let { "?$it" } ?: ""
-    val fragment = url.rawFragment?.takeIf { it.isNotEmpty() }?.let { "#$it" } ?: ""
-    return "${url.scheme}://$userInfo$host$port$effectivePath$query$fragment"
-}
-
-/**
- * Azure OpenAI Responses streaming adapter. Authenticates with the Azure
- * `api-key` header — the SDK's auth scheme for `/responses`, which is not a
- * deployments-prefixed path in the v1 API.
- */
-class AzureOpenAiResponsesApi(
-    private val transport: works.resolve.pathfinder.ai.transport.HttpStreamingTransport,
-    private val retry: ProviderRetry = ProviderRetry(),
-    private val clock: Clock = Clock.System,
-) : ChatApi {
-
-    override fun streamSimple(
-        model: Model,
-        context: Context,
-        options: SimpleStreamOptions,
-    ): Flow<AssistantMessageEvent> {
-        val apiKey = options.apiKey
-            ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
-        val clamped = options.reasoning?.let {
-            works.resolve.pathfinder.ai.core.clampThinkingLevel(model, it.toModelThinkingLevel())
-        }
-        val reasoningEffort = if (clamped == ModelThinkingLevel.OFF) null else clamped
-        return stream(
-            model,
-            context,
-            buildAzureOpenAiResponsesOptions(model, context, options, reasoningEffort),
-        )
-    }
-    fun stream(
-        model: Model,
-        context: Context,
-        options: AzureOpenAiResponsesOptions = AzureOpenAiResponsesOptions(),
-    ): Flow<AssistantMessageEvent> = flow {
-        val deploymentName = resolveDeploymentName(model, options)
-        val startedAtMs = clock.now().toEpochMilliseconds()
-        val grammarToolInputProperties = createGrammarToolInputProperties(
-            context.tools,
-            model.responsesCompat?.supportsOpenAIGrammarTools ?: false,
-        )
-        val state = OpenAiResponsesShared.ResponsesStreamState(
-            model,
-            startedAtMs,
-            OpenAiResponsesShared.StreamProcessingOptions(
-                grammarToolInputProperties = grammarToolInputProperties,
-            ),
-        )
-        try {
-            val apiKey = options.apiKey
-                ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
-            val config = resolveAzureConfig(model, options)
-            val messages = OpenAiResponsesShared.convertResponsesMessages(
-                model,
-                context,
-                OpenAiResponsesShared.AZURE_TOOL_CALL_PROVIDERS,
-                OpenAiResponsesShared.ConvertResponsesMessagesOptions(
-                    grammarToolInputProperties = grammarToolInputProperties,
-                ),
-            )
-
-            var params = buildAzureParams(model, context, options, deploymentName, messages)
-            options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
-            val headers = LinkedHashMap<String, String?>()
-            // Precedence: default User-Agent, then model headers (which may
-            // override it), then options headers last.
-            headers.putAll(mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), model.headers))
-            headers.putAll(options.headers)
-            headers["api-key"] = apiKey
-            headers["Accept"] = "text/event-stream"
-            val request = TransportRequest(
-                url = config.baseUrl.trimEnd('/') + "/responses?api-version=" + config.apiVersion,
-                bearerToken = null,
-                headers = headers.filterValues { it != null }.mapValues { it.value!! },
-                body = params.toString().toByteArray(Charsets.UTF_8),
-                timeoutMs = options.timeoutMs,
-            )
-
-            val response = retry.retryProviderRequest<TransportResponse>(
-                options.maxRetries,
-                options.maxRetryDelayMs,
-            ) { transport.post(request) }
-
-            // Only runs for 2xx: the transport throws before this on non-2xx.
-            options.onResponse?.invoke(ProviderResponse(response.status, headersToRecord(response.headers)), model)
-
-            emit(AssistantMessageEvent.Start(state.partialSnapshot()))
-            for (event in response.events.toList()) {
-                processSseEvent(event, state)?.forEach { emit(it) }
-            }
-            state.assertTerminalEvent()
-            if (state.stopReason == StopReason.PENDING) {
-                throw ProviderStreamException("Azure OpenAI Responses stream ended without a stop reason")
-            }
-            if (state.stopReason == StopReason.ERROR || state.stopReason == StopReason.ABORTED) {
-                throw ProviderStreamException(state.errorMessage ?: "An unknown error occurred")
-            }
-            emit(AssistantMessageEvent.Done(state.stopReason, state.partialSnapshot()))
-        } catch (error: Exception) {
-            if (error is CancellationException) throw error
-            emit(
-                AssistantMessageEvent.Error(
-                    StopReason.ERROR,
-                    state.partialSnapshot().copy(
-                        stopReason = StopReason.ERROR,
-                        errorMessage = formatResponsesProviderError(error, "Azure OpenAI API error"),
-                    ),
-                ),
-            )
-        }
-    }
-}
-
-internal fun buildAzureParams(
-    model: Model,
-    context: Context,
-    options: AzureOpenAiResponsesOptions?,
-    deploymentName: String,
-    messages: List<JsonObject>,
-): JsonObject {
-    var params = buildJsonObject {
-    put("model", deploymentName)
-    put("input", kotlinx.serialization.json.JsonArray(messages))
-    put("stream", true)
-    OpenAiResponsesShared.clampOpenAIPromptCacheKey(options?.sessionId)?.let {
-        put("prompt_cache_key", it)
-    }
-    put("store", false)
-
-    options?.maxTokens?.let {
-        put("max_output_tokens", maxOf(it, OpenAiResponsesShared.OPENAI_RESPONSES_MIN_OUTPUT_TOKENS))
-    }
-    options?.temperature?.let { put("temperature", it) }
-    if (!context.tools.isEmpty()) {
-        // Defaults to true here, unlike openai-responses' getCompat (false).
-        val supportsStrictMode = model.responsesCompat?.supportsStrictMode ?: true
-        put(
-            "tools",
-            kotlinx.serialization.json.JsonArray(
-                OpenAiResponsesShared.convertResponsesTools(
-                    context.tools,
-                    OpenAiResponsesShared.ConvertResponsesToolsOptions(
-                        supportsStrictMode = supportsStrictMode,
-                        supportsOpenAIGrammarTools = model.responsesCompat?.supportsOpenAIGrammarTools
-                            ?: false,
-                    ),
-                ),
-            ),
-        )
-    }
-    options?.toolChoice?.let { put("tool_choice", it) }
-
-    if (model.reasoning) {
-        if (options?.reasoningEffort != null || options?.reasoningSummary != null) {
-            val effort = OpenAiResponsesShared.resolveReasoningEffort(model, options?.reasoningEffort, "medium")
-            put(
-                "reasoning",
-                buildJsonObject {
-                    put("effort", effort)
-                    put("summary", options?.reasoningSummary?.takeIf { it.isNotEmpty() } ?: "auto")
-                },
-            )
-            put(
-                "include",
-                kotlinx.serialization.json.JsonArray(
-                    listOf(kotlinx.serialization.json.JsonPrimitive("reasoning.encrypted_content")),
-                ),
-            )
-        } else if (!(model.thinkingLevelMap?.isSpecified(ModelThinkingLevel.OFF) == true &&
-            model.thinkingLevelMap?.forLevel(ModelThinkingLevel.OFF) == null)
-        ) {
-            // thinkingLevelMap explicitly mapping OFF to null (unsupported)
-            // omits the reasoning block entirely.
-            val off = model.thinkingLevelMap?.takeIf { it.isSpecified(ModelThinkingLevel.OFF) }
-                ?.forLevel(ModelThinkingLevel.OFF) ?: "none"
-            put("reasoning", buildJsonObject { put("effort", off) })
-        }
-    }
-    }
-    // Merged last so custom keys override the named request fields.
-    options?.samplingParams?.let { params = JsonObject(params.toMap() + it) }
-    return params
+    return usage.copy(
+        cost = scaled.copy(total = scaled.input + scaled.output + scaled.cacheRead + scaled.cacheWrite),
+    )
 }
 
 // ---------------------------------------------------------------------------

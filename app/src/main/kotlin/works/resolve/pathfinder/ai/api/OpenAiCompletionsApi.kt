@@ -248,7 +248,7 @@ class OpenAiCompletionsApi(
 
             // The always-sent Accept header is merged last and can never be
             // overridden by request headers.
-            val cacheRetention = OpenAiResponsesShared.resolveCacheRetention(
+            val cacheRetention = OpenAiResponsesApi.resolveCacheRetention(
                 options.cacheRetention,
                 options.env,
             )
@@ -492,7 +492,7 @@ class OpenAiCompletionsApi(
 private fun sessionAffinityHeaders(model: Model, cacheSessionId: String?): Map<String, String> {
     if (cacheSessionId == null || !model.compat.sendSessionAffinityHeaders) return emptyMap()
     val format = model.compat.sessionAffinityFormat
-        ?: OpenAiResponsesShared.detectSessionAffinityFormat(model)
+        ?: detectSessionAffinityFormat(model)
     return when (format) {
         SessionAffinityFormat.OPENROUTER -> mapOf("x-session-id" to cacheSessionId)
         SessionAffinityFormat.OPENAI, SessionAffinityFormat.OPENAI_NOSESSION -> buildMap {
@@ -690,7 +690,7 @@ object OpenAiCompletionsPayload {
         context: Context,
         options: OpenAiCompletionsOptions,
         compat: OpenAiCompletionsCompat = model.compat,
-        cacheRetention: CacheRetention = OpenAiResponsesShared.resolveCacheRetention(
+        cacheRetention: CacheRetention = OpenAiResponsesApi.resolveCacheRetention(
             options.cacheRetention,
             options.env,
         ),
@@ -705,7 +705,7 @@ object OpenAiCompletionsPayload {
             (model.baseUrl.contains("api.openai.com") && cacheRetention != CacheRetention.NONE) ||
                 (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention)
         if (sendPromptCacheKey) {
-            OpenAiResponsesShared.clampOpenAIPromptCacheKey(options.sessionId)?.let {
+            clampOpenAIPromptCacheKey(options.sessionId)?.let {
                 body["prompt_cache_key"] = JsonPrimitive(it)
             }
         }

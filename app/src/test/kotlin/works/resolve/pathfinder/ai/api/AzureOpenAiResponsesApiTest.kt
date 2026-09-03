@@ -62,26 +62,26 @@ class AzureOpenAiResponsesApiTest {
     fun `normalizes bare azure hosts to openai v1 and appends responses path`() = runTest {
         assertEquals(
             "https://my-resource.openai.azure.com/openai/v1",
-            normalizeAzureBaseUrlFor("https://my-resource.openai.azure.com/"),
+            normalizeAzureBaseUrl("https://my-resource.openai.azure.com/"),
         )
         assertEquals(
             "https://my-resource.openai.azure.com/openai/v1",
-            normalizeAzureBaseUrlFor("https://my-resource.openai.azure.com/openai"),
+            normalizeAzureBaseUrl("https://my-resource.openai.azure.com/openai"),
         )
         assertEquals(
             "https://my-resource.services.ai.azure.com/openai/v1",
-            normalizeAzureBaseUrlFor("https://my-resource.services.ai.azure.com/openai/v1/responses"),
+            normalizeAzureBaseUrl("https://my-resource.services.ai.azure.com/openai/v1/responses"),
         )
         assertEquals(
             "https://proxy.example.com/azure",
-            normalizeAzureBaseUrlFor("https://proxy.example.com/azure/"),
+            normalizeAzureBaseUrl("https://proxy.example.com/azure/"),
         )
     }
 
     @Test
     fun `invalid base url fails fast`() {
         val error = kotlin.test.assertFailsWith<IllegalArgumentException> {
-            normalizeAzureBaseUrlFor("not-a-url")
+            normalizeAzureBaseUrl("not-a-url")
         }
         assertTrue(error.message!!.contains("Invalid Azure OpenAI base URL: not-a-url"))
     }
@@ -214,11 +214,11 @@ class AzureOpenAiResponsesApiTest {
         // Only the Azure-host branch strips the query; other hosts keep it, as in pi.
         assertEquals(
             "https://my-proxy.example.com/v1?custom=true",
-            normalizeAzureBaseUrlFor("https://my-proxy.example.com/v1?custom=true"),
+            normalizeAzureBaseUrl("https://my-proxy.example.com/v1?custom=true"),
         )
         assertEquals(
             "https://my-resource.openai.azure.com/openai/v1",
-            normalizeAzureBaseUrlFor("https://my-resource.openai.azure.com/openai?api-version=2024-12-01"),
+            normalizeAzureBaseUrl("https://my-resource.openai.azure.com/openai?api-version=2024-12-01"),
         )
     }
 

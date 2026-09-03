@@ -47,6 +47,7 @@ import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.RetryDelayExceededError
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.splitDeferredTools
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
@@ -269,7 +270,7 @@ class OpenAICodexResponsesApi(
                 grammarToolInputProperties = grammarToolInputProperties,
                 resolveServiceTier = ::resolveCodexServiceTier,
                 applyServiceTierPricing = { usage, tier ->
-                    OpenAiResponsesShared.applyServiceTierPricing(usage, tier, model.id)
+                    applyServiceTierPricing(usage, tier, model.id)
                 },
             ),
         )
@@ -296,12 +297,12 @@ class OpenAICodexResponsesApi(
             val apiKey = options.apiKey
                 ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
             val accountId = extractAccountId(apiKey)
-            val cacheRetention = OpenAiResponsesShared.resolveCacheRetention(
+            val cacheRetention = OpenAiResponsesApi.resolveCacheRetention(
                 options.cacheRetention,
                 options.env,
             )
             val cacheSessionId = if (cacheRetention == CacheRetention.NONE) null else options.sessionId
-            val codexSessionId = OpenAiResponsesShared.clampOpenAIPromptCacheKey(cacheSessionId)
+            val codexSessionId = clampOpenAIPromptCacheKey(cacheSessionId)
             var bodyObj = buildCodexRequestBody(model, context, options, codexSessionId, grammarToolInputProperties)
             options.onPayload?.let { hook -> hook(bodyObj, model)?.let { bodyObj = it } }
             val bodyJson = bodyObj.toString()
