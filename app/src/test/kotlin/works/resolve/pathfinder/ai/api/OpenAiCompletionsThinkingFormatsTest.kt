@@ -307,4 +307,44 @@ class OpenAiCompletionsThinkingFormatsTest {
             }
         }
     }
+
+    // pi test/openai-completions-tool-choice.test.ts "omits reasoning effort for
+    // OpenCode Grok Build": the OPENAI format without effort support sends no
+    // thinking params at all (also covered against the real catalog asset in
+    // OpenAiCompletionsPayloadTest).
+    @Test
+    fun `openai format without effort support sends no thinking params`() {
+        val b = body(model(ThinkingFormat.OPENAI, supportsReasoningEffort = false), ModelThinkingLevel.HIGH)
+        assertFalse(b.containsKey("reasoning_effort"))
+        assertFalse(b.containsKey("thinking"))
+    }
+
+    // TODO(pi test/openai-completions-thinking-token-budget.test.ts @pin, and the
+    // chat-template cases in test/openai-completions-tool-choice.test.ts):
+    // thinking token budgets (compat.supportsThinkingTokenBudget /
+    // thinkingTokenBudgetField → a top-level thinking_token_budget field,
+    // clamped to leave answer room via clampThinkingBudgetToAnswerRoom) and the
+    // chat-template / qwen-chat-template thinkingFormats (chatTemplateKwargs →
+    // chat_template_kwargs, including $var thinking.budget) are unported:
+    // no supported catalog model sets them, and pi only reaches them through
+    // custom local-vLLM providers, which pathfinder does not have. Sketch of
+    // the missing cases:
+    //
+    // fun `sends the configured budget for the requested level`() {
+    //     val m = vllmModel(compat = OpenAiCompletionsCompat(
+    //         thinkingFormat = ThinkingFormat.ZAI, supportsThinkingTokenBudget = true))
+    //     val b = body(m, effort = MEDIUM, thinkingBudgets = {MEDIUM to 4096})
+    //     assertEquals(4096L, b["thinking_token_budget"]!!.jsonPrimitive.longOrNull)
+    // }
+    //
+    // fun `qwen chat template kwargs carry enable_thinking and preserve_thinking`() {
+    //     val b = body(model(ThinkingFormat.QWEN_CHAT_TEMPLATE), effort = HIGH)
+    //     assertEquals(
+    //         parse("{"enable_thinking":true,"preserve_thinking":true}"),
+    //         b["chat_template_kwargs"],
+    //     )
+    // }
+    //
+    // Port these if custom providers ever land (they need OpenAiCompletionsCompat
+    // fields and ThinkingFormat members that do not exist yet).
 }
