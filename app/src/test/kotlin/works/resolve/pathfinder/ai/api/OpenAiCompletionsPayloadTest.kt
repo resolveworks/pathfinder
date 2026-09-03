@@ -1256,4 +1256,255 @@ class OpenAiCompletionsPayloadTest {
         assertEquals("Hello", messages.last().jsonObject["content"]!!.jsonPrimitive.content)
         assertNull(cacheControlOf(b["tools"]!!.jsonArray[0]))
     }
+
+    // ---------------------------------------------------------------------
+    // Cases from pi test/openai-completions-empty-tools.test.ts
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `omits tools field when context tools is empty or absent`() {
+        // `tools: []` must not be serialized — some backends (DashScope)
+        // reject the empty array; only tool history keeps an empty tools param.
+        val empty = body(Context(messages = listOf(UserMessage.ofText("hi")), tools = emptyList()))
+        assertFalse(empty.containsKey("tools"))
+        val absent = body(Context(messages = listOf(UserMessage.ofText("hi"))))
+        assertFalse(absent.containsKey("tools"))
+    }
+
+    // ---------------------------------------------------------------------
+    // Cases from pi test/openai-completions-tool-choice.test.ts (payload side)
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `developer role for reasoning models with developer role support`() {
+        val reasoning = openaiModel.copy(reasoning = true)
+        val b = body(
+            Context(systemPrompt = "Follow instructions.", messages = listOf(UserMessage.ofText("hi"))),
+            model = reasoning,
+        )
+        assertEquals(
+            "developer",
+            b["messages"]!!.jsonArray[0].jsonObject["role"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `zai replay keeps reasoning_content and thinking enabled with mapped effort`() {
+        val b = body(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("Read README.md"),
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent("prior reasoning", thinkingSignature = "reasoning_content"),
+                            ToolCall("call_1", "read", """{"path":"README.md"}"""),
+                        ),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2",
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                    ToolResultMessage("call_1", "read", listOf(TextContent("contents"))),
+                    UserMessage.ofText("Continue"),
+                ),
+            ),
+            OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.HIGH),
+        )
+        val assistant = b["messages"]!!.jsonArray.first {
+            it.jsonObject["role"]!!.jsonPrimitive.content == "assistant"
+        }.jsonObject
+        assertEquals("prior reasoning", assistant["reasoning_content"]!!.jsonPrimitive.content)
+        val thinking = b["thinking"]!!.jsonObject
+        assertEquals("enabled", thinking["type"]!!.jsonPrimitive.content)
+        assertEquals(false, thinking["clear_thinking"]!!.jsonPrimitive.boolean)
+        assertEquals("high", b["reasoning_effort"]!!.jsonPrimitive.content)
+    }
+
+    // ---------------------------------------------------------------------
+    // Cases from pi test/openai-completions-thinking-as-text.test.ts
+    // ---------------------------------------------------------------------
+
+    private fun asTextModel() = openaiModel.copy(compat = openaiModel.compat.copy(requiresThinkingAsText = true))
+
+    private fun replayContext(content: List<works.resolve.pathfinder.ai.core.Content>) = Context(
+        messages = listOf(
+            UserMessage.ofText("hello"),
+            AssistantMessage(
+                content = content,
+                api = "openai-completions",
+                provider = "openai",
+                model = "gpt-4o",
+                stopReason = StopReason.STOP,
+            ),
+            UserMessage.ofText("continue"),
+        ),
+    )
+
+    @Test
+    fun `requiresThinkingAsText serializes thinking plus text replay as assistant text parts`() {
+        val b = body(
+            replayContext(
+                listOf(ThinkingContent("internal reasoning"), TextContent("visible answer")),
+            ),
+            model = asTextModel(),
+        )
+        assertEquals(
+            Json.parseToJsonElement(
+                """[{"type":"text","text":"internal reasoning"},{"type":"text","text":"visible answer"}]""",
+            ),
+            b["messages"]!!.jsonArray[1].jsonObject["content"],
+        )
+    }
+
+    @Test
+    fun `requiresThinkingAsText serializes thinking-only replay as assistant text parts`() {
+        val b = body(
+            replayContext(listOf(ThinkingContent("internal reasoning"))),
+            model = asTextModel(),
+        )
+        assertEquals(
+            Json.parseToJsonElement("""[{"type":"text","text":"internal reasoning"}]"""),
+            b["messages"]!!.jsonArray[1].jsonObject["content"],
+        )
+    }
+
+    @Test
+    fun `requiresThinkingAsText replay omits the raw reasoning field`() {
+        val b = body(
+            replayContext(
+                listOf(ThinkingContent("internal reasoning", thinkingSignature = "reasoning_content")),
+            ),
+            model = asTextModel(),
+        )
+        val assistant = b["messages"]!!.jsonArray[1].jsonObject
+        assertFalse(assistant.containsKey("reasoning_content"))
+        assertFalse(assistant.containsKey("reasoning"))
+    }
+
+    // ---------------------------------------------------------------------
+    // Catalog-driven cases from pi test/openai-completions-tool-choice.test.ts
+    // (DeepSeek max_tokens, Grok Build effort, Xiaomi MiMo replay), using the
+    // generated asset like ProviderCatalogTest's realAsset().
+    // ---------------------------------------------------------------------
+
+    // ---------------------------------------------------------------------
+    // Case from pi test/openai-completions-tool-result-images.test.ts (wire
+    // shape only; the images stack itself is unported per differences.md §7)
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `batches tool-result images after consecutive tool results`() {
+        val vision = openaiModel // gpt-4o accepts image input
+        val b = body(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("Read the images"),
+                    AssistantMessage(
+                        content = listOf(
+                            ToolCall("tool-1", "read", """{"path":"img-1.png"}"""),
+                            ToolCall("tool-2", "read", """{"path":"img-2.png"}"""),
+                        ),
+                        api = "openai-completions",
+                        provider = vision.provider,
+                        model = vision.id,
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                    ToolResultMessage(
+                        toolCallId = "tool-1",
+                        toolName = "read",
+                        content = listOf(
+                            TextContent("Read image file [image/png]"),
+                            ImageContent("ZmFrZQ==", "image/png"),
+                        ),
+                    ),
+                    ToolResultMessage(
+                        toolCallId = "tool-2",
+                        toolName = "read",
+                        content = listOf(
+                            TextContent("Read image file [image/png]"),
+                            ImageContent("ZmFrZQ==", "image/png"),
+                        ),
+                    ),
+                ),
+            ),
+            model = vision,
+        )
+        val messages = b["messages"]!!.jsonArray
+        assertEquals(
+            listOf("user", "assistant", "tool", "tool", "user"),
+            messages.map { it.jsonObject["role"]!!.jsonPrimitive.content },
+        )
+        val imageMessage = messages.last().jsonObject
+        val imageParts = imageMessage["content"]!!.jsonArray
+            .filter { it.jsonObject["type"]!!.jsonPrimitive.content == "image_url" }
+        assertEquals(2, imageParts.size)
+        assertEquals(
+            "data:image/png;base64,ZmFrZQ==",
+            imageParts[0].jsonObject["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content,
+        )
+    }
+
+    private var realCatalog: works.resolve.pathfinder.ai.providers.ProviderCatalog? = null
+
+    private fun realAsset(): works.resolve.pathfinder.ai.providers.ProviderCatalog {
+        val file = java.io.File("src/main/assets/models-catalog.json")
+        org.junit.Assume.assumeTrue("real catalog asset not found at ${file.absolutePath}", file.isFile)
+        var cached = realCatalog
+        if (cached == null) {
+            cached = works.resolve.pathfinder.ai.providers.ProviderCatalog.parse(file.readText())
+            realCatalog = cached
+        }
+        return cached
+    }
+
+    @Test
+    fun `deepseek catalog model sends max_tokens`() {
+        val deepseek = realAsset().getProvider("deepseek")!!.model("deepseek-v4-flash")!!
+        val b = body(
+            Context(messages = listOf(UserMessage.ofText("hi"))),
+            OpenAiCompletionsOptions(apiKey = "k", maxTokens = 123),
+            deepseek,
+        )
+        assertEquals(123L, b["max_tokens"]!!.jsonPrimitive.longOrNull)
+        assertNull(b["max_completion_tokens"])
+    }
+
+    @Test
+    fun `opencode grok build omits reasoning effort`() {
+        val grok = realAsset().getProvider("opencode")!!.model("grok-build-0.1")!!
+        val b = body(
+            Context(messages = listOf(UserMessage.ofText("hi"))),
+            OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.HIGH),
+            grok,
+        )
+        assertFalse(b.containsKey("reasoning_effort"))
+    }
+
+    @Test
+    fun `xiaomi mimo replay sends empty reasoning_content with deepseek thinking params`() {
+        val mimo = realAsset().getProvider("xiaomi")!!.model("mimo-v2.5-pro")!!
+        val b = body(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("Read README.md"),
+                    AssistantMessage(
+                        content = listOf(ToolCall("call_1", "read", """{"path":"README.md"}""")),
+                        api = "openai-completions",
+                        provider = "xiaomi",
+                        model = "mimo-v2.5-pro",
+                        stopReason = StopReason.TOOL_USE,
+                    ),
+                    ToolResultMessage("call_1", "read", listOf(TextContent("contents"))),
+                ),
+            ),
+            OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.HIGH),
+            mimo,
+        )
+        val assistant = b["messages"]!!.jsonArray.first {
+            it.jsonObject["role"]!!.jsonPrimitive.content == "assistant"
+        }.jsonObject
+        assertEquals("", assistant["reasoning_content"]!!.jsonPrimitive.content)
+        assertEquals("enabled", b["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("high", b["reasoning_effort"]!!.jsonPrimitive.content)
+    }
 }

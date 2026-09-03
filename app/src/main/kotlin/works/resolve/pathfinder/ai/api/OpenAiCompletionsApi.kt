@@ -266,8 +266,8 @@ data class OpenAiCompletionsOptions(
  *
  * Like pi's stream(), failures after the stream starts are encoded as an
  * [AssistantMessageEvent.Error] carrying the partial message, not thrown.
- * Malformed complete SSE data payloads are protocol errors, never silently
- * ignored.
+ * Unparseable SSE data payloads are protocol errors; null and non-object
+ * chunks are skipped, like pi's `if (!chunk || typeof chunk !== "object")`.
  */
 class OpenAiCompletionsApi(
     private val transport: works.resolve.pathfinder.ai.transport.HttpStreamingTransport,
@@ -421,7 +421,10 @@ class OpenAiCompletionsApi(
             )
         }
         if (chunk !is JsonObject) {
-            throw ProviderStreamException("Malformed SSE JSON payload: expected a JSON object")
+            // pi skips null and non-object chunks (some OpenAI-compatible
+            // providers send `data: null` keep-alives); only unparseable
+            // payloads above are protocol errors.
+            return emptyList()
         }
 
         // Some providers deliver errors as JSON events mid-stream.
