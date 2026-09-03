@@ -342,4 +342,173 @@ class OpenAiResponsesApiTest {
         assertEquals(0.00001, done.message.usage.cost.output, 1e-9)
         assertIs<AssistantMessageEvent.Start>(events.first())
     }
+
+    @Test
+    fun `github-copilot models omit the default reasoning block`() = runTest {
+        // pi b8b873b98 openai-responses-compat: "omits reasoning when no
+        // reasoning is requested" — the default-effort branch skips
+        // github-copilot entirely.
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        api(transport).stream(
+            model.copy(provider = "github-copilot"),
+            context,
+            OpenAiResponsesOptions(apiKey = "k"),
+        ).toList()
+        assertNull(body(transport)["reasoning"])
+    }
+
+    @Test
+    fun `sends max output tokens above the floor by default`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        api(transport).stream(model, context, OpenAiResponsesOptions(apiKey = "k", maxTokens = 1024)).toList()
+        assertEquals(1024, body(transport)["max_output_tokens"]!!.jsonPrimitive.content.toInt())
+    }
+
+    @Test
+    fun `strict-capable providers emit explicit strict flags per tool`() = runTest {
+        // pi b8b873b98 openai-responses-compat: "sets strict mode explicitly
+        // for Cloudflare OpenAI Responses tools" — ordinary tools carry
+        // strict:false, constrained ones strict:true.
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        val schema = {
+            buildJsonObject {
+                put("type", "object")
+                put("properties", buildJsonObject { put("value", buildJsonObject { put("type", "string") }) })
+                put("additionalProperties", false)
+            }
+        }
+        val ordinary = Tool("ordinary", "An ordinary tool", schema())
+        val constrained = Tool(
+            "constrained",
+            "A constrained tool",
+            schema(),
+            constrainedSampling = works.resolve.pathfinder.ai.core.ConstrainedSamplingConfig.JsonSchema(
+                works.resolve.pathfinder.ai.core.StrictJsonSchemaMode.PREFER,
+            ),
+        )
+        api(transport).stream(
+            model.copy(responsesCompat = OpenAiResponsesCompat(supportsStrictMode = true)),
+            context.copy(tools = listOf(ordinary, constrained)),
+            OpenAiResponsesOptions(apiKey = "k"),
+        ).toList()
+        val tools = body(transport)["tools"]!!.jsonArray
+        assertEquals("ordinary", tools[0]!!.jsonObject["name"]!!.jsonPrimitive.content)
+        assertEquals(false, tools[0]!!.jsonObject["strict"]!!.jsonPrimitive.content.toBoolean())
+        assertEquals("constrained", tools[1]!!.jsonObject["name"]!!.jsonPrimitive.content)
+        assertEquals(true, tools[1]!!.jsonObject["strict"]!!.jsonPrimitive.content.toBoolean())
+    }
+
+    @Test
+    fun `openai-nosession affinity keeps only the client request id`() = runTest {
+        // pi b8b873b98 openai-responses-compat: "uses OpenAI no-session format
+        // when configured" — session_id header dropped, prompt cache kept.
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        val nosession = model.copy(
+            provider = "proxy",
+            baseUrl = "https://proxy.example.com/v1",
+            responsesCompat = OpenAiResponsesCompat(sessionAffinityFormat = SessionAffinityFormat.OPENAI_NOSESSION),
+        )
+        api(transport).stream(nosession, context, OpenAiResponsesOptions(apiKey = "k", sessionId = "session-proxy"))
+            .toList()
+        val headers = transport.requests.single().headers
+        assertEquals("session-proxy", headers["x-client-request-id"])
+        assertNull(headers["session_id"])
+        assertNull(headers["x-session-id"])
+        assertEquals("session-proxy", body(transport)["prompt_cache_key"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `openrouter affinity auto-detects from the endpoint`() = runTest {
+        // pi b8b873b98 openai-responses-compat: "auto-detects OpenRouter
+        // session-affinity header for OpenRouter Responses endpoints".
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        val openrouter = model.copy(provider = "openrouter", baseUrl = "https://openrouter.ai/api/v1")
+        api(transport).stream(openrouter, context, OpenAiResponsesOptions(apiKey = "k", sessionId = "session-or"))
+            .toList()
+        val headers = transport.requests.single().headers
+        assertEquals("session-or", headers["x-session-id"])
+        assertNull(headers["session_id"])
+        assertNull(headers["x-client-request-id"])
+        assertEquals("session-or", body(transport)["prompt_cache_key"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `explicit headers override the default cache-affinity headers`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        api(transport).stream(
+            model,
+            context,
+            OpenAiResponsesOptions(
+                apiKey = "k",
+                sessionId = "session-123",
+                headers = mapOf("session_id" to "override-session", "x-client-request-id" to "override-request"),
+            ),
+        ).toList()
+        val headers = transport.requests.single().headers
+        assertEquals("override-session", headers["session_id"])
+        assertEquals("override-request", headers["x-client-request-id"])
+    }
+
+    @Test
+    fun `cache retention none omits the cache-affinity headers`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        api(transport).stream(
+            model,
+            context,
+            OpenAiResponsesOptions(
+                apiKey = "k",
+                sessionId = "session-123",
+                cacheRetention = works.resolve.pathfinder.ai.core.CacheRetention.NONE,
+            ),
+        ).toList()
+        val headers = transport.requests.single().headers
+        assertNull(headers["session_id"])
+        assertNull(headers["x-client-request-id"])
+    }
+
+    @Test
+    fun `service tier priority scales the completed usage cost`() = runTest {
+        // pi b8b873b98 openai-responses-compat: "applies %s %s service-tier
+        // cost multiplier" — priority doubles the per-million cost.
+        val transport = FakeTransport()
+        transport.enqueueResponse(
+            sse(
+                """{"type":"response.completed","response":{"id":"r1","status":"completed",
+                    "service_tier":"priority",
+                    "usage":{"input_tokens":20000,"output_tokens":10000,"total_tokens":30000,
+                        "input_tokens_details":{"cached_tokens":0}}}}""",
+                "[DONE]",
+            ),
+        )
+        val events = api(transport).stream(model, context, OpenAiResponsesOptions(apiKey = "k")).toList()
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        // Model cost input 1.0 / output 2.0 per million; priority ×2 for
+        // non-gpt-5.5 models.
+        assertEquals(0.04, done.message.usage.cost.input, 1e-9)
+        assertEquals(0.04, done.message.usage.cost.output, 1e-9)
+    }
+
+    @Test
+    fun `streamSimple forwards provider-neutral tool choice`() = runTest {
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
+        api(transport).streamSimple(
+            model,
+            context.copy(tools = listOf(Tool("read", "Read a file", buildJsonObject { put("type", "object") }))),
+            works.resolve.pathfinder.ai.core.SimpleStreamOptions(
+                apiKey = "k",
+                toolChoice = works.resolve.pathfinder.ai.core.SimpleToolChoice.None,
+            ),
+        ).toList()
+        val body = body(transport)
+        assertEquals("none", body["tool_choice"]!!.jsonPrimitive.content)
+        assertEquals(1, body["tools"]!!.jsonArray.size)
+    }
 }

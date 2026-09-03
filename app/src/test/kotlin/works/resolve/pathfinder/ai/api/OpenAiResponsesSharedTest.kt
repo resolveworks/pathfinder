@@ -1257,4 +1257,203 @@ class OpenAiResponsesSharedTest {
         assertEquals("dynamic_tools", end.toolCall.namespace)
         assertEquals("{\"input\":\"hello\"}", end.toolCall.arguments)
     }
+
+    @Test
+    fun `unknown provider incomplete reasons surface as non-retryable errors`() {
+        // pi b8b873b98 openai-responses-terminal-event: "preserves unknown
+        // provider incomplete reasons as non-retryable errors".
+        val s = state()
+        s.onEvent(
+            event(
+                """{"type":"response.incomplete","response":{
+                    "id":"resp_mtl","status":"incomplete",
+                    "incomplete_details":{"reason":"max_time_limit"}}}""",
+            ),
+        )
+        assertEquals(StopReason.ERROR, s.stopReason)
+        assertEquals("incomplete.max_time_limit", s.rawStopReason)
+        assertEquals("Response incomplete: max_time_limit", s.errorMessage)
+    }
+
+    @Test
+    fun `final_answer phase on the added event stops immediately`() {
+        // pi b8b873b98 openai-responses-terminal-event phases [final_answer,
+        // final_answer] -> [stop, stop]: the phase is honored as soon as the
+        // message item appears.
+        val s = state()
+        s.onEvent(
+            event(
+                """{"type":"response.output_item.added","output_index":0,
+                    "item":{"type":"message","id":"msg_1","role":"assistant","phase":"final_answer"}}""",
+            ),
+        )
+        assertEquals(StopReason.STOP, s.stopReason)
+    }
+
+    @Test
+    fun `commentary-only messages keep the pending stop reason`() {
+        // pi b8b873b98 openai-responses-terminal-event phases [commentary,
+        // commentary] -> [pending, pending].
+        val s = state()
+        s.onEvent(
+            event(
+                """{"type":"response.output_item.added","output_index":0,
+                    "item":{"type":"message","id":"msg_1","role":"assistant","phase":"commentary"}}""",
+            ),
+        )
+        assertEquals(StopReason.PENDING, s.stopReason)
+        s.onEvent(
+            event(
+                """{"type":"response.output_item.done","output_index":0,
+                    "item":{"type":"message","id":"msg_1","role":"assistant","status":"completed",
+                        "phase":"commentary",
+                        "content":[{"type":"output_text","text":"answer","annotations":[]}]}}""",
+            ),
+        )
+        assertEquals(StopReason.PENDING, s.stopReason)
+    }
+
+    @Test
+    fun `azure keeps encrypted_content from output_item_done over the terminal response`() {
+        // pi b8b873b98 azure-openai-responses-reasoning-replay: "preserves
+        // existing encrypted_content from output_item.done" — the terminal
+        // response never overwrites a value the done event already carried.
+        val s = state()
+        s.onEvent(
+            event(
+                """{"type":"response.output_item.added","output_index":0,
+                    "item":{"type":"reasoning","id":"rs_done","summary":[]}}""",
+            ),
+        )
+        s.onEvent(
+            event(
+                """{"type":"response.output_item.done","output_index":0,
+                    "item":{"type":"reasoning","id":"rs_done","summary":[],
+                        "encrypted_content":"from-output-item-done"}}""",
+            ),
+        )
+        s.onEvent(
+            event(
+                """{"type":"response.completed","response":{"status":"completed",
+                    "output":[{"type":"reasoning","id":"rs_done",
+                        "encrypted_content":"from-response-completed"}]}}""",
+            ),
+        )
+        val output = s.partialSnapshot()
+        val signature = json.parseToJsonElement((output.content.single() as ThinkingContent).thinkingSignature!!).jsonObject
+        assertEquals("from-output-item-done", signature["encrypted_content"]!!.jsonPrimitive.content)
+
+        // The replayed reasoning item keeps the preserved encrypted_content.
+        val replayed = OpenAiResponsesShared.convertResponsesMessages(
+            model(),
+            Context(messages = listOf(output, UserMessage.ofText("follow-up"))),
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+        ).single { it["type"]?.jsonPrimitive?.content == "reasoning" }
+        assertEquals("from-output-item-done", replayed["encrypted_content"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `custom tool namespaces replay only where the target can load them`() {
+        // pi b8b873b98 openai-responses-namespace: "round-trips a custom-tool
+        // namespace" + "drops namespaces when the target cannot replay their
+        // load items".
+        val options = OpenAiResponsesShared.ConvertResponsesMessagesOptions(
+            grammarToolInputProperties = mapOf("query" to "input"),
+        )
+        val assistant = AssistantMessage(
+            content = listOf(
+                ToolCall(
+                    id = "call_custom|ctc_test",
+                    name = "query",
+                    arguments = """{"input":"hello"}""",
+                    namespace = "dynamic_tools",
+                ),
+            ),
+            api = "openai-responses",
+            provider = "openai",
+            model = "gpt-5-mini",
+            stopReason = StopReason.TOOL_USE,
+        )
+        val sameModel = OpenAiResponsesShared.convertResponsesMessages(
+            model(),
+            Context(messages = listOf(assistant)),
+            setOf("openai"),
+            options,
+        ).single { it["type"]!!.jsonPrimitive.content == "custom_tool_call" }
+        assertEquals("dynamic_tools", sameModel["namespace"]!!.jsonPrimitive.content)
+        assertEquals("ctc_test", sameModel["id"]!!.jsonPrimitive.content)
+        assertEquals("hello", sameModel["input"]!!.jsonPrimitive.content)
+
+        val differentModel = OpenAiResponsesShared.convertResponsesMessages(
+            model(id = "gpt-5.2"),
+            Context(messages = listOf(assistant)),
+            setOf("openai"),
+            options,
+        ).single { it["type"]!!.jsonPrimitive.content == "custom_tool_call" }
+        assertNull(differentModel["namespace"])
+    }
+
+    @Test
+    fun `ordinary function calls replay without a namespace`() {
+        // pi b8b873b98 openai-responses-namespace: "does not add a namespace
+        // to ordinary function calls".
+        val assistant = AssistantMessage(
+            content = listOf(
+                ToolCall(id = "call_test|fc_test", name = "lookup", arguments = """{"value":"hello"}"""),
+            ),
+            api = "openai-responses",
+            provider = "openai",
+            model = "gpt-5-mini",
+            stopReason = StopReason.TOOL_USE,
+        )
+        val replayed = OpenAiResponsesShared.convertResponsesMessages(
+            model(),
+            Context(messages = listOf(assistant)),
+            setOf("openai"),
+        ).single { it["type"]!!.jsonPrimitive.content == "function_call" }
+        assertNull(replayed["namespace"])
+    }
+
+    @Test
+    fun `empty text tool results use the no-output placeholder`() {
+        // pi b8b873b98 openai-responses-empty-tool-result: a text block with
+        // an empty string is not output — the placeholder is used and never
+        // mentions an attached image.
+        val input = OpenAiResponsesShared.convertResponsesMessages(
+            model(),
+            Context(
+                messages = listOf(
+                    ToolResultMessage(toolCallId = "c", toolName = "t", content = listOf(TextContent(""))),
+                ),
+            ),
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+        )
+        val output = input.single()["output"]!!.jsonPrimitive.content
+        assertEquals("(no tool output)", output)
+    }
+
+    @Test
+    fun `tool result image parts carry the full data url`() {
+        // pi b8b873b98 openai-responses-tool-result-images (e2e upstream):
+        // the assertable wire shape — image data URLs inside
+        // function_call_output — without the unported images stack.
+        val input = OpenAiResponsesShared.convertResponsesMessages(
+            model(input = listOf(InputModality.TEXT, InputModality.IMAGE)),
+            Context(
+                messages = listOf(
+                    ToolResultMessage(
+                        toolCallId = "c",
+                        toolName = "t",
+                        content = listOf(TextContent("see"), ImageContent("AAAA", "image/png")),
+                    ),
+                ),
+            ),
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+        )
+        val output = input.single()["output"]!!.jsonArray
+        assertEquals(
+            "data:image/png;base64,AAAA",
+            output[1]!!.jsonObject["image_url"]!!.jsonPrimitive.content,
+        )
+    }
 }

@@ -287,4 +287,86 @@ class AzureOpenAiResponsesApiTest {
         assertEquals("r1", done.message.responseId)
         assertEquals(10, done.message.usage.input)
     }
+
+    @Test
+    fun `normalizes the remaining azure host and path shapes`() {
+        // pi b8b873b98 azure-openai-base-url: Cognitive Services roots,
+        // Microsoft Foundry roots, and already-normalized /openai/v1 paths.
+        assertEquals(
+            "https://res.cognitiveservices.azure.com/openai/v1",
+            normalizeAzureBaseUrl("https://res.cognitiveservices.azure.com"),
+        )
+        assertEquals(
+            "https://res.ai.azure.com/openai/v1",
+            normalizeAzureBaseUrl("https://res.ai.azure.com"),
+        )
+        assertEquals(
+            "https://res.cognitiveservices.azure.com/openai/v1",
+            normalizeAzureBaseUrl("https://res.cognitiveservices.azure.com/openai/v1"),
+        )
+    }
+
+    @Test
+    fun `session id clamps the prompt cache key and keeps the default user agent`() = runTest {
+        // pi b8b873b98 azure-openai-base-url: "clamps prompt_cache_key to
+        // OpenAI's 64-character limit" + "uses pi's User-Agent by default".
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completed().toTypedArray()))
+        api(transport).stream(
+            model,
+            context,
+            AzureOpenAiResponsesOptions(apiKey = "k", sessionId = "x".repeat(67)),
+        ).toList()
+        assertEquals("x".repeat(64), bodyOf(transport)["prompt_cache_key"]!!.jsonPrimitive.content)
+        assertEquals(
+            works.resolve.pathfinder.ai.utils.getPiUserAgent(),
+            transport.requests.single().headers["User-Agent"],
+        )
+    }
+
+    @Test
+    fun `tools carry strict false by default and can disable strict`() = runTest {
+        // pi b8b873b98 azure-openai-base-url: "honors supportsStrictMode:
+        // false" — azure defaults strict mode on (compat absent), so ordinary
+        // tools carry an explicit strict:false until disabled.
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completed().toTypedArray()))
+        api(transport).stream(
+            model.copy(responsesCompat = null),
+            context.copy(tools = listOf(Tool("t", "T", buildJsonObject { put("type", "object") }))),
+            AzureOpenAiResponsesOptions(apiKey = "k"),
+        ).toList()
+        assertEquals(
+            false,
+            bodyOf(transport)["tools"]!!.jsonArray.single().jsonObject["strict"]!!.jsonPrimitive.content.toBoolean(),
+        )
+
+        val strictOff = FakeTransport()
+        strictOff.enqueueResponse(sse(*completed().toTypedArray()))
+        api(strictOff).stream(
+            model.copy(responsesCompat = OpenAiResponsesCompat(supportsStrictMode = false)),
+            context.copy(tools = listOf(Tool("t", "T", buildJsonObject { put("type", "object") }))),
+            AzureOpenAiResponsesOptions(apiKey = "k"),
+        ).toList()
+        assertNull(bodyOf(strictOff)["tools"]!!.jsonArray.single().jsonObject["strict"])
+    }
+
+    @Test
+    fun `streamSimple forwards provider-neutral tool choice`() = runTest {
+        // pi b8b873b98 azure-openai-tool-choice: "forwards provider-neutral
+        // tool choice from simple options".
+        val transport = FakeTransport()
+        transport.enqueueResponse(sse(*completed().toTypedArray()))
+        api(transport).streamSimple(
+            model,
+            context.copy(tools = listOf(Tool("read", "Read a file", buildJsonObject { put("type", "object") }))),
+            works.resolve.pathfinder.ai.core.SimpleStreamOptions(
+                apiKey = "k",
+                toolChoice = works.resolve.pathfinder.ai.core.SimpleToolChoice.None,
+            ),
+        ).toList()
+        val body = bodyOf(transport)
+        assertEquals("none", body["tool_choice"]!!.jsonPrimitive.content)
+        assertEquals(1, body["tools"]!!.jsonArray.size)
+    }
 }
