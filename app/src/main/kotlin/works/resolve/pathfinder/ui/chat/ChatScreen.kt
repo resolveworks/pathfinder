@@ -236,12 +236,11 @@ fun ChatScreen(
         }
     }
 
-    // Newest-content following for the transcript, hoisted above the view
-    // switch: a LaunchedEffect inside the panel would re-run on every
-    // re-entry and yank a preserved scroll position back to the bottom.
-    // Covers text AND thinking so thinking-only chunks keep following; a
-    // reversed lazy list makes index 0 the bottom, and activeSessionId
-    // matters when switching between transcripts with equal message counts.
+    // Transcript scroll, hoisted above the view switch: a LaunchedEffect
+    // inside the panel would re-run on every re-entry and yank a preserved
+    // scroll position back to the bottom. streamingLength covers text AND
+    // thinking so thinking-only chunks keep re-evaluating the follow; a
+    // reversed lazy list makes index 0 the bottom.
     val streamingLength = uiState.streamingMessage?.blocks?.sumOf { block ->
         when (block) {
             is ChatBlock.Text -> block.text.length
@@ -249,16 +248,43 @@ fun ChatScreen(
             is ChatBlock.ToolCall -> 0
         }
     } ?: 0
+
+    // A session switch always lands on the newest content: it cannot ride
+    // the gated follow below, which would strand a scrolled-up reader at
+    // their old offset inside the fresh transcript.
+    LaunchedEffect(uiState.activeSessionId) {
+        if (uiState.messages.isNotEmpty() || uiState.pendingTools.isNotEmpty() ||
+            uiState.streamingMessage != null
+        ) {
+            chatListState.requestScrollToItem(0)
+        }
+    }
+
+    // Stick-to-bottom following (the standard chat pattern): follow growth
+    // and insertions only while already pinned to the bottom. A reversed
+    // list makes the visual bottom the scroll start, so !canScrollBackward
+    // IS the pinned state. Scrolling up detaches — LazyList anchors the
+    // viewport by item key, so updates below the fold never move a detached
+    // reader — and returning to the bottom re-attaches on the next content
+    // change. Sending a message forces the jump (chats follow the user's
+    // own send), detected as a newest-message id transition to a User row.
+    var seenNewestMessageId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(
-        uiState.activeSessionId,
         uiState.messages.size,
         uiState.pendingTools.size,
         uiState.streamingMessage?.id,
         streamingLength
     ) {
-        if (uiState.messages.isNotEmpty() || uiState.pendingTools.isNotEmpty() ||
-            uiState.streamingMessage != null
+        if (uiState.messages.isEmpty() && uiState.pendingTools.isEmpty() &&
+            uiState.streamingMessage == null
         ) {
+            return@LaunchedEffect
+        }
+        val newest = uiState.messages.lastOrNull()
+        val userMessageSent = newest != null && newest.role == ChatRole.User &&
+            newest.id != seenNewestMessageId
+        seenNewestMessageId = newest?.id
+        if (userMessageSent || !chatListState.canScrollBackward) {
             chatListState.requestScrollToItem(0)
         }
     }
