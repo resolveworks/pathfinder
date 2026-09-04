@@ -1,109 +1,51 @@
 # Pathfinder
 
-Pathfinder is a minimal native Android interface for [pi](https://pi.dev). It
-ports pi's relevant agent and model runtime to pure Kotlin, then surrounds it
-with a thin, conventional Android application.
+Pathfinder is the Android app I was missing in my own day-to-day work. I do a
+lot of research from my phone and use a wide range of models—especially open
+models spread across different providers—but I could not find a simple native
+app that brought them together in the way I wanted.
 
-The project is intentionally not a separate interpretation of pi and not a
-literal copy of pi's terminal UI. Pi defines the runtime behavior; Android
-defines the mobile interaction layer.
+I am building Pathfinder for myself first, but sharing it in case it is useful
+to others. Its priorities will naturally follow how I use it rather than a
+product roadmap.
 
-## Direction
+## What it is
 
-- **Port, do not reinvent.** Kotlin runtime behavior follows the current pi
-  sources as closely as the language and platform allow. Concepts, event
-  streams, provider behavior, conversation trees, and failure semantics should
-  stay recognizable and comparable to upstream.
-- **Use Android defaults.** The application favors Jetpack Compose, Material 3,
-  dynamic system styling, and standard lifecycle, navigation, persistence, and
-  security facilities over custom framework or design-system code.
-- **Stay minimal.** Capabilities are added by porting useful pi behavior, not by
-  growing parallel abstractions or speculative app-specific features. The
-  Android shell should remain smaller and simpler than the runtime it exposes.
-- **Track the platform.** The primary target is the latest GrapheneOS release
-  on supported devices, using the newest Android platform, Kotlin toolchain,
-  and AndroidX stack. Compatibility is moved forward rather than maintained by
-  downgrading dependencies.
+Pathfinder is an experimental native Android adaptation of
+[pi](https://pi.dev). Most of the codebase ports the parts of pi's AI and agent
+runtime that the app needs to Kotlin, surrounded by a thin Android shell built
+with Jetpack Compose and Material 3.
 
-These are long-term constraints rather than a snapshot feature list. They are
-intended to keep semantic drift and maintenance cost low as both pi and Android
-evolve.
+Pi is the source of truth for runtime behavior; Android is the source of truth
+for the mobile experience. Pathfinder is not an attempt to bring all of pi—or
+its terminal UI—to Android.
 
-## Architecture
+I explored building on existing Kotlin agent frameworks, including JetBrains'
+[Koog](https://github.com/JetBrains/koog). A selective port of pi ultimately
+proved simpler for this project, gives me the behavior I want, and leaves more
+room to experiment.
 
-The codebase has two boundaries:
+## Built with agents
 
-- The native Kotlin runtime lives under `packages/`, with Gradle modules that
-  mirror pi's `packages/ai`, `packages/agent`, `packages/coding-agent`, and
-  `packages/telemetry`. It owns model and provider behavior, streaming, agent
-  state, compaction, persistence, recovery, and conversation semantics.
-- The Android shell lives under `app/` and owns Compose UI, lifecycle,
-  navigation, settings, secure credential storage, platform adapters, and
-  app-specific tools. It projects runtime state through a conventional
-  MVVM/UDF flow instead of reimplementing agent behavior in the UI.
+Pathfinder is also an experiment in agent-driven software development. I set
+the direction and decide what is worth building; orchestrator agents split the
+work across parallel worktrees and larger swarms, then review and merge the
+results.
 
-The application uses a single activity, state-hoisted Compose surfaces, and a
-small manually wired dependency graph. Platform defaults are preferred over
-custom components, and new architectural machinery is added only when it
-reduces rather than increases total complexity.
+A faithful port is a useful test bed for this: upstream source and tests give
+agents a concrete target, while the native Android interface still leaves room
+for product and design work.
 
-When a faithful port is impossible or inappropriate on Android, the divergence
-is kept at the narrowest boundary and documented against the corresponding pi
-source.
-
-## Upstream synchronization
-
-A local pi checkout is the source of truth for ported behavior. By default,
-tooling expects it at `~/Projects/pi`; set `PI_REPO_DIR` to use another
-checkout. Runtime changes should be compared against current source and package
-documentation under `packages/`, rather than against remembered pi behavior.
-
-The bundled model catalog is generated from pi and must not be edited by hand:
-
-```bash
-node packages/ai/scripts/generate-model-catalog.mjs  # PI_REPO_DIR or ~/Projects/pi
-```
-
-Generation selects the catalog surface supported by the Kotlin runtime and
-records the source pi revision.
+Detailed porting scope and implementation guidance live in
+[AGENTS.md](AGENTS.md).
 
 ## Build
 
-Install a JDK and the Android SDK/Build Tools versions declared by the Gradle
-configuration, set `ANDROID_HOME`, then run:
+Install the JDK and Android SDK versions declared by the Gradle configuration,
+set `ANDROID_HOME`, then run:
 
 ```bash
-./gradlew test assembleDebug
+./gradlew spotlessCheck test assembleDebug
 ```
 
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
-
-## Code style
-
-Formatting is [Spotless](https://github.com/diffplug/spotless) running
-[ktlint](https://github.com/ktlint/ktlint) with the `android_studio` code
-style, configured by the root `.editorconfig` and `build.gradle.kts`:
-
-```bash
-./gradlew spotlessApply   # format
-./gradlew spotlessCheck   # verify
-```
-
-After cloning, enable the pre-commit hook (runs `spotlessCheck` before each
-commit) with this one-time command:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-## Security and diagnostics
-
-Provider credentials are stored per provider behind Android Keystore-backed
-encryption. API keys, message content, and model responses must never be
-logged.
-
-Operational lifecycle events use the `Pathfinder` Logcat tag:
-
-```bash
-adb logcat -v time -s Pathfinder
-```
