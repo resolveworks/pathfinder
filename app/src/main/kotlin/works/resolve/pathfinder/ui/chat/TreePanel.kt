@@ -191,6 +191,7 @@ private fun TreePanelHeader(
             onValueChange = onQueryChange,
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
+            placeholder = { Text(stringResource(R.string.tree_search_hint)) },
             trailingIcon = {
                 if (query.isNotEmpty()) {
                     IconButton(onClick = { onQueryChange("") }) {

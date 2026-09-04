@@ -411,6 +411,7 @@ private fun Composer(
         value = draft,
         onValueChange = onDraftChange,
         enabled = !isStreaming,
+        placeholder = { Text(stringResource(R.string.chat_message_hint)) },
         trailingIcon = {
             if (isStreaming) {
                 IconButton(onClick = onStop) {
@@ -419,8 +420,8 @@ private fun Composer(
                         contentDescription = stringResource(R.string.action_stop)
                     )
                 }
-            } else {
-                IconButton(onClick = onSend, enabled = canSend) {
+            } else if (canSend) {
+                IconButton(onClick = onSend) {
                     Icon(
                         ComposerIcons.Send,
                         contentDescription = stringResource(R.string.action_send)
