@@ -49,3 +49,14 @@ Copyright (c) 2025 Johan Schuijt
 Licensed under the MIT License reproduced above. The attribution here applies
 to the ported portions only; it does not place a license on pathfinder as a
 whole.
+
+## defuddle
+
+The `web_fetch` tool injects the browser bundle of
+[defuddle](https://github.com/kepano/defuddle) (npm release `defuddle@0.19.3`,
+file `dist/index.js`) into pages rendered by its hidden WebView to extract
+article content and metadata. The bundled file is:
+
+Copyright (c) 2025 Steph Ango (@kepano)
+
+Licensed under the MIT License reproduced above.
