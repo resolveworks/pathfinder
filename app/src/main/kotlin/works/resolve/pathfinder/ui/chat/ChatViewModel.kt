@@ -510,6 +510,91 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * Searchable-text corpus snapshot, held only while a query is active
+     * (memory bound; pi holds it only while the selector is open).
+     * Snapshot-at-activation: list churn reuses it, never rescans.
+     */
+    private var sessionSearchCorpus: Map<String, String>? = null
+
+    private var sessionSearchScanJob: Job? = null
+
+    /**
+     * Updates the drawer session-search query: blank drops the corpus and
+     * results; non-blank filters synchronously against the loaded corpus or
+     * triggers the single scan that loads it. A scan failure degrades to
+     * an empty corpus (results stay empty, no error surfaced).
+     */
+    fun onSessionSearchQueryChange(query: String) {
+        updateState { it.copy(sessionSearchQuery = query) }
+        if (query.isBlank()) {
+            sessionSearchScanJob?.cancel()
+            sessionSearchScanJob = null
+            sessionSearchCorpus = null
+            updateState {
+                it.copy(sessionSearchResults = emptyList(), isSessionSearching = false)
+            }
+            return
+        }
+        if (sessionSearchCorpus != null) {
+            applySessionSearchFilter()
+            return
+        }
+        if (sessionSearchScanJob?.isActive == true) return
+        updateState { it.copy(isSessionSearching = true) }
+        sessionSearchScanJob = viewModelScope.launch {
+            val corpus = try {
+                sessionStore.searchCorpus()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                recordDegradation("session_search", e)
+                emptyMap()
+            }
+            sessionSearchCorpus =
+                if (_uiState.value.sessionSearchQuery.isBlank()) null else corpus
+            updateState { it.copy(isSessionSearching = false) }
+            applySessionSearchFilter()
+        }
+    }
+
+    /** Switches the drawer search sort and re-filters when a query is active. */
+    fun setSessionSearchSort(sort: SessionSearchSort) {
+        updateState { it.copy(sessionSearchSort = sort) }
+        if (_uiState.value.sessionSearchQuery.isNotBlank() && sessionSearchCorpus != null) {
+            applySessionSearchFilter()
+        }
+    }
+
+    /**
+     * Sessions absent from the corpus drop out under a query (pi: unscanned
+     * sessions don't appear in selector results).
+     */
+    private fun applySessionSearchFilter() {
+        val corpus = sessionSearchCorpus ?: return
+        val state = _uiState.value
+        if (state.sessionSearchQuery.isBlank()) return
+        val entries = state.sessionSummaries.map { summary ->
+            SessionSearchEntry(summary.id, summary.updatedAt, corpus[summary.id].orEmpty())
+        }
+        val matched = filterAndSortSessions(
+            entries,
+            state.sessionSearchQuery,
+            state.sessionSearchSort
+        )
+        val byId = state.sessionSummaries.associateBy { it.id }
+        updateState {
+            it.copy(sessionSearchResults = matched.mapNotNull { entry -> byId[entry.id] })
+        }
+    }
+
+    /** Reapplies the search filter after a summaries refresh, if a query is active against a loaded corpus. */
+    private fun refreshSessionSearchResults() {
+        if (sessionSearchCorpus != null && _uiState.value.sessionSearchQuery.isNotBlank()) {
+            applySessionSearchFilter()
+        }
+    }
+
     fun newSession() {
         viewModelScope.launch {
             if (rejectWhileBusy()) return@launch
@@ -708,6 +793,7 @@ class ChatViewModel(
                 draft = draft
             )
         }
+        refreshSessionSearchResults()
         // Initial seeding may have appended entries to an entry-less
         // session; flush them like any other append. Loaded sessions carry
         // no new entries, so a plain load or switch never saves here.
@@ -1069,6 +1155,7 @@ class ChatViewModel(
                     _uiState.value.activeSessionId == session.id
                 ) {
                     updateState { it.copy(sessionSummaries = summaries) }
+                    refreshSessionSearchResults()
                 }
             } catch (e: CancellationException) {
                 throw e

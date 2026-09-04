@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
@@ -38,6 +39,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -113,6 +115,8 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         searchAuthPrompts = viewModel::searchProviderAuthPrompts,
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
+        onSessionSearchQueryChange = viewModel::onSessionSearchQueryChange,
+        onSessionSearchSortChange = viewModel::setSessionSearchSort,
         onToggleShowThinking = viewModel::setShowThinking,
         onNavigateTreeEntry = viewModel::navigateToTreeEntry,
         onTreeFilterChange = viewModel::setTreeFilter,
@@ -159,6 +163,8 @@ fun ChatScreen(
     searchAuthPrompts: (providerId: String) -> List<ProviderAuthPrompt>,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
+    onSessionSearchQueryChange: (query: String) -> Unit,
+    onSessionSearchSortChange: (sort: SessionSearchSort) -> Unit,
     onToggleShowThinking: (Boolean) -> Unit,
     onNavigateTreeEntry: (entryId: String) -> Unit,
     onTreeFilterChange: (TreeFilter) -> Unit,
@@ -316,6 +322,8 @@ fun ChatScreen(
         drawerContent = {
             ChatDrawerContent(
                 uiState = uiState,
+                onSessionSearchQueryChange = onSessionSearchQueryChange,
+                onSessionSearchSortChange = onSessionSearchSortChange,
                 onNewSession = {
                     scope.launch { drawerState.close() }
                     onNewSession()
@@ -589,6 +597,8 @@ fun ChatScreen(
 @Composable
 private fun ChatDrawerContent(
     uiState: ChatUiState,
+    onSessionSearchQueryChange: (String) -> Unit,
+    onSessionSearchSortChange: (SessionSearchSort) -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (String) -> Unit,
     onOpenSettings: () -> Unit
@@ -628,8 +638,63 @@ private fun ChatDrawerContent(
             Spacer(Modifier.size(ButtonDefaults.IconSpacing))
             Text(stringResource(R.string.action_new_chat))
         }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            OutlinedTextField(
+                value = uiState.sessionSearchQuery,
+                onValueChange = onSessionSearchQueryChange,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text(stringResource(R.string.session_search_hint)) },
+                trailingIcon = {
+                    if (uiState.sessionSearchQuery.isNotEmpty()) {
+                        IconButton(onClick = { onSessionSearchQueryChange("") }) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = stringResource(R.string.session_search_clear)
+                            )
+                        }
+                    }
+                }
+            )
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+            ) {
+                SessionSearchSort.entries.forEachIndexed { index, sort ->
+                    SegmentedButton(
+                        selected = uiState.sessionSearchSort == sort,
+                        onClick = { onSessionSearchSortChange(sort) },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index,
+                            SessionSearchSort.entries.size
+                        ),
+                        label = {
+                            Text(
+                                stringResource(
+                                    when (sort) {
+                                        SessionSearchSort.RECENT ->
+                                            R.string.session_search_sort_recent
+
+                                        SessionSearchSort.RELEVANCE ->
+                                            R.string.session_search_sort_relevance
+                                    }
+                                )
+                            )
+                        }
+                    )
+                }
+            }
+        }
+        val queryBlank = uiState.sessionSearchQuery.isBlank()
+        val listedSessions =
+            if (queryBlank) uiState.sessionSummaries else uiState.sessionSearchResults
         LazyColumn(modifier = Modifier.weight(1f)) {
-            items(uiState.sessionSummaries, key = SessionSummary::id) { summary ->
+            items(listedSessions, key = SessionSummary::id) { summary ->
                 NavigationDrawerItem(
                     label = {
                         Text(
@@ -644,6 +709,14 @@ private fun ChatDrawerContent(
                     },
                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                 )
+            }
+            if (!queryBlank && !uiState.isSessionSearching && listedSessions.isEmpty()) {
+                item(key = "session-search-no-results") {
+                    Text(
+                        text = stringResource(R.string.session_search_no_results),
+                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                    )
+                }
             }
         }
     }
@@ -838,6 +911,8 @@ private fun PreviewChatScreen(
             searchAuthPrompts = searchAuthPrompts,
             onNewSession = {},
             onSwitchSession = {},
+            onSessionSearchQueryChange = {},
+            onSessionSearchSortChange = {},
             onToggleShowThinking = {},
             onNavigateTreeEntry = {},
             onTreeFilterChange = {},
