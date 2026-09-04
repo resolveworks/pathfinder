@@ -1,18 +1,6 @@
 package works.resolve.pathfinder.ai.providers
 
-import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.testing.FakeTransport
-import works.resolve.pathfinder.ai.testing.TestCatalogs
-import works.resolve.pathfinder.ai.Context
-import works.resolve.pathfinder.ai.CacheControlFormat
-import works.resolve.pathfinder.ai.ChatTemplateKwargValue
-import works.resolve.pathfinder.ai.InputModality
-import works.resolve.pathfinder.ai.DeferredToolsMode
-import works.resolve.pathfinder.ai.MaxTokensField
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.ModelThinkingLevel
-import works.resolve.pathfinder.ai.ThinkingFormat
-import works.resolve.pathfinder.ai.ThinkingLevelMap
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -23,7 +11,19 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assume.assumeTrue
-import java.io.File
+import works.resolve.pathfinder.ai.CacheControlFormat
+import works.resolve.pathfinder.ai.ChatTemplateKwargValue
+import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.DeferredToolsMode
+import works.resolve.pathfinder.ai.InputModality
+import works.resolve.pathfinder.ai.MaxTokensField
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.ThinkingFormat
+import works.resolve.pathfinder.ai.ThinkingLevelMap
+import works.resolve.pathfinder.ai.testing.FakeTransport
+import works.resolve.pathfinder.ai.testing.TestCatalogs
 
 class ProviderCatalogTest {
 
@@ -50,7 +50,7 @@ class ProviderCatalogTest {
                 }
               ]
             }
-            """,
+            """
         )
         val provider = catalog.getProvider("cf")!!
         assertEquals("Cloudflare AI Gateway", provider.name)
@@ -59,9 +59,9 @@ class ProviderCatalogTest {
         assertEquals(
             listOf(
                 AuthPrompt("CLOUDFLARE_API_KEY", "Enter Cloudflare API key", secret = true),
-                AuthPrompt("CLOUDFLARE_ACCOUNT_ID", "Enter account ID", secret = false),
+                AuthPrompt("CLOUDFLARE_ACCOUNT_ID", "Enter account ID", secret = false)
             ),
-            provider.auth.prompts,
+            provider.auth.prompts
         )
         assertNull(catalog.getProvider("missing"))
     }
@@ -81,7 +81,7 @@ class ProviderCatalogTest {
                 }
               ]
             }
-            """,
+            """
         ).getProvider("cf")!!
 
         val cfAuth = cf.toResolvedAuth("cf-key", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acct"))
@@ -90,9 +90,9 @@ class ProviderCatalogTest {
             mapOf(
                 "cf-aig-authorization" to "Bearer cf-key",
                 "Authorization" to null,
-                "x-api-key" to null,
+                "x-api-key" to null
             ),
-            cfAuth.headers,
+            cfAuth.headers
         )
         assertEquals(mapOf("CLOUDFLARE_ACCOUNT_ID" to "acct"), cfAuth.env)
 
@@ -101,7 +101,7 @@ class ProviderCatalogTest {
             {
               "providers": [{"id": "zai", "name": "ZAI", "baseUrl": "https://z.test", "models": []}]
             }
-            """,
+            """
         ).getProvider("zai")!!
         val plainAuth = plain.toResolvedAuth("sk-key", emptyMap())
         assertEquals("sk-key", plainAuth.apiKey)
@@ -149,7 +149,7 @@ class ProviderCatalogTest {
                 }
               ]
             }
-            """,
+            """
         )
         val model = catalog.getModel("p1", "m1")!!
         assertEquals("openai-completions", model.api)
@@ -180,11 +180,11 @@ class ProviderCatalogTest {
         assertEquals(CacheControlFormat.ANTHROPIC, compat.cacheControlFormat)
         assertEquals(
             ChatTemplateKwargValue.Ref(varName = "thinking.enabled", omitWhenOff = true),
-            compat.chatTemplateArgs["enable_thinking"],
+            compat.chatTemplateArgs["enable_thinking"]
         )
         assertEquals(
             ChatTemplateKwargValue.Scalar(JsonPrimitive(0.7)),
-            compat.chatTemplateArgs["temperature"],
+            compat.chatTemplateArgs["temperature"]
         )
     }
 
@@ -211,12 +211,23 @@ class ProviderCatalogTest {
                 }
               ]
             }
-            """,
+            """
         )
-        assertEquals(CacheControlFormat.ANTHROPIC, catalog.getModel("openrouter", "anthropic/claude-sonnet-4")!!.compat.cacheControlFormat, "openrouter anthropic/* detected")
+        assertEquals(
+            CacheControlFormat.ANTHROPIC,
+            catalog.getModel("openrouter", "anthropic/claude-sonnet-4")!!.compat.cacheControlFormat,
+            "openrouter anthropic/* detected"
+        )
         assertNull(catalog.getModel("openrouter", "openai/gpt-4o")!!.compat.cacheControlFormat)
-        assertEquals(CacheControlFormat.ANTHROPIC, catalog.getModel("openrouter", "qwen/qwen3")!!.compat.cacheControlFormat, "explicit compat overrides detection")
-        assertNull(catalog.getModel("other", "anthropic/claude-sonnet-4")!!.compat.cacheControlFormat, "non-openrouter anthropic model unaffected")
+        assertEquals(
+            CacheControlFormat.ANTHROPIC,
+            catalog.getModel("openrouter", "qwen/qwen3")!!.compat.cacheControlFormat,
+            "explicit compat overrides detection"
+        )
+        assertNull(
+            catalog.getModel("other", "anthropic/claude-sonnet-4")!!.compat.cacheControlFormat,
+            "non-openrouter anthropic model unaffected"
+        )
     }
 
     @Test
@@ -228,11 +239,17 @@ class ProviderCatalogTest {
             "~anthropic/claude-fable-latest",
             "~anthropic/claude-haiku-latest",
             "~anthropic/claude-opus-latest",
-            "~anthropic/claude-sonnet-latest",
+            "~anthropic/claude-sonnet-latest"
         )) {
-            assertEquals(CacheControlFormat.ANTHROPIC, catalog.getModel("openrouter", id)!!.compat.cacheControlFormat)
+            assertEquals(
+                CacheControlFormat.ANTHROPIC,
+                catalog.getModel("openrouter", id)!!.compat.cacheControlFormat
+            )
         }
-        assertEquals(CacheControlFormat.ANTHROPIC, catalog.getModel("openrouter", "anthropic/claude-sonnet-4")!!.compat.cacheControlFormat)
+        assertEquals(
+            CacheControlFormat.ANTHROPIC,
+            catalog.getModel("openrouter", "anthropic/claude-sonnet-4")!!.compat.cacheControlFormat
+        )
         assertNull(catalog.getModel("openrouter", "aion-labs/aion-2.0")!!.compat.cacheControlFormat)
     }
 
@@ -253,7 +270,7 @@ class ProviderCatalogTest {
                 ]
               }]
             }
-            """,
+            """
         )
         assertEquals(false, catalog.getModel("p", "a")!!.responsesCompat?.supportsMaxOutputTokens)
         assertEquals(true, catalog.getModel("p", "b")!!.responsesCompat?.supportsMaxOutputTokens)
@@ -273,7 +290,7 @@ class ProviderCatalogTest {
                     "models": [{"id": "a", "name": "A", "compat": {"deferredToolsMode": "anthropic"}}]
                   }]
                 }
-                """,
+                """
             )
         }
         assertTrue("deferred tools mode" in (error.message ?: ""))
@@ -297,7 +314,7 @@ class ProviderCatalogTest {
                     ]
                   }]
                 }
-                """,
+                """
             )
         }
         assertTrue("supportsInfiniteContext" in (error.message ?: ""))
@@ -313,12 +330,21 @@ class ProviderCatalogTest {
         for (provider in catalog.providers) {
             for (model in provider.models) {
                 if (model.compat.deferredToolsMode == DeferredToolsMode.KIMI) deferred++
-                if (model.compat.requiresReasoningContentOnAssistantMessages) requiresReasoningContent++
-                if (model.responsesCompat?.supportsMaxOutputTokens == false) supportsMaxOutputTokensFalse++
+                if (model.compat.requiresReasoningContentOnAssistantMessages) {
+                    requiresReasoningContent++
+                }
+                if (model.responsesCompat?.supportsMaxOutputTokens ==
+                    false
+                ) {
+                    supportsMaxOutputTokensFalse++
+                }
             }
         }
         assertTrue(deferred > 0, "expected kimi deferredToolsMode models in the asset")
-        assertTrue(requiresReasoningContent > 0, "expected requiresReasoningContentOnAssistantMessages models")
+        assertTrue(
+            requiresReasoningContent > 0,
+            "expected requiresReasoningContentOnAssistantMessages models"
+        )
         assertEquals(0, supportsMaxOutputTokensFalse)
     }
 
@@ -335,7 +361,7 @@ class ProviderCatalogTest {
                 ]
               }]
             }
-            """,
+            """
         )
         assertTrue(catalog.getModel("p", "a")!!.compat.supportsStrictMode)
         assertFalse(catalog.getModel("p", "b")!!.compat.supportsStrictMode)
@@ -358,10 +384,13 @@ class ProviderCatalogTest {
                 ]
               }]
             }
-            """,
+            """
         )
         assertEquals(true, catalog.getModel("p", "a")!!.responsesCompat?.supportsOpenAIGrammarTools)
-        assertEquals(false, catalog.getModel("p", "b")!!.responsesCompat?.supportsOpenAIGrammarTools)
+        assertEquals(
+            false,
+            catalog.getModel("p", "b")!!.responsesCompat?.supportsOpenAIGrammarTools
+        )
         assertEquals(true, catalog.getModel("p", "c")!!.compat.supportsOpenAIGrammarTools)
         assertEquals(false, catalog.getModel("p", "d")!!.compat.supportsOpenAIGrammarTools)
     }
@@ -375,7 +404,7 @@ class ProviderCatalogTest {
                "compat":{"supportsStrictTools": true}},
               {"id":"b","name":"B","api":"anthropic-messages"}
             ]}]}
-            """,
+            """
         )
         assertEquals(true, catalog.getModel("p", "a")!!.anthropicCompat.supportsStrictTools)
         assertEquals(false, catalog.getModel("p", "b")!!.anthropicCompat.supportsStrictTools)
@@ -390,7 +419,7 @@ class ProviderCatalogTest {
                "compat":{"allowedFallbackModels":[{"provider":"p","model":"b","cost":{"input":5,"output":25,"cacheRead":0.5,"cacheWrite":6.25}}]}},
               {"id":"b","name":"B","api":"anthropic-messages"}
             ]}]}
-            """,
+            """
         )
         val fallbacks = catalog.getModel("p", "a")!!.anthropicCompat.allowedFallbackModels
         assertEquals(1, fallbacks.size)
@@ -403,17 +432,23 @@ class ProviderCatalogTest {
         assertTrue(fable.anthropicCompat.allowedFallbackModels.size > 0)
         assertEquals(
             listOf("claude-opus-4-8", "claude-opus-5"),
-            fable.anthropicCompat.allowedFallbackModels.map { it.model },
+            fable.anthropicCompat.allowedFallbackModels.map { it.model }
         )
         // claude-opus-5 is a mid-conversation-effort model at HEAD, so pi's
         // generator filters its fallback list to mid-convo-capable targets only;
         // its declared fallback (claude-opus-4-8) is not one, and the empty list
         // drops the field entirely.
         assertTrue(
-            realAsset().getModel("anthropic", "claude-opus-5")!!.anthropicCompat.allowedFallbackModels.isEmpty(),
+            realAsset().getModel(
+                "anthropic",
+                "claude-opus-5"
+            )!!.anthropicCompat.allowedFallbackModels.isEmpty()
         )
         assertTrue(
-            realAsset().getModel("anthropic", "claude-sonnet-5")!!.anthropicCompat.allowedFallbackModels.isEmpty(),
+            realAsset().getModel(
+                "anthropic",
+                "claude-sonnet-5"
+            )!!.anthropicCompat.allowedFallbackModels.isEmpty()
         )
     }
 
@@ -424,7 +459,7 @@ class ProviderCatalogTest {
             {"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
               {"id":"m","name":"M","compat":{"chatTemplateArgs":{"e":{"${'$'}var":"thinking.enabled"}}}}
             ]}]}
-            """,
+            """
         ).getModel("p", "m")!!
         val ref = assertIs<ChatTemplateKwargValue.Ref>(model.compat.chatTemplateArgs["e"])
         assertEquals("thinking.enabled", ref.varName)
@@ -439,7 +474,7 @@ class ProviderCatalogTest {
               {"id":"m","name":"M","reasoning":true,
                "thinkingLevelMap":{"off":"none","low":null,"high":"high"}}
             ]}]}
-            """,
+            """
         ).getModel("p", "m")!!
         assertTrue(model.thinkingLevelMap!!.isSpecified(ModelThinkingLevel.LOW))
         assertNull(model.thinkingLevelMap.forLevel(ModelThinkingLevel.LOW))
@@ -450,7 +485,7 @@ class ProviderCatalogTest {
     @Test
     fun `absent fields fall back to the core Kotlin defaults`() {
         val model = ProviderCatalog.parse(
-            """{"providers":[{"id":"p","name":"P","baseUrl":"https://p.test","models":[{"id":"m","name":"M"}]}]}""",
+            """{"providers":[{"id":"p","name":"P","baseUrl":"https://p.test","models":[{"id":"m","name":"M"}]}]}"""
         ).getModel("p", "m")!!
         assertEquals(listOf(InputModality.TEXT), model.input)
         assertEquals(ThinkingFormat.OPENAI, model.compat.thinkingFormat)
@@ -469,7 +504,7 @@ class ProviderCatalogTest {
             "openrouter" to ThinkingFormat.OPENROUTER,
             "together" to ThinkingFormat.TOGETHER,
             "ant-ling" to ThinkingFormat.ANT_LING,
-            "baseten" to ThinkingFormat.BASETEN,
+            "baseten" to ThinkingFormat.BASETEN
         )
         for ((raw, expected) in formats) {
             val model = ProviderCatalog.parse(
@@ -477,7 +512,7 @@ class ProviderCatalogTest {
                 {"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
                   {"id":"m","name":"M","compat":{"thinkingFormat":"$raw"}}
                 ]}]}
-                """.trimIndent(),
+                """.trimIndent()
             ).getModel("p", "m")!!
             assertEquals(expected, model.compat.thinkingFormat, "thinkingFormat '$raw'")
         }
@@ -489,20 +524,22 @@ class ProviderCatalogTest {
         assertFalse(provider.isCredentialComplete("cf-key", emptyMap()))
         assertEquals(
             listOf("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"),
-            provider.missingAuthPrompts("cf-key", emptyMap()).map { it.envKey },
+            provider.missingAuthPrompts("cf-key", emptyMap()).map { it.envKey }
         )
-        assertFalse(provider.isCredentialComplete("cf-key", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc")))
+        assertFalse(
+            provider.isCredentialComplete("cf-key", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc"))
+        )
         assertFalse(
             provider.isCredentialComplete(
                 "cf-key",
-                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "  "),
-            ),
+                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "  ")
+            )
         )
         assertFalse(
             provider.isCredentialComplete(
                 null,
-                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
-            ),
+                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw")
+            )
         )
     }
 
@@ -512,10 +549,18 @@ class ProviderCatalogTest {
         assertTrue(
             provider.isCredentialComplete(
                 "cf-key",
-                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
-            ),
+                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw")
+            )
         )
-        assertTrue(provider.missingAuthPrompts("cf-key", mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw")).isEmpty())
+        assertTrue(
+            provider.missingAuthPrompts(
+                "cf-key",
+                mapOf(
+                    "CLOUDFLARE_ACCOUNT_ID" to "acc",
+                    "CLOUDFLARE_GATEWAY_ID" to "gw"
+                )
+            ).isEmpty()
+        )
         assertTrue(TestCatalogs.ZAI.isCredentialComplete("zai-key", emptyMap()))
         assertFalse(TestCatalogs.ZAI.isCredentialComplete(null, emptyMap()))
     }
@@ -523,7 +568,7 @@ class ProviderCatalogTest {
     @Test
     fun `provider with no auth prompts still requires a key`() {
         val provider = ProviderCatalog.parse(
-            """{"providers":[{"id":"p","name":"P","baseUrl":"u","models":[]}]}""",
+            """{"providers":[{"id":"p","name":"P","baseUrl":"u","models":[]}]}"""
         ).getProvider("p")!!
         assertFalse(provider.isCredentialComplete(null, emptyMap()))
         assertFalse(provider.isCredentialComplete("  ", emptyMap()))
@@ -535,7 +580,7 @@ class ProviderCatalogTest {
         val error = assertFailsWith<IllegalArgumentException> {
             ProviderCatalog.parse(
                 """{"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-                   {"id":"m","name":"M","compat":{"thinkingFormat":"nope"}}]}]}""",
+                   {"id":"m","name":"M","compat":{"thinkingFormat":"nope"}}]}]}"""
             )
         }
         assertContains(error.message!!, "nope")
@@ -547,7 +592,7 @@ class ProviderCatalogTest {
         assertFailsWith<IllegalArgumentException> {
             ProviderCatalog.parse(
                 """{"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-                   {"id":"m","name":"M","input":["audio"]}]}]}""",
+                   {"id":"m","name":"M","input":["audio"]}]}]}"""
             )
         }
     }
@@ -557,7 +602,7 @@ class ProviderCatalogTest {
         assertFailsWith<IllegalArgumentException> {
             ProviderCatalog.parse(
                 """{"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-                   {"id":"m","name":"M","compat":{"maxTokensField":"tokens_please"}}]}]}""",
+                   {"id":"m","name":"M","compat":{"maxTokensField":"tokens_please"}}]}]}"""
             )
         }
     }
@@ -579,7 +624,7 @@ class ProviderCatalogTest {
                 input = 0.6,
                 output = 2.2,
                 cacheRead = 0.11,
-                cacheWrite = 0.0,
+                cacheWrite = 0.0
             ),
             contextWindow = 204_800,
             maxTokens = 131_072,
@@ -591,8 +636,8 @@ class ProviderCatalogTest {
                 supportsFinishReason = true,
                 maxTokensField = MaxTokensField.MAX_TOKENS,
                 thinkingFormat = ThinkingFormat.ZAI,
-                zaiToolStream = true,
-            ),
+                zaiToolStream = true
+            )
         )
         assertEquals(expected, model)
     }
@@ -601,7 +646,7 @@ class ProviderCatalogTest {
     fun `compat anthropic flags map with pi defaults when absent`() {
         val model = ProviderCatalog.parse(
             """{"providers":[{"id":"p","name":"P","baseUrl":"u","models":[
-               {"id":"m","name":"M","api":"anthropic-messages"}]}]}""",
+               {"id":"m","name":"M","api":"anthropic-messages"}]}]}"""
         ).getModel("p", "m")!!
         assertEquals(works.resolve.pathfinder.ai.AnthropicMessagesCompat(), model.anthropicCompat)
     }
@@ -621,7 +666,7 @@ class ProviderCatalogTest {
                 "supportsStrictTools": true,
                 "forceAdaptiveThinking": true
               }}]}]}
-            """,
+            """
         ).getModel("p", "m")!!
         assertEquals(
             works.resolve.pathfinder.ai.AnthropicMessagesCompat(
@@ -632,9 +677,9 @@ class ProviderCatalogTest {
                 supportsTemperature = false,
                 allowEmptySignature = true,
                 supportsStrictTools = true,
-                forceAdaptiveThinking = true,
+                forceAdaptiveThinking = true
             ),
-            model.anthropicCompat,
+            model.anthropicCompat
         )
     }
 
@@ -645,9 +690,9 @@ class ProviderCatalogTest {
             works.resolve.pathfinder.ai.AnthropicMessagesCompat(
                 supportsTemperature = false,
                 supportsStrictTools = true,
-                forceAdaptiveThinking = true,
+                forceAdaptiveThinking = true
             ),
-            catalog.getModel("anthropic", "claude-opus-4-7")!!.anthropicCompat,
+            catalog.getModel("anthropic", "claude-opus-4-7")!!.anthropicCompat
         )
         // glm-5p3 moved to openai-completions at HEAD; deepseek-v4-flash-0731
         // carries the same non-default anthropic-messages flags.
@@ -656,9 +701,12 @@ class ProviderCatalogTest {
                 supportsEagerToolInputStreaming = false,
                 supportsLongCacheRetention = false,
                 sendSessionAffinityHeaders = true,
-                supportsCacheControlOnTools = false,
+                supportsCacheControlOnTools = false
             ),
-            catalog.getModel("fireworks", "accounts/fireworks/models/deepseek-v4-flash-0731")!!.anthropicCompat,
+            catalog.getModel(
+                "fireworks",
+                "accounts/fireworks/models/deepseek-v4-flash-0731"
+            )!!.anthropicCompat
         )
     }
 
@@ -670,19 +718,28 @@ class ProviderCatalogTest {
         val opencode = catalog.getModel("opencode", "gpt-5")!!
         assertEquals(
             works.resolve.pathfinder.ai.SessionAffinityFormat.OPENAI_NOSESSION,
-            opencode.responsesCompat?.sessionAffinityFormat,
+            opencode.responsesCompat?.sessionAffinityFormat
         )
         val xai = catalog.getModel("xai", "grok-4.3")!!
         assertEquals(false, xai.responsesCompat?.supportsLongCacheRetention)
         // Only the Responses family carries responsesCompat.
-        val claude = catalog.getModel("anthropic", catalog.getProvider("anthropic")!!.models.first { it.api == "anthropic-messages" }.id)!!
+        val claude = catalog.getModel(
+            "anthropic",
+            catalog.getProvider("anthropic")!!.models.first {
+                it.api ==
+                    "anthropic-messages"
+            }.id
+        )!!
         assertNull(claude.responsesCompat)
     }
 
     @Test
     fun `completions compat parses affinity and cache retention flags`() {
         val catalog = realAsset()
-        val cf = catalog.getModel("cloudflare-ai-gateway", "workers-ai/@cf/google/gemma-4-26b-a4b-it")!!
+        val cf = catalog.getModel(
+            "cloudflare-ai-gateway",
+            "workers-ai/@cf/google/gemma-4-26b-a4b-it"
+        )!!
         assertEquals(true, cf.compat.sendSessionAffinityHeaders)
         assertEquals(false, cf.compat.supportsLongCacheRetention)
         assertNull(cf.compat.sessionAffinityFormat, "format auto-detects at request time")
@@ -719,7 +776,10 @@ class ProviderCatalogTest {
         assertNull(catalog.getProvider("amazon-bedrock"))
         assertNull(catalog.getProvider("google-vertex"))
         assertNull(catalog.getModel("zai", "not-a-model"))
-        assertEquals("cf-aig-authorization", catalog.getProvider("cloudflare-ai-gateway")!!.bearerHeaderName)
+        assertEquals(
+            "cf-aig-authorization",
+            catalog.getProvider("cloudflare-ai-gateway")!!.bearerHeaderName
+        )
         val kimi = catalog.getModel("baseten", "moonshotai/Kimi-K2.5")!!
         assertTrue(kimi.reasoning)
         assertIs<ChatTemplateKwargValue.Ref>(kimi.compat.chatTemplateArgs["enable_thinking"])
@@ -739,14 +799,14 @@ class ProviderCatalogTest {
                 "mistral-conversations",
                 "openai-codex-responses",
                 "openai-completions",
-                "openai-responses",
+                "openai-responses"
             ),
-            apis,
+            apis
         )
         // Mixed-API providers keep every model.
         assertEquals(
             setOf("anthropic-messages", "openai-completions", "openai-responses"),
-            catalog.getProvider("cloudflare-ai-gateway")!!.apis,
+            catalog.getProvider("cloudflare-ai-gateway")!!.apis
         )
         assertEquals(setOf("openai-responses"), catalog.getProvider("openai")!!.apis)
         assertEquals(setOf("openai-completions"), catalog.getProvider("zai")!!.apis)
@@ -761,14 +821,17 @@ class ProviderCatalogTest {
         assertEquals(emptyList<AuthPrompt>(), codex.auth.prompts)
         assertEquals(
             ProviderOAuth(name = "OpenAI (ChatGPT Plus/Pro)", isSubscription = true),
-            codex.auth.oauth,
+            codex.auth.oauth
         )
-        assertEquals("ANTHROPIC_API_KEY", catalog.getProvider("anthropic")!!.auth.prompts.single().envKey)
+        assertEquals(
+            "ANTHROPIC_API_KEY",
+            catalog.getProvider("anthropic")!!.auth.prompts.single().envKey
+        )
         assertEquals("GEMINI_API_KEY", catalog.getProvider("google")!!.auth.prompts.single().envKey)
         val gateway = catalog.getProvider("cloudflare-ai-gateway")!!.auth.prompts
         assertEquals(
             listOf("CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"),
-            gateway.map { it.envKey },
+            gateway.map { it.envKey }
         )
         assertFalse(gateway[1].secret)
     }
@@ -782,15 +845,16 @@ class ProviderCatalogTest {
             "kimi-coding" to ProviderOAuth(
                 "Kimi Code (subscription)",
                 loginLabel = "Sign in with Kimi Code",
-                isSubscription = true,
+                isSubscription = true
             ),
             "openai-codex" to ProviderOAuth("OpenAI (ChatGPT Plus/Pro)", isSubscription = true),
-            "openrouter" to ProviderOAuth("OpenRouter OAuth", loginLabel = "Sign in with OpenRouter"),
+            "openrouter" to
+                ProviderOAuth("OpenRouter OAuth", loginLabel = "Sign in with OpenRouter"),
             "xai" to ProviderOAuth(
                 "xAI (Grok/X subscription)",
                 loginLabel = "Sign in with SuperGrok or X Premium",
-                isSubscription = true,
-            ),
+                isSubscription = true
+            )
         )
         for (provider in catalog.providers) {
             assertEquals(expected[provider.id], provider.auth.oauth)
@@ -807,9 +871,15 @@ class ProviderCatalogTest {
         val catalog = realAsset()
         val entry = catalog.getProvider("cloudflare-ai-gateway")!!
         val runtime = entry.toRuntimeProvider(FakeTransport())
-        assertEquals(setOf("openai-completions", "anthropic-messages", "openai-responses"), runtime.apis.keys)
+        assertEquals(
+            setOf("openai-completions", "anthropic-messages", "openai-responses"),
+            runtime.apis.keys
+        )
         val completionsModel = entry.models.first { it.api == "openai-completions" }
         val models = Models(listOf(runtime))
-        assertEquals(completionsModel.id, models.getModel("cloudflare-ai-gateway", completionsModel.id)!!.id)
+        assertEquals(
+            completionsModel.id,
+            models.getModel("cloudflare-ai-gateway", completionsModel.id)!!.id
+        )
     }
 }

@@ -1,7 +1,15 @@
 package works.resolve.pathfinder.ai.api
 
-import works.resolve.pathfinder.ai.api.GoogleRequest.CommonOptions
-import works.resolve.pathfinder.ai.api.GoogleRequest.GoogleThinking
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ChatApi
@@ -19,11 +27,13 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.Usage
+import works.resolve.pathfinder.ai.api.GoogleRequest.CommonOptions
+import works.resolve.pathfinder.ai.api.GoogleRequest.GoogleThinking
+import works.resolve.pathfinder.ai.calculateCost
+import works.resolve.pathfinder.ai.clampThinkingLevel
 import works.resolve.pathfinder.ai.mergeHeaders
 import works.resolve.pathfinder.ai.toModelThinkingLevel
 import works.resolve.pathfinder.ai.toThinkingLevelOrNull
-import works.resolve.pathfinder.ai.calculateCost
-import works.resolve.pathfinder.ai.clampThinkingLevel
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
@@ -43,16 +53,6 @@ import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.telemetry.TelemetryContext
-import java.util.concurrent.atomic.AtomicLong
-import kotlin.time.Clock
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emitAll
-import kotlinx.coroutines.flow.flow
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 /**
  * Google Generative AI (Gemini API) streaming adapter.
@@ -73,7 +73,7 @@ import kotlinx.serialization.json.put
 class GoogleGenerativeAiApi(
     private val transport: HttpStreamingTransport,
     private val retry: ProviderRetry = ProviderRetry(),
-    private val clock: Clock = Clock.System,
+    private val clock: Clock = Clock.System
 ) : ChatApi {
 
     data class GoogleOptions(
@@ -83,7 +83,8 @@ class GoogleGenerativeAiApi(
         val maxTokens: Int? = null,
         val timeoutMs: Long? = null,
         val maxRetries: Int = 0,
-        val maxRetryDelayMs: Long = works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
+        val maxRetryDelayMs: Long =
+            works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
         val env: Map<String, String> = emptyMap(),
         val headers: Map<String, String?> = emptyMap(),
         /** "auto" | "none" | "any". */
@@ -107,37 +108,42 @@ class GoogleGenerativeAiApi(
          * Explicit parent telemetry context for this request. Dormant in this
          * port — carried for shape fidelity.
          */
-        val telemetryContext: TelemetryContext? = null,
+        val telemetryContext: TelemetryContext? = null
     ) {
         override fun toString(): String = CommonOptions(
             apiKey, sessionId, temperature, maxTokens, timeoutMs, maxRetries, maxRetryDelayMs,
-            env, headers, toolChoice, thinking,
+            env, headers, toolChoice, thinking
         ).toString().dropLast(1) +
             ", onPayload=${onPayload != null}, onResponse=${onResponse != null}" +
             ", telemetryContext=${telemetryContext != null})"
 
         internal fun toCommon() = CommonOptions(
             apiKey, sessionId, temperature, maxTokens, timeoutMs, maxRetries, maxRetryDelayMs,
-            env, headers, toolChoice, thinking,
+            env, headers, toolChoice, thinking
         )
     }
 
     fun stream(
         model: Model,
         context: Context,
-        options: GoogleOptions,
+        options: GoogleOptions
     ): Flow<works.resolve.pathfinder.ai.AssistantMessageEvent> {
         val apiKey = options.apiKey
             ?: return missingApiKeyFlow(model)
 
-        val body = GoogleRequest.buildGenerateContentRequest(model, context, options.toCommon(), gemmaSupported = true)
+        val body = GoogleRequest.buildGenerateContentRequest(
+            model,
+            context,
+            options.toCommon(),
+            gemmaSupported = true
+        )
 
         val baseUrl = model.baseUrl.trim().trimEnd('/').ifBlank { DEFAULT_BASE_URL }
         val url = "$baseUrl/models/${model.id}:streamGenerateContent?alt=sse"
 
         val headers = mergeHeaders(
             mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), model.headers),
-            options.headers,
+            options.headers
         ).filterValues { it != null }
             .mapValues { it.value!! } + mapOf("x-goog-api-key" to apiKey)
 
@@ -157,9 +163,9 @@ class GoogleGenerativeAiApi(
                             .toString().toByteArray(Charsets.UTF_8),
                         timeoutMs = options.timeoutMs,
                         maxRetries = options.maxRetries,
-                        maxRetryDelayMs = options.maxRetryDelayMs,
-                    ),
-                ),
+                        maxRetryDelayMs = options.maxRetryDelayMs
+                    )
+                )
             )
         }
     }
@@ -167,7 +173,7 @@ class GoogleGenerativeAiApi(
     override fun streamSimple(
         model: Model,
         context: Context,
-        options: SimpleStreamOptions,
+        options: SimpleStreamOptions
     ): Flow<works.resolve.pathfinder.ai.AssistantMessageEvent> =
         stream(model, context, buildGoogleOptions(model, context, options))
 
@@ -184,13 +190,13 @@ class GoogleGenerativeAiApi(
             model = model.id,
             stopReason = works.resolve.pathfinder.ai.StopReason.ERROR,
             errorMessage = "No API key for provider: ${model.provider}",
-            timestamp = clock.now().toEpochMilliseconds(),
+            timestamp = clock.now().toEpochMilliseconds()
         )
         emit(
             works.resolve.pathfinder.ai.AssistantMessageEvent.Error(
                 works.resolve.pathfinder.ai.StopReason.ERROR,
-                message,
-            ),
+                message
+            )
         )
     }
 }
@@ -216,11 +222,13 @@ internal object GoogleStreamEngine {
         val body: ByteArray,
         val timeoutMs: Long? = null,
         val maxRetries: Int = 0,
-        val maxRetryDelayMs: Long = works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
+        val maxRetryDelayMs: Long =
+            works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS
     ) {
-        override fun toString(): String =
-            "Plan(url=$url, headers=${headers.filterKeys { !it.equals("x-goog-api-key", true) }.keys}" +
-                ", body=<${body.size} bytes>, timeoutMs=$timeoutMs, maxRetries=$maxRetries)"
+        override fun toString(): String = "Plan(url=$url, headers=${headers.filterKeys {
+            !it.equals("x-goog-api-key", true)
+        }.keys}" +
+            ", body=<${body.size} bytes>, timeoutMs=$timeoutMs, maxRetries=$maxRetries)"
     }
 
     fun stream(
@@ -228,7 +236,7 @@ internal object GoogleStreamEngine {
         retry: ProviderRetry,
         clock: Clock = Clock.System,
         model: Model,
-        plan: Plan,
+        plan: Plan
     ): Flow<AssistantMessageEvent> = flow {
         val state = State(model, clock.now().toEpochMilliseconds())
         try {
@@ -249,7 +257,7 @@ internal object GoogleStreamEngine {
             // and the shared policy honors them.)
             val response = retry.retryProviderRequest<TransportResponse>(
                 plan.maxRetries,
-                plan.maxRetryDelayMs,
+                plan.maxRetryDelayMs
             ) {
                 transport.post(
                     TransportRequest(
@@ -257,8 +265,8 @@ internal object GoogleStreamEngine {
                         bearerToken = null,
                         headers = plan.headers,
                         body = plan.body,
-                        timeoutMs = plan.timeoutMs,
-                    ),
+                        timeoutMs = plan.timeoutMs
+                    )
                 )
             }
 
@@ -284,7 +292,7 @@ internal object GoogleStreamEngine {
             if (error is CancellationException) throw error
             val finalMessage = state.snapshot().copy(
                 stopReason = StopReason.ERROR,
-                errorMessage = formatProviderError(error),
+                errorMessage = formatProviderError(error)
             )
             emit(AssistantMessageEvent.Error(finalMessage.stopReason, finalMessage))
         }
@@ -300,8 +308,10 @@ internal object GoogleStreamEngine {
      */
     private fun formatProviderError(error: Exception): String = when (error) {
         is ProviderHttpException -> formatProviderError(normalizeProviderError(error))
+
         // pi's safeJsonStringify fallback for non-Error throws is moot in Kotlin.
         is ProviderStreamException -> error.message ?: "Provider stream error"
+
         else -> error.message ?: error::class.simpleName ?: "Unknown error"
     }
 
@@ -334,7 +344,7 @@ internal object GoogleStreamEngine {
             stopReason = stopReason,
             rawStopReason = rawStopReason,
             responseId = responseId,
-            timestamp = timestampMs,
+            timestamp = timestampMs
         )
 
         private fun snapshotContent(): List<Content> {
@@ -351,7 +361,8 @@ internal object GoogleStreamEngine {
             }
             val thinking = currentThinking
             if (thinking != null) {
-                content[content.size - 1] = ThinkingContent(thinking.toString(), currentThinkingSignature)
+                content[content.size - 1] =
+                    ThinkingContent(thinking.toString(), currentThinkingSignature)
                 return content[content.size - 1]
             }
             return null
@@ -363,7 +374,7 @@ internal object GoogleStreamEngine {
                 lenientJson.parseToJsonElement(event.data)
             } catch (error: Exception) {
                 throw ProviderStreamException(
-                    "Malformed SSE JSON payload: ${error.message ?: error::class.simpleName}",
+                    "Malformed SSE JSON payload: ${error.message ?: error::class.simpleName}"
                 )
             }
             if (chunk !is JsonObject) {
@@ -400,7 +411,7 @@ internal object GoogleStreamEngine {
                     cacheRead = cachedTokens,
                     cacheWrite = 0,
                     reasoning = thoughtsTokens,
-                    totalTokens = meta.int("totalTokenCount") ?: 0,
+                    totalTokens = meta.int("totalTokenCount") ?: 0
                 )
                 usage = newUsage.copy(cost = calculateCost(model, newUsage))
             }
@@ -414,7 +425,8 @@ internal object GoogleStreamEngine {
 
             if (text != null) {
                 val isThinking = GoogleShared.isThinkingPart(part)
-                if (currentText == null && currentThinking == null ||
+                if (
+                    (currentText == null && currentThinking == null) ||
                     (isThinking && currentThinking == null) ||
                     (!isThinking && currentText == null)
                 ) {
@@ -432,17 +444,17 @@ internal object GoogleStreamEngine {
                     }
                 }
                 if (isThinking) {
-                    currentThinking!! .append(text)
+                    currentThinking!!.append(text)
                     currentThinkingSignature = GoogleShared.retainThoughtSignature(
                         currentThinkingSignature,
-                        part["thoughtSignature"].strOrNull(),
+                        part["thoughtSignature"].strOrNull()
                     )
                     events.add(AssistantMessageEvent.ThinkingDelta(blockIndex(), text, snapshot()))
                 } else {
                     currentText!!.append(text)
                     currentTextSignature = GoogleShared.retainThoughtSignature(
                         currentTextSignature,
-                        part["thoughtSignature"].strOrNull(),
+                        part["thoughtSignature"].strOrNull()
                     )
                     events.add(AssistantMessageEvent.TextDelta(blockIndex(), text, snapshot()))
                 }
@@ -468,11 +480,13 @@ internal object GoogleStreamEngine {
                     name = name,
                     arguments = args.toString(),
                     thoughtSignature = part["thoughtSignature"].strOrNull()
-                        ?.takeIf { it.isNotEmpty() },
+                        ?.takeIf { it.isNotEmpty() }
                 )
                 content.add(toolCall)
                 events.add(AssistantMessageEvent.ToolCallStart(blockIndex(), snapshot()))
-                events.add(AssistantMessageEvent.ToolCallDelta(blockIndex(), args.toString(), snapshot()))
+                events.add(
+                    AssistantMessageEvent.ToolCallDelta(blockIndex(), args.toString(), snapshot())
+                )
                 events.add(AssistantMessageEvent.ToolCallEnd(blockIndex(), toolCall, snapshot()))
             }
 
@@ -494,7 +508,11 @@ internal object GoogleStreamEngine {
                 content[content.size - 1] = finished
                 currentThinking = null
                 currentThinkingSignature = null
-                return AssistantMessageEvent.ThinkingEnd(blockIndex(), finished.thinking, snapshot())
+                return AssistantMessageEvent.ThinkingEnd(
+                    blockIndex(),
+                    finished.thinking,
+                    snapshot()
+                )
             }
             return null
         }
@@ -509,7 +527,7 @@ internal object GoogleStreamEngine {
 internal fun buildGoogleOptions(
     model: Model,
     context: Context,
-    options: SimpleStreamOptions,
+    options: SimpleStreamOptions
 ): GoogleGenerativeAiApi.GoogleOptions = GoogleGenerativeAiApi.GoogleOptions(
     apiKey = options.apiKey,
     sessionId = options.sessionId,
@@ -517,7 +535,7 @@ internal fun buildGoogleOptions(
     maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
         model,
         context,
-        options.maxTokens ?: model.maxTokens,
+        options.maxTokens ?: model.maxTokens
     ),
     timeoutMs = options.timeoutMs,
     maxRetries = options.maxRetries,
@@ -535,9 +553,9 @@ internal fun buildGoogleOptions(
         model,
         options.reasoning,
         options.thinkingBudgets,
-        gemmaSupported = true,
+        gemmaSupported = true
     ),
-    telemetryContext = options.telemetryContext,
+    telemetryContext = options.telemetryContext
 )
 
 /**
@@ -555,7 +573,7 @@ object GoogleRequest {
         val enabled: Boolean,
         /** -1 for dynamic, 0 to disable. */
         val budgetTokens: Int? = null,
-        val level: GoogleShared.GoogleApiThinkingLevel? = null,
+        val level: GoogleShared.GoogleApiThinkingLevel? = null
     )
 
     data class CommonOptions(
@@ -565,12 +583,13 @@ object GoogleRequest {
         val maxTokens: Int? = null,
         val timeoutMs: Long? = null,
         val maxRetries: Int = 0,
-        val maxRetryDelayMs: Long = works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
+        val maxRetryDelayMs: Long =
+            works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
         val env: Map<String, String> = emptyMap(),
         val headers: Map<String, String?> = emptyMap(),
         /** "auto" | "none" | "any". */
         val toolChoice: String? = null,
-        val thinking: GoogleThinking? = null,
+        val thinking: GoogleThinking? = null
     ) {
         override fun toString(): String = optionsToString(
             "CommonOptions",
@@ -584,7 +603,7 @@ object GoogleRequest {
             "env" to env.keys,
             "headers" to headers.keys,
             "toolChoice" to toolChoice,
-            "thinking" to thinking?.enabled,
+            "thinking" to thinking?.enabled
         )
     }
 
@@ -592,11 +611,15 @@ object GoogleRequest {
         model: Model,
         context: Context,
         options: CommonOptions,
-        gemmaSupported: Boolean,
+        gemmaSupported: Boolean
     ): JsonObject {
         val supportsStrictMode = GoogleShared.supportsGoogleStrictToolSampling(model.id)
         val functionCallingMode = if (context.tools.isNotEmpty()) {
-            GoogleShared.resolveGoogleFunctionCallingMode(context.tools, options.toolChoice, supportsStrictMode)
+            GoogleShared.resolveGoogleFunctionCallingMode(
+                context.tools,
+                options.toolChoice,
+                supportsStrictMode
+            )
         } else {
             null
         }
@@ -605,7 +628,7 @@ object GoogleRequest {
         request["contents"] = GoogleShared.convertMessages(model, context)
         if (!context.systemPrompt.isNullOrEmpty()) {
             request["systemInstruction"] = JsonPrimitive(
-                sanitizeSurrogates(context.systemPrompt),
+                sanitizeSurrogates(context.systemPrompt)
             )
         }
         if (context.tools.isNotEmpty()) {
@@ -615,7 +638,7 @@ object GoogleRequest {
             request["toolConfig"] = buildJsonObject {
                 put(
                     "functionCallingConfig",
-                    buildJsonObject { put("mode", functionCallingMode) },
+                    buildJsonObject { put("mode", functionCallingMode) }
                 )
             }
         }
@@ -663,18 +686,25 @@ object GoogleRequest {
      * thinking-off either, so use the lowest supported thinkingLevel without
      * includeThoughts; Gemini 2.x disables via thinkingBudget = 0.
      */
-    private fun getDisabledThinkingConfig(model: Model, gemmaSupported: Boolean): JsonObject = when {
-        isGemini3ProModel(model.id) ->
-            buildJsonObject { put("thinkingLevel", GoogleShared.GoogleApiThinkingLevel.LOW.wire) }
+    private fun getDisabledThinkingConfig(model: Model, gemmaSupported: Boolean): JsonObject =
+        when {
+            isGemini3ProModel(model.id) ->
+                buildJsonObject {
+                    put("thinkingLevel", GoogleShared.GoogleApiThinkingLevel.LOW.wire)
+                }
 
-        isGemini3FlashModel(model.id) ->
-            buildJsonObject { put("thinkingLevel", GoogleShared.GoogleApiThinkingLevel.MINIMAL.wire) }
+            isGemini3FlashModel(model.id) ->
+                buildJsonObject {
+                    put("thinkingLevel", GoogleShared.GoogleApiThinkingLevel.MINIMAL.wire)
+                }
 
-        gemmaSupported && isGemma4Model(model.id) ->
-            buildJsonObject { put("thinkingLevel", GoogleShared.GoogleApiThinkingLevel.MINIMAL.wire) }
+            gemmaSupported && isGemma4Model(model.id) ->
+                buildJsonObject {
+                    put("thinkingLevel", GoogleShared.GoogleApiThinkingLevel.MINIMAL.wire)
+                }
 
-        else -> buildJsonObject { put("thinkingBudget", 0) }
-    }
+            else -> buildJsonObject { put("thinkingBudget", 0) }
+        }
 
     /**
      * The provider-neutral reasoning level becomes a Gemini 3 `thinkingLevel`
@@ -686,7 +716,7 @@ object GoogleRequest {
         model: Model,
         reasoning: ThinkingLevel?,
         budgets: Map<ThinkingLevel, Int>,
-        gemmaSupported: Boolean,
+        gemmaSupported: Boolean
     ): GoogleThinking {
         if (reasoning == null) return GoogleThinking(enabled = false)
 
@@ -697,20 +727,26 @@ object GoogleRequest {
             isGemini3FlashModel(model.id) ||
             (gemmaSupported && isGemma4Model(model.id))
         if (useLevels) {
-            return GoogleThinking(enabled = true, level = getThinkingLevel(resolvedLevel, model, gemmaSupported))
+            return GoogleThinking(
+                enabled = true,
+                level = getThinkingLevel(resolvedLevel, model, gemmaSupported)
+            )
         }
-        return GoogleThinking(enabled = true, budgetTokens = getGoogleBudget(model, resolvedLevel, budgets))
+        return GoogleThinking(
+            enabled = true,
+            budgetTokens = getGoogleBudget(model, resolvedLevel, budgets)
+        )
     }
 
     private fun getThinkingLevel(
         effort: GoogleShared.ResolvedGoogleThinkingLevel,
         model: Model,
-        gemmaSupported: Boolean,
+        gemmaSupported: Boolean
     ): GoogleShared.GoogleApiThinkingLevel {
         if (isGemini3ProModel(model.id)) {
             return when (effort) {
                 GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL,
-                GoogleShared.ResolvedGoogleThinkingLevel.LOW,
+                GoogleShared.ResolvedGoogleThinkingLevel.LOW
                 -> GoogleShared.GoogleApiThinkingLevel.LOW
 
                 else -> GoogleShared.GoogleApiThinkingLevel.HIGH
@@ -719,17 +755,24 @@ object GoogleRequest {
         if (gemmaSupported && isGemma4Model(model.id)) {
             return when (effort) {
                 GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL,
-                GoogleShared.ResolvedGoogleThinkingLevel.LOW,
+                GoogleShared.ResolvedGoogleThinkingLevel.LOW
                 -> GoogleShared.GoogleApiThinkingLevel.MINIMAL
 
                 else -> GoogleShared.GoogleApiThinkingLevel.HIGH
             }
         }
         return when (effort) {
-            GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL -> GoogleShared.GoogleApiThinkingLevel.MINIMAL
-            GoogleShared.ResolvedGoogleThinkingLevel.LOW -> GoogleShared.GoogleApiThinkingLevel.LOW
-            GoogleShared.ResolvedGoogleThinkingLevel.MEDIUM -> GoogleShared.GoogleApiThinkingLevel.MEDIUM
-            GoogleShared.ResolvedGoogleThinkingLevel.HIGH -> GoogleShared.GoogleApiThinkingLevel.HIGH
+            GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL ->
+                GoogleShared.GoogleApiThinkingLevel.MINIMAL
+
+            GoogleShared.ResolvedGoogleThinkingLevel.LOW ->
+                GoogleShared.GoogleApiThinkingLevel.LOW
+
+            GoogleShared.ResolvedGoogleThinkingLevel.MEDIUM ->
+                GoogleShared.GoogleApiThinkingLevel.MEDIUM
+
+            GoogleShared.ResolvedGoogleThinkingLevel.HIGH ->
+                GoogleShared.GoogleApiThinkingLevel.HIGH
         }
     }
 
@@ -737,7 +780,7 @@ object GoogleRequest {
     private fun getGoogleBudget(
         model: Model,
         level: GoogleShared.ResolvedGoogleThinkingLevel,
-        customBudgets: Map<ThinkingLevel, Int>,
+        customBudgets: Map<ThinkingLevel, Int>
     ): Int {
         // ResolvedGoogleThinkingLevel names are a subset of ModelThinkingLevel
         // (no off/xhigh/max), so valueOf is safe; drift fails fast.
@@ -749,26 +792,25 @@ object GoogleRequest {
                 GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL to 128,
                 GoogleShared.ResolvedGoogleThinkingLevel.LOW to 2048,
                 GoogleShared.ResolvedGoogleThinkingLevel.MEDIUM to 8192,
-                GoogleShared.ResolvedGoogleThinkingLevel.HIGH to 32768,
+                GoogleShared.ResolvedGoogleThinkingLevel.HIGH to 32768
             )
 
             model.id.contains("2.5-flash-lite") -> mapOf(
                 GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL to 512,
                 GoogleShared.ResolvedGoogleThinkingLevel.LOW to 2048,
                 GoogleShared.ResolvedGoogleThinkingLevel.MEDIUM to 8192,
-                GoogleShared.ResolvedGoogleThinkingLevel.HIGH to 24576,
+                GoogleShared.ResolvedGoogleThinkingLevel.HIGH to 24576
             )
 
             model.id.contains("2.5-flash") -> mapOf(
                 GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL to 128,
                 GoogleShared.ResolvedGoogleThinkingLevel.LOW to 2048,
                 GoogleShared.ResolvedGoogleThinkingLevel.MEDIUM to 8192,
-                GoogleShared.ResolvedGoogleThinkingLevel.HIGH to 24576,
+                GoogleShared.ResolvedGoogleThinkingLevel.HIGH to 24576
             )
 
             else -> return -1
         }
         return defaults.getValue(level)
     }
-
 }

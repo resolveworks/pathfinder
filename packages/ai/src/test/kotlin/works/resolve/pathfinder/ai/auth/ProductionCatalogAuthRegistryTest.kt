@@ -1,10 +1,10 @@
 package works.resolve.pathfinder.ai.auth
 
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
-import java.io.File
 import works.resolve.pathfinder.ai.auth.oauth.AnthropicOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.GitHubCopilotOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.KimiCodingOAuthAuth
@@ -18,16 +18,24 @@ class ProductionCatalogAuthRegistryTest {
 
     @Test
     fun `production registry exposes only the implemented OAuth flows`() {
-        assertIs<AnthropicOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(provider("anthropic")))
-        assertIs<OpenRouterOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(provider("openrouter")))
-        assertIs<KimiCodingOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(provider("kimi-coding")))
+        assertIs<AnthropicOAuthAuth>(
+            ProductionCatalogAuthRegistry().oauthAuth(provider("anthropic"))
+        )
+        assertIs<OpenRouterOAuthAuth>(
+            ProductionCatalogAuthRegistry().oauthAuth(provider("openrouter"))
+        )
+        assertIs<KimiCodingOAuthAuth>(
+            ProductionCatalogAuthRegistry().oauthAuth(provider("kimi-coding"))
+        )
         assertIs<XaiOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(provider("xai")))
-        assertIs<OpenAiCodexOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(provider("openai-codex")))
+        assertIs<OpenAiCodexOAuthAuth>(
+            ProductionCatalogAuthRegistry().oauthAuth(provider("openai-codex"))
+        )
 
         val copilot = assertIs<GitHubCopilotOAuthAuth>(
             ProductionCatalogAuthRegistry().oauthAuth(
-                provider("github-copilot", listOf(model("gpt-4.1"), model("claude-sonnet-5"))),
-            ),
+                provider("github-copilot", listOf(model("gpt-4.1"), model("claude-sonnet-5")))
+            )
         )
         assertEquals(setOf("gpt-4.1", "claude-sonnet-5"), copilot.knownModelIdsForTest())
     }
@@ -35,13 +43,17 @@ class ProductionCatalogAuthRegistryTest {
     @Test
     fun `generated catalog copilot entry projects API key and OAuth login methods`() {
         val catalog = ProviderCatalog.parse(File("src/main/assets/models-catalog.json").readText())
-        val copilot = assertIs<GitHubCopilotOAuthAuth>(ProductionCatalogAuthRegistry().oauthAuth(catalog.getProvider("github-copilot")!!))
+        val copilot =
+            assertIs<GitHubCopilotOAuthAuth>(
+                ProductionCatalogAuthRegistry().oauthAuth(catalog.getProvider("github-copilot")!!)
+            )
         assertEquals(
             catalog.getProvider("github-copilot")!!.models.map { it.id }.toSet(),
-            copilot.knownModelIdsForTest(),
+            copilot.knownModelIdsForTest()
         )
 
-        val service = ProviderAuthService(catalog, ProductionCatalogAuthRegistry(), InMemoryCredentialStore())
+        val service =
+            ProviderAuthService(catalog, ProductionCatalogAuthRegistry(), InMemoryCredentialStore())
         val methods = service.authMethods("github-copilot")
         assertEquals(2, methods.size)
         assertContains(methods.map { it.type }, AuthType.API_KEY)
@@ -55,13 +67,16 @@ class ProductionCatalogAuthRegistryTest {
         name = id,
         api = "openai-completions",
         provider = "github-copilot",
-        baseUrl = "https://example.invalid",
+        baseUrl = "https://example.invalid"
     )
 
-    private fun provider(id: String, models: List<works.resolve.pathfinder.ai.Model> = emptyList()) = CatalogProvider(
+    private fun provider(
+        id: String,
+        models: List<works.resolve.pathfinder.ai.Model> = emptyList()
+    ) = CatalogProvider(
         id = id,
         name = id,
         baseUrl = "https://example.invalid",
-        models = models,
+        models = models
     )
 }

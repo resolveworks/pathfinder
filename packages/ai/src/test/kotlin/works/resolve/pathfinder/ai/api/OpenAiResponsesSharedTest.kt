@@ -1,15 +1,5 @@
 package works.resolve.pathfinder.ai.api
 
-import works.resolve.pathfinder.ai.ProviderAuthException
-import works.resolve.pathfinder.ai.ProviderStreamException
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.buildJsonObject
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -17,20 +7,30 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
-import works.resolve.pathfinder.ai.GrammarFormat
-import works.resolve.pathfinder.ai.StrictJsonSchemaMode
 import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.GrammarFormat
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelCost
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
+import works.resolve.pathfinder.ai.ProviderAuthException
+import works.resolve.pathfinder.ai.ProviderStreamException
 import works.resolve.pathfinder.ai.SessionAffinityFormat
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.StrictJsonSchemaMode
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.Tool
@@ -52,7 +52,7 @@ class OpenAiResponsesSharedTest {
         id: String = "gpt-5-mini",
         reasoning: Boolean = true,
         input: List<InputModality> = listOf(InputModality.TEXT),
-        compat: OpenAiResponsesCompat? = OpenAiResponsesCompat(),
+        compat: OpenAiResponsesCompat? = OpenAiResponsesCompat()
     ) = Model(
         id = id,
         name = id,
@@ -64,7 +64,7 @@ class OpenAiResponsesSharedTest {
         cost = ModelCost(input = 1.0, output = 2.0, cacheRead = 0.25, cacheWrite = 0.5),
         contextWindow = 400_000,
         maxTokens = 128_000,
-        responsesCompat = compat,
+        responsesCompat = compat
     )
 
     @Test
@@ -106,9 +106,14 @@ class OpenAiResponsesSharedTest {
         assertEquals("msg_1" to null, OpenAiResponsesShared.parseTextSignature("msg_1"))
         assertEquals(
             "msg_1" to "final_answer",
-            OpenAiResponsesShared.parseTextSignature("""{"v":1,"id":"msg_1","phase":"final_answer"}"""),
+            OpenAiResponsesShared.parseTextSignature(
+                """{"v":1,"id":"msg_1","phase":"final_answer"}"""
+            )
         )
-        assertEquals("msg_1" to null, OpenAiResponsesShared.parseTextSignature("""{"v":1,"id":"msg_1"}"""))
+        assertEquals(
+            "msg_1" to null,
+            OpenAiResponsesShared.parseTextSignature("""{"v":1,"id":"msg_1"}""")
+        )
         assertEquals("""{"v":2}""" to null, OpenAiResponsesShared.parseTextSignature("""{"v":2}"""))
         assertNull(OpenAiResponsesShared.parseTextSignature(null))
     }
@@ -118,11 +123,11 @@ class OpenAiResponsesSharedTest {
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(),
             Context(systemPrompt = "You are concise.", messages = emptyList()),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         assertEquals(
             """{"role":"developer","content":"You are concise."}""",
-            input.single().toString(),
+            input.single().toString()
         )
     }
 
@@ -131,7 +136,7 @@ class OpenAiResponsesSharedTest {
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(compat = OpenAiResponsesCompat(supportsDeveloperRole = false)),
             Context(systemPrompt = "sys", messages = emptyList()),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         assertEquals("system", input.single()["role"]!!.jsonPrimitive.content)
     }
@@ -145,12 +150,12 @@ class OpenAiResponsesSharedTest {
                     UserMessage(
                         listOf(
                             TextContent("hello"),
-                            ImageContent(data = "AAAA", mimeType = "image/png"),
-                        ),
-                    ),
-                ),
+                            ImageContent(data = "AAAA", mimeType = "image/png")
+                        )
+                    )
+                )
             ),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         val content = input.single()["content"]!!.jsonArray
         assertEquals("input_text", content[0]!!.jsonObject["type"]!!.jsonPrimitive.content)
@@ -158,20 +163,29 @@ class OpenAiResponsesSharedTest {
         assertEquals("input_image", content[1]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals(
             "data:image/png;base64,AAAA",
-            content[1]!!.jsonObject["image_url"]!!.jsonPrimitive.content,
+            content[1]!!.jsonObject["image_url"]!!.jsonPrimitive.content
         )
     }
 
     @Test
     fun `images downgrade to a placeholder for non-vision models`() {
         val messages = transformMessages(
-            listOf(UserMessage(listOf(TextContent("a"), ImageContent("AAAA", "image/png"), ImageContent("BBBB", "image/png"), TextContent("b")))),
-            model(),
+            listOf(
+                UserMessage(
+                    listOf(
+                        TextContent("a"),
+                        ImageContent("AAAA", "image/png"),
+                        ImageContent("BBBB", "image/png"),
+                        TextContent("b")
+                    )
+                )
+            ),
+            model()
         )
         val content = (messages.single() as UserMessage).content
         assertEquals(
             listOf("a", "(image omitted: model does not support images)", "b"),
-            content.map { (it as TextContent).text },
+            content.map { (it as TextContent).text }
         )
     }
 
@@ -182,12 +196,12 @@ class OpenAiResponsesSharedTest {
             api = "openai-responses",
             provider = "openai",
             model = "gpt-5-mini",
-            stopReason = StopReason.STOP,
+            stopReason = StopReason.STOP
         )
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(),
             Context(messages = listOf(assistant)),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         val item = input.single()
         assertEquals("message", item["type"]!!.jsonPrimitive.content)
@@ -195,7 +209,7 @@ class OpenAiResponsesSharedTest {
         assertEquals("completed", item["status"]!!.jsonPrimitive.content)
         assertEquals(
             "output_text",
-            item["content"]!!.jsonArray.single().jsonObject["type"]!!.jsonPrimitive.content,
+            item["content"]!!.jsonArray.single().jsonObject["type"]!!.jsonPrimitive.content
         )
     }
 
@@ -206,12 +220,12 @@ class OpenAiResponsesSharedTest {
             api = "openai-responses",
             provider = "openai",
             model = "gpt-5-mini",
-            stopReason = StopReason.STOP,
+            stopReason = StopReason.STOP
         )
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(),
             Context(messages = listOf(UserMessage.ofText("q"), assistant)),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         assertEquals("msg_pi_1", input[1]["id"]!!.jsonPrimitive.content)
         assertEquals("msg_pi_1_1", input[2]["id"]!!.jsonPrimitive.content)
@@ -219,18 +233,20 @@ class OpenAiResponsesSharedTest {
 
     @Test
     fun `oversized signed message ids hash down to 64 characters`() {
-        val longId = "msg_0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"
+        val longId =
+            "msg_0123456789012345678901234567890123456789012345678901234567890123456789" +
+                "012345678901234567890123456789"
         val assistant = AssistantMessage(
             content = listOf(TextContent("hi", """{"v":1,"id":"$longId"}""")),
             api = "openai-responses",
             provider = "openai",
             model = "gpt-5-mini",
-            stopReason = StopReason.STOP,
+            stopReason = StopReason.STOP
         )
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(),
             Context(messages = listOf(assistant)),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         val id = input.single()["id"]!!.jsonPrimitive.content
         assertEquals("1lfieqfu5oau7", shortHash(longId))
@@ -246,12 +262,12 @@ class OpenAiResponsesSharedTest {
             api = "openai-responses",
             provider = "openai",
             model = "gpt-5-mini",
-            stopReason = StopReason.STOP,
+            stopReason = StopReason.STOP
         )
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(),
             Context(messages = listOf(assistant)),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         assertEquals(json.parseToJsonElement(signature), input.single())
     }
@@ -259,16 +275,18 @@ class OpenAiResponsesSharedTest {
     @Test
     fun `tool calls replay as function_call items with fc_ item ids`() {
         val assistant = AssistantMessage(
-            content = listOf(ToolCall(id = "call_1|fc_2", name = "edit", arguments = """{"a":1}""")),
+            content = listOf(
+                ToolCall(id = "call_1|fc_2", name = "edit", arguments = """{"a":1}""")
+            ),
             api = "openai-responses",
             provider = "openai",
             model = "gpt-5-mini",
-            stopReason = StopReason.TOOL_USE,
+            stopReason = StopReason.TOOL_USE
         )
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(),
             Context(messages = listOf(assistant)),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         // transformMessages appends a synthetic result for the orphaned call.
         val item = input.first()
@@ -285,31 +303,40 @@ class OpenAiResponsesSharedTest {
             api = "openai-responses",
             provider = "openai",
             model = "gpt-5-mini",
-            stopReason = StopReason.TOOL_USE,
+            stopReason = StopReason.TOOL_USE
         )
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(),
             Context(messages = listOf(assistant)),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         assertNull(input.first()["id"])
     }
 
     @Test
     fun `foreign copilot tool item ids hash into bounded fc_ shape`() {
-        val copilotItemId = "I9b95oN1wD/cHXKTw3PpRkL6KkCtzTJhUxMouMWYwHeTo2j3htzfSk7YPx2vifiIM4g3A8XXyOj8q4Bt6SLUG7gqY1E3ELkrkVQNHglRfUmWj84lqxJY+Puieb3VKyX0FB+83TUzn91cDM/4gzt990IzqVrc+nIb9RRscRD070Du16q1glyVjWR0SBJs6EJbY/esOoFpqplogQqrajm1eI++F3eLi73a6q7hVusY0QbeFySVxABCjhL0lXB04caBe1rzHjYzul6MAX/7+r17Moq+yrtyYhN12wkmfHeqTyEei6EFPfMy247cJmJlkfAOCg02WgOOn+BFcbi2ctJFSJhSjt1kSCBqCnnhw3xXjbWiT0wh3DmLScRgTHmGkaMkU+oAcQQJfic65nxvTnEk9e=="
+        val copilotItemId =
+            "I9b95oN1wD/cHXKTw3PpRkL6KkCtzTJhUxMouMWYwHeTo2j3htzfSk7YPx2v" +
+                "ifiIM4g3A8XXyOj8q4Bt6SLUG7gqY1E3ELkrkVQNHglRfUmWj84lqxJY+Pui" +
+                "eb3VKyX0FB+83TUzn91cDM/4gzt990IzqVrc+nIb9RRscRD070Du16q1glyV" +
+                "jWR0SBJs6EJbY/esOoFpqplogQqrajm1eI++F3eLi73a6q7hVusY0QbeFySV" +
+                "xABCjhL0lXB04caBe1rzHjYzul6MAX/7+r17Moq+yrtyYhN12wkmfHeqTyEe" +
+                "i6EFPfMy247cJmJlkfAOCg02WgOOn+BFcbi2ctJFSJhSjt1kSCBqCnnhw3xX" +
+                "jbWiT0wh3DmLScRgTHmGkaMkU+oAcQQJfic65nxvTnEk9e=="
         val rawId = "call_4VnzVawQXPB9MgYib7CiQFEY|$copilotItemId"
         val assistant = AssistantMessage(
-            content = listOf(ToolCall(id = rawId, name = "edit", arguments = """{"path":"a.css"}""")),
+            content = listOf(
+                ToolCall(id = rawId, name = "edit", arguments = """{"path":"a.css"}""")
+            ),
             api = "openai-responses",
             provider = "github-copilot",
             model = "gpt-5.5",
-            stopReason = StopReason.TOOL_USE,
+            stopReason = StopReason.TOOL_USE
         )
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(provider = "openai-codex", id = "gpt-5.5", api = "openai-codex-responses"),
             Context(messages = listOf(assistant)),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         val item = input.first()
         val expectedItemId = "fc_${shortHash(copilotItemId)}"
@@ -328,11 +355,11 @@ class OpenAiResponsesSharedTest {
                     ToolResultMessage(
                         toolCallId = "call_1|fc_2",
                         toolName = "edit",
-                        content = listOf(TextContent("line 1"), TextContent("line 2")),
-                    ),
-                ),
+                        content = listOf(TextContent("line 1"), TextContent("line 2"))
+                    )
+                )
             ),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         val item = input.single()
         assertEquals("function_call_output", item["type"]!!.jsonPrimitive.content)
@@ -346,10 +373,10 @@ class OpenAiResponsesSharedTest {
             model(),
             Context(
                 messages = listOf(
-                    ToolResultMessage(toolCallId = "c", toolName = "t", content = emptyList()),
-                ),
+                    ToolResultMessage(toolCallId = "c", toolName = "t", content = emptyList())
+                )
             ),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         assertEquals("(no tool output)", input.single()["output"]!!.jsonPrimitive.content)
     }
@@ -363,11 +390,11 @@ class OpenAiResponsesSharedTest {
                     ToolResultMessage(
                         toolCallId = "c",
                         toolName = "t",
-                        content = listOf(TextContent("see"), ImageContent("AAAA", "image/jpeg")),
-                    ),
-                ),
+                        content = listOf(TextContent("see"), ImageContent("AAAA", "image/jpeg"))
+                    )
+                )
             ),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         val output = input.single()["output"]!!.jsonArray
         assertEquals("input_text", output[0]!!.jsonObject["type"]!!.jsonPrimitive.content)
@@ -383,13 +410,16 @@ class OpenAiResponsesSharedTest {
                     ToolResultMessage(
                         toolCallId = "c",
                         toolName = "t",
-                        content = listOf(ImageContent("AAAA", "image/jpeg")),
-                    ),
-                ),
+                        content = listOf(ImageContent("AAAA", "image/jpeg"))
+                    )
+                )
             ),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
-        assertEquals("(tool image omitted: model does not support images)", input.single()["output"]!!.jsonPrimitive.content)
+        assertEquals(
+            "(tool image omitted: model does not support images)",
+            input.single()["output"]!!.jsonPrimitive.content
+        )
     }
 
     @Test
@@ -403,23 +433,23 @@ class OpenAiResponsesSharedTest {
                         toolCallId = "c",
                         toolName = "other",
                         content = listOf(TextContent("ok")),
-                        addedToolNames = listOf("deferred_tool"),
-                    ),
+                        addedToolNames = listOf("deferred_tool")
+                    )
                 ),
-                tools = listOf(tool),
+                tools = listOf(tool)
             ),
             OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
             OpenAiResponsesShared.ConvertResponsesMessagesOptions(
                 deferredTools = mapOf("deferred_tool" to tool),
-                deferredToolsMode = OpenAiResponsesShared.DeferredToolsMode.ADDITIONAL_TOOLS,
-            ),
+                deferredToolsMode = OpenAiResponsesShared.DeferredToolsMode.ADDITIONAL_TOOLS
+            )
         )
         val additional = input[1]
         assertEquals("additional_tools", additional["type"]!!.jsonPrimitive.content)
         assertEquals("developer", additional["role"]!!.jsonPrimitive.content)
         assertEquals(
             "deferred_tool",
-            additional["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content,
+            additional["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content
         )
     }
 
@@ -435,16 +465,16 @@ class OpenAiResponsesSharedTest {
                         toolCallId = toolCallId,
                         toolName = "other",
                         content = listOf(TextContent("ok")),
-                        addedToolNames = listOf("deferred_tool"),
-                    ),
+                        addedToolNames = listOf("deferred_tool")
+                    )
                 ),
-                tools = listOf(tool),
+                tools = listOf(tool)
             ),
             OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
             OpenAiResponsesShared.ConvertResponsesMessagesOptions(
                 deferredTools = mapOf("deferred_tool" to tool),
-                deferredToolsMode = OpenAiResponsesShared.DeferredToolsMode.TOOL_SEARCH,
-            ),
+                deferredToolsMode = OpenAiResponsesShared.DeferredToolsMode.TOOL_SEARCH
+            )
         )
         val expectedCallId =
             "pi_tool_load_${shortHash("$toolCallId:deferred_tool")}"
@@ -456,11 +486,12 @@ class OpenAiResponsesSharedTest {
         assertEquals(expectedCallId, output["call_id"]!!.jsonPrimitive.content)
         assertEquals(
             "deferred_tool",
-            output["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content,
+            output["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content
         )
         assertEquals(
             true,
-            output["tools"]!!.jsonArray.single().jsonObject["defer_loading"]!!.jsonPrimitive.content.toBoolean(),
+            output["tools"]!!.jsonArray.single().jsonObject["defer_loading"]!!
+                .jsonPrimitive.content.toBoolean()
         )
     }
 
@@ -471,11 +502,11 @@ class OpenAiResponsesSharedTest {
             api = "openai-responses",
             provider = "openai",
             model = "gpt-5-mini",
-            stopReason = StopReason.TOOL_USE,
+            stopReason = StopReason.TOOL_USE
         )
         val transformed = transformMessages(
             listOf(assistant, UserMessage.ofText("next")),
-            model(),
+            model()
         )
         val synthetic = transformed[1] as ToolResultMessage
         assertEquals("call_1|fc_2", synthetic.toolCallId)
@@ -489,16 +520,16 @@ class OpenAiResponsesSharedTest {
         val assistant = AssistantMessage(
             content = listOf(
                 ThinkingContent("opaque", redacted = true),
-                ToolCall("foreign", "edit", "{}", thoughtSignature = "google-signature"),
+                ToolCall("foreign", "edit", "{}", thoughtSignature = "google-signature")
             ),
             api = "google-generative-ai",
             provider = "google",
             model = "gemini",
-            stopReason = StopReason.TOOL_USE,
+            stopReason = StopReason.TOOL_USE
         )
         val transformed = transformMessages(
             listOf(assistant),
-            model(),
+            model()
         ) { _, _ -> "normalized" }
         val content = (transformed.first() as AssistantMessage).content
         assertEquals(1, content.size)
@@ -515,11 +546,11 @@ class OpenAiResponsesSharedTest {
             provider = "openai",
             model = "gpt-5-mini",
             stopReason = StopReason.ERROR,
-            errorMessage = "boom",
+            errorMessage = "boom"
         )
         val transformed = transformMessages(
             listOf(UserMessage.ofText("q"), errored, UserMessage.ofText("next")),
-            model(),
+            model()
         )
         assertEquals(2, transformed.size)
     }
@@ -529,7 +560,7 @@ class OpenAiResponsesSharedTest {
         val tool = Tool("t", "desc", buildJsonObject { put("type", "object") })
         val strictOff = OpenAiResponsesShared.convertResponsesTools(
             listOf(tool),
-            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsStrictMode = false),
+            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsStrictMode = false)
         ).single()
         assertNull(strictOff["strict"])
 
@@ -537,21 +568,20 @@ class OpenAiResponsesSharedTest {
             listOf(tool),
             OpenAiResponsesShared.ConvertResponsesToolsOptions(
                 strict = true,
-                supportsStrictMode = true,
-            ),
+                supportsStrictMode = true
+            )
         ).single()
         assertEquals("function", strictOn["type"]!!.jsonPrimitive.content)
         assertEquals(true, strictOn["strict"]!!.jsonPrimitive.content.toBoolean())
         assertEquals("t", strictOn["name"]!!.jsonPrimitive.content)
     }
 
-    private fun event(jsonText: String): JsonObject =
-        json.parseToJsonElement(jsonText).jsonObject
+    private fun event(jsonText: String): JsonObject = json.parseToJsonElement(jsonText).jsonObject
 
     private fun state(
         m: Model = model(),
         options: OpenAiResponsesShared.StreamProcessingOptions =
-            OpenAiResponsesShared.StreamProcessingOptions(),
+            OpenAiResponsesShared.StreamProcessingOptions()
     ) = OpenAiResponsesShared.ResponsesStreamState(m, 1_770_000_000_000L, options)
 
     @Test
@@ -562,8 +592,8 @@ class OpenAiResponsesSharedTest {
                 """{"type":"response.completed","response":{
                     "id":"resp_completed","status":"completed",
                     "usage":{"input_tokens":20,"output_tokens":7,"total_tokens":27,
-                        "input_tokens_details":{"cached_tokens":2,"cache_write_tokens":3}}}}""",
-            ),
+                        "input_tokens_details":{"cached_tokens":2,"cache_write_tokens":3}}}}"""
+            )
         )
         assertTrue(s.sawTerminalResponseEvent)
         assertEquals("resp_completed", s.responseId)
@@ -587,8 +617,8 @@ class OpenAiResponsesSharedTest {
                     "id":"resp_i","status":"incomplete",
                     "incomplete_details":{"reason":"max_output_tokens"},
                     "usage":{"input_tokens":30,"output_tokens":12,"total_tokens":42,
-                        "input_tokens_details":{"cached_tokens":5}}}}""",
-            ),
+                        "input_tokens_details":{"cached_tokens":5}}}}"""
+            )
         )
         assertEquals(StopReason.LENGTH, s.stopReason)
         assertEquals("incomplete.max_output_tokens", s.rawStopReason)
@@ -603,8 +633,8 @@ class OpenAiResponsesSharedTest {
         s.onEvent(
             event(
                 """{"type":"response.incomplete","response":{
-                    "status":"incomplete","incomplete_details":{"reason":"content_filter"}}}""",
-            ),
+                    "status":"incomplete","incomplete_details":{"reason":"content_filter"}}}"""
+            )
         )
         assertEquals(StopReason.ERROR, s.stopReason)
         assertEquals("incomplete.content_filter", s.rawStopReason)
@@ -618,8 +648,8 @@ class OpenAiResponsesSharedTest {
             s.onEvent(
                 event(
                     """{"type":"response.failed","response":{
-                        "status":"failed","error":{"code":"server_error","message":"boom"}}}""",
-                ),
+                        "status":"failed","error":{"code":"server_error","message":"boom"}}}"""
+                )
             )
         }
         assertEquals("server_error: boom", error.message)
@@ -632,7 +662,10 @@ class OpenAiResponsesSharedTest {
         val s = state()
         s.onEvent(event("""{"type":"response.created","response":{"id":"r"}}"""))
         val error = assertFailsWith<ProviderStreamException> { s.assertTerminalEvent() }
-        assertEquals("OpenAI Responses stream ended before a terminal response event", error.message)
+        assertEquals(
+            "OpenAI Responses stream ended before a terminal response event",
+            error.message
+        )
     }
 
     @Test
@@ -650,8 +683,8 @@ class OpenAiResponsesSharedTest {
         val events = s.onEvent(
             event(
                 """{"type":"response.output_item.added","output_index":0,
-                    "item":{"type":"message","id":"msg_1","role":"assistant","phase":"commentary"}}""",
-            ),
+                    "item":{"type":"message","id":"msg_1","role":"assistant","phase":"commentary"}}"""
+            )
         )
         assertIs<AssistantMessageEvent.TextStart>(events.single())
         assertEquals(StopReason.PENDING, s.stopReason)
@@ -660,16 +693,16 @@ class OpenAiResponsesSharedTest {
                 """{"type":"response.output_item.done","output_index":0,
                     "item":{"type":"message","id":"msg_1","role":"assistant","status":"completed",
                         "phase":"final_answer",
-                        "content":[{"type":"output_text","text":"answer","annotations":[]}]}}""",
-            ),
+                        "content":[{"type":"output_text","text":"answer","annotations":[]}]}}"""
+            )
         )
         assertEquals(StopReason.STOP, s.stopReason)
         // A later incomplete terminal reason replaces the provisional stop.
         s.onEvent(
             event(
                 """{"type":"response.incomplete","response":{"status":"incomplete",
-                    "incomplete_details":{"reason":"max_output_tokens"}}}""",
-            ),
+                    "incomplete_details":{"reason":"max_output_tokens"}}}"""
+            )
         )
         assertEquals(StopReason.LENGTH, s.stopReason)
     }
@@ -680,34 +713,41 @@ class OpenAiResponsesSharedTest {
         val start = s.onEvent(
             event(
                 """{"type":"response.output_item.added","output_index":0,
-                    "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
-            ),
+                    "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}"""
+            )
         )
         assertIs<AssistantMessageEvent.TextStart>(start.single())
         val delta = s.onEvent(
-            event("""{"type":"response.output_text.delta","output_index":0,"delta":"he"}"""),
+            event("""{"type":"response.output_text.delta","output_index":0,"delta":"he"}""")
         )
         assertIs<AssistantMessageEvent.TextDelta>(delta.single())
-        assertEquals("he", (delta.single() as AssistantMessageEvent.TextDelta).partial.content.single().let { (it as TextContent).text })
+        assertEquals(
+            "he",
+            (delta.single() as AssistantMessageEvent.TextDelta).partial.content.single().let {
+                (it as TextContent).text
+            }
+        )
         val delta2 = s.onEvent(
-            event("""{"type":"response.output_text.delta","output_index":0,"delta":"llo"}"""),
+            event("""{"type":"response.output_text.delta","output_index":0,"delta":"llo"}""")
         )
         assertIs<AssistantMessageEvent.TextDelta>(delta2.single())
         val end = s.onEvent(
             event(
                 """{"type":"response.output_item.done","output_index":0,
                     "item":{"type":"message","id":"msg_1","role":"assistant","status":"completed",
-                        "content":[{"type":"output_text","text":"hello!","annotations":[]}]}}""",
-            ),
+                        "content":[{"type":"output_text","text":"hello!","annotations":[]}]}}"""
+            )
         )
         val textEnd = assertIs<AssistantMessageEvent.TextEnd>(end.single())
         assertEquals("hello!", textEnd.content)
         assertEquals("hello!", (textEnd.partial.content.single() as TextContent).text)
         assertEquals(
             """{"v":1,"id":"msg_1"}""",
-            (textEnd.partial.content.single() as TextContent).textSignature,
+            (textEnd.partial.content.single() as TextContent).textSignature
         )
-        s.onEvent(event("""{"type":"response.completed","response":{"id":"r","status":"completed"}}"""))
+        s.onEvent(
+            event("""{"type":"response.completed","response":{"id":"r","status":"completed"}}""")
+        )
         assertEquals(StopReason.STOP, s.stopReason)
     }
 
@@ -717,17 +757,19 @@ class OpenAiResponsesSharedTest {
         s.onEvent(
             event(
                 """{"type":"response.output_item.added","output_index":0,
-                    "item":{"type":"reasoning","id":"rs_1","summary":[]}}""",
-            ),
+                    "item":{"type":"reasoning","id":"rs_1","summary":[]}}"""
+            )
         )
-        s.onEvent(event("""{"type":"response.reasoning_text.delta","output_index":0,"delta":"think"}"""))
+        s.onEvent(
+            event("""{"type":"response.reasoning_text.delta","output_index":0,"delta":"think"}""")
+        )
         s.onEvent(event("""{"type":"response.reasoning_summary_part.done","output_index":0}"""))
         val end = s.onEvent(
             event(
                 """{"type":"response.output_item.done","output_index":0,
                     "item":{"type":"reasoning","id":"rs_1",
-                        "summary":[{"type":"summary_text","text":"sum"}]}}""",
-            ),
+                        "summary":[{"type":"summary_text","text":"sum"}]}}"""
+            )
         )
         val thinkingEnd = assertIs<AssistantMessageEvent.ThinkingEnd>(end.single())
         assertEquals("sum", thinkingEnd.content)
@@ -743,20 +785,20 @@ class OpenAiResponsesSharedTest {
         s.onEvent(
             event(
                 """{"type":"response.output_item.added","output_index":0,
-                    "item":{"type":"reasoning","id":"rs_1","summary":[]}}""",
-            ),
+                    "item":{"type":"reasoning","id":"rs_1","summary":[]}}"""
+            )
         )
         s.onEvent(
             event(
                 """{"type":"response.output_item.done","output_index":0,
-                    "item":{"type":"reasoning","id":"rs_1","summary":[]}}""",
-            ),
+                    "item":{"type":"reasoning","id":"rs_1","summary":[]}}"""
+            )
         )
         s.onEvent(
             event(
                 """{"type":"response.completed","response":{"status":"completed",
-                    "output":[{"type":"reasoning","id":"rs_1","encrypted_content":"ENC"}]}}""",
-            ),
+                    "output":[{"type":"reasoning","id":"rs_1","encrypted_content":"ENC"}]}}"""
+            )
         )
         val snapshot = s.partialSnapshot()
         val thinking = snapshot.content.single() as ThinkingContent
@@ -771,21 +813,25 @@ class OpenAiResponsesSharedTest {
             event(
                 """{"type":"response.output_item.added","output_index":0,
                     "item":{"type":"function_call","id":"fc_1","call_id":"call_1",
-                        "name":"edit","arguments":""}}""",
-            ),
+                        "name":"edit","arguments":""}}"""
+            )
         )
         s.onEvent(
-            event("""{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"p\""}"""),
+            event(
+                """{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"p\""}"""
+            )
         )
         s.onEvent(
-            event("""{"type":"response.function_call_arguments.delta","output_index":0,"delta":":1}"}"""),
+            event(
+                """{"type":"response.function_call_arguments.delta","output_index":0,"delta":":1}"}"""
+            )
         )
         val end = s.onEvent(
             event(
                 """{"type":"response.output_item.done","output_index":0,
                     "item":{"type":"function_call","id":"fc_1","call_id":"call_1",
-                        "name":"edit","arguments":"{\"p\":1,\"q\":2}"}}""",
-            ),
+                        "name":"edit","arguments":"{\"p\":1,\"q\":2}"}}"""
+            )
         )
         val toolEnd = assertIs<AssistantMessageEvent.ToolCallEnd>(end.single())
         assertEquals("call_1|fc_1", toolEnd.toolCall.id)
@@ -802,18 +848,22 @@ class OpenAiResponsesSharedTest {
             event(
                 """{"type":"response.output_item.added","output_index":0,
                     "item":{"type":"function_call","id":"fc_test","call_id":"call_test",
-                        "name":"lookup","arguments":""}}""",
-            ),
+                        "name":"lookup","arguments":""}}"""
+            )
         )
         s.onEvent(
             event(
                 """{"type":"response.output_item.done","output_index":0,
                     "item":{"type":"function_call","id":"fc_test","call_id":"call_test",
                         "name":"lookup","arguments":"{\"value\":\"hello\"}",
-                        "namespace":"dynamic_tools"}}""",
-            ),
+                        "namespace":"dynamic_tools"}}"""
+            )
         )
-        s.onEvent(event("""{"type":"response.completed","response":{"id":"resp_test","status":"completed"}}"""))
+        s.onEvent(
+            event(
+                """{"type":"response.completed","response":{"id":"resp_test","status":"completed"}}"""
+            )
+        )
         val output = s.partialSnapshot()
         val toolCall = assertIs<ToolCall>(output.content.single())
         assertEquals("call_test|fc_test", toolCall.id)
@@ -824,7 +874,7 @@ class OpenAiResponsesSharedTest {
         val replayed = OpenAiResponsesShared.convertResponsesMessages(
             model(),
             Context(messages = listOf(output)),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         ).single { it["type"]!!.jsonPrimitive.content == "function_call" }
         assertEquals("fc_test", replayed["id"]!!.jsonPrimitive.content)
         assertEquals("call_test", replayed["call_id"]!!.jsonPrimitive.content)
@@ -835,7 +885,7 @@ class OpenAiResponsesSharedTest {
         val replayedOther = OpenAiResponsesShared.convertResponsesMessages(
             model(id = "gpt-5.2"),
             Context(messages = listOf(output)),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         ).single { it["type"]!!.jsonPrimitive.content == "function_call" }
         assertNull(replayedOther["namespace"])
         assertNull(replayedOther["id"])
@@ -846,7 +896,7 @@ class OpenAiResponsesSharedTest {
         assertEquals("""{"v":1}""", OpenAiResponsesShared.encodeTextSignatureV1(null, null))
         assertEquals(
             """{"v":1,"id":"msg_1","phase":"final_answer"}""",
-            OpenAiResponsesShared.encodeTextSignatureV1("msg_1", "final_answer"),
+            OpenAiResponsesShared.encodeTextSignatureV1("msg_1", "final_answer")
         )
     }
 
@@ -856,8 +906,8 @@ class OpenAiResponsesSharedTest {
         s.onEvent(
             event(
                 """{"type":"response.output_item.added","output_index":0,
-                    "item":{"type":"message","id":"m","role":"assistant"}}""",
-            ),
+                    "item":{"type":"message","id":"m","role":"assistant"}}"""
+            )
         )
         s.onEvent(event("""{"type":"response.refusal.delta","output_index":0,"delta":"no"}"""))
         val snapshot = s.partialSnapshot()
@@ -869,7 +919,7 @@ class OpenAiResponsesSharedTest {
         val flex = applyServiceTierPricing(
             Usage(cost = works.resolve.pathfinder.ai.Cost(input = 10.0, output = 20.0)),
             "flex",
-            "gpt-5",
+            "gpt-5"
         )
         assertEquals(5.0, flex.cost.input, 1e-9)
         assertEquals(10.0, flex.cost.output, 1e-9)
@@ -878,14 +928,14 @@ class OpenAiResponsesSharedTest {
         val priority = applyServiceTierPricing(
             Usage(cost = works.resolve.pathfinder.ai.Cost(input = 10.0, output = 20.0)),
             "priority",
-            "gpt-5",
+            "gpt-5"
         )
         assertEquals(20.0, priority.cost.input, 1e-9)
 
         val priorityGpt55 = applyServiceTierPricing(
             Usage(cost = works.resolve.pathfinder.ai.Cost(input = 10.0)),
             "priority",
-            "gpt-5.5",
+            "gpt-5.5"
         )
         assertEquals(25.0, priorityGpt55.cost.input, 1e-9)
     }
@@ -896,27 +946,34 @@ class OpenAiResponsesSharedTest {
             OpenAiResponsesShared.mapStopReason("bogus", null)
         }
         assertEquals(StopReason.STOP to null, OpenAiResponsesShared.mapStopReason("queued", null))
-        assertEquals(StopReason.ERROR to null, OpenAiResponsesShared.mapStopReason("cancelled", null))
+        assertEquals(
+            StopReason.ERROR to null,
+            OpenAiResponsesShared.mapStopReason("cancelled", null)
+        )
     }
 
     @Test
     fun `session affinity format detection and defaults`() {
         assertEquals(
             SessionAffinityFormat.OPENROUTER,
-            getCompat(model(provider = "openrouter")).sessionAffinityFormat,
+            getCompat(model(provider = "openrouter")).sessionAffinityFormat
         )
         assertEquals(
             SessionAffinityFormat.OPENROUTER,
             getCompat(
-                model().copy(baseUrl = "https://openrouter.ai/api/v1"),
-            ).sessionAffinityFormat,
+                model().copy(baseUrl = "https://openrouter.ai/api/v1")
+            ).sessionAffinityFormat
         )
         assertEquals(
             SessionAffinityFormat.OPENAI,
-            getCompat(model()).sessionAffinityFormat,
+            getCompat(model()).sessionAffinityFormat
         )
         val explicit = getCompat(
-            model(compat = OpenAiResponsesCompat(sessionAffinityFormat = SessionAffinityFormat.OPENROUTER)),
+            model(
+                compat = OpenAiResponsesCompat(
+                    sessionAffinityFormat = SessionAffinityFormat.OPENROUTER
+                )
+            )
         )
         assertEquals(SessionAffinityFormat.OPENROUTER, explicit.sessionAffinityFormat)
     }
@@ -925,30 +982,30 @@ class OpenAiResponsesSharedTest {
     fun `cache retention resolves explicit then env then short`() {
         assertEquals(
             CacheRetention.LONG,
-            OpenAiResponsesApi.resolveCacheRetention(CacheRetention.LONG, emptyMap()),
+            OpenAiResponsesApi.resolveCacheRetention(CacheRetention.LONG, emptyMap())
         )
         assertEquals(
             CacheRetention.LONG,
-            OpenAiResponsesApi.resolveCacheRetention(null, mapOf("PI_CACHE_RETENTION" to "long")),
+            OpenAiResponsesApi.resolveCacheRetention(null, mapOf("PI_CACHE_RETENTION" to "long"))
         )
         assertEquals(
             CacheRetention.SHORT,
-            OpenAiResponsesApi.resolveCacheRetention(null, mapOf("PI_CACHE_RETENTION" to "short")),
+            OpenAiResponsesApi.resolveCacheRetention(null, mapOf("PI_CACHE_RETENTION" to "short"))
         )
         assertEquals(
             "24h",
             getPromptCacheRetention(
                 getCompat(model()),
-                CacheRetention.LONG,
-            ),
+                CacheRetention.LONG
+            )
         )
         assertNull(
             getPromptCacheRetention(
                 getCompat(
-                    model(compat = OpenAiResponsesCompat(supportsLongCacheRetention = false)),
+                    model(compat = OpenAiResponsesCompat(supportsLongCacheRetention = false))
                 ),
-                CacheRetention.LONG,
-            ),
+                CacheRetention.LONG
+            )
         )
     }
 
@@ -957,7 +1014,7 @@ class OpenAiResponsesSharedTest {
         assertEquals("k", getClientApiKey("p", "k", emptyMap()))
         assertEquals(
             "unused",
-            getClientApiKey("p", null, mapOf("authorization" to "Bearer x")),
+            getClientApiKey("p", null, mapOf("authorization" to "Bearer x"))
         )
         assertFailsWith<ProviderAuthException> {
             getClientApiKey("p", null, emptyMap())
@@ -968,19 +1025,19 @@ class OpenAiResponsesSharedTest {
     fun `affinity headers follow the compat format`() {
         val openai = sessionAffinityHeaders(
             "s1",
-            getCompat(model()),
+            getCompat(model())
         )
         assertEquals(mapOf("session_id" to "s1", "x-client-request-id" to "s1"), openai)
         val openrouter = sessionAffinityHeaders(
             "s1",
-            getCompat(model(provider = "openrouter")),
+            getCompat(model(provider = "openrouter"))
         )
         assertEquals(mapOf("x-session-id" to "s1"), openrouter)
         assertTrue(sessionAffinityHeaders(null, getCompat(model())).isEmpty())
     }
 
     private fun sampleTool(
-        constrainedSampling: works.resolve.pathfinder.ai.ConstrainedSamplingConfig? = null,
+        constrainedSampling: works.resolve.pathfinder.ai.ConstrainedSamplingConfig? = null
     ): Tool = Tool(
         name = "sample_tool",
         description = "Sample tool",
@@ -990,12 +1047,12 @@ class OpenAiResponsesSharedTest {
                 "properties",
                 buildJsonObject {
                     put("payload", buildJsonObject { put("type", "string") })
-                },
+                }
             )
             put("required", JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("payload"))))
             put("additionalProperties", false)
         },
-        constrainedSampling = constrainedSampling,
+        constrainedSampling = constrainedSampling
     )
 
     @Test
@@ -1004,11 +1061,11 @@ class OpenAiResponsesSharedTest {
             listOf(
                 sampleTool(
                     ConstrainedSamplingConfig.Grammar(
-                        mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/"),
-                    ),
-                ),
+                        mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/")
+                    )
+                )
             ),
-            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsOpenAIGrammarTools = true),
+            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsOpenAIGrammarTools = true)
         ).single()
         assertEquals("custom", lark["type"]!!.jsonPrimitive.content)
         assertEquals("sample_tool", lark["name"]!!.jsonPrimitive.content)
@@ -1024,22 +1081,24 @@ class OpenAiResponsesSharedTest {
                     ConstrainedSamplingConfig.Grammar(
                         mapOf(
                             GrammarFormat.OPENAI_LARK to "start: /[a-z]+/",
-                            GrammarFormat.OPENAI_REGEX to "[a-z]+",
-                        ),
-                    ),
-                ),
+                            GrammarFormat.OPENAI_REGEX to "[a-z]+"
+                        )
+                    )
+                )
             ),
-            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsOpenAIGrammarTools = true),
+            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsOpenAIGrammarTools = true)
         ).single()
         assertEquals("lark", both["format"]!!.jsonObject["syntax"]!!.jsonPrimitive.content)
 
         val regex = OpenAiResponsesShared.convertResponsesTools(
             listOf(
                 sampleTool(
-                    ConstrainedSamplingConfig.Grammar(mapOf(GrammarFormat.OPENAI_REGEX to "[a-z]+")),
-                ),
+                    ConstrainedSamplingConfig.Grammar(
+                        mapOf(GrammarFormat.OPENAI_REGEX to "[a-z]+")
+                    )
+                )
             ),
-            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsOpenAIGrammarTools = true),
+            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsOpenAIGrammarTools = true)
         ).single()
         assertEquals("regex", regex["format"]!!.jsonObject["syntax"]!!.jsonPrimitive.content)
         assertEquals("[a-z]+", regex["format"]!!.jsonObject["definition"]!!.jsonPrimitive.content)
@@ -1051,14 +1110,14 @@ class OpenAiResponsesSharedTest {
             listOf(
                 sampleTool(
                     ConstrainedSamplingConfig.Grammar(
-                        mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/"),
-                    ),
-                ),
+                        mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/")
+                    )
+                )
             ),
             OpenAiResponsesShared.ConvertResponsesToolsOptions(
                 supportsOpenAIGrammarTools = false,
-                supportsStrictMode = false,
-            ),
+                supportsStrictMode = false
+            )
         ).single()
         assertEquals("function", fallback["type"]!!.jsonPrimitive.content)
         assertEquals("sample_tool", fallback["name"]!!.jsonPrimitive.content)
@@ -1070,20 +1129,22 @@ class OpenAiResponsesSharedTest {
         val failure = assertFailsWith<ConstrainedSamplingError> {
             OpenAiResponsesShared.convertResponsesTools(
                 listOf(sampleTool(ConstrainedSamplingConfig.Grammar(emptyMap()))),
-                OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsOpenAIGrammarTools = true),
+                OpenAiResponsesShared.ConvertResponsesToolsOptions(
+                    supportsOpenAIGrammarTools = true
+                )
             )
         }
         assertEquals(
             "Tool \"sample_tool\" cannot use grammar constrained sampling: " +
                 "no supported grammar variant was provided.",
-            failure.message,
+            failure.message
         )
     }
 
     @Test
     fun `json schema constrained tools emit strict rewritten parameters`() {
         val converted = OpenAiResponsesShared.convertResponsesTools(
-            listOf(sampleTool(ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER))),
+            listOf(sampleTool(ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER)))
         ).single()
         assertEquals("function", converted["type"]!!.jsonPrimitive.content)
         assertEquals(true, converted["strict"]!!.jsonPrimitive.content.toBoolean())
@@ -1099,14 +1160,16 @@ class OpenAiResponsesSharedTest {
     fun `strict require rejects when strict mode is unsupported`() {
         val failure = assertFailsWith<ConstrainedSamplingError> {
             OpenAiResponsesShared.convertResponsesTools(
-                listOf(sampleTool(ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE))),
-                OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsStrictMode = false),
+                listOf(
+                    sampleTool(ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE))
+                ),
+                OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsStrictMode = false)
             )
         }
         assertEquals(
             "Tool \"sample_tool\" requires JSON-schema constrained sampling, " +
                 "but strict tools are unsupported.",
-            failure.message,
+            failure.message
         )
     }
 
@@ -1120,16 +1183,24 @@ class OpenAiResponsesSharedTest {
                 put(
                     "properties",
                     buildJsonObject {
-                        put("child", buildJsonObject { put("\$ref", "https://example.com/child.json") })
-                    },
+                        put(
+                            "child",
+                            buildJsonObject {
+                                put("\$ref", "https://example.com/child.json")
+                            }
+                        )
+                    }
                 )
-                put("required", JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("child"))))
+                put(
+                    "required",
+                    JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("child")))
+                )
             },
-            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER),
+            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER)
         )
         val converted = OpenAiResponsesShared.convertResponsesTools(
             listOf(tool),
-            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsStrictMode = true),
+            OpenAiResponsesShared.ConvertResponsesToolsOptions(supportsStrictMode = true)
         ).single()
         assertEquals(false, converted["strict"]!!.jsonPrimitive.content.toBoolean())
         assertEquals(tool.parameters, converted["parameters"])
@@ -1140,9 +1211,14 @@ class OpenAiResponsesSharedTest {
         assertEquals("\$ref schemas are unsupported", strictFailure.message)
 
         val requiring = tool.copy(
-            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
+            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(
+                StrictJsonSchemaMode.REQUIRE
+            )
         )
-        val resolveFailure = assertFailsWith<ConstrainedSamplingError> { resolveJsonSchemaStrictSampling(requiring, true) }
+        val resolveFailure =
+            assertFailsWith<ConstrainedSamplingError> {
+                resolveJsonSchemaStrictSampling(requiring, true)
+            }
         assertContains(resolveFailure.message!!, "\$ref schemas are unsupported")
     }
 
@@ -1150,21 +1226,23 @@ class OpenAiResponsesSharedTest {
     fun `replays grammar calls as custom tool call items`() {
         fun grammarContext(arguments: String): Context {
             val assistant = AssistantMessage(
-                content = listOf(ToolCall(id = "call_1|ctc_1", name = "sample_tool", arguments = arguments)),
+                content = listOf(
+                    ToolCall(id = "call_1|ctc_1", name = "sample_tool", arguments = arguments)
+                ),
                 api = "openai-responses",
                 provider = "openai",
                 model = "gpt-test",
-                stopReason = StopReason.TOOL_USE,
+                stopReason = StopReason.TOOL_USE
             )
             val result = ToolResultMessage(
                 toolCallId = "call_1|ctc_1",
                 toolName = "sample_tool",
-                content = listOf(TextContent("done")),
+                content = listOf(TextContent("done"))
             )
             return Context(messages = listOf(assistant, result))
         }
         val options = OpenAiResponsesShared.ConvertResponsesMessagesOptions(
-            grammarToolInputProperties = mapOf("sample_tool" to "payload"),
+            grammarToolInputProperties = mapOf("sample_tool" to "payload")
         )
         for (invalidArguments in listOf("{}", """{"payload":42}""")) {
             val failure = assertFailsWith<ConstrainedSamplingError> {
@@ -1172,12 +1250,12 @@ class OpenAiResponsesSharedTest {
                     model(id = "gpt-test"),
                     grammarContext(invalidArguments),
                     setOf("openai"),
-                    options,
+                    options
                 )
             }
             assertEquals(
                 "Grammar tool call \"sample_tool\" requires argument \"payload\" to be a string.",
-                failure.message,
+                failure.message
             )
         }
 
@@ -1185,7 +1263,7 @@ class OpenAiResponsesSharedTest {
             model(id = "gpt-test"),
             grammarContext("""{"payload":"abc"}"""),
             setOf("openai"),
-            options,
+            options
         )
         val call = messages.first()
         assertEquals("custom_tool_call", call["type"]!!.jsonPrimitive.content)
@@ -1204,8 +1282,8 @@ class OpenAiResponsesSharedTest {
     fun `streams custom tool calls as string arguments`() {
         val s = state(
             options = OpenAiResponsesShared.StreamProcessingOptions(
-                grammarToolInputProperties = mapOf("sample_tool" to "payload"),
-            ),
+                grammarToolInputProperties = mapOf("sample_tool" to "payload")
+            )
         )
         val allEvents = mutableListOf<AssistantMessageEvent>()
         fun feed(jsonText: String) {
@@ -1214,18 +1292,18 @@ class OpenAiResponsesSharedTest {
         feed(
             """{"type":"response.output_item.added","output_index":0,
                 "item":{"type":"custom_tool_call","call_id":"call_1","id":"ctc_1",
-                    "name":"sample_tool","input":""}}""",
+                    "name":"sample_tool","input":""}}"""
         )
         feed("""{"type":"response.custom_tool_call_input.delta","output_index":0,"delta":"ab"}""")
         feed("""{"type":"response.custom_tool_call_input.done","output_index":0,"input":"abc"}""")
         feed(
             """{"type":"response.output_item.done","output_index":0,
                 "item":{"type":"custom_tool_call","call_id":"call_1","id":"ctc_1",
-                    "name":"sample_tool","input":"abc"}}""",
+                    "name":"sample_tool","input":"abc"}}"""
         )
         feed(
             """{"type":"response.completed","response":{"status":"completed",
-                "usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}""",
+                "usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}"""
         )
 
         assertEquals(StopReason.TOOL_USE, s.stopReason)
@@ -1233,24 +1311,30 @@ class OpenAiResponsesSharedTest {
         assertEquals("call_1|ctc_1", toolCall.id)
         assertEquals("sample_tool", toolCall.name)
         assertEquals("{\"payload\":\"abc\"}", toolCall.arguments)
-        val deltas = allEvents.filterIsInstance<AssistantMessageEvent.ToolCallDelta>().joinToString("") { it.delta }
+        val deltas = allEvents.filterIsInstance<AssistantMessageEvent.ToolCallDelta>().joinToString(
+            ""
+        ) {
+            it.delta
+        }
         assertEquals("{\"payload\":\"abc\"}", deltas)
-        assertIs<AssistantMessageEvent.ToolCallEnd>(allEvents.filterIsInstance<AssistantMessageEvent.ToolCallEnd>().single())
+        assertIs<AssistantMessageEvent.ToolCallEnd>(
+            allEvents.filterIsInstance<AssistantMessageEvent.ToolCallEnd>().single()
+        )
     }
 
     @Test
     fun `custom tool call item done alone finalizes input and namespace`() {
         val s = state(
             options = OpenAiResponsesShared.StreamProcessingOptions(
-                grammarToolInputProperties = mapOf("query" to "input"),
-            ),
+                grammarToolInputProperties = mapOf("query" to "input")
+            )
         )
         val events = s.onEvent(
             event(
                 """{"type":"response.output_item.done","output_index":0,
                     "item":{"type":"custom_tool_call","id":"ctc_test","call_id":"call_test",
-                        "name":"query","input":"hello","namespace":"dynamic_tools"}}""",
-            ),
+                        "name":"query","input":"hello","namespace":"dynamic_tools"}}"""
+            )
         )
         val end = assertIs<AssistantMessageEvent.ToolCallEnd>(events.last())
         assertEquals("call_test|ctc_test", end.toolCall.id)
@@ -1267,8 +1351,8 @@ class OpenAiResponsesSharedTest {
             event(
                 """{"type":"response.incomplete","response":{
                     "id":"resp_mtl","status":"incomplete",
-                    "incomplete_details":{"reason":"max_time_limit"}}}""",
-            ),
+                    "incomplete_details":{"reason":"max_time_limit"}}}"""
+            )
         )
         assertEquals(StopReason.ERROR, s.stopReason)
         assertEquals("incomplete.max_time_limit", s.rawStopReason)
@@ -1284,8 +1368,8 @@ class OpenAiResponsesSharedTest {
         s.onEvent(
             event(
                 """{"type":"response.output_item.added","output_index":0,
-                    "item":{"type":"message","id":"msg_1","role":"assistant","phase":"final_answer"}}""",
-            ),
+                    "item":{"type":"message","id":"msg_1","role":"assistant","phase":"final_answer"}}"""
+            )
         )
         assertEquals(StopReason.STOP, s.stopReason)
     }
@@ -1298,8 +1382,8 @@ class OpenAiResponsesSharedTest {
         s.onEvent(
             event(
                 """{"type":"response.output_item.added","output_index":0,
-                    "item":{"type":"message","id":"msg_1","role":"assistant","phase":"commentary"}}""",
-            ),
+                    "item":{"type":"message","id":"msg_1","role":"assistant","phase":"commentary"}}"""
+            )
         )
         assertEquals(StopReason.PENDING, s.stopReason)
         s.onEvent(
@@ -1307,8 +1391,8 @@ class OpenAiResponsesSharedTest {
                 """{"type":"response.output_item.done","output_index":0,
                     "item":{"type":"message","id":"msg_1","role":"assistant","status":"completed",
                         "phase":"commentary",
-                        "content":[{"type":"output_text","text":"answer","annotations":[]}]}}""",
-            ),
+                        "content":[{"type":"output_text","text":"answer","annotations":[]}]}}"""
+            )
         )
         assertEquals(StopReason.PENDING, s.stopReason)
     }
@@ -1322,32 +1406,37 @@ class OpenAiResponsesSharedTest {
         s.onEvent(
             event(
                 """{"type":"response.output_item.added","output_index":0,
-                    "item":{"type":"reasoning","id":"rs_done","summary":[]}}""",
-            ),
+                    "item":{"type":"reasoning","id":"rs_done","summary":[]}}"""
+            )
         )
         s.onEvent(
             event(
                 """{"type":"response.output_item.done","output_index":0,
                     "item":{"type":"reasoning","id":"rs_done","summary":[],
-                        "encrypted_content":"from-output-item-done"}}""",
-            ),
+                        "encrypted_content":"from-output-item-done"}}"""
+            )
         )
         s.onEvent(
             event(
                 """{"type":"response.completed","response":{"status":"completed",
                     "output":[{"type":"reasoning","id":"rs_done",
-                        "encrypted_content":"from-response-completed"}]}}""",
-            ),
+                        "encrypted_content":"from-response-completed"}]}}"""
+            )
         )
         val output = s.partialSnapshot()
-        val signature = json.parseToJsonElement((output.content.single() as ThinkingContent).thinkingSignature!!).jsonObject
-        assertEquals("from-output-item-done", signature["encrypted_content"]!!.jsonPrimitive.content)
+        val signature = json.parseToJsonElement(
+            (output.content.single() as ThinkingContent).thinkingSignature!!
+        ).jsonObject
+        assertEquals(
+            "from-output-item-done",
+            signature["encrypted_content"]!!.jsonPrimitive.content
+        )
 
         // The replayed reasoning item keeps the preserved encrypted_content.
         val replayed = OpenAiResponsesShared.convertResponsesMessages(
             model(),
             Context(messages = listOf(output, UserMessage.ofText("follow-up"))),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         ).single { it["type"]?.jsonPrimitive?.content == "reasoning" }
         assertEquals("from-output-item-done", replayed["encrypted_content"]!!.jsonPrimitive.content)
     }
@@ -1358,7 +1447,7 @@ class OpenAiResponsesSharedTest {
         // namespace" + "drops namespaces when the target cannot replay their
         // load items".
         val options = OpenAiResponsesShared.ConvertResponsesMessagesOptions(
-            grammarToolInputProperties = mapOf("query" to "input"),
+            grammarToolInputProperties = mapOf("query" to "input")
         )
         val assistant = AssistantMessage(
             content = listOf(
@@ -1366,19 +1455,19 @@ class OpenAiResponsesSharedTest {
                     id = "call_custom|ctc_test",
                     name = "query",
                     arguments = """{"input":"hello"}""",
-                    namespace = "dynamic_tools",
-                ),
+                    namespace = "dynamic_tools"
+                )
             ),
             api = "openai-responses",
             provider = "openai",
             model = "gpt-5-mini",
-            stopReason = StopReason.TOOL_USE,
+            stopReason = StopReason.TOOL_USE
         )
         val sameModel = OpenAiResponsesShared.convertResponsesMessages(
             model(),
             Context(messages = listOf(assistant)),
             setOf("openai"),
-            options,
+            options
         ).single { it["type"]!!.jsonPrimitive.content == "custom_tool_call" }
         assertEquals("dynamic_tools", sameModel["namespace"]!!.jsonPrimitive.content)
         assertEquals("ctc_test", sameModel["id"]!!.jsonPrimitive.content)
@@ -1388,7 +1477,7 @@ class OpenAiResponsesSharedTest {
             model(id = "gpt-5.2"),
             Context(messages = listOf(assistant)),
             setOf("openai"),
-            options,
+            options
         ).single { it["type"]!!.jsonPrimitive.content == "custom_tool_call" }
         assertNull(differentModel["namespace"])
     }
@@ -1399,17 +1488,21 @@ class OpenAiResponsesSharedTest {
         // to ordinary function calls".
         val assistant = AssistantMessage(
             content = listOf(
-                ToolCall(id = "call_test|fc_test", name = "lookup", arguments = """{"value":"hello"}"""),
+                ToolCall(
+                    id = "call_test|fc_test",
+                    name = "lookup",
+                    arguments = """{"value":"hello"}"""
+                )
             ),
             api = "openai-responses",
             provider = "openai",
             model = "gpt-5-mini",
-            stopReason = StopReason.TOOL_USE,
+            stopReason = StopReason.TOOL_USE
         )
         val replayed = OpenAiResponsesShared.convertResponsesMessages(
             model(),
             Context(messages = listOf(assistant)),
-            setOf("openai"),
+            setOf("openai")
         ).single { it["type"]!!.jsonPrimitive.content == "function_call" }
         assertNull(replayed["namespace"])
     }
@@ -1423,10 +1516,14 @@ class OpenAiResponsesSharedTest {
             model(),
             Context(
                 messages = listOf(
-                    ToolResultMessage(toolCallId = "c", toolName = "t", content = listOf(TextContent(""))),
-                ),
+                    ToolResultMessage(
+                        toolCallId = "c",
+                        toolName = "t",
+                        content = listOf(TextContent(""))
+                    )
+                )
             ),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         val output = input.single()["output"]!!.jsonPrimitive.content
         assertEquals("(no tool output)", output)
@@ -1444,16 +1541,16 @@ class OpenAiResponsesSharedTest {
                     ToolResultMessage(
                         toolCallId = "c",
                         toolName = "t",
-                        content = listOf(TextContent("see"), ImageContent("AAAA", "image/png")),
-                    ),
-                ),
+                        content = listOf(TextContent("see"), ImageContent("AAAA", "image/png"))
+                    )
+                )
             ),
-            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
+            OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         val output = input.single()["output"]!!.jsonArray
         assertEquals(
             "data:image/png;base64,AAAA",
-            output[1]!!.jsonObject["image_url"]!!.jsonPrimitive.content,
+            output[1]!!.jsonObject["image_url"]!!.jsonPrimitive.content
         )
     }
 }

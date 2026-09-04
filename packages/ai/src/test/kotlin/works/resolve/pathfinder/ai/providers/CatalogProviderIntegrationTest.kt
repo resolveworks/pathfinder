@@ -1,14 +1,5 @@
 package works.resolve.pathfinder.ai.providers
 
-import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.Context
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.ResolvedAuth
-import works.resolve.pathfinder.ai.testing.TestCatalogs
-import works.resolve.pathfinder.ai.transport.OkHttpTransport
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -23,6 +14,15 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.ResolvedAuth
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.testing.TestCatalogs
+import works.resolve.pathfinder.ai.transport.OkHttpTransport
 
 class CatalogProviderIntegrationTest {
 
@@ -45,21 +45,23 @@ class CatalogProviderIntegrationTest {
 
                         data: [DONE]
 
-                        """.trimIndent(),
-                    ),
+                        """.trimIndent()
+                    )
             )
 
             val testKey = "zai-integration-test-key"
             val provider = TestCatalogs.ZAI.toRuntimeProvider(
                 transport = OkHttpTransport(),
-                authResolver = { _, _ -> ResolvedAuth(testKey) },
+                authResolver = { _, _ -> ResolvedAuth(testKey) }
             )
             val models = Models(listOf(provider))
 
             val events = runBlocking {
                 models.stream(
-                    TestCatalogs.GLM_4_7.copy(baseUrl = normalizeBaseUrl(server.url("/v4").toString())),
-                    Context(messages = listOf(UserMessage.ofText("hi"))),
+                    TestCatalogs.GLM_4_7.copy(
+                        baseUrl = normalizeBaseUrl(server.url("/v4").toString())
+                    ),
+                    Context(messages = listOf(UserMessage.ofText("hi")))
                 ).toList()
             }
 
@@ -105,8 +107,8 @@ class CatalogProviderIntegrationTest {
 
                         data: [DONE]
 
-                        """.trimIndent(),
-                    ),
+                        """.trimIndent()
+                    )
             )
 
             val testKey = "cf-integration-test-key"
@@ -118,10 +120,10 @@ class CatalogProviderIntegrationTest {
                         key = testKey,
                         env = mapOf(
                             "CLOUDFLARE_ACCOUNT_ID" to "acct-123",
-                            "CLOUDFLARE_GATEWAY_ID" to "gw-456",
-                        ),
+                            "CLOUDFLARE_GATEWAY_ID" to "gw-456"
+                        )
                     )
-                },
+                }
             )
             val models = Models(listOf(provider))
 
@@ -131,9 +133,9 @@ class CatalogProviderIntegrationTest {
                     // construction would otherwise percent-encode them.
                     entry.model("workers-ai/test-model")!!.copy(
                         baseUrl = server.url("/v1").toString() +
-                            "/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat",
+                            "/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat"
                     ),
-                    Context(messages = listOf(UserMessage.ofText("hi"))),
+                    Context(messages = listOf(UserMessage.ofText("hi")))
                 ).toList()
             }
 
@@ -144,7 +146,7 @@ class CatalogProviderIntegrationTest {
             val recorded = server.takeRequest()
             assertEquals(
                 "/v1/acct-123/gw-456/compat/chat/completions",
-                recorded.path,
+                recorded.path
             )
             assertEquals("Bearer $testKey", recorded.getHeader("cf-aig-authorization"))
             assertNull(recorded.getHeader("Authorization"))

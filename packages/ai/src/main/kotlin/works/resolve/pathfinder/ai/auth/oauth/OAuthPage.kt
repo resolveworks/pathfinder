@@ -9,16 +9,19 @@ package works.resolve.pathfinder.ai.auth.oauth
 private const val LOGO_SVG =
     "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 800 800\" aria-hidden=\"true\"><path fill=\"#fff\" fill-rule=\"evenodd\" d=\"M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z\"/><path fill=\"#fff\" d=\"M517.36 400 H634.72 V634.72 H517.36 Z\"/></svg>"
 
-internal fun escapeHtml(value: String): String {
-    return value
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-        .replace("'", "&#39;")
-}
+internal fun escapeHtml(value: String): String = value
+    .replace("&", "&amp;")
+    .replace("<", "&lt;")
+    .replace(">", "&gt;")
+    .replace("\"", "&quot;")
+    .replace("'", "&#39;")
 
-private fun renderPage(title: String, heading: String, message: String, details: String? = null): String {
+private fun renderPage(
+    title: String,
+    heading: String,
+    message: String,
+    details: String? = null
+): String {
     val escapedTitle = escapeHtml(title)
     val escapedHeading = escapeHtml(heading)
     val escapedMessage = escapeHtml(message)
@@ -29,7 +32,7 @@ private fun renderPage(title: String, heading: String, message: String, details:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapedTitle}</title>
+  <title>$escapedTitle</title>
   <style>
     :root {
       --text: #fafafa;
@@ -92,27 +95,23 @@ private fun renderPage(title: String, heading: String, message: String, details:
 <body>
   <main>
     <div class="logo">${LOGO_SVG}</div>
-    <h1>${escapedHeading}</h1>
-    <p>${escapedMessage}</p>
+    <h1>$escapedHeading</h1>
+    <p>$escapedMessage</p>
     ${escapedDetails?.let { "<div class=\"details\">$it</div>" } ?: ""}
   </main>
 </body>
 </html>"""
 }
 
-fun oauthSuccessHtml(message: String): String {
-    return renderPage(
-        title = "Authentication successful",
-        heading = "Authentication successful",
-        message = message,
-    )
-}
+fun oauthSuccessHtml(message: String): String = renderPage(
+    title = "Authentication successful",
+    heading = "Authentication successful",
+    message = message
+)
 
-fun oauthErrorHtml(message: String, details: String? = null): String {
-    return renderPage(
-        title = "Authentication failed",
-        heading = "Authentication failed",
-        message = message,
-        details = details,
-    )
-}
+fun oauthErrorHtml(message: String, details: String? = null): String = renderPage(
+    title = "Authentication failed",
+    heading = "Authentication failed",
+    message = message,
+    details = details
+)

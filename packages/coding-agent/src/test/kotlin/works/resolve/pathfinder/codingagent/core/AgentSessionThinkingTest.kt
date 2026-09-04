@@ -1,21 +1,5 @@
 package works.resolve.pathfinder.codingagent.core
 
-import works.resolve.pathfinder.agent.*
-
-import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.ModelThinkingLevel
-import works.resolve.pathfinder.ai.SimpleStreamOptions
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.ThinkingLevel
-import works.resolve.pathfinder.ai.ThinkingLevelMap
-import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
@@ -26,6 +10,22 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import works.resolve.pathfinder.agent.Agent
+import works.resolve.pathfinder.agent.StreamFn
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.Provider
+import works.resolve.pathfinder.ai.ResolvedAuth
+import works.resolve.pathfinder.ai.SimpleStreamOptions
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingLevel
+import works.resolve.pathfinder.ai.ThinkingLevelMap
+import works.resolve.pathfinder.codingagent.core.session.Conversation
+import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
 
 class AgentSessionThinkingTest {
 
@@ -35,7 +35,7 @@ class AgentSessionThinkingTest {
         api = "openai-completions",
         provider = "provider-a",
         baseUrl = "https://a.example.invalid",
-        reasoning = true,
+        reasoning = true
     )
 
     /** pi's xhigh/max thinkingLevelMap shape (explicit null = unsupported). */
@@ -48,8 +48,8 @@ class AgentSessionThinkingTest {
             ModelThinkingLevel.MEDIUM to null,
             ModelThinkingLevel.HIGH to "high",
             ModelThinkingLevel.XHIGH to null,
-            ModelThinkingLevel.MAX to "max",
-        ),
+            ModelThinkingLevel.MAX to "max"
+        )
     )
 
     private val plainModel = reasoningModel.copy(id = "model-plain", reasoning = false)
@@ -60,12 +60,12 @@ class AgentSessionThinkingTest {
         provider = model.provider,
         model = model.id,
         stopReason = StopReason.STOP,
-        timestamp = 42L,
+        timestamp = 42L
     )
 
     private fun okStream(model: Model): Flow<AssistantMessageEvent> = flowOf(
         AssistantMessageEvent.Start(assistant(model, "")),
-        AssistantMessageEvent.Done(StopReason.STOP, assistant(model, "ok")),
+        AssistantMessageEvent.Done(StopReason.STOP, assistant(model, "ok"))
     )
 
     private fun provider(model: Model): Provider = Provider(
@@ -74,18 +74,22 @@ class AgentSessionThinkingTest {
         baseUrl = model.baseUrl,
         authResolver = { _, _ -> ResolvedAuth(apiKey = "k") },
         models = listOf(model),
-        apis = emptyMap(), // StreamFn is scripted; no request flows through Models
+        apis = emptyMap() // StreamFn is scripted; no request flows through Models
     )
 
     private fun session(
         model: Model,
         conversation: Conversation = Conversation(emptyList(), null),
-        streamFn: (Model, works.resolve.pathfinder.ai.Context, SimpleStreamOptions) -> Flow<AssistantMessageEvent> =
-            { m, _, _ -> okStream(m) },
+        streamFn: (
+            Model,
+            works.resolve.pathfinder.ai.Context,
+            SimpleStreamOptions
+        ) -> Flow<AssistantMessageEvent> =
+            { m, _, _ -> okStream(m) }
     ): AgentSession = AgentSession(
         agent = Agent(model = model, streamFn = StreamFn(streamFn)),
         conversation = conversation,
-        models = Models(listOf(provider(model))),
+        models = Models(listOf(provider(model)))
     )
 
     @Test
@@ -95,7 +99,11 @@ class AgentSessionThinkingTest {
         s.setThinkingLevel(ModelThinkingLevel.HIGH)
 
         assertEquals(ModelThinkingLevel.OFF, s.thinkingLevel)
-        assertEquals("no thinking_level_change when the clamped level is unchanged", 0, s.conversation.entries.size)
+        assertEquals(
+            "no thinking_level_change when the clamped level is unchanged",
+            0,
+            s.conversation.entries.size
+        )
     }
 
     @Test
@@ -132,7 +140,7 @@ class AgentSessionThinkingTest {
         assertEquals(
             "each actual change appends its clamped level",
             listOf("high", "low"),
-            s.conversation.entries.filterIsInstance<ThinkingLevelEntry>().map { it.thinkingLevel },
+            s.conversation.entries.filterIsInstance<ThinkingLevelEntry>().map { it.thinkingLevel }
         )
     }
 
@@ -145,15 +153,15 @@ class AgentSessionThinkingTest {
                 ModelThinkingLevel.MINIMAL,
                 ModelThinkingLevel.LOW,
                 ModelThinkingLevel.MEDIUM,
-                ModelThinkingLevel.HIGH,
+                ModelThinkingLevel.HIGH
             ),
-            works.resolve.pathfinder.ai.getSupportedThinkingLevels(s.model),
+            works.resolve.pathfinder.ai.getSupportedThinkingLevels(s.model)
         )
 
         val extended = session(extendedModel)
         assertEquals(
             listOf(ModelThinkingLevel.LOW, ModelThinkingLevel.HIGH, ModelThinkingLevel.MAX),
-            works.resolve.pathfinder.ai.getSupportedThinkingLevels(extended.model),
+            works.resolve.pathfinder.ai.getSupportedThinkingLevels(extended.model)
         )
     }
 
@@ -164,12 +172,20 @@ class AgentSessionThinkingTest {
         val folded = session(
             extendedModel,
             Conversation(emptyList(), null)
-                .appendThinkingLevelChange("medium"),
+                .appendThinkingLevelChange("medium")
         )
-        assertEquals("medium clamps up to the map's high", ModelThinkingLevel.HIGH, folded.thinkingLevel)
+        assertEquals(
+            "medium clamps up to the map's high",
+            ModelThinkingLevel.HIGH,
+            folded.thinkingLevel
+        )
 
         val withoutEntry = session(extendedModel, Conversation(emptyList(), null))
-        assertEquals("the off fold clamps up to the map's low", ModelThinkingLevel.LOW, withoutEntry.thinkingLevel)
+        assertEquals(
+            "the off fold clamps up to the map's low",
+            ModelThinkingLevel.LOW,
+            withoutEntry.thinkingLevel
+        )
 
         val plainFold = session(reasoningModel, Conversation(emptyList(), null))
         assertEquals(ModelThinkingLevel.OFF, plainFold.thinkingLevel)

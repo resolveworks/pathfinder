@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
+import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -16,11 +17,10 @@ import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.oauth.PkceGenerator
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
 import works.resolve.pathfinder.ai.utils.truthyString
-import kotlin.time.Clock
-import works.resolve.pathfinder.ai.utils.strictDouble
 
 /**
  * Divergences from pi:
@@ -70,7 +70,7 @@ class OpenAiCodexOAuthAuth(
     /** Injectable so tests never race the fixed port. */
     private val callbackPort: Int = CALLBACK_PORT,
     /** Android foreground gate for the loopback wait; `null` = pi parity. */
-    private val gate: OAuthForegroundGate? = null,
+    private val gate: OAuthForegroundGate? = null
 ) : OAuthAuth {
 
     override val name: String = "OpenAI (ChatGPT Plus/Pro)"
@@ -94,9 +94,12 @@ class OpenAiCodexOAuthAuth(
                 message = "Select OpenAI Codex login method:",
                 options = listOf(
                     AuthPrompt.Select.Option(BROWSER_LOGIN_METHOD, "Browser login (default)"),
-                    AuthPrompt.Select.Option(DEVICE_CODE_LOGIN_METHOD, "Device code login (headless)"),
-                ),
-            ),
+                    AuthPrompt.Select.Option(
+                        DEVICE_CODE_LOGIN_METHOD,
+                        "Device code login (headless)"
+                    )
+                )
+            )
         )
 
         return when (method) {
@@ -109,7 +112,8 @@ class OpenAiCodexOAuthAuth(
     override suspend fun refresh(credential: OAuthCredential): OAuthCredential =
         credentialsFromToken(refreshAccessToken(credential.refresh))
 
-    override suspend fun toAuth(credential: OAuthCredential): ModelAuth = ModelAuth(apiKey = credential.access)
+    override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
+        ModelAuth(apiKey = credential.access)
 
     // --- browser login ---
 
@@ -132,13 +136,17 @@ class OpenAiCodexOAuthAuth(
                     "state" to state,
                     "id_token_add_organizations" to "true",
                     "codex_cli_simplified_flow" to "true",
-                    "originator" to originator,
-                ),
+                    "originator" to originator
+                )
             ).toString(Charsets.UTF_8)
         return AuthorizationFlow(verifier = pair.verifier, state = state, url = url)
     }
 
-    internal data class AuthorizationFlow(val verifier: String, val state: String, val url: String) {
+    internal data class AuthorizationFlow(
+        val verifier: String,
+        val state: String,
+        val url: String
+    ) {
         override fun toString(): String =
             "AuthorizationFlow(verifier=<redacted>, state=$state, url=$url)"
     }
@@ -151,8 +159,8 @@ class OpenAiCodexOAuthAuth(
             interaction.notify(
                 AuthEvent.AuthUrl(
                     url = flow.url,
-                    instructions = "A browser window should open. Complete login to finish.",
-                ),
+                    instructions = "A browser window should open. Complete login to finish."
+                )
             )
             return coroutineScope {
                 var manualCode: String? = null
@@ -161,9 +169,10 @@ class OpenAiCodexOAuthAuth(
                     try {
                         manualCode = interaction.prompt(
                             AuthPrompt.ManualCode(
-                                message = "Complete login in your browser, or paste the authorization code / redirect URL here:",
-                                placeholder = REDIRECT_URI,
-                            ),
+                                message = "Complete login in your browser, " +
+                                    "or paste the authorization code / redirect URL here:",
+                                placeholder = REDIRECT_URI
+                            )
                         )
                     } catch (error: CancellationException) {
                         throw error
@@ -215,7 +224,9 @@ class OpenAiCodexOAuthAuth(
     }
 
     /** Bind failure returns null, degrading to the manual-only flow. */
-    private suspend fun startLocalOAuthServer(state: String): LoopbackCallbackHandle<CallbackCode>? {
+    private suspend fun startLocalOAuthServer(
+        state: String
+    ): LoopbackCallbackHandle<CallbackCode>? {
         val server = LoopbackOAuthServer(
             port = callbackPort,
             host = CALLBACK_HOST,
@@ -233,11 +244,13 @@ class OpenAiCodexOAuthAuth(
                         settle(CallbackCode(code))
                         LoopbackCallbackResponse(
                             200,
-                            oauthSuccessHtml("OpenAI authentication completed. You can close this window."),
+                            oauthSuccessHtml(
+                                "OpenAI authentication completed. You can close this window."
+                            )
                         )
                     }
                 }
-            },
+            }
         )
         val handle = server.start()
         lastCallbackPort = handle?.port
@@ -268,7 +281,7 @@ class OpenAiCodexOAuthAuth(
         if (url?.scheme != null) {
             return AuthorizationInput(
                 code = queryParam(url.rawQuery, "code"),
-                state = queryParam(url.rawQuery, "state"),
+                state = queryParam(url.rawQuery, "state")
             )
         }
 
@@ -280,7 +293,7 @@ class OpenAiCodexOAuthAuth(
         if (value.contains("code=")) {
             return AuthorizationInput(
                 code = queryParam(value, "code"),
-                state = queryParam(value, "state"),
+                state = queryParam(value, "state")
             )
         }
 
@@ -315,21 +328,21 @@ class OpenAiCodexOAuthAuth(
                 userCode = device.userCode,
                 verificationUri = DEVICE_VERIFICATION_URI,
                 intervalSeconds = device.intervalSeconds.toInt(),
-                expiresInSeconds = DEVICE_CODE_TIMEOUT_SECONDS.toInt(),
-            ),
+                expiresInSeconds = DEVICE_CODE_TIMEOUT_SECONDS.toInt()
+            )
         )
         val code = pollOpenAICodexDeviceAuth(device)
         return exchangeAuthorizationCodeForCredentials(
             code.authorizationCode,
             code.codeVerifier,
-            DEVICE_REDIRECT_URI,
+            DEVICE_REDIRECT_URI
         )
     }
 
     internal data class DeviceAuthInfo(
         val deviceAuthId: String,
         val userCode: String,
-        val intervalSeconds: Double,
+        val intervalSeconds: Double
     ) {
         override fun toString(): String =
             "DeviceAuthInfo(deviceAuthId=<redacted>, userCode=$userCode, intervalSeconds=$intervalSeconds)"
@@ -338,21 +351,21 @@ class OpenAiCodexOAuthAuth(
     internal suspend fun startOpenAICodexDeviceAuth(): DeviceAuthInfo {
         val response = postJson(
             DEVICE_USER_CODE_URL,
-            buildJsonObject { put("client_id", CLIENT_ID) }.toString(),
+            buildJsonObject { put("client_id", CLIENT_ID) }.toString()
         )
         val text = response.body.toString(Charsets.UTF_8)
         if (response.status !in 200..299) {
             if (response.status == 404) {
                 throw IllegalStateException(
                     "OpenAI Codex device code login is not enabled for this server. " +
-                        "Use browser login or verify the server URL.",
+                        "Use browser login or verify the server URL."
                 )
             }
             throw IllegalStateException(
                 withErrorBody(
                     "OpenAI Codex device code request failed with status ${response.status}",
-                    text,
-                ),
+                    text
+                )
             )
         }
 
@@ -365,10 +378,10 @@ class OpenAiCodexOAuthAuth(
             val missing = listOfNotNull(
                 if (deviceAuthId == null) "device_auth_id" else null,
                 if (userCode == null) "user_code" else null,
-                if (!intervalValid) "interval" else null,
+                if (!intervalValid) "interval" else null
             )
             throw IllegalStateException(
-                "Invalid OpenAI Codex device code response: missing fields: ${missing.joinToString()}",
+                "Invalid OpenAI Codex device code response: missing fields: ${missing.joinToString()}"
             )
         }
         return DeviceAuthInfo(deviceAuthId, userCode, intervalSeconds)
@@ -382,8 +395,12 @@ class OpenAiCodexOAuthAuth(
     private fun coerceIntervalSeconds(json: JsonObject?): Double =
         when (val interval = json?.get("interval")) {
             is JsonPrimitive ->
-                if (interval.isString) jsNumber(interval.content)
-                else interval.content.toDoubleOrNull() ?: Double.NaN
+                if (interval.isString) {
+                    jsNumber(interval.content)
+                } else {
+                    interval.content.toDoubleOrNull() ?: Double.NaN
+                }
+
             else -> Double.NaN
         }
 
@@ -402,10 +419,16 @@ class OpenAiCodexOAuthAuth(
         val negative = s.startsWith("-")
         val unsigned = s.removePrefix("+").removePrefix("-")
         when (unsigned) {
-            "Infinity" -> return if (negative) Double.NEGATIVE_INFINITY else Double.POSITIVE_INFINITY
+            "Infinity" ->
+                return if (negative) {
+                    Double.NEGATIVE_INFINITY
+                } else {
+                    Double.POSITIVE_INFINITY
+                }
+
             "NaN" -> return Double.NaN
         }
-        RadixLiteral.matchEntire(s)?.let { match ->
+        radixLiteral.matchEntire(s)?.let { match ->
             val digits = match.groupValues[2].substring(2)
             val radix = when (match.groupValues[2][1].lowercaseChar()) {
                 'x' -> 16
@@ -415,14 +438,17 @@ class OpenAiCodexOAuthAuth(
             val value = digits.toLongOrNull(radix) ?: return Double.NaN
             return (if (negative) -value else value).toDouble()
         }
-        return if (DecimalLiteral.matches(s)) s.toDouble() else Double.NaN
+        return if (decimalLiteral.matches(s)) s.toDouble() else Double.NaN
     }
 
-    private val RadixLiteral = Regex("^([+-]?)(0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+)$")
+    private val radixLiteral = Regex("^([+-]?)(0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+)$")
 
-    private val DecimalLiteral = Regex("^([+-]?)((\\d+(\\.\\d*)?)|\\.\\d+)([eE][+-]?\\d+)?$")
+    private val decimalLiteral = Regex("^([+-]?)((\\d+(\\.\\d*)?)|\\.\\d+)([eE][+-]?\\d+)?$")
 
-    internal data class DeviceTokenSuccess(val authorizationCode: String, val codeVerifier: String) {
+    internal data class DeviceTokenSuccess(
+        val authorizationCode: String,
+        val codeVerifier: String
+    ) {
         override fun toString(): String =
             "DeviceTokenSuccess(authorizationCode=<redacted>, codeVerifier=<redacted>)"
     }
@@ -438,7 +464,7 @@ class OpenAiCodexOAuthAuth(
                         buildJsonObject {
                             put("device_auth_id", device.deviceAuthId)
                             put("user_code", device.userCode)
-                        }.toString(),
+                        }.toString()
                     )
                     val text = response.body.toString(Charsets.UTF_8)
 
@@ -450,15 +476,22 @@ class OpenAiCodexOAuthAuth(
                             // The raw body can echo the code/verifier; report
                             // missing field names only.
                             OAuthDeviceCodePollResult.Failed(
-                                "Invalid OpenAI Codex device auth token response: missing fields: " +
+                                "Invalid OpenAI Codex device auth token response: " +
+                                    "missing fields: " +
                                     listOfNotNull(
-                                        if (authorizationCode == null) "authorization_code" else null,
-                                        if (codeVerifier == null) "code_verifier" else null,
-                                    ).joinToString(),
+                                        if (authorizationCode ==
+                                            null
+                                        ) {
+                                            "authorization_code"
+                                        } else {
+                                            null
+                                        },
+                                        if (codeVerifier == null) "code_verifier" else null
+                                    ).joinToString()
                             )
                         } else {
                             OAuthDeviceCodePollResult.Complete(
-                                DeviceTokenSuccess(authorizationCode, codeVerifier),
+                                DeviceTokenSuccess(authorizationCode, codeVerifier)
                             )
                         }
                     } else if (response.status == 403 || response.status == 404) {
@@ -466,19 +499,21 @@ class OpenAiCodexOAuthAuth(
                     } else {
                         when (errorCode(text)) {
                             "deviceauth_authorization_pending" -> OAuthDeviceCodePollResult.Pending
+
                             "slow_down" -> OAuthDeviceCodePollResult.SlowDown()
+
                             else -> OAuthDeviceCodePollResult.Failed(
                                 withErrorBody(
                                     "OpenAI Codex device auth failed with status ${response.status}",
                                     text,
-                                    secrets = listOf(device.deviceAuthId, device.userCode),
-                                ),
+                                    secrets = listOf(device.deviceAuthId, device.userCode)
+                                )
                             )
                         }
                     }
-                },
+                }
             ),
-            clock = clock,
+            clock = clock
         )
 
     private fun errorCode(body: String): String? {
@@ -495,7 +530,7 @@ class OpenAiCodexOAuthAuth(
     private suspend fun exchangeAuthorizationCode(
         code: String,
         verifier: String,
-        redirectUri: String,
+        redirectUri: String
     ): OAuthToken {
         val response = postForm(
             TOKEN_URL,
@@ -504,10 +539,14 @@ class OpenAiCodexOAuthAuth(
                 "client_id" to CLIENT_ID,
                 "code" to code,
                 "code_verifier" to verifier,
-                "redirect_uri" to redirectUri,
-            ),
+                "redirect_uri" to redirectUri
+            )
         )
-        return readTokenResponse(response, TokenOperation.EXCHANGE, secrets = listOf(code, verifier))
+        return readTokenResponse(
+            response,
+            TokenOperation.EXCHANGE,
+            secrets = listOf(code, verifier)
+        )
     }
 
     private suspend fun refreshAccessToken(refreshToken: String): OAuthToken {
@@ -518,13 +557,15 @@ class OpenAiCodexOAuthAuth(
                 mapOf(
                     "grant_type" to "refresh_token",
                     "refresh_token" to refreshToken,
-                    "client_id" to CLIENT_ID,
-                ),
+                    "client_id" to CLIENT_ID
+                )
             )
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
         } catch (error: Exception) {
-            throw IllegalStateException("OpenAI Codex token refresh error: ${error.message ?: error.toString()}")
+            throw IllegalStateException(
+                "OpenAI Codex token refresh error: ${error.message ?: error.toString()}"
+            )
         }
         return readTokenResponse(response, TokenOperation.REFRESH, secrets = listOf(refreshToken))
     }
@@ -543,7 +584,7 @@ class OpenAiCodexOAuthAuth(
     internal fun readTokenResponse(
         response: OAuthHttpResponse,
         operation: TokenOperation,
-        secrets: List<String> = emptyList(),
+        secrets: List<String> = emptyList()
     ): OAuthToken {
         val text = response.body.toString(Charsets.UTF_8)
         if (response.status !in 200..299) {
@@ -551,8 +592,8 @@ class OpenAiCodexOAuthAuth(
                 withErrorBody(
                     "OpenAI Codex token ${operation.id} failed (${response.status})",
                     text,
-                    secrets,
-                ),
+                    secrets
+                )
             )
         }
 
@@ -564,23 +605,23 @@ class OpenAiCodexOAuthAuth(
             val missing = listOfNotNull(
                 if (access == null) "access_token" else null,
                 if (refresh == null) "refresh_token" else null,
-                if (expiresIn == null) "expires_in" else null,
+                if (expiresIn == null) "expires_in" else null
             )
             throw IllegalStateException(
-                "OpenAI Codex token ${operation.id} response missing fields: ${missing.joinToString()}",
+                "OpenAI Codex token ${operation.id} response missing fields: ${missing.joinToString()}"
             )
         }
 
         return OAuthToken(
             access = access,
             refresh = refresh,
-            expires = clock.now().toEpochMilliseconds() + (expiresIn * 1000).toLong(),
+            expires = clock.now().toEpochMilliseconds() + (expiresIn * 1000).toLong()
         )
     }
 
     internal enum class TokenOperation(internal val id: String) {
         EXCHANGE("exchange"),
-        REFRESH("refresh"),
+        REFRESH("refresh")
     }
 
     // --- credentials ---
@@ -600,10 +641,9 @@ class OpenAiCodexOAuthAuth(
         }
     }
 
-    internal fun getAccountId(accessToken: String): String? =
-        decodeJwt(accessToken)
-            ?.obj(JWT_CLAIM_PATH)
-            ?.truthyString("chatgpt_account_id")
+    internal fun getAccountId(accessToken: String): String? = decodeJwt(accessToken)
+        ?.obj(JWT_CLAIM_PATH)
+        ?.truthyString("chatgpt_account_id")
 
     private fun credentialsFromToken(token: OAuthToken): OAuthCredential {
         val accountId =
@@ -613,18 +653,19 @@ class OpenAiCodexOAuthAuth(
             access = token.access,
             refresh = token.refresh,
             expires = token.expires,
-            extras = mapOf(ACCOUNT_ID_EXTRA to JsonPrimitive(accountId)),
+            extras = mapOf(accountIdExtra to JsonPrimitive(accountId))
         )
     }
 
     /** The credential extra carrying pi's `accountId` field. */
-    internal val ACCOUNT_ID_EXTRA: String = "accountId"
+    internal val accountIdExtra: String = "accountId"
 
     private suspend fun exchangeAuthorizationCodeForCredentials(
         code: String,
         verifier: String,
-        redirectUri: String,
-    ): OAuthCredential = credentialsFromToken(exchangeAuthorizationCode(code, verifier, redirectUri))
+        redirectUri: String
+    ): OAuthCredential =
+        credentialsFromToken(exchangeAuthorizationCode(code, verifier, redirectUri))
 
     // --- HTTP ---
 
@@ -635,33 +676,35 @@ class OpenAiCodexOAuthAuth(
                 url = url,
                 headers = mapOf("content-type" to "application/x-www-form-urlencoded"),
                 body = XaiOAuthAuth.formUrlEncode(fields),
-                timeoutMs = REQUEST_TIMEOUT_MS,
-            ),
+                timeoutMs = REQUEST_TIMEOUT_MS
+            )
         )
 
-    private suspend fun postJson(url: String, json: String): OAuthHttpResponse =
-        http.execute(
-            OAuthHttpRequest(
-                method = "POST",
-                url = url,
-                headers = mapOf("content-type" to "application/json"),
-                body = json.toByteArray(Charsets.UTF_8),
-                timeoutMs = REQUEST_TIMEOUT_MS,
-            ),
+    private suspend fun postJson(url: String, json: String): OAuthHttpResponse = http.execute(
+        OAuthHttpRequest(
+            method = "POST",
+            url = url,
+            headers = mapOf("content-type" to "application/json"),
+            body = json.toByteArray(Charsets.UTF_8),
+            timeoutMs = REQUEST_TIMEOUT_MS
         )
+    )
 
-    private fun parseJson(text: String): kotlinx.serialization.json.JsonElement? =
-        try {
-            lenientJson.parseToJsonElement(text)
-        } catch (_: Exception) {
-            null
-        }
+    private fun parseJson(text: String): kotlinx.serialization.json.JsonElement? = try {
+        lenientJson.parseToJsonElement(text)
+    } catch (_: Exception) {
+        null
+    }
 
     /**
      * Appends a sanitized `: error=<detail>` suffix (see class KDoc for what
      * survives), scrubbed of any [secrets]; `<redacted>` when nothing does.
      */
-    private fun withErrorBody(message: String, body: String, secrets: List<String> = emptyList()): String {
+    private fun withErrorBody(
+        message: String,
+        body: String,
+        secrets: List<String> = emptyList()
+    ): String {
         if (body.isEmpty()) return message
         val obj = try {
             parseJson(body) as? JsonObject
@@ -671,10 +714,12 @@ class OpenAiCodexOAuthAuth(
         val parts = mutableListOf<String>()
         when (val error = obj?.get("error")) {
             is JsonPrimitive -> if (error.isString) parts += error.content
+
             is JsonObject -> {
                 error.truthyString("code")?.let { parts += it }
                 error.truthyString("message")?.let { parts += it }
             }
+
             else -> {}
         }
         obj?.truthyString("error_description")?.let { parts += it }
@@ -682,8 +727,9 @@ class OpenAiCodexOAuthAuth(
         return "$message: error=" + scrub(parts.joinToString(": "), secrets)
     }
 
-    private fun scrub(text: String, secrets: List<String>): String =
-        secrets.filter { it.isNotEmpty() }.fold(text) { acc, secret -> acc.replace(secret, "<redacted>") }
+    private fun scrub(text: String, secrets: List<String>): String = secrets.filter {
+        it.isNotEmpty()
+    }.fold(text) { acc, secret -> acc.replace(secret, "<redacted>") }
 
     companion object {
         const val CLIENT_ID: String = "app_EMoamEEZ73f0CkXaXp7hrann"

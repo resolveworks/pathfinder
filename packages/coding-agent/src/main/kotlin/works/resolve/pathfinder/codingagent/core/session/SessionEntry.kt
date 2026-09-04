@@ -1,9 +1,9 @@
 package works.resolve.pathfinder.codingagent.core.session
 
+import kotlinx.serialization.json.JsonElement
 import works.resolve.pathfinder.agent.CompactionDetails
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Usage
-import kotlinx.serialization.json.JsonElement
 
 /** A node in a session's conversation tree; [parentId] is null for roots. */
 sealed class SessionEntry {
@@ -39,7 +39,7 @@ data class MessageEntry(
      * tool-batch result requests early termination). Only ever persisted as
      * `true`; null encodes to an absent field.
      */
-    val terminate: Boolean? = null,
+    val terminate: Boolean? = null
 ) : SessionEntry() {
     override fun withSeq(seq: Long) = copy(seq = seq)
 }
@@ -60,7 +60,7 @@ data class CompactionEntry(
     /** File-operation details of the compacted history. */
     val details: CompactionDetails? = null,
     /** Usage from the LLM call(s) that generated the summary. */
-    val usage: Usage? = null,
+    val usage: Usage? = null
 ) : SessionEntry() {
     override fun withSeq(seq: Long) = copy(seq = seq)
 }
@@ -76,7 +76,7 @@ data class ModelChangeEntry(
     override val parentId: String?,
     override val timestamp: Long,
     val provider: String,
-    val modelId: String,
+    val modelId: String
 ) : SessionEntry() {
     override fun withSeq(seq: Long) = copy(seq = seq)
 }
@@ -88,7 +88,7 @@ data class ThinkingLevelEntry(
     override val parentId: String?,
     override val timestamp: Long,
     /** pi's ThinkingLevel string, e.g. "off", "high". */
-    val thinkingLevel: String,
+    val thinkingLevel: String
 ) : SessionEntry() {
     override fun withSeq(seq: Long) = copy(seq = seq)
 }
@@ -100,7 +100,7 @@ data class ActiveToolsEntry(
     override val parentId: String?,
     override val timestamp: Long,
     /** The active set from this entry onward; empty = all tools off. */
-    val activeToolNames: List<String>,
+    val activeToolNames: List<String>
 ) : SessionEntry() {
     override fun withSeq(seq: Long) = copy(seq = seq)
 }
@@ -115,7 +115,7 @@ data class BranchSummaryEntry(
     val summary: String,
     val details: JsonElement? = null,
     /** Usage from the LLM call(s) that generated the summary. */
-    val usage: Usage? = null,
+    val usage: Usage? = null
 ) : SessionEntry() {
     override fun withSeq(seq: Long) = copy(seq = seq)
 }
@@ -127,7 +127,7 @@ data class CustomEntry(
     override val parentId: String?,
     override val timestamp: Long,
     val customType: String,
-    val data: JsonElement? = null,
+    val data: JsonElement? = null
 ) : SessionEntry() {
     override fun withSeq(seq: Long) = copy(seq = seq)
 }

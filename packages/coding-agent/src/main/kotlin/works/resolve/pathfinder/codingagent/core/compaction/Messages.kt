@@ -43,24 +43,20 @@ const val BRANCH_SUMMARY_PREFIX =
 
 const val BRANCH_SUMMARY_SUFFIX = "</summary>"
 
-fun createCompactionSummaryMessage(
-    summary: String,
-    tokensBefore: Int,
-    timestamp: Long,
-): Message = UserMessage(
-    content = listOf(TextContent(COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX)),
-    timestamp = timestamp,
-)
+fun createCompactionSummaryMessage(summary: String, tokensBefore: Int, timestamp: Long): Message =
+    UserMessage(
+        content = listOf(
+            TextContent(COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX)
+        ),
+        timestamp = timestamp
+    )
 
 /**
  * Upstream accepts a string timestamp and converts; pathfinder entries
  * carry epoch millis already.
  */
-fun createBranchSummaryMessage(
-    summary: String,
-    fromId: String,
-    timestamp: Long,
-): Message = UserMessage(
-    content = listOf(TextContent(BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX)),
-    timestamp = timestamp,
-)
+fun createBranchSummaryMessage(summary: String, fromId: String, timestamp: Long): Message =
+    UserMessage(
+        content = listOf(TextContent(BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX)),
+        timestamp = timestamp
+    )

@@ -7,7 +7,4 @@ package works.resolve.pathfinder.agent
  * the lower-level agent module while compaction behavior remains in
  * `packages/coding-agent`.
  */
-data class CompactionDetails(
-    val readFiles: List<String>,
-    val modifiedFiles: List<String>,
-)
+data class CompactionDetails(val readFiles: List<String>, val modifiedFiles: List<String>)

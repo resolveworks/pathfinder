@@ -1,10 +1,13 @@
 package works.resolve.pathfinder.ai
 
 import kotlin.time.Clock
-import works.resolve.pathfinder.ai.auth.Credential
-import works.resolve.pathfinder.ai.ChatApi
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.last
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.Model
@@ -13,16 +16,13 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.Usage
+import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.mergeHeaders
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.GITHUB_COPILOT_PROVIDER_ID
 import works.resolve.pathfinder.ai.providers.filterGitHubCopilotModels
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.last
 
 /**
  * A resolved provider credential: the API key (or, for header-auth providers,
@@ -41,14 +41,14 @@ class ResolvedAuth(
      * GitHub Copilot's per-account proxy endpoint); null keeps the model's
      * own. Not secret.
      */
-    val baseUrl: String? = null,
+    val baseUrl: String? = null
 ) {
     override fun toString(): String = optionsToString(
         "ResolvedAuth",
         "apiKey" to redactedSecret(apiKey),
         "env" to env.keys,
         "headers" to headers.keys,
-        "baseUrl" to baseUrl,
+        "baseUrl" to baseUrl
     )
 }
 
@@ -68,18 +68,28 @@ class Provider(
      * credential (explicit env still merges over stored env there). Returns
      * null when unconfigured.
      */
-    val authResolver: (suspend (apiKey: String?, env: Map<String, String>) -> ResolvedAuth?)? = null,
+    val authResolver: (
+        suspend (
+            apiKey: String?,
+            env: Map<String, String>
+        ) -> ResolvedAuth?
+    )? = null,
     val models: List<Model>,
-    val apis: Map<String, ChatApi>,
+    val apis: Map<String, ChatApi>
 ) {
     constructor(
         id: String,
         name: String,
         baseUrl: String,
-        authResolver: (suspend (apiKey: String?, env: Map<String, String>) -> ResolvedAuth?)? = null,
+        authResolver: (
+            suspend (
+                apiKey: String?,
+                env: Map<String, String>
+            ) -> ResolvedAuth?
+        )? = null,
         models: List<Model>,
         apiId: String,
-        api: ChatApi,
+        api: ChatApi
     ) : this(id, name, baseUrl, authResolver, models, mapOf(apiId to api))
 }
 
@@ -96,10 +106,7 @@ class Provider(
  * refreshed or replaced. Runtime-published model lists would need an
  * explicit decision (a store + refresh surface) if ever needed.
  */
-class Models(
-    providers: List<Provider>,
-    private val clock: Clock = Clock.System,
-) {
+class Models(providers: List<Provider>, private val clock: Clock = Clock.System) {
     private val byId = providers.associateBy { it.id }
 
     fun getProviders(): List<Provider> = byId.values.toList()
@@ -131,9 +138,8 @@ class Models(
             a != null && b != null && a.id == b.id && a.provider == b.provider
     }
 
-    private fun requireProvider(model: Model): Provider =
-        byId[model.provider]
-            ?: throw IllegalArgumentException("Unknown provider: ${model.provider}")
+    private fun requireProvider(model: Model): Provider = byId[model.provider]
+        ?: throw IllegalArgumentException("Unknown provider: ${model.provider}")
 
     /**
      * Starts a chat stream for [model]: the model's provider must be
@@ -150,13 +156,13 @@ class Models(
     fun stream(
         model: Model,
         context: Context,
-        options: SimpleStreamOptions = SimpleStreamOptions(),
+        options: SimpleStreamOptions = SimpleStreamOptions()
     ): Flow<AssistantMessageEvent> {
         val provider = requireProvider(model)
         val api = provider.apis[model.api]
             ?: throw IllegalArgumentException(
                 "Provider '${provider.id}' has no API implementation for '${model.api}'" +
-                    " (model '${model.id}')",
+                    " (model '${model.id}')"
             )
         return flow {
             // Resolve the credential lazily inside the flow so stored-credential
@@ -166,7 +172,11 @@ class Models(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                emitAuthError(model, provider, "Failed to resolve stored credential for provider '${provider.id}'")
+                emitAuthError(
+                    model,
+                    provider,
+                    "Failed to resolve stored credential for provider '${provider.id}'"
+                )
                 return@flow
             }
             // A provider with an auth resolver owns auth semantics: a null
@@ -194,7 +204,7 @@ class Models(
                 } else {
                     auth.env + options.env
                 },
-                headers = mergeHeaders(authHeaders, options.headers),
+                headers = mergeHeaders(authHeaders, options.headers)
             )
             api.streamSimple(requestModel, context, merged).collect { emit(it) }
         }
@@ -209,7 +219,7 @@ class Models(
     suspend fun completeSimple(
         model: Model,
         context: Context,
-        options: SimpleStreamOptions = SimpleStreamOptions(),
+        options: SimpleStreamOptions = SimpleStreamOptions()
     ): AssistantMessage {
         var terminal: AssistantMessage? = null
         stream(model, context, options).collect { event ->
@@ -227,7 +237,7 @@ class Models(
     private suspend fun kotlinx.coroutines.flow.FlowCollector<AssistantMessageEvent>.emitAuthError(
         model: Model,
         provider: Provider,
-        message: String,
+        message: String
     ) {
         emit(
             AssistantMessageEvent.Error(
@@ -240,9 +250,9 @@ class Models(
                     stopReason = StopReason.ERROR,
                     // Safe generic message: no exception or credential text.
                     errorMessage = message,
-                    timestamp = clock.now().toEpochMilliseconds(),
-                ),
-            ),
+                    timestamp = clock.now().toEpochMilliseconds()
+                )
+            )
         )
     }
 }
@@ -270,7 +280,7 @@ fun calculateCost(model: Model, usage: Usage): Cost {
         input = (rates.input / 1_000_000.0) * usage.input,
         output = (rates.output / 1_000_000.0) * usage.output,
         cacheRead = (rates.cacheRead / 1_000_000.0) * usage.cacheRead,
-        cacheWrite = (rates.cacheWrite * shortWrite + rates.input * 2 * longWrite) / 1_000_000.0,
+        cacheWrite = (rates.cacheWrite * shortWrite + rates.input * 2 * longWrite) / 1_000_000.0
     )
     return cost.copy(total = cost.input + cost.output + cost.cacheRead + cost.cacheWrite)
 }
@@ -282,7 +292,7 @@ private val EXTENDED_THINKING_LEVELS = listOf(
     ModelThinkingLevel.MEDIUM,
     ModelThinkingLevel.HIGH,
     ModelThinkingLevel.XHIGH,
-    ModelThinkingLevel.MAX,
+    ModelThinkingLevel.MAX
 )
 
 fun getSupportedThinkingLevels(model: Model): List<ModelThinkingLevel> {

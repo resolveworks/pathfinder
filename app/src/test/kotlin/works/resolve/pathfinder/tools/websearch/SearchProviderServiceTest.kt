@@ -1,14 +1,14 @@
 package works.resolve.pathfinder.tools.websearch
 
-import works.resolve.pathfinder.ai.auth.ApiKeyCredential
-import works.resolve.pathfinder.ai.auth.InMemoryCredentialStore
-import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
+import works.resolve.pathfinder.ai.auth.ApiKeyCredential
+import works.resolve.pathfinder.ai.auth.InMemoryCredentialStore
 
 class SearchProviderServiceTest {
 
@@ -17,7 +17,10 @@ class SearchProviderServiceTest {
     @Test
     fun `only brave is listed as a provider`() {
         val providers = service().providers
-        assertEquals(listOf(SearchProvider(SearchProviderService.BRAVE_PROVIDER_ID, "Brave Search")), providers)
+        assertEquals(
+            listOf(SearchProvider(SearchProviderService.BRAVE_PROVIDER_ID, "Brave Search")),
+            providers
+        )
     }
 
     @Test

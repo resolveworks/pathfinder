@@ -1,18 +1,18 @@
 package works.resolve.pathfinder.ui.chat
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -59,20 +59,17 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
+import kotlinx.coroutines.launch
 import works.resolve.pathfinder.R
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthType
-import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.codingagent.core.session.SessionSummary
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
-import kotlinx.coroutines.launch
 
 @Composable
-fun ChatRoute(
-    viewModel: ChatViewModel,
-    modifier: Modifier = Modifier,
-) {
+fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     // The initial stack comes from the first collected state (Loading with
     // startKey = Chat); initialize() soon swaps it via the reset effect in
@@ -107,7 +104,7 @@ fun ChatRoute(
         onNavigateTreeEntry = viewModel::navigateToTreeEntry,
         onTreeFilterChange = viewModel::setTreeFilter,
         onDismissError = viewModel::dismissError,
-        modifier = modifier,
+        modifier = modifier
     )
 }
 
@@ -129,7 +126,11 @@ fun ChatScreen(
     onToggleModelScope: (providerId: String, modelId: String, checked: Boolean) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
     onSetDefaultThinkingLevel: (ModelThinkingLevel) -> Unit,
-    onSaveProviderCredential: (providerId: String, apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
+    onSaveProviderCredential: (
+        providerId: String,
+        apiKeyInput: String,
+        envInputs: Map<String, String>
+    ) -> Unit,
     onRemoveProviderCredential: (providerId: String) -> Unit,
     authPrompts: (providerId: String) -> List<ProviderAuthPrompt>,
     authMethods: (providerId: String) -> List<AuthMethodInfo>,
@@ -147,25 +148,25 @@ fun ChatScreen(
     onNavigateTreeEntry: (entryId: String) -> Unit,
     onTreeFilterChange: (TreeFilter) -> Unit,
     onDismissError: () -> Unit,
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    val pagerState = rememberPagerState { ChatPagerPageCount }
+    val pagerState = rememberPagerState { CHAT_PAGER_PAGE_COUNT }
     // Reading currentPage keeps the top bar in sync with swipes.
-    val onTreePage = pagerState.currentPage == TreePageIndex
+    val onTreePage = pagerState.currentPage == TREE_PAGE_INDEX
 
     // On the tree page, system back returns to the chat page instead of
     // leaving the Chat root (BackHandler wins over Nav3's onBack while
     // enabled).
     BackHandler(enabled = onTreePage) {
-        scope.launch { pagerState.animateScrollToPage(ChatPageIndex) }
+        scope.launch { pagerState.animateScrollToPage(CHAT_PAGE_INDEX) }
     }
 
     // A session switch (or init's null -> real id) lands on the chat page.
     LaunchedEffect(uiState.activeSessionId) {
-        pagerState.scrollToPage(ChatPageIndex)
+        pagerState.scrollToPage(CHAT_PAGE_INDEX)
     }
 
     LaunchedEffect(uiState.error) {
@@ -214,8 +215,12 @@ fun ChatScreen(
     }
     val topKey = backStack.lastOrNull() ?: ChatNavKey
     // Explicit () -> Unit: launch returns a Job.
-    val openTreePage: () -> Unit = { scope.launch { pagerState.animateScrollToPage(TreePageIndex) } }
-    val backToChatPage: () -> Unit = { scope.launch { pagerState.animateScrollToPage(ChatPageIndex) } }
+    val openTreePage: () -> Unit = {
+        scope.launch { pagerState.animateScrollToPage(TREE_PAGE_INDEX) }
+    }
+    val backToChatPage: () -> Unit = {
+        scope.launch { pagerState.animateScrollToPage(CHAT_PAGE_INDEX) }
+    }
     val openDrawer: () -> Unit = { scope.launch { drawerState.open() } }
 
     ModalNavigationDrawer(
@@ -236,10 +241,10 @@ fun ChatScreen(
                 onOpenSettings = {
                     scope.launch { drawerState.close() }
                     pushSettings()
-                },
+                }
             )
         },
-        modifier = modifier,
+        modifier = modifier
     ) {
         val showPager = topKey == ChatNavKey && uiState.status == ChatStatus.Ready
 
@@ -251,19 +256,31 @@ fun ChatScreen(
                     ChatTopBar(
                         title = when (topKey) {
                             SettingsNavKey -> stringResource(R.string.settings_title)
+
                             ModelsNavKey -> stringResource(R.string.settings_model)
+
                             DefaultModelNavKey -> stringResource(R.string.settings_default_model)
-                            DefaultThinkingNavKey -> stringResource(R.string.settings_default_thinking)
+
+                            DefaultThinkingNavKey -> stringResource(
+                                R.string.settings_default_thinking
+                            )
+
                             ProvidersNavKey -> stringResource(R.string.providers_title)
+
                             SearchProvidersNavKey -> stringResource(R.string.search_providers_title)
-                            is SearchProviderAuthNavKey -> uiState.searchProviderOptions
-                                .firstOrNull { it.id == topKey.providerId }?.name
-                                ?: stringResource(R.string.search_providers_title)
-                            is ProviderAuthNavKey -> uiState.providerOptions
-                                .firstOrNull { it.id == topKey.providerId }?.name
-                                ?: stringResource(R.string.providers_title)
+
+                            is SearchProviderAuthNavKey ->
+                                uiState.searchProviderOptions
+                                    .firstOrNull { it.id == topKey.providerId }?.name
+                                    ?: stringResource(R.string.search_providers_title)
+
+                            is ProviderAuthNavKey ->
+                                uiState.providerOptions
+                                    .firstOrNull { it.id == topKey.providerId }?.name
+                                    ?: stringResource(R.string.providers_title)
+
                             else -> stringResource(
-                                if (onTreePage) R.string.tree_title else R.string.chat_title,
+                                if (onTreePage) R.string.tree_title else R.string.chat_title
                             )
                         },
                         // The drawer belongs to the Chat root; nested
@@ -287,31 +304,33 @@ fun ChatScreen(
                                 IconButton(onClick = openTreePage) {
                                     Icon(
                                         Icons.AutoMirrored.Outlined.List,
-                                        contentDescription = stringResource(R.string.tree_open),
+                                        contentDescription = stringResource(R.string.tree_open)
                                     )
                                 }
                             }
                         } else {
                             {}
-                        },
+                        }
                     )
                 }
             },
-            snackbarHost = { SnackbarHost(snackbarHostState) },
+            snackbarHost = { SnackbarHost(snackbarHostState) }
         ) { contentPadding ->
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(contentPadding),
+                    .padding(contentPadding)
             ) {
                 when {
                     uiState.status == ChatStatus.Loading -> LoadingContent()
+
                     // Any settings-family destination pushed on top of a
                     // failed init replaces the error surface; popping returns.
                     uiState.status == ChatStatus.Failed && topKey == ChatNavKey -> FailedContent(
                         error = uiState.error ?: stringResource(R.string.error_generic),
-                        onOpenProviders = pushProviders,
+                        onOpenProviders = pushProviders
                     )
+
                     else -> NavDisplay(
                         backStack = backStack,
                         onBack = { backStack.removeLastOrNull() },
@@ -327,7 +346,7 @@ fun ChatScreen(
                                         onSelectModel = onSelectModel,
                                         onSelectThinkingLevel = onSelectThinkingLevel,
                                         onNavigateTreeEntry = onNavigateTreeEntry,
-                                        onTreeFilterChange = onTreeFilterChange,
+                                        onTreeFilterChange = onTreeFilterChange
                                     )
                                 } else {
                                     ChatSurface(
@@ -336,7 +355,7 @@ fun ChatScreen(
                                         onSend = onSend,
                                         onStop = onStop,
                                         onSelectModel = onSelectModel,
-                                        onSelectThinkingLevel = onSelectThinkingLevel,
+                                        onSelectThinkingLevel = onSelectThinkingLevel
                                     )
                                 }
                             }
@@ -344,14 +363,15 @@ fun ChatScreen(
                                 SettingsContent(
                                     defaultModel = uiState.defaultModel,
                                     defaultThinkingLevel = uiState.defaultThinkingLevel,
-                                    showDefaultThinkingRow = uiState.availableThinkingLevels.isNotEmpty(),
+                                    showDefaultThinkingRow =
+                                        uiState.availableThinkingLevels.isNotEmpty(),
                                     showThinking = uiState.showThinking,
                                     onOpenDefaultModel = pushDefaultModel,
                                     onOpenDefaultThinking = pushDefaultThinking,
                                     onOpenModels = pushModels,
                                     onOpenProviders = pushProviders,
                                     onOpenSearchProviders = pushSearchProviders,
-                                    onToggleShowThinking = onToggleShowThinking,
+                                    onToggleShowThinking = onToggleShowThinking
                                 )
                             }
                             entry<DefaultModelNavKey> {
@@ -359,14 +379,14 @@ fun ChatScreen(
                                     modelOptions = uiState.modelOptions,
                                     defaultModel = uiState.defaultModel,
                                     onSetDefault = onSetStartupDefault,
-                                    onOpenProviders = pushProviders,
+                                    onOpenProviders = pushProviders
                                 )
                             }
                             entry<DefaultThinkingNavKey> {
                                 DefaultThinkingLevelContent(
                                     availableLevels = uiState.availableThinkingLevels,
                                     defaultLevel = uiState.defaultThinkingLevel,
-                                    onSetDefault = onSetDefaultThinkingLevel,
+                                    onSetDefault = onSetDefaultThinkingLevel
                                 )
                             }
                             entry<ModelsNavKey> {
@@ -374,21 +394,21 @@ fun ChatScreen(
                                     modelOptions = uiState.modelOptions,
                                     enabledModels = uiState.enabledModels,
                                     onToggleScope = onToggleModelScope,
-                                    onOpenProviders = pushProviders,
+                                    onOpenProviders = pushProviders
                                 )
                             }
                             entry<ProvidersNavKey> {
                                 ProvidersContent(
                                     providerOptions = uiState.providerOptions,
                                     onRefresh = onRefreshProviderStatus,
-                                    onOpenProvider = pushProviderAuth,
+                                    onOpenProvider = pushProviderAuth
                                 )
                             }
                             entry<SearchProvidersNavKey> {
                                 SearchProvidersContent(
                                     providerOptions = uiState.searchProviderOptions,
                                     onRefresh = onRefreshSearchProviderStatus,
-                                    onOpenProvider = pushSearchProviderAuth,
+                                    onOpenProvider = pushSearchProviderAuth
                                 )
                             }
                             entry<SearchProviderAuthNavKey> { key ->
@@ -405,11 +425,13 @@ fun ChatScreen(
                                         onSave = { apiKeyInput, _ ->
                                             onSaveSearchProviderCredential(
                                                 key.providerId,
-                                                apiKeyInput,
+                                                apiKeyInput
                                             )
                                         },
-                                        onRemove = { onRemoveSearchProviderCredential(key.providerId) },
-                                        onClose = popBackStack,
+                                        onRemove = {
+                                            onRemoveSearchProviderCredential(key.providerId)
+                                        },
+                                        onClose = popBackStack
                                     )
                                 }
                             }
@@ -419,11 +441,18 @@ fun ChatScreen(
                                 if (option != null) {
                                     ProviderAuthEntry(
                                         provider = option,
-                                        flow = uiState.authFlow?.takeIf { it.providerId == key.providerId },
+                                        flow = uiState.authFlow?.takeIf {
+                                            it.providerId ==
+                                                key.providerId
+                                        },
                                         prompts = authPrompts(key.providerId),
                                         methods = authMethods(key.providerId),
                                         onSave = { apiKeyInput, envInputs ->
-                                            onSaveProviderCredential(key.providerId, apiKeyInput, envInputs)
+                                            onSaveProviderCredential(
+                                                key.providerId,
+                                                apiKeyInput,
+                                                envInputs
+                                            )
                                         },
                                         onRemove = { onRemoveProviderCredential(key.providerId) },
                                         onBeginLogin = { method ->
@@ -431,11 +460,11 @@ fun ChatScreen(
                                         },
                                         onSubmitPrompt = onSubmitAuthPrompt,
                                         onCancelLogin = onCancelProviderAuthLogin,
-                                        onClose = popBackStack,
+                                        onClose = popBackStack
                                     )
                                 }
                             }
-                        },
+                        }
                     )
                 }
             }
@@ -448,24 +477,24 @@ private fun ChatDrawerContent(
     uiState: ChatUiState,
     onNewSession: () -> Unit,
     onSwitchSession: (String) -> Unit,
-    onOpenSettings: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     ModalDrawerSheet {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(start = 16.dp, top = 4.dp, bottom = 4.dp, end = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f)
             )
             IconButton(onClick = onOpenSettings) {
                 Icon(
                     Icons.Outlined.Settings,
-                    contentDescription = stringResource(R.string.settings_title),
+                    contentDescription = stringResource(R.string.settings_title)
                 )
             }
         }
@@ -475,12 +504,12 @@ private fun ChatDrawerContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(NavigationDrawerItemDefaults.ItemPadding)
-                .padding(vertical = 8.dp),
+                .padding(vertical = 8.dp)
         ) {
             Icon(
                 Icons.Default.Add,
                 contentDescription = null,
-                modifier = Modifier.size(ButtonDefaults.IconSize),
+                modifier = Modifier.size(ButtonDefaults.IconSize)
             )
             Spacer(Modifier.size(ButtonDefaults.IconSpacing))
             Text(stringResource(R.string.action_new_chat))
@@ -492,14 +521,14 @@ private fun ChatDrawerContent(
                         Text(
                             text = summary.title,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            overflow = TextOverflow.Ellipsis
                         )
                     },
                     selected = summary.id == uiState.activeSessionId,
                     onClick = {
                         if (summary.id != uiState.activeSessionId) onSwitchSession(summary.id)
                     },
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                 )
             }
         }
@@ -512,7 +541,7 @@ private fun ChatTopBar(
     title: String,
     onOpenDrawer: (() -> Unit)?,
     onBack: (() -> Unit)?,
-    actions: @Composable RowScope.() -> Unit = {},
+    actions: @Composable RowScope.() -> Unit = {}
 ) {
     TopAppBar(
         title = { Text(title) },
@@ -521,18 +550,19 @@ private fun ChatTopBar(
                 onOpenDrawer != null -> IconButton(onClick = onOpenDrawer) {
                     Icon(
                         Icons.Default.Menu,
-                        contentDescription = stringResource(R.string.action_menu),
+                        contentDescription = stringResource(R.string.action_menu)
                     )
                 }
+
                 onBack != null -> IconButton(onClick = onBack) {
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.action_back),
+                        contentDescription = stringResource(R.string.action_back)
                     )
                 }
             }
         },
-        actions = actions,
+        actions = actions
     )
 }
 
@@ -551,12 +581,12 @@ private fun FailedContent(error: String, onOpenProviders: () -> Unit) {
             .verticalScroll(rememberScrollState())
             .padding(24.dp),
         verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text = error,
             style = MaterialTheme.typography.bodyLarge,
-            textAlign = TextAlign.Center,
+            textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.padding(top = 16.dp))
         Button(onClick = onOpenProviders) {
@@ -570,42 +600,50 @@ private val PREVIEW_MODEL_OPTIONS = listOf(
         providerId = "zai",
         providerName = "Z.AI",
         modelId = "model-a",
-        name = "Preview Model A",
+        name = "Preview Model A"
     ),
     ModelOption(
         providerId = "zai",
         providerName = "Z.AI",
         modelId = "model-b",
-        name = "Preview Model B",
-    ),
+        name = "Preview Model B"
+    )
 )
 
 private val PREVIEW_PROVIDER_OPTIONS = listOf(
     ProviderOption("anthropic", "Anthropic", configured = true),
     ProviderOption("cloudflare-ai-gateway", "Cloudflare AI Gateway", configured = true),
     ProviderOption("openai", "OpenAI", configured = false),
-    ProviderOption("zai", "Z.AI", configured = false),
+    ProviderOption("zai", "Z.AI", configured = false)
 )
 
 private val PREVIEW_SEARCH_PROVIDER_OPTIONS = listOf(
-    ProviderOption("brave", "Brave Search", configured = true),
+    ProviderOption("brave", "Brave Search", configured = true)
 )
 
 private val PREVIEW_CLOUDFLARE_PROMPTS = listOf(
     ProviderAuthPrompt("CLOUDFLARE_API_KEY", "Enter the Cloudflare API key", secret = true),
-    ProviderAuthPrompt("CLOUDFLARE_ACCOUNT_ID", "Enter the Cloudflare account ID", secret = false),
+    ProviderAuthPrompt("CLOUDFLARE_ACCOUNT_ID", "Enter the Cloudflare account ID", secret = false)
 )
 
 private val PREVIEW_AUTH_METHODS = listOf(
-    AuthMethodInfo(works.resolve.pathfinder.ai.auth.AuthType.OAUTH, "Sign in with a Z.AI account", isSubscription = true),
-    AuthMethodInfo(works.resolve.pathfinder.ai.auth.AuthType.API_KEY, "Z.AI API key", isSubscription = false),
+    AuthMethodInfo(
+        works.resolve.pathfinder.ai.auth.AuthType.OAUTH,
+        "Sign in with a Z.AI account",
+        isSubscription = true
+    ),
+    AuthMethodInfo(
+        works.resolve.pathfinder.ai.auth.AuthType.API_KEY,
+        "Z.AI API key",
+        isSubscription = false
+    )
 )
 
 private val PREVIEW_SELECTED_MODEL = SelectedModel(
     providerId = "zai",
     providerName = "Z.AI",
     modelId = "model-a",
-    modelName = "Preview Model A",
+    modelName = "Preview Model A"
 )
 
 @Composable
@@ -615,7 +653,7 @@ private fun PreviewChatScreen(
     extraKeys: List<NavKey> = emptyList(),
     authPrompts: (String) -> List<ProviderAuthPrompt> = { emptyList() },
     authMethods: (String) -> List<AuthMethodInfo> = { emptyList() },
-    searchAuthPrompts: (String) -> List<ProviderAuthPrompt> = { emptyList() },
+    searchAuthPrompts: (String) -> List<ProviderAuthPrompt> = { emptyList() }
 ) {
     PathfinderTheme {
         ChatScreen(
@@ -647,7 +685,7 @@ private fun PreviewChatScreen(
             onNavigateTreeEntry = {},
             onTreeFilterChange = {},
             onDismissError = {},
-            modifier = Modifier,
+            modifier = Modifier
         )
     }
 }
@@ -661,9 +699,13 @@ private fun ChatScreenNeedsConfigurationPreview() {
             startKey = ProvidersNavKey,
             providerOptions = listOf(
                 ProviderOption("zai", "Z.AI", configured = false),
-                ProviderOption("cloudflare-ai-gateway", "Cloudflare AI Gateway", configured = false),
-            ),
-        ),
+                ProviderOption(
+                    "cloudflare-ai-gateway",
+                    "Cloudflare AI Gateway",
+                    configured = false
+                )
+            )
+        )
     )
 }
 
@@ -675,8 +717,8 @@ private fun ChatScreenSettingsPreview() {
             status = ChatStatus.Ready,
             startKey = SettingsNavKey,
             modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModel = PREVIEW_SELECTED_MODEL,
-        ),
+            selectedModel = PREVIEW_SELECTED_MODEL
+        )
     )
 }
 
@@ -687,9 +729,9 @@ private fun ChatScreenSettingsRootPreview() {
         uiState = ChatUiState(
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModel = PREVIEW_SELECTED_MODEL,
+            selectedModel = PREVIEW_SELECTED_MODEL
         ),
-        extraKeys = listOf(SettingsNavKey),
+        extraKeys = listOf(SettingsNavKey)
     )
 }
 
@@ -701,9 +743,9 @@ private fun ChatScreenProvidersPreview() {
             status = ChatStatus.Ready,
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModel = PREVIEW_SELECTED_MODEL,
+            selectedModel = PREVIEW_SELECTED_MODEL
         ),
-        extraKeys = listOf(SettingsNavKey, ProvidersNavKey),
+        extraKeys = listOf(SettingsNavKey, ProvidersNavKey)
     )
 }
 
@@ -716,9 +758,9 @@ private fun ChatScreenSearchProvidersPreview() {
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             searchProviderOptions = PREVIEW_SEARCH_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModel = PREVIEW_SELECTED_MODEL,
+            selectedModel = PREVIEW_SELECTED_MODEL
         ),
-        extraKeys = listOf(SettingsNavKey, SearchProvidersNavKey),
+        extraKeys = listOf(SettingsNavKey, SearchProvidersNavKey)
     )
 }
 
@@ -731,20 +773,22 @@ private fun ChatScreenSearchProviderAuthPreview() {
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             searchProviderOptions = PREVIEW_SEARCH_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModel = PREVIEW_SELECTED_MODEL,
+            selectedModel = PREVIEW_SELECTED_MODEL
         ),
         extraKeys = listOf(
             SettingsNavKey,
             SearchProvidersNavKey,
-            SearchProviderAuthNavKey("brave"),
+            SearchProviderAuthNavKey("brave")
         ),
         searchAuthPrompts = { providerId ->
             if (providerId == "brave") {
-                listOf(ProviderAuthPrompt("BRAVE_API_KEY", "Enter Brave Search API key", secret = true))
+                listOf(
+                    ProviderAuthPrompt("BRAVE_API_KEY", "Enter Brave Search API key", secret = true)
+                )
             } else {
                 emptyList()
             }
-        },
+        }
     )
 }
 
@@ -756,19 +800,29 @@ private fun ChatScreenProviderAuthPreview() {
             status = ChatStatus.Ready,
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModel = PREVIEW_SELECTED_MODEL,
+            selectedModel = PREVIEW_SELECTED_MODEL
         ),
-        extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("cloudflare-ai-gateway")),
+        extraKeys = listOf(
+            SettingsNavKey,
+            ProvidersNavKey,
+            ProviderAuthNavKey("cloudflare-ai-gateway")
+        ),
         authPrompts = { providerId ->
             if (providerId == "cloudflare-ai-gateway") PREVIEW_CLOUDFLARE_PROMPTS else emptyList()
         },
         authMethods = { providerId ->
             if (providerId == "cloudflare-ai-gateway") {
-                listOf(AuthMethodInfo(works.resolve.pathfinder.ai.auth.AuthType.API_KEY, "Cloudflare API key", isSubscription = false))
+                listOf(
+                    AuthMethodInfo(
+                        works.resolve.pathfinder.ai.auth.AuthType.API_KEY,
+                        "Cloudflare API key",
+                        isSubscription = false
+                    )
+                )
             } else {
                 emptyList()
             }
-        },
+        }
     )
 }
 
@@ -780,7 +834,7 @@ private fun ChatScreenAuthMethodChoicePreview() {
             status = ChatStatus.Ready,
             providerOptions = PREVIEW_PROVIDER_OPTIONS,
             modelOptions = PREVIEW_MODEL_OPTIONS,
-            selectedModel = PREVIEW_SELECTED_MODEL,
+            selectedModel = PREVIEW_SELECTED_MODEL
         ),
         extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("zai")),
         authPrompts = { providerId ->
@@ -790,7 +844,15 @@ private fun ChatScreenAuthMethodChoicePreview() {
                 emptyList()
             }
         },
-        authMethods = { providerId -> if (providerId == "zai") PREVIEW_AUTH_METHODS else emptyList() },
+        authMethods = { providerId ->
+            if (providerId ==
+                "zai"
+            ) {
+                PREVIEW_AUTH_METHODS
+            } else {
+                emptyList()
+            }
+        }
     )
 }
 
@@ -808,18 +870,29 @@ private fun ChatScreenAuthFlowPreview() {
                 method = PREVIEW_AUTH_METHODS.first(),
                 events = listOf(
                     AuthEvent.Info("Open the link and sign in", emptyList()),
-                    AuthEvent.AuthUrl("https://auth.example.invalid/authorize", "Approve the request"),
+                    AuthEvent.AuthUrl(
+                        "https://auth.example.invalid/authorize",
+                        "Approve the request"
+                    ),
                     AuthEvent.DeviceCode("ABCD-1234", "https://verify.example.invalid/device"),
-                    AuthEvent.Progress("Waiting for approval"),
+                    AuthEvent.Progress("Waiting for approval")
                 ),
                 pendingPrompt = PendingAuthPrompt(
                     kind = AuthPromptKind.MANUAL_CODE,
-                    message = "Enter the code shown in the browser",
-                ),
-            ),
+                    message = "Enter the code shown in the browser"
+                )
+            )
         ),
         extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("zai")),
-        authMethods = { providerId -> if (providerId == "zai") PREVIEW_AUTH_METHODS else emptyList() },
+        authMethods = { providerId ->
+            if (providerId ==
+                "zai"
+            ) {
+                PREVIEW_AUTH_METHODS
+            } else {
+                emptyList()
+            }
+        }
     )
 }
 
@@ -833,12 +906,22 @@ private fun ChatScreenPagerPreview() {
             selectedModel = PREVIEW_SELECTED_MODEL,
             activeSessionId = "s1",
             sessionSummaries = listOf(
-                SessionSummary(id = "s1", title = "Preview chat", createdAt = 0L, updatedAt = 0L, messageCount = 1),
+                SessionSummary(
+                    id = "s1",
+                    title = "Preview chat",
+                    createdAt = 0L,
+                    updatedAt = 0L,
+                    messageCount = 1
+                )
             ),
             messages = listOf(
-                ChatMessage(id = "m1", role = ChatRole.User, blocks = listOf(ChatBlock.Text("Hello there"))),
-            ),
-        ),
+                ChatMessage(
+                    id = "m1",
+                    role = ChatRole.User,
+                    blocks = listOf(ChatBlock.Text("Hello there"))
+                )
+            )
+        )
     )
 }
 
@@ -857,15 +940,27 @@ private fun ChatScreenReadyStreamingPreview() {
                     title = "Preview chat",
                     createdAt = 0L,
                     updatedAt = 0L,
-                    messageCount = 2,
-                ),
+                    messageCount = 2
+                )
             ),
             messages = listOf(
-                ChatMessage(id = "m1", role = ChatRole.User, blocks = listOf(ChatBlock.Text("Hello there"))),
-                ChatMessage(id = "m2", role = ChatRole.Assistant, blocks = listOf(ChatBlock.Text("Hi! How can I help?"))),
+                ChatMessage(
+                    id = "m1",
+                    role = ChatRole.User,
+                    blocks = listOf(ChatBlock.Text("Hello there"))
+                ),
+                ChatMessage(
+                    id = "m2",
+                    role = ChatRole.Assistant,
+                    blocks = listOf(ChatBlock.Text("Hi! How can I help?"))
+                )
             ),
-            streamingMessage = ChatMessage(id = "streaming-1", role = ChatRole.Assistant, blocks = listOf(ChatBlock.Text("Sure, "))),
-            isStreaming = true,
-        ),
+            streamingMessage = ChatMessage(
+                id = "streaming-1",
+                role = ChatRole.Assistant,
+                blocks = listOf(ChatBlock.Text("Sure, "))
+            ),
+            isStreaming = true
+        )
     )
 }

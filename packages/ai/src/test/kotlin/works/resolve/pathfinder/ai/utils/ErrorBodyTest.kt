@@ -1,13 +1,13 @@
 package works.resolve.pathfinder.ai.utils
 
 import kotlin.test.Test
-import works.resolve.pathfinder.ai.api.formatCodexError
-import works.resolve.pathfinder.ai.api.formatResponsesProviderError
-import works.resolve.pathfinder.ai.transport.ProviderHttpException
-import works.resolve.pathfinder.ai.testing.FakeClock
-import works.resolve.pathfinder.ai.testing.FakeTransport
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import works.resolve.pathfinder.ai.api.formatCodexError
+import works.resolve.pathfinder.ai.api.formatResponsesProviderError
+import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.testing.FakeTransport
+import works.resolve.pathfinder.ai.transport.ProviderHttpException
 
 class ErrorBodyTest {
     private fun httpError(status: Int, body: String) =
@@ -22,9 +22,18 @@ class ErrorBodyTest {
 
     @Test
     fun `formatProviderError composes body with and without prefix`() {
-        val norm = NormalizedProviderError(status = 429, body = "rate limited", message = "msg", messageCarriesBody = false)
+        val norm =
+            NormalizedProviderError(
+                status = 429,
+                body = "rate limited",
+                message = "msg",
+                messageCarriesBody = false
+            )
         assertEquals("429: rate limited", formatProviderError(norm))
-        assertEquals("OpenAI API error (429): rate limited", formatProviderError(norm, "OpenAI API error"))
+        assertEquals(
+            "OpenAI API error (429): rate limited",
+            formatProviderError(norm, "OpenAI API error")
+        )
     }
 
     @Test
@@ -47,27 +56,48 @@ class ErrorBodyTest {
 
         assertEquals(
             """OpenAI API error (403): {"error":"blocked by gateway WAF"}""",
-            formatProviderError(norm, "OpenAI API error"),
+            formatProviderError(norm, "OpenAI API error")
         )
     }
 
     @Test
     fun `formatProviderError falls back to message when body is missing`() {
-        val norm = NormalizedProviderError(status = 500, body = null, message = "msg", messageCarriesBody = false)
+        val norm =
+            NormalizedProviderError(
+                status = 500,
+                body = null,
+                message = "msg",
+                messageCarriesBody = false
+            )
         assertEquals("msg", formatProviderError(norm))
         assertEquals("OpenAI API error (500): msg", formatProviderError(norm, "OpenAI API error"))
     }
 
     @Test
     fun `formatProviderError returns message unchanged when it carries the body`() {
-        val norm = NormalizedProviderError(status = 400, body = null, message = "bad request: details", messageCarriesBody = true)
+        val norm =
+            NormalizedProviderError(
+                status = 400,
+                body = null,
+                message = "bad request: details",
+                messageCarriesBody = true
+            )
         assertEquals("bad request: details", formatProviderError(norm))
-        assertEquals("OpenAI API error (400): bad request: details", formatProviderError(norm, "OpenAI API error"))
+        assertEquals(
+            "OpenAI API error (400): bad request: details",
+            formatProviderError(norm, "OpenAI API error")
+        )
     }
 
     @Test
     fun `formatProviderError returns message unchanged when status is missing`() {
-        val norm = NormalizedProviderError(status = null, body = "body", message = "msg", messageCarriesBody = false)
+        val norm =
+            NormalizedProviderError(
+                status = null,
+                body = "body",
+                message = "msg",
+                messageCarriesBody = false
+            )
         assertEquals("msg", formatProviderError(norm))
         assertEquals("msg", formatProviderError(norm, "OpenAI API error"))
     }
@@ -89,7 +119,7 @@ class ErrorBodyTest {
         // parsed body is JSON-stringified; the transport body already is the
         // JSON text and must surface unchanged, messageCarriesBody false.
         val norm = normalizeProviderError(
-            httpError(400, """{"message":"schema validation failed","field":"tools[0]"}"""),
+            httpError(400, """{"message":"schema validation failed","field":"tools[0]"}""")
         )
 
         assertEquals("""{"message":"schema validation failed","field":"tools[0]"}""", norm.body)
@@ -102,7 +132,7 @@ class ErrorBodyTest {
         val norm = normalizeProviderError(httpError(500, body))
         assertEquals(
             "y".repeat(MAX_PROVIDER_ERROR_BODY_CHARS) + "... [truncated 10 chars]",
-            norm.body,
+            norm.body
         )
     }
 
@@ -132,13 +162,13 @@ class ErrorBodyTest {
             """OpenAI API error (500): {"error":{"code":"server_error","message":"boom"}}""",
             formatResponsesProviderError(
                 httpError(500, """{"error":{"code":"server_error","message":"boom"}}"""),
-                "OpenAI API error",
-            ),
+                "OpenAI API error"
+            )
         )
         // Documented divergence: a blank body emits only "prefix (status)".
         assertEquals(
             "OpenAI API error (429)",
-            formatResponsesProviderError(httpError(429, "  "), "OpenAI API error"),
+            formatResponsesProviderError(httpError(429, "  "), "OpenAI API error")
         )
     }
 
@@ -148,8 +178,8 @@ class ErrorBodyTest {
             """Azure OpenAI API error (401): {"error":{"message":"bad key"}}""",
             formatResponsesProviderError(
                 httpError(401, """{"error":{"message":"bad key"}}"""),
-                "Azure OpenAI API error",
-            ),
+                "Azure OpenAI API error"
+            )
         )
     }
 
@@ -157,24 +187,27 @@ class ErrorBodyTest {
     fun `codex golden format has no prefix`() {
         assertEquals(
             """503: {"error":{"message":"quota exceeded"}}""",
-            formatCodexError(httpError(503, """{"error":{"message":"quota exceeded"}}""")),
+            formatCodexError(httpError(503, """{"error":{"message":"quota exceeded"}}"""))
         )
         assertEquals(
             "Provider returned HTTP 503",
-            formatCodexError(httpError(503, "")),
+            formatCodexError(httpError(503, ""))
         )
     }
 
     @Test
     fun `mistral golden format keeps its provider-specific composition`() {
-        val api = works.resolve.pathfinder.ai.api.MistralConversationsApi(FakeTransport(), clock = FakeClock(0L))
+        val api = works.resolve.pathfinder.ai.api.MistralConversationsApi(
+            FakeTransport(),
+            clock = FakeClock(0L)
+        )
         assertEquals(
             """Mistral API error (403): {"message":"blocked by gateway"}""",
-            api.formatMistralError(httpError(403, """{"message":"blocked by gateway"}""")),
+            api.formatMistralError(httpError(403, """{"message":"blocked by gateway"}"""))
         )
         assertEquals(
             "Mistral API error (403): Provider returned HTTP 403",
-            api.formatMistralError(httpError(403, "")),
+            api.formatMistralError(httpError(403, ""))
         )
     }
 }

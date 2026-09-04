@@ -33,8 +33,8 @@ class SettingsRepositoryTest {
         repository = SettingsRepository(
             PreferenceDataStoreFactory.create(
                 scope = scope,
-                produceFile = { File(tmpFolder.root, "settings.preferences_pb") },
-            ),
+                produceFile = { File(tmpFolder.root, "settings.preferences_pb") }
+            )
         )
     }
 
@@ -104,16 +104,18 @@ class SettingsRepositoryTest {
     fun enabledModels_defaultNull_andRoundTripsPreservingOrder() = runTest {
         assertNull(repository.settings.first().enabledModels)
 
-        repository.setEnabledModels(listOf("anthropic/claude-opus-4-8", "gpt-5.5", "gemini-3.1-pro-preview"))
+        repository.setEnabledModels(
+            listOf("anthropic/claude-opus-4-8", "gpt-5.5", "gemini-3.1-pro-preview")
+        )
 
         assertEquals(
             listOf("anthropic/claude-opus-4-8", "gpt-5.5", "gemini-3.1-pro-preview"),
-            repository.settings.first().enabledModels,
+            repository.settings.first().enabledModels
         )
         repository.setEnabledModels(listOf("gpt-5.5", "anthropic/claude-opus-4-8"))
         assertEquals(
             listOf("gpt-5.5", "anthropic/claude-opus-4-8"),
-            repository.settings.first().enabledModels,
+            repository.settings.first().enabledModels
         )
     }
 
@@ -138,7 +140,13 @@ class SettingsRepositoryTest {
 
     @Test
     fun enabledModels_malformedStoredData_isRejected() = runTest {
-        for (malformed in listOf("{not json", "[\"a\",42]", "{\"k\":\"v\"}", "\"just a string\"", "")) {
+        for (malformed in listOf(
+            "{not json",
+            "[\"a\",42]",
+            "{\"k\":\"v\"}",
+            "\"just a string\"",
+            ""
+        )) {
             try {
                 repository.decodeEnabledModels(malformed)
                 org.junit.Assert.fail("Expected rejection of malformed enabled_models: $malformed")
@@ -158,8 +166,8 @@ class SettingsRepositoryTest {
             val second = SettingsRepository(
                 PreferenceDataStoreFactory.create(
                     scope = secondScope,
-                    produceFile = { file },
-                ),
+                    produceFile = { file }
+                )
             )
             assertEquals(listOf("b", "a"), second.settings.first().enabledModels)
         } finally {
@@ -178,8 +186,8 @@ class SettingsRepositoryTest {
             val second = SettingsRepository(
                 PreferenceDataStoreFactory.create(
                     scope = secondScope,
-                    produceFile = { file },
-                ),
+                    produceFile = { file }
+                )
             )
             assertEquals("openai", second.settings.first().providerId)
         } finally {

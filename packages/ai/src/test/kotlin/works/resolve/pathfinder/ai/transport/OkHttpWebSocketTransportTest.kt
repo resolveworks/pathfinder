@@ -66,17 +66,35 @@ class OkHttpWebSocketTransportTest {
         val serverListener = EchoServerListener()
         val server = upgradeServer(serverListener)
         runBlocking {
-            val connection = transport().connect(url(server), mapOf("Authorization" to "Bearer secret-token"))
+            val connection = transport().connect(
+                url(server),
+                mapOf("Authorization" to "Bearer secret-token")
+            )
             assertTrue(connection.isOpen)
-            assertEquals(WebSocketEvent.Message("hello"), withTimeout(5_000) { connection.events.receive() })
+            assertEquals(
+                WebSocketEvent.Message("hello"),
+                withTimeout(5_000) {
+                    connection.events.receive()
+                }
+            )
             connection.send("ping")
-            assertEquals(WebSocketEvent.Message("ping"), withTimeout(5_000) { connection.events.receive() })
+            assertEquals(
+                WebSocketEvent.Message("ping"),
+                withTimeout(5_000) {
+                    connection.events.receive()
+                }
+            )
             connection.close()
         }
         assertTrue(serverListener.serverClosed.await(5, TimeUnit.SECONDS))
         val recorded = server.takeRequest()
         assertEquals("/v1/ws", recorded.path)
-        assertEquals("secret-token", recorded.getHeader("Authorization").let { it?.removePrefix("Bearer ") })
+        assertEquals(
+            "secret-token",
+            recorded.getHeader("Authorization").let {
+                it?.removePrefix("Bearer ")
+            }
+        )
         server.shutdown()
     }
 
@@ -96,8 +114,13 @@ class OkHttpWebSocketTransportTest {
             val connection = transport().connect(url(server), emptyMap())
             val event = withTimeout(5_000) { connection.events.receive() }
             assertEquals(
-                WebSocketEvent.Closed(code = 4408, reason = "session expired", wasClean = null, message = "WebSocket closed 4408 session expired"),
-                event,
+                WebSocketEvent.Closed(
+                    code = 4408,
+                    reason = "session expired",
+                    wasClean = null,
+                    message = "WebSocket closed 4408 session expired"
+                ),
+                event
             )
             assertTrue(withTimeout(5_000) { connection.events.isClosedForReceive })
             assertFalse(connection.isOpen)
@@ -162,7 +185,11 @@ class OkHttpWebSocketTransportTest {
         runBlocking {
             val connected = CompletableDeferred<WebSocketConnection>()
             val job = launch {
-                val connection = transport().connect(url(server), emptyMap(), connectTimeoutMs = 60_000)
+                val connection = transport().connect(
+                    url(server),
+                    emptyMap(),
+                    connectTimeoutMs = 60_000
+                )
                 connected.complete(connection)
                 while (true) {
                     connection.events.receive()
@@ -174,7 +201,7 @@ class OkHttpWebSocketTransportTest {
         }
         assertTrue(
             serverListener.serverClosed.await(5, TimeUnit.SECONDS),
-            "server must observe the close/cancel after caller cancellation",
+            "server must observe the close/cancel after caller cancellation"
         )
         server.shutdown()
     }
@@ -243,7 +270,10 @@ class OkHttpWebSocketTransportTest {
         runBlocking {
             val connection = transport().connect(
                 url(server),
-                mapOf("Authorization" to "Bearer secret-token", "OpenAI-Beta" to "responses_websockets=2026-02-06"),
+                mapOf(
+                    "Authorization" to "Bearer secret-token",
+                    "OpenAI-Beta" to "responses_websockets=2026-02-06"
+                )
             )
             val event = withTimeout(5_000) { connection.events.receive() }
             val connectionText = connection.toString()

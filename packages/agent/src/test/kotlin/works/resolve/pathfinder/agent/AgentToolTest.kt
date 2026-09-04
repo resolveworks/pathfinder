@@ -1,15 +1,5 @@
 package works.resolve.pathfinder.agent
 
-import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.ImageContent
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.ThinkingContent
-import works.resolve.pathfinder.ai.Tool
-import works.resolve.pathfinder.ai.ToolCall
-import works.resolve.pathfinder.ai.UserMessage
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -21,6 +11,16 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.ImageContent
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingContent
+import works.resolve.pathfinder.ai.Tool
+import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.UserMessage
 
 class AgentToolTest {
 
@@ -29,7 +29,7 @@ class AgentToolTest {
         name = "GLM",
         api = "openai-completions",
         provider = "zai",
-        baseUrl = "https://example.invalid",
+        baseUrl = "https://example.invalid"
     )
 
     private fun toolUseMessage(vararg calls: ToolCall): AssistantMessage = AssistantMessage(
@@ -37,7 +37,7 @@ class AgentToolTest {
         api = model.api,
         provider = model.provider,
         model = model.id,
-        stopReason = StopReason.TOOL_USE,
+        stopReason = StopReason.TOOL_USE
     )
 
     private fun textMessage(text: String): AssistantMessage = AssistantMessage(
@@ -45,14 +45,16 @@ class AgentToolTest {
         api = model.api,
         provider = model.provider,
         model = model.id,
-        stopReason = StopReason.STOP,
+        stopReason = StopReason.STOP
     )
 
     /** One scripted provider response per stream call, like AgentLoopTest's scriptedStream. */
     private fun scriptedStream(vararg messages: AssistantMessage): StreamFn {
         var call = 0
         return StreamFn { _, _, _ ->
-            val message = messages.getOrElse(call++) { error("unexpected provider call #${call - 1}") }
+            val message = messages.getOrElse(call++) {
+                error("unexpected provider call #${call - 1}")
+            }
             flowOf(AssistantMessageEvent.Done(message.stopReason, message))
         }
     }
@@ -60,7 +62,7 @@ class AgentToolTest {
     @Test
     fun `result accepts text and image content`() {
         val result = AgentToolResult(
-            content = listOf(TextContent("hello"), ImageContent("aGk=", "image/png")),
+            content = listOf(TextContent("hello"), ImageContent("aGk=", "image/png"))
         )
         assertEquals(2, result.content.size)
     }
@@ -99,8 +101,11 @@ class AgentToolTest {
             override val definition = Tool("t", "d", JsonPrimitive("object"))
             override val label = "t"
             override fun validateArguments(arguments: JsonObject) = arguments
-            override suspend fun execute(toolCallId: String, arguments: JsonObject, onUpdate: AgentToolUpdateCallback) =
-                AgentToolResult(content = emptyList())
+            override suspend fun execute(
+                toolCallId: String,
+                arguments: JsonObject,
+                onUpdate: AgentToolUpdateCallback
+            ) = AgentToolResult(content = emptyList())
         }
         assertNull(tool.executionMode)
         assertNull(tool.promptSnippet)
@@ -117,54 +122,56 @@ class AgentToolTest {
     }
 
     @Test
-    fun `update callback streams partial results with details and drops calls after settlement`() = runTest {
-        lateinit var captured: AgentToolUpdateCallback
-        val tool = object : AgentTool {
-            override val definition = Tool("progress_tool", "reports progress", JsonPrimitive("object"))
-            override val label = "progress_tool"
-            override fun validateArguments(arguments: JsonObject) = arguments
-            override suspend fun execute(
-                toolCallId: String,
-                arguments: JsonObject,
-                onUpdate: AgentToolUpdateCallback,
-            ): AgentToolResult {
-                captured = onUpdate
-                onUpdate(
-                    AgentToolResult(
-                        content = listOf(TextContent("running")),
-                        details = buildJsonObject { put("status", "running") },
-                    ),
-                )
-                return AgentToolResult(
-                    content = listOf(TextContent("done")),
-                    details = buildJsonObject { put("status", "done") },
-                )
+    fun `update callback streams partial results with details and drops calls after settlement`() =
+        runTest {
+            lateinit var captured: AgentToolUpdateCallback
+            val tool = object : AgentTool {
+                override val definition =
+                    Tool("progress_tool", "reports progress", JsonPrimitive("object"))
+                override val label = "progress_tool"
+                override fun validateArguments(arguments: JsonObject) = arguments
+                override suspend fun execute(
+                    toolCallId: String,
+                    arguments: JsonObject,
+                    onUpdate: AgentToolUpdateCallback
+                ): AgentToolResult {
+                    captured = onUpdate
+                    onUpdate(
+                        AgentToolResult(
+                            content = listOf(TextContent("running")),
+                            details = buildJsonObject { put("status", "running") }
+                        )
+                    )
+                    return AgentToolResult(
+                        content = listOf(TextContent("done")),
+                        details = buildJsonObject { put("status", "done") }
+                    )
+                }
             }
+
+            val events = mutableListOf<AgentEvent>()
+            runAgentLoop(
+                listOf(UserMessage.ofText("run")),
+                AgentContext(messages = emptyList(), tools = listOf(tool)),
+                AgentLoopConfig(
+                    model,
+                    streamFn = scriptedStream(
+                        toolUseMessage(ToolCall("call-1", "progress_tool", "{}")),
+                        textMessage("finished")
+                    )
+                )
+            ) { events.add(it) }
+
+            val update = events.filterIsInstance<AgentEvent.ToolExecutionUpdate>().single()
+            assertEquals("call-1", update.toolCallId)
+            assertEquals("progress_tool", update.toolName)
+            assertEquals(listOf(TextContent("running")), update.partialResult.content)
+            assertEquals(buildJsonObject { put("status", "running") }, update.partialResult.details)
+
+            // The callback outlives the invocation; late calls are dropped, not thrown.
+            captured(AgentToolResult(content = listOf(TextContent("late"))))
+            assertEquals(1, events.count { it is AgentEvent.ToolExecutionUpdate })
         }
-
-        val events = mutableListOf<AgentEvent>()
-        runAgentLoop(
-            listOf(UserMessage.ofText("run")),
-            AgentContext(messages = emptyList(), tools = listOf(tool)),
-            AgentLoopConfig(
-                model,
-                streamFn = scriptedStream(
-                    toolUseMessage(ToolCall("call-1", "progress_tool", "{}")),
-                    textMessage("finished"),
-                ),
-            ),
-        ) { events.add(it) }
-
-        val update = events.filterIsInstance<AgentEvent.ToolExecutionUpdate>().single()
-        assertEquals("call-1", update.toolCallId)
-        assertEquals("progress_tool", update.toolName)
-        assertEquals(listOf(TextContent("running")), update.partialResult.content)
-        assertEquals(buildJsonObject { put("status", "running") }, update.partialResult.details)
-
-        // The callback outlives the invocation; late calls are dropped, not thrown.
-        captured(AgentToolResult(content = listOf(TextContent("late"))))
-        assertEquals(1, events.count { it is AgentEvent.ToolExecutionUpdate })
-    }
 
     @Test
     fun `thrown failure is the error channel and carries pi's empty details object`() = runTest {
@@ -175,7 +182,7 @@ class AgentToolTest {
             override suspend fun execute(
                 toolCallId: String,
                 arguments: JsonObject,
-                onUpdate: AgentToolUpdateCallback,
+                onUpdate: AgentToolUpdateCallback
             ): AgentToolResult = throw IllegalStateException("Command exited with code 7")
         }
 
@@ -187,14 +194,17 @@ class AgentToolTest {
                 model,
                 streamFn = scriptedStream(
                     toolUseMessage(ToolCall("call-1", "shell", "{}")),
-                    textMessage("handled"),
-                ),
-            ),
+                    textMessage("handled")
+                )
+            )
         ) { events.add(it) }
 
         val end = events.filterIsInstance<AgentEvent.ToolExecutionEnd>().single()
         assertTrue(end.isError)
-        assertEquals("Command exited with code 7", (end.result.content.single() as TextContent).text)
+        assertEquals(
+            "Command exited with code 7",
+            (end.result.content.single() as TextContent).text
+        )
         assertEquals(JsonObject(emptyMap()), end.result.details)
     }
 }

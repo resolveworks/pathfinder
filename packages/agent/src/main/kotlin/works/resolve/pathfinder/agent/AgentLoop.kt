@@ -1,5 +1,17 @@
 package works.resolve.pathfinder.agent
 
+import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
@@ -10,18 +22,6 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.utils.lenientJson
-import kotlin.time.Clock
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.launch
-import kotlinx.serialization.json.JsonObject
 
 /**
  * Runs the agent loop: streams assistant turns and executes each response's
@@ -40,7 +40,7 @@ suspend fun runAgentLoop(
     prompts: List<Message>,
     context: AgentContext,
     config: AgentLoopConfig,
-    emit: suspend (AgentEvent) -> Unit,
+    emit: suspend (AgentEvent) -> Unit
 ): List<Message> {
     prompts.forEach { prompt ->
         require(prompt !is AssistantMessage) { "Prompts must be user or toolResult messages" }
@@ -60,10 +60,7 @@ suspend fun runAgentLoop(
     return newMessages.toList()
 }
 
-private class ExecutedToolCallBatch(
-    val messages: List<ToolResultMessage>,
-    val terminate: Boolean,
-)
+private class ExecutedToolCallBatch(val messages: List<ToolResultMessage>, val terminate: Boolean)
 
 private sealed interface ToolCallPreparation
 
@@ -71,24 +68,19 @@ private class PreparedToolCall(
     val toolCall: ToolCall,
     val tool: AgentTool,
     /** Validated arguments used for execution. */
-    val arguments: JsonObject,
+    val arguments: JsonObject
 ) : ToolCallPreparation
 
-private class ImmediateToolCallOutcome(
-    val result: AgentToolResult,
-    val isError: Boolean,
-) : ToolCallPreparation
+private class ImmediateToolCallOutcome(val result: AgentToolResult, val isError: Boolean) :
+    ToolCallPreparation
 
 private class FinalizedToolCallOutcome(
     val toolCall: ToolCall,
     val result: AgentToolResult,
-    val isError: Boolean,
+    val isError: Boolean
 )
 
-private class ExecutedToolCallOutcome(
-    val result: AgentToolResult,
-    val isError: Boolean,
-)
+private class ExecutedToolCallOutcome(val result: AgentToolResult, val isError: Boolean)
 
 /**
  * Turn loop: streams one assistant turn, executes its tool batch, appends
@@ -104,17 +96,17 @@ private suspend fun runLoop(
     llmMessages: MutableList<Message>,
     newMessages: MutableList<Message>,
     config: AgentLoopConfig,
-    emit: suspend (AgentEvent) -> Unit,
+    emit: suspend (AgentEvent) -> Unit
 ) {
     while (true) {
         val message = streamAssistantResponse(
             llmContext = Context(
                 systemPrompt = context.systemPrompt,
                 messages = llmMessages.toList(),
-                tools = context.tools.map { it.definition },
+                tools = context.tools.map { it.definition }
             ),
             config = config,
-            emit = emit,
+            emit = emit
         )
         newMessages.add(message)
         llmMessages.add(message)
@@ -164,7 +156,7 @@ private suspend fun runLoop(
 private suspend fun streamAssistantResponse(
     llmContext: Context,
     config: AgentLoopConfig,
-    emit: suspend (AgentEvent) -> Unit,
+    emit: suspend (AgentEvent) -> Unit
 ): AssistantMessage {
     val response = config.streamFn.stream(config.model, llmContext, config.options)
 
@@ -195,7 +187,7 @@ private suspend fun streamAssistantResponse(
                     is AssistantMessageEvent.ThinkingEnd,
                     is AssistantMessageEvent.ToolCallStart,
                     is AssistantMessageEvent.ToolCallDelta,
-                    is AssistantMessageEvent.ToolCallEnd,
+                    is AssistantMessageEvent.ToolCallEnd
                     -> {
                         if (started) {
                             latestPartial = event.partial
@@ -204,7 +196,7 @@ private suspend fun streamAssistantResponse(
                     }
 
                     is AssistantMessageEvent.Done,
-                    is AssistantMessageEvent.Error,
+                    is AssistantMessageEvent.Error
                     -> {
                         finalMessage = when (event) {
                             is AssistantMessageEvent.Done -> event.message
@@ -231,7 +223,7 @@ private suspend fun streamAssistantResponse(
         message = if (partial != null) {
             partial.copy(
                 stopReason = StopReason.ERROR,
-                errorMessage = "Provider stream completed without a terminal event",
+                errorMessage = "Provider stream completed without a terminal event"
             )
         } else {
             unsupportedErrorMessage(config.model, config.clock.now().toEpochMilliseconds())
@@ -256,7 +248,7 @@ private suspend fun streamAssistantResponse(
 private suspend fun failToolCallsFromTruncatedMessage(
     toolCalls: List<ToolCall>,
     clock: Clock,
-    emit: suspend (AgentEvent) -> Unit,
+    emit: suspend (AgentEvent) -> Unit
 ): ExecutedToolCallBatch {
     val messages = mutableListOf<ToolResultMessage>()
     for (toolCall in toolCalls) {
@@ -264,16 +256,17 @@ private suspend fun failToolCallsFromTruncatedMessage(
             AgentEvent.ToolExecutionStart(
                 toolCallId = toolCall.id,
                 toolName = toolCall.name,
-                arguments = parseRawArguments(toolCall.arguments) ?: JsonObject(emptyMap()),
-            ),
+                arguments = parseRawArguments(toolCall.arguments) ?: JsonObject(emptyMap())
+            )
         )
         val finalized = FinalizedToolCallOutcome(
             toolCall = toolCall,
             result = createErrorToolResult(
-                "Tool call \"${toolCall.name}\" was not executed: the response hit the output token limit, " +
-                    "so its arguments may be truncated. Re-issue the tool call with complete arguments.",
+                "Tool call \"${toolCall.name}\" was not executed: the response hit the " +
+                    "output token limit, so its arguments may be truncated. Re-issue the tool " +
+                    "call with complete arguments."
             ),
-            isError = true,
+            isError = true
         )
         emitToolExecutionEnd(finalized, emit)
         val toolResultMessage = createToolResultMessage(finalized, clock)
@@ -292,7 +285,7 @@ private suspend fun executeToolCalls(
     context: AgentContext,
     toolCalls: List<ToolCall>,
     config: AgentLoopConfig,
-    emit: suspend (AgentEvent) -> Unit,
+    emit: suspend (AgentEvent) -> Unit
 ): ExecutedToolCallBatch {
     val hasSequentialToolCall = toolCalls.any { toolCall ->
         context.tools.firstOrNull { it.definition.name == toolCall.name }
@@ -318,7 +311,7 @@ private suspend fun executeToolCallsSequential(
     context: AgentContext,
     toolCalls: List<ToolCall>,
     config: AgentLoopConfig,
-    emit: suspend (AgentEvent) -> Unit,
+    emit: suspend (AgentEvent) -> Unit
 ): ExecutedToolCallBatch {
     val finalizedCalls = mutableListOf<FinalizedToolCallOutcome>()
     val messages = mutableListOf<ToolResultMessage>()
@@ -330,6 +323,7 @@ private suspend fun executeToolCallsSequential(
         val finalized = when (preparation) {
             is ImmediateToolCallOutcome ->
                 FinalizedToolCallOutcome(toolCall, preparation.result, preparation.isError)
+
             is PreparedToolCall ->
                 executeAndFinalizePreparedToolCall(preparation, emit)
         }
@@ -345,7 +339,7 @@ private suspend fun executeToolCallsSequential(
 
     return ExecutedToolCallBatch(
         messages = messages,
-        terminate = shouldTerminateToolBatch(finalizedCalls),
+        terminate = shouldTerminateToolBatch(finalizedCalls)
     )
 }
 
@@ -366,7 +360,7 @@ private suspend fun executeToolCallsParallel(
     context: AgentContext,
     toolCalls: List<ToolCall>,
     config: AgentLoopConfig,
-    emit: suspend (AgentEvent) -> Unit,
+    emit: suspend (AgentEvent) -> Unit
 ): ExecutedToolCallBatch {
     val finalizedEntries = mutableListOf<suspend () -> FinalizedToolCallOutcome>()
 
@@ -375,7 +369,8 @@ private suspend fun executeToolCallsParallel(
 
         val preparation = prepareToolCall(context, toolCall)
         if (preparation is ImmediateToolCallOutcome) {
-            val finalized = FinalizedToolCallOutcome(toolCall, preparation.result, preparation.isError)
+            val finalized =
+                FinalizedToolCallOutcome(toolCall, preparation.result, preparation.isError)
             emitToolExecutionEnd(finalized, emit)
             finalizedEntries.add { finalized }
             ensureActiveBetweenCalls()
@@ -402,7 +397,7 @@ private suspend fun executeToolCallsParallel(
 
     return ExecutedToolCallBatch(
         messages = messages,
-        terminate = shouldTerminateToolBatch(orderedFinalizedCalls),
+        terminate = shouldTerminateToolBatch(orderedFinalizedCalls)
     )
 }
 
@@ -412,7 +407,8 @@ private suspend fun ensureActiveBetweenCalls() {
 }
 
 /** Always false: [AgentToolResult] has no `terminate` field. */
-private fun shouldTerminateToolBatch(finalizedCalls: List<FinalizedToolCallOutcome>): Boolean = false
+private fun shouldTerminateToolBatch(finalizedCalls: List<FinalizedToolCallOutcome>): Boolean =
+    false
 
 private val toolArgumentsJson = lenientJson
 
@@ -420,12 +416,11 @@ private val toolArgumentsJson = lenientJson
  * Parses the provider's raw JSON arguments string into a [JsonObject], or
  * null when the string is malformed or not a JSON object.
  */
-private fun parseRawArguments(raw: String): JsonObject? =
-    try {
-        toolArgumentsJson.parseToJsonElement(raw) as? JsonObject
-    } catch (_: IllegalArgumentException) {
-        null
-    }
+private fun parseRawArguments(raw: String): JsonObject? = try {
+    toolArgumentsJson.parseToJsonElement(raw) as? JsonObject
+} catch (_: IllegalArgumentException) {
+    null
+}
 
 /**
  * Finds the tool by exact name, parses [ToolCall.arguments] (a raw JSON
@@ -437,31 +432,28 @@ private fun parseRawArguments(raw: String): JsonObject? =
  * The validated map is copied so a tool cannot mutate transcript-owned
  * values.
  */
-private fun prepareToolCall(
-    context: AgentContext,
-    toolCall: ToolCall,
-): ToolCallPreparation {
+private fun prepareToolCall(context: AgentContext, toolCall: ToolCall): ToolCallPreparation {
     val tool = context.tools.firstOrNull { it.definition.name == toolCall.name }
         ?: return ImmediateToolCallOutcome(
             result = createErrorToolResult("Tool ${toolCall.name} not found"),
-            isError = true,
+            isError = true
         )
 
     return try {
         val parsed = parseRawArguments(toolCall.arguments)
             ?: throw IllegalArgumentException(
-                "Validation failed for tool \"${toolCall.name}\": arguments are not a JSON object",
+                "Validation failed for tool \"${toolCall.name}\": arguments are not a JSON object"
             )
         val validated = tool.validateArguments(parsed)
         PreparedToolCall(
             toolCall = toolCall,
             tool = tool,
-            arguments = JsonObject(validated),
+            arguments = JsonObject(validated)
         )
     } catch (error: Throwable) {
         ImmediateToolCallOutcome(
             result = createErrorToolResult(error.message ?: error.toString()),
-            isError = true,
+            isError = true
         )
     }
 }
@@ -482,7 +474,7 @@ private fun prepareToolCall(
  */
 private suspend fun executeAndFinalizePreparedToolCall(
     prepared: PreparedToolCall,
-    emit: suspend (AgentEvent) -> Unit,
+    emit: suspend (AgentEvent) -> Unit
 ): FinalizedToolCallOutcome {
     val updates = Channel<AgentToolResult>(Channel.UNLIMITED)
     val collector = CoroutineScope(currentCoroutineContext()).launch {
@@ -494,14 +486,17 @@ private suspend fun executeAndFinalizePreparedToolCall(
                     // Pi passes the call's original arguments; this port passes
                     // the validated object.
                     arguments = prepared.arguments,
-                    partialResult = partialResult,
-                ),
+                    partialResult = partialResult
+                )
             )
         }
     }
 
     val executed = try {
-        val result = prepared.tool.execute(prepared.toolCall.id, prepared.arguments) { partialResult ->
+        val result = prepared.tool.execute(
+            prepared.toolCall.id,
+            prepared.arguments
+        ) { partialResult ->
             updates.trySend(partialResult)
         }
         updates.close()
@@ -514,70 +509,65 @@ private suspend fun executeAndFinalizePreparedToolCall(
         collector.join()
         ExecutedToolCallOutcome(
             result = createErrorToolResult(error.message ?: error.toString()),
-            isError = true,
+            isError = true
         )
     }
     return FinalizedToolCallOutcome(
         toolCall = prepared.toolCall,
         result = executed.result,
-        isError = executed.isError,
+        isError = executed.isError
     )
 }
 
-private fun createErrorToolResult(message: String): AgentToolResult =
-    AgentToolResult(
-        content = listOf(TextContent(message)),
-        // An empty object, not null — mirrors pi's `details: {}`.
-        details = JsonObject(emptyMap()),
-    )
+private fun createErrorToolResult(message: String): AgentToolResult = AgentToolResult(
+    content = listOf(TextContent(message)),
+    // An empty object, not null — mirrors pi's `details: {}`.
+    details = JsonObject(emptyMap())
+)
 
 private suspend fun emitToolExecutionEnd(
     finalized: FinalizedToolCallOutcome,
-    emit: suspend (AgentEvent) -> Unit,
+    emit: suspend (AgentEvent) -> Unit
 ) {
     emit(
         AgentEvent.ToolExecutionEnd(
             toolCallId = finalized.toolCall.id,
             toolName = finalized.toolCall.name,
             result = finalized.result,
-            isError = finalized.isError,
-        ),
+            isError = finalized.isError
+        )
     )
 }
 
 private fun createToolResultMessage(
     finalized: FinalizedToolCallOutcome,
-    clock: Clock,
-): ToolResultMessage =
-    ToolResultMessage(
-        toolCallId = finalized.toolCall.id,
-        toolName = finalized.toolCall.name,
-        content = finalized.result.content,
-        details = finalized.result.details,
-        usage = finalized.result.usage,
-        addedToolNames = finalized.result.addedToolNames,
-        isError = finalized.isError,
-        timestamp = clock.now().toEpochMilliseconds(),
-    )
+    clock: Clock
+): ToolResultMessage = ToolResultMessage(
+    toolCallId = finalized.toolCall.id,
+    toolName = finalized.toolCall.name,
+    content = finalized.result.content,
+    details = finalized.result.details,
+    usage = finalized.result.usage,
+    addedToolNames = finalized.result.addedToolNames,
+    isError = finalized.isError,
+    timestamp = clock.now().toEpochMilliseconds()
+)
 
 private suspend fun emitToolResultMessage(
     toolResultMessage: ToolResultMessage,
-    emit: suspend (AgentEvent) -> Unit,
+    emit: suspend (AgentEvent) -> Unit
 ) {
     emit(AgentEvent.MessageStart(toolResultMessage))
     emit(AgentEvent.MessageEnd(toolResultMessage))
 }
 
-private suspend fun emitToolExecutionStart(
-    toolCall: ToolCall,
-    emit: suspend (AgentEvent) -> Unit,
-) {
+private suspend fun emitToolExecutionStart(toolCall: ToolCall, emit: suspend (AgentEvent) -> Unit) {
     emit(
         AgentEvent.ToolExecutionStart(
             toolCallId = toolCall.id,
             toolName = toolCall.name,
-            arguments = parseRawArguments(toolCall.arguments) ?: JsonObject(emptyMap()),
-        ),
+            arguments = parseRawArguments(toolCall.arguments) ?: JsonObject(emptyMap())
+        )
     )
 }
 
@@ -589,5 +579,5 @@ private fun unsupportedErrorMessage(model: Model, timestamp: Long): AssistantMes
         model = model.id,
         stopReason = StopReason.ERROR,
         errorMessage = "Provider stream completed without a terminal event",
-        timestamp = timestamp,
+        timestamp = timestamp
     )

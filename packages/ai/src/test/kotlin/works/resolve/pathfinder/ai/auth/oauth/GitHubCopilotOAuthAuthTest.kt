@@ -7,12 +7,11 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.test.TestScope
 import kotlin.time.Clock
 import kotlin.time.Instant
-import works.resolve.pathfinder.ai.testing.FakeClock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -24,6 +23,7 @@ import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.ai.auth.OAuthCredential
+import works.resolve.pathfinder.ai.testing.FakeClock
 
 /** Faked HTTP and virtual time (`runTest` + scheduler clock) keep poll sleeps and retry backoffs instant. */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -52,9 +52,7 @@ class GitHubCopilotOAuthAuthTest {
         }
     }
 
-    private class RecordingInteraction(
-        var textResponse: String = "",
-    ) : AuthInteraction {
+    private class RecordingInteraction(var textResponse: String = "") : AuthInteraction {
         val events = mutableListOf<AuthEvent>()
         val prompts = mutableListOf<AuthPrompt>()
 
@@ -73,22 +71,22 @@ class GitHubCopilotOAuthAuthTest {
 
     private fun ok(body: String) = json(200, body)
 
-    private fun copilotTokenJson(token: String = "tid=1;exp=99;proxy-ep=proxy.individual.githubcopilot.com;se=2") =
-        """{"token":"$token","expires_at":1000,"refresh_in":1500,"endpoints":{}}"""
+    private fun copilotTokenJson(
+        token: String = "tid=1;exp=99;proxy-ep=proxy.individual.githubcopilot.com;se=2"
+    ) = """{"token":"$token","expires_at":1000,"refresh_in":1500,"endpoints":{}}"""
 
     private fun deviceCodeJson(interval: Int? = null) =
         """{"device_code":"DC","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device"${
             interval?.let { ""","interval":$it""" } ?: ""
         },"expires_in":900}"""
 
-    private fun modelsJson(vararg entries: String) =
-        """{"data":[${entries.joinToString(",")}]}"""
+    private fun modelsJson(vararg entries: String) = """{"data":[${entries.joinToString(",")}]}"""
 
     private fun modelEntry(
         id: String,
         picker: Boolean = true,
         state: String? = "enabled",
-        toolCalls: Boolean? = true,
+        toolCalls: Boolean? = true
     ): String = buildString {
         append("""{"id":"$id","model_picker_enabled":$picker,"capabilities":{"supports":{""")
         if (toolCalls != null) append("\"tool_calls\":$toolCalls")
@@ -100,7 +98,7 @@ class GitHubCopilotOAuthAuthTest {
     private fun auth(
         http: FakeHttpClient,
         known: Set<String> = setOf("gpt-4.1", "claude-sonnet-5", "grok-4.6"),
-        clock: Clock = FakeClock(0L),
+        clock: Clock = FakeClock(0L)
     ) = GitHubCopilotOAuthAuth(http = http, knownModelIds = known, clock = clock)
 
     private fun FakeHttpClient.happyPath(
@@ -109,9 +107,9 @@ class GitHubCopilotOAuthAuthTest {
             modelEntry("gpt-4.1"),
             modelEntry("claude-sonnet-5", state = "unconfigured"),
             modelEntry("grok-4.6", picker = false, state = "disabled"),
-            modelEntry("unknown-model", picker = false, state = "unconfigured"),
+            modelEntry("unknown-model", picker = false, state = "unconfigured")
         ),
-        policyResponses: List<OAuthHttpResponse> = emptyList(),
+        policyResponses: List<OAuthHttpResponse> = emptyList()
     ) {
         script += { ok(deviceCodeJson()) }
         script += { ok("""{"access_token":"gho_github","token_type":"bearer"}""") }
@@ -138,15 +136,15 @@ class GitHubCopilotOAuthAuthTest {
         assertEquals("https://github.com/login/device/code", deviceRequest.url)
         assertEquals(
             "client_id=Iv1.b507a08c87ecfe98&scope=read%3Auser",
-            deviceRequest.body.toString(Charsets.UTF_8),
+            deviceRequest.body.toString(Charsets.UTF_8)
         )
         assertEquals(
             mapOf(
                 "Accept" to "application/json",
                 "Content-Type" to "application/x-www-form-urlencoded",
-                "User-Agent" to "GitHubCopilotChat/0.35.0",
+                "User-Agent" to "GitHubCopilotChat/0.35.0"
             ),
-            deviceRequest.headers,
+            deviceRequest.headers
         )
 
         val pollRequest = http.requests[1]
@@ -154,7 +152,7 @@ class GitHubCopilotOAuthAuthTest {
         assertEquals(
             "client_id=Iv1.b507a08c87ecfe98&device_code=DC" +
                 "&grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code",
-            pollRequest.body.toString(Charsets.UTF_8),
+            pollRequest.body.toString(Charsets.UTF_8)
         )
 
         val exchangeRequest = http.requests[2]
@@ -166,12 +164,16 @@ class GitHubCopilotOAuthAuthTest {
                 "User-Agent" to "GitHubCopilotChat/0.35.0",
                 "Editor-Version" to "vscode/1.107.0",
                 "Editor-Plugin-Version" to "copilot-chat/0.35.0",
-                "Copilot-Integration-Id" to "vscode-chat",
+                "Copilot-Integration-Id" to "vscode-chat"
             ),
-            GitHubCopilotOAuthAuth.COPILOT_HEADERS,
+            GitHubCopilotOAuthAuth.COPILOT_HEADERS
         )
         assertEquals("Bearer gho_github", exchangeRequest.headers["Authorization"])
-        assertTrue(exchangeRequest.headers.entries.containsAll(GitHubCopilotOAuthAuth.COPILOT_HEADERS.entries))
+        assertTrue(
+            exchangeRequest.headers.entries.containsAll(
+                GitHubCopilotOAuthAuth.COPILOT_HEADERS.entries
+            )
+        )
 
         val deviceEvent = interaction.events.filterIsInstance<AuthEvent.DeviceCode>().single()
         assertEquals("ABCD-1234", deviceEvent.userCode)
@@ -212,7 +214,12 @@ class GitHubCopilotOAuthAuthTest {
     @Test
     fun `untrusted verification_uri is rejected`() = runTest {
         val http = FakeHttpClient()
-        http.script += { ok("""{"device_code":"DC","user_code":"ABCD-1234","verification_uri":"file:///bin/sh","expires_in":900}""") }
+        http.script +=
+            {
+                ok(
+                    """{"device_code":"DC","user_code":"ABCD-1234","verification_uri":"file:///bin/sh","expires_in":900}"""
+                )
+            }
         val error = assertFailsWith<IllegalStateException> {
             auth(http).login(RecordingInteraction())
         }
@@ -222,7 +229,12 @@ class GitHubCopilotOAuthAuthTest {
     @Test
     fun `malformed device code fields fail with pi's message`() = runTest {
         val http = FakeHttpClient()
-        http.script += { ok("""{"device_code":"DC","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","interval":"fast","expires_in":900}""") }
+        http.script +=
+            {
+                ok(
+                    """{"device_code":"DC","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","interval":"fast","expires_in":900}"""
+                )
+            }
         val error = assertFailsWith<IllegalStateException> {
             auth(http).login(RecordingInteraction())
         }
@@ -241,7 +253,13 @@ class GitHubCopilotOAuthAuthTest {
 
         val credential = auth(http, clock = virtualClock).login(RecordingInteraction())
 
-        assertEquals(3, http.requests.count { it.url == "https://github.com/login/oauth/access_token" })
+        assertEquals(
+            3,
+            http.requests.count {
+                it.url ==
+                    "https://github.com/login/oauth/access_token"
+            }
+        )
         assertEquals("gho_late", credential.refresh)
     }
 
@@ -270,7 +288,8 @@ class GitHubCopilotOAuthAuthTest {
     @Test
     fun `non-ok device code response fails with status and body`() = runTest {
         val http = FakeHttpClient()
-        http.script += { json(404, """{"error":"not_found","error_description":"no such client"}""") }
+        http.script +=
+            { json(404, """{"error":"not_found","error_description":"no such client"}""") }
         val error = assertFailsWith<IllegalStateException> {
             auth(http).login(RecordingInteraction())
         }
@@ -283,7 +302,7 @@ class GitHubCopilotOAuthAuthTest {
             """{"token":123,"expires_at":1000}""" to "Invalid Copilot token response fields",
             """{"token":"t"}""" to "Invalid Copilot token response fields",
             """[]""" to "Invalid Copilot token response fields",
-            """"scalar"""" to "Invalid Copilot token response",
+            """"scalar"""" to "Invalid Copilot token response"
         )) {
             val http = FakeHttpClient()
             http.script += { ok(deviceCodeJson()) }
@@ -309,10 +328,11 @@ class GitHubCopilotOAuthAuthTest {
         assertEquals(
             mapOf(
                 "Accept" to "application/json",
-                "Authorization" to "Bearer " + "tid=1;exp=99;proxy-ep=proxy.individual.githubcopilot.com;se=2",
-                "X-GitHub-Api-Version" to "2026-06-01",
+                "Authorization" to
+                    "Bearer " + "tid=1;exp=99;proxy-ep=proxy.individual.githubcopilot.com;se=2",
+                "X-GitHub-Api-Version" to "2026-06-01"
             ) + GitHubCopilotOAuthAuth.COPILOT_HEADERS,
-            modelsRequest.headers,
+            modelsRequest.headers
         )
     }
 
@@ -327,16 +347,22 @@ class GitHubCopilotOAuthAuthTest {
                 modelEntry("gpt-4.1-b", state = "disabled"),
                 modelEntry("claude-sonnet-5-x", state = "unconfigured"),
                 modelEntry("toolless", toolCalls = false),
-                modelEntry("toolless-ok", toolCalls = null),
-            ),
+                modelEntry("toolless-ok", toolCalls = null)
+            )
         )
         val parsed = a.parseGitHubCopilotModelCatalog(raw, allowPolicyFallback = false)
         // Picker models are available unless explicitly disabled — missing policy state counts as available.
-        assertEquals(listOf("gpt-4.1", "claude-sonnet-5", "claude-sonnet-5-x", "toolless-ok"), parsed.availableModelIds)
+        assertEquals(
+            listOf("gpt-4.1", "claude-sonnet-5", "claude-sonnet-5-x", "toolless-ok"),
+            parsed.availableModelIds
+        )
         assertEquals(listOf("claude-sonnet-5"), parsed.policyModelIds)
 
         val error = assertFailsWith<IllegalStateException> {
-            a.parseGitHubCopilotModelCatalog(Json.parseToJsonElement("""{"data":{}}"""), allowPolicyFallback = false)
+            a.parseGitHubCopilotModelCatalog(
+                Json.parseToJsonElement("""{"data":{}}"""),
+                allowPolicyFallback = false
+            )
         }
         assertEquals("Invalid Copilot models response", error.message)
     }
@@ -347,8 +373,8 @@ class GitHubCopilotOAuthAuthTest {
         val raw = Json.parseToJsonElement(
             modelsJson(
                 modelEntry("gpt-4.1", picker = false, state = "enabled"),
-                modelEntry("claude-sonnet-5", picker = false, state = "unconfigured"),
-            ),
+                modelEntry("claude-sonnet-5", picker = false, state = "unconfigured")
+            )
         )
         val fallback = a.parseGitHubCopilotModelCatalog(raw, allowPolicyFallback = true)
         assertEquals(listOf("gpt-4.1"), fallback.availableModelIds)
@@ -364,7 +390,7 @@ class GitHubCopilotOAuthAuthTest {
         val http = FakeHttpClient()
         http.happyPath(
             tokenBody = """{"token":"tid=1;exp=99","expires_at":1000}""",
-            modelsBody = modelsJson(modelEntry("gpt-4.1", picker = false, state = "enabled")),
+            modelsBody = modelsJson(modelEntry("gpt-4.1", picker = false, state = "enabled"))
         )
         val interaction = RecordingInteraction(textResponse = "company.ghe.com")
 
@@ -382,36 +408,45 @@ class GitHubCopilotOAuthAuthTest {
             modelsBody = modelsJson(
                 modelEntry("gpt-4.1"),
                 modelEntry("claude-sonnet-5", state = "unconfigured"),
-                modelEntry("grok-4.6", state = "unconfigured"),
+                modelEntry("grok-4.6", state = "unconfigured")
             ),
             policyResponses = listOf(
                 ok("""{"policy":{"state":"enabled"}}"""),
-                json(500, "boom"),
-            ),
+                json(500, "boom")
+            )
         )
         val interaction = RecordingInteraction()
 
         val credential = auth(http).login(interaction)
 
-        assertEquals(AuthEvent.Progress("Enabling models..."), interaction.events.filterIsInstance<AuthEvent.Progress>().single())
+        assertEquals(
+            AuthEvent.Progress("Enabling models..."),
+            interaction.events.filterIsInstance<AuthEvent.Progress>().single()
+        )
 
         for ((index, modelId) in listOf("claude-sonnet-5", "grok-4.6").withIndex()) {
             val policyRequest = http.requests[4 + index]
             assertEquals(
                 "https://api.individual.githubcopilot.com/models/$modelId/policy",
-                policyRequest.url,
+                policyRequest.url
             )
             assertEquals("POST", policyRequest.method)
             assertEquals("""{"state":"enabled"}""", policyRequest.body.toString(Charsets.UTF_8))
             assertEquals("chat-policy", policyRequest.headers["openai-intent"])
             assertEquals("chat-policy", policyRequest.headers["x-interaction-type"])
-            assertTrue(policyRequest.headers.entries.containsAll(GitHubCopilotOAuthAuth.COPILOT_HEADERS.entries))
+            assertTrue(
+                policyRequest.headers.entries.containsAll(
+                    GitHubCopilotOAuthAuth.COPILOT_HEADERS.entries
+                )
+            )
         }
         // Picker-enabled unconfigured models are available up front; the
         // failed enablement (HTTP 500) just adds nothing.
         assertEquals(
             listOf("gpt-4.1", "claude-sonnet-5", "grok-4.6"),
-            (credential.extras["availableModelIds"] as JsonArray).map { (it as JsonPrimitive).content },
+            (credential.extras["availableModelIds"] as JsonArray).map {
+                (it as JsonPrimitive).content
+            }
         )
     }
 
@@ -421,12 +456,15 @@ class GitHubCopilotOAuthAuthTest {
         http.happyPath(
             modelsBody = modelsJson(
                 modelEntry("claude-sonnet-5", state = "unconfigured"),
-                modelEntry("grok-4.6", state = "unconfigured"),
-            ),
+                modelEntry("grok-4.6", state = "unconfigured")
+            )
         )
         // Three 429s exhaust maxRetries=2 (retry-after 0 keeps virtual time still);
         // pi treats this as best-effort: the batch stops, login still succeeds.
-        repeat(3) { http.script += { json(429, """{"error":"rate_limited"}""", mapOf("retry-after" to listOf("0"))) } }
+        repeat(3) {
+            http.script +=
+                { json(429, """{"error":"rate_limited"}""", mapOf("retry-after" to listOf("0"))) }
+        }
 
         val credential = auth(http, clock = virtualClock).login(RecordingInteraction())
 
@@ -435,7 +473,9 @@ class GitHubCopilotOAuthAuthTest {
         // Only the picker-available ids survive; neither enablement succeeded.
         assertEquals(
             listOf("claude-sonnet-5", "grok-4.6"),
-            (credential.extras["availableModelIds"] as JsonArray).map { (it as JsonPrimitive).content },
+            (credential.extras["availableModelIds"] as JsonArray).map {
+                (it as JsonPrimitive).content
+            }
         )
     }
 
@@ -451,7 +491,13 @@ class GitHubCopilotOAuthAuthTest {
         auth(http, clock = virtualClock).login(RecordingInteraction())
 
         // maxRetries=2: two 429 retries, then success.
-        assertEquals(3, http.requests.count { it.url == "https://api.individual.githubcopilot.com/models" })
+        assertEquals(
+            3,
+            http.requests.count {
+                it.url ==
+                    "https://api.individual.githubcopilot.com/models"
+            }
+        )
     }
 
     @Test
@@ -489,7 +535,8 @@ class GitHubCopilotOAuthAuthTest {
         http.happyPath()
         http.script.removeAt(3)
         // A date before the fixed-epoch clock clamps to an immediate retry.
-        http.script += { json(429, "x", mapOf("retry-after" to listOf("Wed, 21 Oct 2015 07:28:00 GMT"))) }
+        http.script +=
+            { json(429, "x", mapOf("retry-after" to listOf("Wed, 21 Oct 2015 07:28:00 GMT"))) }
         http.script += { ok(modelsJson(modelEntry("gpt-4.1"))) }
 
         auth(http, clock = FakeClock(1_700_000_000_000L)).login(RecordingInteraction())
@@ -502,31 +549,49 @@ class GitHubCopilotOAuthAuthTest {
     }
 
     @Test
-    fun `refresh rotates the access token, keeps the refresh token, and refreshes model ids`() = runTest {
-        val http = FakeHttpClient()
-        http.script += { ok(copilotTokenJson(token = "tid=2;exp=99;proxy-ep=proxy.business.githubcopilot.com")) }
-        http.script += { ok(modelsJson(modelEntry("gpt-4.1"), modelEntry("claude-sonnet-5"))) }
-        val stored = OAuthCredential(
-            access = "old-access",
-            refresh = "gho_keep",
-            expires = 1,
-            extras = mapOf(
-                "enterpriseUrl" to JsonPrimitive("company.ghe.com"),
-                "availableModelIds" to JsonArray(listOf(JsonPrimitive("stale"))),
-            ),
-        )
+    fun `refresh rotates the access token, keeps the refresh token, and refreshes model ids`() =
+        runTest {
+            val http = FakeHttpClient()
+            http.script +=
+                {
+                    ok(
+                        copilotTokenJson(
+                            token = "tid=2;exp=99;proxy-ep=proxy.business.githubcopilot.com"
+                        )
+                    )
+                }
+            http.script += { ok(modelsJson(modelEntry("gpt-4.1"), modelEntry("claude-sonnet-5"))) }
+            val stored = OAuthCredential(
+                access = "old-access",
+                refresh = "gho_keep",
+                expires = 1,
+                extras = mapOf(
+                    "enterpriseUrl" to JsonPrimitive("company.ghe.com"),
+                    "availableModelIds" to JsonArray(listOf(JsonPrimitive("stale")))
+                )
+            )
 
-        val refreshed = auth(http).refresh(stored)
+            val refreshed = auth(http).refresh(stored)
 
-        assertEquals("tid=2;exp=99;proxy-ep=proxy.business.githubcopilot.com", refreshed.access)
-        assertEquals("gho_keep", refreshed.refresh)
-        assertEquals("company.ghe.com", refreshed.extras["enterpriseUrl"]?.let { (it as JsonPrimitive).content })
-        assertEquals(
-            listOf("gpt-4.1", "claude-sonnet-5"),
-            (refreshed.extras["availableModelIds"] as JsonArray).map { (it as JsonPrimitive).content },
-        )
-        assertEquals("https://api.company.ghe.com/copilot_internal/v2/token", http.requests[0].url)
-    }
+            assertEquals("tid=2;exp=99;proxy-ep=proxy.business.githubcopilot.com", refreshed.access)
+            assertEquals("gho_keep", refreshed.refresh)
+            assertEquals(
+                "company.ghe.com",
+                refreshed.extras["enterpriseUrl"]?.let {
+                    (it as JsonPrimitive).content
+                }
+            )
+            assertEquals(
+                listOf("gpt-4.1", "claude-sonnet-5"),
+                (refreshed.extras["availableModelIds"] as JsonArray).map {
+                    (it as JsonPrimitive).content
+                }
+            )
+            assertEquals(
+                "https://api.company.ghe.com/copilot_internal/v2/token",
+                http.requests[0].url
+            )
+        }
 
     @Test
     fun `refresh without 429 retries fails immediately on the first 429`() = runTest {
@@ -549,14 +614,21 @@ class GitHubCopilotOAuthAuthTest {
             OAuthCredential(
                 access = "tid=1;exp=9;proxy-ep=proxy.individual.githubcopilot.com;x=1",
                 refresh = "gho",
-                expires = Long.MAX_VALUE,
-            ),
+                expires = Long.MAX_VALUE
+            )
         )
-        assertEquals("tid=1;exp=9;proxy-ep=proxy.individual.githubcopilot.com;x=1", individual.apiKey)
+        assertEquals(
+            "tid=1;exp=9;proxy-ep=proxy.individual.githubcopilot.com;x=1",
+            individual.apiKey
+        )
         assertEquals("https://api.individual.githubcopilot.com", individual.baseUrl)
 
         val business = a.toAuth(
-            OAuthCredential("tid=1;proxy-ep=proxy.business.githubcopilot.com", "gho", Long.MAX_VALUE),
+            OAuthCredential(
+                "tid=1;proxy-ep=proxy.business.githubcopilot.com",
+                "gho",
+                Long.MAX_VALUE
+            )
         )
         assertEquals("https://api.business.githubcopilot.com", business.baseUrl)
 
@@ -565,8 +637,8 @@ class GitHubCopilotOAuthAuthTest {
                 access = "tid=1;exp=9",
                 refresh = "gho",
                 expires = Long.MAX_VALUE,
-                extras = mapOf("enterpriseUrl" to JsonPrimitive("https://GHE.Com")),
-            ),
+                extras = mapOf("enterpriseUrl" to JsonPrimitive("https://GHE.Com"))
+            )
         )
         assertEquals("https://copilot-api.ghe.com", enterprise.baseUrl)
 
@@ -577,9 +649,23 @@ class GitHubCopilotOAuthAuthTest {
     @Test
     fun `copilotEnterpriseDomain normalizes the stored extra`() = runTest {
         val a = auth(FakeHttpClient())
-        assertEquals("ghe.com", a.copilotEnterpriseDomain(OAuthCredential("a", "r", 1, mapOf("enterpriseUrl" to JsonPrimitive("https://ghe.com/x")))))
+        assertEquals(
+            "ghe.com",
+            a.copilotEnterpriseDomain(
+                OAuthCredential(
+                    "a",
+                    "r",
+                    1,
+                    mapOf("enterpriseUrl" to JsonPrimitive("https://ghe.com/x"))
+                )
+            )
+        )
         assertNull(a.copilotEnterpriseDomain(OAuthCredential("a", "r", 1)))
-        assertNull(a.copilotEnterpriseDomain(OAuthCredential("a", "r", 1, mapOf("enterpriseUrl" to JsonPrimitive("")))))
+        assertNull(
+            a.copilotEnterpriseDomain(
+                OAuthCredential("a", "r", 1, mapOf("enterpriseUrl" to JsonPrimitive("")))
+            )
+        )
     }
 
     @Test
@@ -605,7 +691,7 @@ class GitHubCopilotOAuthAuthTest {
         assertNull(a.getBaseUrlFromToken("tid=1;exp=9"))
         assertEquals(
             "https://api.enterprise-proxy.example.com",
-            a.getBaseUrlFromToken("tid=1;proxy-ep=proxy.enterprise-proxy.example.com;exp=9"),
+            a.getBaseUrlFromToken("tid=1;proxy-ep=proxy.enterprise-proxy.example.com;exp=9")
         )
     }
 
@@ -632,25 +718,33 @@ class GitHubCopilotOAuthAuthTest {
         val a = auth(FakeHttpClient())
         assertEquals(
             "https://github.com/login/device",
-            a.validateVerificationUri("HTTPS://GitHub.COM:443/login/device"),
+            a.validateVerificationUri("HTTPS://GitHub.COM:443/login/device")
         )
         assertEquals("https://github.com/", a.validateVerificationUri("https://github.com"))
         assertEquals("https://github.com/", a.validateVerificationUri("https://GITHUB.com"))
         assertEquals(
             "http://github.com/login?x=1#frag",
-            a.validateVerificationUri("http://github.com:80/login?x=1#frag"),
+            a.validateVerificationUri("http://github.com:80/login?x=1#frag")
         )
         assertEquals(
             "https://github.com:8443/login",
-            a.validateVerificationUri("https://github.com:8443/login"),
+            a.validateVerificationUri("https://github.com:8443/login")
         )
     }
 
     @Test
     fun `authority-less and malformed verification uris are rejected`() {
         val a = auth(FakeHttpClient())
-        for (bad in listOf("http:foo", "https:", "//github.com", "file:///bin/sh", "github.com/login", "not a url")) {
-            val error = assertFailsWith<IllegalStateException>(bad) { a.validateVerificationUri(bad) }
+        for (bad in listOf(
+            "http:foo",
+            "https:",
+            "//github.com",
+            "file:///bin/sh",
+            "github.com/login",
+            "not a url"
+        )) {
+            val error =
+                assertFailsWith<IllegalStateException>(bad) { a.validateVerificationUri(bad) }
             assertEquals("Untrusted verification_uri in device code response", error.message)
         }
         // Control characters make the URI unparseable → untrusted.
@@ -663,7 +757,12 @@ class GitHubCopilotOAuthAuthTest {
     @Test
     fun `login rejects authority-less verification uri from the server`() = runTest {
         val http = FakeHttpClient()
-        http.script += { ok("""{"device_code":"DC","user_code":"ABCD-1234","verification_uri":"http:foo","expires_in":900}""") }
+        http.script +=
+            {
+                ok(
+                    """{"device_code":"DC","user_code":"ABCD-1234","verification_uri":"http:foo","expires_in":900}"""
+                )
+            }
         val error = assertFailsWith<IllegalStateException> {
             auth(http).login(RecordingInteraction())
         }
@@ -700,7 +799,14 @@ class GitHubCopilotOAuthAuthTest {
             json(429, """{"error":"rate_limited"}""", mapOf("retry-after" to listOf("0")))
         }
         http.script += { ok(modelsJson(modelEntry("gpt-4.1"))) }
-        val flow = GitHubCopilotOAuthAuth(http = http, knownModelIds = setOf("gpt-4.1"), clock = mutableClockOf { clock })
+        val flow =
+            GitHubCopilotOAuthAuth(
+                http = http,
+                knownModelIds = setOf("gpt-4.1"),
+                clock = mutableClockOf {
+                    clock
+                }
+            )
 
         val credential = flow.login(RecordingInteraction())
 
@@ -709,7 +815,9 @@ class GitHubCopilotOAuthAuthTest {
         assertEquals(2000, http.requests[4].timeoutMs)
         assertEquals(
             listOf("gpt-4.1"),
-            (credential.extras["availableModelIds"] as JsonArray).map { (it as JsonPrimitive).content },
+            (credential.extras["availableModelIds"] as JsonArray).map {
+                (it as JsonPrimitive).content
+            }
         )
     }
 
@@ -726,7 +834,14 @@ class GitHubCopilotOAuthAuthTest {
             clock += 4500
             json(429, """{"error":"rate_limited"}""", mapOf("retry-after" to listOf("1")))
         }
-        val flow = GitHubCopilotOAuthAuth(http = http, knownModelIds = setOf("gpt-4.1"), clock = mutableClockOf { clock })
+        val flow =
+            GitHubCopilotOAuthAuth(
+                http = http,
+                knownModelIds = setOf("gpt-4.1"),
+                clock = mutableClockOf {
+                    clock
+                }
+            )
 
         val error = assertFailsWith<IllegalStateException> {
             flow.login(RecordingInteraction())
@@ -744,7 +859,10 @@ class GitHubCopilotOAuthAuthTest {
         assertTrue(token !in unparseable.message!!)
         val nonError = a.statusError(500, """{"token":"$token"}""".toByteArray())
         assertEquals("500: <redacted response body>", nonError.message)
-        val structured = a.statusError(429, """{"error":"rate_limited","error_description":"too many"}""".toByteArray())
+        val structured = a.statusError(
+            429,
+            """{"error":"rate_limited","error_description":"too many"}""".toByteArray()
+        )
         assertEquals("429: rate_limited: too many", structured.message)
     }
 
@@ -777,8 +895,8 @@ class GitHubCopilotOAuthAuthTest {
         http.happyPath(
             modelsBody = modelsJson(
                 modelEntry("claude-sonnet-5", picker = false, state = "unconfigured"),
-                modelEntry("grok-4.6", picker = false, state = "unconfigured"),
-            ),
+                modelEntry("grok-4.6", picker = false, state = "unconfigured")
+            )
         )
         http.script += { throw IllegalStateException("tls blew up") }
         http.script += { ok("""{"policy":{"state":"enabled"}}""") }
@@ -789,13 +907,15 @@ class GitHubCopilotOAuthAuthTest {
         assertEquals(
             listOf(
                 "https://api.individual.githubcopilot.com/models/claude-sonnet-5/policy",
-                "https://api.individual.githubcopilot.com/models/grok-4.6/policy",
+                "https://api.individual.githubcopilot.com/models/grok-4.6/policy"
             ),
-            policyUrls,
+            policyUrls
         )
         assertEquals(
             listOf("grok-4.6"),
-            (credential.extras["availableModelIds"] as JsonArray).map { (it as JsonPrimitive).content },
+            (credential.extras["availableModelIds"] as JsonArray).map {
+                (it as JsonPrimitive).content
+            }
         )
     }
 }

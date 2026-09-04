@@ -1,5 +1,16 @@
 package works.resolve.pathfinder.ai.api
 
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Model
@@ -9,17 +20,6 @@ import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
-import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 /**
  * Ports the request-shaping half of pi's anthropic-auth-token.test.ts.
@@ -44,18 +44,18 @@ class AnthropicMessagesAuthTokenTest {
         input = listOf(InputModality.TEXT),
         cost = ModelCost(input = 0.0, output = 0.0, cacheRead = 0.0, cacheWrite = 0.0),
         contextWindow = 100_000,
-        maxTokens = 4096,
+        maxTokens = 4096
     )
 
     private val context = Context(
         systemPrompt = "System prompt.",
-        messages = listOf(UserMessage.ofText("Hello")),
+        messages = listOf(UserMessage.ofText("Hello"))
     )
 
     private fun api(transport: FakeTransport) = AnthropicMessagesApi(
         transport,
         ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
-        clock = FakeClock(1_770_000_000_000L),
+        clock = FakeClock(1_770_000_000_000L)
     )
 
     private fun okStream(): List<Pair<String?, String>> = listOf(
@@ -63,7 +63,7 @@ class AnthropicMessagesAuthTokenTest {
             """{"type":"message_start","message":{"id":"msg_test","usage":{"input_tokens":1,"output_tokens":0}}}""",
         "message_delta" to
             """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}""",
-        "message_stop" to """{"type":"message_stop"}""",
+        "message_stop" to """{"type":"message_stop"}"""
     )
 
     @Test
@@ -71,7 +71,11 @@ class AnthropicMessagesAuthTokenTest {
         val transport = FakeTransport()
         transport.enqueueNamedResponse(okStream())
         api(transport)
-            .stream(claude, context, AnthropicMessagesOptions(headers = mapOf("authorization" to "Bearer gateway-token")))
+            .stream(
+                claude,
+                context,
+                AnthropicMessagesOptions(headers = mapOf("authorization" to "Bearer gateway-token"))
+            )
             .toList()
 
         val request = transport.requests.single()
@@ -91,7 +95,9 @@ class AnthropicMessagesAuthTokenTest {
     fun `sends pi user agent by default for anthropic messages requests`() = runTest {
         val transport = FakeTransport()
         transport.enqueueNamedResponse(okStream())
-        api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "anthropic-key")).toList()
+        api(
+            transport
+        ).stream(claude, context, AnthropicMessagesOptions(apiKey = "anthropic-key")).toList()
 
         // Divergence: the product token is `pathfinder (...)`, not pi's
         // `pi (...)` — see getPiUserAgent().
@@ -106,13 +112,16 @@ class AnthropicMessagesAuthTokenTest {
             id = "kimi-for-coding",
             name = "Kimi For Coding",
             provider = "kimi-coding",
-            baseUrl = "https://api.kimi.com/coding",
+            baseUrl = "https://api.kimi.com/coding"
         )
         api(transport)
             .stream(
                 kimiCoding,
                 context,
-                AnthropicMessagesOptions(apiKey = "kimi-key", headers = mapOf("User-Agent" to "custom-client")),
+                AnthropicMessagesOptions(
+                    apiKey = "kimi-key",
+                    headers = mapOf("User-Agent" to "custom-client")
+                )
             )
             .toList()
 
@@ -130,13 +139,18 @@ class AnthropicMessagesAuthTokenTest {
                 context,
                 AnthropicMessagesOptions(
                     apiKey = "k",
-                    headers = mapOf("authorization" to "Bearer explicit-token"),
-                ),
+                    headers = mapOf("authorization" to "Bearer explicit-token")
+                )
             )
             .toList()
 
         val request = transport.requests.single()
-        assertEquals(1, request.headers.keys.count { it.equals("authorization", ignoreCase = true) })
+        assertEquals(
+            1,
+            request.headers.keys.count {
+                it.equals("authorization", ignoreCase = true)
+            }
+        )
         assertEquals("Bearer explicit-token", request.headers["authorization"])
         // pi's ambient auth-token collapses to the Authorization header; the
         // apiKey pathfinder uses instead stays on x-api-key alongside it.

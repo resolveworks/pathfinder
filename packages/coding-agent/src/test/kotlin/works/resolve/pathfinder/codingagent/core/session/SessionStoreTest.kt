@@ -1,7 +1,17 @@
 package works.resolve.pathfinder.codingagent.core.session
 
-import works.resolve.pathfinder.agent.*
-
+import java.io.File
+import kotlin.test.assertFailsWith
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.ImageContent
@@ -17,18 +27,6 @@ import works.resolve.pathfinder.logging.PathfinderDiagnostics
 import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
 import works.resolve.pathfinder.telemetry.SpanStatus
 import works.resolve.pathfinder.telemetry.attr
-import java.io.File
-import kotlin.test.assertFailsWith
-import kotlinx.coroutines.test.runTest
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertThrows
-import org.junit.Assert.assertTrue
-import org.junit.Rule
-import org.junit.Test
-import org.junit.rules.TemporaryFolder
 
 class SessionStoreTest {
 
@@ -45,7 +43,7 @@ class SessionStoreTest {
             root = root,
             clock = clock,
             idFactory = { "sess-${nextId++}" },
-            maxFileBytes = maxFileBytes,
+            maxFileBytes = maxFileBytes
         )
     }
 
@@ -55,7 +53,7 @@ class SessionStoreTest {
             root = root,
             clock = clock,
             idFactory = { nextId++.toString() },
-            maxFileBytes = maxFileBytes,
+            maxFileBytes = maxFileBytes
         )
     }
 
@@ -63,37 +61,47 @@ class SessionStoreTest {
         UserMessage(
             content = listOf(
                 TextContent("hello"),
-                ImageContent(data = "aGk=", mimeType = "image/png"),
+                ImageContent(data = "aGk=", mimeType = "image/png")
             ),
-            timestamp = 1L,
+            timestamp = 1L
         ),
         AssistantMessage(
             content = listOf(
                 ThinkingContent(thinking = "hmm", thinkingSignature = "sig-1"),
                 TextContent("hi there"),
-                ToolCall(id = "call-1", name = "get_weather", arguments = """{"city":"Oslo"}"""),
+                ToolCall(id = "call-1", name = "get_weather", arguments = """{"city":"Oslo"}""")
             ),
             api = "openai-completions",
             provider = "zai",
             model = "glm-4.6",
             usage = Usage(
-                input = 10, output = 20, cacheRead = 5, cacheWrite = 2,
-                reasoning = 3, totalTokens = 35,
-                cost = Cost(input = 0.001, output = 0.002, cacheRead = 0.0001, cacheWrite = 0.0002, total = 0.0033),
+                input = 10,
+                output = 20,
+                cacheRead = 5,
+                cacheWrite = 2,
+                reasoning = 3,
+                totalTokens = 35,
+                cost = Cost(
+                    input = 0.001,
+                    output = 0.002,
+                    cacheRead = 0.0001,
+                    cacheWrite = 0.0002,
+                    total = 0.0033
+                )
             ),
             stopReason = StopReason.TOOL_USE,
             errorMessage = null,
             rawStopReason = "tool_calls",
             responseId = "resp-9",
             responseModel = "glm-4.6-actual",
-            timestamp = 2L,
+            timestamp = 2L
         ),
         ToolResultMessage(
             toolCallId = "call-1",
             toolName = "get_weather",
             content = listOf(TextContent("""{"temp":12}""")),
             isError = false,
-            timestamp = 3L,
+            timestamp = 3L
         ),
         AssistantMessage(
             content = listOf(TextContent("It is 12 degrees.")),
@@ -102,8 +110,8 @@ class SessionStoreTest {
             model = "glm-4.6",
             stopReason = StopReason.ERROR,
             errorMessage = "boom",
-            timestamp = 4L,
-        ),
+            timestamp = 4L
+        )
     )
 
     @Test
@@ -142,16 +150,27 @@ class SessionStoreTest {
         val rootEntry = MessageEntry("m0", 1, null, 1L, UserMessage.ofText("a", 1L))
         val left = MessageEntry("m1", 2, "m0", 2L, UserMessage.ofText("b", 2L))
         val right = MessageEntry("m2", 3, "m0", 3L, UserMessage.ofText("c", 3L))
-        val saved = store.save(created.copy(entries = listOf(rootEntry, left, right), leafId = "m2"))
+        val saved = store.save(
+            created.copy(entries = listOf(rootEntry, left, right), leafId = "m2")
+        )
 
         val reloaded = newStore().load(created.id)!!
         assertEquals(saved, reloaded)
         assertEquals(listOf(rootEntry, left, right).map { it.id }, reloaded.entries.map { it.id })
         assertEquals("m2", reloaded.leafId)
-        assertEquals(listOf("a", "c"), reloaded.messages.map { (it as UserMessage).content.single().let { c -> (c as TextContent).text } })
+        assertEquals(
+            listOf("a", "c"),
+            reloaded.messages.map {
+                (it as UserMessage).content.single().let { c -> (c as TextContent).text }
+            }
+        )
         // The branch persisted as a lane mutation (pi's moveLane-before-append order).
         val lines = File(root, "${created.id}.jsonl").readLines()
-        assertTrue(lines.any { it.contains("\"kind\":\"lane\"") && it.contains("\"leafId\":\"m0\"") })
+        assertTrue(
+            lines.any {
+                it.contains("\"kind\":\"lane\"") && it.contains("\"leafId\":\"m0\"")
+            }
+        )
     }
 
     @Test
@@ -167,9 +186,13 @@ class SessionStoreTest {
             conversation = conversation.append(UserMessage.ofText("m$i", i.toLong()))
             store.save(
                 Session(
-                    created.id, created.title, created.createdAt, created.updatedAt,
-                    entries = conversation.entries, leafId = conversation.leafId,
-                ),
+                    created.id,
+                    created.title,
+                    created.createdAt,
+                    created.updatedAt,
+                    entries = conversation.entries,
+                    leafId = conversation.leafId
+                )
             )
             assertTrue(file.length() > previousLength)
             assertEquals(headerLine, file.readLines().first())
@@ -224,7 +247,9 @@ class SessionStoreTest {
         val id = store.create().id
         val messages = mutableListOf(UserMessage.ofText("a"))
         val conversation = Conversation.fromMessages(messages)
-        store.save(Session(id, "t", 1, 1, entries = conversation.entries, leafId = conversation.leafId))
+        store.save(
+            Session(id, "t", 1, 1, entries = conversation.entries, leafId = conversation.leafId)
+        )
         messages.add(UserMessage.ofText("sneaky"))
 
         val loaded = store.load(id)!!
@@ -274,11 +299,11 @@ class SessionStoreTest {
         val id = store.create().id
         // Legacy whole-file format-3 snapshot: invisible to listing, never migrated.
         File(root, "$id.json").writeText(
-            """{"format":3,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[],"leafId":null}""",
+            """{"format":3,"id":"$id","title":"t","createdAt":1,"updatedAt":1,"entries":[],"leafId":null}"""
         )
         assertTrue(store.summaries().all { it.id != "$id.json" })
         File(root, "old.jsonl").writeText(
-            """{"kind":"header","version":3,"id":"old","createdAt":1}""",
+            """{"kind":"header","version":3,"id":"old","createdAt":1}"""
         )
         assertFailsWithSessionError { store.load("old") }
         assertTrue(store.summaries().none { it.id == "old" })
@@ -302,27 +327,27 @@ class SessionStoreTest {
             File(root, "$id.jsonl").writeText(
                 """{"kind":"header","version":4,"id":"$id","createdAt":0}
                     |$payload
-                """.trimMargin(),
+                """.trimMargin()
             )
         }
 
         writeMutationLine(
-            """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"system","timestamp":0}}""",
+            """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"system","timestamp":0}}"""
         )
         assertFailsWithSessionError { store.load(id) }
 
         writeMutationLine(
-            """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":0,"content":[{"type":"audio"}]}}""",
+            """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":0,"content":[{"type":"audio"}]}}"""
         )
         assertFailsWithSessionError { store.load(id) }
 
         writeMutationLine(
-            """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"mystery","parentId":null,"timestamp":0}""",
+            """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"mystery","parentId":null,"timestamp":0}"""
         )
         assertFailsWithSessionError { store.load(id) }
 
         writeMutationLine(
-            """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m","stopReason":"STOP"}}""",
+            """{"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"assistant","timestamp":0,"content":[],"api":"a","provider":"p","model":"m","stopReason":"STOP"}}"""
         )
         assertFailsWithSessionError { store.load(id) }
     }
@@ -336,14 +361,14 @@ class SessionStoreTest {
             """{"kind":"header","version":4,"id":"$id","createdAt":0}
                 {"kind":"fact","seq":1,"fact":"name","name":"t"}
                 {"kind":"entry","seq":3,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":0,"content":[]}}
-            """.trimIndent().trimMargin(),
+            """.trimIndent().trimMargin()
         )
         assertFailsWithSessionError { store.load(id) }
 
         File(root, "$id.jsonl").writeText(
             """{"kind":"header","version":4,"id":"$id","createdAt":0}
                 {"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":"ghost","timestamp":0,"message":{"role":"user","timestamp":0,"content":[]}}
-            """.trimIndent().trimMargin(),
+            """.trimIndent().trimMargin()
         )
         assertFailsWithSessionError { store.load(id) }
     }
@@ -376,7 +401,7 @@ class SessionStoreTest {
         file.writeText(
             """{"kind":"header","version":4,"id":"${created.id}","createdAt":0}
                 {"kind":"zzz","seq":1}
-            """.trimIndent().trimMargin() + "\n",
+            """.trimIndent().trimMargin() + "\n"
         )
         assertFailsWithSessionError { newStore().load(created.id) }
     }
@@ -397,7 +422,10 @@ class SessionStoreTest {
         assertEquals(1, reloaded!!.messages.size)
         // The repair appended the missing newline, so the next append is well-formed.
         val store3 = newStore()
-        val grown = Conversation(reloaded.entries, reloaded.leafId).append(UserMessage.ofText("b", 2L))
+        val grown = Conversation(
+            reloaded.entries,
+            reloaded.leafId
+        ).append(UserMessage.ofText("b", 2L))
         store3.save(reloaded.copy(entries = grown.entries, leafId = grown.leafId))
         val reloaded2 = newStore().load(created.id)!!
         assertEquals(2, reloaded2.messages.size)
@@ -470,14 +498,14 @@ class SessionStoreTest {
         File(root, "$id.jsonl").writeText(
             """{"kind":"header","version":4,"id":"$id","createdAt":0}
                 {"kind":"entry","seq":1,"lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":"7","content":[]}}
-            """.trimIndent().trimMargin() + "\n",
+            """.trimIndent().trimMargin() + "\n"
         )
         assertFailsWithSessionError { store.load(id) }
 
         File(root, "$id.jsonl").writeText(
             """{"kind":"header","version":4,"id":"$id","createdAt":0}
                 {"kind":"entry","seq":"1","lane":"main","id":"m0","type":"message","parentId":null,"timestamp":0,"message":{"role":"user","timestamp":0,"content":[]}}
-            """.trimIndent().trimMargin() + "\n",
+            """.trimIndent().trimMargin() + "\n"
         )
         assertFailsWithSessionError { store.load(id) }
     }
@@ -487,7 +515,7 @@ class SessionStoreTest {
         val store = newStore()
         val id = store.create().id
         File(root, "$id.jsonl").writeText(
-            """{"kind":"header","version":4,"id":"other","createdAt":0}""",
+            """{"kind":"header","version":4,"id":"other","createdAt":0}"""
         )
         assertFailsWithSessionError { store.load(id) }
         // Corrupt entries are skipped by summaries.
@@ -523,7 +551,7 @@ class SessionStoreTest {
             root = tmpFolder.newFolder("telemetry-ok"),
             clock = clock,
             idFactory = { "sess-t" },
-            diagnostics = PathfinderDiagnostics(telemetry),
+            diagnostics = PathfinderDiagnostics(telemetry)
         )
         val created = store.create("t")
         assertNotNull(store.load(created.id))
@@ -546,14 +574,19 @@ class SessionStoreTest {
             root = rootFail,
             clock = clock,
             idFactory = { "sess-f" },
-            diagnostics = PathfinderDiagnostics(telemetry),
+            diagnostics = PathfinderDiagnostics(telemetry)
         )
         val id = store.create("t").id
         File(rootFail, "$id.jsonl").writeText("{corrupt")
 
         assertFailsWithSessionError { store.load(id) }
         val loadFailed = telemetry.getSpans().last { it.name == "pf.session.load" }
-        assertEquals(SpanStatus.Ok, telemetry.getSpans().first { it.name == "pf.session.save" }.status)
+        assertEquals(
+            SpanStatus.Ok,
+            telemetry.getSpans().first {
+                it.name == "pf.session.save"
+            }.status
+        )
         val error = loadFailed.status as SpanStatus.Error
         assertEquals("SessionError", error.error?.name) // short type name only
         assertEquals("", error.error?.message) // never exception text, paths, or content
@@ -571,7 +604,7 @@ class SessionStoreTest {
             root = tmpFolder.newFolder("telemetry-fork"),
             clock = clock,
             idFactory = { "sess-fork" },
-            diagnostics = PathfinderDiagnostics(telemetry),
+            diagnostics = PathfinderDiagnostics(telemetry)
         )
         val created = store.create("t")
         store.fork(created.id, ForkOptions.Tree, id = "sess-forked")
@@ -590,7 +623,7 @@ class SessionStoreTest {
             root = rootAsFile,
             clock = clock,
             idFactory = { "sess-w" },
-            diagnostics = PathfinderDiagnostics(telemetry),
+            diagnostics = PathfinderDiagnostics(telemetry)
         )
         assertFailsWithSessionError { store.create("t") }
         val saveFailed = telemetry.getSpans().single()

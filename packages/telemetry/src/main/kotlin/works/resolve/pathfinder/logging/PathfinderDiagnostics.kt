@@ -44,9 +44,9 @@ class PathfinderDiagnostics(private val context: TelemetryContext) {
                 name = SPAN_AUTH_LOGIN,
                 attributes = mapOf(
                     ATTR_AUTH_PROVIDER to attr(providerId),
-                    ATTR_AUTH_TYPE to attr(authType),
-                ),
-            ),
+                    ATTR_AUTH_TYPE to attr(authType)
+                )
+            )
         ) { span ->
             try {
                 val result = login()
@@ -66,7 +66,10 @@ class PathfinderDiagnostics(private val context: TelemetryContext) {
             try {
                 val value = read()
                 span.setAttributes(
-                    mapOf(ATTR_CREDENTIAL_OUTCOME to attr(if (value == null) OUTCOME_ABSENT else OUTCOME_DECRYPTED)),
+                    mapOf(
+                        ATTR_CREDENTIAL_OUTCOME to
+                            attr(if (value == null) OUTCOME_ABSENT else OUTCOME_DECRYPTED)
+                    )
                 )
                 value
             } catch (error: CancellationException) {
@@ -110,7 +113,12 @@ class PathfinderDiagnostics(private val context: TelemetryContext) {
         context.startSpan(credentialSpan(SPAN_CREDENTIAL_DELETE, providerId)) { span ->
             try {
                 val deleted = delete()
-                span.setAttributes(mapOf(ATTR_CREDENTIAL_OUTCOME to attr(if (deleted) OUTCOME_DELETED else OUTCOME_ABSENT)))
+                span.setAttributes(
+                    mapOf(
+                        ATTR_CREDENTIAL_OUTCOME to
+                            attr(if (deleted) OUTCOME_DELETED else OUTCOME_ABSENT)
+                    )
+                )
                 deleted
             } catch (error: CancellationException) {
                 span.setStatus(SpanStatus.Ok)
@@ -122,20 +130,23 @@ class PathfinderDiagnostics(private val context: TelemetryContext) {
         }
 
     /** A fork writes a new log but is the same persistence boundary as a save. */
-    suspend fun <T> sessionWrite(kind: SessionWrite, sessionId: String, operation: suspend () -> T): T =
-        context.startSpan(sessionSpan(kind.spanName, sessionId)) { span ->
-            try {
-                val result = operation()
-                span.setAttributes(mapOf(ATTR_SESSION_OUTCOME to attr(OUTCOME_PERSISTED)))
-                result
-            } catch (error: CancellationException) {
-                span.setStatus(SpanStatus.Ok)
-                throw error
-            } catch (error: Throwable) {
-                span.setStatus(typeOnlyError(error))
-                throw error
-            }
+    suspend fun <T> sessionWrite(
+        kind: SessionWrite,
+        sessionId: String,
+        operation: suspend () -> T
+    ): T = context.startSpan(sessionSpan(kind.spanName, sessionId)) { span ->
+        try {
+            val result = operation()
+            span.setAttributes(mapOf(ATTR_SESSION_OUTCOME to attr(OUTCOME_PERSISTED)))
+            result
+        } catch (error: CancellationException) {
+            span.setStatus(SpanStatus.Ok)
+            throw error
+        } catch (error: Throwable) {
+            span.setStatus(typeOnlyError(error))
+            throw error
         }
+    }
 
     /**
      * Records `pf.session.load`; unlike [sessionSummary], a failed load
@@ -156,7 +167,7 @@ class PathfinderDiagnostics(private val context: TelemetryContext) {
         spanName: String,
         sessionId: String,
         load: suspend () -> T,
-        skipped: Boolean,
+        skipped: Boolean
     ): T? = context.startSpan(sessionSpan(spanName, sessionId)) { span ->
         try {
             val session = load()
@@ -201,10 +212,17 @@ class PathfinderDiagnostics(private val context: TelemetryContext) {
      * been handled by the caller; recording must never re-observe it as a
      * behavior change.
      */
-    private suspend fun recordSwallowedFailure(spanName: String, attribute: Pair<String, String>, cause: Throwable) {
+    private suspend fun recordSwallowedFailure(
+        spanName: String,
+        attribute: Pair<String, String>,
+        cause: Throwable
+    ) {
         try {
             context.startSpan(
-                SpanOptions(name = spanName, attributes = mapOf(attribute.first to attr(attribute.second))),
+                SpanOptions(
+                    name = spanName,
+                    attributes = mapOf(attribute.first to attr(attribute.second))
+                )
             ) { span ->
                 span.setStatus(typeOnlyError(cause))
                 throw cause
@@ -217,12 +235,12 @@ class PathfinderDiagnostics(private val context: TelemetryContext) {
 
     private fun credentialSpan(name: String, providerId: String) = SpanOptions(
         name = name,
-        attributes = mapOf(ATTR_CREDENTIAL_PROVIDER to attr(providerId)),
+        attributes = mapOf(ATTR_CREDENTIAL_PROVIDER to attr(providerId))
     )
 
     private fun sessionSpan(name: String, sessionId: String) = SpanOptions(
         name = name,
-        attributes = mapOf(ATTR_SESSION_ID to attr(sessionId)),
+        attributes = mapOf(ATTR_SESSION_ID to attr(sessionId))
     )
 
     private val SessionWrite.spanName: String
@@ -271,7 +289,9 @@ class PathfinderDiagnostics(private val context: TelemetryContext) {
          * not replace the business exception.
          */
         private fun typeOnlyError(error: Throwable): SpanStatus = try {
-            SpanStatus.Error(TelemetryError(name = error::class.simpleName ?: "Throwable", message = ""))
+            SpanStatus.Error(
+                TelemetryError(name = error::class.simpleName ?: "Throwable", message = "")
+            )
         } catch (_: Throwable) {
             SpanStatus.Error(TelemetryError(name = "Throwable", message = ""))
         }

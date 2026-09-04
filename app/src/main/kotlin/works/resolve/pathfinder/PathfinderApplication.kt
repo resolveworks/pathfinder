@@ -5,29 +5,29 @@ import android.content.Context
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import works.resolve.pathfinder.runtime.NativeAgentFactory
-import works.resolve.pathfinder.ai.providers.ProviderCatalog
-import works.resolve.pathfinder.ai.transport.OkHttpTransport
-import works.resolve.pathfinder.ai.transport.OkHttpWebSocketTransport
+import java.io.File
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
 import works.resolve.pathfinder.ai.auth.CatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.CredentialStore
 import works.resolve.pathfinder.ai.auth.ProductionCatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
 import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
+import works.resolve.pathfinder.ai.providers.ProviderCatalog
+import works.resolve.pathfinder.ai.transport.OkHttpTransport
+import works.resolve.pathfinder.ai.transport.OkHttpWebSocketTransport
+import works.resolve.pathfinder.codingagent.core.session.SessionStore
 import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
-import works.resolve.pathfinder.codingagent.core.session.SessionStore
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.logging.LogcatTelemetryContext
+import works.resolve.pathfinder.logging.PathfinderDiagnostics
+import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.webfetch.WebViewPageFetcher
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
-import works.resolve.pathfinder.logging.PathfinderDiagnostics
 import works.resolve.pathfinder.ui.chat.ChatViewModel
-import java.io.File
-import java.util.concurrent.TimeUnit
-import okhttp3.OkHttpClient
 
 /**
  * Application-level manual dependency graph: every property is a lazy,
@@ -36,7 +36,9 @@ import okhttp3.OkHttpClient
  */
 class PathfinderApplication : Application() {
 
-    val diagnostics: PathfinderDiagnostics by lazy { PathfinderDiagnostics(LogcatTelemetryContext()) }
+    val diagnostics: PathfinderDiagnostics by lazy {
+        PathfinderDiagnostics(LogcatTelemetryContext())
+    }
 
     private val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -69,13 +71,15 @@ class PathfinderApplication : Application() {
     val appForegroundGate: AppForegroundGate by lazy { AppForegroundGate() }
 
     /** OAuth flows shared by the login UI and runtime auth resolution. */
-    val authRegistry: CatalogAuthRegistry by lazy { ProductionCatalogAuthRegistry(appForegroundGate) }
+    val authRegistry: CatalogAuthRegistry by lazy {
+        ProductionCatalogAuthRegistry(appForegroundGate)
+    }
 
     val authService: ProviderAuthService by lazy {
         ProviderAuthService(
             catalog = modelCatalog,
             registry = authRegistry,
-            credentials = credentials,
+            credentials = credentials
         )
     }
 
@@ -87,7 +91,9 @@ class PathfinderApplication : Application() {
     val webSearchTool: BraveWebSearchTool by lazy {
         BraveWebSearchTool(
             client = okHttpClient,
-            apiKeyResolver = { searchProviderService.apiKey(SearchProviderService.BRAVE_PROVIDER_ID) },
+            apiKeyResolver = {
+                searchProviderService.apiKey(SearchProviderService.BRAVE_PROVIDER_ID)
+            }
         )
     }
 
@@ -117,7 +123,7 @@ class PathfinderApplication : Application() {
             transport = transport,
             webSocketTransport = webSocketTransport,
             authRegistry = authRegistry,
-            tools = listOf(webSearchTool, webFetchTool),
+            tools = listOf(webSearchTool, webFetchTool)
         )
     }
 
@@ -132,7 +138,7 @@ class PathfinderApplication : Application() {
                 searchProviderService = searchProviderService,
                 modelResolver = agentFactory::resolveModel,
                 diagnostics = diagnostics,
-                appForegroundGate = appForegroundGate,
+                appForegroundGate = appForegroundGate
             )
         }
     }

@@ -49,16 +49,19 @@ class LogcatTelemetryTest {
         val expected = Any()
         var calls = 0
 
-        val result = telemetry.startSpan(SpanOptions(name = "success")) { calls++; expected }
+        val result = telemetry.startSpan(SpanOptions(name = "success")) {
+            calls++
+            expected
+        }
 
         assertSame(expected, result)
         assertEquals(1, calls)
         assertEquals(
             listOf(
                 "> success id=1 parent=-",
-                "< success id=1 status=ok duration_ms=1",
+                "< success id=1 status=ok duration_ms=1"
             ),
-            sink.messages,
+            sink.messages
         )
         assertFalse(sink.lines.any { it.isError })
     }
@@ -77,7 +80,11 @@ class LogcatTelemetryTest {
 
         val end = sink.lines.last()
         assertTrue(end.isError)
-        assertTrue(end.message.startsWith("< sync-error id=1 status=error error_name=IllegalStateException duration_ms="))
+        assertTrue(
+            end.message.startsWith(
+                "< sync-error id=1 status=error error_name=IllegalStateException duration_ms="
+            )
+        )
         // The exception message must never reach the sink.
         assertFalse(end.message.contains("secret message"))
     }
@@ -86,7 +93,10 @@ class LogcatTelemetryTest {
     fun `automatic error status is used when none was set`() = runBlocking {
         val (telemetry, sink) = context(RecordingSink())
         runCatching {
-            telemetry.startSpan(SpanOptions(name = "auto")) { delay(1); throw RuntimeException("boom") }
+            telemetry.startSpan(SpanOptions(name = "auto")) {
+                delay(1)
+                throw RuntimeException("boom")
+            }
         }
         val end = sink.lines.last()
         assertTrue(end.isError)
@@ -146,7 +156,13 @@ class LogcatTelemetryTest {
         val (telemetry, sink) = context(RecordingSink())
 
         telemetry.startSpan(
-            SpanOptions(name = "recording", attributes = mapOf("start" to attr("value"), "overwrite" to attr("start"))),
+            SpanOptions(
+                name = "recording",
+                attributes = mapOf(
+                    "start" to attr("value"),
+                    "overwrite" to attr("start")
+                )
+            )
         ) { span ->
             span.setAttributes(mapOf("count" to attr(1), "overwrite" to attr("middle")))
             span.setAttributes(mapOf("overwrite" to attr("end")))
@@ -158,7 +174,10 @@ class LogcatTelemetryTest {
         assertEquals("> recording id=1 parent=- start=value overwrite=start", messages[0])
         assertEquals("+ recording id=1 event=first index=1", messages[1])
         assertEquals("+ recording id=1 event=second index=2", messages[2])
-        assertEquals("< recording id=1 status=ok duration_ms=1 start=value overwrite=end count=1", messages[3])
+        assertEquals(
+            "< recording id=1 status=ok duration_ms=1 start=value overwrite=end count=1",
+            messages[3]
+        )
     }
 
     @Test
@@ -182,9 +201,16 @@ class LogcatTelemetryTest {
             override fun get(index: Int): String = throw IllegalStateException("read")
         }
 
-        telemetry.startSpan(SpanOptions(name = "atomic", attributes = mapOf("retained" to attr("value")))) { span ->
+        telemetry.startSpan(
+            SpanOptions(name = "atomic", attributes = mapOf("retained" to attr("value")))
+        ) { span ->
             try {
-                span.setAttributes(mapOf("partial" to attr("must not survive"), "unreadable" to AttributeValue.Strs(throwingList)))
+                span.setAttributes(
+                    mapOf(
+                        "partial" to attr("must not survive"),
+                        "unreadable" to AttributeValue.Strs(throwingList)
+                    )
+                )
             } catch (_: Throwable) {
                 fail("setAttributes must be passive")
             }
@@ -213,7 +239,9 @@ class LogcatTelemetryTest {
         val (telemetry, sink) = context(RecordingSink())
         lateinit var settledSpan: TelemetrySpan
 
-        telemetry.startSpan(SpanOptions(name = "settled", attributes = mapOf("value" to attr("initial")))) { span ->
+        telemetry.startSpan(
+            SpanOptions(name = "settled", attributes = mapOf("value" to attr("initial")))
+        ) { span ->
             settledSpan = span
         }
 
@@ -259,8 +287,13 @@ class LogcatTelemetryTest {
 
         telemetry.startSpan(SpanOptions(name = "parent")) { parent ->
             listOf(
-                async { parent.startSpan(SpanOptions(name = "first-child")) { delay(50); 1 } },
-                async { parent.startSpan(SpanOptions(name = "second-child")) { 2 } },
+                async {
+                    parent.startSpan(SpanOptions(name = "first-child")) {
+                        delay(50)
+                        1
+                    }
+                },
+                async { parent.startSpan(SpanOptions(name = "second-child")) { 2 } }
             ).awaitAll()
         }
 
@@ -269,8 +302,14 @@ class LogcatTelemetryTest {
         assertEquals("> first-child id=2 parent=1", messages[1])
         assertEquals("> second-child id=3 parent=1", messages[2])
         assertTrue(messages.last().startsWith("< parent id=1 status=ok"))
-        assertTrue(messages.indexOfFirst { it.startsWith("< first-child") } < messages.indexOfFirst { it.startsWith("< parent") })
-        assertTrue(messages.indexOfFirst { it.startsWith("< second-child") } < messages.indexOfFirst { it.startsWith("< parent") })
+        assertTrue(
+            messages.indexOfFirst { it.startsWith("< first-child") } <
+                messages.indexOfFirst { it.startsWith("< parent") }
+        )
+        assertTrue(
+            messages.indexOfFirst { it.startsWith("< second-child") } <
+                messages.indexOfFirst { it.startsWith("< parent") }
+        )
     }
 
     @Test
@@ -312,7 +351,10 @@ class LogcatTelemetryTest {
         var calls = 0
 
         val result = telemetry.startSpan(
-            SpanOptions(name = "unreadable-options", attributes = mapOf("secret" to AttributeValue.Strs(throwingList))),
+            SpanOptions(
+                name = "unreadable-options",
+                attributes = mapOf("secret" to AttributeValue.Strs(throwingList))
+            )
         ) {
             calls++
             9
@@ -349,18 +391,22 @@ class LogcatTelemetryTest {
     }
 
     @Test
-    fun `explicit error status on a returned result logs at error level without stack`() = runBlocking {
-        val (telemetry, sink) = context(RecordingSink())
+    fun `explicit error status on a returned result logs at error level without stack`() =
+        runBlocking {
+            val (telemetry, sink) = context(RecordingSink())
 
-        telemetry.startSpan(SpanOptions(name = "type-only")) { span ->
-            span.setStatus(SpanStatus.Error(TelemetryError("ProviderAuthException", "")))
-            Unit
+            telemetry.startSpan(SpanOptions(name = "type-only")) { span ->
+                span.setStatus(SpanStatus.Error(TelemetryError("ProviderAuthException", "")))
+                Unit
+            }
+
+            val end = sink.lines.last()
+            assertTrue(end.isError)
+            assertEquals(
+                "< type-only id=1 status=error error_name=ProviderAuthException duration_ms=1",
+                end.message
+            )
         }
-
-        val end = sink.lines.last()
-        assertTrue(end.isError)
-        assertEquals("< type-only id=1 status=error error_name=ProviderAuthException duration_ms=1", end.message)
-    }
 
     @Test
     fun `values with whitespace or quotes are quoted and escaped`() {
@@ -371,8 +417,8 @@ class LogcatTelemetryTest {
                 "pf.chat.error",
                 SpanStatus.Error(TelemetryError("E", "line one\nline \"two\"")),
                 mapOf("note" to attr("line one\nline \"two\"")),
-                0,
-            ),
+                0
+            )
         )
     }
 
@@ -396,8 +442,13 @@ class LogcatTelemetryTest {
                 1,
                 null,
                 "pf.span",
-                mapOf("count" to attr(400), "ok" to attr(true), "cost" to attr(0.5), "items" to AttributeValue.Strs(listOf("a", "b"))),
-            ),
+                mapOf(
+                    "count" to attr(400),
+                    "ok" to attr(true),
+                    "cost" to attr(0.5),
+                    "items" to AttributeValue.Strs(listOf("a", "b"))
+                )
+            )
         )
     }
 
@@ -405,7 +456,7 @@ class LogcatTelemetryTest {
     fun `attribute values cannot forge key value structure`() {
         assertEquals(
             "> pf.span id=1 parent=- note=\"a b c=forged\"",
-            renderStart(1, null, "pf.span", mapOf("note" to attr("a b c=forged"))),
+            renderStart(1, null, "pf.span", mapOf("note" to attr("a b c=forged")))
         )
     }
 }

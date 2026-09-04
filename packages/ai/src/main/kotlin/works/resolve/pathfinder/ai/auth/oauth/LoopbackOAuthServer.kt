@@ -1,12 +1,5 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.io.InputStream
 import java.net.InetSocketAddress
@@ -15,17 +8,21 @@ import java.net.Socket
 import java.net.SocketException
 import java.net.URLDecoder
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal data class LoopbackCallbackRequest(
     val method: String,
     val path: String,
-    val query: Map<String, String>,
+    val query: Map<String, String>
 )
 
-internal data class LoopbackCallbackResponse(
-    val status: Int,
-    val html: String,
-)
+internal data class LoopbackCallbackResponse(val status: Int, val html: String)
 
 /** Handle over a running loopback OAuth callback server. */
 internal interface LoopbackCallbackHandle<R> {
@@ -76,7 +73,10 @@ internal class LoopbackOAuthServer<R>(
      * (OpenRouter settles only after an in-handler token exchange completes);
      * the first call wins.
      */
-    val handler: suspend (request: LoopbackCallbackRequest, settle: (R?) -> Unit) -> LoopbackCallbackResponse,
+    val handler: suspend (
+        request: LoopbackCallbackRequest,
+        settle: (R?) -> Unit
+    ) -> LoopbackCallbackResponse
 ) {
     /**
      * Bind and listen. Returns `null` when the port cannot be bound; flows
@@ -162,7 +162,10 @@ internal class LoopbackOAuthServer<R>(
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                LoopbackCallbackResponse(500, oauthErrorHtml("Internal error while processing OAuth callback."))
+                LoopbackCallbackResponse(
+                    500,
+                    oauthErrorHtml("Internal error while processing OAuth callback.")
+                )
             }
             writeResponse(s, response)
         }
@@ -184,14 +187,24 @@ internal class LoopbackOAuthServer<R>(
         val target = parts[1]
         val queryStart = target.indexOf('?')
         val rawPath = if (queryStart >= 0) target.substring(0, queryStart) else target
-        val query = if (queryStart >= 0) parseQuery(target.substring(queryStart + 1)) else emptyMap()
+        val query = if (queryStart >=
+            0
+        ) {
+            parseQuery(target.substring(queryStart + 1))
+        } else {
+            emptyMap()
+        }
         return LoopbackCallbackRequest(method, rawPath, query)
     }
 
     private fun writeResponse(socket: Socket, response: LoopbackCallbackResponse) {
         val body = response.html.toByteArray(Charsets.UTF_8)
         val head = buildString {
-            append("HTTP/1.1 ").append(response.status).append(' ').append(reasonPhrase(response.status)).append("\r\n")
+            append(
+                "HTTP/1.1 "
+            ).append(
+                response.status
+            ).append(' ').append(reasonPhrase(response.status)).append("\r\n")
             append("Content-Type: text/html; charset=utf-8\r\n")
             append("Content-Length: ").append(body.size).append("\r\n")
             append("Cache-Control: no-store\r\n")

@@ -1,9 +1,9 @@
 package works.resolve.pathfinder.codingagent.core.session
 
-import works.resolve.pathfinder.ai.Usage
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import works.resolve.pathfinder.ai.Usage
 
 /**
  * One append-only mutation of a session's persisted log: an appended
@@ -56,7 +56,8 @@ sealed class LogItem {
     data class FactName(override val seq: Long, val name: String?) : LogItem()
 
     /** The `fact: "label"` log item; null clears the label. */
-    data class FactLabel(override val seq: Long, val targetId: String, val label: String?) : LogItem()
+    data class FactLabel(override val seq: Long, val targetId: String, val label: String?) :
+        LogItem()
 }
 
 /**
@@ -89,9 +90,10 @@ sealed class LaneRecord {
         override val timestamp: Long = 0L,
         /** The lane leaf the operation started from; may name an entry that persists later (see class KDoc). */
         val sourceLeafId: String? = null,
-        val intent: OperationIntent,
+        val intent: OperationIntent
     ) : LaneRecord() {
-        override fun withAssigned(seq: Long, timestamp: Long) = copy(seq = seq, timestamp = timestamp)
+        override fun withAssigned(seq: Long, timestamp: Long) =
+            copy(seq = seq, timestamp = timestamp)
     }
 
     data class AbortRequestedRecord(
@@ -100,9 +102,10 @@ sealed class LaneRecord {
         override val seq: Long = 0L,
         override val timestamp: Long = 0L,
         /** The operation_started record's id. */
-        val runId: String,
+        val runId: String
     ) : LaneRecord() {
-        override fun withAssigned(seq: Long, timestamp: Long) = copy(seq = seq, timestamp = timestamp)
+        override fun withAssigned(seq: Long, timestamp: Long) =
+            copy(seq = seq, timestamp = timestamp)
     }
 
     data class OperationFinishedRecord(
@@ -113,9 +116,10 @@ sealed class LaneRecord {
         /** The operation_started record's id. */
         val runId: String,
         val outcome: OperationOutcome,
-        val error: RecordError? = null,
+        val error: RecordError? = null
     ) : LaneRecord() {
-        override fun withAssigned(seq: Long, timestamp: Long) = copy(seq = seq, timestamp = timestamp)
+        override fun withAssigned(seq: Long, timestamp: Long) =
+            copy(seq = seq, timestamp = timestamp)
     }
 
     /**
@@ -129,9 +133,10 @@ sealed class LaneRecord {
         override val seq: Long = 0L,
         override val timestamp: Long = 0L,
         val usage: Usage,
-        val fields: JsonObject,
+        val fields: JsonObject
     ) : LaneRecord() {
-        override fun withAssigned(seq: Long, timestamp: Long) = copy(seq = seq, timestamp = timestamp)
+        override fun withAssigned(seq: Long, timestamp: Long) =
+            copy(seq = seq, timestamp = timestamp)
     }
 
     /**
@@ -147,9 +152,10 @@ sealed class LaneRecord {
         override val seq: Long = 0L,
         override val timestamp: Long = 0L,
         val type: String,
-        val fields: JsonObject,
+        val fields: JsonObject
     ) : LaneRecord() {
-        override fun withAssigned(seq: Long, timestamp: Long) = copy(seq = seq, timestamp = timestamp)
+        override fun withAssigned(seq: Long, timestamp: Long) =
+            copy(seq = seq, timestamp = timestamp)
     }
 }
 
@@ -162,18 +168,18 @@ sealed class LaneRecord {
 data class OperationIntent(
     val kind: Kind,
     /** The complete intent object, including its `kind` member. */
-    val payload: JsonObject,
+    val payload: JsonObject
 ) {
     enum class Kind(val wire: String) {
         RUN("run"),
         COMPACTION("compaction"),
-        NAVIGATION("navigation"),
+        NAVIGATION("navigation")
     }
 
     companion object {
         fun run(): OperationIntent = OperationIntent(
             kind = Kind.RUN,
-            payload = buildJsonObject { put("kind", "run") },
+            payload = buildJsonObject { put("kind", "run") }
         )
 
         fun compaction(resultEntryId: String): OperationIntent = OperationIntent(
@@ -181,7 +187,7 @@ data class OperationIntent(
             payload = buildJsonObject {
                 put("kind", "compaction")
                 put("resultEntryId", resultEntryId)
-            },
+            }
         )
     }
 }
@@ -190,7 +196,7 @@ enum class OperationOutcome(val wire: String) {
     COMPLETED("completed"),
     ABORTED("aborted"),
     FAILED("failed"),
-    DECLINED("declined"),
+    DECLINED("declined")
 }
 
 /** The error payload of an [OperationFinishedRecord]. */

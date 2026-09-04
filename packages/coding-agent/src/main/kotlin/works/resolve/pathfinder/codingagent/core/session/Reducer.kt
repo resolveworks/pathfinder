@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.codingagent.core.session
 
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.MessageRole
 import works.resolve.pathfinder.ai.StopReason
@@ -17,10 +19,8 @@ import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 import works.resolve.pathfinder.codingagent.core.session.OperationIntent
 import works.resolve.pathfinder.codingagent.core.session.SessionEntry
 import works.resolve.pathfinder.codingagent.core.session.SessionMutation
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
 
-/**
+/*
  * Reduces a lane's durable record log back into orchestration state. This is
  * what makes the record log a recovery log rather than telemetry.
  */
@@ -46,26 +46,24 @@ enum class RecordLogCorruptionReason {
     PROVISIONED_ENTRY_MISMATCH,
 
     /** Never raised: no adapter produces DEFERRED responses, so no entry carries a deferred handle. */
-    INVALID_DEFERRED_HANDLE,
+    INVALID_DEFERRED_HANDLE
 }
 
-class RecordLogCorruption(
-    val reason: RecordLogCorruptionReason,
-    message: String,
-) : Exception(message)
+class RecordLogCorruption(val reason: RecordLogCorruptionReason, message: String) :
+    Exception(message)
 
 data class RecordLogSlice(
     val lane: String,
     val openOperations: List<LaneRecord.OperationStartedRecord>,
     val records: List<LaneRecord>,
     /** Operation-owned entries plus entries fetched directly by provisioned or referenced ids. */
-    val entries: List<SessionEntry>,
+    val entries: List<SessionEntry>
 )
 
 data class TerminalFailureState(
     val entryId: String,
     val source: Source,
-    val message: AssistantMessage,
+    val message: AssistantMessage
 ) {
     enum class Source { STEP, DEFERRED_FETCH }
 }
@@ -74,7 +72,7 @@ data class LaneStepState(
     val kind: Kind,
     val attempts: Int,
     val resultEntryId: String,
-    val compactionReason: String? = null,
+    val compactionReason: String? = null
 ) {
     enum class Kind { ASSISTANT, COMPACTION, BRANCH_SUMMARY }
 }
@@ -84,13 +82,10 @@ data class NewestOwnState(
     /** The entry's wire type (e.g. "message"). */
     val type: String,
     val role: MessageRole? = null,
-    val stopReason: StopReason? = null,
+    val stopReason: StopReason? = null
 )
 
-data class LaneOperationTargets(
-    val result: Boolean? = null,
-    val summary: Boolean? = null,
-)
+data class LaneOperationTargets(val result: Boolean? = null, val summary: Boolean? = null)
 
 /**
  * Provisioned-entry lists — [missingInitialMessages], [pendingSteer],
@@ -109,14 +104,14 @@ data class LaneOperationState(
     val pendingWrites: List<JsonObject> = emptyList(),
     val overflowRecoveryUsed: Boolean = false,
     val newestOwn: NewestOwnState? = null,
-    val targets: LaneOperationTargets = LaneOperationTargets(),
+    val targets: LaneOperationTargets = LaneOperationTargets()
 )
 
 data class LaneState(
     val lane: String,
     val leafId: String?,
     val operation: LaneOperationState? = null,
-    val pendingNextRun: List<JsonObject> = emptyList(),
+    val pendingNextRun: List<JsonObject> = emptyList()
 )
 
 data class LaneReductionInput(
@@ -135,13 +130,13 @@ data class LaneReductionInput(
      */
     val configurationEntries: List<SessionEntry> = emptyList(),
     /** Harness option fallbacks used when no persisted value exists. */
-    val defaults: Conversation.EffectiveConfiguration = Conversation.EffectiveConfiguration(),
+    val defaults: Conversation.EffectiveConfiguration = Conversation.EffectiveConfiguration()
 )
 
 data class LaneReductionResult(
     val laneState: LaneState,
     val effectiveConfiguration: Conversation.EffectiveConfiguration,
-    val terminalFailure: TerminalFailureState? = null,
+    val terminalFailure: TerminalFailureState? = null
 )
 
 /**
@@ -159,11 +154,12 @@ sealed interface LaneRecovery {
 }
 
 /** Classifies [openOperations] (newest first). */
-fun classifyLaneRecovery(openOperations: List<LaneRecord.OperationStartedRecord>): LaneRecovery = when {
-    openOperations.isEmpty() -> LaneRecovery.Idle
-    openOperations.size == 1 -> LaneRecovery.Suspended(openOperations[0].intent.kind)
-    else -> LaneRecovery.Corrupt(RecordLogCorruptionReason.MULTIPLE_OPEN_OPERATIONS)
-}
+fun classifyLaneRecovery(openOperations: List<LaneRecord.OperationStartedRecord>): LaneRecovery =
+    when {
+        openOperations.isEmpty() -> LaneRecovery.Idle
+        openOperations.size == 1 -> LaneRecovery.Suspended(openOperations[0].intent.kind)
+        else -> LaneRecovery.Corrupt(RecordLogCorruptionReason.MULTIPLE_OPEN_OPERATIONS)
+    }
 
 private fun corrupt(reason: RecordLogCorruptionReason, message: String): Nothing =
     throw RecordLogCorruption(reason, message)
@@ -192,13 +188,16 @@ private fun matchesProvisionedEntry(entry: SessionEntry, target: JsonObject): Bo
 private val PROVISION_EXCLUDED_KEYS = setOf("kind", "lane", "parentId", "seq", "timestamp")
 
 /** An entry with the target's id must carry exactly the provisioned content. */
-private fun validateExactProvisionedEntry(entriesById: Map<String, SessionEntry>, target: JsonObject) {
+private fun validateExactProvisionedEntry(
+    entriesById: Map<String, SessionEntry>,
+    target: JsonObject
+) {
     val id = target.string("id") ?: return
     val entry = entriesById[id]
     if (entry != null && !matchesProvisionedEntry(entry, target)) {
         corrupt(
             RecordLogCorruptionReason.PROVISIONED_ENTRY_MISMATCH,
-            "Provisioned entry $id exists with content different from its intent",
+            "Provisioned entry $id exists with content different from its intent"
         )
     }
 }
@@ -207,13 +206,13 @@ private fun validateResultEntry(
     entriesById: Map<String, SessionEntry>,
     resultEntryId: String,
     matches: (SessionEntry) -> Boolean,
-    description: String,
+    description: String
 ) {
     val entry = entriesById[resultEntryId]
     if (entry != null && !matches(entry)) {
         corrupt(
             RecordLogCorruptionReason.PROVISIONED_ENTRY_MISMATCH,
-            "Provisioned $description entry $resultEntryId exists with different content",
+            "Provisioned $description entry $resultEntryId exists with different content"
         )
     }
 }
@@ -227,35 +226,41 @@ private fun intentInitialMessages(record: LaneRecord.OperationStartedRecord): Li
 private fun isAssistantMessage(entry: SessionEntry): Boolean =
     entry is MessageEntry && entry.message is AssistantMessage
 
-private fun validateOperationResult(entriesById: Map<String, SessionEntry>, record: LaneRecord.OperationStartedRecord) {
+private fun validateOperationResult(
+    entriesById: Map<String, SessionEntry>,
+    record: LaneRecord.OperationStartedRecord
+) {
     when (record.intent.kind) {
         OperationIntent.Kind.RUN ->
-            for (target in intentInitialMessages(record)) validateExactProvisionedEntry(entriesById, target)
+            for (target in intentInitialMessages(
+                record
+            )) {
+                validateExactProvisionedEntry(entriesById, target)
+            }
+
         OperationIntent.Kind.COMPACTION -> {
             val resultEntryId = record.intent.payload.string("resultEntryId") ?: return
             validateResultEntry(
                 entriesById,
                 resultEntryId,
                 { it is CompactionEntry },
-                "manual compaction",
+                "manual compaction"
             )
         }
+
         OperationIntent.Kind.NAVIGATION -> {
             val summaryEntryId = record.intent.payload.string("summaryEntryId") ?: return
             validateResultEntry(
                 entriesById,
                 summaryEntryId,
                 { it is BranchSummaryEntry },
-                "navigation summary",
+                "navigation summary"
             )
         }
     }
 }
 
-private class StepAttemptSeries(
-    val record: LaneRecord.DeferredRecord,
-    val fields: JsonObject,
-) {
+private class StepAttemptSeries(val record: LaneRecord.DeferredRecord, val fields: JsonObject) {
     val step: String = fields.string("step") ?: ""
     val attempt: Int = fields.strictInt("attempt") ?: 0
     val resultEntryId: String = fields.string("resultEntryId") ?: ""
@@ -269,13 +274,13 @@ private fun validateAttemptReason(attempt: StepAttemptSeries) {
         if (reason != "manual" && reason != "threshold" && reason != "overflow") {
             corrupt(
                 RecordLogCorruptionReason.INVALID_COMPACTION_REASON,
-                "Compaction attempt ${attempt.record.id} has no valid compaction reason",
+                "Compaction attempt ${attempt.record.id} has no valid compaction reason"
             )
         }
     } else if (reason != null) {
         corrupt(
             RecordLogCorruptionReason.INVALID_COMPACTION_REASON,
-            "${attempt.step} attempt ${attempt.record.id} has a compaction reason",
+            "${attempt.step} attempt ${attempt.record.id} has a compaction reason"
         )
     }
 }
@@ -283,7 +288,7 @@ private fun validateAttemptReason(attempt: StepAttemptSeries) {
 private fun validateAttemptSequence(
     attempt: StepAttemptSeries,
     previous: StepAttemptSeries?,
-    entriesById: Map<String, SessionEntry>,
+    entriesById: Map<String, SessionEntry>
 ) {
     val previousResult = previous?.let { entriesById[it.resultEntryId] }
     val continuesSeries =
@@ -294,43 +299,48 @@ private fun validateAttemptSequence(
     if (attempt.attempt != expectedAttempt) {
         corrupt(
             RecordLogCorruptionReason.NON_CONSECUTIVE_ATTEMPT,
-            "${attempt.step} attempt ${attempt.record.id} is ${attempt.attempt}; expected $expectedAttempt",
+            "${attempt.step} attempt ${attempt.record.id} is ${attempt.attempt}; expected $expectedAttempt"
         )
     }
     if (!continuesSeries || attempt.step == "assistant" || previous == null) return
     if (attempt.resultEntryId != previous.resultEntryId) {
         corrupt(
             RecordLogCorruptionReason.INCONSISTENT_STEP,
-            "${attempt.step} attempts disagree on their result entry id",
+            "${attempt.step} attempts disagree on their result entry id"
         )
     }
     if (attempt.compactionReason != previous.compactionReason) {
         corrupt(
             RecordLogCorruptionReason.INCONSISTENT_STEP,
-            "${attempt.step} attempts disagree on their compaction reason",
+            "${attempt.step} attempts disagree on their compaction reason"
         )
     }
 }
 
-private fun validateAttemptResult(entriesById: Map<String, SessionEntry>, attempt: StepAttemptSeries) {
+private fun validateAttemptResult(
+    entriesById: Map<String, SessionEntry>,
+    attempt: StepAttemptSeries
+) {
     when (attempt.step) {
         "assistant" -> validateResultEntry(
             entriesById,
             attempt.resultEntryId,
             ::isAssistantMessage,
-            "assistant result",
+            "assistant result"
         )
+
         "compaction" -> validateResultEntry(
             entriesById,
             attempt.resultEntryId,
             { it is CompactionEntry },
-            "compaction result",
+            "compaction result"
         )
+
         "branch_summary" -> validateResultEntry(
             entriesById,
             attempt.resultEntryId,
             { it is BranchSummaryEntry },
-            "branch-summary result",
+            "branch-summary result"
         )
     }
 }
@@ -338,7 +348,7 @@ private fun validateAttemptResult(entriesById: Map<String, SessionEntry>, attemp
 private fun validateToolStart(
     record: LaneRecord.DeferredRecord,
     entriesById: Map<String, SessionEntry>,
-    invocations: MutableSet<String>,
+    invocations: MutableSet<String>
 ) {
     val fields = record.fields
     val assistantEntryId = fields.string("assistantEntryId") ?: ""
@@ -347,7 +357,7 @@ private fun validateToolStart(
     if (invocation in invocations) {
         corrupt(
             RecordLogCorruptionReason.DUPLICATE_TOOL_INVOCATION,
-            "Tool invocation $assistantEntryId:$toolIndex is duplicated",
+            "Tool invocation $assistantEntryId:$toolIndex is duplicated"
         )
     }
     invocations.add(invocation)
@@ -356,16 +366,18 @@ private fun validateToolStart(
     if (assistantEntry !is MessageEntry || assistantEntry.message !is AssistantMessage) {
         corrupt(
             RecordLogCorruptionReason.TOOL_CALL_MISMATCH,
-            "Tool start ${record.id} does not reference an assistant entry",
+            "Tool start ${record.id} does not reference an assistant entry"
         )
         return
     }
     val toolCalls = assistantEntry.message.content.filterIsInstance<ToolCall>()
     val toolCall = toolCalls.getOrNull(toolIndex)
-    if (toolCall == null || toolCall.id != fields.string("toolCallId") || toolCall.name != fields.string("toolName")) {
+    if (toolCall == null || toolCall.id != fields.string("toolCallId") ||
+        toolCall.name != fields.string("toolName")
+    ) {
         corrupt(
             RecordLogCorruptionReason.TOOL_CALL_MISMATCH,
-            "Tool start ${record.id} does not match its assistant tool-call ordinal",
+            "Tool start ${record.id} does not match its assistant tool-call ordinal"
         )
         return
     }
@@ -380,7 +392,7 @@ private fun validateToolStart(
                 (entry.message as ToolResultMessage).toolCallId == toolCall.id &&
                 (entry.message as ToolResultMessage).toolName == toolCall.name
         },
-        "tool result",
+        "tool result"
     )
 }
 
@@ -389,7 +401,7 @@ fun validateRecordLog(input: RecordLogSlice) {
     if (input.openOperations.size > 1) {
         corrupt(
             RecordLogCorruptionReason.MULTIPLE_OPEN_OPERATIONS,
-            "Lane ${input.lane} has at least two open operations",
+            "Lane ${input.lane} has at least two open operations"
         )
     }
 
@@ -414,32 +426,46 @@ fun validateRecordLog(input: RecordLogSlice) {
             if (runId !in starts) {
                 corrupt(
                     RecordLogCorruptionReason.UNKNOWN_OPERATION,
-                    "Record ${record.id} references unknown operation $runId",
+                    "Record ${record.id} references unknown operation $runId"
                 )
             }
             val finishSeq = finishedAt[runId]
             if (finishSeq != null && record.seq > finishSeq) {
                 corrupt(
                     RecordLogCorruptionReason.RECORD_AFTER_FINISH,
-                    "Record ${record.id} follows the finish of operation $runId",
+                    "Record ${record.id} follows the finish of operation $runId"
                 )
             }
         }
 
         when (record) {
-            is LaneRecord.OperationStartedRecord -> Unit // handled above
+            is LaneRecord.OperationStartedRecord -> Unit
+
+            // handled above
             is LaneRecord.OperationFinishedRecord -> finishedAt[record.runId] = record.seq
+
             is LaneRecord.AbortRequestedRecord -> abortedAt[record.runId] = record.seq
+
             is LaneRecord.UsageRecord -> Unit
+
             is LaneRecord.DeferredRecord -> when (record.type) {
                 "step_attempt" -> {
                     val attempt = StepAttemptSeries(record, record.fields)
                     validateAttemptReason(attempt)
-                    validateAttemptSequence(attempt, latestAttempt[attempt.fields.string("runId") ?: ""], entriesById)
+                    validateAttemptSequence(
+                        attempt,
+                        latestAttempt[
+                            attempt.fields.string("runId")
+                                ?: ""
+                        ],
+                        entriesById
+                    )
                     validateAttemptResult(entriesById, attempt)
                     latestAttempt[attempt.fields.string("runId") ?: ""] = attempt
                 }
+
                 "tool_started" -> validateToolStart(record, entriesById, toolInvocations)
+
                 "queue_enqueued" -> {
                     val queue = record.fields.string("queue")
                     val target = record.fields["target"] as? JsonObject ?: JsonObject(emptyMap())
@@ -452,13 +478,16 @@ fun validateRecordLog(input: RecordLogSlice) {
                     ) {
                         corrupt(
                             RecordLogCorruptionReason.QUEUE_AFTER_ABORT,
-                            "$queue item ${target.string("id") ?: record.id} was enqueued after abort",
+                            "$queue item ${target.string(
+                                "id"
+                            ) ?: record.id} was enqueued after abort"
                         )
                     }
                     val targetId = target.string("id")
                     if (targetId != null) queueEnqueues[targetId] = record
                     validateExactProvisionedEntry(entriesById, target)
                 }
+
                 "queue_cancelled" -> {
                     val entryId = record.fields.string("entryId")
                     val enqueue = entryId?.let(queueEnqueues::get)
@@ -470,20 +499,24 @@ fun validateRecordLog(input: RecordLogSlice) {
                     ) {
                         corrupt(
                             RecordLogCorruptionReason.INVALID_QUEUE_CANCELLATION,
-                            "Queue cancellation ${record.id} has no pending matching enqueue",
+                            "Queue cancellation ${record.id} has no pending matching enqueue"
                         )
                     }
                 }
+
                 "write_deferred" ->
-                    validateExactProvisionedEntry(entriesById, record.fields["target"] as? JsonObject ?: JsonObject(emptyMap()))
+                    validateExactProvisionedEntry(
+                        entriesById,
+                        record.fields["target"] as? JsonObject ?: JsonObject(emptyMap())
+                    )
+
                 else -> Unit
             }
         }
     }
 }
 
-private fun <T : Any> bySequence(values: List<T>, seq: (T) -> Long): List<T> =
-    values.sortedBy(seq)
+private fun <T : Any> bySequence(values: List<T>, seq: (T) -> Long): List<T> = values.sortedBy(seq)
 
 private fun entryType(entry: SessionEntry): String = when (entry) {
     is MessageEntry -> "message"
@@ -499,12 +532,19 @@ private fun deriveNewestOwn(entry: SessionEntry?): NewestOwnState? {
     if (message !is AssistantMessage) {
         return NewestOwnState(entryId = entry.id, type = "message", role = message.role)
     }
-    return NewestOwnState(entryId = entry.id, type = "message", role = message.role, stopReason = message.stopReason)
+    return NewestOwnState(
+        entryId = entry.id,
+        type = "message",
+        role = message.role,
+        stopReason = message.stopReason
+    )
 }
 
 /** Purely reconstructs one lane's orchestration state from its bounded recovery inputs. */
 fun reduceLaneState(input: LaneReductionInput): LaneReductionResult {
-    validateRecordLog(RecordLogSlice(input.lane, input.openOperations, input.records, input.entries))
+    validateRecordLog(
+        RecordLogSlice(input.lane, input.openOperations, input.records, input.entries)
+    )
 
     val records = bySequence(input.records) { it.seq }
     val ownEntries = bySequence(input.ownEntries) { it.seq }
@@ -538,36 +578,52 @@ fun reduceLaneState(input: LaneReductionInput): LaneReductionResult {
         .filterNot { it.string("id") in capturedInitialMessageIds }
     val folded = Conversation(
         entries = input.configurationEntries + ownEntries,
-        leafId = input.leafId,
+        leafId = input.leafId
     ).effectiveConfiguration()
     val sawThinkingLevelEntry = (input.configurationEntries + ownEntries)
         .any { it is works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry }
     val effectiveConfiguration = Conversation.EffectiveConfiguration(
         model = folded.model ?: input.defaults.model,
-        thinkingLevel = if (sawThinkingLevelEntry) folded.thinkingLevel else input.defaults.thinkingLevel,
-        activeToolNames = folded.activeToolNames ?: input.defaults.activeToolNames,
+        thinkingLevel = if (sawThinkingLevelEntry) {
+            folded.thinkingLevel
+        } else {
+            input.defaults.thinkingLevel
+        },
+        activeToolNames = folded.activeToolNames ?: input.defaults.activeToolNames
     )
 
     if (started == null) {
         return LaneReductionResult(
-            laneState = LaneState(lane = input.lane, leafId = input.leafId, operation = null, pendingNextRun = pendingNextRun),
+            laneState = LaneState(
+                lane = input.lane,
+                leafId = input.leafId,
+                operation = null,
+                pendingNextRun = pendingNextRun
+            ),
             effectiveConfiguration = effectiveConfiguration,
-            terminalFailure = null,
+            terminalFailure = null
         )
     }
 
     val operationRecords = records.filter { record ->
-        if (record is LaneRecord.OperationStartedRecord) record.id == started.id else record.runIdOrNull() == started.id
+        if (record is LaneRecord.OperationStartedRecord) {
+            record.id == started.id
+        } else {
+            record.runIdOrNull() ==
+                started.id
+        }
     }
     val aborting = operationRecords.any { it is LaneRecord.AbortRequestedRecord }
-    fun pendingQueue(queue: String): List<JsonObject> =
-        if (aborting) {
-            emptyList()
-        } else {
-            pendingQueueRecords
-                .filter { (record, _) -> record.fields.string("queue") == queue && record.fields.string("runId") == started.id }
-                .map { (_, target) -> target }
-        }
+    fun pendingQueue(queue: String): List<JsonObject> = if (aborting) {
+        emptyList()
+    } else {
+        pendingQueueRecords
+            .filter { (record, _) ->
+                record.fields.string("queue") == queue &&
+                    record.fields.string("runId") == started.id
+            }
+            .map { (_, target) -> target }
+    }
     val pendingSteer = pendingQueue("steer")
     val pendingFollowUp = pendingQueue("followUp")
     val pendingWrites = operationRecords
@@ -597,23 +653,35 @@ fun reduceLaneState(input: LaneReductionInput): LaneReductionResult {
                 },
                 attempts = record.fields.strictInt("attempt") ?: 1,
                 resultEntryId = record.fields.string("resultEntryId") ?: "",
-                compactionReason = record.fields.string("compactionReason").takeIf { stepName == "compaction" },
+                compactionReason = record.fields.string("compactionReason").takeIf {
+                    stepName ==
+                        "compaction"
+                }
             )
         }
 
     val consumedInputIds = HashSet<String>()
     if (started.intent.kind == OperationIntent.Kind.RUN) {
-        for (target in intentInitialMessages(started)) target.string("id")?.let(consumedInputIds::add)
+        for (target in intentInitialMessages(
+            started
+        )) {
+            target.string("id")?.let(consumedInputIds::add)
+        }
     }
     for (record in operationRecords) {
-        if (record is LaneRecord.DeferredRecord && record.type == "queue_enqueued" && record.fields.string("queue") != "nextRun") {
+        if (record is LaneRecord.DeferredRecord && record.type == "queue_enqueued" &&
+            record.fields.string("queue") != "nextRun"
+        ) {
             (record.fields["target"] as? JsonObject)?.string("id")?.let(consumedInputIds::add)
         }
     }
     var newestConsumedInputSequence = Long.MIN_VALUE
     for (id in consumedInputIds) {
         val entry = entriesById[id]
-        if (entry is MessageEntry) newestConsumedInputSequence = maxOf(newestConsumedInputSequence, entry.seq)
+        if (entry is MessageEntry) {
+            newestConsumedInputSequence =
+                maxOf(newestConsumedInputSequence, entry.seq)
+        }
     }
     val overflowRecoveryUsed = operationRecords.any { record ->
         record is LaneRecord.DeferredRecord &&
@@ -635,7 +703,7 @@ fun reduceLaneState(input: LaneReductionInput): LaneReductionResult {
             started.intent.payload.string("summaryEntryId")?.let { it in entriesById }
         } else {
             null
-        },
+        }
     )
 
     val deferredWriteIds = operationRecords
@@ -668,8 +736,12 @@ fun reduceLaneState(input: LaneReductionInput): LaneReductionResult {
         if (producedByStep || producedByDeferredFetch) {
             terminalFailure = TerminalFailureState(
                 entryId = newestOwnEntry.id,
-                source = if (producedByStep) TerminalFailureState.Source.STEP else TerminalFailureState.Source.DEFERRED_FETCH,
-                message = newestMessage,
+                source = if (producedByStep) {
+                    TerminalFailureState.Source.STEP
+                } else {
+                    TerminalFailureState.Source.DEFERRED_FETCH
+                },
+                message = newestMessage
             )
         }
     }
@@ -689,11 +761,11 @@ fun reduceLaneState(input: LaneReductionInput): LaneReductionResult {
                 pendingWrites = pendingWrites,
                 overflowRecoveryUsed = overflowRecoveryUsed,
                 newestOwn = newestOwn,
-                targets = targets,
+                targets = targets
             ),
-            pendingNextRun = pendingNextRun,
+            pendingNextRun = pendingNextRun
         ),
         effectiveConfiguration = effectiveConfiguration,
-        terminalFailure = terminalFailure,
+        terminalFailure = terminalFailure
     )
 }

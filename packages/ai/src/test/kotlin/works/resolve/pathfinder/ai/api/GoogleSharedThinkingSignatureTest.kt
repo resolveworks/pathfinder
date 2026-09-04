@@ -21,8 +21,8 @@ class GoogleSharedThinkingSignatureTest {
                 buildJsonObject {
                     put("thought", true)
                     put("thoughtSignature", "opaque-signature")
-                },
-            ),
+                }
+            )
         )
     }
 
@@ -32,15 +32,19 @@ class GoogleSharedThinkingSignatureTest {
         // appear on any part type. Only thought === true indicates thinking
         // content. See https://ai.google.dev/gemini-api/docs/thought-signatures
         assertFalse(
-            GoogleShared.isThinkingPart(buildJsonObject { put("thoughtSignature", "opaque-signature") }),
+            GoogleShared.isThinkingPart(
+                buildJsonObject {
+                    put("thoughtSignature", "opaque-signature")
+                }
+            )
         )
         assertFalse(
             GoogleShared.isThinkingPart(
                 buildJsonObject {
                     put("thought", false)
                     put("thoughtSignature", "opaque-signature")
-                },
-            ),
+                }
+            )
         )
     }
 
@@ -52,8 +56,8 @@ class GoogleSharedThinkingSignatureTest {
                 buildJsonObject {
                     put("thought", false)
                     put("thoughtSignature", "")
-                },
-            ),
+                }
+            )
         )
     }
 

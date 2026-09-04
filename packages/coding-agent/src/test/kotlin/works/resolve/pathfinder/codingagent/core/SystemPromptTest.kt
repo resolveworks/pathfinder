@@ -1,21 +1,22 @@
 package works.resolve.pathfinder.codingagent.core
 
-import works.resolve.pathfinder.agent.*
-
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.Tool
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import works.resolve.pathfinder.agent.AgentTool
+import works.resolve.pathfinder.agent.AgentToolResult
+import works.resolve.pathfinder.agent.AgentToolUpdateCallback
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.Tool
 
 class SystemPromptTest {
 
     private class FakeTool(
         val name: String,
         override val promptSnippet: String? = null,
-        override val promptGuidelines: List<String> = emptyList(),
+        override val promptGuidelines: List<String> = emptyList()
     ) : AgentTool {
         override val definition = Tool(name, "$name tool", JsonPrimitive("object"))
         override val label = name
@@ -25,7 +26,7 @@ class SystemPromptTest {
         override suspend fun execute(
             toolCallId: String,
             arguments: JsonObject,
-            onUpdate: AgentToolUpdateCallback,
+            onUpdate: AgentToolUpdateCallback
         ) = AgentToolResult(content = listOf(TextContent("ok")))
     }
 
@@ -44,7 +45,7 @@ class SystemPromptTest {
                 "Guidelines:\n" +
                 "- Be concise in your responses\n" +
                 "- Show file paths clearly when working with files",
-            prompt,
+            prompt
         )
     }
 
@@ -54,8 +55,8 @@ class SystemPromptTest {
             listOf(
                 FakeTool("bash", promptSnippet = "Run shell commands"),
                 FakeTool("hidden"),
-                FakeTool("read", promptSnippet = "Read file contents"),
-            ),
+                FakeTool("read", promptSnippet = "Read file contents")
+            )
         )
         assertEquals(
             "Available tools:\n" +
@@ -65,7 +66,7 @@ class SystemPromptTest {
                 "Guidelines:\n" +
                 "- Be concise in your responses\n" +
                 "- Show file paths clearly when working with files",
-            prompt,
+            prompt
         )
     }
 
@@ -76,10 +77,14 @@ class SystemPromptTest {
                 FakeTool(
                     "web_search",
                     promptSnippet = "Search the web",
-                    promptGuidelines = listOf("Cite sources", "  Cite sources  ", "", "   "),
+                    promptGuidelines = listOf("Cite sources", "  Cite sources  ", "", "   ")
                 ),
-                FakeTool("web_fetch", promptSnippet = "Fetch a URL", promptGuidelines = listOf("Cite sources", "Prefer web_fetch over guessing URLs")),
-            ),
+                FakeTool(
+                    "web_fetch",
+                    promptSnippet = "Fetch a URL",
+                    promptGuidelines = listOf("Cite sources", "Prefer web_fetch over guessing URLs")
+                )
+            )
         )
         assertEquals(
             "Available tools:\n" +
@@ -91,14 +96,14 @@ class SystemPromptTest {
                 "- Prefer web_fetch over guessing URLs\n" +
                 "- Be concise in your responses\n" +
                 "- Show file paths clearly when working with files",
-            prompt,
+            prompt
         )
     }
 
     @Test
     fun `always-on guidelines dedupe against tool guidelines`() {
         val prompt = buildSystemPrompt(
-            listOf(FakeTool("echo", promptGuidelines = listOf("Be concise in your responses"))),
+            listOf(FakeTool("echo", promptGuidelines = listOf("Be concise in your responses")))
         )
         assertEquals(
             "Available tools:\n" +
@@ -107,7 +112,7 @@ class SystemPromptTest {
                 "Guidelines:\n" +
                 "- Be concise in your responses\n" +
                 "- Show file paths clearly when working with files",
-            prompt,
+            prompt
         )
     }
 
@@ -116,8 +121,8 @@ class SystemPromptTest {
         val prompt = buildSystemPrompt(
             listOf(
                 FakeTool("bash", promptSnippet = "   "),
-                FakeTool("read", promptSnippet = "Read file contents"),
-            ),
+                FakeTool("read", promptSnippet = "Read file contents")
+            )
         )
         assertEquals(
             "Available tools:\n" +
@@ -126,14 +131,14 @@ class SystemPromptTest {
                 "Guidelines:\n" +
                 "- Be concise in your responses\n" +
                 "- Show file paths clearly when working with files",
-            prompt,
+            prompt
         )
     }
 
     @Test
     fun `multi-line snippet with whitespace runs is collapsed to one trimmed line`() {
         val prompt = buildSystemPrompt(
-            listOf(FakeTool("web_search", promptSnippet = "Search\n  the   web\r\nfor facts  ")),
+            listOf(FakeTool("web_search", promptSnippet = "Search\n  the   web\r\nfor facts  "))
         )
         assertEquals(
             "Available tools:\n" +
@@ -142,7 +147,7 @@ class SystemPromptTest {
                 "Guidelines:\n" +
                 "- Be concise in your responses\n" +
                 "- Show file paths clearly when working with files",
-            prompt,
+            prompt
         )
     }
 }

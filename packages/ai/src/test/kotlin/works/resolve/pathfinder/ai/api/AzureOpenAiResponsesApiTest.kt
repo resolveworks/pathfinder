@@ -1,11 +1,5 @@
 package works.resolve.pathfinder.ai.api
 
-import works.resolve.pathfinder.ai.testing.FakeClock
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -16,6 +10,11 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
@@ -23,6 +22,7 @@ import works.resolve.pathfinder.ai.ModelCost
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
@@ -38,7 +38,7 @@ class AzureOpenAiResponsesApiTest {
         cost = ModelCost(input = 0.15, output = 0.6, cacheRead = 0.075, cacheWrite = 0.0),
         contextWindow = 128_000,
         maxTokens = 16_384,
-        responsesCompat = OpenAiResponsesCompat(),
+        responsesCompat = OpenAiResponsesCompat()
     )
 
     private val context = Context(messages = listOf(UserMessage.ofText("hi")))
@@ -46,35 +46,36 @@ class AzureOpenAiResponsesApiTest {
     private fun api(transport: FakeTransport) = AzureOpenAiResponsesApi(
         transport,
         ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
-        clock = FakeClock(1_770_000_000_000L),
+        clock = FakeClock(1_770_000_000_000L)
     )
 
     private fun completed() = listOf(
         """{"type":"response.completed","response":{"id":"r1","status":"completed",
             "usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}""",
-        "[DONE]",
+        "[DONE]"
     )
 
-    private fun bodyOf(transport: FakeTransport) =
-        responsesJson.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+    private fun bodyOf(transport: FakeTransport) = responsesJson.parseToJsonElement(
+        transport.requests.single().body.decodeToString()
+    ).jsonObject
 
     @Test
     fun `normalizes bare azure hosts to openai v1 and appends responses path`() = runTest {
         assertEquals(
             "https://my-resource.openai.azure.com/openai/v1",
-            normalizeAzureBaseUrl("https://my-resource.openai.azure.com/"),
+            normalizeAzureBaseUrl("https://my-resource.openai.azure.com/")
         )
         assertEquals(
             "https://my-resource.openai.azure.com/openai/v1",
-            normalizeAzureBaseUrl("https://my-resource.openai.azure.com/openai"),
+            normalizeAzureBaseUrl("https://my-resource.openai.azure.com/openai")
         )
         assertEquals(
             "https://my-resource.services.ai.azure.com/openai/v1",
-            normalizeAzureBaseUrl("https://my-resource.services.ai.azure.com/openai/v1/responses"),
+            normalizeAzureBaseUrl("https://my-resource.services.ai.azure.com/openai/v1/responses")
         )
         assertEquals(
             "https://proxy.example.com/azure",
-            normalizeAzureBaseUrl("https://proxy.example.com/azure/"),
+            normalizeAzureBaseUrl("https://proxy.example.com/azure/")
         )
     }
 
@@ -90,11 +91,13 @@ class AzureOpenAiResponsesApiTest {
     fun `requests hit responses with api-version and the api-key header`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completed().toTypedArray()))
-        api(transport).stream(model, context, AzureOpenAiResponsesOptions(apiKey = "az-key")).toList()
+        api(
+            transport
+        ).stream(model, context, AzureOpenAiResponsesOptions(apiKey = "az-key")).toList()
         val request = transport.requests.single()
         assertEquals(
             "https://my-resource.openai.azure.com/openai/v1/responses?api-version=v1",
-            request.url,
+            request.url
         )
         assertEquals("az-key", request.headers["api-key"])
         assertNull(request.bearerToken)
@@ -105,7 +108,7 @@ class AzureOpenAiResponsesApiTest {
     fun `resource name and env base url and api version resolve in priority order`() = runTest {
         assertEquals(
             AzureConfig("https://res.openai.azure.com/openai/v1", "v1"),
-            resolveAzureConfig(model, AzureOpenAiResponsesOptions(azureResourceName = "res")),
+            resolveAzureConfig(model, AzureOpenAiResponsesOptions(azureResourceName = "res"))
         )
         assertEquals(
             AzureConfig("https://env.openai.azure.com/openai/v1", "2025-04-01"),
@@ -114,10 +117,10 @@ class AzureOpenAiResponsesApiTest {
                 AzureOpenAiResponsesOptions(
                     env = mapOf(
                         "AZURE_OPENAI_BASE_URL" to "https://env.openai.azure.com/openai/v1",
-                        "AZURE_OPENAI_API_VERSION" to "2025-04-01",
-                    ),
-                ),
-            ),
+                        "AZURE_OPENAI_API_VERSION" to "2025-04-01"
+                    )
+                )
+            )
         )
         assertEquals(
             AzureConfig("https://opt.openai.azure.com/openai/v1", "v2"),
@@ -126,9 +129,9 @@ class AzureOpenAiResponsesApiTest {
                 AzureOpenAiResponsesOptions(
                     azureBaseUrl = "https://opt.openai.azure.com/openai/v1",
                     azureApiVersion = "v2",
-                    env = mapOf("AZURE_OPENAI_BASE_URL" to "https://env.openai.azure.com"),
-                ),
-            ),
+                    env = mapOf("AZURE_OPENAI_BASE_URL" to "https://env.openai.azure.com")
+                )
+            )
         )
     }
 
@@ -147,17 +150,22 @@ class AzureOpenAiResponsesApiTest {
             "dep-1",
             resolveDeploymentName(
                 model,
-                AzureOpenAiResponsesOptions(env = mapOf("AZURE_OPENAI_DEPLOYMENT_NAME_MAP" to "gpt-4o-mini=dep-1")),
-            ),
+                AzureOpenAiResponsesOptions(
+                    env = mapOf("AZURE_OPENAI_DEPLOYMENT_NAME_MAP" to "gpt-4o-mini=dep-1")
+                )
+            )
         )
         assertEquals(
             "dep-2",
-            resolveDeploymentName(model, AzureOpenAiResponsesOptions(azureDeploymentName = "dep-2")),
+            resolveDeploymentName(
+                model,
+                AzureOpenAiResponsesOptions(azureDeploymentName = "dep-2")
+            )
         )
         assertEquals("gpt-4o-mini", resolveDeploymentName(model, AzureOpenAiResponsesOptions()))
         assertEquals(
             mapOf("a" to "b", "c" to "d"),
-            parseDeploymentNameMap("a=b, c=d ,"),
+            parseDeploymentNameMap("a=b, c=d ,")
         )
     }
 
@@ -171,8 +179,8 @@ class AzureOpenAiResponsesApiTest {
             AzureOpenAiResponsesOptions(
                 apiKey = "k",
                 azureDeploymentName = "my-deployment",
-                sessionId = "session-1",
-            ),
+                sessionId = "session-1"
+            )
         ).toList()
         val body = bodyOf(transport)
         assertEquals("my-deployment", body["model"]!!.jsonPrimitive.content)
@@ -192,9 +200,14 @@ class AzureOpenAiResponsesApiTest {
     fun `http errors carry the azure prefix`() = runTest {
         val transport = FakeTransport()
         transport.enqueueError(401, """{"error":{"message":"bad key"}}""")
-        val events = api(transport).stream(model, context, AzureOpenAiResponsesOptions(apiKey = "k")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, AzureOpenAiResponsesOptions(apiKey = "k")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
-        assertEquals("""Azure OpenAI API error (401): {"error":{"message":"bad key"}}""", error.error.errorMessage)
+        assertEquals(
+            """Azure OpenAI API error (401): {"error":{"message":"bad key"}}""",
+            error.error.errorMessage
+        )
     }
 
     @Test
@@ -204,7 +217,7 @@ class AzureOpenAiResponsesApiTest {
         api(transport).stream(
             model.copy(headers = mapOf("User-Agent" to "provider-agent")),
             context,
-            AzureOpenAiResponsesOptions(apiKey = "k"),
+            AzureOpenAiResponsesOptions(apiKey = "k")
         ).toList()
         assertEquals("provider-agent", transport.requests.single().headers["User-Agent"])
     }
@@ -214,11 +227,13 @@ class AzureOpenAiResponsesApiTest {
         // Only the Azure-host branch strips the query; other hosts keep it, as in pi.
         assertEquals(
             "https://my-proxy.example.com/v1?custom=true",
-            normalizeAzureBaseUrl("https://my-proxy.example.com/v1?custom=true"),
+            normalizeAzureBaseUrl("https://my-proxy.example.com/v1?custom=true")
         )
         assertEquals(
             "https://my-resource.openai.azure.com/openai/v1",
-            normalizeAzureBaseUrl("https://my-resource.openai.azure.com/openai?api-version=2024-12-01"),
+            normalizeAzureBaseUrl(
+                "https://my-resource.openai.azure.com/openai?api-version=2024-12-01"
+            )
         )
     }
 
@@ -231,12 +246,12 @@ class AzureOpenAiResponsesApiTest {
             context,
             AzureOpenAiResponsesOptions(
                 apiKey = "k",
-                azureBaseUrl = "https://my-proxy.example.com/v1?custom=true",
-            ),
+                azureBaseUrl = "https://my-proxy.example.com/v1?custom=true"
+            )
         ).toList()
         assertEquals(
             "https://my-proxy.example.com/v1?custom=true/responses?api-version=v1",
-            transport.requests.single().url,
+            transport.requests.single().url
         )
     }
 
@@ -248,12 +263,12 @@ class AzureOpenAiResponsesApiTest {
         api(transport).stream(
             model,
             context.copy(tools = listOf(tool)),
-            AzureOpenAiResponsesOptions(apiKey = "k", toolChoice = "required"),
+            AzureOpenAiResponsesOptions(apiKey = "k", toolChoice = "required")
         ).toList()
         val body = bodyOf(transport)
         assertEquals(
             "get_weather",
-            body["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content,
+            body["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content
         )
         assertEquals("required", body["tool_choice"]!!.jsonPrimitive.content)
     }
@@ -264,7 +279,7 @@ class AzureOpenAiResponsesApiTest {
         transport.enqueueHangingResponse(
             """{"type":"response.output_item.added","output_index":0,
                 "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
-            """{"type":"response.output_text.delta","output_index":0,"delta":"partial"}""",
+            """{"type":"response.output_text.delta","output_index":0,"delta":"partial"}"""
         )
         val collected = mutableListOf<AssistantMessageEvent>()
         val job = launch(start = CoroutineStart.UNDISPATCHED) {
@@ -282,7 +297,9 @@ class AzureOpenAiResponsesApiTest {
     fun `terminal event completes the stream`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completed().toTypedArray()))
-        val events = api(transport).stream(model, context, AzureOpenAiResponsesOptions(apiKey = "k")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, AzureOpenAiResponsesOptions(apiKey = "k")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals("r1", done.message.responseId)
         assertEquals(10, done.message.usage.input)
@@ -294,15 +311,15 @@ class AzureOpenAiResponsesApiTest {
         // Microsoft Foundry roots, and already-normalized /openai/v1 paths.
         assertEquals(
             "https://res.cognitiveservices.azure.com/openai/v1",
-            normalizeAzureBaseUrl("https://res.cognitiveservices.azure.com"),
+            normalizeAzureBaseUrl("https://res.cognitiveservices.azure.com")
         )
         assertEquals(
             "https://res.ai.azure.com/openai/v1",
-            normalizeAzureBaseUrl("https://res.ai.azure.com"),
+            normalizeAzureBaseUrl("https://res.ai.azure.com")
         )
         assertEquals(
             "https://res.cognitiveservices.azure.com/openai/v1",
-            normalizeAzureBaseUrl("https://res.cognitiveservices.azure.com/openai/v1"),
+            normalizeAzureBaseUrl("https://res.cognitiveservices.azure.com/openai/v1")
         )
     }
 
@@ -315,12 +332,12 @@ class AzureOpenAiResponsesApiTest {
         api(transport).stream(
             model,
             context,
-            AzureOpenAiResponsesOptions(apiKey = "k", sessionId = "x".repeat(67)),
+            AzureOpenAiResponsesOptions(apiKey = "k", sessionId = "x".repeat(67))
         ).toList()
         assertEquals("x".repeat(64), bodyOf(transport)["prompt_cache_key"]!!.jsonPrimitive.content)
         assertEquals(
             works.resolve.pathfinder.ai.utils.getPiUserAgent(),
-            transport.requests.single().headers["User-Agent"],
+            transport.requests.single().headers["User-Agent"]
         )
     }
 
@@ -334,11 +351,13 @@ class AzureOpenAiResponsesApiTest {
         api(transport).stream(
             model.copy(responsesCompat = null),
             context.copy(tools = listOf(Tool("t", "T", buildJsonObject { put("type", "object") }))),
-            AzureOpenAiResponsesOptions(apiKey = "k"),
+            AzureOpenAiResponsesOptions(apiKey = "k")
         ).toList()
         assertEquals(
             false,
-            bodyOf(transport)["tools"]!!.jsonArray.single().jsonObject["strict"]!!.jsonPrimitive.content.toBoolean(),
+            bodyOf(
+                transport
+            )["tools"]!!.jsonArray.single().jsonObject["strict"]!!.jsonPrimitive.content.toBoolean()
         )
 
         val strictOff = FakeTransport()
@@ -346,7 +365,7 @@ class AzureOpenAiResponsesApiTest {
         api(strictOff).stream(
             model.copy(responsesCompat = OpenAiResponsesCompat(supportsStrictMode = false)),
             context.copy(tools = listOf(Tool("t", "T", buildJsonObject { put("type", "object") }))),
-            AzureOpenAiResponsesOptions(apiKey = "k"),
+            AzureOpenAiResponsesOptions(apiKey = "k")
         ).toList()
         assertNull(bodyOf(strictOff)["tools"]!!.jsonArray.single().jsonObject["strict"])
     }
@@ -359,11 +378,21 @@ class AzureOpenAiResponsesApiTest {
         transport.enqueueResponse(sse(*completed().toTypedArray()))
         api(transport).streamSimple(
             model,
-            context.copy(tools = listOf(Tool("read", "Read a file", buildJsonObject { put("type", "object") }))),
+            context.copy(
+                tools = listOf(
+                    Tool(
+                        "read",
+                        "Read a file",
+                        buildJsonObject {
+                            put("type", "object")
+                        }
+                    )
+                )
+            ),
             works.resolve.pathfinder.ai.SimpleStreamOptions(
                 apiKey = "k",
-                toolChoice = works.resolve.pathfinder.ai.SimpleToolChoice.None,
-            ),
+                toolChoice = works.resolve.pathfinder.ai.SimpleToolChoice.None
+            )
         ).toList()
         val body = bodyOf(transport)
         assertEquals("none", body["tool_choice"]!!.jsonPrimitive.content)

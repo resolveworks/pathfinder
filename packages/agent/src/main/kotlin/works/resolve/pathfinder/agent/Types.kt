@@ -1,5 +1,8 @@
 package works.resolve.pathfinder.agent
 
+import kotlin.time.Clock
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Content
@@ -12,9 +15,6 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
-import kotlin.time.Clock
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
 
 /**
  * How tool calls from a single assistant message are executed.
@@ -37,7 +37,7 @@ data class AgentLoopConfig(
      * forces the whole batch sequential.
      */
     val toolExecution: ToolExecutionMode = ToolExecutionMode.PARALLEL,
-    val clock: Clock = Clock.System,
+    val clock: Clock = Clock.System
 )
 
 /**
@@ -56,7 +56,7 @@ data class AgentState(
     val pendingToolCalls: Set<String> = emptySet(),
     val isStreaming: Boolean = false,
     val errorMessage: String? = null,
-    val thinkingLevel: ModelThinkingLevel = ModelThinkingLevel.OFF,
+    val thinkingLevel: ModelThinkingLevel = ModelThinkingLevel.OFF
 )
 
 /**
@@ -72,7 +72,7 @@ data class AgentToolResult(
     /** Usage of the final tool execution itself; not used for main LLM context accounting. */
     val usage: Usage? = null,
     /** Tools introduced by this result, available from this transcript point onward. */
-    val addedToolNames: List<String> = emptyList(),
+    val addedToolNames: List<String> = emptyList()
 ) {
     init {
         require(content.all { it is TextContent || it is ImageContent }) {
@@ -126,7 +126,11 @@ interface AgentTool {
      * `AbortSignal`; [onUpdate] is required — a non-streaming tool passes a
      * no-op.
      */
-    suspend fun execute(toolCallId: String, arguments: JsonObject, onUpdate: AgentToolUpdateCallback): AgentToolResult
+    suspend fun execute(
+        toolCallId: String,
+        arguments: JsonObject,
+        onUpdate: AgentToolUpdateCallback
+    ): AgentToolResult
 }
 
 /**
@@ -137,7 +141,7 @@ interface AgentTool {
 data class AgentContext(
     val systemPrompt: String? = null,
     val messages: List<Message> = emptyList(),
-    val tools: List<AgentTool> = emptyList(),
+    val tools: List<AgentTool> = emptyList()
 )
 
 /** Lifecycle events emitted by the agent loop. */
@@ -150,14 +154,17 @@ sealed class AgentEvent {
     object TurnStart : AgentEvent()
 
     /** Final assistant message of the turn plus its tool results in source order. */
-    data class TurnEnd(val message: AssistantMessage, val toolResults: List<ToolResultMessage> = emptyList()) : AgentEvent()
+    data class TurnEnd(
+        val message: AssistantMessage,
+        val toolResults: List<ToolResultMessage> = emptyList()
+    ) : AgentEvent()
 
     data class MessageStart(val message: Message) : AgentEvent()
 
     /** Only emitted for assistant messages while streaming. */
     data class MessageUpdate(
         val message: AssistantMessage,
-        val assistantMessageEvent: AssistantMessageEvent,
+        val assistantMessageEvent: AssistantMessageEvent
     ) : AgentEvent()
 
     data class MessageEnd(val message: Message) : AgentEvent()
@@ -169,21 +176,21 @@ sealed class AgentEvent {
     data class ToolExecutionStart(
         val toolCallId: String,
         val toolName: String,
-        val arguments: JsonObject,
+        val arguments: JsonObject
     ) : AgentEvent()
 
     data class ToolExecutionUpdate(
         val toolCallId: String,
         val toolName: String,
         val arguments: JsonObject,
-        val partialResult: AgentToolResult,
+        val partialResult: AgentToolResult
     ) : AgentEvent()
 
     data class ToolExecutionEnd(
         val toolCallId: String,
         val toolName: String,
         val result: AgentToolResult,
-        val isError: Boolean,
+        val isError: Boolean
     ) : AgentEvent()
 
     /**
@@ -194,7 +201,7 @@ sealed class AgentEvent {
         val attempt: Int,
         val maxAttempts: Int,
         val delayMs: Long,
-        val errorMessage: String,
+        val errorMessage: String
     ) : AgentEvent()
 
     /**
@@ -204,7 +211,7 @@ sealed class AgentEvent {
     data class AutoRetryEnd(
         val success: Boolean,
         val attempt: Int,
-        val finalError: String? = null,
+        val finalError: String? = null
     ) : AgentEvent()
 
     /**
@@ -229,13 +236,11 @@ sealed class AgentEvent {
         val tokensBefore: Int,
         val estimatedTokensAfter: Int,
         val usage: Usage?,
-        val details: works.resolve.pathfinder.agent.CompactionDetails?,
+        val details: works.resolve.pathfinder.agent.CompactionDetails?
     )
 
     /** Automatic compaction started; emitted by [AgentSession] between agent runs. */
-    data class CompactionStart(
-        val reason: CompactionReason,
-    ) : AgentEvent()
+    data class CompactionStart(val reason: CompactionReason) : AgentEvent()
 
     /** Compaction ended — succeeded, was aborted, or failed. */
     data class CompactionEnd(
@@ -243,7 +248,7 @@ sealed class AgentEvent {
         val result: CompactionResult? = null,
         val aborted: Boolean,
         val willRetry: Boolean,
-        val errorMessage: String? = null,
+        val errorMessage: String? = null
     ) : AgentEvent()
 
     /** A summarization retry is scheduled: the summary LLM call is backed off. */
@@ -251,12 +256,10 @@ sealed class AgentEvent {
         val attempt: Int,
         val maxAttempts: Int,
         val delayMs: Long,
-        val errorMessage: String,
+        val errorMessage: String
     ) : AgentEvent()
 
-    data class SummarizationRetryAttemptStart(
-        val source: SummarizationSource,
-    ) : AgentEvent()
+    data class SummarizationRetryAttemptStart(val source: SummarizationSource) : AgentEvent()
 
     object SummarizationRetryFinished : AgentEvent()
 }

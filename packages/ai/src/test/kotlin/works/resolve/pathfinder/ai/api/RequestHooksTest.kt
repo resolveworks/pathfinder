@@ -1,20 +1,5 @@
 package works.resolve.pathfinder.ai.api
 
-import works.resolve.pathfinder.ai.testing.FakeClock
-import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.Context
-import works.resolve.pathfinder.ai.InputModality
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.ModelCost
-import works.resolve.pathfinder.ai.OpenAiResponsesCompat
-import works.resolve.pathfinder.ai.ProviderResponse
-import works.resolve.pathfinder.ai.SimpleStreamOptions
-import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.testing.FakeTransport
-import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
-import works.resolve.pathfinder.ai.testing.sse
-import works.resolve.pathfinder.ai.transport.TransportResponse
-import works.resolve.pathfinder.ai.utils.ProviderRetry
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -28,9 +13,24 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.doubleOrNull
+import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.InputModality
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelCost
+import works.resolve.pathfinder.ai.OpenAiResponsesCompat
+import works.resolve.pathfinder.ai.ProviderResponse
+import works.resolve.pathfinder.ai.SimpleStreamOptions
+import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.testing.FakeTransport
+import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
+import works.resolve.pathfinder.ai.testing.sse
+import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.ai.utils.ProviderRetry
 
 class RequestHooksTest {
 
@@ -39,7 +39,9 @@ class RequestHooksTest {
     private fun bodyOf(transport: FakeTransport, index: Int = 0): JsonObject {
         val request = transport.requests[index]
         val text = if (request.headers["content-encoding"] == "zstd") {
-            com.github.luben.zstd.ZstdInputStream(request.body.inputStream()).readBytes().decodeToString()
+            com.github.luben.zstd.ZstdInputStream(
+                request.body.inputStream()
+            ).readBytes().decodeToString()
         } else {
             request.body.decodeToString()
         }
@@ -48,55 +50,57 @@ class RequestHooksTest {
 
     private fun enqueueMultiHeaderResponse(transport: FakeTransport, chunks: List<String>) {
         transport.outcomes.add {
-            val events = flow { chunks.forEach { emit(works.resolve.pathfinder.ai.transport.SseEvent(it)) } }
+            val events =
+                flow { chunks.forEach { emit(works.resolve.pathfinder.ai.transport.SseEvent(it)) } }
             TransportResponse(
                 status = 200,
                 headers = mapOf(
                     "content-type" to listOf("text/event-stream"),
-                    "x-multi" to listOf("a", "b"),
+                    "x-multi" to listOf("a", "b")
                 ),
-                events = events,
+                events = events
             )
         }
     }
 
     @Test
-    fun `completions onPayload observes the serialized payload and replaces the wire body`() = runTest {
-        val transport = FakeTransport()
-        transport.enqueueResponse(
-            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"),
-        )
-        val model = works.resolve.pathfinder.ai.testing.TestCatalogs.GLM_5_2
-        val context = Context(messages = listOf(UserMessage.ofText("hi")))
-        val seen = mutableListOf<JsonObject>()
-        val events = OpenAiCompletionsApi(transport, retry).streamSimple(
-            model,
-            context,
-            SimpleStreamOptions(
-                apiKey = "k",
-                temperature = 0.5,
-                onPayload = { payload, m ->
-                    assertEquals(model, m)
-                    seen.add(payload)
-                    JsonObject(payload.toMap() + ("top_k" to JsonPrimitive(4)))
-                },
-            ),
-        ).toList()
-        assertIs<AssistantMessageEvent.Done>(events.last())
-        assertEquals(0.5, seen.single()["temperature"]?.jsonPrimitive?.doubleOrNull)
-        assertEquals(4, bodyOf(transport)["top_k"]?.jsonPrimitive?.content?.toInt())
-    }
+    fun `completions onPayload observes the serialized payload and replaces the wire body`() =
+        runTest {
+            val transport = FakeTransport()
+            transport.enqueueResponse(
+                sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]")
+            )
+            val model = works.resolve.pathfinder.ai.testing.TestCatalogs.GLM_5_2
+            val context = Context(messages = listOf(UserMessage.ofText("hi")))
+            val seen = mutableListOf<JsonObject>()
+            val events = OpenAiCompletionsApi(transport, retry).streamSimple(
+                model,
+                context,
+                SimpleStreamOptions(
+                    apiKey = "k",
+                    temperature = 0.5,
+                    onPayload = { payload, m ->
+                        assertEquals(model, m)
+                        seen.add(payload)
+                        JsonObject(payload.toMap() + ("top_k" to JsonPrimitive(4)))
+                    }
+                )
+            ).toList()
+            assertIs<AssistantMessageEvent.Done>(events.last())
+            assertEquals(0.5, seen.single()["temperature"]?.jsonPrimitive?.doubleOrNull)
+            assertEquals(4, bodyOf(transport)["top_k"]?.jsonPrimitive?.content?.toInt())
+        }
 
     @Test
     fun `completions onPayload null return keeps the payload`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(
-            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"),
+            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]")
         )
         OpenAiCompletionsApi(transport, retry).streamSimple(
             works.resolve.pathfinder.ai.testing.TestCatalogs.GLM_5_2,
             Context(messages = listOf(UserMessage.ofText("hi"))),
-            SimpleStreamOptions(apiKey = "k", onPayload = { _, _ -> null }),
+            SimpleStreamOptions(apiKey = "k", onPayload = { _, _ -> null })
         ).toList()
         assertNull(bodyOf(transport)["top_k"])
     }
@@ -106,7 +110,7 @@ class RequestHooksTest {
         val transport = FakeTransport()
         enqueueMultiHeaderResponse(
             transport,
-            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"),
+            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]")
         )
         val responses = mutableListOf<ProviderResponse>()
         OpenAiCompletionsApi(transport, retry).streamSimple(
@@ -114,8 +118,8 @@ class RequestHooksTest {
             Context(messages = listOf(UserMessage.ofText("hi"))),
             SimpleStreamOptions(
                 apiKey = "k",
-                onResponse = { response, _ -> responses.add(response) },
-            ),
+                onResponse = { response, _ -> responses.add(response) }
+            )
         ).toList()
         assertEquals(200, responses.single().status)
         // pi's headersToRecord joins repeated values with ", ".
@@ -131,45 +135,49 @@ class RequestHooksTest {
         OpenAiCompletionsApi(transport, retry).streamSimple(
             works.resolve.pathfinder.ai.testing.TestCatalogs.GLM_5_2,
             Context(messages = listOf(UserMessage.ofText("hi"))),
-            SimpleStreamOptions(apiKey = "k", onResponse = { r, _ -> responses.add(r) }),
+            SimpleStreamOptions(apiKey = "k", onResponse = { r, _ -> responses.add(r) })
         ).toList()
         assertTrue(responses.isEmpty())
     }
 
     @Test
-    fun `completions samplingParams override named fields and merge over model defaults`() = runTest {
-        val transport = FakeTransport()
-        transport.enqueueResponse(
-            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"),
-        )
-        val model = works.resolve.pathfinder.ai.testing.TestCatalogs.GLM_5_2.copy(
-            samplingParams = mapOf("top_p" to JsonPrimitive(0.9), "repetition_penalty" to JsonPrimitive(2.0)),
-        )
-        OpenAiCompletionsApi(transport, retry).streamSimple(
-            model,
-            Context(messages = listOf(UserMessage.ofText("hi"))),
-            SimpleStreamOptions(
-                apiKey = "k",
-                temperature = 0.5,
-                samplingParams = mapOf("top_p" to JsonPrimitive(0.5)),
-            ),
-        ).toList()
-        val body = bodyOf(transport)
-        assertEquals(0.5, body["top_p"]?.jsonPrimitive?.doubleOrNull)
-        assertEquals(2.0, body["repetition_penalty"]?.jsonPrimitive?.doubleOrNull)
-        assertEquals(0.5, body["temperature"]?.jsonPrimitive?.doubleOrNull)
-    }
+    fun `completions samplingParams override named fields and merge over model defaults`() =
+        runTest {
+            val transport = FakeTransport()
+            transport.enqueueResponse(
+                sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]")
+            )
+            val model = works.resolve.pathfinder.ai.testing.TestCatalogs.GLM_5_2.copy(
+                samplingParams = mapOf(
+                    "top_p" to JsonPrimitive(0.9),
+                    "repetition_penalty" to JsonPrimitive(2.0)
+                )
+            )
+            OpenAiCompletionsApi(transport, retry).streamSimple(
+                model,
+                Context(messages = listOf(UserMessage.ofText("hi"))),
+                SimpleStreamOptions(
+                    apiKey = "k",
+                    temperature = 0.5,
+                    samplingParams = mapOf("top_p" to JsonPrimitive(0.5))
+                )
+            ).toList()
+            val body = bodyOf(transport)
+            assertEquals(0.5, body["top_p"]?.jsonPrimitive?.doubleOrNull)
+            assertEquals(2.0, body["repetition_penalty"]?.jsonPrimitive?.doubleOrNull)
+            assertEquals(0.5, body["temperature"]?.jsonPrimitive?.doubleOrNull)
+        }
 
     @Test
     fun `completions omits samplingParams keys when absent`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(
-            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"),
+            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]")
         )
         OpenAiCompletionsApi(transport, retry).streamSimple(
             works.resolve.pathfinder.ai.testing.TestCatalogs.GLM_5_2,
             Context(messages = listOf(UserMessage.ofText("hi"))),
-            SimpleStreamOptions(apiKey = "k"),
+            SimpleStreamOptions(apiKey = "k")
         ).toList()
         assertNull(bodyOf(transport)["top_p"])
         assertNull(bodyOf(transport)["repetition_penalty"])
@@ -182,7 +190,7 @@ class RequestHooksTest {
         provider = "anthropic",
         baseUrl = "https://api.anthropic.com",
         contextWindow = 200_000,
-        maxTokens = 64_000,
+        maxTokens = 64_000
     )
 
     private val anthropicContext = Context(messages = listOf(UserMessage.ofText("hi")))
@@ -197,7 +205,7 @@ class RequestHooksTest {
         "content_block_stop" to """{"type":"content_block_stop","index":0}""",
         "message_delta" to
             """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}""",
-        "message_stop" to """{"type":"message_stop"}""",
+        "message_stop" to """{"type":"message_stop"}"""
     )
 
     @Test
@@ -212,10 +220,13 @@ class RequestHooksTest {
             SimpleStreamOptions(
                 apiKey = "k",
                 maxTokens = 100,
-                onPayload = { payload, _ -> seen.add(payload); null },
+                onPayload = { payload, _ ->
+                    seen.add(payload)
+                    null
+                },
                 onResponse = { r, _ -> responses.add(r) },
-                samplingParams = mapOf("top_k" to JsonPrimitive(9)),
-            ),
+                samplingParams = mapOf("top_k" to JsonPrimitive(9))
+            )
         ).toList()
         assertEquals(bodyOf(transport), seen.single())
         assertEquals(200, responses.single().status)
@@ -232,8 +243,10 @@ class RequestHooksTest {
             anthropicContext,
             SimpleStreamOptions(
                 apiKey = "k",
-                onPayload = { payload, _ -> JsonObject(payload.toMap() + ("metadata" to JsonPrimitive("x"))) },
-            ),
+                onPayload = { payload, _ ->
+                    JsonObject(payload.toMap() + ("metadata" to JsonPrimitive("x")))
+                }
+            )
         ).toList()
         assertEquals("x", bodyOf(transport)["metadata"]?.jsonPrimitive?.content)
     }
@@ -246,7 +259,7 @@ class RequestHooksTest {
         AnthropicMessagesApi(transport, retry).streamSimple(
             claude,
             anthropicContext,
-            SimpleStreamOptions(apiKey = "k", onResponse = { r, _ -> responses.add(r) }),
+            SimpleStreamOptions(apiKey = "k", onResponse = { r, _ -> responses.add(r) })
         ).toList()
         assertTrue(responses.isEmpty())
     }
@@ -257,8 +270,8 @@ class RequestHooksTest {
         transport.enqueueResponse(
             sse(
                 """{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],
-                    "usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}""",
-            ),
+                    "usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}"""
+            )
         )
         val model = Model(
             id = "gemini-2.5-flash",
@@ -269,7 +282,7 @@ class RequestHooksTest {
             reasoning = true,
             input = listOf(InputModality.TEXT, InputModality.IMAGE),
             contextWindow = 128_000,
-            maxTokens = 8_192,
+            maxTokens = 8_192
         )
         val seen = mutableListOf<JsonObject>()
         val responses = mutableListOf<ProviderResponse>()
@@ -278,10 +291,13 @@ class RequestHooksTest {
             Context(messages = listOf(UserMessage.ofText("hi"))),
             SimpleStreamOptions(
                 apiKey = "k",
-                onPayload = { payload, _ -> seen.add(payload); null },
+                onPayload = { payload, _ ->
+                    seen.add(payload)
+                    null
+                },
                 onResponse = { r, _ -> responses.add(r) },
-                samplingParams = mapOf("top_k" to JsonPrimitive(9)),
-            ),
+                samplingParams = mapOf("top_k" to JsonPrimitive(9))
+            )
         ).toList()
         assertEquals(bodyOf(transport), seen.single())
         // pi's google-generative-ai has no onResponse call site.
@@ -296,7 +312,7 @@ class RequestHooksTest {
         provider = "mistral",
         baseUrl = "https://api.mistral.ai",
         contextWindow = 131_000,
-        maxTokens = 131_000,
+        maxTokens = 131_000
     )
 
     private val mistralContext = Context(messages = listOf(UserMessage.ofText("hi")))
@@ -317,9 +333,12 @@ class RequestHooksTest {
             mistralContext,
             SimpleStreamOptions(
                 apiKey = "k",
-                onPayload = { payload, _ -> seen.add(payload); null },
-                samplingParams = mapOf("top_k" to JsonPrimitive(9)),
-            ),
+                onPayload = { payload, _ ->
+                    seen.add(payload)
+                    null
+                },
+                samplingParams = mapOf("top_k" to JsonPrimitive(9))
+            )
         ).toList()
         assertEquals(bodyOf(transport), seen.single())
         assertNull(bodyOf(transport)["top_k"])
@@ -333,7 +352,7 @@ class RequestHooksTest {
         MistralConversationsApi(transport).streamSimple(
             mistral,
             mistralContext,
-            SimpleStreamOptions(apiKey = "k", onResponse = { r, _ -> responses.add(r) }),
+            SimpleStreamOptions(apiKey = "k", onResponse = { r, _ -> responses.add(r) })
         ).toList()
         // pi fires onResponse before the !ok check, so error responses hit the hook.
         assertEquals(500, responses.single().status)
@@ -349,7 +368,7 @@ class RequestHooksTest {
         cost = ModelCost(input = 1.0, output = 2.0),
         contextWindow = 400_000,
         maxTokens = 128_000,
-        responsesCompat = OpenAiResponsesCompat(),
+        responsesCompat = OpenAiResponsesCompat()
     )
 
     private fun responsesTerminal() = sse(
@@ -357,33 +376,40 @@ class RequestHooksTest {
             "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
         """{"type":"response.completed","response":{"id":"resp_1","status":"completed",
             "usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}""",
-        "[DONE]",
+        "[DONE]"
     )
 
     @Test
-    fun `responses onPayload and onResponse fire and samplingParams override named fields`() = runTest {
-        val transport = FakeTransport()
-        transport.enqueueResponse(responsesTerminal())
-        val seen = mutableListOf<JsonObject>()
-        val responses = mutableListOf<ProviderResponse>()
-        OpenAiResponsesApi(transport, retry).streamSimple(
-            gpt,
-            Context(messages = listOf(UserMessage.ofText("hi"))),
-            SimpleStreamOptions(
-                apiKey = "k",
-                maxTokens = 512,
-                onPayload = { payload, _ -> seen.add(payload); null },
-                onResponse = { r, _ -> responses.add(r) },
-                samplingParams = mapOf("max_output_tokens" to JsonPrimitive(7), "min_p" to JsonPrimitive(0.1)),
-            ),
-        ).toList()
-        assertEquals(200, responses.single().status)
-        val body = bodyOf(transport)
-        // onPayload sees the payload after the samplingParams merge.
-        assertEquals(body, seen.single())
-        assertEquals(7, body["max_output_tokens"]?.jsonPrimitive?.content?.toInt())
-        assertEquals(0.1, body["min_p"]?.jsonPrimitive?.doubleOrNull)
-    }
+    fun `responses onPayload and onResponse fire and samplingParams override named fields`() =
+        runTest {
+            val transport = FakeTransport()
+            transport.enqueueResponse(responsesTerminal())
+            val seen = mutableListOf<JsonObject>()
+            val responses = mutableListOf<ProviderResponse>()
+            OpenAiResponsesApi(transport, retry).streamSimple(
+                gpt,
+                Context(messages = listOf(UserMessage.ofText("hi"))),
+                SimpleStreamOptions(
+                    apiKey = "k",
+                    maxTokens = 512,
+                    onPayload = { payload, _ ->
+                        seen.add(payload)
+                        null
+                    },
+                    onResponse = { r, _ -> responses.add(r) },
+                    samplingParams = mapOf(
+                        "max_output_tokens" to JsonPrimitive(7),
+                        "min_p" to JsonPrimitive(0.1)
+                    )
+                )
+            ).toList()
+            assertEquals(200, responses.single().status)
+            val body = bodyOf(transport)
+            // onPayload sees the payload after the samplingParams merge.
+            assertEquals(body, seen.single())
+            assertEquals(7, body["max_output_tokens"]?.jsonPrimitive?.content?.toInt())
+            assertEquals(0.1, body["min_p"]?.jsonPrimitive?.doubleOrNull)
+        }
 
     @Test
     fun `azure onPayload and onResponse fire and samplingParams override named fields`() = runTest {
@@ -392,8 +418,8 @@ class RequestHooksTest {
             sse(
                 """{"type":"response.completed","response":{"id":"r1","status":"completed",
                     "usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
         val model = Model(
             id = "gpt-4o-mini",
@@ -403,7 +429,7 @@ class RequestHooksTest {
             baseUrl = "https://my-resource.openai.azure.com/openai/v1",
             contextWindow = 128_000,
             maxTokens = 16_384,
-            responsesCompat = OpenAiResponsesCompat(),
+            responsesCompat = OpenAiResponsesCompat()
         )
         val seen = mutableListOf<JsonObject>()
         val responses = mutableListOf<ProviderResponse>()
@@ -413,10 +439,13 @@ class RequestHooksTest {
             SimpleStreamOptions(
                 apiKey = "k",
                 temperature = 0.5,
-                onPayload = { payload, _ -> seen.add(payload); null },
+                onPayload = { payload, _ ->
+                    seen.add(payload)
+                    null
+                },
                 onResponse = { r, _ -> responses.add(r) },
-                samplingParams = mapOf("temperature" to JsonPrimitive(0.9)),
-            ),
+                samplingParams = mapOf("temperature" to JsonPrimitive(0.9))
+            )
         ).toList()
         assertEquals(200, responses.single().status)
         val body = bodyOf(transport)
@@ -425,39 +454,50 @@ class RequestHooksTest {
     }
 
     @Test
-    fun `codex onPayload fires, onResponse fires for non-2xx, samplingParams are ignored`() = runTest {
-        val transport = FakeTransport()
-        // 429 with a terminal usage-limit body: no retry, hook fires once.
-        transport.enqueueError(429, """{"error":"GoUsageLimitError"}""")
-        val model = Model(
-            id = "gpt-5.1-codex",
-            name = "GPT-5.1 Codex",
-            api = "openai-codex-responses",
-            provider = "openai-codex",
-            baseUrl = "https://chatgpt.com/backend-api",
-            reasoning = true,
-            contextWindow = 400_000,
-            maxTokens = 128_000,
-            responsesCompat = OpenAiResponsesCompat(supportsStrictMode = true),
-        )
-        val seen = mutableListOf<JsonObject>()
-        val responses = mutableListOf<ProviderResponse>()
-        val events = OpenAICodexResponsesApi(transport, clock = FakeClock(0L), webSocketTransport = NoWebSocketTransport).streamSimple(
-            model,
-            Context(systemPrompt = "You are Codex.", messages = listOf(UserMessage.ofText("hi"))),
-            SimpleStreamOptions(
-                apiKey = jwt("acc-1"),
-                onPayload = { payload, _ -> seen.add(payload); null },
-                onResponse = { r, _ -> responses.add(r) },
-                samplingParams = mapOf("top_k" to JsonPrimitive(9)),
-            ),
-        ).toList()
-        assertIs<AssistantMessageEvent.Error>(events.last())
-        assertEquals(bodyOf(transport), seen.single())
-        // pi fires onResponse before the ok check, so non-2xx hits the hook.
-        assertEquals(429, responses.single().status)
-        assertNull(bodyOf(transport)["top_k"])
-    }
+    fun `codex onPayload fires, onResponse fires for non-2xx, samplingParams are ignored`() =
+        runTest {
+            val transport = FakeTransport()
+            // 429 with a terminal usage-limit body: no retry, hook fires once.
+            transport.enqueueError(429, """{"error":"GoUsageLimitError"}""")
+            val model = Model(
+                id = "gpt-5.1-codex",
+                name = "GPT-5.1 Codex",
+                api = "openai-codex-responses",
+                provider = "openai-codex",
+                baseUrl = "https://chatgpt.com/backend-api",
+                reasoning = true,
+                contextWindow = 400_000,
+                maxTokens = 128_000,
+                responsesCompat = OpenAiResponsesCompat(supportsStrictMode = true)
+            )
+            val seen = mutableListOf<JsonObject>()
+            val responses = mutableListOf<ProviderResponse>()
+            val events = OpenAICodexResponsesApi(
+                transport,
+                clock = FakeClock(0L),
+                webSocketTransport = NoWebSocketTransport
+            ).streamSimple(
+                model,
+                Context(
+                    systemPrompt = "You are Codex.",
+                    messages = listOf(UserMessage.ofText("hi"))
+                ),
+                SimpleStreamOptions(
+                    apiKey = jwt("acc-1"),
+                    onPayload = { payload, _ ->
+                        seen.add(payload)
+                        null
+                    },
+                    onResponse = { r, _ -> responses.add(r) },
+                    samplingParams = mapOf("top_k" to JsonPrimitive(9))
+                )
+            ).toList()
+            assertIs<AssistantMessageEvent.Error>(events.last())
+            assertEquals(bodyOf(transport), seen.single())
+            // pi fires onResponse before the ok check, so non-2xx hits the hook.
+            assertEquals(429, responses.single().status)
+            assertNull(bodyOf(transport)["top_k"])
+        }
 
     @Test
     fun `hook presence and sampling keys never leak payload or parameter values into toString`() {
@@ -466,7 +506,7 @@ class RequestHooksTest {
             apiKey = secret,
             samplingParams = mapOf("x-custom" to JsonPrimitive(secret)),
             onPayload = { payload, _ -> payload },
-            onResponse = { _, _ -> },
+            onResponse = { _, _ -> }
         )
         val rendered = options.toString()
         assertFalse(rendered.contains(secret))

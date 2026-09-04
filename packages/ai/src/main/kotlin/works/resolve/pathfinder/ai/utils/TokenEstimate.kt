@@ -1,16 +1,16 @@
 package works.resolve.pathfinder.ai.utils
 
+import kotlin.math.ceil
+import kotlin.math.max
+import kotlin.math.min
 import works.resolve.pathfinder.ai.Content
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ContentType
+import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.MessageRole
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.Usage
-import kotlin.math.ceil
-import kotlin.math.max
-import kotlin.math.min
 
 /**
  * Rough context token estimation: ~4 chars per token and a fixed 4800-char
@@ -28,41 +28,43 @@ data class ContextUsageEstimate(
     val tokens: Int,
     val usageTokens: Int,
     val trailingTokens: Int,
-    val lastUsageIndex: Int?,
+    val lastUsageIndex: Int?
 )
 
-fun calculateContextTokens(usage: Usage): Int =
-    usage.totalTokens.takeIf { it > 0 } ?: usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+fun calculateContextTokens(usage: Usage): Int = usage.totalTokens.takeIf { it > 0 }
+    ?: usage.input + usage.output + usage.cacheRead + usage.cacheWrite
 
 fun estimateTextTokens(text: String): Int = ceil(text.length / CHARS_PER_TOKEN.toDouble()).toInt()
 
-private fun estimateTextAndImageChars(content: List<Content>): Int =
-    content.sumOf { block ->
-        when (block.type) {
-            ContentType.TEXT -> (block as works.resolve.pathfinder.ai.TextContent).text.length
-            ContentType.IMAGE -> ESTIMATED_IMAGE_CHARS
-            else -> 0
-        }
+private fun estimateTextAndImageChars(content: List<Content>): Int = content.sumOf { block ->
+    when (block.type) {
+        ContentType.TEXT -> (block as works.resolve.pathfinder.ai.TextContent).text.length
+        ContentType.IMAGE -> ESTIMATED_IMAGE_CHARS
+        else -> 0
     }
+}
 
-fun estimateMessageTokens(message: Message): Int {
-    return when (message.role) {
-        MessageRole.USER, MessageRole.TOOL_RESULT ->
-            ceil(estimateTextAndImageChars(message.contentList()) / CHARS_PER_TOKEN.toDouble()).toInt()
+fun estimateMessageTokens(message: Message): Int = when (message.role) {
+    MessageRole.USER, MessageRole.TOOL_RESULT ->
+        ceil(
+            estimateTextAndImageChars(message.contentList()) / CHARS_PER_TOKEN.toDouble()
+        ).toInt()
 
-        MessageRole.ASSISTANT -> {
-            var chars = 0
-            for (block in message.contentList()) {
-                when (block) {
-                    is works.resolve.pathfinder.ai.TextContent -> chars += block.text.length
-                    is works.resolve.pathfinder.ai.ThinkingContent -> chars += block.thinking.length
-                    is works.resolve.pathfinder.ai.ToolCall ->
-                        chars += block.name.length + block.arguments.length
-                    else -> {}
-                }
+    MessageRole.ASSISTANT -> {
+        var chars = 0
+        for (block in message.contentList()) {
+            when (block) {
+                is works.resolve.pathfinder.ai.TextContent -> chars += block.text.length
+
+                is works.resolve.pathfinder.ai.ThinkingContent -> chars += block.thinking.length
+
+                is works.resolve.pathfinder.ai.ToolCall ->
+                    chars += block.name.length + block.arguments.length
+
+                else -> {}
             }
-            ceil(chars / CHARS_PER_TOKEN.toDouble()).toInt()
         }
+        ceil(chars / CHARS_PER_TOKEN.toDouble()).toInt()
     }
 }
 
@@ -109,7 +111,12 @@ private fun estimateMessages(messages: List<Message>): ContextUsageEstimate {
         val usageTokens = calculateContextTokens(usage)
         // When usage applies, it already covers the system prompt and tools.
         val trailingTokens = messages.drop(index + 1).sumOf { estimateMessageTokens(it) }
-        return ContextUsageEstimate(usageTokens + trailingTokens, usageTokens, trailingTokens, index)
+        return ContextUsageEstimate(
+            usageTokens + trailingTokens,
+            usageTokens,
+            trailingTokens,
+            index
+        )
     }
 
     val tokens = messages.sumOf { estimateMessageTokens(it) }
@@ -137,16 +144,17 @@ fun estimateContextTokens(context: Context): ContextUsageEstimate {
             tokens = estimate.tokens + addedToolTokens,
             usageTokens = estimate.usageTokens,
             trailingTokens = estimate.trailingTokens + addedToolTokens,
-            lastUsageIndex = estimate.lastUsageIndex,
+            lastUsageIndex = estimate.lastUsageIndex
         )
     }
 
-    val prefixTokens = (context.systemPrompt?.let { estimateTextTokens(it) } ?: 0) + estimateToolsTokens(context)
+    val prefixTokens =
+        (context.systemPrompt?.let { estimateTextTokens(it) } ?: 0) + estimateToolsTokens(context)
     return ContextUsageEstimate(
         tokens = estimate.tokens + prefixTokens,
         usageTokens = estimate.usageTokens,
         trailingTokens = estimate.trailingTokens + prefixTokens,
-        lastUsageIndex = estimate.lastUsageIndex,
+        lastUsageIndex = estimate.lastUsageIndex
     )
 }
 
@@ -157,6 +165,7 @@ fun estimateContextTokens(context: Context): ContextUsageEstimate {
  */
 fun clampMaxTokensToContext(model: Model, context: Context, maxTokens: Int): Int {
     if (model.contextWindow <= 0) return max(MIN_MAX_TOKENS, maxTokens)
-    val available = model.contextWindow - estimateContextTokens(context).tokens - CONTEXT_SAFETY_TOKENS
+    val available =
+        model.contextWindow - estimateContextTokens(context).tokens - CONTEXT_SAFETY_TOKENS
     return min(maxTokens, max(MIN_MAX_TOKENS, available))
 }

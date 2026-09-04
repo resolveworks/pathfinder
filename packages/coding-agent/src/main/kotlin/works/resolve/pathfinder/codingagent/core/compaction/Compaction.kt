@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.codingagent.core.compaction
 
 import kotlin.time.Clock
+import works.resolve.pathfinder.agent.CompactionDetails
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.Context
@@ -8,15 +9,14 @@ import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.MessageRole
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.agent.CompactionDetails
 import works.resolve.pathfinder.ai.toThinkingLevelOrNull
-import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.utils.ContextUsageEstimate
 import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
@@ -25,7 +25,6 @@ import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.ai.utils.contentText
 import works.resolve.pathfinder.ai.utils.estimateMessageTokens
 import works.resolve.pathfinder.ai.utils.uuidv7
-import works.resolve.pathfinder.codingagent.core.utils.addUsage
 import works.resolve.pathfinder.codingagent.core.session.ActiveToolsEntry
 import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
@@ -34,18 +33,19 @@ import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
 import works.resolve.pathfinder.codingagent.core.session.SessionEntry
 import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.utils.addUsage
 
 data class CompactionSettings(
     val enabled: Boolean,
     /** Headroom held out of the context window for the summary request. */
     val reserveTokens: Int,
-    val keepRecentTokens: Int,
+    val keepRecentTokens: Int
 )
 
 val DEFAULT_COMPACTION_SETTINGS = CompactionSettings(
     enabled = true,
     reserveTokens = 16384,
-    keepRecentTokens = 20000,
+    keepRecentTokens = 20000
 )
 
 private fun getAssistantUsage(msg: Message): Usage? {
@@ -105,7 +105,7 @@ fun estimateContextTokens(messages: List<Message>): ContextUsageEstimate {
             tokens = estimated,
             usageTokens = 0,
             trailingTokens = estimated,
-            lastUsageIndex = null,
+            lastUsageIndex = null
         )
     }
 
@@ -120,7 +120,7 @@ fun estimateContextTokens(messages: List<Message>): ContextUsageEstimate {
         tokens = usageTokens + trailingTokens,
         usageTokens = usageTokens,
         trailingTokens = trailingTokens,
-        lastUsageIndex = index,
+        lastUsageIndex = index
     )
 }
 
@@ -129,7 +129,11 @@ fun shouldCompact(contextTokens: Int, contextWindow: Int, settings: CompactionSe
     return contextTokens > contextWindow - settings.reserveTokens
 }
 
-private fun findValidCutPoints(entries: List<SessionEntry>, startIndex: Int, endIndex: Int): List<Int> {
+private fun findValidCutPoints(
+    entries: List<SessionEntry>,
+    startIndex: Int,
+    endIndex: Int
+): List<Int> {
     val cutPoints = mutableListOf<Int>()
     for (i in startIndex until endIndex) {
         val entry = entries[i]
@@ -160,14 +164,14 @@ data class CutPointResult(
     val firstKeptEntryIndex: Int,
     /** Turn-start entry index when the cut splits a turn, otherwise -1. */
     val turnStartIndex: Int,
-    val isSplitTurn: Boolean,
+    val isSplitTurn: Boolean
 )
 
 fun findCutPoint(
     entries: List<SessionEntry>,
     startIndex: Int,
     endIndex: Int,
-    keepRecentTokens: Int,
+    keepRecentTokens: Int
 ): CutPointResult {
     val cutPoints = findValidCutPoints(entries, startIndex, endIndex)
 
@@ -199,19 +203,30 @@ fun findCutPoint(
     }
     val cutEntry = entries[cutIndex]
     val isUserMessage = cutEntry is MessageEntry && cutEntry.message.role == MessageRole.USER
-    val turnStartIndex = if (isUserMessage) -1 else findTurnStartIndex(entries, cutIndex, startIndex)
+    val turnStartIndex = if (isUserMessage) {
+        -1
+    } else {
+        findTurnStartIndex(
+            entries,
+            cutIndex,
+            startIndex
+        )
+    }
 
     return CutPointResult(
         firstKeptEntryIndex = cutIndex,
         turnStartIndex = turnStartIndex,
-        isSplitTurn = !isUserMessage && turnStartIndex != -1,
+        isSplitTurn = !isUserMessage && turnStartIndex != -1
     )
 }
 
 const val SUMMARIZATION_SYSTEM_PROMPT =
-    "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n" +
+    "You are a context summarization assistant. Your task is to read a conversation " +
+        "between a user and an AI assistant, then produce a structured summary " +
+        "following the exact format specified.\n" +
         "\n" +
-        "Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary."
+        "Do NOT continue the conversation. Do NOT respond to any questions in the conversation. " +
+        "ONLY output the structured summary."
 
 /**
  * Upstream reads the previous compaction entry's details out of the entries
@@ -221,7 +236,7 @@ const val SUMMARIZATION_SYSTEM_PROMPT =
  */
 fun extractFileOperations(
     messages: List<Message>,
-    prevCompactionDetails: CompactionDetails? = null,
+    prevCompactionDetails: CompactionDetails? = null
 ): FileOperations {
     val fileOps = createFileOps()
     if (prevCompactionDetails != null) {
@@ -236,11 +251,22 @@ fun extractFileOperations(
 
 private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
     is MessageEntry -> entry.message
+
     // Upstream synthesizes dedicated branchSummary/compactionSummary agent
     // messages here; pathfinder has no such roles, so both entries project
     // to their LLM form — a wrapped user message (Messages.kt).
-    is BranchSummaryEntry -> createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)
-    is CompactionEntry -> createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp)
+    is BranchSummaryEntry -> createBranchSummaryMessage(
+        entry.summary,
+        entry.fromId,
+        entry.timestamp
+    )
+
+    is CompactionEntry -> createCompactionSummaryMessage(
+        entry.summary,
+        entry.tokensBefore,
+        entry.timestamp
+    )
+
     is ModelChangeEntry, is ThinkingLevelEntry, is ActiveToolsEntry, is CustomEntry -> null
 }
 
@@ -253,10 +279,7 @@ internal fun getMessageFromEntryForCompaction(entry: SessionEntry): Message? =
 
 enum class CompactionErrorCode { ABORTED, SUMMARIZATION_FAILED }
 
-class CompactionError(
-    val code: CompactionErrorCode,
-    message: String,
-) : Exception(message)
+class CompactionError(val code: CompactionErrorCode, message: String) : Exception(message)
 
 sealed interface CompactionResult<out T> {
     data class Ok<T>(val value: T) : CompactionResult<T>
@@ -267,10 +290,7 @@ internal fun <T> ok(value: T): CompactionResult<T> = CompactionResult.Ok(value)
 
 internal fun err(error: CompactionError): CompactionResult<Nothing> = CompactionResult.Err(error)
 
-data class GeneratedSummary(
-    val text: String,
-    val usage: Usage,
-)
+data class GeneratedSummary(val text: String, val usage: Usage)
 
 /** Compaction outcome to persist as a session compaction entry. */
 data class CompactResult(
@@ -279,7 +299,7 @@ data class CompactResult(
     val tokensBefore: Int,
     val usage: Usage?,
     val retainedTail: List<Message>,
-    val details: CompactionDetails?,
+    val details: CompactionDetails?
 )
 
 private val DEFAULT_RETRY = Retry()
@@ -298,16 +318,16 @@ suspend fun completeSimpleWithRetries(
     options: SimpleStreamOptions,
     retry: RetryPolicy? = null,
     callbacks: RetryCallbacks? = null,
-    retryRunner: Retry = DEFAULT_RETRY,
+    retryRunner: Retry = DEFAULT_RETRY
 ): AssistantMessage {
     val requestOptions = options.copy(
         cacheRetention = CacheRetention.NONE,
-        sessionId = uuidv7(),
+        sessionId = uuidv7()
     )
     return retryRunner.retryAssistantCall(
         { models.completeSimple(model, context, requestOptions) },
         retry,
-        callbacks,
+        callbacks
     )
 }
 
@@ -408,21 +428,23 @@ private fun summarizationContext(promptText: String, clock: Clock): Context = Co
     messages = listOf(
         UserMessage(
             content = listOf(TextContent(promptText)),
-            timestamp = clock.now().toEpochMilliseconds(),
-        ),
-    ),
+            timestamp = clock.now().toEpochMilliseconds()
+        )
+    )
 )
 
 private fun completionOptions(
     model: Model,
     maxTokens: Int,
-    thinkingLevel: ModelThinkingLevel?,
-): SimpleStreamOptions =
-    // The OFF guard above makes the shared OFF→null mapper total here: OFF
+    thinkingLevel: ModelThinkingLevel?
+): SimpleStreamOptions = // The OFF guard above makes the shared OFF→null mapper total here: OFF
     // never reaches toThinkingLevelOrNull, matching pi, which only sets
     // reasoning when the level is present and not "off".
     if (model.reasoning && thinkingLevel != null && thinkingLevel != ModelThinkingLevel.OFF) {
-        SimpleStreamOptions(maxTokens = maxTokens, reasoning = thinkingLevel.toThinkingLevelOrNull())
+        SimpleStreamOptions(
+            maxTokens = maxTokens,
+            reasoning = thinkingLevel.toThinkingLevelOrNull()
+        )
     } else {
         SimpleStreamOptions(maxTokens = maxTokens)
     }
@@ -444,15 +466,16 @@ suspend fun generateSummary(
     retry: RetryPolicy? = null,
     callbacks: RetryCallbacks? = null,
     retryRunner: Retry = DEFAULT_RETRY,
-    clock: Clock,
-): CompactionResult<String> =
-    when (val result = generateSummaryWithUsage(
+    clock: Clock
+): CompactionResult<String> = when (
+    val result = generateSummaryWithUsage(
         currentMessages, models, model, reserveTokens,
-        customInstructions, previousSummary, thinkingLevel, retry, callbacks, retryRunner, clock,
-    )) {
-        is CompactionResult.Ok -> ok(result.value.text)
-        is CompactionResult.Err -> err(result.error)
-    }
+        customInstructions, previousSummary, thinkingLevel, retry, callbacks, retryRunner, clock
+    )
+) {
+    is CompactionResult.Ok -> ok(result.value.text)
+    is CompactionResult.Err -> err(result.error)
+}
 
 /**
  * Upstream builds the prompt over `convertToLlm(messages)`; pathfinder
@@ -471,10 +494,16 @@ suspend fun generateSummaryWithUsage(
     retry: RetryPolicy? = null,
     callbacks: RetryCallbacks? = null,
     retryRunner: Retry = DEFAULT_RETRY,
-    clock: Clock,
+    clock: Clock
 ): CompactionResult<GeneratedSummary> {
     val maxTokens = summaryMaxTokens(reserveTokens, model, 0.8)
-    var basePrompt = if (previousSummary != null) UPDATE_SUMMARIZATION_PROMPT else SUMMARIZATION_PROMPT
+    var basePrompt = if (previousSummary !=
+        null
+    ) {
+        UPDATE_SUMMARIZATION_PROMPT
+    } else {
+        SUMMARIZATION_PROMPT
+    }
     if (customInstructions != null) {
         basePrompt = "$basePrompt\n\nAdditional focus: $customInstructions"
     }
@@ -492,17 +521,22 @@ suspend fun generateSummaryWithUsage(
         completionOptions(model, maxTokens, thinkingLevel),
         retry,
         callbacks,
-        retryRunner,
+        retryRunner
     )
     if (response.stopReason == StopReason.ABORTED) {
-        return err(CompactionError(CompactionErrorCode.ABORTED, response.errorMessage ?: "Summarization aborted"))
+        return err(
+            CompactionError(
+                CompactionErrorCode.ABORTED,
+                response.errorMessage ?: "Summarization aborted"
+            )
+        )
     }
     if (response.stopReason == StopReason.ERROR) {
         return err(
             CompactionError(
                 CompactionErrorCode.SUMMARIZATION_FAILED,
-                "Summarization failed: ${response.errorMessage ?: "Unknown error"}",
-            ),
+                "Summarization failed: ${response.errorMessage ?: "Unknown error"}"
+            )
         )
     }
 
@@ -517,12 +551,12 @@ data class CompactionPreparation(
     val tokensBefore: Int,
     val previousSummary: String?,
     val fileOps: FileOperations,
-    val settings: CompactionSettings,
+    val settings: CompactionSettings
 )
 
 fun prepareCompaction(
     pathEntries: List<SessionEntry>,
-    settings: CompactionSettings,
+    settings: CompactionSettings
 ): CompactionResult<CompactionPreparation?> {
     if (pathEntries.isEmpty() || pathEntries.last() is CompactionEntry) {
         return ok(null)
@@ -541,22 +575,36 @@ fun prepareCompaction(
     if (prevCompactionIndex >= 0) {
         val prevCompaction = pathEntries[prevCompactionIndex] as CompactionEntry
         previousSummary = prevCompaction.summary
-        val virtualRetainedEntries: List<SessionEntry> = prevCompaction.retainedTail.mapIndexed { index, message ->
+        val virtualRetainedEntries: List<SessionEntry> = prevCompaction.retainedTail.mapIndexed {
+                index,
+                message
+            ->
             MessageEntry(
                 id = "${prevCompaction.id}:retained:$index",
-                parentId = if (index == 0) prevCompaction.id else "${prevCompaction.id}:retained:${index - 1}",
+                parentId = if (index ==
+                    0
+                ) {
+                    prevCompaction.id
+                } else {
+                    "${prevCompaction.id}:retained:${index - 1}"
+                },
                 timestamp = message.timestamp,
-                message = message,
+                message = message
             )
         }
-        compactableEntries = virtualRetainedEntries + pathEntries.subList(prevCompactionIndex + 1, pathEntries.size)
+        compactableEntries =
+            virtualRetainedEntries + pathEntries.subList(prevCompactionIndex + 1, pathEntries.size)
     }
     val boundaryEnd = compactableEntries.size
 
     val tokensBefore = estimateContextTokens(buildSessionContext(pathEntries)).tokens
 
     val cutPoint = findCutPoint(compactableEntries, 0, boundaryEnd, settings.keepRecentTokens)
-    val historyEnd = if (cutPoint.isSplitTurn) cutPoint.turnStartIndex else cutPoint.firstKeptEntryIndex
+    val historyEnd = if (cutPoint.isSplitTurn) {
+        cutPoint.turnStartIndex
+    } else {
+        cutPoint.firstKeptEntryIndex
+    }
     val messagesToSummarize = mutableListOf<Message>()
     for (i in 0 until historyEnd) {
         getMessageFromEntryForCompaction(compactableEntries[i])?.let { messagesToSummarize.add(it) }
@@ -564,7 +612,9 @@ fun prepareCompaction(
     val turnPrefixMessages = mutableListOf<Message>()
     if (cutPoint.isSplitTurn) {
         for (i in cutPoint.turnStartIndex until cutPoint.firstKeptEntryIndex) {
-            getMessageFromEntryForCompaction(compactableEntries[i])?.let { turnPrefixMessages.add(it) }
+            getMessageFromEntryForCompaction(compactableEntries[i])?.let {
+                turnPrefixMessages.add(it)
+            }
         }
     }
     val retainedTail = mutableListOf<Message>()
@@ -592,8 +642,8 @@ fun prepareCompaction(
             tokensBefore = tokensBefore,
             previousSummary = previousSummary,
             fileOps = fileOps,
-            settings = settings,
-        ),
+            settings = settings
+        )
     )
 }
 
@@ -612,10 +662,12 @@ suspend fun compact(
     retry: RetryPolicy? = null,
     callbacks: RetryCallbacks? = null,
     retryRunner: Retry = DEFAULT_RETRY,
-    clock: Clock,
+    clock: Clock
 ): CompactionResult<CompactResult> {
-    val (messagesToSummarize, turnPrefixMessages, retainedTail, isSplitTurn, tokensBefore, previousSummary, fileOps, settings) =
-        preparation
+    val (
+        messagesToSummarize, turnPrefixMessages, retainedTail, isSplitTurn, tokensBefore,
+        previousSummary, fileOps, settings
+    ) = preparation
 
     val summary: String
     val summaryUsage: Usage
@@ -626,7 +678,8 @@ suspend fun compact(
         if (messagesToSummarize.isNotEmpty()) {
             val historyResult = generateSummaryWithUsage(
                 messagesToSummarize, models, model, settings.reserveTokens,
-                customInstructions, previousSummary, thinkingLevel, retry, callbacks, retryRunner, clock,
+                customInstructions, previousSummary, thinkingLevel, retry, callbacks,
+                retryRunner, clock
             )
             if (historyResult is CompactionResult.Err) return err(historyResult.error)
             historyResult as CompactionResult.Ok
@@ -635,17 +688,18 @@ suspend fun compact(
         }
         val turnPrefixResult = generateTurnPrefixSummary(
             turnPrefixMessages, models, model, settings.reserveTokens,
-            thinkingLevel, retry, callbacks, retryRunner, clock,
+            thinkingLevel, retry, callbacks, retryRunner, clock
         )
         if (turnPrefixResult is CompactionResult.Err) return err(turnPrefixResult.error)
         turnPrefixResult as CompactionResult.Ok
-        summary = "$historyText\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value.text}"
+        summary =
+            "$historyText\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value.text}"
         summaryUsage = historyUsage?.let { addUsage(it, turnPrefixResult.value.usage) }
             ?: turnPrefixResult.value.usage
     } else {
         val summaryResult = generateSummaryWithUsage(
             messagesToSummarize, models, model, settings.reserveTokens,
-            customInstructions, previousSummary, thinkingLevel, retry, callbacks, retryRunner, clock,
+            customInstructions, previousSummary, thinkingLevel, retry, callbacks, retryRunner, clock
         )
         if (summaryResult is CompactionResult.Err) return err(summaryResult.error)
         summaryResult as CompactionResult.Ok
@@ -662,8 +716,8 @@ suspend fun compact(
             tokensBefore = tokensBefore,
             usage = summaryUsage,
             retainedTail = retainedTail,
-            details = CompactionDetails(readFiles = readFiles, modifiedFiles = modifiedFiles),
-        ),
+            details = CompactionDetails(readFiles = readFiles, modifiedFiles = modifiedFiles)
+        )
     )
 }
 
@@ -676,11 +730,12 @@ private suspend fun generateTurnPrefixSummary(
     retry: RetryPolicy?,
     callbacks: RetryCallbacks?,
     retryRunner: Retry,
-    clock: Clock,
+    clock: Clock
 ): CompactionResult<GeneratedSummary> {
     val maxTokens = summaryMaxTokens(reserveTokens, model, 0.5)
     val conversationText = serializeConversation(messages)
-    val promptText = "<conversation>\n$conversationText\n</conversation>\n\n$TURN_PREFIX_SUMMARIZATION_PROMPT"
+    val promptText = "<conversation>\n$conversationText\n</conversation>\n\n" +
+        TURN_PREFIX_SUMMARIZATION_PROMPT
 
     val response = completeSimpleWithRetries(
         models,
@@ -689,17 +744,22 @@ private suspend fun generateTurnPrefixSummary(
         completionOptions(model, maxTokens, thinkingLevel),
         retry,
         callbacks,
-        retryRunner,
+        retryRunner
     )
     if (response.stopReason == StopReason.ABORTED) {
-        return err(CompactionError(CompactionErrorCode.ABORTED, response.errorMessage ?: "Turn prefix summarization aborted"))
+        return err(
+            CompactionError(
+                CompactionErrorCode.ABORTED,
+                response.errorMessage ?: "Turn prefix summarization aborted"
+            )
+        )
     }
     if (response.stopReason == StopReason.ERROR) {
         return err(
             CompactionError(
                 CompactionErrorCode.SUMMARIZATION_FAILED,
-                "Turn prefix summarization failed: ${response.errorMessage ?: "Unknown error"}",
-            ),
+                "Turn prefix summarization failed: ${response.errorMessage ?: "Unknown error"}"
+            )
         )
     }
 

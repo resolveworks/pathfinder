@@ -1,8 +1,8 @@
 package works.resolve.pathfinder.ai.auth
 
+import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.time.Clock
 
 /**
  * A stored credential owns the provider: ambient/env is consulted only when
@@ -19,15 +19,12 @@ enum class ModelsErrorCode {
     PROVIDER,
     STREAM,
     AUTH,
-    OAUTH,
+    OAUTH
 }
 
 /** Callers surface `message` only, so the underlying reason stays in it. */
-class ModelsError(
-    val code: ModelsErrorCode,
-    message: String,
-    cause: Throwable? = null,
-) : Exception(withCauseDetail(message, cause), cause) {
+class ModelsError(val code: ModelsErrorCode, message: String, cause: Throwable? = null) :
+    Exception(withCauseDetail(message, cause), cause) {
     constructor(code: ModelsErrorCode, message: String) : this(code, message, null)
 
     companion object {
@@ -42,7 +39,7 @@ class ModelsError(
 data class AuthResolutionOverrides(
     val apiKey: String? = null,
     val env: Map<String, String> = emptyMap(),
-    val minOAuthValidityMs: Long? = null,
+    val minOAuthValidityMs: Long? = null
 )
 
 suspend fun resolveProviderAuth(
@@ -50,10 +47,16 @@ suspend fun resolveProviderAuth(
     credentials: CredentialStore,
     authContext: AuthContext,
     overrides: AuthResolutionOverrides? = null,
-    clock: Clock = Clock.System,
+    clock: Clock = Clock.System
 ): AuthResult? {
     val requestAuthContext =
-        if (overrides?.env?.isNotEmpty() == true) overlayEnvAuthContext(authContext, overrides.env) else authContext
+        if (overrides?.env?.isNotEmpty() ==
+            true
+        ) {
+            overlayEnvAuthContext(authContext, overrides.env)
+        } else {
+            authContext
+        }
 
     val apiKeyAuth = provider.auth.apiKey
     val overrideKey = overrides?.apiKey
@@ -62,7 +65,7 @@ suspend fun resolveProviderAuth(
             requestAuthContext,
             apiKeyAuth,
             provider.id,
-            ApiKeyCredential(key = overrideKey, env = overrides.env),
+            ApiKeyCredential(key = overrideKey, env = overrides.env)
         )
     }
 
@@ -76,7 +79,7 @@ suspend fun resolveProviderAuth(
                 oauthAuth,
                 stored,
                 overrides?.minOAuthValidityMs,
-                clock,
+                clock
             )
         }
         if (stored is ApiKeyCredential && apiKeyAuth != null) {
@@ -105,7 +108,8 @@ private fun overlayEnvAuthContext(base: AuthContext, env: Map<String, String>): 
     object : AuthContext {
         // An empty override falls through to the ambient value instead of
         // suppressing it.
-        override suspend fun env(name: String): String? = env[name]?.takeIf { it.isNotEmpty() } ?: base.env(name)
+        override suspend fun env(name: String): String? =
+            env[name]?.takeIf { it.isNotEmpty() } ?: base.env(name)
 
         override suspend fun fileExists(path: String): Boolean = base.fileExists(path)
     }
@@ -126,7 +130,7 @@ private suspend fun resolveStoredOAuth(
     oauth: OAuthAuth,
     stored: OAuthCredential,
     minOAuthValidityMs: Long?,
-    clock: Clock = Clock.System,
+    clock: Clock = Clock.System
 ): AuthResult? {
     val minimumValidityMs = maxOf(DEFAULT_OAUTH_MINIMUM_VALIDITY_MS, minOAuthValidityMs ?: 0)
     fun expiresSoon(credential: OAuthCredential): Boolean =
@@ -137,18 +141,27 @@ private suspend fun resolveStoredOAuth(
         // Optimistic check said expired; the authoritative check runs under the lock.
         val post = try {
             credentials.modify(providerId) { current ->
-                val currentOAuth = current as? OAuthCredential ?: return@modify null // logged out meanwhile
-                if (!expiresSoon(currentOAuth)) return@modify null // another request refreshed
+                // logged out meanwhile
+                val currentOAuth = current as? OAuthCredential ?: return@modify null
+                if (!expiresSoon(currentOAuth)) {
+                    return@modify null // another request refreshed
+                }
                 try {
-                    withTimeoutOrNull(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS) { oauth.refresh(currentOAuth) }
+                    withTimeoutOrNull(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS) {
+                        oauth.refresh(currentOAuth)
+                    }
                         ?: throw ModelsError(
                             ModelsErrorCode.OAUTH,
-                            "OAuth refresh timed out for $providerId after ${DEFAULT_OAUTH_REFRESH_TIMEOUT_MS}ms",
+                            "OAuth refresh timed out for $providerId after ${DEFAULT_OAUTH_REFRESH_TIMEOUT_MS}ms"
                         )
                 } catch (error: CancellationException) {
                     throw error // caller cancellation (incl. an outer withTimeout) — never wrapped
                 } catch (error: Throwable) {
-                    throw ModelsError(ModelsErrorCode.OAUTH, "OAuth refresh failed for $providerId", error)
+                    throw ModelsError(
+                        ModelsErrorCode.OAUTH,
+                        "OAuth refresh failed for $providerId",
+                        error
+                    )
                 }
             }
         } catch (error: ModelsError) {
@@ -156,7 +169,11 @@ private suspend fun resolveStoredOAuth(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
-            throw ModelsError(ModelsErrorCode.AUTH, "Credential store modify failed for $providerId", error)
+            throw ModelsError(
+                ModelsErrorCode.AUTH,
+                "Credential store modify failed for $providerId",
+                error
+            )
         }
         if (post !is OAuthCredential) return null // logged out meanwhile
         credential = post
@@ -164,7 +181,10 @@ private suspend fun resolveStoredOAuth(
         // provider contract. Explicit callers do require the requested minimum
         // after the refresh.
         if (minOAuthValidityMs != null && expiresSoon(credential)) {
-            throw ModelsError(ModelsErrorCode.OAUTH, "OAuth refresh returned a token that expires too soon for $providerId")
+            throw ModelsError(
+                ModelsErrorCode.OAUTH,
+                "OAuth refresh returned a token that expires too soon for $providerId"
+            )
         }
     }
 
@@ -173,7 +193,11 @@ private suspend fun resolveStoredOAuth(
     } catch (error: CancellationException) {
         throw error
     } catch (error: Throwable) {
-        throw ModelsError(ModelsErrorCode.OAUTH, "OAuth auth derivation failed for $providerId", error)
+        throw ModelsError(
+            ModelsErrorCode.OAUTH,
+            "OAuth auth derivation failed for $providerId",
+            error
+        )
     }
 }
 
@@ -181,24 +205,28 @@ private suspend fun resolveApiKey(
     authContext: AuthContext,
     apiKey: ApiKeyAuth,
     providerId: String,
-    credential: ApiKeyCredential?,
-): AuthResult? =
-    try {
-        apiKey.resolve(authContext, credential)
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: Throwable) {
-        throw ModelsError(ModelsErrorCode.AUTH, "API key auth failed for provider $providerId", error)
-    }
+    credential: ApiKeyCredential?
+): AuthResult? = try {
+    apiKey.resolve(authContext, credential)
+} catch (error: CancellationException) {
+    throw error
+} catch (error: Throwable) {
+    throw ModelsError(
+        ModelsErrorCode.AUTH,
+        "API key auth failed for provider $providerId",
+        error
+    )
+}
 
-private suspend fun readCredential(
-    credentials: CredentialStore,
-    providerId: String,
-): Credential? =
+private suspend fun readCredential(credentials: CredentialStore, providerId: String): Credential? =
     try {
         credentials.read(providerId)
     } catch (error: CancellationException) {
         throw error
     } catch (error: Throwable) {
-        throw ModelsError(ModelsErrorCode.AUTH, "Credential store read failed for $providerId", error)
+        throw ModelsError(
+            ModelsErrorCode.AUTH,
+            "Credential store read failed for $providerId",
+            error
+        )
     }

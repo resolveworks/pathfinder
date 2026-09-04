@@ -1,12 +1,24 @@
 package works.resolve.pathfinder.ai.api
 
+import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Content
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ContentType
+import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
@@ -24,12 +36,16 @@ import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.anthropicCompatOf
+import works.resolve.pathfinder.ai.calculateCost
 import works.resolve.pathfinder.ai.hasHeader
 import works.resolve.pathfinder.ai.headersToRecord
 import works.resolve.pathfinder.ai.mergeHeaders
 import works.resolve.pathfinder.ai.toModelThinkingLevel
 import works.resolve.pathfinder.ai.toToolChoice
-import works.resolve.pathfinder.ai.calculateCost
+import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
+import works.resolve.pathfinder.ai.transport.ProviderHttpException
+import works.resolve.pathfinder.ai.transport.TransportRequest
+import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.AssistantMessageDiagnostic
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.appendAssistantMessageDiagnostic
@@ -46,25 +62,12 @@ import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.splitDeferredTools
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strOrNull
-import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
-import works.resolve.pathfinder.ai.transport.ProviderHttpException
-import works.resolve.pathfinder.ai.transport.TransportRequest
-import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.telemetry.TelemetryContext
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emitAll
-import kotlinx.coroutines.flow.flow
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import kotlin.time.Clock
 
-internal fun resolveCacheRetention(cacheRetention: CacheRetention?, env: Map<String, String>): CacheRetention {
+internal fun resolveCacheRetention(
+    cacheRetention: CacheRetention?,
+    env: Map<String, String>
+): CacheRetention {
     if (cacheRetention != null) return cacheRetention
     if (env["PI_CACHE_RETENTION"] == "long") return CacheRetention.LONG
     return CacheRetention.SHORT
@@ -73,7 +76,8 @@ internal fun resolveCacheRetention(cacheRetention: CacheRetention?, env: Map<Str
 internal fun getCacheControl(model: Model, options: AnthropicMessagesOptions): JsonObject? {
     val retention = resolveCacheRetention(options.cacheRetention, options.env)
     if (retention == CacheRetention.NONE) return null
-    val ttl = retention == CacheRetention.LONG && anthropicCompatOf(model).supportsLongCacheRetention
+    val ttl =
+        retention == CacheRetention.LONG && anthropicCompatOf(model).supportsLongCacheRetention
     return buildJsonObject {
         put("type", "ephemeral")
         if (ttl) put("ttl", "1h")
@@ -86,7 +90,7 @@ internal const val CLAUDE_CODE_VERSION = "2.1.251"
 private val CLAUDE_CODE_TOOLS = listOf(
     "Read", "Write", "Edit", "Bash", "Grep", "Glob", "AskUserQuestion",
     "EnterPlanMode", "ExitPlanMode", "KillShell", "NotebookEdit", "Skill",
-    "Task", "TaskOutput", "TodoWrite", "WebFetch", "WebSearch",
+    "Task", "TaskOutput", "TodoWrite", "WebFetch", "WebSearch"
 )
 
 private val CC_TOOL_LOOKUP = CLAUDE_CODE_TOOLS.associateBy { it.lowercase() }
@@ -112,7 +116,11 @@ internal fun fromClaudeCodeName(name: String, tools: List<Tool>): String {
 internal fun convertContentBlocks(content: List<Content>): Any {
     val hasImages = content.any { it.type == ContentType.IMAGE }
     if (!hasImages) {
-        return sanitizeSurrogates(content.filterIsInstance<TextContent>().joinToString("\n") { it.text })
+        return sanitizeSurrogates(
+            content.filterIsInstance<TextContent>().joinToString("\n") {
+                it.text
+            }
+        )
     }
 
     val blocks = content.map { block ->
@@ -121,14 +129,19 @@ internal fun convertContentBlocks(content: List<Content>): Any {
                 put("type", "text")
                 put("text", sanitizeSurrogates(block.text))
             }
+
             is ImageContent -> buildJsonObject {
                 put("type", "image")
-                put("source", buildJsonObject {
-                    put("type", "base64")
-                    put("media_type", block.mimeType)
-                    put("data", block.data)
-                })
+                put(
+                    "source",
+                    buildJsonObject {
+                        put("type", "base64")
+                        put("media_type", block.mimeType)
+                        put("data", block.data)
+                    }
+                )
             }
+
             else -> null
         }
     }.filterNotNull().toMutableList()
@@ -139,7 +152,7 @@ internal fun convertContentBlocks(content: List<Content>): Any {
             buildJsonObject {
                 put("type", "text")
                 put("text", "(see attached image)")
-            },
+            }
         )
     }
     return JsonArray(blocks)
@@ -192,7 +205,7 @@ data class AnthropicMessagesOptions(
      * Explicit parent telemetry context for this request. Dormant in this
      * port — carried for shape fidelity.
      */
-    val telemetryContext: TelemetryContext? = null,
+    val telemetryContext: TelemetryContext? = null
 ) {
     override fun toString(): String = optionsToString(
         "AnthropicMessagesOptions",
@@ -214,7 +227,7 @@ data class AnthropicMessagesOptions(
         "headers" to headers.keys,
         "onPayload" to (onPayload != null),
         "onResponse" to (onResponse != null),
-        "telemetryContext" to (telemetryContext != null),
+        "telemetryContext" to (telemetryContext != null)
     )
 }
 
@@ -234,18 +247,19 @@ data class AnthropicMessagesOptions(
 class AnthropicMessagesApi(
     private val transport: HttpStreamingTransport,
     private val retry: ProviderRetry = ProviderRetry(),
-    private val clock: Clock = Clock.System,
+    private val clock: Clock = Clock.System
 ) : ChatApi {
 
     fun stream(
         model: Model,
         context: Context,
-        options: AnthropicMessagesOptions = AnthropicMessagesOptions(),
+        options: AnthropicMessagesOptions = AnthropicMessagesOptions()
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = clock.now().toEpochMilliseconds()
         // Copilot is never OAuth: its Bearer-auth branch is checked first,
         // as in pi's createClient.
-        val isOAuth = model.provider != "github-copilot" && options.apiKey?.let { isOAuthToken(it) } == true
+        val isOAuth =
+            model.provider != "github-copilot" && options.apiKey?.let { isOAuthToken(it) } == true
         val providerThinkingLevel =
             if (anthropicCompatOf(model).supportsMidConvoEffort) {
                 (options.effort ?: AnthropicEffort.HIGH).name.lowercase()
@@ -263,7 +277,8 @@ class AnthropicMessagesApi(
             options.onPayload?.let { hook ->
                 hook(params, model)?.let { next ->
                     // A replacement payload must not turn off streaming.
-                    params = JsonObject(next.toMutableMap().apply { put("stream", JsonPrimitive(true)) })
+                    params =
+                        JsonObject(next.toMutableMap().apply { put("stream", JsonPrimitive(true)) })
                 }
             }
             // The beta namespace moves `betas` out of the body and into the
@@ -276,21 +291,34 @@ class AnthropicMessagesApi(
                 .toString()
                 .toByteArray(Charsets.UTF_8)
 
-            val (headers, bearerToken) = buildHeaders(model, isOAuth, options, context, cacheSessionId, betas)
+            val (headers, bearerToken) = buildHeaders(
+                model,
+                isOAuth,
+                options,
+                context,
+                cacheSessionId,
+                betas
+            )
             val url = model.baseUrl.trimEnd('/') + "/v1/messages?beta=true"
             val request = TransportRequest(
                 url = url,
                 bearerToken = bearerToken,
                 headers = headers,
                 body = body,
-                timeoutMs = options.timeoutMs,
+                timeoutMs = options.timeoutMs
             )
 
-            val response = retry.retryProviderRequest<TransportResponse>(options.maxRetries, options.maxRetryDelayMs) {
+            val response = retry.retryProviderRequest<TransportResponse>(
+                options.maxRetries,
+                options.maxRetryDelayMs
+            ) {
                 transport.post(request)
             }
 
-            options.onResponse?.invoke(ProviderResponse(response.status, headersToRecord(response.headers)), model)
+            options.onResponse?.invoke(
+                ProviderResponse(response.status, headersToRecord(response.headers)),
+                model
+            )
 
             emit(AssistantMessageEvent.Start(state.snapshot()))
 
@@ -309,7 +337,9 @@ class AnthropicMessagesApi(
             }
 
             var message = state.snapshot()
-            state.inputTransformationsDiagnostic(clock.now().toEpochMilliseconds())?.let { diagnostic ->
+            state.inputTransformationsDiagnostic(
+                clock.now().toEpochMilliseconds()
+            )?.let { diagnostic ->
                 message = appendAssistantMessageDiagnostic(message, diagnostic)
             }
             emit(AssistantMessageEvent.Done(state.stopReason, message))
@@ -317,7 +347,7 @@ class AnthropicMessagesApi(
             if (error is CancellationException) throw error
             val finalMessage = state.snapshot().copy(
                 stopReason = StopReason.ERROR,
-                errorMessage = formatProviderError(error),
+                errorMessage = formatProviderError(error)
             )
             emit(AssistantMessageEvent.Error(finalMessage.stopReason, finalMessage))
         }
@@ -330,7 +360,7 @@ class AnthropicMessagesApi(
     override fun streamSimple(
         model: Model,
         context: Context,
-        options: SimpleStreamOptions,
+        options: SimpleStreamOptions
     ): Flow<AssistantMessageEvent> = flow {
         try {
             assertRequestAuth(model.provider, options.apiKey, options.headers)
@@ -340,7 +370,7 @@ class AnthropicMessagesApi(
         }
 
         val base = buildBaseOptions(model, context, options).copy(
-            toolChoice = mapToolChoice(options.toolChoice?.toToolChoice()),
+            toolChoice = mapToolChoice(options.toolChoice?.toToolChoice())
         )
         val reasoning = options.reasoning
         val resolved: AnthropicMessagesOptions = if (reasoning == null) {
@@ -348,16 +378,21 @@ class AnthropicMessagesApi(
         } else if (anthropicCompatOf(model).forceAdaptiveThinking == true) {
             base.copy(
                 thinkingEnabled = true,
-                effort = mapThinkingLevelToEffort(model, reasoning),
+                effort = mapThinkingLevelToEffort(model, reasoning)
             )
         } else {
             val (maxTokens, thinkingBudget) =
-                adjustMaxTokensForThinking(base.maxTokens, model.maxTokens, reasoning, options.thinkingBudgets)
+                adjustMaxTokensForThinking(
+                    base.maxTokens,
+                    model.maxTokens,
+                    reasoning,
+                    options.thinkingBudgets
+                )
             val clamped = clampMaxTokensToContext(model, context, maxTokens)
             base.copy(
                 maxTokens = clamped,
                 thinkingEnabled = true,
-                thinkingBudgetTokens = minOf(thinkingBudget, maxOf(0, clamped - MIN_ANSWER_TOKENS)),
+                thinkingBudgetTokens = minOf(thinkingBudget, maxOf(0, clamped - MIN_ANSWER_TOKENS))
             )
         }
         emitAll(stream(model, context, resolved))
@@ -367,7 +402,7 @@ class AnthropicMessagesApi(
         event: works.resolve.pathfinder.ai.transport.SseEvent,
         model: Model,
         context: Context,
-        state: AnthropicStreamState,
+        state: AnthropicStreamState
     ): List<AssistantMessageEvent> {
         if (event.name == "error") {
             throw ProviderStreamException(event.data)
@@ -379,11 +414,13 @@ class AnthropicMessagesApi(
             lenientJson.parseToJsonElement(event.data)
         } catch (error: Exception) {
             throw ProviderStreamException(
-                "Could not parse Anthropic SSE event $name: ${error.message ?: error::class.simpleName}; data=${event.data}",
+                "Could not parse Anthropic SSE event $name: ${error.message ?: error::class.simpleName}; data=${event.data}"
             )
         }
         if (parsed !is JsonObject) {
-            throw ProviderStreamException("Could not parse Anthropic SSE event $name: expected object; data=${event.data}")
+            throw ProviderStreamException(
+                "Could not parse Anthropic SSE event $name: expected object; data=${event.data}"
+            )
         }
 
         return when (name) {
@@ -397,7 +434,11 @@ class AnthropicMessagesApi(
         }
     }
 
-    private fun assertRequestAuth(provider: String, apiKey: String?, headers: Map<String, String?>) {
+    private fun assertRequestAuth(
+        provider: String,
+        apiKey: String?,
+        headers: Map<String, String?>
+    ) {
         if (apiKey != null) return
         if (hasHeader(headers, "authorization") ||
             hasHeader(headers, "x-api-key") ||
@@ -408,10 +449,7 @@ class AnthropicMessagesApi(
         throw ProviderAuthException("No API key for provider: $provider")
     }
 
-    private fun missingAuthEvent(
-        model: Model,
-        error: Exception,
-    ): AssistantMessageEvent.Error {
+    private fun missingAuthEvent(model: Model, error: Exception): AssistantMessageEvent.Error {
         val message = AssistantMessage(
             content = emptyList(),
             api = model.api,
@@ -419,7 +457,7 @@ class AnthropicMessagesApi(
             model = model.id,
             stopReason = StopReason.ERROR,
             errorMessage = error.message ?: "Unknown error",
-            timestamp = clock.now().toEpochMilliseconds(),
+            timestamp = clock.now().toEpochMilliseconds()
         )
         return AssistantMessageEvent.Error(message.stopReason, message)
     }
@@ -437,14 +475,14 @@ class AnthropicMessagesApi(
             "message_stop",
             "content_block_start",
             "content_block_delta",
-            "content_block_stop",
+            "content_block_stop"
         )
     }
 }
 
 internal fun mapThinkingLevelToEffort(
     model: Model,
-    level: works.resolve.pathfinder.ai.ThinkingLevel?,
+    level: works.resolve.pathfinder.ai.ThinkingLevel?
 ): AnthropicEffort {
     // Core ThinkingLevel has no OFF case, so toModelThinkingLevel is total here.
     val mapped = level?.let { model.thinkingLevelMap?.forLevel(it.toModelThinkingLevel()) }
@@ -457,9 +495,11 @@ internal fun mapThinkingLevelToEffort(
     }
     return when (level) {
         works.resolve.pathfinder.ai.ThinkingLevel.MINIMAL,
-        works.resolve.pathfinder.ai.ThinkingLevel.LOW,
+        works.resolve.pathfinder.ai.ThinkingLevel.LOW
         -> AnthropicEffort.LOW
+
         works.resolve.pathfinder.ai.ThinkingLevel.MEDIUM -> AnthropicEffort.MEDIUM
+
         else -> AnthropicEffort.HIGH
     }
 }
@@ -470,12 +510,12 @@ internal val DEFAULT_THINKING_BUDGETS = mapOf(
     works.resolve.pathfinder.ai.ThinkingLevel.MINIMAL to 1024,
     works.resolve.pathfinder.ai.ThinkingLevel.LOW to 2048,
     works.resolve.pathfinder.ai.ThinkingLevel.MEDIUM to 8192,
-    works.resolve.pathfinder.ai.ThinkingLevel.HIGH to 16384,
+    works.resolve.pathfinder.ai.ThinkingLevel.HIGH to 16384
 )
 
 /** Xhigh/max have no budget entries, so they clamp to high before lookup. */
 internal fun clampReasoning(
-    level: works.resolve.pathfinder.ai.ThinkingLevel,
+    level: works.resolve.pathfinder.ai.ThinkingLevel
 ): works.resolve.pathfinder.ai.ThinkingLevel =
     if (level == works.resolve.pathfinder.ai.ThinkingLevel.XHIGH ||
         level == works.resolve.pathfinder.ai.ThinkingLevel.MAX
@@ -487,7 +527,7 @@ internal fun clampReasoning(
 
 internal fun thinkingBudgetForLevel(
     level: works.resolve.pathfinder.ai.ThinkingLevel,
-    customBudgets: Map<works.resolve.pathfinder.ai.ThinkingLevel, Int> = emptyMap(),
+    customBudgets: Map<works.resolve.pathfinder.ai.ThinkingLevel, Int> = emptyMap()
 ): Int {
     val budgets = DEFAULT_THINKING_BUDGETS + customBudgets
     return budgets[clampReasoning(level)]!!
@@ -497,7 +537,7 @@ internal fun adjustMaxTokensForThinking(
     baseMaxTokens: Int?,
     modelMaxTokens: Int,
     reasoningLevel: works.resolve.pathfinder.ai.ThinkingLevel,
-    customBudgets: Map<works.resolve.pathfinder.ai.ThinkingLevel, Int> = emptyMap(),
+    customBudgets: Map<works.resolve.pathfinder.ai.ThinkingLevel, Int> = emptyMap()
 ): Pair<Int, Int> {
     var thinkingBudget = thinkingBudgetForLevel(reasoningLevel, customBudgets)
     val maxTokens = if (baseMaxTokens == null) {
@@ -519,34 +559,37 @@ internal fun adjustMaxTokensForThinking(
 internal fun mapToolChoice(choice: works.resolve.pathfinder.ai.ToolChoice?): AnthropicToolChoice? =
     when (choice) {
         works.resolve.pathfinder.ai.ToolChoice.Auto -> AnthropicToolChoice.Auto
+
         works.resolve.pathfinder.ai.ToolChoice.None -> AnthropicToolChoice.None
+
         works.resolve.pathfinder.ai.ToolChoice.Any,
-        works.resolve.pathfinder.ai.ToolChoice.Required,
+        works.resolve.pathfinder.ai.ToolChoice.Required
         -> AnthropicToolChoice.Any
+
         is works.resolve.pathfinder.ai.ToolChoice.Function -> AnthropicToolChoice.Tool(choice.name)
+
         null -> null
     }
 
 internal fun buildBaseOptions(
     model: Model,
     context: Context,
-    options: works.resolve.pathfinder.ai.SimpleStreamOptions,
-): AnthropicMessagesOptions =
-    AnthropicMessagesOptions(
-        apiKey = options.apiKey,
-        sessionId = options.sessionId,
-        temperature = options.temperature,
-        maxTokens = clampMaxTokensToContext(model, context, options.maxTokens ?: model.maxTokens),
-        cacheRetention = options.cacheRetention,
-        timeoutMs = options.timeoutMs,
-        maxRetries = options.maxRetries,
-        maxRetryDelayMs = options.maxRetryDelayMs,
-        env = options.env,
-        headers = options.headers,
-        onPayload = options.onPayload,
-        onResponse = options.onResponse,
-        telemetryContext = options.telemetryContext,
-    )
+    options: works.resolve.pathfinder.ai.SimpleStreamOptions
+): AnthropicMessagesOptions = AnthropicMessagesOptions(
+    apiKey = options.apiKey,
+    sessionId = options.sessionId,
+    temperature = options.temperature,
+    maxTokens = clampMaxTokensToContext(model, context, options.maxTokens ?: model.maxTokens),
+    cacheRetention = options.cacheRetention,
+    timeoutMs = options.timeoutMs,
+    maxRetries = options.maxRetries,
+    maxRetryDelayMs = options.maxRetryDelayMs,
+    env = options.env,
+    headers = options.headers,
+    onPayload = options.onPayload,
+    onResponse = options.onResponse,
+    telemetryContext = options.telemetryContext
+)
 
 internal fun isOAuthToken(apiKey: String): Boolean = apiKey.contains("sk-ant-oat")
 
@@ -561,7 +604,9 @@ internal const val ANTHROPIC_VERSION = "2023-06-01"
  */
 internal fun defaultSupportsToolReferences(model: Model): Boolean {
     if (model.provider != "anthropic" || model.id.contains("haiku")) return false
-    val version = Regex("^claude-(?:opus|sonnet|fable)-(\\d+)(?:-(\\d+))?(?:-|$)").find(model.id) ?: return false
+    val version =
+        Regex("^claude-(?:opus|sonnet|fable)-(\\d+)(?:-(\\d+))?(?:-|$)").find(model.id)
+            ?: return false
     val major = version.groupValues[1].toInt()
     // A long "minor" (a date suffix, >= 8 chars) is not a version minor.
     val minor = version.groupValues[2].takeIf { it.isNotEmpty() && it.length < 8 }?.toInt() ?: 0
@@ -589,7 +634,7 @@ internal fun getBetaFeatures(
     model: Model,
     context: Context,
     isOAuthToken: Boolean,
-    options: AnthropicMessagesOptions?,
+    options: AnthropicMessagesOptions?
 ): List<String> {
     var configuredFeatures: String? = null
     var configured = false
@@ -649,7 +694,7 @@ private fun buildHeaders(
     options: AnthropicMessagesOptions,
     context: Context,
     cacheSessionId: String?,
-    betas: List<String>,
+    betas: List<String>
 ): Pair<Map<String, String>, String?> {
     val compat = anthropicCompatOf(model)
 
@@ -666,9 +711,9 @@ private fun buildHeaders(
                 // per-request options headers.
                 mergeHeaders(
                     mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
-                    options.headers,
-                ),
-            ),
+                    options.headers
+                )
+            )
         )
         return merged to options.apiKey
     }
@@ -684,8 +729,8 @@ private fun buildHeaders(
         return filterNonNull(
             mergeHeaders(
                 mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), base),
-                mergeHeaders(model.headers, options.headers),
-            ),
+                mergeHeaders(model.headers, options.headers)
+            )
         ) to options.apiKey
     }
 
@@ -703,13 +748,13 @@ private fun buildHeaders(
             options.apiKey?.let { put("x-api-key", it) }
             if (betas.isNotEmpty()) put("anthropic-beta", betas.joinToString(","))
         },
-        sessionAffinity,
+        sessionAffinity
     )
     val merged = filterNonNull(
         mergeHeaders(
             mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), base),
-            mergeHeaders(model.headers, options.headers),
-        ),
+            mergeHeaders(model.headers, options.headers)
+        )
     )
     return merged to null
 }
@@ -717,22 +762,26 @@ private fun buildHeaders(
 private fun filterNonNull(headers: Map<String, String?>): Map<String, String> =
     headers.filterValues { it != null }.mapValues { it.value!! }
 
-internal const val CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
+internal const val CLAUDE_CODE_IDENTITY =
+    "You are Claude Code, Anthropic's official CLI for Claude."
 
 internal fun buildRequestBody(
     model: Model,
     context: Context,
     isOAuthToken: Boolean,
-    options: AnthropicMessagesOptions,
+    options: AnthropicMessagesOptions
 ): JsonObject {
     val cacheControl = getCacheControl(model, options)
     val compat = anthropicCompatOf(model)
-    val transformed = transformMessages(context.messages, model) { id, _ -> normalizeToolCallId(id) }
-    val normalizeToolName: (String) -> String = if (isOAuthToken) ::toClaudeCodeName else { name -> name }
+    val transformed =
+        transformMessages(context.messages, model) { id, _ -> normalizeToolCallId(id) }
+    val normalizeToolName: (
+        String
+    ) -> String = if (isOAuthToken) ::toClaudeCodeName else { name -> name }
     val toolPlacement = splitDeferredTools(
         context.copy(messages = transformed),
         supportsToolReferences(model),
-        normalizeToolName,
+        normalizeToolName
     )
     var immediateTools = toolPlacement.immediate
     var deferredTools = toolPlacement.deferred.values.toList()
@@ -749,7 +798,7 @@ internal fun buildRequestBody(
         compat.allowEmptySignature,
         deferredToolNames,
         normalizeToolName,
-        if (managed) model.provider else null,
+        if (managed) model.provider else null
     )
     val activeEffort = options.effort ?: AnthropicEffort.HIGH
     val betaFeatures = getBetaFeatures(model, context, isOAuthToken, options)
@@ -757,7 +806,7 @@ internal fun buildRequestBody(
     val body = mutableMapOf<String, JsonElement>()
     body["model"] = JsonPrimitive(model.id)
     body["messages"] = JsonArray(
-        if (managed) insertThinkingLevelMessages(converted, activeEffort) else converted.messages,
+        if (managed) insertThinkingLevelMessages(converted, activeEffort) else converted.messages
     )
     body["max_tokens"] = JsonPrimitive(options.maxTokens ?: model.maxTokens)
     body["stream"] = JsonPrimitive(true)
@@ -796,15 +845,15 @@ internal fun buildRequestBody(
                 isOAuthToken,
                 compat.supportsEagerToolInputStreaming,
                 compat.supportsStrictTools,
-                if (compat.supportsCacheControlOnTools) cacheControl else null,
+                if (compat.supportsCacheControlOnTools) cacheControl else null
             ) + convertTools(
                 deferredTools,
                 isOAuthToken,
                 compat.supportsEagerToolInputStreaming,
                 compat.supportsStrictTools,
                 cacheControl = null,
-                deferLoading = true,
-            ),
+                deferLoading = true
+            )
         )
     }
 
@@ -846,12 +895,16 @@ internal fun buildRequestBody(
 
     when (val choice = options.toolChoice) {
         AnthropicToolChoice.Auto -> body["tool_choice"] = buildJsonObject { put("type", "auto") }
+
         AnthropicToolChoice.Any -> body["tool_choice"] = buildJsonObject { put("type", "any") }
+
         AnthropicToolChoice.None -> body["tool_choice"] = buildJsonObject { put("type", "none") }
+
         is AnthropicToolChoice.Tool -> body["tool_choice"] = buildJsonObject {
             put("type", "tool")
             put("name", choice.name)
         }
+
         null -> {}
     }
 
@@ -861,7 +914,7 @@ internal fun buildRequestBody(
     val allowedFallbackModels = compat.allowedFallbackModels
     if (allowedFallbackModels.isNotEmpty()) {
         body["fallbacks"] = JsonArray(
-            allowedFallbackModels.map { buildJsonObject { put("model", it.model) } },
+            allowedFallbackModels.map { buildJsonObject { put("model", it.model) } }
         )
     }
 
@@ -878,25 +931,29 @@ internal fun thinkingOffExplicitlyUnsupported(model: Model): Boolean {
 internal fun normalizeToolCallId(id: String): String =
     id.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(64)
 
-private fun textBlock(text: String, cacheControl: JsonObject? = null): JsonObject = buildJsonObject {
-    put("type", "text")
-    put("text", sanitizeSurrogates(text))
-    if (cacheControl != null) put("cache_control", cacheControl)
-}
+private fun textBlock(text: String, cacheControl: JsonObject? = null): JsonObject =
+    buildJsonObject {
+        put("type", "text")
+        put("text", sanitizeSurrogates(text))
+        if (cacheControl != null) put("cache_control", cacheControl)
+    }
 
 private fun imageBlock(block: ImageContent): JsonObject = buildJsonObject {
     put("type", "image")
-    put("source", buildJsonObject {
-        put("type", "base64")
-        put("media_type", block.mimeType)
-        put("data", block.data)
-    })
+    put(
+        "source",
+        buildJsonObject {
+            put("type", "base64")
+            put("media_type", block.mimeType)
+            put("data", block.data)
+        }
+    )
 }
 
 internal data class ConvertedAnthropicMessages(
     val messages: List<JsonObject>,
     /** Per-converted-message-index historical effort for managed models. */
-    val assistantLevels: Map<Int, AnthropicEffort>,
+    val assistantLevels: Map<Int, AnthropicEffort>
 )
 
 private fun isAnthropicEffort(value: String?): Boolean =
@@ -915,7 +972,7 @@ private fun effortMarkerMessage(effort: AnthropicEffort): JsonObject = buildJson
  */
 private fun insertThinkingLevelMessages(
     converted: ConvertedAnthropicMessages,
-    activeEffort: AnthropicEffort,
+    activeEffort: AnthropicEffort
 ): List<JsonObject> {
     val messages = mutableListOf<JsonObject>()
     converted.messages.forEachIndexed { index, message ->
@@ -939,7 +996,7 @@ private fun convertToolResult(
     isOAuthToken: Boolean,
     deferredToolNames: Set<String>,
     loadedToolNames: MutableSet<String>,
-    normalizeToolName: (String) -> String,
+    normalizeToolName: (String) -> String
 ): Pair<JsonObject, List<JsonObject>> {
     val references = mutableListOf<JsonObject>()
     for (name in msg.addedToolNames) {
@@ -950,7 +1007,7 @@ private fun convertToolResult(
             buildJsonObject {
                 put("type", "tool_reference")
                 put("tool_name", if (isOAuthToken) toClaudeCodeName(name) else name)
-            },
+            }
         )
     }
     val convertedContent = convertContentBlocks(msg.content)
@@ -963,7 +1020,7 @@ private fun convertToolResult(
                 references.isNotEmpty() -> JsonArray(references)
                 convertedContent is JsonArray -> convertedContent
                 else -> JsonPrimitive(convertedContent.toString())
-            },
+            }
         )
         put("is_error", msg.isError)
     }
@@ -982,7 +1039,7 @@ internal fun convertMessages(
     allowEmptySignature: Boolean,
     deferredToolNames: Set<String> = emptySet(),
     normalizeToolName: (String) -> String = { it },
-    managedProvider: String? = null,
+    managedProvider: String? = null
 ): ConvertedAnthropicMessages {
     val params = mutableListOf<JsonObject>()
     val assistantLevels = mutableMapOf<Int, AnthropicEffort>()
@@ -998,7 +1055,9 @@ internal fun convertMessages(
                     when (block) {
                         is TextContent ->
                             if (block.text.trim().isNotEmpty()) textBlock(block.text) else null
+
                         is ImageContent -> imageBlock(block)
+
                         else -> null
                     }
                 }
@@ -1007,16 +1066,22 @@ internal fun convertMessages(
                         buildJsonObject {
                             put("role", "user")
                             put("content", JsonArray(blocks))
-                        },
+                        }
                     )
                 }
             }
+
             works.resolve.pathfinder.ai.MessageRole.ASSISTANT -> {
                 val assistant = msg as works.resolve.pathfinder.ai.AssistantMessage
                 val blocks = mutableListOf<JsonObject>()
                 for (block in assistant.content) {
                     when (block) {
-                        is TextContent -> if (block.text.trim().isNotEmpty()) blocks.add(textBlock(block.text))
+                        is TextContent -> if (block.text.trim().isNotEmpty()) {
+                            blocks.add(
+                                textBlock(block.text)
+                            )
+                        }
+
                         is ThinkingContent -> {
                             // Redacted thinking: pass the opaque payload back.
                             if (block.redacted) {
@@ -1024,12 +1089,13 @@ internal fun convertMessages(
                                     buildJsonObject {
                                         put("type", "redacted_thinking")
                                         put("data", block.thinkingSignature ?: "")
-                                    },
+                                    }
                                 )
                                 continue
                             }
                             val signature = block.thinkingSignature
-                            val hasSignature = !signature.isNullOrEmpty() && signature.trim().isNotEmpty()
+                            val hasSignature =
+                                !signature.isNullOrEmpty() && signature.trim().isNotEmpty()
                             if (block.thinking.trim().isEmpty() && !hasSignature) continue
                             if (!hasSignature) {
                                 blocks.add(
@@ -1041,7 +1107,7 @@ internal fun convertMessages(
                                         }
                                     } else {
                                         textBlock(block.thinking)
-                                    },
+                                    }
                                 )
                             } else {
                                 blocks.add(
@@ -1049,21 +1115,26 @@ internal fun convertMessages(
                                         put("type", "thinking")
                                         put("thinking", sanitizeSurrogates(block.thinking))
                                         put("signature", signature)
-                                    },
+                                    }
                                 )
                             }
                         }
+
                         is ToolCall -> blocks.add(
                             buildJsonObject {
                                 put("type", "tool_use")
                                 put("id", block.id)
-                                put("name", if (isOAuthToken) toClaudeCodeName(block.name) else block.name)
+                                put(
+                                    "name",
+                                    if (isOAuthToken) toClaudeCodeName(block.name) else block.name
+                                )
                                 put(
                                     "input",
-                                    parseOrEmptyObject(block.arguments),
+                                    parseOrEmptyObject(block.arguments)
                                 )
-                            },
+                            }
                         )
+
                         else -> {}
                     }
                 }
@@ -1073,7 +1144,7 @@ internal fun convertMessages(
                         buildJsonObject {
                             put("role", "assistant")
                             put("content", JsonArray(blocks))
-                        },
+                        }
                     )
                     if (
                         managedProvider != null &&
@@ -1086,20 +1157,22 @@ internal fun convertMessages(
                     }
                 }
             }
+
             works.resolve.pathfinder.ai.MessageRole.TOOL_RESULT -> {
                 // Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint.
                 val toolResults = mutableListOf<JsonObject>()
                 val siblingContent = mutableListOf<JsonObject>()
                 var j = i
                 while (j < transformedMessages.size &&
-                    transformedMessages[j].role == works.resolve.pathfinder.ai.MessageRole.TOOL_RESULT
+                    transformedMessages[j].role ==
+                    works.resolve.pathfinder.ai.MessageRole.TOOL_RESULT
                 ) {
                     val (toolResult, siblings) = convertToolResult(
                         transformedMessages[j] as ToolResultMessage,
                         isOAuthToken,
                         deferredToolNames,
                         loadedToolNames,
-                        normalizeToolName,
+                        normalizeToolName
                     )
                     toolResults.add(toolResult)
                     siblingContent.addAll(siblings)
@@ -1111,7 +1184,7 @@ internal fun convertMessages(
                     buildJsonObject {
                         put("role", "user")
                         put("content", JsonArray(toolResults + siblingContent))
-                    },
+                    }
                 )
             }
         }
@@ -1128,17 +1201,23 @@ internal fun convertMessages(
                 content is JsonArray && content.isNotEmpty() -> {
                     val lastBlock = content.last() as? JsonObject
                     val type = lastBlock.str("type")
-                    if (lastBlock != null && (type == "text" || type == "image" || type == "tool_result")) {
-                        JsonArray(content.dropLast(1) + lastBlock.toMutableMap().apply {
-                            put("cache_control", cacheControl)
-                        }.let { JsonObject(it) })
+                    if (lastBlock != null &&
+                        (type == "text" || type == "image" || type == "tool_result")
+                    ) {
+                        JsonArray(
+                            content.dropLast(1) + lastBlock.toMutableMap().apply {
+                                put("cache_control", cacheControl)
+                            }.let { JsonObject(it) }
+                        )
                     } else {
                         content
                     }
                 }
+
                 content is JsonPrimitive -> JsonArray(
-                    listOf(textBlock(content.content, cacheControl)),
+                    listOf(textBlock(content.content, cacheControl))
                 )
+
                 else -> content ?: JsonNull
             }
             params[params.size - 1] = buildJsonObject {
@@ -1167,7 +1246,7 @@ internal fun convertTools(
     supportsEagerToolInputStreaming: Boolean,
     supportsStrictTools: Boolean,
     cacheControl: JsonObject?,
-    deferLoading: Boolean = false,
+    deferLoading: Boolean = false
 ): List<JsonObject> = tools.mapIndexed { index, tool ->
     val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictTools)
     val parameters = getJsonSchemaToolParameters(tool, strict)
@@ -1205,7 +1284,7 @@ internal class AnthropicStreamState(
     private val timestampMs: Long,
     private val isOAuth: Boolean = false,
     /** Managed-effort models record the active effort on every response. */
-    private val providerThinkingLevel: String? = null,
+    private val providerThinkingLevel: String? = null
 ) {
     private sealed interface Block {
         val streamIndex: Int
@@ -1223,6 +1302,7 @@ internal class AnthropicStreamState(
     private class Tool(override val streamIndex: Int) : Block {
         var id = ""
         var name = ""
+
         /** pi seeds `arguments` from content_block_start input; kept as raw JSON here. */
         var seedJson: String? = null
         val partialJson = StringBuilder()
@@ -1281,17 +1361,14 @@ internal class AnthropicStreamState(
                 cacheRead = messageUsage.int("cache_read_input_tokens") ?: 0,
                 cacheWrite = messageUsage.int("cache_creation_input_tokens") ?: 0,
                 cacheWrite1h = messageUsage.obj("cache_creation")
-                    ?.int("ephemeral_1h_input_tokens") ?: 0,
+                    ?.int("ephemeral_1h_input_tokens") ?: 0
             )
             usage = withTotal(usage)
         }
         return emptyList()
     }
 
-    fun onContentBlockStart(
-        event: JsonObject,
-        context: Context,
-    ): List<AssistantMessageEvent> {
+    fun onContentBlockStart(event: JsonObject, context: Context): List<AssistantMessageEvent> {
         val index = event.int("index") ?: return emptyList()
         val contentBlock = event.obj("content_block") ?: return emptyList()
         val type = contentBlock.str("type")
@@ -1299,14 +1376,17 @@ internal class AnthropicStreamState(
             "text" -> Text(index).apply {
                 contentBlock["text"].strOrNull()?.let { text.append(it) }
             }
+
             "thinking" -> Thinking(index, redacted = false).apply {
                 contentBlock["thinking"].strOrNull()?.let { thinking.append(it) }
                 contentBlock["signature"].strOrNull()?.let { signature = it }
             }
+
             "redacted_thinking" -> Thinking(index, redacted = true).apply {
                 thinking.append("[Reasoning redacted]")
                 signature = contentBlock["data"].strOrNull() ?: ""
             }
+
             "tool_use" -> Tool(index).apply {
                 id = contentBlock["id"].strOrNull() ?: ""
                 var blockName = contentBlock["name"].strOrNull() ?: ""
@@ -1314,14 +1394,18 @@ internal class AnthropicStreamState(
                 name = blockName
                 (contentBlock.obj("input"))?.let { seedJson = it.toString() }
             }
+
             // A pre-output fallback marker is expected; once output has begun
             // it means the server swapped models mid-response.
             "fallback" -> {
                 if (blocks.isNotEmpty()) {
-                    throw ProviderStreamException("Anthropic performed an unsupported mid-output model fallback")
+                    throw ProviderStreamException(
+                        "Anthropic performed an unsupported mid-output model fallback"
+                    )
                 }
                 return emptyList()
             }
+
             else -> return emptyList()
         }
         byStreamIndex[index] = blocks.size
@@ -1332,7 +1416,7 @@ internal class AnthropicStreamState(
                 is Text -> AssistantMessageEvent.TextStart(contentIndex, snapshot())
                 is Thinking -> AssistantMessageEvent.ThinkingStart(contentIndex, snapshot())
                 is Tool -> AssistantMessageEvent.ToolCallStart(contentIndex, snapshot())
-            },
+            }
         )
     }
 
@@ -1347,23 +1431,27 @@ internal class AnthropicStreamState(
                 text.text.append(value)
                 listOf(AssistantMessageEvent.TextDelta(blockIndex, value, snapshot()))
             }
+
             "thinking_delta" -> {
                 val thinking = (blocks[blockIndex] as? Thinking) ?: return emptyList()
                 val value = delta["thinking"].strOrNull() ?: ""
                 thinking.thinking.append(value)
                 listOf(AssistantMessageEvent.ThinkingDelta(blockIndex, value, snapshot()))
             }
+
             "input_json_delta" -> {
                 val tool = (blocks[blockIndex] as? Tool) ?: return emptyList()
                 val value = delta["partial_json"].strOrNull() ?: ""
                 tool.partialJson.append(value)
                 listOf(AssistantMessageEvent.ToolCallDelta(blockIndex, value, snapshot()))
             }
+
             "signature_delta" -> {
                 val thinking = (blocks[blockIndex] as? Thinking) ?: return emptyList()
                 thinking.signature += delta["signature"].strOrNull() ?: ""
                 emptyList()
             }
+
             else -> emptyList()
         }
     }
@@ -1372,12 +1460,20 @@ internal class AnthropicStreamState(
         val index = event.int("index") ?: return emptyList()
         val blockIndex = byStreamIndex[index] ?: return emptyList()
         return when (val block = blocks[blockIndex]) {
-            is Text -> listOf(AssistantMessageEvent.TextEnd(blockIndex, block.text.toString(), snapshot()))
-            is Thinking -> listOf(
-                AssistantMessageEvent.ThinkingEnd(blockIndex, block.thinking.toString(), snapshot()),
+            is Text -> listOf(
+                AssistantMessageEvent.TextEnd(blockIndex, block.text.toString(), snapshot())
             )
+
+            is Thinking -> listOf(
+                AssistantMessageEvent.ThinkingEnd(
+                    blockIndex,
+                    block.thinking.toString(),
+                    snapshot()
+                )
+            )
+
             is Tool -> listOf(
-                AssistantMessageEvent.ToolCallEnd(blockIndex, toolCallOf(block), snapshot()),
+                AssistantMessageEvent.ToolCallEnd(blockIndex, toolCallOf(block), snapshot())
             )
         }
     }
@@ -1391,7 +1487,7 @@ internal class AnthropicStreamState(
                 rawStopReason = stopReason
                 val (mapped, error) = mapStopReason(
                     stopReason,
-                    delta.obj("stop_details")?.get("explanation").strOrNull(),
+                    delta.obj("stop_details")?.get("explanation").strOrNull()
                 )
                 this.stopReason = mapped
                 errorMessage = error ?: errorMessage
@@ -1407,7 +1503,7 @@ internal class AnthropicStreamState(
                 cacheRead = eventUsage.int("cache_read_input_tokens") ?: usage.cacheRead,
                 cacheWrite = eventUsage.int("cache_creation_input_tokens") ?: usage.cacheWrite,
                 reasoning = eventUsage.obj("output_tokens_details")
-                    ?.int("thinking_tokens") ?: usage.reasoning,
+                    ?.int("thinking_tokens") ?: usage.reasoning
             )
             usage = withTotal(usage)
         }
@@ -1419,25 +1515,35 @@ internal class AnthropicStreamState(
         return emptyList()
     }
 
-    private fun mapStopReason(reason: String, refusalExplanation: String?): Pair<StopReason, String?> =
-        when (reason) {
-            "end_turn" -> StopReason.STOP to null
-            "max_tokens" -> StopReason.LENGTH to null
-            "tool_use" -> StopReason.TOOL_USE to null
-            "refusal" -> StopReason.ERROR to
+    private fun mapStopReason(
+        reason: String,
+        refusalExplanation: String?
+    ): Pair<StopReason, String?> = when (reason) {
+        "end_turn" -> StopReason.STOP to null
+
+        "max_tokens" -> StopReason.LENGTH to null
+
+        "tool_use" -> StopReason.TOOL_USE to null
+
+        "refusal" ->
+            StopReason.ERROR to
                 (refusalExplanation ?: "The model refused to complete the request")
-            "pause_turn" -> StopReason.STOP to null
-            "stop_sequence" -> StopReason.STOP to null
-            "sensitive" -> StopReason.ERROR to "Provider stopped with: sensitive"
-            else -> throw ProviderStreamException("Unhandled stop reason: $reason")
-        }
+
+        "pause_turn" -> StopReason.STOP to null
+
+        "stop_sequence" -> StopReason.STOP to null
+
+        "sensitive" -> StopReason.ERROR to "Provider stopped with: sensitive"
+
+        else -> throw ProviderStreamException("Unhandled stop reason: $reason")
+    }
 
     private fun toolCallOf(block: Tool): ToolCall = ToolCall(
         id = block.id,
         name = block.name,
         // Unlike pi, the streamed JSON is not parsed at stop; the raw string
         // (seed or "{}" when blank) preserves partial snapshots.
-        arguments = block.partialJson.toString().ifBlank { block.seedJson ?: "{}" },
+        arguments = block.partialJson.toString().ifBlank { block.seedJson ?: "{}" }
     )
 
     /** Anthropic doesn't provide total_tokens; compute from components. */
@@ -1464,14 +1570,20 @@ internal class AnthropicStreamState(
                     JsonArray(
                         transformations.map { transformation ->
                             buildJsonObject {
-                                (transformation as? JsonObject)?.get("type").strOrNull()?.let { put("type", it) }
-                                (transformation as? JsonObject)?.get("path").strOrNull()?.let { put("path", it) }
-                                (transformation as? JsonObject)?.get("reason").strOrNull()?.let { put("reason", it) }
+                                (transformation as? JsonObject)?.get("type").strOrNull()?.let {
+                                    put("type", it)
+                                }
+                                (transformation as? JsonObject)?.get("path").strOrNull()?.let {
+                                    put("path", it)
+                                }
+                                (transformation as? JsonObject)?.get("reason").strOrNull()?.let {
+                                    put("reason", it)
+                                }
                             }
-                        },
-                    ),
+                        }
+                    )
                 )
-            },
+            }
         )
     }
 
@@ -1479,11 +1591,13 @@ internal class AnthropicStreamState(
         content = blocks.map { block ->
             when (block) {
                 is Text -> TextContent(block.text.toString())
+
                 is Thinking -> ThinkingContent(
                     block.thinking.toString(),
                     block.signature.ifEmpty { null },
-                    block.redacted,
+                    block.redacted
                 )
+
                 is Tool -> toolCallOf(block)
             }
         },
@@ -1497,6 +1611,6 @@ internal class AnthropicStreamState(
         responseId = responseId,
         responseModel = responseModel,
         providerThinkingLevel = providerThinkingLevel,
-        timestamp = timestampMs,
+        timestamp = timestampMs
     )
 }

@@ -3,6 +3,7 @@ package works.resolve.pathfinder.ai.auth.oauth
 import java.net.SocketTimeoutException
 import java.net.URI
 import java.net.URLDecoder
+import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -18,9 +19,8 @@ import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.oauth.PkceGenerator
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.requireString
-import works.resolve.pathfinder.ai.utils.string
-import kotlin.time.Clock
 import works.resolve.pathfinder.ai.utils.strictDouble
+import works.resolve.pathfinder.ai.utils.string
 
 /**
  * A loopback callback server races the manual code prompt; a server result
@@ -62,23 +62,20 @@ class AnthropicOAuthAuth(
      */
     private val callbackPort: Int = CALLBACK_PORT,
     /** Android foreground gate for the loopback wait. */
-    private val gate: OAuthForegroundGate? = null,
+    private val gate: OAuthForegroundGate? = null
 ) : OAuthAuth {
 
     override val name: String = "Anthropic (Claude Pro/Max)"
 
     override val isSubscription: Boolean = true
 
-    internal data class CallbackResult(
-        val code: String,
-        val state: String,
-    )
+    internal data class CallbackResult(val code: String, val state: String)
 
     /** The expected state is the PKCE verifier: the authorize URL sends `state = verifier`. */
     private fun callbackResponse(
         request: LoopbackCallbackRequest,
         settle: (CallbackResult?) -> Unit,
-        expectedState: String,
+        expectedState: String
     ): LoopbackCallbackResponse {
         if (request.path != CALLBACK_PATH) {
             return LoopbackCallbackResponse(404, oauthErrorHtml("Callback route not found."))
@@ -91,7 +88,7 @@ class AnthropicOAuthAuth(
         if (!error.isNullOrEmpty()) {
             return LoopbackCallbackResponse(
                 400,
-                oauthErrorHtml("Anthropic authentication did not complete.", "Error: $error"),
+                oauthErrorHtml("Anthropic authentication did not complete.", "Error: $error")
             )
         }
 
@@ -106,7 +103,7 @@ class AnthropicOAuthAuth(
         settle(CallbackResult(code, state))
         return LoopbackCallbackResponse(
             200,
-            oauthSuccessHtml("Anthropic authentication completed. You can close this window."),
+            oauthSuccessHtml("Anthropic authentication completed. You can close this window.")
         )
     }
 
@@ -114,13 +111,18 @@ class AnthropicOAuthAuth(
         val challenge = pkce.generate()
         val verifier = challenge.verifier
 
-        val handle = LoopbackOAuthServer(port = callbackPort, host = CALLBACK_HOST, gate = gate) { request, settle ->
-            callbackResponse(request, settle, verifier)
-        }.start()
-            ?: throw IllegalStateException(
-                "Failed to bind the Anthropic OAuth callback server on $CALLBACK_HOST:$callbackPort; " +
-                    "another OAuth login may already be using the port",
-            )
+        val handle =
+            LoopbackOAuthServer(port = callbackPort, host = CALLBACK_HOST, gate = gate) {
+                    request,
+                    settle
+                ->
+                callbackResponse(request, settle, verifier)
+            }.start()
+                ?: throw IllegalStateException(
+                    "Failed to bind the Anthropic OAuth callback server on " +
+                        "$CALLBACK_HOST:$callbackPort; " +
+                        "another OAuth login may already be using the port"
+                )
 
         try {
             val authParams = linkedMapOf(
@@ -131,23 +133,24 @@ class AnthropicOAuthAuth(
                 "scope" to SCOPES,
                 "code_challenge" to challenge.challenge,
                 "code_challenge_method" to "S256",
-                "state" to verifier,
+                "state" to verifier
             )
             interaction.notify(
                 AuthEvent.AuthUrl(
                     url = AUTHORIZE_URL + "?" + formEncode(authParams),
                     instructions =
-                        "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.",
-                ),
+                        "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here."
+                )
             )
 
             val manualPrompt = async {
                 try {
                     interaction.prompt(
                         AuthPrompt.ManualCode(
-                            message = "Complete login in your browser, or paste the authorization code / redirect URL here:",
-                            placeholder = REDIRECT_URI,
-                        ),
+                            message = "Complete login in your browser, " +
+                                "or paste the authorization code / redirect URL here:",
+                            placeholder = REDIRECT_URI
+                        )
                     )
                 } finally {
                     handle.cancelWait()
@@ -169,7 +172,9 @@ class AnthropicOAuthAuth(
                 if (!parsed.state.isNullOrEmpty() && parsed.state != verifier) {
                     throw IllegalStateException("OAuth state mismatch")
                 }
-                code = parsed.code?.takeIf { it.isNotEmpty() } ?: throw IllegalStateException("Missing authorization code")
+                code =
+                    parsed.code?.takeIf { it.isNotEmpty() }
+                        ?: throw IllegalStateException("Missing authorization code")
                 state = parsed.state ?: verifier
                 if (state.isEmpty()) throw IllegalStateException("Missing OAuth state")
             }
@@ -181,10 +186,7 @@ class AnthropicOAuthAuth(
         }
     }
 
-    internal data class ParsedAuthorizationInput(
-        val code: String?,
-        val state: String?,
-    )
+    internal data class ParsedAuthorizationInput(val code: String?, val state: String?)
 
     /** Extracts code/state from a pasted URL, `code#state`, bare `code=` query string, or raw code. */
     internal fun parseAuthorizationInput(input: String): ParsedAuthorizationInput {
@@ -229,18 +231,17 @@ class AnthropicOAuthAuth(
         return result
     }
 
-    private fun String.urlDecode(): String =
-        try {
-            URLDecoder.decode(this, "UTF-8")
-        } catch (_: IllegalArgumentException) {
-            this
-        }
+    private fun String.urlDecode(): String = try {
+        URLDecoder.decode(this, "UTF-8")
+    } catch (_: IllegalArgumentException) {
+        this
+    }
 
     internal suspend fun exchangeAuthorizationCode(
         code: String,
         state: String,
         verifier: String,
-        redirectUri: String,
+        redirectUri: String
     ): OAuthCredential {
         val responseBody: String
         try {
@@ -251,8 +252,8 @@ class AnthropicOAuthAuth(
                     "code" to code,
                     "state" to state,
                     "redirect_uri" to redirectUri,
-                    "code_verifier" to verifier,
-                ),
+                    "code_verifier" to verifier
+                )
             )
         } catch (error: CancellationException) {
             throw error
@@ -260,7 +261,7 @@ class AnthropicOAuthAuth(
             throw IllegalStateException(
                 "Token exchange request failed. url=$TOKEN_URL; redirect_uri=$redirectUri; " +
                     "response_type=authorization_code; details=${formatErrorDetails(error)}",
-                error,
+                error
             )
         }
 
@@ -273,7 +274,7 @@ class AnthropicOAuthAuth(
             // input, which can carry secrets.
             throw IllegalStateException(
                 "Token exchange returned invalid JSON. url=$TOKEN_URL; " +
-                    "details=IllegalStateException: response body is not valid JSON",
+                    "details=IllegalStateException: response body is not valid JSON"
             )
         }
 
@@ -287,15 +288,16 @@ class AnthropicOAuthAuth(
                 mapOf(
                     "grant_type" to "refresh_token",
                     "client_id" to CLIENT_ID,
-                    "refresh_token" to refreshToken,
-                ),
+                    "refresh_token" to refreshToken
+                )
             )
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             throw IllegalStateException(
-                "Anthropic token refresh request failed. url=$TOKEN_URL; details=${formatErrorDetails(error)}",
-                error,
+                "Anthropic token refresh request failed. url=$TOKEN_URL; " +
+                    "details=${formatErrorDetails(error)}",
+                error
             )
         }
 
@@ -308,7 +310,7 @@ class AnthropicOAuthAuth(
             // input, which can carry secrets.
             throw IllegalStateException(
                 "Anthropic token refresh returned invalid JSON. url=$TOKEN_URL; " +
-                    "details=IllegalStateException: response body is not valid JSON",
+                    "details=IllegalStateException: response body is not valid JSON"
             )
         }
 
@@ -318,20 +320,25 @@ class AnthropicOAuthAuth(
     override suspend fun refresh(credential: OAuthCredential): OAuthCredential =
         refreshAnthropicToken(credential.refresh)
 
-    override suspend fun toAuth(credential: OAuthCredential): ModelAuth = ModelAuth(apiKey = credential.access)
+    override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
+        ModelAuth(apiKey = credential.access)
 
     private fun credentialFrom(body: JsonObject): OAuthCredential {
         // Empty string counts as missing — pi's unchecked cast would pass it through.
-        val access = body.requireString("access_token") { invalidField(it) }.takeIf { it.isNotEmpty() }
-            ?: throw invalidField("access_token")
-        val refresh = body.requireString("refresh_token") { invalidField(it) }.takeIf { it.isNotEmpty() }
-            ?: throw invalidField("refresh_token")
+        val access =
+            body.requireString("access_token") { invalidField(it) }.takeIf { it.isNotEmpty() }
+                ?: throw invalidField("access_token")
+        val refresh =
+            body.requireString("refresh_token") { invalidField(it) }.takeIf { it.isNotEmpty() }
+                ?: throw invalidField("refresh_token")
         val expiresInSeconds = body.strictDouble("expires_in")?.takeIf { it > 0 }
             ?: throw invalidField("expires_in")
         return OAuthCredential(
             access = access,
             refresh = refresh,
-            expires = clock.now().toEpochMilliseconds() + (expiresInSeconds * 1000).toLong() - REFRESH_SKEW_MS,
+            expires =
+                clock.now().toEpochMilliseconds() + (expiresInSeconds * 1000).toLong() -
+                    REFRESH_SKEW_MS
         )
     }
 
@@ -356,16 +363,17 @@ class AnthropicOAuthAuth(
                 url = TOKEN_URL,
                 headers = mapOf(
                     "Content-Type" to "application/json",
-                    "Accept" to "application/json",
+                    "Accept" to "application/json"
                 ),
                 body = jsonRequest(fields),
-                timeoutMs = REQUEST_TIMEOUT_MS,
-            ),
+                timeoutMs = REQUEST_TIMEOUT_MS
+            )
         )
         val responseBody = response.body.toString(Charsets.UTF_8)
         if (response.status !in 200..299) {
             throw IllegalStateException(
-                "HTTP request failed. status=${response.status}; url=$TOKEN_URL; body=${safeBodySummary(responseBody)}",
+                "HTTP request failed. status=${response.status}; url=$TOKEN_URL; " +
+                    "body=${safeBodySummary(responseBody)}"
             )
         }
         return responseBody
@@ -387,13 +395,12 @@ class AnthropicOAuthAuth(
         return if (detail.isNotEmpty()) "error=$detail" else "<redacted>"
     }
 
-    private fun jsonRequest(fields: Map<String, String>): ByteArray =
-        lenientJson.encodeToString(
-            JsonObject.serializer(),
-            buildJsonObject {
-                for ((name, value) in fields) put(name, value)
-            },
-        ).toByteArray(Charsets.UTF_8)
+    private fun jsonRequest(fields: Map<String, String>): ByteArray = lenientJson.encodeToString(
+        JsonObject.serializer(),
+        buildJsonObject {
+            for ((name, value) in fields) put(name, value)
+        }
+    ).toByteArray(Charsets.UTF_8)
 
     companion object {
         const val CLIENT_ID: String = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"

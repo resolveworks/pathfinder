@@ -22,8 +22,8 @@ object MarkdownParser {
             listOf(
                 TablesExtension.create(),
                 StrikethroughExtension.create(),
-                TaskListItemsExtension.create(),
-            ),
+                TaskListItemsExtension.create()
+            )
         )
         .build()
 }

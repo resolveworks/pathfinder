@@ -25,9 +25,9 @@ class ChatApiRegistryTest {
                 ChatApiRegistry.MISTRAL_CONVERSATIONS,
                 ChatApiRegistry.OPENAI_RESPONSES,
                 ChatApiRegistry.OPENAI_CODEX_RESPONSES,
-                ChatApiRegistry.AZURE_OPENAI_RESPONSES,
+                ChatApiRegistry.AZURE_OPENAI_RESPONSES
             ),
-            ChatApiRegistry.SUPPORTED_API_IDS,
+            ChatApiRegistry.SUPPORTED_API_IDS
         )
         assertTrue(ChatApiRegistry.isSupported("anthropic-messages"))
         assertTrue(ChatApiRegistry.isSupported("google-generative-ai"))
@@ -41,15 +41,30 @@ class ChatApiRegistryTest {
 
     @Test
     fun `create builds the matching api or null`() {
-        assertIs<OpenAiCompletionsApi>(ChatApiRegistry.create("openai-completions", transport, retry))
-        assertIs<AnthropicMessagesApi>(ChatApiRegistry.create("anthropic-messages", transport, retry))
-        assertIs<GoogleGenerativeAiApi>(ChatApiRegistry.create("google-generative-ai", transport, retry))
-        assertIs<MistralConversationsApi>(ChatApiRegistry.create("mistral-conversations", transport, retry))
+        assertIs<OpenAiCompletionsApi>(
+            ChatApiRegistry.create("openai-completions", transport, retry)
+        )
+        assertIs<AnthropicMessagesApi>(
+            ChatApiRegistry.create("anthropic-messages", transport, retry)
+        )
+        assertIs<GoogleGenerativeAiApi>(
+            ChatApiRegistry.create("google-generative-ai", transport, retry)
+        )
+        assertIs<MistralConversationsApi>(
+            ChatApiRegistry.create("mistral-conversations", transport, retry)
+        )
         assertIs<OpenAiResponsesApi>(ChatApiRegistry.create("openai-responses", transport, retry))
         assertIs<OpenAICodexResponsesApi>(
-            ChatApiRegistry.create("openai-codex-responses", transport, retry, webSocketTransport = NoWebSocketTransport),
+            ChatApiRegistry.create(
+                "openai-codex-responses",
+                transport,
+                retry,
+                webSocketTransport = NoWebSocketTransport
+            )
         )
-        assertIs<AzureOpenAiResponsesApi>(ChatApiRegistry.create("azure-openai-responses", transport, retry))
+        assertIs<AzureOpenAiResponsesApi>(
+            ChatApiRegistry.create("azure-openai-responses", transport, retry)
+        )
         assertNull(ChatApiRegistry.create("google-vertex", transport, retry))
     }
 }

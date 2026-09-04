@@ -5,9 +5,9 @@ import works.resolve.pathfinder.ai.auth.oauth.ForegroundGatedOAuthHttpClient
 import works.resolve.pathfinder.ai.auth.oauth.GitHubCopilotOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.KimiCodingOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.OAuthForegroundGate
+import works.resolve.pathfinder.ai.auth.oauth.OAuthHttpClient
 import works.resolve.pathfinder.ai.auth.oauth.OpenAiCodexOAuthAuth
 import works.resolve.pathfinder.ai.auth.oauth.OpenRouterOAuthAuth
-import works.resolve.pathfinder.ai.auth.oauth.OAuthHttpClient
 import works.resolve.pathfinder.ai.auth.oauth.UrlConnectionOAuthHttpClient
 import works.resolve.pathfinder.ai.auth.oauth.XaiOAuthAuth
 
@@ -22,7 +22,7 @@ import works.resolve.pathfinder.ai.auth.oauth.XaiOAuthAuth
  * [OAuthForegroundGate.NONE], the default, is exact pi parity).
  */
 class ProductionCatalogAuthRegistry(
-    private val gate: OAuthForegroundGate = OAuthForegroundGate.NONE,
+    private val gate: OAuthForegroundGate = OAuthForegroundGate.NONE
 ) : CatalogAuthRegistry {
     private fun client(): OAuthHttpClient =
         ForegroundGatedOAuthHttpClient(UrlConnectionOAuthHttpClient(), gate)
@@ -33,18 +33,20 @@ class ProductionCatalogAuthRegistry(
             "openrouter" to OpenRouterOAuthAuth(client(), gate = gate),
             "kimi-coding" to KimiCodingOAuthAuth(client()),
             "xai" to XaiOAuthAuth(client()),
-            "openai-codex" to OpenAiCodexOAuthAuth(client(), gate = gate),
-        ),
+            "openai-codex" to OpenAiCodexOAuthAuth(client(), gate = gate)
+        )
     )
 
-    override fun oauthAuth(provider: works.resolve.pathfinder.ai.providers.CatalogProvider): OAuthAuth? {
+    override fun oauthAuth(
+        provider: works.resolve.pathfinder.ai.providers.CatalogProvider
+    ): OAuthAuth? {
         // Constructed per provider because the flow's policy-enablement
         // check needs the entry's static model ids — the same generated
         // asset pi derives its GITHUB_COPILOT_MODELS list from.
         if (provider.id == "github-copilot") {
             return GitHubCopilotOAuthAuth(
                 http = client(),
-                knownModelIds = provider.models.map { it.id }.toSet(),
+                knownModelIds = provider.models.map { it.id }.toSet()
             )
         }
         return delegate.oauthAuth(provider)

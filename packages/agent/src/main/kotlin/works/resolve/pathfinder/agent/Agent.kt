@@ -1,12 +1,5 @@
 package works.resolve.pathfinder.agent
 
-import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.Message
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.ModelThinkingLevel
-import works.resolve.pathfinder.ai.SimpleStreamOptions
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.toThinkingLevelOrNull
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -24,6 +17,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.Message
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.SimpleStreamOptions
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.toThinkingLevelOrNull
 
 /**
  * Stateful wrapper around the low-level agent loop: owns the agent
@@ -39,7 +39,7 @@ class Agent(
     tools: List<AgentTool> = emptyList(),
     private val toolExecution: ToolExecutionMode = ToolExecutionMode.PARALLEL,
     private val clock: Clock = Clock.System,
-    private val streamFn: StreamFn,
+    private val streamFn: StreamFn
 ) {
     /** Guards [active] and transcript mutations; critical sections stay brief and non-suspending. */
     private val lock = Any()
@@ -70,7 +70,7 @@ class Agent(
     }
 
     private val _state = MutableStateFlow(
-        AgentState(model = model, tools = tools.toList(), systemPrompt = systemPrompt),
+        AgentState(model = model, tools = tools.toList(), systemPrompt = systemPrompt)
     )
     val state: StateFlow<AgentState> = _state.asStateFlow()
 
@@ -157,7 +157,7 @@ class Agent(
         synchronized(lock) {
             if (active) {
                 throw IllegalStateException(
-                    "Agent is already processing a prompt. Wait for completion or abort it.",
+                    "Agent is already processing a prompt. Wait for completion or abort it."
                 )
             }
             active = true
@@ -170,19 +170,19 @@ class Agent(
             // later runs.
             val runModel = _state.value.model
             val runOptions = streamOptions.copy(
-                reasoning = _state.value.thinkingLevel.toThinkingLevelOrNull(),
+                reasoning = _state.value.thinkingLevel.toThinkingLevelOrNull()
             )
             val contextSnapshot = AgentContext(
                 systemPrompt = _state.value.systemPrompt,
                 messages = _state.value.messages.toList(),
-                tools = _state.value.tools.toList(),
+                tools = _state.value.tools.toList()
             )
             val config = AgentLoopConfig(
                 model = runModel,
                 options = runOptions,
                 streamFn = streamFn,
                 toolExecution = toolExecution,
-                clock = clock,
+                clock = clock
             )
 
             coroutineScope {
@@ -211,7 +211,9 @@ class Agent(
             withContext(NonCancellable) { handleRunFailure(aborted = false, cause = e) }
         } finally {
             activeJob = null
-            reduce { it.copy(isStreaming = false, streamingMessage = null, pendingToolCalls = emptySet()) }
+            reduce {
+                it.copy(isStreaming = false, streamingMessage = null, pendingToolCalls = emptySet())
+            }
             synchronized(lock) { active = false }
         }
     }
@@ -236,7 +238,7 @@ class Agent(
         val lastMessage = synchronized(lock) {
             if (active) {
                 throw IllegalStateException(
-                    "Agent is already processing. Wait for completion before continuing.",
+                    "Agent is already processing. Wait for completion before continuing."
                 )
             }
             _state.value.messages.lastOrNull()
@@ -263,7 +265,9 @@ class Agent(
     fun replaceTranscript(messages: List<Message>) {
         synchronized(lock) {
             if (active) {
-                throw IllegalStateException("Cannot replace the transcript while a prompt is running")
+                throw IllegalStateException(
+                    "Cannot replace the transcript while a prompt is running"
+                )
             }
             val copy = messages.toList()
             reduce { it.copy(messages = copy) }
@@ -300,7 +304,7 @@ class Agent(
             model = model.id,
             stopReason = if (aborted) StopReason.ABORTED else StopReason.ERROR,
             errorMessage = if (aborted) ABORT_ERROR_MESSAGE else safeErrorMessage(cause),
-            timestamp = clock.now().toEpochMilliseconds(),
+            timestamp = clock.now().toEpochMilliseconds()
         )
         processEvent(AgentEvent.MessageStart(failure))
         processEvent(AgentEvent.MessageEnd(failure))
@@ -324,7 +328,7 @@ class Agent(
             is AgentEvent.SummarizationRetryScheduled,
             is AgentEvent.SummarizationRetryAttemptStart,
             AgentEvent.SummarizationRetryFinished,
-            is AgentEvent.ToolExecutionUpdate,
+            is AgentEvent.ToolExecutionUpdate
             -> Unit
 
             is AgentEvent.MessageStart -> reduce { it.copy(streamingMessage = event.message) }

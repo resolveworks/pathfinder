@@ -1,57 +1,5 @@
 package works.resolve.pathfinder.codingagent.core
 
-import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.agent.Agent
-import works.resolve.pathfinder.agent.AgentEvent
-import works.resolve.pathfinder.agent.AgentState
-import works.resolve.pathfinder.agent.AgentTool
-import works.resolve.pathfinder.ai.Message
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.ModelThinkingLevel
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.clampThinkingLevel
-import works.resolve.pathfinder.ai.getSupportedThinkingLevels
-import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
-import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.utils.Retry
-import works.resolve.pathfinder.ai.utils.RetryCallbacks
-import works.resolve.pathfinder.ai.utils.RetryPolicy
-import works.resolve.pathfinder.ai.utils.calculateContextTokens
-import works.resolve.pathfinder.ai.utils.estimateMessageTokens
-import works.resolve.pathfinder.ai.utils.isContextOverflow
-import works.resolve.pathfinder.ai.utils.isRecoverableLength
-import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryCallResult
-import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryErrorCode
-import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryResult
-import works.resolve.pathfinder.codingagent.core.compaction.CompactionErrorCode
-import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
-import works.resolve.pathfinder.codingagent.core.compaction.CompactionResult as CompactionOutcome
-import works.resolve.pathfinder.codingagent.core.compaction.DEFAULT_COMPACTION_SETTINGS
-import works.resolve.pathfinder.codingagent.core.compaction.GenerateBranchSummaryOptions
-import works.resolve.pathfinder.codingagent.core.compaction.buildSessionContext
-import works.resolve.pathfinder.codingagent.core.compaction.collectEntriesForBranchSummary
-import works.resolve.pathfinder.codingagent.core.compaction.compact
-import works.resolve.pathfinder.codingagent.core.compaction.estimateContextTokens
-import works.resolve.pathfinder.codingagent.core.compaction.generateBranchSummary
-import works.resolve.pathfinder.codingagent.core.compaction.getLatestCompactionEntry
-import works.resolve.pathfinder.codingagent.core.compaction.prepareCompaction
-import works.resolve.pathfinder.codingagent.core.compaction.shouldCompact
-import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.LaneRecord
-import works.resolve.pathfinder.codingagent.core.session.OperationIntent
-import works.resolve.pathfinder.codingagent.core.session.OperationOutcome
-import works.resolve.pathfinder.codingagent.core.session.RecordError
-import works.resolve.pathfinder.codingagent.core.session.SessionState
-import works.resolve.pathfinder.ai.utils.uuidv7
-import works.resolve.pathfinder.codingagent.core.RetrySettings
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -67,6 +15,58 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import works.resolve.pathfinder.agent.Agent
+import works.resolve.pathfinder.agent.AgentEvent
+import works.resolve.pathfinder.agent.AgentState
+import works.resolve.pathfinder.agent.AgentTool
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.Message
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.clampThinkingLevel
+import works.resolve.pathfinder.ai.getSupportedThinkingLevels
+import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
+import works.resolve.pathfinder.ai.utils.Retry
+import works.resolve.pathfinder.ai.utils.RetryCallbacks
+import works.resolve.pathfinder.ai.utils.RetryPolicy
+import works.resolve.pathfinder.ai.utils.calculateContextTokens
+import works.resolve.pathfinder.ai.utils.estimateMessageTokens
+import works.resolve.pathfinder.ai.utils.isContextOverflow
+import works.resolve.pathfinder.ai.utils.isRecoverableLength
+import works.resolve.pathfinder.ai.utils.uuidv7
+import works.resolve.pathfinder.codingagent.core.RetrySettings
+import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryCallResult
+import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryErrorCode
+import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryResult
+import works.resolve.pathfinder.codingagent.core.compaction.CompactionErrorCode
+import works.resolve.pathfinder.codingagent.core.compaction.CompactionResult as CompactionOutcome
+import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
+import works.resolve.pathfinder.codingagent.core.compaction.DEFAULT_COMPACTION_SETTINGS
+import works.resolve.pathfinder.codingagent.core.compaction.GenerateBranchSummaryOptions
+import works.resolve.pathfinder.codingagent.core.compaction.buildSessionContext
+import works.resolve.pathfinder.codingagent.core.compaction.collectEntriesForBranchSummary
+import works.resolve.pathfinder.codingagent.core.compaction.compact
+import works.resolve.pathfinder.codingagent.core.compaction.estimateContextTokens
+import works.resolve.pathfinder.codingagent.core.compaction.generateBranchSummary
+import works.resolve.pathfinder.codingagent.core.compaction.getLatestCompactionEntry
+import works.resolve.pathfinder.codingagent.core.compaction.prepareCompaction
+import works.resolve.pathfinder.codingagent.core.compaction.shouldCompact
+import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
+import works.resolve.pathfinder.codingagent.core.session.Conversation
+import works.resolve.pathfinder.codingagent.core.session.LaneRecord
+import works.resolve.pathfinder.codingagent.core.session.MessageEntry
+import works.resolve.pathfinder.codingagent.core.session.OperationIntent
+import works.resolve.pathfinder.codingagent.core.session.OperationOutcome
+import works.resolve.pathfinder.codingagent.core.session.RecordError
+import works.resolve.pathfinder.codingagent.core.session.SessionState
 
 /**
  * Durable sink for operation-lifecycle lane records. [AgentSession]
@@ -113,7 +113,7 @@ class AgentSession(
     /** Injectable backoff sleep so tests never wait. */
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     /** Wall clock for minting message timestamps. */
-    private val clock: Clock = Clock.System,
+    private val clock: Clock = Clock.System
 ) {
     /**
      * Durable operation-lifecycle recorder. Set before the first prompt;
@@ -130,6 +130,7 @@ class AgentSession(
     /** Id of the lane's open operation; null while idle. */
     @Volatile
     private var currentOperationId: String? = null
+
     /** The session tree; only this class appends to it during prompts. */
     var conversation: Conversation = conversation
         private set
@@ -217,8 +218,8 @@ class AgentSession(
             clampThinkingLevel(
                 agent.model,
                 modelThinkingLevelFromWire(conversation.effectiveConfiguration().thinkingLevel)
-                    ?: ModelThinkingLevel.OFF,
-            ),
+                    ?: ModelThinkingLevel.OFF
+            )
         )
         // Seed the active tool set from the branch's configuration fold, else
         // all registered tools. The fold is applied without persisting:
@@ -269,7 +270,7 @@ class AgentSession(
             }
             if (active) {
                 throw IllegalStateException(
-                    "Agent is already processing a prompt. Wait for completion or abort it.",
+                    "Agent is already processing a prompt. Wait for completion or abort it."
                 )
             }
             active = true
@@ -304,8 +305,8 @@ class AgentSession(
                 OperationOutcome.FAILED,
                 RecordError(
                     code = e::class.simpleName ?: "error",
-                    message = e.message ?: "operation failed",
-                ),
+                    message = e.message ?: "operation failed"
+                )
             )
             throw e
         } finally {
@@ -322,7 +323,11 @@ class AgentSession(
         val operationId = currentOperationId
         if (operationId != null) {
             operationRecorder?.appendBestEffort(
-                LaneRecord.AbortRequestedRecord(id = uuidv7(), lane = SessionState.LANE_MAIN, runId = operationId),
+                LaneRecord.AbortRequestedRecord(
+                    id = uuidv7(),
+                    lane = SessionState.LANE_MAIN,
+                    runId = operationId
+                )
             )
         }
         promptJob?.cancel()
@@ -368,7 +373,14 @@ class AgentSession(
      */
     suspend fun setThinkingLevel(level: ModelThinkingLevel) {
         val available = getSupportedThinkingLevels(agent.model)
-        val effective = if (available.contains(level)) level else clampThinkingLevel(agent.model, level)
+        val effective = if (available.contains(
+                level
+            )
+        ) {
+            level
+        } else {
+            clampThinkingLevel(agent.model, level)
+        }
         val previous = agent.thinkingLevel
         agent.setThinkingLevel(effective)
         if (effective != previous) {
@@ -404,7 +416,7 @@ class AgentSession(
         /** Custom instructions appended to (or replacing) the default prompt. */
         val customInstructions: String? = null,
         /** Replace the default prompt with [customInstructions] instead of appending. */
-        val replaceInstructions: Boolean = false,
+        val replaceInstructions: Boolean = false
     )
 
     /** Result of [navigateTree]. */
@@ -414,7 +426,7 @@ class AgentSession(
         val cancelled: Boolean = false,
         val aborted: Boolean = false,
         /** The appended branch-summary entry, when one was generated. */
-        val summaryEntry: BranchSummaryEntry? = null,
+        val summaryEntry: BranchSummaryEntry? = null
     )
 
     /**
@@ -436,12 +448,12 @@ class AgentSession(
      */
     suspend fun navigateTree(
         targetId: String,
-        options: NavigateTreeOptions = NavigateTreeOptions(),
+        options: NavigateTreeOptions = NavigateTreeOptions()
     ): NavigationResult {
         synchronized(lock) {
             if (active || compactionInProgress) {
                 throw IllegalStateException(
-                    "Wait for the current response to finish before navigating the session tree.",
+                    "Wait for the current response to finish before navigating the session tree."
                 )
             }
         }
@@ -469,8 +481,8 @@ class AgentSession(
                 targetId = targetId,
                 summarize = options.summarize,
                 customInstructions = options.customInstructions,
-                summaryEntryId = summaryEntryId,
-            ),
+                summaryEntryId = summaryEntryId
+            )
         )
         try {
             var summary: BranchSummaryResult? = null
@@ -486,11 +498,13 @@ class AgentSession(
                             retry = RetryPolicy(
                                 enabled = retrySettings.enabled,
                                 maxRetries = retrySettings.maxRetries,
-                                baseDelayMs = retrySettings.baseDelayMs,
+                                baseDelayMs = retrySettings.baseDelayMs
                             ),
-                            callbacks = summarizationRetryCallbacks(AgentEvent.SummarizationSource.BranchSummary),
-                            clock = clock,
-                        ),
+                            callbacks = summarizationRetryCallbacks(
+                                AgentEvent.SummarizationSource.BranchSummary
+                            ),
+                            clock = clock
+                        )
                     )
                 ) {
                     is BranchSummaryCallResult.Err -> {
@@ -500,6 +514,7 @@ class AgentSession(
                         }
                         throw outcome.error
                     }
+
                     is BranchSummaryCallResult.Ok -> summary = outcome.value
                 }
             }
@@ -523,7 +538,7 @@ class AgentSession(
                         put("readFiles", JsonArray(summary.readFiles.map(::JsonPrimitive)))
                         put("modifiedFiles", JsonArray(summary.modifiedFiles.map(::JsonPrimitive)))
                     },
-                    usage = summary.usage,
+                    usage = summary.usage
                 )
                 updateConversation { Conversation(it.entries + entry, entry.id) }
                 summaryEntry = entry
@@ -536,7 +551,11 @@ class AgentSession(
             agent.replaceTranscript(buildSessionContext(conversation.activeEntries()))
 
             finishOperation(OperationOutcome.COMPLETED)
-            return NavigationResult(editorText = editorText, cancelled = false, summaryEntry = summaryEntry)
+            return NavigationResult(
+                editorText = editorText,
+                cancelled = false,
+                summaryEntry = summaryEntry
+            )
         } catch (e: CancellationException) {
             finishOperation(OperationOutcome.ABORTED)
             throw e
@@ -545,8 +564,8 @@ class AgentSession(
                 OperationOutcome.FAILED,
                 RecordError(
                     code = e::class.simpleName ?: "error",
-                    message = e.message ?: "navigation failed",
-                ),
+                    message = e.message ?: "navigation failed"
+                )
             )
             throw e
         }
@@ -557,7 +576,7 @@ class AgentSession(
         targetId: String,
         summarize: Boolean,
         customInstructions: String?,
-        summaryEntryId: String?,
+        summaryEntryId: String?
     ): OperationIntent = OperationIntent(
         kind = OperationIntent.Kind.NAVIGATION,
         payload = buildJsonObject {
@@ -566,7 +585,7 @@ class AgentSession(
             put("summarize", summarize)
             customInstructions?.let { put("customInstructions", it) }
             summaryEntryId?.let { put("summaryEntryId", it) }
-        },
+        }
     )
 
     // ---- operation lifecycle records ----
@@ -583,8 +602,8 @@ class AgentSession(
                 id = id,
                 lane = SessionState.LANE_MAIN,
                 sourceLeafId = conversation.leafId,
-                intent = intent,
-            ),
+                intent = intent
+            )
         )
         currentOperationId = id
         return id
@@ -601,8 +620,8 @@ class AgentSession(
                     lane = SessionState.LANE_MAIN,
                     runId = id,
                     outcome = outcome,
-                    error = error,
-                ),
+                    error = error
+                )
             )
         }
     }
@@ -628,6 +647,7 @@ class AgentSession(
             is AgentEvent.MessageStart -> {
                 if (event.message is UserMessage) overflowRecoveryAttempted = false
             }
+
             is AgentEvent.MessageEnd -> {
                 // The tree is the persistence unit and is append-only, so
                 // messages later removed from agent state (auto-retry,
@@ -636,7 +656,9 @@ class AgentSession(
                 val assistant = event.message as? AssistantMessage
                 if (assistant != null) {
                     lastAssistantMessage = assistant
-                    if (assistant.stopReason != StopReason.ERROR && assistant.stopReason != StopReason.LENGTH) {
+                    if (assistant.stopReason != StopReason.ERROR &&
+                        assistant.stopReason != StopReason.LENGTH
+                    ) {
                         overflowRecoveryAttempted = false
                     }
                     // Reset the retry counter at the successful message's
@@ -648,6 +670,7 @@ class AgentSession(
                     }
                 }
             }
+
             else -> Unit
         }
         _events.emit(event)
@@ -672,7 +695,11 @@ class AgentSession(
 
         if (msg.stopReason == StopReason.ERROR && retryAttempt > 0) {
             _events.emit(
-                AgentEvent.AutoRetryEnd(success = false, attempt = retryAttempt, finalError = msg.errorMessage),
+                AgentEvent.AutoRetryEnd(
+                    success = false,
+                    attempt = retryAttempt,
+                    finalError = msg.errorMessage
+                )
             )
             retryAttempt = 0
         }
@@ -747,8 +774,8 @@ class AgentSession(
                             OVERFLOW_RECOVERY_FAILED
                         } else {
                             TRUNCATED_RECOVERY_FAILED
-                        },
-                    ),
+                        }
+                    )
                 )
                 return false
             }
@@ -805,7 +832,7 @@ class AgentSession(
      */
     private suspend fun runAutoCompaction(
         reason: AgentEvent.CompactionReason,
-        willRetry: Boolean,
+        willRetry: Boolean
     ): Boolean {
         val summarizationModels = models ?: return false
         var started = false
@@ -840,18 +867,22 @@ class AgentSession(
                     retry = RetryPolicy(
                         enabled = retrySettings.enabled,
                         maxRetries = retrySettings.maxRetries,
-                        baseDelayMs = retrySettings.baseDelayMs,
+                        baseDelayMs = retrySettings.baseDelayMs
                     ),
                     callbacks = summarizationRetryCallbacks(
-                        AgentEvent.SummarizationSource.Compaction(reason),
+                        AgentEvent.SummarizationSource.Compaction(reason)
                     ),
-                    clock = clock,
+                    clock = clock
                 )
             ) {
                 is CompactionOutcome.Err -> {
                     if (outcome.error.code == CompactionErrorCode.ABORTED) {
                         _events.emit(
-                            AgentEvent.CompactionEnd(reason = reason, aborted = true, willRetry = false),
+                            AgentEvent.CompactionEnd(
+                                reason = reason,
+                                aborted = true,
+                                willRetry = false
+                            )
                         )
                         finishOperation(OperationOutcome.ABORTED)
                         return false
@@ -861,18 +892,22 @@ class AgentSession(
                             reason = reason,
                             aborted = false,
                             willRetry = false,
-                            errorMessage = compactionFailureMessage(reason, outcome.error.message ?: "compaction failed"),
-                        ),
+                            errorMessage = compactionFailureMessage(
+                                reason,
+                                outcome.error.message ?: "compaction failed"
+                            )
+                        )
                     )
                     finishOperation(
                         OperationOutcome.FAILED,
                         RecordError(
                             code = outcome.error.code.name,
-                            message = outcome.error.message ?: "compaction failed",
-                        ),
+                            message = outcome.error.message ?: "compaction failed"
+                        )
                     )
                     return false
                 }
+
                 is CompactionOutcome.Ok -> outcome.value
             }
 
@@ -885,7 +920,7 @@ class AgentSession(
                     tokensBefore = compactResult.tokensBefore,
                     details = compactResult.details,
                     usage = compactResult.usage,
-                    id = resultEntryId,
+                    id = resultEntryId
                 )
             }
             val sessionContext = buildSessionContext(conversation.activeEntries())
@@ -900,11 +935,11 @@ class AgentSession(
                         tokensBefore = compactResult.tokensBefore,
                         estimatedTokensAfter = estimatedTokensAfter,
                         usage = compactResult.usage,
-                        details = compactResult.details,
+                        details = compactResult.details
                     ),
                     aborted = false,
-                    willRetry = willRetry,
-                ),
+                    willRetry = willRetry
+                )
             )
 
             finishOperation(OperationOutcome.COMPLETED)
@@ -920,7 +955,10 @@ class AgentSession(
                 val messages = agent.state.value.messages
                 val lastMsg = messages.lastOrNull()
                 if (lastMsg is AssistantMessage &&
-                    (lastMsg.stopReason == StopReason.ERROR || lastMsg.stopReason == StopReason.LENGTH)
+                    (
+                        lastMsg.stopReason == StopReason.ERROR ||
+                            lastMsg.stopReason == StopReason.LENGTH
+                        )
                 ) {
                     agent.replaceTranscript(messages.dropLast(1))
                 }
@@ -933,7 +971,9 @@ class AgentSession(
         } catch (e: CancellationException) {
             if (started) {
                 withContext(NonCancellable) {
-                    _events.emit(AgentEvent.CompactionEnd(reason = reason, aborted = true, willRetry = false))
+                    _events.emit(
+                        AgentEvent.CompactionEnd(reason = reason, aborted = true, willRetry = false)
+                    )
                 }
             }
             finishOperation(OperationOutcome.ABORTED)
@@ -945,13 +985,20 @@ class AgentSession(
                         reason = reason,
                         aborted = false,
                         willRetry = false,
-                        errorMessage = compactionFailureMessage(reason, e.message ?: "compaction failed"),
-                    ),
+                        errorMessage = compactionFailureMessage(
+                            reason,
+                            e.message ?: "compaction failed"
+                        )
+                    )
                 )
             }
             finishOperation(
                 OperationOutcome.FAILED,
-                RecordError(code = e::class.simpleName ?: "error", message = e.message ?: "compaction failed"),
+                RecordError(
+                    code = e::class.simpleName ?: "error",
+                    message =
+                        e.message ?: "compaction failed"
+                )
             )
             return false
         } finally {
@@ -963,27 +1010,35 @@ class AgentSession(
      * Retry callbacks for the summary LLM calls: shared schedule/finish
      * events plus the per-source attempt-start event.
      */
-    private fun summarizationRetryCallbacks(source: AgentEvent.SummarizationSource): RetryCallbacks =
-        RetryCallbacks(
-            onRetryScheduled = { attempt, maxAttempts, delayMs, errorMessage ->
-                _events.emit(
-                    AgentEvent.SummarizationRetryScheduled(attempt, maxAttempts, delayMs, errorMessage),
+    private fun summarizationRetryCallbacks(
+        source: AgentEvent.SummarizationSource
+    ): RetryCallbacks = RetryCallbacks(
+        onRetryScheduled = { attempt, maxAttempts, delayMs, errorMessage ->
+            _events.emit(
+                AgentEvent.SummarizationRetryScheduled(
+                    attempt,
+                    maxAttempts,
+                    delayMs,
+                    errorMessage
                 )
-            },
-            onRetryAttemptStart = {
-                _events.emit(AgentEvent.SummarizationRetryAttemptStart(source))
-            },
-            onRetryFinished = { _, _, _ ->
-                _events.emit(AgentEvent.SummarizationRetryFinished)
-            },
-        )
-
-    private fun compactionFailureMessage(reason: AgentEvent.CompactionReason, message: String): String =
-        if (reason == AgentEvent.CompactionReason.OVERFLOW) {
-            "Context overflow recovery failed: $message"
-        } else {
-            "Auto-compaction failed: $message"
+            )
+        },
+        onRetryAttemptStart = {
+            _events.emit(AgentEvent.SummarizationRetryAttemptStart(source))
+        },
+        onRetryFinished = { _, _, _ ->
+            _events.emit(AgentEvent.SummarizationRetryFinished)
         }
+    )
+
+    private fun compactionFailureMessage(
+        reason: AgentEvent.CompactionReason,
+        message: String
+    ): String = if (reason == AgentEvent.CompactionReason.OVERFLOW) {
+        "Context overflow recovery failed: $message"
+    } else {
+        "Auto-compaction failed: $message"
+    }
 
     /**
      * Context overflow errors are not retryable (compaction's job); every
@@ -1023,8 +1078,8 @@ class AgentSession(
                 attempt = retryAttempt,
                 maxAttempts = retrySettings.maxRetries,
                 delayMs = delayMs,
-                errorMessage = message.errorMessage ?: "Unknown error",
-            ),
+                errorMessage = message.errorMessage ?: "Unknown error"
+            )
         )
 
         val messages = agent.state.value.messages
@@ -1038,7 +1093,13 @@ class AgentSession(
             val attempt = retryAttempt
             retryAttempt = 0
             withContext(NonCancellable) {
-                _events.emit(AgentEvent.AutoRetryEnd(success = false, attempt = attempt, finalError = RETRY_CANCELLED))
+                _events.emit(
+                    AgentEvent.AutoRetryEnd(
+                        success = false,
+                        attempt = attempt,
+                        finalError = RETRY_CANCELLED
+                    )
+                )
             }
             throw e
         }

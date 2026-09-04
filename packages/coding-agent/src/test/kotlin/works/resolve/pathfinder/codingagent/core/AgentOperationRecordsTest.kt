@@ -1,23 +1,5 @@
 package works.resolve.pathfinder.codingagent.core
 
-import works.resolve.pathfinder.agent.*
-
-import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.Usage
-import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
-import works.resolve.pathfinder.ai.ChatApi
-import works.resolve.pathfinder.ai.Context
-import works.resolve.pathfinder.ai.SimpleStreamOptions
-import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
-import works.resolve.pathfinder.codingagent.core.session.LaneRecord
-import works.resolve.pathfinder.codingagent.core.session.OperationIntent
-import works.resolve.pathfinder.codingagent.core.session.OperationOutcome
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
@@ -33,6 +15,24 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import works.resolve.pathfinder.agent.Agent
+import works.resolve.pathfinder.agent.StreamFn
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.ChatApi
+import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.Provider
+import works.resolve.pathfinder.ai.ResolvedAuth
+import works.resolve.pathfinder.ai.SimpleStreamOptions
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.Usage
+import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
+import works.resolve.pathfinder.codingagent.core.session.LaneRecord
+import works.resolve.pathfinder.codingagent.core.session.OperationIntent
+import works.resolve.pathfinder.codingagent.core.session.OperationOutcome
 
 class AgentOperationRecordsTest {
 
@@ -55,13 +55,13 @@ class AgentOperationRecordsTest {
         provider = "zai",
         baseUrl = "https://example.invalid",
         contextWindow = 200_000,
-        maxTokens = 8_192,
+        maxTokens = 8_192
     )
 
     private fun assistant(
         text: String = "hello",
         stopReason: StopReason = StopReason.STOP,
-        usage: Usage = Usage(),
+        usage: Usage = Usage()
     ) = AssistantMessage(
         content = if (text.isEmpty()) emptyList() else listOf(TextContent(text)),
         api = model.api,
@@ -69,22 +69,26 @@ class AgentOperationRecordsTest {
         model = model.id,
         stopReason = stopReason,
         usage = usage,
-        timestamp = 42L,
+        timestamp = 42L
     )
 
     private class FauxApi : ChatApi {
         val responses = ArrayDeque<AssistantMessage>()
         var failSummaries = false
 
-        override fun streamSimple(model: Model, context: Context, options: SimpleStreamOptions): Flow<AssistantMessageEvent> =
-            flow {
-                val response = responses.removeFirstOrNull() ?: error("No faux summary response queued")
-                if (response.stopReason == StopReason.ERROR) {
-                    emit(AssistantMessageEvent.Error(response.stopReason, response))
-                } else {
-                    emit(AssistantMessageEvent.Done(response.stopReason, response))
-                }
+        override fun streamSimple(
+            model: Model,
+            context: Context,
+            options: SimpleStreamOptions
+        ): Flow<AssistantMessageEvent> = flow {
+            val response =
+                responses.removeFirstOrNull() ?: error("No faux summary response queued")
+            if (response.stopReason == StopReason.ERROR) {
+                emit(AssistantMessageEvent.Error(response.stopReason, response))
+            } else {
+                emit(AssistantMessageEvent.Done(response.stopReason, response))
             }
+        }
     }
 
     private fun fauxModels(api: FauxApi): Models = Models(
@@ -95,18 +99,18 @@ class AgentOperationRecordsTest {
                 "https://faux.test",
                 authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
                 models = listOf(model),
-                apis = mapOf(model.api to api),
-            ),
-        ),
+                apis = mapOf(model.api to api)
+            )
+        )
     )
 
     private fun session(
         sink: RecordingSink,
         streamFn: StreamFn,
-        models: Models? = null,
+        models: Models? = null
     ): AgentSession = AgentSession(
         agent = Agent(model = model, streamFn = streamFn),
-        models = models,
+        models = models
     ).apply { operationRecorder = sink }
 
     @Test
@@ -117,8 +121,8 @@ class AgentOperationRecordsTest {
         streams.add(
             flowOf(
                 AssistantMessageEvent.Start(assistant("")),
-                AssistantMessageEvent.Done(StopReason.STOP, assistant("done")),
-            ),
+                AssistantMessageEvent.Done(StopReason.STOP, assistant("done"))
+            )
         )
         agent.prompt("hi")
 
@@ -133,8 +137,8 @@ class AgentOperationRecordsTest {
         streams.add(
             flowOf(
                 AssistantMessageEvent.Start(assistant("")),
-                AssistantMessageEvent.Done(StopReason.STOP, assistant("done2")),
-            ),
+                AssistantMessageEvent.Done(StopReason.STOP, assistant("done2"))
+            )
         )
         agent.prompt("again")
         val second = sink.records[2] as LaneRecord.OperationStartedRecord
@@ -150,7 +154,7 @@ class AgentOperationRecordsTest {
             flow {
                 emit(AssistantMessageEvent.Start(assistant("")))
                 awaitCancellation()
-            },
+            }
         )
         val job = launch { agent.prompt("hi") }
         withTimeout(5_000) { while (!agent.state.value.isStreaming) yield() }
@@ -160,7 +164,7 @@ class AgentOperationRecordsTest {
         val kinds = sink.records.map { it::class.simpleName }
         assertEquals(
             listOf("OperationStartedRecord", "AbortRequestedRecord", "OperationFinishedRecord"),
-            kinds,
+            kinds
         )
         val started = sink.records[0] as LaneRecord.OperationStartedRecord
         assertEquals(started.id, (sink.records[1] as LaneRecord.AbortRequestedRecord).runId)
@@ -169,44 +173,58 @@ class AgentOperationRecordsTest {
     }
 
     @Test
-    fun `threshold compaction records run finish, compaction operation, and completion`() = runTest {
-        val sink = RecordingSink()
-        val api = FauxApi()
-        api.responses.add(assistant("SUMMARY", usage = Usage(input = 100, output = 50, totalTokens = 150)))
-        val streams = ArrayDeque<Flow<AssistantMessageEvent>>()
-        val agent = session(
-            sink,
-            StreamFn { _, _, _ -> streams.removeFirst() },
-            models = fauxModels(api),
-        )
-        streams.add(
-            flowOf(
-                AssistantMessageEvent.Start(assistant("")),
-                AssistantMessageEvent.Done(
-                    StopReason.STOP,
-                    assistant("long", usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)),
-                ),
-            ),
-        )
-        agent.prompt("hi")
+    fun `threshold compaction records run finish, compaction operation, and completion`() =
+        runTest {
+            val sink = RecordingSink()
+            val api = FauxApi()
+            api.responses.add(
+                assistant("SUMMARY", usage = Usage(input = 100, output = 50, totalTokens = 150))
+            )
+            val streams = ArrayDeque<Flow<AssistantMessageEvent>>()
+            val agent = session(
+                sink,
+                StreamFn { _, _, _ -> streams.removeFirst() },
+                models = fauxModels(api)
+            )
+            streams.add(
+                flowOf(
+                    AssistantMessageEvent.Start(assistant("")),
+                    AssistantMessageEvent.Done(
+                        StopReason.STOP,
+                        assistant(
+                            "long",
+                            usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)
+                        )
+                    )
+                )
+            )
+            agent.prompt("hi")
 
-        assertEquals(4, sink.records.size)
-        val runStarted = sink.records[0] as LaneRecord.OperationStartedRecord
-        assertEquals(OperationIntent.Kind.RUN, runStarted.intent.kind)
-        assertEquals(runStarted.id, (sink.records[1] as LaneRecord.OperationFinishedRecord).runId)
-        assertEquals(OperationOutcome.COMPLETED, (sink.records[1] as LaneRecord.OperationFinishedRecord).outcome)
+            assertEquals(4, sink.records.size)
+            val runStarted = sink.records[0] as LaneRecord.OperationStartedRecord
+            assertEquals(OperationIntent.Kind.RUN, runStarted.intent.kind)
+            assertEquals(
+                runStarted.id,
+                (sink.records[1] as LaneRecord.OperationFinishedRecord).runId
+            )
+            assertEquals(
+                OperationOutcome.COMPLETED,
+                (sink.records[1] as LaneRecord.OperationFinishedRecord).outcome
+            )
 
-        val compactionStarted = sink.records[2] as LaneRecord.OperationStartedRecord
-        assertEquals(OperationIntent.Kind.COMPACTION, compactionStarted.intent.kind)
-        val resultEntryId = compactionStarted.intent.payload["resultEntryId"]!!.toString().trim('"')
-        val compactionEntry = agent.conversation.entries.last() as CompactionEntry
-        assertEquals(resultEntryId, compactionEntry.id)
-        assertEquals(compactionEntry.parentId, compactionStarted.sourceLeafId)
+            val compactionStarted = sink.records[2] as LaneRecord.OperationStartedRecord
+            assertEquals(OperationIntent.Kind.COMPACTION, compactionStarted.intent.kind)
+            val resultEntryId = compactionStarted.intent.payload["resultEntryId"]!!.toString().trim(
+                '"'
+            )
+            val compactionEntry = agent.conversation.entries.last() as CompactionEntry
+            assertEquals(resultEntryId, compactionEntry.id)
+            assertEquals(compactionEntry.parentId, compactionStarted.sourceLeafId)
 
-        val compactionFinished = sink.records[3] as LaneRecord.OperationFinishedRecord
-        assertEquals(compactionStarted.id, compactionFinished.runId)
-        assertEquals(OperationOutcome.COMPLETED, compactionFinished.outcome)
-    }
+            val compactionFinished = sink.records[3] as LaneRecord.OperationFinishedRecord
+            assertEquals(compactionStarted.id, compactionFinished.runId)
+            assertEquals(OperationOutcome.COMPLETED, compactionFinished.outcome)
+        }
 
     @Test
     fun `failed summarization finishes the compaction operation as failed`() = runTest {
@@ -217,16 +235,19 @@ class AgentOperationRecordsTest {
         val agent = session(
             sink,
             StreamFn { _, _, _ -> streams.removeFirst() },
-            models = fauxModels(api),
+            models = fauxModels(api)
         )
         streams.add(
             flowOf(
                 AssistantMessageEvent.Start(assistant("")),
                 AssistantMessageEvent.Done(
                     StopReason.STOP,
-                    assistant("long", usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)),
-                ),
-            ),
+                    assistant(
+                        "long",
+                        usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)
+                    )
+                )
+            )
         )
         agent.prompt("hi")
 

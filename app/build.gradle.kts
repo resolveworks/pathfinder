@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "works.resolve.pathfinder"
-        minSdk = 26
+        minSdk = 37
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
@@ -23,7 +23,7 @@ android {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro",
+                "proguard-rules.pro"
             )
         }
     }
@@ -36,7 +36,6 @@ android {
     buildFeatures {
         compose = true
     }
-
 }
 
 dependencies {

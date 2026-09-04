@@ -16,17 +16,14 @@ class TreeProjectionTest {
     private var clock = 0L
 
     private fun user(text: String) = UserMessage.ofText(text, clock++)
-    private fun assistant(
-        text: String,
-        error: String? = null,
-    ) = AssistantMessage(
+    private fun assistant(text: String, error: String? = null) = AssistantMessage(
         content = if (text.isEmpty()) emptyList() else listOf(TextContent(text)),
         api = "openai-completions",
         provider = "zai",
         model = "glm-4.7",
         stopReason = StopReason.STOP,
         errorMessage = error,
-        timestamp = clock++,
+        timestamp = clock++
     )
 
     private fun entry(id: String, parent: String?, message: works.resolve.pathfinder.ai.Message) =
@@ -62,7 +59,12 @@ class TreeProjectionTest {
         assertFalse(result.first().isCurrentLeaf)
         assertEquals(listOf("u1"), result[0].path)
         assertEquals(listOf("u1", "a1", "u2", "a2"), result[3].path)
-        assertEquals(listOf("You", "Assistant", "You", "Assistant"), result.map { it.preview.substringBefore(":") })
+        assertEquals(
+            listOf("You", "Assistant", "You", "Assistant"),
+            result.map {
+                it.preview.substringBefore(":")
+            }
+        )
     }
 
     @Test
@@ -112,7 +114,7 @@ class TreeProjectionTest {
         assertEquals(TreeConnector.ELBOW, result[4].connector)
         assertEquals(
             listOf(true, true, false, false, false),
-            result.map { it.isFoldable },
+            result.map { it.isFoldable }
         )
     }
 
@@ -132,7 +134,12 @@ class TreeProjectionTest {
 
         val filtered = rows(conversation, TreeFilter.USER_ONLY)
         assertEquals(listOf("u1", "u2b", "u2"), filtered.map { it.id })
-        assertEquals(listOf("You: first", "You: first-edited", "You: second"), filtered.map { it.preview })
+        assertEquals(
+            listOf("You: first", "You: first-edited", "You: second"),
+            filtered.map {
+                it.preview
+            }
+        )
         assertEquals(0, filtered[0].indent)
         assertTrue(filtered[0].isFoldable)
         assertEquals(1, filtered[1].indent)
@@ -158,7 +165,7 @@ class TreeProjectionTest {
         assertEquals(listOf(0, 1, 0, 1), result.map { it.indent })
         assertEquals(
             listOf(TreeConnector.NONE, TreeConnector.NONE, TreeConnector.NONE, TreeConnector.NONE),
-            result.map { it.connector },
+            result.map { it.connector }
         )
         assertEquals(listOf(true, false, true, false), result.map { it.isFoldable })
         assertEquals(setOf("r2", "a2"), result.filter { it.isOnActivePath }.map { it.id }.toSet())

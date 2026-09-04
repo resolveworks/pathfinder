@@ -26,8 +26,8 @@ private val NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPatte
         "insufficient_quota",
         "out of budget",
         "quota exceeded",
-        "billing",
-    ),
+        "billing"
+    )
 )
 
 private val RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern(
@@ -94,8 +94,8 @@ private val RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern(
         "please retry your request",
 
         // gRPC based providers (e.g. NVIDIA NIM)
-        "ResourceExhausted",
-    ),
+        "ResourceExhausted"
+    )
 )
 
 /** Matches `settings.retry` (`enabled`, `maxRetries`, `baseDelayMs`) in coding-agent. */
@@ -104,17 +104,25 @@ data class RetryPolicy(
     /** Max retry attempts (0 = no retries). The initial call never counts as a retry. */
     val maxRetries: Int,
     /** Base delay in ms. Per-attempt delay is `baseDelayMs * 2^(attempt-1)` before jitter. */
-    val baseDelayMs: Long,
+    val baseDelayMs: Long
 )
 
 /** Optional callbacks emitted by [Retry.retryAssistantCall] around each retry. */
 data class RetryCallbacks(
     /** Emitted before the backoff sleep of each retry attempt (1-indexed). */
-    val onRetryScheduled: (suspend (attempt: Int, maxAttempts: Int, delayMs: Long, errorMessage: String) -> Unit)? = null,
+    val onRetryScheduled: (
+        suspend (attempt: Int, maxAttempts: Int, delayMs: Long, errorMessage: String) -> Unit
+    )? = null,
     /** Emitted after the backoff sleep, immediately before the retried call starts. */
     val onRetryAttemptStart: (suspend () -> Unit)? = null,
     /** Emitted once when the loop ends: success if a later call completed normally. */
-    val onRetryFinished: (suspend (success: Boolean, attempt: Int, finalError: String?) -> Unit)? = null,
+    val onRetryFinished: (
+        suspend (
+            success: Boolean,
+            attempt: Int,
+            finalError: String?
+        ) -> Unit
+    )? = null
 )
 
 /**
@@ -126,9 +134,7 @@ data class RetryCallbacks(
  * [CancellationException] around the backoff sleep, and the final callback still
  * fires via [NonCancellable].
  */
-class Retry(
-    private val sleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
-) {
+class Retry(private val sleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) }) {
     /**
      * Run a single assistant-producing call with bounded retry on transient errors.
      *
@@ -150,7 +156,7 @@ class Retry(
     suspend fun retryAssistantCall(
         produce: suspend () -> AssistantMessage,
         policy: RetryPolicy?,
-        callbacks: RetryCallbacks? = null,
+        callbacks: RetryCallbacks? = null
     ): AssistantMessage {
         val maxAttempts = if (policy?.enabled == true) policy.maxRetries else 0
 
@@ -160,17 +166,33 @@ class Retry(
             val response = produce()
 
             if (response.stopReason == StopReason.ABORTED) {
-                if (lastRetry != null) callbacks?.onRetryFinished?.invoke(false, lastRetry.first, null)
+                if (lastRetry !=
+                    null
+                ) {
+                    callbacks?.onRetryFinished?.invoke(false, lastRetry.first, null)
+                }
                 return response
             }
 
             if (response.stopReason != StopReason.ERROR) {
-                if (lastRetry != null) callbacks?.onRetryFinished?.invoke(true, lastRetry.first, null)
+                if (lastRetry !=
+                    null
+                ) {
+                    callbacks?.onRetryFinished?.invoke(true, lastRetry.first, null)
+                }
                 return response
             }
 
             if (attempt >= maxAttempts || !isRetryableAssistantError(response)) {
-                if (lastRetry != null) callbacks?.onRetryFinished?.invoke(false, lastRetry.first, response.errorMessage)
+                if (lastRetry !=
+                    null
+                ) {
+                    callbacks?.onRetryFinished?.invoke(
+                        false,
+                        lastRetry.first,
+                        response.errorMessage
+                    )
+                }
                 return response
             }
 

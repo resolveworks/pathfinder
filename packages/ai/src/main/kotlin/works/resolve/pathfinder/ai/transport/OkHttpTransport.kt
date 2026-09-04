@@ -1,15 +1,14 @@
 package works.resolve.pathfinder.ai.transport
 
-import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.receiveAsFlow
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -19,6 +18,7 @@ import okhttp3.Response
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
+import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
 
 /**
  * [HttpStreamingTransport] over OkHttp and okhttp-sse. Never logs the bearer
@@ -45,9 +45,7 @@ import okhttp3.sse.EventSources
  * below this boundary here, no parity workaround is attempted. Pinned by
  * OkHttpTransportTest's unterminated-terminal-frame probe.
  */
-class OkHttpTransport(
-    private val client: OkHttpClient = OkHttpClient(),
-) : HttpStreamingTransport {
+class OkHttpTransport(private val client: OkHttpClient = OkHttpClient()) : HttpStreamingTransport {
 
     override suspend fun post(request: TransportRequest): TransportResponse {
         val builder = Request.Builder()
@@ -76,7 +74,12 @@ class OkHttpTransport(
                     headers.complete(response.code, response.headers.toMultimap())
                 }
 
-                override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                override fun onEvent(
+                    eventSource: EventSource,
+                    id: String?,
+                    type: String?,
+                    data: String
+                ) {
                     events.trySend(SseEvent(data, type))
                 }
 
@@ -85,7 +88,11 @@ class OkHttpTransport(
                     events.close()
                 }
 
-                override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                override fun onFailure(
+                    eventSource: EventSource,
+                    t: Throwable?,
+                    response: Response?
+                ) {
                     if (response != null) {
                         // Read at most ~4x the char cap (worst-case UTF-8) so a
                         // huge error body is never fully buffered just to be
@@ -112,8 +119,8 @@ class OkHttpTransport(
                                 status = response.code,
                                 headers = headers2,
                                 body = errorBody,
-                                statusText = response.message,
-                            ),
+                                statusText = response.message
+                            )
                         )
                     } else {
                         val networkError = NetworkException(t ?: IOException("SSE stream failed"))
@@ -126,7 +133,7 @@ class OkHttpTransport(
                         }
                     }
                 }
-            },
+            }
         )
 
         // Cancellation while waiting for headers must cancel the call too.
@@ -147,7 +154,7 @@ class OkHttpTransport(
             headers = headers.headerMap,
             // Cancelling a finished source is a no-op; this also guarantees the
             // call closes when the collector stops early (e.g. on [DONE]).
-            events = events.receiveAsFlow().onCompletion { eventSource.cancel() },
+            events = events.receiveAsFlow().onCompletion { eventSource.cancel() }
         )
     }
 

@@ -33,6 +33,7 @@ object CredentialCodec {
             }
             JsonObject(fields).toString()
         }
+
         is OAuthCredential -> {
             val fields = buildMap {
                 put("type", JsonPrimitive(TYPE_OAUTH))
@@ -52,7 +53,9 @@ object CredentialCodec {
         } catch (_: Exception) {
             throw CredentialFormatException("Malformed credential JSON")
         }
-        val obj = element as? JsonObject ?: throw CredentialFormatException("Credential JSON is not an object")
+        val obj =
+            element as? JsonObject
+                ?: throw CredentialFormatException("Credential JSON is not an object")
         val typeField = obj["type"]
         // JSON null is a non-string primitive and must hit the "not a string"
         // branch, not the missing branch — hence the explicit null check.
@@ -75,18 +78,24 @@ object CredentialCodec {
         },
         env = obj["env"]?.let { env ->
             (env as? JsonObject)?.entries?.associate { (name, value) ->
-                name to (value.stringOrNull()
-                    ?: throw CredentialFormatException("Non-string env value for $name"))
+                name to (
+                    value.stringOrNull()
+                        ?: throw CredentialFormatException("Non-string env value for $name")
+                    )
             } ?: throw CredentialFormatException("Env is not an object")
-        } ?: emptyMap(),
+        } ?: emptyMap()
     )
 
     private fun decodeOAuth(obj: JsonObject): OAuthCredential = OAuthCredential(
-        access = obj.requireString("access") { name -> CredentialFormatException("Missing or non-string $name") },
-        refresh = obj.requireString("refresh") { name -> CredentialFormatException("Missing or non-string $name") },
+        access = obj.requireString("access") { name ->
+            CredentialFormatException("Missing or non-string $name")
+        },
+        refresh = obj.requireString("refresh") { name ->
+            CredentialFormatException("Missing or non-string $name")
+        },
         expires = obj.strictLong("expires")
             ?: throw CredentialFormatException("Missing or non-numeric expires"),
-        extras = obj.filterKeys { it !in OAuthCredential.RESERVED_FIELDS },
+        extras = obj.filterKeys { it !in OAuthCredential.RESERVED_FIELDS }
     )
 
     private const val TYPE_API_KEY = "api_key"

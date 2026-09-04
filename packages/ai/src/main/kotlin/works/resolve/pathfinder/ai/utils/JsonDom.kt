@@ -34,8 +34,7 @@ fun JsonObject?.boolean(key: String): Boolean? = this?.get(key).primitiveOrNull(
  * pi truthiness read (`!json?.field`): a non-empty string primitive. Absent,
  * JSON null, the empty string, and non-string primitives all yield null.
  */
-fun JsonObject?.truthyString(key: String): String? =
-    string(key)?.takeIf { it.isNotEmpty() }
+fun JsonObject?.truthyString(key: String): String? = string(key)?.takeIf { it.isNotEmpty() }
 
 /** Nested object at [key]; null when absent or of another kind. */
 fun JsonObject?.obj(key: String): JsonObject? = this?.get(key) as? JsonObject
@@ -53,24 +52,20 @@ fun JsonObject?.string(key: String): String? =
     (this?.get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 /** Element form of [string]. */
-fun JsonElement?.stringOrNull(): String? =
-    (this as? JsonPrimitive)?.takeIf { it.isString }?.content
+fun JsonElement?.stringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 /** Finite numeric double that is not string-encoded (TS `Number.isFinite` shape). */
 fun JsonElement?.numberOrNull(): Double? =
     (this as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull?.takeIf { it.isFinite() }
 
 /** [key] as a numeric (never string-encoded) Int; null when absent/malformed. */
-fun JsonObject?.strictInt(key: String): Int? =
-    strictNumeric(key) { it.intOrNull }
+fun JsonObject?.strictInt(key: String): Int? = strictNumeric(key) { it.intOrNull }
 
 /** [key] as a numeric (never string-encoded) Long; null when absent/malformed. */
-fun JsonObject?.strictLong(key: String): Long? =
-    strictNumeric(key) { it.longOrNull }
+fun JsonObject?.strictLong(key: String): Long? = strictNumeric(key) { it.longOrNull }
 
 /** [key] as a numeric (never string-encoded) Double; null when absent/malformed. */
-fun JsonObject?.strictDouble(key: String): Double? =
-    strictNumeric(key) { it.doubleOrNull }
+fun JsonObject?.strictDouble(key: String): Double? = strictNumeric(key) { it.doubleOrNull }
 
 /** [key] as a boolean primitive (never string-encoded); null when absent/malformed. */
 fun JsonObject?.strictBoolean(key: String): Boolean? =

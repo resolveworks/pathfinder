@@ -1,8 +1,5 @@
 package works.resolve.pathfinder.ai.utils
 
-import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.TextContent
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -10,20 +7,23 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
 
 class RetryTest {
 
     private fun fauxAssistantMessage(
         text: String = "",
         stopReason: StopReason = StopReason.STOP,
-        errorMessage: String? = null,
+        errorMessage: String? = null
     ): AssistantMessage = AssistantMessage(
         content = listOf(TextContent(text)),
         api = "faux",
         provider = "faux",
         model = "faux",
         stopReason = stopReason,
-        errorMessage = errorMessage,
+        errorMessage = errorMessage
     )
 
     private val openAIExplicitRetryMessage =
@@ -45,22 +45,53 @@ class RetryTest {
     @Test
     fun `matches explicit provider retry guidance`() {
         val retry = Retry()
-        assertTrue(retry.isRetryableAssistantError(fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = openAIExplicitRetryMessage)))
-        assertTrue(retry.isRetryableAssistantError(fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = bedrockExplicitRetryMessage)))
-        assertTrue(retry.isRetryableAssistantError(fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = nvidiaNIMResourceExhaustedMessage)))
+        assertTrue(
+            retry.isRetryableAssistantError(
+                fauxAssistantMessage(
+                    stopReason = StopReason.ERROR,
+                    errorMessage = openAIExplicitRetryMessage
+                )
+            )
+        )
+        assertTrue(
+            retry.isRetryableAssistantError(
+                fauxAssistantMessage(
+                    stopReason = StopReason.ERROR,
+                    errorMessage = bedrockExplicitRetryMessage
+                )
+            )
+        )
+        assertTrue(
+            retry.isRetryableAssistantError(
+                fauxAssistantMessage(
+                    stopReason = StopReason.ERROR,
+                    errorMessage = nvidiaNIMResourceExhaustedMessage
+                )
+            )
+        )
     }
 
     @Test
     fun `matches Bun fetch socket drop wording`() {
-        assertTrue(Retry().isRetryableAssistantError(fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = bunFetchSocketClosedMessage)))
+        assertTrue(
+            Retry().isRetryableAssistantError(
+                fauxAssistantMessage(
+                    stopReason = StopReason.ERROR,
+                    errorMessage = bunFetchSocketClosedMessage
+                )
+            )
+        )
     }
 
     @Test
     fun `matches upstream request buffer exhaustion wording`() {
         assertTrue(
             Retry().isRetryableAssistantError(
-                fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "Error: exceeded request buffer limit while retrying upstream"),
-            ),
+                fauxAssistantMessage(
+                    stopReason = StopReason.ERROR,
+                    errorMessage = "Error: exceeded request buffer limit while retrying upstream"
+                )
+            )
         )
     }
 
@@ -71,34 +102,69 @@ class RetryTest {
             wrappedDnsLookupError,
             "connect ENOTFOUND api.example.com",
             "EAI_AGAIN api.example.com",
-            "getaddrinfo failed for api.example.com",
+            "getaddrinfo failed for api.example.com"
         )) {
-            assertTrue(retry.isRetryableAssistantError(fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = errorMessage)))
+            assertTrue(
+                retry.isRetryableAssistantError(
+                    fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = errorMessage)
+                )
+            )
         }
     }
 
     @Test
     fun `matches OpenAI Responses streams that end before terminal events`() {
-        assertTrue(Retry().isRetryableAssistantError(fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = openAIResponsesEarlyEofMessage)))
+        assertTrue(
+            Retry().isRetryableAssistantError(
+                fauxAssistantMessage(
+                    stopReason = StopReason.ERROR,
+                    errorMessage = openAIResponsesEarlyEofMessage
+                )
+            )
+        )
     }
 
     @Test
     fun `keeps provider limit errors non-retryable`() {
-        assertFalse(Retry().isRetryableAssistantError(fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "429 quota exceeded")))
+        assertFalse(
+            Retry().isRetryableAssistantError(
+                fauxAssistantMessage(
+                    stopReason = StopReason.ERROR,
+                    errorMessage = "429 quota exceeded"
+                )
+            )
+        )
     }
 
     @Test
     fun `classifies assistant error messages`() {
         val retry = Retry()
-        assertTrue(retry.isRetryableAssistantError(fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "overloaded_error")))
-        assertTrue(retry.isRetryableAssistantError(fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "524 status code (no body)")))
+        assertTrue(
+            retry.isRetryableAssistantError(
+                fauxAssistantMessage(
+                    stopReason = StopReason.ERROR,
+                    errorMessage = "overloaded_error"
+                )
+            )
+        )
+        assertTrue(
+            retry.isRetryableAssistantError(
+                fauxAssistantMessage(
+                    stopReason = StopReason.ERROR,
+                    errorMessage = "524 status code (no body)"
+                )
+            )
+        )
         assertFalse(retry.isRetryableAssistantError(fauxAssistantMessage("not an error")))
     }
 
     @Test
     fun `returns a successful response immediately without retrying`() = runTest {
         var calls = 0
-        val res = Retry().retryAssistantCall({ calls++; fauxAssistantMessage("ok") }, enabled)
+        val res = Retry().retryAssistantCall({
+            calls++
+            fauxAssistantMessage("ok")
+        }, enabled)
         assertEquals(listOf(TextContent("ok")), res.content)
         assertEquals(1, calls)
     }
@@ -108,9 +174,12 @@ class RetryTest {
         var calls = 0
         var scheduled = 0
         val res = Retry().retryAssistantCall(
-            { calls++; fauxAssistantMessage(stopReason = StopReason.ABORTED) },
+            {
+                calls++
+                fauxAssistantMessage(stopReason = StopReason.ABORTED)
+            },
             enabled,
-            RetryCallbacks(onRetryScheduled = { _, _, _, _ -> scheduled++ }),
+            RetryCallbacks(onRetryScheduled = { _, _, _, _ -> scheduled++ })
         )
         assertEquals(StopReason.ABORTED, res.stopReason)
         assertEquals(1, calls)
@@ -123,12 +192,18 @@ class RetryTest {
         var scheduled = 0
         var finished = 0
         val res = Retry().retryAssistantCall(
-            { calls++; fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "insufficient_quota") },
+            {
+                calls++
+                fauxAssistantMessage(
+                    stopReason = StopReason.ERROR,
+                    errorMessage = "insufficient_quota"
+                )
+            },
             enabled,
             RetryCallbacks(
                 onRetryScheduled = { _, _, _, _ -> scheduled++ },
-                onRetryFinished = { _, _, _ -> finished++ },
-            ),
+                onRetryFinished = { _, _, _ -> finished++ }
+            )
         )
         assertEquals(StopReason.ERROR, res.stopReason)
         assertEquals(1, calls)
@@ -142,12 +217,18 @@ class RetryTest {
         var scheduled = 0
         var finished: Triple<Boolean, Int, String?>? = null
         val res = Retry().retryAssistantCall(
-            { calls++; fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "terminated") },
+            {
+                calls++
+                fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "terminated")
+            },
             enabled,
             RetryCallbacks(
                 onRetryScheduled = { _, _, _, _ -> scheduled++ },
-                onRetryFinished = { success, attempt, finalError -> finished = Triple(success, attempt, finalError) },
-            ),
+                onRetryFinished = { success, attempt, finalError ->
+                    finished =
+                        Triple(success, attempt, finalError)
+                }
+            )
         )
         assertEquals(StopReason.ERROR, res.stopReason)
         assertEquals(4, calls) // 1 initial + 3 retries
@@ -162,11 +243,22 @@ class RetryTest {
         val res = Retry().retryAssistantCall(
             {
                 n++
-                if (n < 3) fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "terminated")
-                else fauxAssistantMessage("recovered")
+                if (n <
+                    3
+                ) {
+                    fauxAssistantMessage(
+                        stopReason = StopReason.ERROR,
+                        errorMessage = "terminated"
+                    )
+                } else {
+                    fauxAssistantMessage("recovered")
+                }
             },
             enabled,
-            RetryCallbacks(onRetryFinished = { success, attempt, finalError -> finished = Triple(success, attempt, finalError) }),
+            RetryCallbacks(onRetryFinished = { success, attempt, finalError ->
+                finished =
+                    Triple(success, attempt, finalError)
+            })
         )
         assertEquals(listOf(TextContent("recovered")), res.content)
         assertEquals(3, n)
@@ -180,11 +272,22 @@ class RetryTest {
         val res = Retry().retryAssistantCall(
             {
                 n++
-                if (n == 1) fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "terminated")
-                else fauxAssistantMessage(stopReason = StopReason.ABORTED)
+                if (n ==
+                    1
+                ) {
+                    fauxAssistantMessage(
+                        stopReason = StopReason.ERROR,
+                        errorMessage = "terminated"
+                    )
+                } else {
+                    fauxAssistantMessage(stopReason = StopReason.ABORTED)
+                }
             },
             enabled,
-            RetryCallbacks(onRetryFinished = { success, attempt, finalError -> finished = Triple(success, attempt, finalError) }),
+            RetryCallbacks(onRetryFinished = { success, attempt, finalError ->
+                finished =
+                    Triple(success, attempt, finalError)
+            })
         )
         assertEquals(StopReason.ABORTED, res.stopReason)
         assertEquals(2, n)
@@ -197,12 +300,15 @@ class RetryTest {
         var scheduled = 0
         var finished = 0
         val res = Retry().retryAssistantCall(
-            { calls++; fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "terminated") },
+            {
+                calls++
+                fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "terminated")
+            },
             disabled,
             RetryCallbacks(
                 onRetryScheduled = { _, _, _, _ -> scheduled++ },
-                onRetryFinished = { _, _, _ -> finished++ },
-            ),
+                onRetryFinished = { _, _, _ -> finished++ }
+            )
         )
         assertEquals(StopReason.ERROR, res.stopReason)
         assertEquals(1, calls)
@@ -218,14 +324,22 @@ class RetryTest {
             {
                 events.add("produce:$n")
                 n++
-                if (n < 3) fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "terminated")
-                else fauxAssistantMessage("recovered")
+                if (n <
+                    3
+                ) {
+                    fauxAssistantMessage(
+                        stopReason = StopReason.ERROR,
+                        errorMessage = "terminated"
+                    )
+                } else {
+                    fauxAssistantMessage("recovered")
+                }
             },
             enabled,
             RetryCallbacks(
                 onRetryScheduled = { attempt, _, _, _ -> events.add("retry:$attempt") },
-                onRetryAttemptStart = { events.add("attempt-start") },
-            ),
+                onRetryAttemptStart = { events.add("attempt-start") }
+            )
         )
         assertEquals(listOf(TextContent("recovered")), res.content)
         assertEquals(
@@ -234,24 +348,31 @@ class RetryTest {
                 "retry:1", "sleep", "attempt-start",
                 "produce:1",
                 "retry:2", "sleep", "attempt-start",
-                "produce:2",
+                "produce:2"
             ),
-            events,
+            events
         )
     }
 
     @Test
-    fun `aborts backoff sleep via cancellation, returns an aborted message, and emits onRetryFinished false`() = runTest {
-        var calls = 0
-        var finished: Triple<Boolean, Int, String?>? = null
-        val res = Retry(sleep = { throw CancellationException("aborted") }).retryAssistantCall(
-            { calls++; fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "terminated") },
-            RetryPolicy(enabled = true, maxRetries = 5, baseDelayMs = 10_000),
-            RetryCallbacks(onRetryFinished = { success, attempt, finalError -> finished = Triple(success, attempt, finalError) }),
-        )
-        assertEquals(StopReason.ABORTED, res.stopReason)
-        assertNull(res.errorMessage)
-        assertEquals(1, calls)
-        assertEquals(Triple(false, 1, "terminated"), finished)
-    }
+    fun `aborts backoff sleep via cancellation, returns an aborted message, and emits onRetryFinished false`() =
+        runTest {
+            var calls = 0
+            var finished: Triple<Boolean, Int, String?>? = null
+            val res = Retry(sleep = { throw CancellationException("aborted") }).retryAssistantCall(
+                {
+                    calls++
+                    fauxAssistantMessage(stopReason = StopReason.ERROR, errorMessage = "terminated")
+                },
+                RetryPolicy(enabled = true, maxRetries = 5, baseDelayMs = 10_000),
+                RetryCallbacks(onRetryFinished = { success, attempt, finalError ->
+                    finished =
+                        Triple(success, attempt, finalError)
+                })
+            )
+            assertEquals(StopReason.ABORTED, res.stopReason)
+            assertNull(res.errorMessage)
+            assertEquals(1, calls)
+            assertEquals(Triple(false, 1, "terminated"), finished)
+        }
 }

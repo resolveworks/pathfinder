@@ -1,20 +1,20 @@
 package works.resolve.pathfinder.ui.chat
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.text.KeyboardActions
@@ -26,10 +26,10 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,9 +47,9 @@ import androidx.compose.ui.unit.dp
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 
-internal const val ChatPageIndex = 0
-internal const val TreePageIndex = 1
-internal const val ChatPagerPageCount = 2
+internal const val CHAT_PAGE_INDEX = 0
+internal const val TREE_PAGE_INDEX = 1
+internal const val CHAT_PAGER_PAGE_COUNT = 2
 
 /**
  * Two-page swipeable chat surface: chat page and session-tree page. Only
@@ -66,24 +66,25 @@ internal fun ConversationPager(
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
     onNavigateTreeEntry: (entryId: String) -> Unit,
-    onTreeFilterChange: (TreeFilter) -> Unit,
+    onTreeFilterChange: (TreeFilter) -> Unit
 ) {
     HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
         when (page) {
-            TreePageIndex -> TreePanel(
+            TREE_PAGE_INDEX -> TreePanel(
                 rows = uiState.treeRows,
                 filter = uiState.treeFilter,
                 onFilterChange = onTreeFilterChange,
                 onNavigate = onNavigateTreeEntry,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize()
             )
+
             else -> ChatSurface(
                 uiState = uiState,
                 onDraftChange = onDraftChange,
                 onSend = onSend,
                 onStop = onStop,
                 onSelectModel = onSelectModel,
-                onSelectThinkingLevel = onSelectThinkingLevel,
+                onSelectThinkingLevel = onSelectThinkingLevel
             )
         }
     }
@@ -101,17 +102,17 @@ internal fun ChatSurface(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
-    onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
+    onSelectThinkingLevel: (ModelThinkingLevel) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ConversationContent(
             uiState = uiState,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f)
         )
         Column(
             modifier = Modifier
                 .navigationBarsPadding()
-                .imePadding(),
+                .imePadding()
         ) {
             SelectionBar(
                 selectedModel = uiState.selectedModel,
@@ -123,12 +124,12 @@ internal fun ChatSurface(
                 thinkingLevel = uiState.thinkingLevel,
                 availableThinkingLevels = uiState.availableThinkingLevels,
                 defaultThinkingLevel = uiState.defaultThinkingLevel,
-                onSelectThinkingLevel = onSelectThinkingLevel,
+                onSelectThinkingLevel = onSelectThinkingLevel
             )
             uiState.retryStatus?.let { retry ->
                 RetryStatusRow(
                     attempt = retry.attempt,
-                    maxAttempts = retry.maxAttempts,
+                    maxAttempts = retry.maxAttempts
                 )
             }
             if (uiState.isCompacting) {
@@ -140,7 +141,7 @@ internal fun ChatSurface(
                 onSend = onSend,
                 onStop = onStop,
                 canSend = uiState.canSend,
-                isStreaming = uiState.isStreaming,
+                isStreaming = uiState.isStreaming
             )
         }
     }
@@ -159,7 +160,7 @@ private fun SelectionBar(
     availableThinkingLevels: List<ModelThinkingLevel>,
     defaultThinkingLevel: ModelThinkingLevel?,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier
 ) {
     var sheetOpen by rememberSaveable { mutableStateOf(false) }
     var thinkingSheetOpen by rememberSaveable { mutableStateOf(false) }
@@ -170,7 +171,7 @@ private fun SelectionBar(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         AssistChip(
             onClick = { sheetOpen = true },
@@ -178,9 +179,9 @@ private fun SelectionBar(
                 Text(
                     text = selectedModel?.modelName ?: stringResource(R.string.model_picker_empty),
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    overflow = TextOverflow.Ellipsis
                 )
-            },
+            }
         )
         if (showThinkingChip) {
             Spacer(Modifier.width(8.dp))
@@ -194,9 +195,9 @@ private fun SelectionBar(
                         } else {
                             thinkingLevelLabel(level)
                         },
-                        maxLines = 1,
+                        maxLines = 1
                     )
-                },
+                }
             )
         }
     }
@@ -211,7 +212,7 @@ private fun SelectionBar(
                 sheetOpen = false
                 onSelectModel(option.providerId, option.modelId)
             },
-            onDismiss = { sheetOpen = false },
+            onDismiss = { sheetOpen = false }
         )
     }
     if (thinkingSheetOpen) {
@@ -223,7 +224,7 @@ private fun SelectionBar(
                 thinkingSheetOpen = false
                 onSelectThinkingLevel(level)
             },
-            onDismiss = { thinkingSheetOpen = false },
+            onDismiss = { thinkingSheetOpen = false }
         )
     }
 }
@@ -254,7 +255,10 @@ internal fun thinkingLevelDescriptionText(level: ModelThinkingLevel): String = w
 
 /** Row description with "· default" on the effective default — as in pi, an unset default is MEDIUM. */
 @Composable
-private fun thinkingLevelDescription(level: ModelThinkingLevel, defaultLevel: ModelThinkingLevel?): String {
+private fun thinkingLevelDescription(
+    level: ModelThinkingLevel,
+    defaultLevel: ModelThinkingLevel?
+): String {
     val description = thinkingLevelDescriptionText(level)
     return if (level == (defaultLevel ?: ModelThinkingLevel.MEDIUM)) {
         stringResource(R.string.thinking_level_default_marker, description)
@@ -280,19 +284,19 @@ private fun ThinkingLevelPickerSheet(
     selectedLevel: ModelThinkingLevel,
     defaultLevel: ModelThinkingLevel?,
     onSelect: (ModelThinkingLevel) -> Unit,
-    onDismiss: () -> Unit,
+    onDismiss: () -> Unit
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-                .navigationBarsPadding(),
+                .navigationBarsPadding()
         ) {
             LazyColumn(
                 modifier = Modifier
                     .weight(1f, fill = false)
-                    .heightIn(max = 480.dp),
+                    .heightIn(max = 480.dp)
             ) {
                 items(availableLevels, key = { it.wire }) { level ->
                     ListItem(
@@ -303,13 +307,13 @@ private fun ThinkingLevelPickerSheet(
                                 Icon(
                                     Icons.Default.Check,
                                     contentDescription = stringResource(R.string.model_selected),
-                                    tint = MaterialTheme.colorScheme.secondary,
+                                    tint = MaterialTheme.colorScheme.secondary
                                 )
                             }
                         } else {
                             null
                         },
-                        modifier = Modifier.clickable { onSelect(level) },
+                        modifier = Modifier.clickable { onSelect(level) }
                     )
                 }
             }
@@ -337,7 +341,7 @@ private fun ModelPickerSheet(
     selectedModel: SelectedModel?,
     defaultModel: SelectedModel?,
     onSelect: (ModelOption) -> Unit,
-    onDismiss: () -> Unit,
+    onDismiss: () -> Unit
 ) {
     var allView by rememberSaveable { mutableStateOf(!scopeConfigured) }
     val options = if (allView) allOptions else scopedOptions
@@ -345,35 +349,37 @@ private fun ModelPickerSheet(
     // keeps the option list's display order otherwise (pi breaks ties by
     // provider name).
     val isCurrent: (ModelOption) -> Boolean = { option ->
-        selectedModel?.let { option.providerId == it.providerId && option.modelId == it.modelId } == true
+        selectedModel?.let { option.providerId == it.providerId && option.modelId == it.modelId } ==
+            true
     }
     val isDefault: (ModelOption) -> Boolean = { option ->
-        defaultModel?.let { option.providerId == it.providerId && option.modelId == it.modelId } == true
+        defaultModel?.let { option.providerId == it.providerId && option.modelId == it.modelId } ==
+            true
     }
     val sortedOptions = options.sortedWith(
-        compareByDescending<ModelOption> { isCurrent(it) }.thenByDescending { isDefault(it) },
+        compareByDescending<ModelOption> { isCurrent(it) }.thenByDescending { isDefault(it) }
     )
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-                .navigationBarsPadding(),
+                .navigationBarsPadding()
         ) {
             if (scopeConfigured) {
                 Row(
                     modifier = Modifier.padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     FilterChip(
                         selected = !allView,
                         onClick = { allView = false },
-                        label = { Text(stringResource(R.string.model_picker_scoped)) },
+                        label = { Text(stringResource(R.string.model_picker_scoped)) }
                     )
                     FilterChip(
                         selected = allView,
                         onClick = { allView = true },
-                        label = { Text(stringResource(R.string.model_picker_all)) },
+                        label = { Text(stringResource(R.string.model_picker_all)) }
                     )
                 }
             }
@@ -382,13 +388,13 @@ private fun ModelPickerSheet(
                     text = stringResource(R.string.models_scope_empty),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 24.dp),
+                    modifier = Modifier.padding(vertical = 24.dp)
                 )
             } else {
                 LazyColumn(
                     modifier = Modifier
                         .weight(1f, fill = false)
-                        .heightIn(max = 480.dp),
+                        .heightIn(max = 480.dp)
                 ) {
                     items(sortedOptions, key = { "${it.providerId}/${it.modelId}" }) { option ->
                         val isSelected = isCurrent(option)
@@ -397,24 +403,29 @@ private fun ModelPickerSheet(
                             supportingContent = {
                                 Text(
                                     text = if (isDefault(option)) {
-                                        stringResource(R.string.model_default_marker, option.providerName)
+                                        stringResource(
+                                            R.string.model_default_marker,
+                                            option.providerName
+                                        )
                                     } else {
                                         option.providerName
-                                    },
+                                    }
                                 )
                             },
                             trailingContent = if (isSelected) {
                                 {
                                     Icon(
                                         Icons.Default.Check,
-                                        contentDescription = stringResource(R.string.model_selected),
-                                        tint = MaterialTheme.colorScheme.secondary,
+                                        contentDescription = stringResource(
+                                            R.string.model_selected
+                                        ),
+                                        tint = MaterialTheme.colorScheme.secondary
                                     )
                                 }
                             } else {
                                 null
                             },
-                            modifier = Modifier.clickable { onSelect(option) },
+                            modifier = Modifier.clickable { onSelect(option) }
                         )
                     }
                 }
@@ -431,7 +442,7 @@ private fun RetryStatusRow(attempt: Int, maxAttempts: Int, modifier: Modifier = 
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 2.dp),
+            .padding(horizontal = 16.dp, vertical = 2.dp)
     )
 }
 
@@ -443,7 +454,7 @@ private fun CompactingStatusRow(modifier: Modifier = Modifier) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 2.dp),
+            .padding(horizontal = 16.dp, vertical = 2.dp)
     )
 }
 
@@ -455,13 +466,13 @@ private fun Composer(
     onStop: () -> Unit,
     canSend: Boolean,
     isStreaming: Boolean,
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         OutlinedTextField(
             value = draft,
@@ -470,7 +481,7 @@ private fun Composer(
             label = { Text(stringResource(R.string.composer_hint)) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f)
         )
         Spacer(modifier = Modifier.width(8.dp))
         if (isStreaming) {

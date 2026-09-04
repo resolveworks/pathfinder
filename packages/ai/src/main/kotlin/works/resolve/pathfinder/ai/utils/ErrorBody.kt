@@ -10,7 +10,7 @@ data class NormalizedProviderError(
     val body: String?,
     val message: String,
     /** True when [message] already contains the body (no separate body to add). */
-    val messageCarriesBody: Boolean,
+    val messageCarriesBody: Boolean
 )
 
 /**
@@ -31,7 +31,7 @@ fun normalizeProviderError(error: ProviderHttpException): NormalizedProviderErro
         status = error.status,
         body = body,
         message = error.message ?: error::class.simpleName ?: "Unknown error",
-        messageCarriesBody = false,
+        messageCarriesBody = false
     )
 }
 
@@ -47,12 +47,18 @@ fun normalizeProviderError(error: ProviderHttpException): NormalizedProviderErro
 fun formatProviderError(norm: NormalizedProviderError, prefix: String? = null): String {
     if (norm.messageCarriesBody || norm.status == null || norm.body == null) {
         return if (prefix != null && norm.status != null) {
-            "${prefix} (${norm.status}): ${norm.message}"
+            "$prefix (${norm.status}): ${norm.message}"
         } else {
             norm.message
         }
     }
-    return if (prefix != null) "${prefix} (${norm.status}): ${norm.body}" else "${norm.status}: ${norm.body}"
+    return if (prefix !=
+        null
+    ) {
+        "$prefix (${norm.status}): ${norm.body}"
+    } else {
+        "${norm.status}: ${norm.body}"
+    }
 }
 
 fun truncateErrorText(text: String, maxChars: Int): String {

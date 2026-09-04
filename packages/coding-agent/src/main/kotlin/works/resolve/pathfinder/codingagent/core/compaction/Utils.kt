@@ -10,7 +10,7 @@ import works.resolve.pathfinder.ai.utils.contentText
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.string
 
-/**
+/*
  * [ToolCall.arguments] is the raw JSON argument string exactly as the
  * provider streamed it (pi stores a parsed object), so argument access
  * below parses that string; unparsable arguments are treated as absent,
@@ -22,7 +22,7 @@ data class FileOperations(
     /** Files read but not necessarily modified. */
     val read: MutableSet<String>,
     val written: MutableSet<String>,
-    val edited: MutableSet<String>,
+    val edited: MutableSet<String>
 )
 
 fun createFileOps(): FileOperations = FileOperations(mutableSetOf(), mutableSetOf(), mutableSetOf())
@@ -88,21 +88,29 @@ fun serializeConversation(messages: List<Message>): String {
                 val content = contentText(msg.content, "")
                 if (content.isNotEmpty()) parts.add("[User]: $content")
             }
+
             is AssistantMessage -> {
                 val thinkingParts = mutableListOf<String>()
                 val toolCalls = mutableListOf<String>()
 
                 for (block in msg.content) {
                     when (block) {
-                        is works.resolve.pathfinder.ai.ThinkingContent -> thinkingParts.add(block.thinking)
+                        is works.resolve.pathfinder.ai.ThinkingContent -> thinkingParts.add(
+                            block.thinking
+                        )
+
                         is ToolCall -> {
                             val args = parseToolCallArguments(block)
                             val argsStr = when (args) {
                                 null -> block.arguments
-                                else -> args.entries.joinToString(", ") { (k, v) -> "$k=${safeJsonStringify(v)}" }
+
+                                else -> args.entries.joinToString(", ") { (k, v) ->
+                                    "$k=${safeJsonStringify(v)}"
+                                }
                             }
                             toolCalls.add("${block.name}($argsStr)")
                         }
+
                         else -> {}
                     }
                 }
@@ -117,10 +125,13 @@ fun serializeConversation(messages: List<Message>): String {
                     parts.add("[Assistant tool calls]: ${toolCalls.joinToString("; ")}")
                 }
             }
+
             is works.resolve.pathfinder.ai.ToolResultMessage -> {
                 val content = contentText(msg.content, "")
                 if (content.isNotEmpty()) {
-                    parts.add("[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}")
+                    parts.add(
+                        "[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}"
+                    )
                 }
             }
         }

@@ -1,15 +1,15 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 class OAuthForegroundGateTest {
 
@@ -37,7 +37,7 @@ class OAuthForegroundGateTest {
         method = "POST",
         url = url,
         body = ByteArray(0),
-        timeoutMs = 30_000,
+        timeoutMs = 30_000
     )
 
     @Test
@@ -50,7 +50,10 @@ class OAuthForegroundGateTest {
         withTimeout(100) {
             while (gate.awaited == 0) kotlinx.coroutines.delay(1)
         }
-        assertTrue(client.requests.isEmpty(), "execute must not reach the network while backgrounded")
+        assertTrue(
+            client.requests.isEmpty(),
+            "execute must not reach the network while backgrounded"
+        )
 
         gate.proceed.complete(Unit)
         job.join()
@@ -90,38 +93,41 @@ class OAuthForegroundGateTest {
     }
 
     @Test
-    fun `loopback waitForResult blocks while backgrounded and resumes on foreground`() = runBlocking {
-        val gate = AppForegroundGate()
-        val handle = LoopbackOAuthServer<String>(
-            port = 0,
-            gate = gate,
-            handler = { _, settle ->
-                settle("code")
-                LoopbackCallbackResponse(200, "ok")
-            },
-        ).start()!!
-        try {
-            // Simulate the browser landing the redirect while the app is
-            // backgrounded: the server must keep serving, but the flow's
-            // wait must not proceed.
-            val connection = java.net.URL("http://127.0.0.1:${handle.port}/cb").openConnection() as java.net.HttpURLConnection
+    fun `loopback waitForResult blocks while backgrounded and resumes on foreground`() =
+        runBlocking {
+            val gate = AppForegroundGate()
+            val handle = LoopbackOAuthServer<String>(
+                port = 0,
+                gate = gate,
+                handler = { _, settle ->
+                    settle("code")
+                    LoopbackCallbackResponse(200, "ok")
+                }
+            ).start()!!
             try {
-                connection.inputStream.use { it.readBytes() }
+                // Simulate the browser landing the redirect while the app is
+                // backgrounded: the server must keep serving, but the flow's
+                // wait must not proceed.
+                val connection = java.net.URL(
+                    "http://127.0.0.1:${handle.port}/cb"
+                ).openConnection() as java.net.HttpURLConnection
+                try {
+                    connection.inputStream.use { it.readBytes() }
+                } finally {
+                    connection.disconnect()
+                }
+
+                gate.onAppBackgrounded()
+                val waiter = async { handle.waitForResult() }
+                kotlinx.coroutines.delay(50)
+                assertTrue(waiter.isActive, "waitForResult must stay gated while backgrounded")
+
+                gate.onAppForegrounded()
+                assertEquals("code", waiter.await())
             } finally {
-                connection.disconnect()
+                handle.close()
             }
-
-            gate.onAppBackgrounded()
-            val waiter = async { handle.waitForResult() }
-            kotlinx.coroutines.delay(50)
-            assertTrue(waiter.isActive, "waitForResult must stay gated while backgrounded")
-
-            gate.onAppForegrounded()
-            assertEquals("code", waiter.await())
-        } finally {
-            handle.close()
         }
-    }
 
     @Test
     fun `cancelling the login still cancels a gated loopback wait`() = runBlocking {
@@ -130,7 +136,7 @@ class OAuthForegroundGateTest {
         val handle = LoopbackOAuthServer<String>(
             port = 0,
             gate = gate,
-            handler = { _, _ -> LoopbackCallbackResponse(200, "ok") },
+            handler = { _, _ -> LoopbackCallbackResponse(200, "ok") }
         ).start()!!
         try {
             val waiter = async { handle.waitForResult() }

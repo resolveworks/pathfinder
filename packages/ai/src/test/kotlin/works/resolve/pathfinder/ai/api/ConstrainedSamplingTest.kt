@@ -22,13 +22,14 @@ class ConstrainedSamplingTest {
     private fun schema(json: String) = Json.parseToJsonElement(json)
 
     private fun makeTool(
-        parameters: String = """{"type":"object","properties":{"payload":{"type":"string"}},"required":["payload"]}""",
-        constrainedSampling: ConstrainedSamplingConfig? = null,
+        parameters: String =
+            """{"type":"object","properties":{"payload":{"type":"string"}},"required":["payload"]}""",
+        constrainedSampling: ConstrainedSamplingConfig? = null
     ) = Tool(
         name = "sample_tool",
         description = "Sample tool",
         parameters = schema(parameters),
-        constrainedSampling = constrainedSampling,
+        constrainedSampling = constrainedSampling
     )
 
     @Test
@@ -48,7 +49,7 @@ class ConstrainedSamplingTest {
               },
               "required": ["path", "metadata"]
             }
-            """.trimIndent(),
+            """.trimIndent()
         )
 
         val strict = makeStrictJsonSchema(parameters)
@@ -56,50 +57,58 @@ class ConstrainedSamplingTest {
         assertTrue(!(parameters.jsonObject.containsKey("additionalProperties")))
         assertEquals(
             listOf("path", "metadata"),
-            parameters.jsonObject["required"]!!.jsonArray.map { it.jsonPrimitive.content },
+            parameters.jsonObject["required"]!!.jsonArray.map { it.jsonPrimitive.content }
         )
         assertEquals(false, strict["additionalProperties"]!!.jsonPrimitive.boolean)
         assertEquals(
             listOf("path", "offset", "metadata", "nullable"),
-            strict["required"]!!.jsonArray.map { it.jsonPrimitive.content },
+            strict["required"]!!.jsonArray.map { it.jsonPrimitive.content }
         )
         assertEquals(
             """{"anyOf":[{"type":"number"},{"type":"null"}]}""",
-            strict["properties"]!!.jsonObject["offset"].toString(),
+            strict["properties"]!!.jsonObject["offset"].toString()
         )
         assertEquals(
             listOf("enabled"),
             strict["properties"]!!.jsonObject["metadata"]!!.jsonObject["required"]!!
-                .jsonArray.map { it.jsonPrimitive.content },
+                .jsonArray.map { it.jsonPrimitive.content }
         )
         assertEquals(
             """{"anyOf":[{"type":"boolean"},{"type":"null"}]}""",
             strict["properties"]!!.jsonObject["metadata"]!!.jsonObject["properties"]!!
-                .jsonObject["enabled"].toString(),
+                .jsonObject["enabled"].toString()
         )
         assertEquals(
             """{"anyOf":[{"type":"string"},{"type":"null"}]}""",
-            strict["properties"]!!.jsonObject["nullable"].toString(),
+            strict["properties"]!!.jsonObject["nullable"].toString()
         )
     }
 
     @Test
     fun `falls back or rejects schemas that cannot be safely converted`() {
         val cases = listOf(
-            """{"type":"object","properties":{"metadata":{"type":"object","additionalProperties":{"type":"string"}}},"required":["metadata"]}""" to
+            """{"type":"object","properties":{"metadata":{"type":"object",""" +
+                """"additionalProperties":{"type":"string"}}},"required":["metadata"]}""" to
                 "schema-valued or true additionalProperties is unsupported",
-            """{"type":"object","allOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"b":{"type":"number"}}}]}""" to
+            """{"type":"object","allOf":[{"type":"object",""" +
+                """"properties":{"a":{"type":"string"}}},""" +
+                """{"type":"object","properties":{"b":{"type":"number"}}}]}""" to
                 "allOf schemas are unsupported",
-            """{"type":"object","properties":{"value":{"anyOf":[{"type":"object","properties":{"nested":{"type":"string"}}},{"type":"null"}]}},"required":["value"]}""" to
+            """{"type":"object","properties":{"value":{"anyOf":[{"type":"object",""" +
+                """"properties":{"nested":{"type":"string"}}},""" +
+                """{"type":"null"}]}},"required":["value"]}""" to
                 "object and array unions are unsupported",
-            """{"type":"object","properties":{"child":{"${'$'}ref":"https://example.com/child.json"}},"required":["child"]}""" to
-                "\$ref schemas are unsupported",
+
+            """{"type":"object","properties":{"child":{"${'$'}ref":""" +
+                """"https://example.com/child.json"""" +
+                """}},"required":["child"]}""" to
+                "\$ref schemas are unsupported"
         )
 
         for ((parameters, error) in cases) {
             val tool = makeTool(
                 parameters,
-                ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER),
+                ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER)
             )
 
             assertFailsWith<UnsupportedStrictJsonSchemaError>(error) {
@@ -109,21 +118,33 @@ class ConstrainedSamplingTest {
             assertEquals(tool.parameters, getJsonSchemaToolParameters(tool, strict = null))
 
             val requiring = tool.copy(
-                constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
+                constrainedSampling = ConstrainedSamplingConfig.JsonSchema(
+                    StrictJsonSchemaMode.REQUIRE
+                )
             )
-            val failure = assertFailsWith<ConstrainedSamplingError> { resolveJsonSchemaStrictSampling(requiring, true) }
+            val failure =
+                assertFailsWith<ConstrainedSamplingError> {
+                    resolveJsonSchemaStrictSampling(requiring, true)
+                }
             assertTrue(
                 failure.message!!.contains(error),
-                "expected \"$error\" in \"${failure.message}\"",
+                "expected \"$error\" in \"${failure.message}\""
             )
         }
     }
 
     @Test
     fun `resolves prefer and require strict sampling`() {
-        val prefer = makeTool(constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER))
+        val prefer =
+            makeTool(
+                constrainedSampling = ConstrainedSamplingConfig.JsonSchema(
+                    StrictJsonSchemaMode.PREFER
+                )
+            )
         val require = prefer.copy(
-            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.REQUIRE),
+            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(
+                StrictJsonSchemaMode.REQUIRE
+            )
         )
         val plain = makeTool()
 
@@ -132,18 +153,21 @@ class ConstrainedSamplingTest {
         assertNull(
             resolveJsonSchemaStrictSampling(
                 makeTool(constrainedSampling = ConstrainedSamplingConfig.Disabled),
-                supportsStrictMode = true,
-            ),
+                supportsStrictMode = true
+            )
         )
 
         assertEquals(true, resolveJsonSchemaStrictSampling(prefer, supportsStrictMode = true))
         assertEquals(true, resolveJsonSchemaStrictSampling(require, supportsStrictMode = true))
 
         assertNull(resolveJsonSchemaStrictSampling(prefer, supportsStrictMode = false))
-        val failure = assertFailsWith<ConstrainedSamplingError> { resolveJsonSchemaStrictSampling(require, supportsStrictMode = false) }
+        val failure =
+            assertFailsWith<ConstrainedSamplingError> {
+                resolveJsonSchemaStrictSampling(require, supportsStrictMode = false)
+            }
         assertEquals(
             "Tool \"sample_tool\" requires JSON-schema constrained sampling, but strict tools are unsupported.",
-            failure.message,
+            failure.message
         )
     }
 
@@ -153,37 +177,37 @@ class ConstrainedSamplingTest {
             constrainedSampling = ConstrainedSamplingConfig.Grammar(
                 mapOf(
                     GrammarFormat.OPENAI_LARK to "start: /[a-z]+/",
-                    GrammarFormat.OPENAI_REGEX to "[a-z]+",
-                ),
-            ),
+                    GrammarFormat.OPENAI_REGEX to "[a-z]+"
+                )
+            )
         )
         assertEquals(
             GrammarConstrainedSampling(GrammarConstrainedFormat.LARK, "start: /[a-z]+/", "payload"),
-            resolveGrammarConstrainedSampling(both, supportsOpenAIGrammarTools = true),
+            resolveGrammarConstrainedSampling(both, supportsOpenAIGrammarTools = true)
         )
 
         val regexOnly = makeTool(
             constrainedSampling = ConstrainedSamplingConfig.Grammar(
-                mapOf(GrammarFormat.OPENAI_REGEX to "[a-z]+"),
-            ),
+                mapOf(GrammarFormat.OPENAI_REGEX to "[a-z]+")
+            )
         )
         assertEquals(
             GrammarConstrainedSampling(GrammarConstrainedFormat.REGEX, "[a-z]+", "payload"),
-            resolveGrammarConstrainedSampling(regexOnly, supportsOpenAIGrammarTools = true),
+            resolveGrammarConstrainedSampling(regexOnly, supportsOpenAIGrammarTools = true)
         )
 
         // Blank variants do not count.
         val blank = makeTool(
             constrainedSampling = ConstrainedSamplingConfig.Grammar(
-                mapOf(GrammarFormat.OPENAI_LARK to "   "),
-            ),
+                mapOf(GrammarFormat.OPENAI_LARK to "   ")
+            )
         )
         val failure = assertFailsWith<ConstrainedSamplingError> {
             resolveGrammarConstrainedSampling(blank, supportsOpenAIGrammarTools = true)
         }
         assertEquals(
             "Tool \"sample_tool\" cannot use grammar constrained sampling: no supported grammar variant was provided.",
-            failure.message,
+            failure.message
         )
 
         assertNull(resolveGrammarConstrainedSampling(both, supportsOpenAIGrammarTools = false))
@@ -199,20 +223,23 @@ class ConstrainedSamplingTest {
                 "grammar constrained sampling requires exactly one required string property",
             """{"type":"object","required":["payload"]}""" to
                 "grammar constrained sampling requires a properties entry for payload",
-            """{"type":"object","properties":{"payload":{"type":"number"}},"required":["payload"]}""" to
-                "grammar constrained sampling property payload must have type string",
+            """{"type":"object","properties":{"payload":{"type":"number"}},""" +
+                """"required":["payload"]}""" to
+                "grammar constrained sampling property payload must have type string"
         )
         for ((parameters, error) in cases) {
             val tool = makeTool(
                 parameters,
-                ConstrainedSamplingConfig.Grammar(mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/")),
+                ConstrainedSamplingConfig.Grammar(
+                    mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/")
+                )
             )
             val failure = assertFailsWith<ConstrainedSamplingError> {
                 resolveGrammarConstrainedSampling(tool, supportsOpenAIGrammarTools = true)
             }
             assertEquals(
                 "Tool \"sample_tool\" cannot use grammar constrained sampling: $error.",
-                failure.message,
+                failure.message
             )
         }
     }
@@ -221,23 +248,29 @@ class ConstrainedSamplingTest {
     fun `creates grammar tool input properties per tool`() {
         val grammarTool = makeTool(
             constrainedSampling = ConstrainedSamplingConfig.Grammar(
-                mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/"),
-            ),
+                mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/")
+            )
         )
         val jsonSchemaTool = makeTool(
-            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER),
+            constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER)
         )
         assertEquals(
             mapOf("sample_tool" to "payload"),
-            createGrammarToolInputProperties(listOf(grammarTool, jsonSchemaTool), supportsOpenAIGrammarTools = true),
+            createGrammarToolInputProperties(
+                listOf(grammarTool, jsonSchemaTool),
+                supportsOpenAIGrammarTools = true
+            )
         )
         assertEquals(
             emptyMap<String, String>(),
-            createGrammarToolInputProperties(listOf(grammarTool), supportsOpenAIGrammarTools = false),
+            createGrammarToolInputProperties(
+                listOf(grammarTool),
+                supportsOpenAIGrammarTools = false
+            )
         )
         assertEquals(
             emptyMap<String, String>(),
-            createGrammarToolInputProperties(null, supportsOpenAIGrammarTools = true),
+            createGrammarToolInputProperties(null, supportsOpenAIGrammarTools = true)
         )
     }
 
@@ -245,11 +278,17 @@ class ConstrainedSamplingTest {
     fun `reads grammar tool input arguments`() {
         val arguments = JsonObject(mapOf("payload" to JsonPrimitive("abc")))
         assertEquals("abc", getGrammarToolInput("sample_tool", arguments, "payload"))
-        for (invalid in listOf(JsonObject(emptyMap()), JsonObject(mapOf("payload" to JsonPrimitive(42))))) {
-            val failure = assertFailsWith<ConstrainedSamplingError> { getGrammarToolInput("sample_tool", invalid, "payload") }
+        for (invalid in listOf(
+            JsonObject(emptyMap()),
+            JsonObject(mapOf("payload" to JsonPrimitive(42)))
+        )) {
+            val failure =
+                assertFailsWith<ConstrainedSamplingError> {
+                    getGrammarToolInput("sample_tool", invalid, "payload")
+                }
             assertEquals(
                 "Grammar tool call \"sample_tool\" requires argument \"payload\" to be a string.",
-                failure.message,
+                failure.message
             )
         }
     }
@@ -267,7 +306,7 @@ class ConstrainedSamplingTest {
         }
         assertEquals(
             "grammar tool input for property \"payload\" changed after it was closed",
-            failure.message,
+            failure.message
         )
     }
 
@@ -281,7 +320,7 @@ class ConstrainedSamplingTest {
         }
         assertEquals(
             "grammar tool input for property \"payload\" changed non-monotonically",
-            failure.message,
+            failure.message
         )
     }
 

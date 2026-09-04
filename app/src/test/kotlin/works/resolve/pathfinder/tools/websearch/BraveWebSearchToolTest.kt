@@ -1,6 +1,10 @@
 package works.resolve.pathfinder.tools.websearch
 
-import works.resolve.pathfinder.ai.TextContent
+import kotlin.test.AfterTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -12,11 +16,7 @@ import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
-import kotlin.test.AfterTest
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
+import works.resolve.pathfinder.ai.TextContent
 
 class BraveWebSearchToolTest {
 
@@ -31,10 +31,11 @@ class BraveWebSearchToolTest {
     private fun resultText(result: works.resolve.pathfinder.agent.AgentToolResult): String =
         (result.content.single() as TextContent).text
 
-    private fun args(query: String? = null, freshness: String? = null): JsonObject = buildJsonObject {
-        query?.let { put("query", it) }
-        freshness?.let { put("freshness", it) }
-    }
+    private fun args(query: String? = null, freshness: String? = null): JsonObject =
+        buildJsonObject {
+            query?.let { put("query", it) }
+            freshness?.let { put("freshness", it) }
+        }
 
     @AfterTest
     fun tearDown() {
@@ -46,7 +47,10 @@ class BraveWebSearchToolTest {
         val tool = tool()
         assertEquals("web_search", BraveWebSearchTool.NAME)
         assertEquals("web_search", tool.definition.name)
-        assertEquals("Search Brave's web index and return relevant results as markdown.", tool.definition.description)
+        assertEquals(
+            "Search Brave's web index and return relevant results as markdown.",
+            tool.definition.description
+        )
         val params = tool.definition.parameters as JsonObject
         val required = params["required"].toString()
         assertTrue(required.contains("query"))
@@ -72,7 +76,9 @@ class BraveWebSearchToolTest {
     @Test
     fun `validation rejects invalid freshness and accepts valid ones`() {
         val tool = tool()
-        assertFailsWith<IllegalArgumentException> { tool.validateArguments(args(query = "q", freshness = "po")) }
+        assertFailsWith<IllegalArgumentException> {
+            tool.validateArguments(args(query = "q", freshness = "po"))
+        }
         for (f in BraveWebSearchTool.FRESHNESS_VALUES) {
             tool.validateArguments(args(query = "q", freshness = f))
         }
@@ -82,7 +88,7 @@ class BraveWebSearchToolTest {
     @Test
     fun `sends scry request shape and headers`() = runBlocking<Unit> {
         server.enqueue(
-            MockResponse().setBody("""{"web":{"results":[]}}"""),
+            MockResponse().setBody("""{"web":{"results":[]}}""")
         )
         tool().execute("t1", tool().validateArguments(args(query = "kotlin coroutines")), {})
 
@@ -115,8 +121,8 @@ class BraveWebSearchToolTest {
                   {"title":"Second","url":"https://b.example"},
                   {"title":"Third","url":"https://c.example","description":""}
                 ]}}
-                """.trimIndent(),
-            ),
+                """.trimIndent()
+            )
         )
         val result = tool().execute("t1", tool().validateArguments(args(query = "q")), {})
         assertEquals(
@@ -129,7 +135,7 @@ class BraveWebSearchToolTest {
                 "\n" +
                 // Scry's `if (r.description)`: empty descriptions are skipped.
                 "3. **[Third](https://c.example)**",
-            resultText(result),
+            resultText(result)
         )
         assertEquals("{}", result.details.toString())
     }
@@ -189,28 +195,29 @@ class BraveWebSearchToolTest {
     }
 
     @Test
-    fun `cancellation rethrows CancellationException instead of returning aborted content`() = runBlocking<Unit> {
-        server.enqueue(
-            MockResponse()
-                .setBody("""{"web":{"results":[]}}""")
-                .setHeadersDelay(10, java.util.concurrent.TimeUnit.SECONDS),
-        )
-        // Run execute on IO so the runBlocking thread can block in takeRequest
-        // while the request is dispatched (single-threaded event loop would
-        // otherwise never start the call).
-        val job = async(Dispatchers.IO) {
-            tool().execute("t1", tool().validateArguments(args(query = "q")), {})
+    fun `cancellation rethrows CancellationException instead of returning aborted content`() =
+        runBlocking<Unit> {
+            server.enqueue(
+                MockResponse()
+                    .setBody("""{"web":{"results":[]}}""")
+                    .setHeadersDelay(10, java.util.concurrent.TimeUnit.SECONDS)
+            )
+            // Run execute on IO so the runBlocking thread can block in takeRequest
+            // while the request is dispatched (single-threaded event loop would
+            // otherwise never start the call).
+            val job = async(Dispatchers.IO) {
+                tool().execute("t1", tool().validateArguments(args(query = "q")), {})
+            }
+            // Deterministically wait until the request is in flight before canceling.
+            assertTrue(server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS) != null)
+            job.cancelAndJoin()
+            assertTrue(job.isCancelled)
+            try {
+                job.await()
+                kotlin.test.fail("expected CancellationException")
+            } catch (_: CancellationException) {
+            }
+            // Scry's "Search aborted." content path is deliberately not ported:
+            // cancellation must propagate (see BraveWebSearchTool KDoc).
         }
-        // Deterministically wait until the request is in flight before canceling.
-        assertTrue(server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS) != null)
-        job.cancelAndJoin()
-        assertTrue(job.isCancelled)
-        try {
-            job.await()
-            kotlin.test.fail("expected CancellationException")
-        } catch (_: CancellationException) {
-        }
-        // Scry's "Search aborted." content path is deliberately not ported:
-        // cancellation must propagate (see BraveWebSearchTool KDoc).
-    }
 }

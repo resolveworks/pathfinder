@@ -20,12 +20,18 @@ class CatalogApiKeyAuth(private val entry: CatalogProvider) : ApiKeyAuth {
             val env = mutableMapOf<String, String>()
             entry.auth.prompts.forEachIndexed { index, prompt ->
                 val value = interaction.prompt(
-                    if (prompt.secret) AuthPrompt.Secret(prompt.message) else AuthPrompt.Text(prompt.message),
+                    if (prompt.secret) {
+                        AuthPrompt.Secret(
+                            prompt.message
+                        )
+                    } else {
+                        AuthPrompt.Text(prompt.message)
+                    }
                 )
                 if (value.isBlank()) {
                     throw ModelsError(
                         ModelsErrorCode.AUTH,
-                        "${entry.name} requires a value for ${prompt.envKey}",
+                        "${entry.name} requires a value for ${prompt.envKey}"
                     )
                 }
                 if (index == 0) key = value else env[prompt.envKey] = value
@@ -40,7 +46,8 @@ class CatalogApiKeyAuth(private val entry: CatalogProvider) : ApiKeyAuth {
         prompts.forEachIndexed { index, prompt ->
             val stored = if (index == 0) credential?.key else credential?.env?.get(prompt.envKey)
             val value =
-                stored?.takeIf { it.isNotBlank() } ?: ctx.env(prompt.envKey)?.takeIf { it.isNotBlank() }
+                stored?.takeIf { it.isNotBlank() }
+                    ?: ctx.env(prompt.envKey)?.takeIf { it.isNotBlank() }
             if (value == null) return null
             if (index == 0) apiKey = value else env[prompt.envKey] = value
         }
@@ -50,7 +57,7 @@ class CatalogApiKeyAuth(private val entry: CatalogProvider) : ApiKeyAuth {
         return AuthResult(
             auth = entry.toModelAuth(key, env),
             env = env,
-            source = source,
+            source = source
         )
     }
 }
@@ -79,7 +86,7 @@ class MapCatalogAuthRegistry(private val oauthById: Map<String, OAuthAuth>) : Ca
 
 class CatalogAuthProviderRef(
     entry: CatalogProvider,
-    registry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
+    registry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY
 ) : AuthProviderRef {
     override val id: String = entry.id
     override val auth: ProviderAuth = CatalogProviderAuth(entry, registry)
@@ -89,9 +96,11 @@ class CatalogAuthProviderRef(
  * prompt-less providers (pi's `openai-codex`) have none. */
 class CatalogProviderAuth(
     entry: CatalogProvider,
-    registry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
+    registry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY
 ) : ProviderAuth {
-    override val apiKey: ApiKeyAuth? = entry.auth.prompts.takeIf { it.isNotEmpty() }?.let { CatalogApiKeyAuth(entry) }
+    override val apiKey: ApiKeyAuth? = entry.auth.prompts.takeIf {
+        it.isNotEmpty()
+    }?.let { CatalogApiKeyAuth(entry) }
     override val oauth: OAuthAuth? = registry.oauthAuth(entry)
 }
 

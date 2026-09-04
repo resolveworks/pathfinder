@@ -1,7 +1,12 @@
 package works.resolve.pathfinder.codingagent.core.compaction
 
-import works.resolve.pathfinder.agent.*
-
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import works.resolve.pathfinder.agent.CompactionDetails
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.StopReason
@@ -14,12 +19,6 @@ import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 import works.resolve.pathfinder.codingagent.core.session.SessionEntry
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNotEquals
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 class CompactionTest {
 
@@ -27,30 +26,38 @@ class CompactionTest {
 
     private fun createId(): String = "entry-${nextId++}"
 
-    private fun createMockUsage(input: Int, output: Int, cacheRead: Int = 0, cacheWrite: Int = 0) = Usage(
-        input = input,
-        output = output,
-        cacheRead = cacheRead,
-        cacheWrite = cacheWrite,
-        totalTokens = input + output + cacheRead + cacheWrite,
-    )
+    private fun createMockUsage(input: Int, output: Int, cacheRead: Int = 0, cacheWrite: Int = 0) =
+        Usage(
+            input = input,
+            output = output,
+            cacheRead = cacheRead,
+            cacheWrite = cacheWrite,
+            totalTokens = input + output + cacheRead + cacheWrite
+        )
 
     private fun createUserMessage(text: String): UserMessage = UserMessage.ofText(text)
 
     private fun createAssistantMessage(
         text: String,
-        usage: Usage = createMockUsage(100, 50),
+        usage: Usage = createMockUsage(100, 50)
     ): AssistantMessage = AssistantMessage(
         content = listOf(TextContent(text)),
         api = "anthropic-messages",
         provider = "anthropic",
         model = "claude-sonnet-4-5",
         usage = usage,
-        stopReason = StopReason.STOP,
+        stopReason = StopReason.STOP
     )
 
-    private fun createMessageEntry(message: works.resolve.pathfinder.ai.Message, parentId: String? = null) =
-        MessageEntry(id = createId(), parentId = parentId, timestamp = nextId.toLong(), message = message)
+    private fun createMessageEntry(
+        message: works.resolve.pathfinder.ai.Message,
+        parentId: String? = null
+    ) = MessageEntry(
+        id = createId(),
+        parentId = parentId,
+        timestamp = nextId.toLong(),
+        message = message
+    )
 
     @Test
     fun `calculates total context tokens from usage`() {
@@ -60,7 +67,8 @@ class CompactionTest {
 
     @Test
     fun `checks compaction threshold`() {
-        val settings = CompactionSettings(enabled = true, reserveTokens = 10000, keepRecentTokens = 20000)
+        val settings =
+            CompactionSettings(enabled = true, reserveTokens = 10000, keepRecentTokens = 20000)
         assertTrue(shouldCompact(95000, 100000, settings))
         assertFalse(shouldCompact(89000, 100000, settings))
         assertFalse(shouldCompact(95000, 100000, settings.copy(enabled = false)))
@@ -75,7 +83,7 @@ class CompactionTest {
             entries.add(user)
             val assistant = createMessageEntry(
                 createAssistantMessage("Assistant $i", createMockUsage(0, 100, (i + 1) * 1000, 0)),
-                user.id,
+                user.id
             )
             entries.add(assistant)
             parentId = assistant.id
@@ -91,18 +99,18 @@ class CompactionTest {
             id = createId(),
             parentId = null,
             timestamp = nextId.toLong(),
-            thinkingLevel = "high",
+            thinkingLevel = "high"
         )
         val modelChange = works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry(
             id = createId(),
             parentId = thinking.id,
             timestamp = nextId.toLong(),
             provider = "openai",
-            modelId = "gpt-4",
+            modelId = "gpt-4"
         )
         assertEquals(
             CutPointResult(firstKeptEntryIndex = 0, turnStartIndex = -1, isSplitTurn = false),
-            findCutPoint(listOf<SessionEntry>(thinking, modelChange), 0, 2, 1),
+            findCutPoint(listOf<SessionEntry>(thinking, modelChange), 0, 2, 1)
         )
 
         val branchSummary = works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry(
@@ -110,7 +118,7 @@ class CompactionTest {
             parentId = modelChange.id,
             timestamp = nextId.toLong(),
             fromId = "branch",
-            summary = "branch summary",
+            summary = "branch summary"
         )
         assertEquals(1, findTurnStartIndex(listOf(thinking, branchSummary), 1, 0))
         assertEquals(-1, findTurnStartIndex(listOf(thinking, modelChange), 1, 0))
@@ -121,12 +129,12 @@ class CompactionTest {
             ToolResultMessage(
                 toolCallId = "call-1",
                 toolName = "read",
-                content = listOf(TextContent("tool output")),
-            ),
+                content = listOf(TextContent("tool output"))
+            )
         )
         assertEquals(
             CutPointResult(firstKeptEntryIndex = 0, turnStartIndex = -1, isSplitTurn = false),
-            findCutPoint(listOf(toolResult), 0, 1, 1),
+            findCutPoint(listOf(toolResult), 0, 1, 1)
         )
 
         val assistantOnly = createMessageEntry(createAssistantMessage("assistant"))
@@ -148,10 +156,18 @@ class CompactionTest {
             timestamp = nextId.toLong(),
             summary = "summary",
             retainedTail = emptyList(),
-            tokensBefore = 1234,
+            tokensBefore = 1234
         )
         val assistant = createMessageEntry(createAssistantMessage("assistant"), compaction.id)
-        assertEquals(2, findCutPoint(listOf<SessionEntry>(user, compaction, assistant), 0, 3, 1).firstKeptEntryIndex)
+        assertEquals(
+            2,
+            findCutPoint(
+                listOf<SessionEntry>(user, compaction, assistant),
+                0,
+                3,
+                1
+            ).firstKeptEntryIndex
+        )
     }
 
     @Test
@@ -161,16 +177,16 @@ class CompactionTest {
         val assistantWithThinkingAndTool = assistant.copy(
             content = listOf(
                 ThinkingContent("thinking"),
-                ToolCall(id = "call-1", name = "read", arguments = """{"path":"file.ts"}"""),
-            ),
+                ToolCall(id = "call-1", name = "read", arguments = """{"path":"file.ts"}""")
+            )
         )
         val toolResultWithImage = ToolResultMessage(
             toolCallId = "call-1",
             toolName = "read",
             content = listOf(
                 TextContent("tool text"),
-                ImageContent(data = "abc", mimeType = "image/png"),
-            ),
+                ImageContent(data = "abc", mimeType = "image/png")
+            )
         )
 
         assertTrue(estimateTokens(UserMessage.ofText("plain user")) > 0)
@@ -182,24 +198,29 @@ class CompactionTest {
         // `compactionSummary` exist only pre-projected to wrapped user messages
         // (Messages.kt), so those assertions run over the projection.
         assertTrue(estimateTokens(createBranchSummaryMessage("branch", "x", timestamp = 1L)) > 0)
-        assertTrue(estimateTokens(createCompactionSummaryMessage("compact", tokensBefore = 123, timestamp = 1L)) > 0)
+        assertTrue(
+            estimateTokens(
+                createCompactionSummaryMessage("compact", tokensBefore = 123, timestamp = 1L)
+            ) >
+                0
+        )
 
         assertEquals(
             usage,
             getLastAssistantUsage(
                 listOf(
                     createMessageEntry(createUserMessage("user")),
-                    createMessageEntry(assistant),
-                ),
-            ),
+                    createMessageEntry(assistant)
+                )
+            )
         )
         assertNull(
             getLastAssistantUsage(
                 listOf(
                     createMessageEntry(assistant.copy(stopReason = StopReason.ABORTED)),
-                    createMessageEntry(assistant.copy(stopReason = StopReason.ERROR)),
-                ),
-            ),
+                    createMessageEntry(assistant.copy(stopReason = StopReason.ERROR))
+                )
+            )
         )
         assertEquals(
             usage,
@@ -207,9 +228,9 @@ class CompactionTest {
                 listOf(
                     createMessageEntry(createUserMessage("user")),
                     createMessageEntry(assistant),
-                    createMessageEntry(createAssistantMessage("partial", createMockUsage(0, 0))),
-                ),
-            ),
+                    createMessageEntry(createAssistantMessage("partial", createMockUsage(0, 0)))
+                )
+            )
         )
 
         assertNull(estimateContextTokens(listOf(createUserMessage("no usage"))).lastUsageIndex)
@@ -221,8 +242,8 @@ class CompactionTest {
                 createUserMessage("Hello"),
                 assistant,
                 createUserMessage("continue"),
-                createAssistantMessage("Partial thinking", createMockUsage(0, 0)),
-            ),
+                createAssistantMessage("Partial thinking", createMockUsage(0, 0))
+            )
         )
         assertEquals(20, estimate.usageTokens)
         assertEquals(1, estimate.lastUsageIndex)
@@ -237,8 +258,8 @@ class CompactionTest {
             ToolResultMessage(
                 toolCallId = "tc1",
                 toolName = "read",
-                content = listOf(TextContent(longContent)),
-            ),
+                content = listOf(TextContent(longContent))
+            )
         )
         val result = serializeConversation(messages)
         assertTrue("[Tool result]:" in result)
@@ -251,12 +272,12 @@ class CompactionTest {
             content = listOf(
                 ThinkingContent("let me think"),
                 TextContent("answer"),
-                ToolCall(id = "t1", name = "read", arguments = """{"path":"file.ts"}"""),
+                ToolCall(id = "t1", name = "read", arguments = """{"path":"file.ts"}""")
             ),
             api = "anthropic-messages",
             provider = "anthropic",
             model = "claude-sonnet-4-5",
-            stopReason = StopReason.STOP,
+            stopReason = StopReason.STOP
         )
         val result = serializeConversation(listOf(UserMessage.ofText("hi"), assistant))
         assertEquals(
@@ -264,7 +285,7 @@ class CompactionTest {
                 "[Assistant thinking]: let me think\n\n" +
                 "[Assistant]: answer\n\n" +
                 """[Assistant tool calls]: read(path="file.ts")""",
-            result,
+            result
         )
     }
 
@@ -276,12 +297,12 @@ class CompactionTest {
                 ToolCall(id = "2", name = "write", arguments = """{"path":"b.ts"}"""),
                 ToolCall(id = "3", name = "edit", arguments = """{"path":"c.ts"}"""),
                 ToolCall(id = "4", name = "read", arguments = """{"other":"no path"}"""),
-                ToolCall(id = "5", name = "read", arguments = "not json"),
+                ToolCall(id = "5", name = "read", arguments = "not json")
             ),
             api = "anthropic-messages",
             provider = "anthropic",
             model = "claude-sonnet-4-5",
-            stopReason = StopReason.STOP,
+            stopReason = StopReason.STOP
         )
 
         val fileOps = extractFileOperations(listOf(assistantWithCalls))
@@ -293,15 +314,20 @@ class CompactionTest {
     @Test
     fun `extractFileOperations carries previous compaction details`() {
         val assistant = AssistantMessage(
-            content = listOf(ToolCall(id = "1", name = "read", arguments = """{"path":"new.ts"}""")),
+            content = listOf(
+                ToolCall(id = "1", name = "read", arguments = """{"path":"new.ts"}""")
+            ),
             api = "anthropic-messages",
             provider = "anthropic",
             model = "claude-sonnet-4-5",
-            stopReason = StopReason.STOP,
+            stopReason = StopReason.STOP
         )
         val fileOps = extractFileOperations(
             listOf(assistant),
-            prevCompactionDetails = CompactionDetails(readFiles = listOf("old-read.ts"), modifiedFiles = listOf("old-edit.ts")),
+            prevCompactionDetails = CompactionDetails(
+                readFiles = listOf("old-read.ts"),
+                modifiedFiles = listOf("old-edit.ts")
+            )
         )
         assertEquals(setOf("old-read.ts", "new.ts"), fileOps.read)
         assertEquals(setOf("old-edit.ts"), fileOps.edited)
@@ -321,7 +347,7 @@ class CompactionTest {
 
         assertEquals(
             "\n\n<read-files>\nread-only.ts\n</read-files>\n\n<modified-files>\nboth.ts\nwritten.ts\n</modified-files>",
-            formatFileOperations(readFiles, modifiedFiles),
+            formatFileOperations(readFiles, modifiedFiles)
         )
         assertEquals("", formatFileOperations(emptyList(), emptyList()))
     }
@@ -329,10 +355,14 @@ class CompactionTest {
     @Test
     fun `summarization system prompt matches upstream verbatim`() {
         assertEquals(
-            "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n" +
+            "You are a context summarization assistant. Your task is to read a " +
+                "conversation between a user and an AI assistant, then produce a " +
+                "structured summary " +
+                "following the exact format specified.\n" +
                 "\n" +
-                "Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.",
-            SUMMARIZATION_SYSTEM_PROMPT,
+                "Do NOT continue the conversation. Do NOT respond to any questions in the " +
+                "conversation. ONLY output the structured summary.",
+            SUMMARIZATION_SYSTEM_PROMPT
         )
         assertNotEquals("", SUMMARIZATION_SYSTEM_PROMPT)
     }
@@ -341,7 +371,7 @@ class CompactionTest {
     fun `default settings match upstream`() {
         assertEquals(
             CompactionSettings(enabled = true, reserveTokens = 16384, keepRecentTokens = 20000),
-            DEFAULT_COMPACTION_SETTINGS,
+            DEFAULT_COMPACTION_SETTINGS
         )
     }
 }

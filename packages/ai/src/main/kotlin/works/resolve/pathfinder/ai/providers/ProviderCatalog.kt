@@ -7,7 +7,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
-import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.AnthropicAllowedFallbackModel
 import works.resolve.pathfinder.ai.AnthropicMessagesCompat
 import works.resolve.pathfinder.ai.CacheControlFormat
@@ -21,27 +20,24 @@ import works.resolve.pathfinder.ai.ModelCostTier
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.OpenAiCompletionsCompat
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
+import works.resolve.pathfinder.ai.Provider
+import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SessionAffinityFormat
 import works.resolve.pathfinder.ai.ThinkingFormat
 import works.resolve.pathfinder.ai.ThinkingLevelMap
+import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.auth.ModelAuth
-import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.boolean
-import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.string
 
-data class AuthPrompt(
-    val envKey: String,
-    val message: String,
-    val secret: Boolean = true,
-)
+data class AuthPrompt(val envKey: String, val message: String, val secret: Boolean = true)
 
 /** OAuth capability metadata only; flow wiring lives in
  * [works.resolve.pathfinder.ai.auth.CatalogAuthRegistry]. A null
@@ -49,13 +45,13 @@ data class AuthPrompt(
 data class ProviderOAuth(
     val name: String,
     val loginLabel: String? = null,
-    val isSubscription: Boolean = false,
+    val isSubscription: Boolean = false
 )
 
 data class ProviderAuth(
     val label: String? = null,
     val oauth: ProviderOAuth? = null,
-    val prompts: List<AuthPrompt> = emptyList(),
+    val prompts: List<AuthPrompt> = emptyList()
 )
 
 /**
@@ -70,7 +66,7 @@ class CatalogProvider(
     val baseUrl: String,
     val bearerHeaderName: String? = null,
     val auth: ProviderAuth = ProviderAuth(),
-    val models: List<Model>,
+    val models: List<Model>
 ) {
     fun model(id: String): Model? = models.firstOrNull { it.id == id }
 
@@ -112,15 +108,20 @@ class CatalogProvider(
             headers = mapOf(
                 bearerHeaderName to "Bearer $key",
                 "Authorization" to null,
-                "x-api-key" to null,
-            ),
+                "x-api-key" to null
+            )
         )
     }
 
     /** [toModelAuth] projected onto the models-layer [ResolvedAuth] shape. */
     fun toResolvedAuth(key: String, env: Map<String, String>): ResolvedAuth {
         val auth = toModelAuth(key, env)
-        return ResolvedAuth(apiKey = auth.apiKey, env = env, headers = auth.headers, baseUrl = auth.baseUrl)
+        return ResolvedAuth(
+            apiKey = auth.apiKey,
+            env = env,
+            headers = auth.headers,
+            baseUrl = auth.baseUrl
+        )
     }
 
     /**
@@ -133,19 +134,26 @@ class CatalogProvider(
     fun toRuntimeProvider(
         transport: HttpStreamingTransport,
         retry: ProviderRetry = ProviderRetry(),
-        authResolver: (suspend (apiKey: String?, env: Map<String, String>) -> ResolvedAuth?)? = null,
-        webSocketTransport: WebSocketStreamingTransport? = null,
-    ): Provider =
-        Provider(
-            id = id,
-            name = name,
-            baseUrl = baseUrl,
-            authResolver = authResolver,
-            models = models,
-            apis = apis.mapNotNull { apiId ->
-                ChatApiRegistry.create(apiId, transport, retry, webSocketTransport)?.let { apiId to it }
-            }.toMap(),
-        )
+        authResolver: (
+            suspend (
+                apiKey: String?,
+                env: Map<String, String>
+            ) -> ResolvedAuth?
+        )? = null,
+        webSocketTransport: WebSocketStreamingTransport? = null
+    ): Provider = Provider(
+        id = id,
+        name = name,
+        baseUrl = baseUrl,
+        authResolver = authResolver,
+        models = models,
+        apis = apis.mapNotNull { apiId ->
+            ChatApiRegistry.create(apiId, transport, retry, webSocketTransport)?.let {
+                apiId to
+                    it
+            }
+        }.toMap()
+    )
 }
 
 /**
@@ -167,7 +175,7 @@ class ProviderCatalog(val providers: List<CatalogProvider>) {
         fun parse(text: String): ProviderCatalog = try {
             rejectUnknownCompatKeys(text)
             ProviderCatalog(
-                json.decodeFromString<CatalogDto>(text).providers.map { it.toDomain() },
+                json.decodeFromString<CatalogDto>(text).providers.map { it.toDomain() }
             )
         } catch (error: SerializationException) {
             throw IllegalArgumentException("Malformed model catalog: ${error.message}", error)
@@ -187,7 +195,7 @@ class ProviderCatalog(val providers: List<CatalogProvider>) {
                         if (key !in COMPAT_KEYS) {
                             throw IllegalArgumentException(
                                 "Unknown compat key \"$key\" for model $providerId/$modelId; " +
-                                    "port the flag (pi packages/ai/src/types.ts) and extend CompatDto",
+                                    "port the flag (pi packages/ai/src/types.ts) and extend CompatDto"
                             )
                         }
                     }
@@ -222,7 +230,7 @@ fun normalizeBaseUrl(url: String): String {
 @Serializable
 private data class CatalogDto(
     val generatedAt: String? = null,
-    val providers: List<ProviderDto> = emptyList(),
+    val providers: List<ProviderDto> = emptyList()
 )
 
 @Serializable
@@ -232,7 +240,7 @@ private data class ProviderDto(
     val baseUrl: String = "",
     val auth: AuthDto? = null,
     val bearerHeaderName: String? = null,
-    val models: List<ModelDto> = emptyList(),
+    val models: List<ModelDto> = emptyList()
 ) {
     fun toDomain(): CatalogProvider = CatalogProvider(
         id = id,
@@ -240,7 +248,7 @@ private data class ProviderDto(
         baseUrl = baseUrl,
         bearerHeaderName = bearerHeaderName,
         auth = auth?.toDomain() ?: ProviderAuth(),
-        models = models.map { it.toDomain(this) },
+        models = models.map { it.toDomain(this) }
     )
 }
 
@@ -248,12 +256,12 @@ private data class ProviderDto(
 private data class AuthDto(
     val label: String? = null,
     val oauth: OAuthDto? = null,
-    val prompts: List<PromptDto> = emptyList(),
+    val prompts: List<PromptDto> = emptyList()
 ) {
     fun toDomain() = ProviderAuth(
         label = label,
         oauth = oauth?.toDomain(),
-        prompts = prompts.map { it.toDomain() },
+        prompts = prompts.map { it.toDomain() }
     )
 }
 
@@ -261,7 +269,7 @@ private data class AuthDto(
 private data class OAuthDto(
     val name: String,
     val loginLabel: String? = null,
-    val isSubscription: Boolean = false,
+    val isSubscription: Boolean = false
 ) {
     fun toDomain() = ProviderOAuth(name, loginLabel, isSubscription)
 }
@@ -270,7 +278,7 @@ private data class OAuthDto(
 private data class PromptDto(
     val envKey: String,
     val message: String = "",
-    val secret: Boolean = true,
+    val secret: Boolean = true
 ) {
     fun toDomain() = AuthPrompt(envKey = envKey, message = message, secret = secret)
 }
@@ -290,7 +298,7 @@ private data class ModelDto(
     val contextWindow: Int = 4096,
     val maxTokens: Int = 4096,
     val compat: CompatDto = CompatDto(),
-    val headers: Map<String, String> = emptyMap(),
+    val headers: Map<String, String> = emptyMap()
 ) {
     fun toDomain(owner: ProviderDto): Model {
         val resolvedProvider = provider.ifEmpty { owner.id }
@@ -307,15 +315,23 @@ private data class ModelDto(
             provider = resolvedProvider,
             baseUrl = baseUrl.ifEmpty { owner.baseUrl },
             reasoning = reasoning,
-            thinkingLevelMap = thinkingLevelMap?.let { parseThinkingLevelMap(it, "${owner.id}/$id") },
+            thinkingLevelMap = thinkingLevelMap?.let {
+                parseThinkingLevelMap(it, "${owner.id}/$id")
+            },
             input = input.map { parseInputModality(it, "${owner.id}/$id") },
             cost = cost.toDomain(),
             contextWindow = contextWindow,
             maxTokens = maxTokens,
             compat = compat.toDomain("${owner.id}/$id", detectedCacheControlFormat),
             anthropicCompat = compat.toAnthropicDomain(),
-            responsesCompat = if (api in RESPONSES_FAMILY_APIS) compat.toResponsesDomain("${owner.id}/$id") else null,
-            headers = headers,
+            responsesCompat = if (api in
+                RESPONSES_FAMILY_APIS
+            ) {
+                compat.toResponsesDomain("${owner.id}/$id")
+            } else {
+                null
+            },
+            headers = headers
         )
     }
 
@@ -324,7 +340,7 @@ private data class ModelDto(
         val RESPONSES_FAMILY_APIS = setOf(
             "openai-responses",
             "openai-codex-responses",
-            "azure-openai-responses",
+            "azure-openai-responses"
         )
     }
 }
@@ -333,7 +349,7 @@ private data class ModelDto(
 private data class AllowedFallbackModelDto(
     val provider: String,
     val model: String,
-    val cost: CostDto = CostDto(),
+    val cost: CostDto = CostDto()
 ) {
     fun toDomain() = AnthropicAllowedFallbackModel(provider, model, cost.toDomain())
 }
@@ -344,7 +360,7 @@ private data class CostDto(
     val output: Double = 0.0,
     val cacheRead: Double = 0.0,
     val cacheWrite: Double = 0.0,
-    val tiers: List<CostTierDto> = emptyList(),
+    val tiers: List<CostTierDto> = emptyList()
 ) {
     fun toDomain() = ModelCost(input, output, cacheRead, cacheWrite, tiers.map { it.toDomain() })
 }
@@ -355,7 +371,7 @@ private data class CostTierDto(
     val output: Double,
     val cacheRead: Double,
     val cacheWrite: Double,
-    val inputTokensAbove: Int,
+    val inputTokensAbove: Int
 ) {
     fun toDomain() = ModelCostTier(input, output, cacheRead, cacheWrite, inputTokensAbove)
 }
@@ -398,48 +414,56 @@ private data class CompatDto(
     val supportsMaxOutputTokens: Boolean? = null,
     val requiresReasoningContentOnAssistantMessages: Boolean? = null,
     val deferredToolsMode: String? = null,
-    val vllmPriority: Int? = null,
+    val vllmPriority: Int? = null
 ) {
-    fun toDomain(where: String, detectedCacheControlFormat: CacheControlFormat?) = OpenAiCompletionsCompat(
-        supportsStore = supportsStore ?: true,
-        supportsDeveloperRole = supportsDeveloperRole ?: true,
-        supportsReasoningEffort = supportsReasoningEffort ?: true,
-        supportsUsageInStreaming = supportsUsageInStreaming ?: true,
-        supportsFinishReason = supportsFinishReason ?: true,
-        maxTokensField = maxTokensField?.let { parseMaxTokensField(it, where) }
-            ?: MaxTokensField.MAX_COMPLETION_TOKENS,
-        requiresToolResultName = requiresToolResultName ?: false,
-        requiresThinkingAsText = requiresThinkingAsText ?: false,
-        thinkingFormat = thinkingFormat?.let { parseThinkingFormat(it, where) } ?: ThinkingFormat.OPENAI,
-        zaiToolStream = zaiToolStream ?: false,
-        chatTemplateArgs = chatTemplateArgs
-            ?.mapValues { (_, value) -> parseChatTemplateKwarg(value, "${where}.chatTemplateArgs") }
-            ?: emptyMap(),
-        sendSessionAffinityHeaders = sendSessionAffinityHeaders ?: false,
-        sessionAffinityFormat = sessionAffinityFormat?.let { parseSessionAffinityFormat(it, where) },
-        supportsLongCacheRetention = supportsLongCacheRetention ?: true,
-        supportsStrictMode = supportsStrictMode ?: true,
-        supportsOpenAIGrammarTools = supportsOpenAIGrammarTools ?: false,
-        cacheControlFormat = cacheControlFormat
-            ?.let { parseCacheControlFormat(it, where) }
-            ?: detectedCacheControlFormat,
-        requiresReasoningContentOnAssistantMessages =
-            requiresReasoningContentOnAssistantMessages ?: false,
-        deferredToolsMode = deferredToolsMode?.let { parseDeferredToolsMode(it, where) },
-        vllmPriority = vllmPriority,
-    )
+    fun toDomain(where: String, detectedCacheControlFormat: CacheControlFormat?) =
+        OpenAiCompletionsCompat(
+            supportsStore = supportsStore ?: true,
+            supportsDeveloperRole = supportsDeveloperRole ?: true,
+            supportsReasoningEffort = supportsReasoningEffort ?: true,
+            supportsUsageInStreaming = supportsUsageInStreaming ?: true,
+            supportsFinishReason = supportsFinishReason ?: true,
+            maxTokensField = maxTokensField?.let { parseMaxTokensField(it, where) }
+                ?: MaxTokensField.MAX_COMPLETION_TOKENS,
+            requiresToolResultName = requiresToolResultName ?: false,
+            requiresThinkingAsText = requiresThinkingAsText ?: false,
+            thinkingFormat =
+                thinkingFormat?.let { parseThinkingFormat(it, where) } ?: ThinkingFormat.OPENAI,
+            zaiToolStream = zaiToolStream ?: false,
+            chatTemplateArgs = chatTemplateArgs
+                ?.mapValues { (_, value) ->
+                    parseChatTemplateKwarg(value, "$where.chatTemplateArgs")
+                }
+                ?: emptyMap(),
+            sendSessionAffinityHeaders = sendSessionAffinityHeaders ?: false,
+            sessionAffinityFormat = sessionAffinityFormat?.let {
+                parseSessionAffinityFormat(it, where)
+            },
+            supportsLongCacheRetention = supportsLongCacheRetention ?: true,
+            supportsStrictMode = supportsStrictMode ?: true,
+            supportsOpenAIGrammarTools = supportsOpenAIGrammarTools ?: false,
+            cacheControlFormat = cacheControlFormat
+                ?.let { parseCacheControlFormat(it, where) }
+                ?: detectedCacheControlFormat,
+            requiresReasoningContentOnAssistantMessages =
+                requiresReasoningContentOnAssistantMessages ?: false,
+            deferredToolsMode = deferredToolsMode?.let { parseDeferredToolsMode(it, where) },
+            vllmPriority = vllmPriority
+        )
 
     /** Per-field defaults mirror pi's openai-responses getCompat. */
     fun toResponsesDomain(where: String) = OpenAiResponsesCompat(
         supportsDeveloperRole = supportsDeveloperRole ?: true,
-        sessionAffinityFormat = sessionAffinityFormat?.let { parseSessionAffinityFormat(it, where) },
+        sessionAffinityFormat = sessionAffinityFormat?.let {
+            parseSessionAffinityFormat(it, where)
+        },
         supportsLongCacheRetention = supportsLongCacheRetention ?: true,
         supportsStrictMode = supportsStrictMode ?: false,
         supportsOpenAIGrammarTools = supportsOpenAIGrammarTools ?: false,
         supportsAdditionalTools = supportsAdditionalTools ?: false,
         supportsToolSearch = supportsToolSearch ?: false,
         supportsExplicitPromptCacheMode = supportsExplicitPromptCacheMode ?: false,
-        supportsMaxOutputTokens = supportsMaxOutputTokens ?: true,
+        supportsMaxOutputTokens = supportsMaxOutputTokens ?: true
     )
 
     /** Per-field defaults mirror pi's getAnthropicCompat. */
@@ -454,26 +478,33 @@ private data class CompatDto(
         forceAdaptiveThinking = forceAdaptiveThinking,
         allowedFallbackModels = allowedFallbackModels?.map { it.toDomain() } ?: emptyList(),
         supportsMidConvoEffort = supportsMidConvoEffort ?: false,
-        supportsToolReferences = supportsToolReferences,
+        supportsToolReferences = supportsToolReferences
     )
 }
 
-private fun parseCacheControlFormat(value: String, where: String): CacheControlFormat = when (value) {
-    "anthropic" -> CacheControlFormat.ANTHROPIC
-    else -> throw IllegalArgumentException("Unknown cache control format '$value' for $where")
-}
+private fun parseCacheControlFormat(value: String, where: String): CacheControlFormat =
+    when (value) {
+        "anthropic" -> CacheControlFormat.ANTHROPIC
+        else -> throw IllegalArgumentException("Unknown cache control format '$value' for $where")
+    }
 
 private fun parseDeferredToolsMode(value: String, where: String): DeferredToolsMode = when (value) {
     "kimi" -> DeferredToolsMode.KIMI
     else -> throw IllegalArgumentException("Unknown deferred tools mode '$value' for $where")
 }
 
-private fun parseSessionAffinityFormat(value: String, where: String): SessionAffinityFormat = when (value) {
-    "openai" -> SessionAffinityFormat.OPENAI
-    "openai-nosession" -> SessionAffinityFormat.OPENAI_NOSESSION
-    "openrouter" -> SessionAffinityFormat.OPENROUTER
-    else -> throw IllegalArgumentException("Unknown session affinity format '$value' for $where")
-}
+private fun parseSessionAffinityFormat(value: String, where: String): SessionAffinityFormat =
+    when (value) {
+        "openai" -> SessionAffinityFormat.OPENAI
+
+        "openai-nosession" -> SessionAffinityFormat.OPENAI_NOSESSION
+
+        "openrouter" -> SessionAffinityFormat.OPENROUTER
+
+        else -> throw IllegalArgumentException(
+            "Unknown session affinity format '$value' for $where"
+        )
+    }
 
 private fun parseInputModality(value: String, where: String): InputModality = when (value) {
     "text" -> InputModality.TEXT
@@ -499,10 +530,7 @@ private fun parseMaxTokensField(value: String, where: String): MaxTokensField = 
     else -> throw IllegalArgumentException("Unknown maxTokensField '$value' for $where")
 }
 
-private fun parseThinkingLevel(
-    value: String,
-    where: String,
-): ModelThinkingLevel = try {
+private fun parseThinkingLevel(value: String, where: String): ModelThinkingLevel = try {
     ModelThinkingLevel.valueOf(value.uppercase())
 } catch (_: IllegalArgumentException) {
     throw IllegalArgumentException("Unknown thinking level '$value' for $where")
@@ -522,7 +550,7 @@ private fun parseThinkingLevelMap(raw: Map<String, String?>, where: String): Thi
 
 private fun parseChatTemplateKwarg(
     value: kotlinx.serialization.json.JsonElement,
-    where: String,
+    where: String
 ): ChatTemplateKwargValue {
     if (value is JsonObject && value.containsKey("\$var")) {
         val varName = value.string("\$var")

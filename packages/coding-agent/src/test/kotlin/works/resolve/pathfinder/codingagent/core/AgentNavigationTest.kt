@@ -1,38 +1,38 @@
 package works.resolve.pathfinder.codingagent.core
 
-import works.resolve.pathfinder.agent.*
-
+import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import works.resolve.pathfinder.agent.Agent
+import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.Provider
+import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.ChatApi
-import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
+import works.resolve.pathfinder.codingagent.core.RetrySettings
 import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryError
 import works.resolve.pathfinder.codingagent.core.compaction.buildSessionContext
 import works.resolve.pathfinder.codingagent.core.compaction.createBranchSummaryMessage
 import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.codingagent.core.session.LaneRecord
-import kotlinx.serialization.json.jsonPrimitive
 import works.resolve.pathfinder.codingagent.core.session.OperationOutcome
-import works.resolve.pathfinder.codingagent.core.RetrySettings
-import java.util.concurrent.CopyOnWriteArrayList
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.test.runTest
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
 
 class AgentNavigationTest {
 
@@ -41,7 +41,7 @@ class AgentNavigationTest {
         name = "GLM",
         api = "openai-completions",
         provider = "zai",
-        baseUrl = "https://example.invalid",
+        baseUrl = "https://example.invalid"
     )
 
     private class RecordingSink : OperationLifecycleRecorder {
@@ -59,7 +59,7 @@ class AgentNavigationTest {
         override fun streamSimple(
             model: Model,
             context: Context,
-            options: SimpleStreamOptions,
+            options: SimpleStreamOptions
         ): Flow<AssistantMessageEvent> = flow {
             val response = responses.removeFirstOrNull() ?: error("No faux summary response queued")
             emit(AssistantMessageEvent.Done(response.stopReason, response))
@@ -77,8 +77,8 @@ class AgentNavigationTest {
                 provider = model.provider,
                 model = model.id,
                 stopReason = StopReason.STOP,
-                usage = Usage(),
-            ),
+                usage = Usage()
+            )
         )
         val branchA = conversation.leafId!!
         conversation = conversation.append(
@@ -88,8 +88,8 @@ class AgentNavigationTest {
                 provider = model.provider,
                 model = model.id,
                 stopReason = StopReason.STOP,
-                usage = Usage(),
-            ),
+                usage = Usage()
+            )
         )
         return conversation to branchA
     }
@@ -99,85 +99,112 @@ class AgentNavigationTest {
         api = model.api,
         provider = model.provider,
         model = model.id,
-        stopReason = StopReason.STOP,
+        stopReason = StopReason.STOP
     )
 
     @Test
-    fun `navigation with summarize appends the record pair and a branch summary on the target`() = runTest {
-        val api = FauxApi().apply { responses.add(summaryResponse("## Goal\nexplore")) }
-        val models = Models(
-            listOf(
-                Provider(
-                    model.provider,
-                    model.provider,
-                    "https://faux.test",
-                    authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
-                    models = listOf(model),
-                    apis = mapOf(model.api to api),
-                ),
-            ),
-        )
-        val (forked, branchA) = forkedConversation()
-        val sink = RecordingSink()
-        val session = AgentSession(
-            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            conversation = forked,
-            models = models,
-            retrySettings = RetrySettings(enabled = false),
-        )
-        session.operationRecorder = sink
+    fun `navigation with summarize appends the record pair and a branch summary on the target`() =
+        runTest {
+            val api = FauxApi().apply { responses.add(summaryResponse("## Goal\nexplore")) }
+            val models = Models(
+                listOf(
+                    Provider(
+                        model.provider,
+                        model.provider,
+                        "https://faux.test",
+                        authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
+                        models = listOf(model),
+                        apis = mapOf(model.api to api)
+                    )
+                )
+            )
+            val (forked, branchA) = forkedConversation()
+            val sink = RecordingSink()
+            val session = AgentSession(
+                agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
+                conversation = forked,
+                models = models,
+                retrySettings = RetrySettings(enabled = false)
+            )
+            session.operationRecorder = sink
 
-        val result = session.navigateTree(branchA, AgentSession.NavigateTreeOptions(summarize = true))
+            val result = session.navigateTree(
+                branchA,
+                AgentSession.NavigateTreeOptions(summarize = true)
+            )
 
-        assertNull(result.editorText)
-        assertTrue(!result.cancelled)
-        val summary = result.summaryEntry
-        assertNotNull(summary)
+            assertNull(result.editorText)
+            assertTrue(!result.cancelled)
+            val summary = result.summaryEntry
+            assertNotNull(summary)
 
-        val start = sink.records.filterIsInstance<LaneRecord.OperationStartedRecord>().single()
-        assertEquals("navigation", start.intent.payload["kind"]!!.jsonPrimitive.content)
-        assertEquals(branchA, start.intent.payload["targetId"]!!.jsonPrimitive.content)
-        assertEquals(true, start.intent.payload["summarize"]!!.jsonPrimitive.content.toBoolean())
-        assertEquals(summary!!.id, start.intent.payload["summaryEntryId"]!!.jsonPrimitive.content)
-        val finish = sink.records.filterIsInstance<LaneRecord.OperationFinishedRecord>().single()
-        assertEquals(start.id, finish.runId)
-        assertEquals(OperationOutcome.COMPLETED, finish.outcome)
+            val start = sink.records.filterIsInstance<LaneRecord.OperationStartedRecord>().single()
+            assertEquals("navigation", start.intent.payload["kind"]!!.jsonPrimitive.content)
+            assertEquals(branchA, start.intent.payload["targetId"]!!.jsonPrimitive.content)
+            assertEquals(
+                true,
+                start.intent.payload["summarize"]!!.jsonPrimitive.content.toBoolean()
+            )
+            assertEquals(
+                summary!!.id,
+                start.intent.payload["summaryEntryId"]!!.jsonPrimitive.content
+            )
+            val finish = sink.records
+                .filterIsInstance<LaneRecord.OperationFinishedRecord>()
+                .single()
+            assertEquals(start.id, finish.runId)
+            assertEquals(OperationOutcome.COMPLETED, finish.outcome)
 
-        assertEquals(branchA, summary.parentId)
-        assertEquals(forked.leafId, summary.fromId)
-        assertTrue(summary.summary.contains("## Goal"))
-        assertEquals(summary.id, session.conversation.leafId)
+            assertEquals(branchA, summary.parentId)
+            assertEquals(forked.leafId, summary.fromId)
+            assertTrue(summary.summary.contains("## Goal"))
+            assertEquals(summary.id, session.conversation.leafId)
 
-        val context = buildSessionContext(session.conversation.activeEntries())
-        val projected = createBranchSummaryMessage(summary.summary, summary.fromId, summary.timestamp)
-        val projectedContent = (projected as works.resolve.pathfinder.ai.UserMessage).content
-        assertTrue(context.any { msg -> msg is works.resolve.pathfinder.ai.UserMessage && msg.content == projectedContent })
-        assertTrue(context.none { msg -> msg is AssistantMessage && msg.content.any { c -> c is TextContent && c.text == "branch B" } })
-    }
+            val context = buildSessionContext(session.conversation.activeEntries())
+            val projected =
+                createBranchSummaryMessage(summary.summary, summary.fromId, summary.timestamp)
+            val projectedContent = (projected as works.resolve.pathfinder.ai.UserMessage).content
+            assertTrue(
+                context.any { msg ->
+                    msg is works.resolve.pathfinder.ai.UserMessage &&
+                        msg.content == projectedContent
+                }
+            )
+            assertTrue(
+                context.none { msg ->
+                    msg is AssistantMessage &&
+                        msg.content.any { c -> c is TextContent && c.text == "branch B" }
+                }
+            )
+        }
 
     @Test
-    fun `navigation without summarize moves the leaf and records a completed navigation`() = runTest {
-        val (forked, branchA) = forkedConversation()
-        val sink = RecordingSink()
-        val session = AgentSession(
-            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            conversation = forked,
-            retrySettings = RetrySettings(enabled = false),
-        )
-        session.operationRecorder = sink
+    fun `navigation without summarize moves the leaf and records a completed navigation`() =
+        runTest {
+            val (forked, branchA) = forkedConversation()
+            val sink = RecordingSink()
+            val session = AgentSession(
+                agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
+                conversation = forked,
+                retrySettings = RetrySettings(enabled = false)
+            )
+            session.operationRecorder = sink
 
-        val result = session.navigateTree(branchA)
+            val result = session.navigateTree(branchA)
 
-        assertNull(result.summaryEntry)
-        assertEquals(branchA, session.conversation.leafId)
-        val start = sink.records.filterIsInstance<LaneRecord.OperationStartedRecord>().single()
-        assertEquals(false, start.intent.payload["summarize"]!!.jsonPrimitive.content.toBoolean())
-        assertNull(start.intent.payload["summaryEntryId"])
-        assertEquals(
-            OperationOutcome.COMPLETED,
-            sink.records.filterIsInstance<LaneRecord.OperationFinishedRecord>().single().outcome,
-        )
-    }
+            assertNull(result.summaryEntry)
+            assertEquals(branchA, session.conversation.leafId)
+            val start = sink.records.filterIsInstance<LaneRecord.OperationStartedRecord>().single()
+            assertEquals(
+                false,
+                start.intent.payload["summarize"]!!.jsonPrimitive.content.toBoolean()
+            )
+            assertNull(start.intent.payload["summaryEntryId"])
+            assertEquals(
+                OperationOutcome.COMPLETED,
+                sink.records.filterIsInstance<LaneRecord.OperationFinishedRecord>().single().outcome
+            )
+        }
 
     @Test
     fun `navigating to the current leaf is a recordless no-op`() = runTest {
@@ -185,7 +212,7 @@ class AgentNavigationTest {
         val sink = RecordingSink()
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            conversation = forked,
+            conversation = forked
         )
         session.operationRecorder = sink
 
@@ -200,7 +227,7 @@ class AgentNavigationTest {
         val sink = RecordingSink()
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            conversation = forked,
+            conversation = forked
         )
         session.operationRecorder = sink
 
@@ -211,7 +238,7 @@ class AgentNavigationTest {
         assertNull(session.conversation.leafId)
         assertEquals(
             OperationOutcome.COMPLETED,
-            sink.records.filterIsInstance<LaneRecord.OperationFinishedRecord>().single().outcome,
+            sink.records.filterIsInstance<LaneRecord.OperationFinishedRecord>().single().outcome
         )
     }
 
@@ -220,7 +247,7 @@ class AgentNavigationTest {
         val (forked, branchA) = forkedConversation()
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            conversation = forked,
+            conversation = forked
         )
         try {
             session.navigateTree(branchA, AgentSession.NavigateTreeOptions(summarize = true))
@@ -240,8 +267,8 @@ class AgentNavigationTest {
                     provider = model.provider,
                     model = model.id,
                     stopReason = StopReason.ERROR,
-                    errorMessage = "provider down",
-                ),
+                    errorMessage = "provider down"
+                )
             )
         }
         val models = Models(
@@ -252,9 +279,9 @@ class AgentNavigationTest {
                     "https://faux.test",
                     authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
                     models = listOf(model),
-                    apis = mapOf(model.api to api),
-                ),
-            ),
+                    apis = mapOf(model.api to api)
+                )
+            )
         )
         val (forked, branchA) = forkedConversation()
         val sink = RecordingSink()
@@ -262,7 +289,7 @@ class AgentNavigationTest {
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
             conversation = forked,
             models = models,
-            retrySettings = RetrySettings(enabled = false),
+            retrySettings = RetrySettings(enabled = false)
         )
         session.operationRecorder = sink
 
@@ -274,7 +301,7 @@ class AgentNavigationTest {
         }
         assertEquals(
             OperationOutcome.FAILED,
-            sink.records.filterIsInstance<LaneRecord.OperationFinishedRecord>().single().outcome,
+            sink.records.filterIsInstance<LaneRecord.OperationFinishedRecord>().single().outcome
         )
         assertTrue(session.conversation.entries.none { it is BranchSummaryEntry })
         assertEquals(forked.leafId, session.conversation.leafId)

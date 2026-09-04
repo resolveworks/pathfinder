@@ -1,31 +1,34 @@
 package works.resolve.pathfinder.codingagent.core.compaction
 
-import works.resolve.pathfinder.agent.*
-
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonArray
-import kotlinx.serialization.json.add
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
-import works.resolve.pathfinder.ai.ChatApi
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.Provider
+import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
@@ -33,11 +36,6 @@ import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
 import works.resolve.pathfinder.codingagent.core.session.SessionEntry
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertIs
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 class BranchSummarizationTest {
 
@@ -57,40 +55,44 @@ class BranchSummarizationTest {
             output = 1,
             reasoning = 0,
             totalTokens = 2,
-            cost = Cost(0.0, 0.0, 0.0, 0.0, 0.0),
+            cost = Cost(0.0, 0.0, 0.0, 0.0, 0.0)
         ),
         stopReason = StopReason.STOP,
-        timestamp = nextId.toLong(),
+        timestamp = nextId.toLong()
     )
 
-    private fun messageEntry(message: Message, parentId: String? = null, terminate: Boolean? = null) =
-        MessageEntry(
-            id = createId(),
-            parentId = parentId,
-            timestamp = nextId.toLong(),
-            message = message,
-            terminate = terminate,
-        )
+    private fun messageEntry(
+        message: Message,
+        parentId: String? = null,
+        terminate: Boolean? = null
+    ) = MessageEntry(
+        id = createId(),
+        parentId = parentId,
+        timestamp = nextId.toLong(),
+        message = message,
+        terminate = terminate
+    )
 
     private fun branchSummaryEntry(
         summary: String,
         parentId: String?,
         fromId: String,
-        details: JsonObject? = null,
+        details: JsonObject? = null
     ) = BranchSummaryEntry(
         id = createId(),
         parentId = parentId,
         timestamp = nextId.toLong(),
         fromId = fromId,
         summary = summary,
-        details = details,
+        details = details
     )
 
     @Test
     fun `collects nothing when there is no old leaf`() {
         val root = messageEntry(user("root"))
         val conversation = Conversation(listOf(root), root.id)
-        val result = collectEntriesForBranchSummary(conversation, oldLeafId = null, targetId = root.id)
+        val result =
+            collectEntriesForBranchSummary(conversation, oldLeafId = null, targetId = root.id)
         assertTrue(result.entries.isEmpty())
         assertNull(result.commonAncestorId)
     }
@@ -103,7 +105,8 @@ class BranchSummarizationTest {
         val b1 = messageEntry(user("b1"), root.id)
         val conversation = Conversation(listOf(root, a1, a2, b1), b1.id)
 
-        val result = collectEntriesForBranchSummary(conversation, oldLeafId = a2.id, targetId = b1.id)
+        val result =
+            collectEntriesForBranchSummary(conversation, oldLeafId = a2.id, targetId = b1.id)
 
         assertEquals(root.id, result.commonAncestorId)
         assertEquals(listOf<SessionEntry>(a1, a2), result.entries)
@@ -116,7 +119,8 @@ class BranchSummarizationTest {
         val a2 = messageEntry(assistant("a2"), a1.id)
         val conversation = Conversation(listOf(root, a1, a2), a2.id)
 
-        val result = collectEntriesForBranchSummary(conversation, oldLeafId = a2.id, targetId = a1.id)
+        val result =
+            collectEntriesForBranchSummary(conversation, oldLeafId = a2.id, targetId = a1.id)
 
         assertEquals(a1.id, result.commonAncestorId)
         assertEquals(listOf<SessionEntry>(a2), result.entries)
@@ -128,7 +132,8 @@ class BranchSummarizationTest {
         val a1 = messageEntry(user("a1"), root.id)
         val conversation = Conversation(listOf(root, a1), a1.id)
 
-        val result = collectEntriesForBranchSummary(conversation, oldLeafId = a1.id, targetId = a1.id)
+        val result =
+            collectEntriesForBranchSummary(conversation, oldLeafId = a1.id, targetId = a1.id)
 
         assertEquals(a1.id, result.commonAncestorId)
         assertTrue(result.entries.isEmpty())
@@ -148,25 +153,39 @@ class BranchSummarizationTest {
                 timestamp = 0,
                 summary = "compacted",
                 retainedTail = emptyList(),
-                tokensBefore = 10,
+                tokensBefore = 10
             ),
-            ModelChangeEntry(createId(), 0, null, 0, provider = "p", modelId = "m"),
+            ModelChangeEntry(createId(), 0, null, 0, provider = "p", modelId = "m")
         )
 
         val preparation = prepareBranchEntries(entries, tokenBudget = 0)
 
         assertEquals(4, preparation.messages.size)
-        assertEquals(user("root").content, preparation.messages[0].let { (it as UserMessage).content })
+        assertEquals(
+            user("root").content,
+            preparation.messages[0].let {
+                (it as UserMessage).content
+            }
+        )
         val branch = preparation.messages[1] as UserMessage
         assertTrue(
-            (branch.content[0] as TextContent).text.startsWith(BRANCH_SUMMARY_PREFIX.trimStart().substringBefore("<")),
+            (branch.content[0] as TextContent).text.startsWith(
+                BRANCH_SUMMARY_PREFIX.trimStart().substringBefore("<")
+            )
         )
         assertTrue((branch.content[0] as TextContent).text.contains("explored elsewhere"))
         assertTrue((branch.content[0] as TextContent).text.endsWith(BRANCH_SUMMARY_SUFFIX))
-        assertEquals("answer", ((preparation.messages[2] as AssistantMessage).content[0] as TextContent).text)
+        assertEquals(
+            "answer",
+            ((preparation.messages[2] as AssistantMessage).content[0] as TextContent).text
+        )
         val compaction = preparation.messages[3] as UserMessage
         assertTrue((compaction.content[0] as TextContent).text.contains("compacted"))
-        assertTrue((compaction.content[0] as TextContent).text.startsWith(COMPACTION_SUMMARY_PREFIX.trimStart().substringBefore("<")))
+        assertTrue(
+            (compaction.content[0] as TextContent).text.startsWith(
+                COMPACTION_SUMMARY_PREFIX.trimStart().substringBefore("<")
+            )
+        )
         assertEquals(preparation.messages.map(::estimateTokens).sum(), preparation.totalTokens)
     }
 
@@ -174,8 +193,13 @@ class BranchSummarizationTest {
     fun `preparation skips tool result messages`() {
         val root = messageEntry(user("root"))
         val toolResult = messageEntry(
-            ToolResultMessage(toolCallId = "c1", toolName = "read", content = listOf(TextContent("ok")), isError = false),
-            root.id,
+            ToolResultMessage(
+                toolCallId = "c1",
+                toolName = "read",
+                content = listOf(TextContent("ok")),
+                isError = false
+            ),
+            root.id
         )
         val preparation = prepareBranchEntries(listOf(root, toolResult), tokenBudget = 0)
         assertEquals(1, preparation.messages.size)
@@ -193,7 +217,10 @@ class BranchSummarizationTest {
 
         // Walking newest-first, only the tiny message fits the budget.
         assertEquals(1, preparation.messages.size)
-        assertEquals("tiny", ((preparation.messages[0] as UserMessage).content[0] as TextContent).text)
+        assertEquals(
+            "tiny",
+            ((preparation.messages[0] as UserMessage).content[0] as TextContent).text
+        )
     }
 
     @Test
@@ -216,7 +243,10 @@ class BranchSummarizationTest {
     fun `nested branch summary details carry into file operations`() {
         val details = buildJsonObject {
             putJsonArray("readFiles") { add("a.txt") }
-            putJsonArray("modifiedFiles") { add("b.txt"); add("c.txt") }
+            putJsonArray("modifiedFiles") {
+                add("b.txt")
+                add("c.txt")
+            }
         }
         val summary = branchSummaryEntry("s", parentId = null, fromId = "x", details = details)
         val preparation = prepareBranchEntries(listOf(summary), tokenBudget = 0)
@@ -233,13 +263,15 @@ class BranchSummarizationTest {
         override fun streamSimple(
             model: Model,
             context: Context,
-            options: SimpleStreamOptions,
+            options: SimpleStreamOptions
         ): Flow<AssistantMessageEvent> = flow {
             seenContexts += context
             seenOptions += options
             val response = responses.removeFirstOrNull()
                 ?: error("No faux completeSimple response queued")
-            if (response.stopReason == StopReason.ERROR || response.stopReason == StopReason.ABORTED) {
+            if (response.stopReason == StopReason.ERROR ||
+                response.stopReason == StopReason.ABORTED
+            ) {
                 emit(AssistantMessageEvent.Error(response.stopReason, response))
             } else {
                 emit(AssistantMessageEvent.Done(response.stopReason, response))
@@ -262,7 +294,7 @@ class BranchSummarizationTest {
             baseUrl = "https://faux.test",
             reasoning = false,
             contextWindow = 200000,
-            maxTokens = 8192,
+            maxTokens = 8192
         )
         return Faux(
             api,
@@ -274,18 +306,18 @@ class BranchSummarizationTest {
                         "https://faux.test",
                         authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
                         models = listOf(model),
-                        apis = mapOf("faux-api" to api),
-                    ),
-                ),
+                        apis = mapOf("faux-api" to api)
+                    )
+                )
             ),
-            model,
+            model
         )
     }
 
     private fun fauxAssistantMessage(
         text: String,
         stopReason: StopReason = StopReason.STOP,
-        errorMessage: String? = null,
+        errorMessage: String? = null
     ): AssistantMessage = AssistantMessage(
         content = listOf(TextContent(text)),
         api = "faux-api",
@@ -296,10 +328,10 @@ class BranchSummarizationTest {
             output = 5,
             reasoning = 0,
             totalTokens = 15,
-            cost = Cost(0.0, 0.0, 0.0, 0.0, 0.0),
+            cost = Cost(0.0, 0.0, 0.0, 0.0, 0.0)
         ),
         stopReason = stopReason,
-        errorMessage = errorMessage,
+        errorMessage = errorMessage
     )
 
     private fun promptText(context: Context): String =
@@ -314,13 +346,13 @@ class BranchSummarizationTest {
 
         val result = generateBranchSummary(
             entries,
-            GenerateBranchSummaryOptions(models = faux.models, model = faux.model, clock = clock),
+            GenerateBranchSummaryOptions(models = faux.models, model = faux.model, clock = clock)
         )
 
         val ok = assertIs<BranchSummaryCallResult.Ok>(result)
         assertEquals(
             "$BRANCH_SUMMARY_PREAMBLE## Goal\nship it",
-            ok.value.summary,
+            ok.value.summary
         )
         assertEquals(15, ok.value.usage?.totalTokens)
         assertEquals(emptyList(), ok.value.readFiles)
@@ -343,9 +375,17 @@ class BranchSummarizationTest {
 
         generateBranchSummary(
             entries,
-            GenerateBranchSummaryOptions(models = faux.models, model = faux.model, customInstructions = "focus on tests"),
+            GenerateBranchSummaryOptions(
+                models = faux.models,
+                model = faux.model,
+                customInstructions = "focus on tests"
+            )
         )
-        assertTrue(promptText(faux.api.seenContexts[0]).endsWith("$BRANCH_SUMMARY_PROMPT\n\nAdditional focus: focus on tests"))
+        assertTrue(
+            promptText(
+                faux.api.seenContexts[0]
+            ).endsWith("$BRANCH_SUMMARY_PROMPT\n\nAdditional focus: focus on tests")
+        )
 
         generateBranchSummary(
             entries,
@@ -353,10 +393,12 @@ class BranchSummarizationTest {
                 models = faux.models,
                 model = faux.model,
                 customInstructions = "custom prompt",
-                replaceInstructions = true,
-            ),
+                replaceInstructions = true
+            )
         )
-        assertTrue(promptText(faux.api.seenContexts[1]).endsWith("</conversation>\n\ncustom prompt"))
+        assertTrue(
+            promptText(faux.api.seenContexts[1]).endsWith("</conversation>\n\ncustom prompt")
+        )
     }
 
     @Test
@@ -369,18 +411,22 @@ class BranchSummarizationTest {
         }
         val entries = listOf(
             branchSummaryEntry("inner", parentId = null, fromId = "x", details = details),
-            messageEntry(user("tail")),
+            messageEntry(user("tail"))
         )
 
         val result = generateBranchSummary(
             entries,
-            GenerateBranchSummaryOptions(models = faux.models, model = faux.model),
+            GenerateBranchSummaryOptions(models = faux.models, model = faux.model)
         )
 
         val ok = assertIs<BranchSummaryCallResult.Ok>(result)
         assertEquals(listOf("read-only.txt"), ok.value.readFiles)
         assertEquals(listOf("also-read.txt"), ok.value.modifiedFiles)
-        assertTrue(ok.value.summary.endsWith("<read-files>\nread-only.txt\n</read-files>\n\n<modified-files>\nalso-read.txt\n</modified-files>"))
+        assertTrue(
+            ok.value.summary.endsWith(
+                "<read-files>\nread-only.txt\n</read-files>\n\n<modified-files>\nalso-read.txt\n</modified-files>"
+            )
+        )
     }
 
     @Test
@@ -388,7 +434,7 @@ class BranchSummarizationTest {
         val faux = createFaux()
         val result = generateBranchSummary(
             listOf(ModelChangeEntry(createId(), 0, null, 0, provider = "p", modelId = "m")),
-            GenerateBranchSummaryOptions(models = faux.models, model = faux.model),
+            GenerateBranchSummaryOptions(models = faux.models, model = faux.model)
         )
         val ok = assertIs<BranchSummaryCallResult.Ok>(result)
         assertEquals("No content to summarize", ok.value.summary)
@@ -400,16 +446,24 @@ class BranchSummarizationTest {
         val faux = createFaux()
         val entries = listOf(messageEntry(user("m")))
 
-        faux.api.responses += fauxAssistantMessage("x", stopReason = StopReason.ABORTED, errorMessage = "cancelled")
+        faux.api.responses +=
+            fauxAssistantMessage("x", stopReason = StopReason.ABORTED, errorMessage = "cancelled")
         val aborted = assertIs<BranchSummaryCallResult.Err>(
-            generateBranchSummary(entries, GenerateBranchSummaryOptions(models = faux.models, model = faux.model)),
+            generateBranchSummary(
+                entries,
+                GenerateBranchSummaryOptions(models = faux.models, model = faux.model)
+            )
         )
         assertEquals(BranchSummaryErrorCode.ABORTED, aborted.error.code)
         assertEquals("cancelled", aborted.error.message.orEmpty())
 
-        faux.api.responses += fauxAssistantMessage("x", stopReason = StopReason.ERROR, errorMessage = "boom")
+        faux.api.responses +=
+            fauxAssistantMessage("x", stopReason = StopReason.ERROR, errorMessage = "boom")
         val failed = assertIs<BranchSummaryCallResult.Err>(
-            generateBranchSummary(entries, GenerateBranchSummaryOptions(models = faux.models, model = faux.model)),
+            generateBranchSummary(
+                entries,
+                GenerateBranchSummaryOptions(models = faux.models, model = faux.model)
+            )
         )
         assertEquals(BranchSummaryErrorCode.SUMMARIZATION_FAILED, failed.error.code)
         assertTrue(failed.error.message.orEmpty().startsWith("Branch summary failed: boom"))
@@ -426,7 +480,11 @@ class BranchSummarizationTest {
         assertEquals(3, messages.size)
         val projected = messages[1] as UserMessage
         val text = (projected.content[0] as TextContent).text
-        assertTrue(text.startsWith("The following is a summary of a branch that this conversation came back from:"))
+        assertTrue(
+            text.startsWith(
+                "The following is a summary of a branch that this conversation came back from:"
+            )
+        )
         assertTrue(text.contains("what we found"))
         assertTrue(text.endsWith(BRANCH_SUMMARY_SUFFIX))
         assertEquals(summary.timestamp, projected.timestamp)
@@ -443,11 +501,17 @@ class BranchSummarizationTest {
     @Test
     fun `deferred assistant messages drop from context`() {
         val root = messageEntry(user("root"))
-        val deferred = messageEntry(assistant("partial").copy(stopReason = StopReason.DEFERRED), root.id)
+        val deferred =
+            messageEntry(assistant("partial").copy(stopReason = StopReason.DEFERRED), root.id)
         val final = messageEntry(assistant("done"), deferred.id)
         val toolResult = messageEntry(
-            ToolResultMessage(toolCallId = "c", toolName = "t", content = listOf(TextContent("r")), isError = false),
-            final.id,
+            ToolResultMessage(
+                toolCallId = "c",
+                toolName = "t",
+                content = listOf(TextContent("r")),
+                isError = false
+            ),
+            final.id
         )
 
         val messages = buildSessionContext(listOf(root, deferred, final, toolResult))

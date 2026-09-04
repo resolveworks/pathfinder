@@ -1,11 +1,20 @@
 package works.resolve.pathfinder.ai
 
-import works.resolve.pathfinder.ai.api.AzureOpenAiResponsesOptions
-import works.resolve.pathfinder.ai.api.OpenAiCompletionsOptions
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
 import works.resolve.pathfinder.ai.api.AnthropicMessagesOptions
+import works.resolve.pathfinder.ai.api.AzureOpenAiResponsesOptions
 import works.resolve.pathfinder.ai.api.GoogleGenerativeAiApi
 import works.resolve.pathfinder.ai.api.MistralOptions
 import works.resolve.pathfinder.ai.api.OpenAICodexResponsesOptions
+import works.resolve.pathfinder.ai.api.OpenAiCompletionsApi
+import works.resolve.pathfinder.ai.api.OpenAiCompletionsOptions
 import works.resolve.pathfinder.ai.api.OpenAiResponsesOptions
 import works.resolve.pathfinder.ai.api.buildAzureOpenAiResponsesOptions
 import works.resolve.pathfinder.ai.api.buildBaseOptions
@@ -14,19 +23,10 @@ import works.resolve.pathfinder.ai.api.buildMistralOptions
 import works.resolve.pathfinder.ai.api.buildOpenAICodexResponsesOptions
 import works.resolve.pathfinder.ai.api.buildOpenAiResponsesOptions
 import works.resolve.pathfinder.ai.api.toMistralOptions
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
-import works.resolve.pathfinder.ai.testing.FakeClock
-import works.resolve.pathfinder.ai.api.OpenAiCompletionsApi
 import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
-import kotlin.test.Test
-import kotlin.test.assertSame
-import kotlin.test.assertTrue
-import kotlin.test.assertFalse
-import kotlin.test.assertNull
-import kotlin.test.assertEquals
-import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.test.runTest
 
 /** telemetryContext is dormant: no adapter reads it, and none may emit spans. */
 class TelemetryOptionsTest {
@@ -44,7 +44,7 @@ class TelemetryOptionsTest {
         input = listOf(InputModality.TEXT),
         cost = ModelCost(),
         contextWindow = 1000,
-        maxTokens = 100,
+        maxTokens = 100
     )
 
     @Test
@@ -73,9 +73,18 @@ class TelemetryOptionsTest {
         val options = SimpleStreamOptions(telemetryContext = telemetry)
         assertSame(telemetry, options.toStreamOptions(null).telemetryContext)
         assertSame(telemetry, buildBaseOptions(model, context, options).telemetryContext)
-        assertSame(telemetry, buildOpenAiResponsesOptions(model, context, options, null).telemetryContext)
-        assertSame(telemetry, buildAzureOpenAiResponsesOptions(model, context, options, null).telemetryContext)
-        assertSame(telemetry, buildOpenAICodexResponsesOptions(model, context, options, null).telemetryContext)
+        assertSame(
+            telemetry,
+            buildOpenAiResponsesOptions(model, context, options, null).telemetryContext
+        )
+        assertSame(
+            telemetry,
+            buildAzureOpenAiResponsesOptions(model, context, options, null).telemetryContext
+        )
+        assertSame(
+            telemetry,
+            buildOpenAICodexResponsesOptions(model, context, options, null).telemetryContext
+        )
         assertSame(telemetry, buildGoogleOptions(model, context, options).telemetryContext)
         assertSame(telemetry, buildMistralOptions(model, context, options).telemetryContext)
     }
@@ -97,7 +106,7 @@ class TelemetryOptionsTest {
             OpenAICodexResponsesOptions(telemetryContext = telemetry).toString(),
             AnthropicMessagesOptions(telemetryContext = telemetry).toString(),
             GoogleGenerativeAiApi.GoogleOptions(telemetryContext = telemetry).toString(),
-            MistralOptions(telemetryContext = telemetry).toString(),
+            MistralOptions(telemetryContext = telemetry).toString()
         )
         for (text in rendered) {
             assertTrue("telemetryContext=true" in text, text)
@@ -113,14 +122,18 @@ class TelemetryOptionsTest {
         transport.enqueueResponse(
             listOf(
                 """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = OpenAiCompletionsApi(transport, ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }))
+        val events = OpenAiCompletionsApi(
+            transport,
+            ProviderRetry(sleep = {
+            }, clock = FakeClock(0L), random = { 0.0 })
+        )
             .streamSimple(
                 model,
                 Context(messages = listOf(UserMessage.ofText("hi"))),
-                SimpleStreamOptions(apiKey = "k", telemetryContext = telemetry),
+                SimpleStreamOptions(apiKey = "k", telemetryContext = telemetry)
             )
             .toList()
         assertEquals(works.resolve.pathfinder.ai.StopReason.STOP, events.last().partial.stopReason)

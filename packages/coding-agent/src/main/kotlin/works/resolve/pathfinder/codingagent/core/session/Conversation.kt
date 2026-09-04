@@ -8,10 +8,7 @@ import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.utils.uuidv7
 
 /** Node of the conversation tree; children are sorted oldest-first. */
-data class SessionTreeNode(
-    val entry: SessionEntry,
-    val children: List<SessionTreeNode>,
-)
+data class SessionTreeNode(val entry: SessionEntry, val children: List<SessionTreeNode>)
 
 /**
  * Immutable conversation tree; all operations return new instances. The
@@ -28,7 +25,7 @@ class Conversation(
     val entries: List<SessionEntry>,
     val leafId: String?,
     idGenerator: () -> String = ::uuidv7,
-    clock: Clock = Clock.System,
+    clock: Clock = Clock.System
 ) {
     private val nextId: () -> String = idGenerator
     private val clock: Clock = clock
@@ -39,7 +36,7 @@ class Conversation(
             id = nextId(),
             parentId = leafId,
             timestamp = clock.now().toEpochMilliseconds(),
-            message = message,
+            message = message
         )
         return Conversation(entries + entry, entry.id, nextId, clock)
     }
@@ -58,7 +55,7 @@ class Conversation(
         details: CompactionDetails? = null,
         usage: Usage? = null,
         /** Pre-minted entry id for producers that record it up front (pi's compaction names its resultEntryId before the work runs). */
-        id: String? = null,
+        id: String? = null
     ): Conversation {
         val entry = CompactionEntry(
             id = id ?: nextId(),
@@ -68,7 +65,7 @@ class Conversation(
             retainedTail = retainedTail,
             tokensBefore = tokensBefore,
             details = details,
-            usage = usage,
+            usage = usage
         )
         return Conversation(entries + entry, entry.id, nextId, clock)
     }
@@ -79,7 +76,7 @@ class Conversation(
             parentId = leafId,
             timestamp = clock.now().toEpochMilliseconds(),
             provider = provider,
-            modelId = modelId,
+            modelId = modelId
         )
         return Conversation(entries + entry, entry.id, nextId, clock)
     }
@@ -90,7 +87,7 @@ class Conversation(
             id = nextId(),
             parentId = leafId,
             timestamp = clock.now().toEpochMilliseconds(),
-            thinkingLevel = thinkingLevel,
+            thinkingLevel = thinkingLevel
         )
         return Conversation(entries + entry, entry.id, nextId, clock)
     }
@@ -131,7 +128,7 @@ class Conversation(
     data class EffectiveConfiguration(
         val model: SessionModelSelection? = null,
         val thinkingLevel: String = "off",
-        val activeToolNames: List<String>? = null,
+        val activeToolNames: List<String>? = null
     )
 
     /** Folds the active root→leaf path into the branch's effective configuration. */
@@ -140,16 +137,22 @@ class Conversation(
         for (entry in activeEntries()) {
             configuration = when (entry) {
                 is ModelChangeEntry -> configuration.copy(
-                    model = SessionModelSelection(entry.provider, entry.modelId),
+                    model = SessionModelSelection(entry.provider, entry.modelId)
                 )
+
                 is ThinkingLevelEntry -> configuration.copy(thinkingLevel = entry.thinkingLevel)
-                is ActiveToolsEntry -> configuration.copy(activeToolNames = entry.activeToolNames.toList())
+
+                is ActiveToolsEntry -> configuration.copy(
+                    activeToolNames = entry.activeToolNames.toList()
+                )
+
                 is MessageEntry -> {
                     val assistant = entry.message as? AssistantMessage ?: continue
                     configuration.copy(
-                        model = SessionModelSelection(assistant.provider, assistant.model),
+                        model = SessionModelSelection(assistant.provider, assistant.model)
                     )
                 }
+
                 else -> configuration
             }
         }
@@ -210,7 +213,7 @@ class Conversation(
                     id = uuidv7(),
                     parentId = conversation.leafId,
                     timestamp = message.timestamp,
-                    message = message,
+                    message = message
                 )
                 conversation = Conversation(conversation.entries + entry, entry.id)
             }

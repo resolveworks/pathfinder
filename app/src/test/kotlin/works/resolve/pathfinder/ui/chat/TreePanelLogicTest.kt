@@ -5,11 +5,7 @@ import org.junit.Test
 
 class TreePanelLogicTest {
 
-    private fun row(
-        id: String,
-        path: List<String>,
-        preview: String,
-    ): TreeRow = TreeRow(
+    private fun row(id: String, path: List<String>, preview: String): TreeRow = TreeRow(
         id = id,
         path = path,
         indent = path.size - 1,
@@ -18,14 +14,14 @@ class TreePanelLogicTest {
         isOnActivePath = false,
         isCurrentLeaf = false,
         isFoldable = false,
-        preview = preview,
+        preview = preview
     )
 
     private val tree = listOf(
         row("u1", listOf("u1"), "You: explain the MVVM pattern"),
         row("a1", listOf("u1", "a1"), "Assistant: MVVM separates UI and state"),
         row("u2", listOf("u1", "a1", "u2"), "You: show a Kotlin example"),
-        row("a2", listOf("u1", "a1", "u2", "a2"), "Assistant: here is a ViewModel"),
+        row("a2", listOf("u1", "a1", "u2", "a2"), "Assistant: here is a ViewModel")
     )
 
     // ---- search and fold visibility ----
@@ -59,7 +55,7 @@ class TreePanelLogicTest {
             row("root", listOf("root"), "root"),
             row("left", listOf("root", "left"), "left child"),
             row("leftChild", listOf("root", "left", "leftChild"), "left grandchild"),
-            row("right", listOf("root", "right"), "right child"),
+            row("right", listOf("root", "right"), "right child")
         )
         val result = filterTreeRows(forked, "", setOf("left"))
         assertEquals(listOf("root", "left", "right"), result.map { it.id })
@@ -93,7 +89,7 @@ class TreePanelLogicTest {
         indent: Int,
         connector: TreeConnector = TreeConnector.NONE,
         gutters: List<Int> = emptyList(),
-        foldable: Boolean = false,
+        foldable: Boolean = false
     ): TreeRow = TreeRow(
         id = "x",
         path = List(indent + 1) { "a$it" },
@@ -103,7 +99,7 @@ class TreePanelLogicTest {
         isOnActivePath = false,
         isCurrentLeaf = false,
         isFoldable = foldable,
-        preview = "p",
+        preview = "p"
     )
 
     @Test
@@ -121,19 +117,19 @@ class TreePanelLogicTest {
     fun `gutters occupy ancestor branch levels`() {
         assertEquals(
             listOf(TreeGuideCell.GUTTER, TreeGuideCell.EMPTY),
-            treeGuideCells(guideRow(2, gutters = listOf(0))),
+            treeGuideCells(guideRow(2, gutters = listOf(0)))
         )
         assertEquals(
             listOf(TreeGuideCell.EMPTY, TreeGuideCell.EMPTY),
-            treeGuideCells(guideRow(2)),
+            treeGuideCells(guideRow(2))
         )
         assertEquals(
             listOf(TreeGuideCell.GUTTER, TreeGuideCell.EMPTY, TreeGuideCell.ELBOW),
-            treeGuideCells(guideRow(3, TreeConnector.ELBOW, gutters = listOf(0))),
+            treeGuideCells(guideRow(3, TreeConnector.ELBOW, gutters = listOf(0)))
         )
         assertEquals(
             listOf(TreeGuideCell.GUTTER, TreeGuideCell.GUTTER, TreeGuideCell.TEE),
-            treeGuideCells(guideRow(3, TreeConnector.TEE, gutters = listOf(0, 1))),
+            treeGuideCells(guideRow(3, TreeConnector.TEE, gutters = listOf(0, 1)))
         )
     }
 }

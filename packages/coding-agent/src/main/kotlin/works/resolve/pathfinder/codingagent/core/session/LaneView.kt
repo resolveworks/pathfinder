@@ -1,7 +1,7 @@
 package works.resolve.pathfinder.codingagent.core.session
 
-import works.resolve.pathfinder.ai.Message
 import kotlinx.serialization.json.JsonElement
+import works.resolve.pathfinder.ai.Message
 
 /**
  * Lane-scoped projection of an open session (pi's Session.view(lane)): reads
@@ -21,7 +21,7 @@ import kotlinx.serialization.json.JsonElement
 class LaneView internal constructor(
     val lane: String,
     private val storage: JsonlSessionStorage,
-    private val write: Writer,
+    private val write: Writer
 ) {
     /** Serializes a write through the owning store. */
     internal interface Writer {
@@ -41,10 +41,13 @@ class LaneView internal constructor(
 
     fun label(targetId: String): String? = storage.label(targetId)
 
-    suspend fun setLabel(targetId: String, label: String?) = write.write { it.setLabel(targetId, label) }
+    suspend fun setLabel(targetId: String, label: String?) = write.write {
+        it.setLabel(targetId, label)
+    }
 
     /** Query validation is state-level, as upstream. */
-    fun findEntries(query: EntryQuery = EntryQuery()): List<SessionEntry> = storage.findEntries(query)
+    fun findEntries(query: EntryQuery = EntryQuery()): List<SessionEntry> =
+        storage.findEntries(query)
 
     /** [findEntries] capped at one result. */
     fun findEntry(query: EntryQuery = EntryQuery()): SessionEntry? =
@@ -54,7 +57,7 @@ class LaneView internal constructor(
     fun findEntriesOnBranch(
         query: EntryQuery = EntryQuery(),
         stopAtType: EntryType? = null,
-        stopAtId: String? = null,
+        stopAtId: String? = null
     ): List<SessionEntry> {
         val start = leafId() ?: return emptyList()
         return storage.findEntriesOnBranch(
@@ -66,8 +69,8 @@ class LaneView internal constructor(
                 customType = query.customType,
                 order = query.order,
                 limit = query.limit,
-                cursor = query.cursor,
-            ),
+                cursor = query.cursor
+            )
         )
     }
 
@@ -75,11 +78,13 @@ class LaneView internal constructor(
     fun findEntryOnBranch(
         query: EntryQuery = EntryQuery(),
         stopAtType: EntryType? = null,
-        stopAtId: String? = null,
-    ): SessionEntry? = findEntriesOnBranch(withResultLimit(query, 1), stopAtType, stopAtId).firstOrNull()
+        stopAtId: String? = null
+    ): SessionEntry? =
+        findEntriesOnBranch(withResultLimit(query, 1), stopAtType, stopAtId).firstOrNull()
 
     /** Appends [message] to this lane; returns the entry id. */
-    suspend fun appendMessage(message: Message): String = write.write { it.appendMessage(message, lane) }
+    suspend fun appendMessage(message: Message): String =
+        write.write { it.appendMessage(message, lane) }
 
     suspend fun appendCustomEntry(customType: String, data: JsonElement? = null): String =
         write.write { it.appendCustomEntry(customType, data, lane) }

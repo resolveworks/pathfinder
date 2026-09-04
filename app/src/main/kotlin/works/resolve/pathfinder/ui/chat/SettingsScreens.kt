@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -8,7 +9,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.List
@@ -50,12 +50,12 @@ internal fun SettingsContent(
     onOpenModels: () -> Unit,
     onOpenProviders: () -> Unit,
     onOpenSearchProviders: () -> Unit,
-    onToggleShowThinking: (Boolean) -> Unit,
+    onToggleShowThinking: (Boolean) -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(16.dp)
     ) {
         ListItem(
             headlineContent = { Text(stringResource(R.string.settings_default_model)) },
@@ -65,7 +65,7 @@ internal fun SettingsContent(
             trailingContent = {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },
-            modifier = Modifier.clickable(onClick = onOpenDefaultModel),
+            modifier = Modifier.clickable(onClick = onOpenDefaultModel)
         )
         if (showDefaultThinkingRow) {
             ListItem(
@@ -74,13 +74,13 @@ internal fun SettingsContent(
                     Text(
                         defaultThinkingLevel
                             ?.let { thinkingLevelDescriptionText(it) }
-                            ?: stringResource(R.string.settings_not_set),
+                            ?: stringResource(R.string.settings_not_set)
                     )
                 },
                 trailingContent = {
                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
                 },
-                modifier = Modifier.clickable(onClick = onOpenDefaultThinking),
+                modifier = Modifier.clickable(onClick = onOpenDefaultThinking)
             )
         }
         ListItem(
@@ -89,7 +89,7 @@ internal fun SettingsContent(
             trailingContent = {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },
-            modifier = Modifier.clickable(onClick = onOpenModels),
+            modifier = Modifier.clickable(onClick = onOpenModels)
         )
         ListItem(
             headlineContent = { Text(stringResource(R.string.providers_title)) },
@@ -97,7 +97,7 @@ internal fun SettingsContent(
             trailingContent = {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },
-            modifier = Modifier.clickable(onClick = onOpenProviders),
+            modifier = Modifier.clickable(onClick = onOpenProviders)
         )
         ListItem(
             headlineContent = { Text(stringResource(R.string.search_providers_title)) },
@@ -105,7 +105,7 @@ internal fun SettingsContent(
             trailingContent = {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },
-            modifier = Modifier.clickable(onClick = onOpenSearchProviders),
+            modifier = Modifier.clickable(onClick = onOpenSearchProviders)
         )
         ListItem(
             headlineContent = { Text(stringResource(R.string.settings_show_thinking)) },
@@ -113,10 +113,10 @@ internal fun SettingsContent(
             trailingContent = {
                 Switch(
                     checked = showThinking,
-                    onCheckedChange = onToggleShowThinking,
+                    onCheckedChange = onToggleShowThinking
                 )
             },
-            modifier = Modifier.clickable { onToggleShowThinking(!showThinking) },
+            modifier = Modifier.clickable { onToggleShowThinking(!showThinking) }
         )
     }
 }
@@ -131,18 +131,18 @@ internal fun DefaultModelContent(
     modelOptions: List<ModelOption>,
     defaultModel: SelectedModel?,
     onSetDefault: (providerId: String, modelId: String) -> Unit,
-    onOpenProviders: () -> Unit,
+    onOpenProviders: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(16.dp)
     ) {
         if (modelOptions.isEmpty()) {
             Text(
                 text = stringResource(R.string.models_empty_configured_hint),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             TextButton(onClick = onOpenProviders) {
                 Text(stringResource(R.string.action_set_up_providers))
@@ -161,7 +161,7 @@ internal fun DefaultModelContent(
                         },
                         modifier = Modifier.clickable {
                             onSetDefault(option.providerId, option.modelId)
-                        },
+                        }
                     )
                     HorizontalDivider()
                 }
@@ -180,12 +180,12 @@ internal fun DefaultModelContent(
 internal fun DefaultThinkingLevelContent(
     availableLevels: List<ModelThinkingLevel>,
     defaultLevel: ModelThinkingLevel?,
-    onSetDefault: (ModelThinkingLevel) -> Unit,
+    onSetDefault: (ModelThinkingLevel) -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(16.dp)
     ) {
         LazyColumn {
             items(availableLevels, key = { it.wire }) { level ->
@@ -195,7 +195,7 @@ internal fun DefaultThinkingLevelContent(
                     trailingContent = {
                         RadioButton(selected = level == defaultLevel, onClick = null)
                     },
-                    modifier = Modifier.clickable { onSetDefault(level) },
+                    modifier = Modifier.clickable { onSetDefault(level) }
                 )
                 HorizontalDivider()
             }
@@ -214,7 +214,7 @@ internal fun ModelsContent(
     modelOptions: List<ModelOption>,
     enabledModels: List<String>?,
     onToggleScope: (providerId: String, modelId: String, checked: Boolean) -> Unit,
-    onOpenProviders: () -> Unit,
+    onOpenProviders: () -> Unit
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     val filteredOptions = modelOptions.filter { option ->
@@ -229,20 +229,20 @@ internal fun ModelsContent(
             .fillMaxSize()
             .imePadding()
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
             label = { Text(stringResource(R.string.model_search_hint)) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth()
         )
         if (modelOptions.isEmpty()) {
             Text(
                 text = stringResource(R.string.models_empty_configured_hint),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             TextButton(onClick = onOpenProviders) {
                 Text(stringResource(R.string.action_set_up_providers))
@@ -258,12 +258,14 @@ internal fun ModelsContent(
                         trailingContent = {
                             Checkbox(
                                 checked = checked,
-                                onCheckedChange = { onToggleScope(option.providerId, option.modelId, it) },
+                                onCheckedChange = {
+                                    onToggleScope(option.providerId, option.modelId, it)
+                                }
                             )
                         },
                         modifier = Modifier.clickable {
                             onToggleScope(option.providerId, option.modelId, !checked)
-                        },
+                        }
                     )
                     HorizontalDivider()
                 }

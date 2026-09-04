@@ -1,11 +1,5 @@
 package works.resolve.pathfinder.ui.chat
 
-import works.resolve.pathfinder.ai.auth.AuthEvent
-import works.resolve.pathfinder.ai.auth.AuthInteraction
-import works.resolve.pathfinder.ai.auth.AuthMethodInfo
-import works.resolve.pathfinder.ai.auth.AuthPrompt as AuthInteractionPrompt
-import works.resolve.pathfinder.ai.auth.ProviderAuthService
-import works.resolve.pathfinder.logging.PathfinderDiagnostics
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -14,6 +8,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import works.resolve.pathfinder.ai.auth.AuthEvent
+import works.resolve.pathfinder.ai.auth.AuthInteraction
+import works.resolve.pathfinder.ai.auth.AuthMethodInfo
+import works.resolve.pathfinder.ai.auth.AuthPrompt as AuthInteractionPrompt
+import works.resolve.pathfinder.ai.auth.ProviderAuthService
+import works.resolve.pathfinder.logging.PathfinderDiagnostics
 
 /**
  * Interactive provider-login state machine. The login coroutine runs in
@@ -35,7 +35,7 @@ internal class ProviderLoginController(
      * Runs in [scope] with the flow state already cleared; the raw cause is
      * never surfaced — the owner maps it to a safe static error.
      */
-    private val onLoginFailed: suspend (cause: Throwable) -> Unit,
+    private val onLoginFailed: suspend (cause: Throwable) -> Unit
 ) {
     private var authJob: Job? = null
     private var pendingPromptReply: CompletableDeferred<String>? = null

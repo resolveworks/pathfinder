@@ -89,5 +89,5 @@ Keystore-backed boundary.
 ## Check
 
 ```bash
-./gradlew test assembleDebug
+./gradlew spotlessCheck test assembleDebug
 ```

@@ -1,5 +1,8 @@
 package works.resolve.pathfinder.codingagent.core.compaction
 
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.Message
+import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.codingagent.core.session.ActiveToolsEntry
 import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
@@ -8,9 +11,6 @@ import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
 import works.resolve.pathfinder.codingagent.core.session.SessionEntry
 import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
-import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.Message
-import works.resolve.pathfinder.ai.StopReason
 
 /**
  * Mirrors pi's `packages/agent/src/harness/session/context.ts` at pin
@@ -74,8 +74,12 @@ private fun sessionEntryToContextMessages(entry: SessionEntry): List<Message> = 
             listOf(entry.message)
         }
     }
-    is CompactionEntry -> listOf(createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp)) +
+
+    is CompactionEntry -> listOf(
+        createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp)
+    ) +
         entry.retainedTail
+
     // Upstream guards summary truthiness; with a non-null summary here, that
     // reduces to excluding the empty string.
     is BranchSummaryEntry -> if (entry.summary.isNotEmpty()) {
@@ -83,6 +87,7 @@ private fun sessionEntryToContextMessages(entry: SessionEntry): List<Message> = 
     } else {
         emptyList()
     }
+
     // Upstream routes `custom` entries through per-type projectors; pathfinder
     // has no custom-entry producer, so nothing projects.
     is ModelChangeEntry, is ThinkingLevelEntry, is ActiveToolsEntry, is CustomEntry -> emptyList()

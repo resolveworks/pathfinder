@@ -33,7 +33,7 @@ enum class ModelThinkingLevel(val wire: String) {
     MEDIUM("medium"),
     HIGH("high"),
     XHIGH("xhigh"),
-    MAX("max"),
+    MAX("max")
 }
 
 /**
@@ -100,7 +100,7 @@ data class TextContent(
      * Opaque thought-signature replay data Google attaches to a text part;
      * only meaningful for the same provider/model.
      */
-    val textSignature: String? = null,
+    val textSignature: String? = null
 ) : Content() {
     override val type: ContentType get() = ContentType.TEXT
 }
@@ -110,7 +110,7 @@ data class ThinkingContent(
     /** Provider-specific opaque reasoning replay data (e.g. which wire field it came from). */
     val thinkingSignature: String? = null,
     /** True for Anthropic redacted_thinking blocks: opaque replay-only payload. */
-    val redacted: Boolean = false,
+    val redacted: Boolean = false
 ) : Content() {
     override val type: ContentType get() = ContentType.THINKING
 }
@@ -118,7 +118,7 @@ data class ThinkingContent(
 data class ImageContent(
     /** Base64 encoded image data. */
     val data: String,
-    val mimeType: String,
+    val mimeType: String
 ) : Content() {
     override val type: ContentType get() = ContentType.IMAGE
 }
@@ -134,7 +134,7 @@ data class ToolCall(
      */
     val thoughtSignature: String? = null,
     /** OpenAI Responses namespace for dynamically loaded or namespaced tools. */
-    val namespace: String? = null,
+    val namespace: String? = null
 ) : Content() {
     override val type: ContentType get() = ContentType.TOOL_CALL
 }
@@ -150,7 +150,7 @@ data class UserMessage(
     // Reduction: pi's content also allows a plain string; the port accepts
     // only the structured array form — use [ofText] for the plain-string shape.
     val content: List<Content>,
-    override val timestamp: Long = 0L,
+    override val timestamp: Long = 0L
 ) : Message() {
     override val role: MessageRole get() = MessageRole.USER
 
@@ -178,7 +178,7 @@ data class AssistantMessage(
     val diagnostics: List<AssistantMessageDiagnostic> = emptyList(),
     /** Codex end-of-turn flag from the terminal response. */
     val endTurn: Boolean? = null,
-    override val timestamp: Long = 0L,
+    override val timestamp: Long = 0L
 ) : Message() {
     override val role: MessageRole get() = MessageRole.ASSISTANT
 }
@@ -200,7 +200,7 @@ data class ToolResultMessage(
     val isError: Boolean = false,
     /** Tool names this result made available (deferred tool loading). */
     val addedToolNames: List<String> = emptyList(),
-    override val timestamp: Long = 0L,
+    override val timestamp: Long = 0L
 ) : Message() {
     override val role: MessageRole get() = MessageRole.TOOL_RESULT
 }
@@ -217,7 +217,7 @@ data class Usage(
     val cacheWrite1h: Int = 0,
     val reasoning: Int = 0,
     val totalTokens: Int = 0,
-    val cost: Cost = Cost(),
+    val cost: Cost = Cost()
 )
 
 data class Cost(
@@ -225,7 +225,7 @@ data class Cost(
     val output: Double = 0.0,
     val cacheRead: Double = 0.0,
     val cacheWrite: Double = 0.0,
-    val total: Double = 0.0,
+    val total: Double = 0.0
 )
 
 /** No provider adapter produces DEFERRED; it exists because the session
@@ -263,7 +263,7 @@ data class Tool(
     val name: String,
     val description: String,
     val parameters: JsonElement,
-    val constrainedSampling: ConstrainedSamplingConfig? = null,
+    val constrainedSampling: ConstrainedSamplingConfig? = null
 )
 
 /**
@@ -292,6 +292,7 @@ sealed interface ToolChoice {
     data object None : ToolChoice
     data object Any : ToolChoice
     data object Required : ToolChoice
+
     /** Force a specific named function tool. */
     data class Function(val name: String) : ToolChoice
 }
@@ -299,7 +300,7 @@ sealed interface ToolChoice {
 data class Context(
     val systemPrompt: String? = null,
     val messages: List<Message>,
-    val tools: List<Tool> = emptyList(),
+    val tools: List<Tool> = emptyList()
 )
 
 /**
@@ -329,50 +330,63 @@ sealed class AssistantMessageEvent {
     data class TextStart(val contentIndex: Int, override val partial: AssistantMessage) :
         AssistantMessageEvent()
 
-    data class TextDelta(val contentIndex: Int, val delta: String, override val partial: AssistantMessage) :
-        AssistantMessageEvent()
+    data class TextDelta(
+        val contentIndex: Int,
+        val delta: String,
+        override val partial: AssistantMessage
+    ) : AssistantMessageEvent()
 
-    data class TextEnd(val contentIndex: Int, val content: String, override val partial: AssistantMessage) :
-        AssistantMessageEvent()
+    data class TextEnd(
+        val contentIndex: Int,
+        val content: String,
+        override val partial: AssistantMessage
+    ) : AssistantMessageEvent()
 
     data class ThinkingStart(val contentIndex: Int, override val partial: AssistantMessage) :
         AssistantMessageEvent()
 
-    data class ThinkingDelta(val contentIndex: Int, val delta: String, override val partial: AssistantMessage) :
-        AssistantMessageEvent()
+    data class ThinkingDelta(
+        val contentIndex: Int,
+        val delta: String,
+        override val partial: AssistantMessage
+    ) : AssistantMessageEvent()
 
-    data class ThinkingEnd(val contentIndex: Int, val content: String, override val partial: AssistantMessage) :
-        AssistantMessageEvent()
+    data class ThinkingEnd(
+        val contentIndex: Int,
+        val content: String,
+        override val partial: AssistantMessage
+    ) : AssistantMessageEvent()
 
     data class ToolCallStart(val contentIndex: Int, override val partial: AssistantMessage) :
         AssistantMessageEvent()
 
-    data class ToolCallDelta(val contentIndex: Int, val delta: String, override val partial: AssistantMessage) :
-        AssistantMessageEvent()
+    data class ToolCallDelta(
+        val contentIndex: Int,
+        val delta: String,
+        override val partial: AssistantMessage
+    ) : AssistantMessageEvent()
 
-    data class ToolCallEnd(val contentIndex: Int, val toolCall: ToolCall, override val partial: AssistantMessage) :
-        AssistantMessageEvent()
+    data class ToolCallEnd(
+        val contentIndex: Int,
+        val toolCall: ToolCall,
+        override val partial: AssistantMessage
+    ) : AssistantMessageEvent()
 
-    data class Done(
-        val reason: StopReason,
-        val message: AssistantMessage,
-    ) : AssistantMessageEvent() {
+    data class Done(val reason: StopReason, val message: AssistantMessage) :
+        AssistantMessageEvent() {
         override val partial: AssistantMessage get() = message
     }
 
     data class Error(
         val reason: StopReason,
         /** Final assistant message with stopReason ABORTED/ERROR and errorMessage set. */
-        val error: AssistantMessage,
+        val error: AssistantMessage
     ) : AssistantMessageEvent() {
         override val partial: AssistantMessage get() = error
     }
 }
 
-data class ProviderResponse(
-    val status: Int,
-    val headers: Map<String, String>,
-)
+data class ProviderResponse(val status: Int, val headers: Map<String, String>)
 
 /**
  * Flattens multi-valued HTTP response headers into the single-value map
@@ -399,7 +413,7 @@ data class StreamOptions(
      * Dormant: carried for shape fidelity through the conversion paths, with
      * no consumer of its own. Presence boolean only in toString().
      */
-    val telemetryContext: TelemetryContext? = null,
+    val telemetryContext: TelemetryContext? = null
 ) {
     override fun toString(): String = optionsToString(
         "StreamOptions",
@@ -410,7 +424,7 @@ data class StreamOptions(
         "timeoutMs" to timeoutMs,
         "maxRetries" to maxRetries,
         "maxRetryDelayMs" to maxRetryDelayMs,
-        "telemetryContext" to (telemetryContext != null),
+        "telemetryContext" to (telemetryContext != null)
     )
 
     companion object {
@@ -475,7 +489,7 @@ data class SimpleStreamOptions(
      * Dormant: carried for shape fidelity and preserved (same object) through
      * every conversion. Presence boolean only in toString().
      */
-    val telemetryContext: TelemetryContext? = null,
+    val telemetryContext: TelemetryContext? = null
 ) {
     override fun toString(): String = optionsToString(
         "SimpleStreamOptions",
@@ -496,7 +510,7 @@ data class SimpleStreamOptions(
         "samplingParams" to samplingParams?.keys,
         "transport" to transport,
         "websocketConnectTimeoutMs" to websocketConnectTimeoutMs,
-        "telemetryContext" to (telemetryContext != null),
+        "telemetryContext" to (telemetryContext != null)
     )
 
     fun toStreamOptions(reasoningEffort: ModelThinkingLevel?): OpenAiCompletionsOptions =
@@ -517,7 +531,7 @@ data class SimpleStreamOptions(
             onPayload = onPayload,
             onResponse = onResponse,
             samplingParams = samplingParams,
-            telemetryContext = telemetryContext,
+            telemetryContext = telemetryContext
         )
 }
 
@@ -543,10 +557,7 @@ fun mergeSamplingParams(model: Model, options: SimpleStreamOptions): Map<String,
  * Upstream keeps this logic private per API file; the shared helper here is
  * an accepted pathfinder centralization (differences.md §4).
  */
-fun mergeHeaders(
-    base: Map<String, String?>,
-    override: Map<String, String?>,
-): Map<String, String?> {
+fun mergeHeaders(base: Map<String, String?>, override: Map<String, String?>): Map<String, String?> {
     if (base.isEmpty() && override.isEmpty()) return emptyMap()
     val merged = LinkedHashMap(base)
     for ((name, value) in override) {
@@ -590,7 +601,7 @@ data class Model(
      * applied only by OpenAI-compatible adapters. Not carried by the
      * generated model catalog.
      */
-    val samplingParams: Map<String, JsonElement>? = null,
+    val samplingParams: Map<String, JsonElement>? = null
 )
 
 /** Per-million-token reference rates. */
@@ -606,7 +617,7 @@ data class ModelCost(
     override val output: Double = 0.0,
     override val cacheRead: Double = 0.0,
     override val cacheWrite: Double = 0.0,
-    val tiers: List<ModelCostTier> = emptyList(),
+    val tiers: List<ModelCostTier> = emptyList()
 ) : ModelCostRates
 
 /**
@@ -618,7 +629,7 @@ data class ModelCostTier(
     override val output: Double,
     override val cacheRead: Double,
     override val cacheWrite: Double,
-    val inputTokensAbove: Int,
+    val inputTokensAbove: Int
 ) : ModelCostRates
 
 /** How the provider expects the max output token limit to be spelled. */
@@ -672,7 +683,7 @@ data class OpenAiCompletionsCompat(
      * background/batch work from stalling interactive sessions. Off by
      * default; not set on the generated catalog.
      */
-    val vllmPriority: Int? = null,
+    val vllmPriority: Int? = null
 )
 
 /** Only "kimi" exists upstream. */
@@ -689,7 +700,7 @@ data class OpenAiResponsesCompat(
     val supportsToolSearch: Boolean = false,
     val supportsExplicitPromptCacheMode: Boolean = false,
     /** Whether to send the `max_output_tokens` param. */
-    val supportsMaxOutputTokens: Boolean = true,
+    val supportsMaxOutputTokens: Boolean = true
 )
 
 data class AnthropicMessagesCompat(
@@ -718,7 +729,7 @@ data class AnthropicMessagesCompat(
      * callers must omit `fallbacks`; Anthropic rejects the field for models
      * with no permitted fallback targets.
      */
-    val allowedFallbackModels: List<AnthropicAllowedFallbackModel> = emptyList(),
+    val allowedFallbackModels: List<AnthropicAllowedFallbackModel> = emptyList()
 )
 
 fun anthropicCompatOf(model: Model): AnthropicMessagesCompat = model.anthropicCompat
@@ -731,7 +742,7 @@ fun anthropicCompatOf(model: Model): AnthropicMessagesCompat = model.anthropicCo
 data class AnthropicAllowedFallbackModel(
     val provider: String,
     val model: String,
-    val cost: ModelCost,
+    val cost: ModelCost
 )
 
 /**
@@ -762,10 +773,7 @@ sealed interface ChatTemplateKwargValue {
     data class Scalar(val value: JsonElement) : ChatTemplateKwargValue
 
     /** `$var` reference. [varName] is e.g. "thinking.enabled". */
-    data class Ref(
-        val varName: String,
-        val omitWhenOff: Boolean = false,
-    ) : ChatTemplateKwargValue
+    data class Ref(val varName: String, val omitWhenOff: Boolean = false) : ChatTemplateKwargValue
 
     companion object {
         fun of(value: String): ChatTemplateKwargValue = Scalar(JsonPrimitive(value))
@@ -792,21 +800,19 @@ interface ChatApi {
     fun streamSimple(
         model: Model,
         context: Context,
-        options: SimpleStreamOptions = SimpleStreamOptions(),
+        options: SimpleStreamOptions = SimpleStreamOptions()
     ): Flow<AssistantMessageEvent>
 }
 
-/**
+/*
  * The exceptions below are pathfinder-side encodings of upstream behavior
  * (pi throws plain errors inline in its adapters and exports no exception
  * types); they live next to the [ChatApi] contract they serve.
  */
 
 /** Thrown internally by streaming implementations; surfaced as an error event. */
-class ProviderStreamException(
-    message: String,
-    val stopReason: StopReason = StopReason.ERROR,
-) : Exception(message)
+class ProviderStreamException(message: String, val stopReason: StopReason = StopReason.ERROR) :
+    Exception(message)
 
 class ProviderAuthException(message: String) : Exception(message)
 

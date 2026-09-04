@@ -1,10 +1,5 @@
 package works.resolve.pathfinder.logging
 
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.test.runTest
-import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
-import works.resolve.pathfinder.telemetry.SpanStatus
-import works.resolve.pathfinder.telemetry.attr
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -12,6 +7,11 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.test.runTest
+import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
+import works.resolve.pathfinder.telemetry.SpanStatus
+import works.resolve.pathfinder.telemetry.attr
 
 class PathfinderDiagnosticsTest {
 
@@ -60,7 +60,9 @@ class PathfinderDiagnosticsTest {
 
         val (cancelledTelemetry, cancelledDiagnostics) = newFacade()
         assertFailsWith<CancellationException> {
-            cancelledDiagnostics.credentialDelete("zai") { throw CancellationException("cancelled") }
+            cancelledDiagnostics.credentialDelete("zai") {
+                throw CancellationException("cancelled")
+            }
         }
         assertEquals(SpanStatus.Ok, cancelledTelemetry.getSpans().single().status)
     }
@@ -69,7 +71,7 @@ class PathfinderDiagnosticsTest {
     fun `sessionSummary skips expected exceptions but propagates fatal errors`() = runTest {
         val (telemetry, diagnostics) = newFacade()
         assertNull(
-            diagnostics.sessionSummary("s") { throw IllegalStateException("corrupt log") },
+            diagnostics.sessionSummary("s") { throw IllegalStateException("corrupt log") }
         )
         val skipped = telemetry.getSpans().single()
         val status = assertIs<SpanStatus.Error>(skipped.status)

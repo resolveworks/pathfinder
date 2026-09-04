@@ -1,6 +1,9 @@
 package works.resolve.pathfinder.logging
 
 import android.util.Log
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import works.resolve.pathfinder.telemetry.AttributeValue
 import works.resolve.pathfinder.telemetry.NOOP_TELEMETRY_CONTEXT
 import works.resolve.pathfinder.telemetry.SpanAttributes
@@ -9,9 +12,6 @@ import works.resolve.pathfinder.telemetry.SpanStatus
 import works.resolve.pathfinder.telemetry.TelemetryContext
 import works.resolve.pathfinder.telemetry.TelemetrySpan
 import works.resolve.pathfinder.telemetry.automaticErrorStatus
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
 
 /**
  * The app's telemetry backend — an Android application adapter over the
@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicReference
 class LogcatTelemetryContext internal constructor(
     private val tag: String = DEFAULT_TAG,
     private val sink: LogSink = ANDROID_LOG_SINK,
-    private val nanoTime: () -> Long = System::nanoTime,
+    private val nanoTime: () -> Long = System::nanoTime
 ) : TelemetryContext {
 
     /**
@@ -52,13 +52,15 @@ class LogcatTelemetryContext internal constructor(
 
     private val nextId = AtomicInteger(0)
 
-    override suspend fun <T> startSpan(options: SpanOptions, callback: suspend (TelemetrySpan) -> T): T =
-        startSpan(parentId = null, options, callback)
+    override suspend fun <T> startSpan(
+        options: SpanOptions,
+        callback: suspend (TelemetrySpan) -> T
+    ): T = startSpan(parentId = null, options, callback)
 
     private suspend fun <T> startSpan(
         parentId: Int?,
         options: SpanOptions,
-        callback: suspend (TelemetrySpan) -> T,
+        callback: suspend (TelemetrySpan) -> T
     ): T {
         // One atomic admission: copy the payload before consuming an id, and
         // route the whole span through the no-op context if anything about it
@@ -94,7 +96,7 @@ class LogcatTelemetryContext internal constructor(
         val id: Int,
         val parentId: Int?,
         val name: String,
-        startAttributes: SpanAttributes,
+        startAttributes: SpanAttributes
     ) : TelemetrySpan {
         private val attributes = AtomicReference(startAttributes)
         private val explicitStatus = AtomicReference<SpanStatus?>(null)
@@ -102,7 +104,7 @@ class LogcatTelemetryContext internal constructor(
 
         override suspend fun <R> startSpan(
             childOptions: SpanOptions,
-            childCallback: suspend (TelemetrySpan) -> R,
+            childCallback: suspend (TelemetrySpan) -> R
         ): R = if (settled.get()) {
             // Post-settlement admission is inert: the child callback still
             // runs via the no-op context, but nothing is recorded.
@@ -130,9 +132,12 @@ class LogcatTelemetryContext internal constructor(
             while (true) {
                 val current = attributes.get()
                 try {
-                    val merged = LinkedHashMap<String, AttributeValue>(current.size + newAttributes.size)
+                    val merged =
+                        LinkedHashMap<String, AttributeValue>(current.size + newAttributes.size)
                     current.forEach { (key, value) -> merged[key] = value }
-                    newAttributes.forEach { (key, value) -> merged[key] = copyAttributeValue(value) }
+                    newAttributes.forEach { (key, value) ->
+                        merged[key] = copyAttributeValue(value)
+                    }
                     if (attributes.compareAndSet(current, merged)) return
                 } catch (_: Throwable) {
                     // Passive; the partial copy is discarded.
@@ -154,11 +159,21 @@ class LogcatTelemetryContext internal constructor(
         fun settle(failed: Boolean, error: Throwable?, startNanos: Long, endNanos: Long) {
             if (!settled.compareAndSet(false, true)) return
             try {
-                val status = explicitStatus.get() ?: if (failed) error?.let(::automaticErrorStatus) ?: SpanStatus.Error() else SpanStatus.Ok
+                val status =
+                    explicitStatus.get()
+                        ?: if (failed) {
+                            error?.let(
+                                ::automaticErrorStatus
+                            ) ?: SpanStatus.Error()
+                        } else {
+                            SpanStatus.Ok
+                        }
                 val isError = status is SpanStatus.Error
                 val stack = if (isError && error != null) renderStack(error) else null
                 val durationMs = (endNanos - startNanos) / 1_000_000
-                emitPassively(isError) { renderEnd(id, name, status, attributes.get(), durationMs, stack) }
+                emitPassively(isError) {
+                    renderEnd(id, name, status, attributes.get(), durationMs, stack)
+                }
             } catch (_: Throwable) {
                 // Passive; the business result/exception is already on its way.
             }
@@ -186,7 +201,7 @@ internal fun renderStart(
     id: Int,
     parentId: Int?,
     name: String,
-    attributes: SpanAttributes,
+    attributes: SpanAttributes
 ): String = buildString {
     append("> ").append(name.asLogValue()).append(" id=").append(id)
     append(" parent=").append(parentId?.toString() ?: "-")
@@ -198,7 +213,7 @@ internal fun renderEvent(
     id: Int,
     name: String,
     eventName: String,
-    attributes: SpanAttributes,
+    attributes: SpanAttributes
 ): String = buildString {
     append("+ ").append(name.asLogValue()).append(" id=").append(id)
     append(" event=").append(eventName.asLogValue())
@@ -216,11 +231,12 @@ internal fun renderEnd(
     status: SpanStatus,
     attributes: SpanAttributes,
     durationMs: Long,
-    stack: String? = null,
+    stack: String? = null
 ): String = buildString {
     append("< ").append(name.asLogValue()).append(" id=").append(id)
     when (status) {
         is SpanStatus.Ok -> append(" status=ok")
+
         is SpanStatus.Error -> {
             append(" status=error")
             status.error?.let { error -> append(" error_name=").append(error.name.asLogValue()) }

@@ -34,18 +34,18 @@ class EncryptedCredentialStore(
     private val dir: File,
     private val encrypt: (ByteArray) -> ByteArray,
     private val decrypt: (ByteArray) -> ByteArray,
-    private val diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP,
+    private val diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP
 ) : CredentialStore {
 
     constructor(
         context: Context,
         cipher: KeystoreAeadCipher,
-        diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP,
+        diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP
     ) : this(
         dir = File(context.filesDir, DIRECTORY),
         encrypt = cipher::encrypt,
         decrypt = cipher::decrypt,
-        diagnostics = diagnostics,
+        diagnostics = diagnostics
     )
 
     private val locks = ConcurrentHashMap<String, Mutex>()
@@ -69,16 +69,17 @@ class EncryptedCredentialStore(
     private suspend fun writeRaw(providerId: String, encoded: String) =
         diagnostics.credentialWrite(providerId) { writeRawSpanned(providerId, encoded) }
 
-    private suspend fun writeRawSpanned(providerId: String, encoded: String) = withContext(Dispatchers.IO) {
-        val file = fileFor(providerId)
-        file.parentFile?.mkdirs()
-        val tmp = File(file.parentFile, "${file.name}.tmp")
-        tmp.writeBytes(encrypt(encoded.toByteArray(Charsets.UTF_8)))
-        if (!tmp.renameTo(file)) {
-            file.delete()
-            check(tmp.renameTo(file)) { "Could not persist credential" }
+    private suspend fun writeRawSpanned(providerId: String, encoded: String) =
+        withContext(Dispatchers.IO) {
+            val file = fileFor(providerId)
+            file.parentFile?.mkdirs()
+            val tmp = File(file.parentFile, "${file.name}.tmp")
+            tmp.writeBytes(encrypt(encoded.toByteArray(Charsets.UTF_8)))
+            if (!tmp.renameTo(file)) {
+                file.delete()
+                check(tmp.renameTo(file)) { "Could not persist credential" }
+            }
         }
-    }
 
     private suspend fun decodeRaw(providerId: String): Credential? =
         readRaw(providerId)?.let { raw ->
@@ -86,7 +87,9 @@ class EncryptedCredentialStore(
                 try {
                     CredentialCodec.decode(raw)
                 } catch (error: CredentialFormatException) {
-                    throw CredentialFormatException("Stored credential for $providerId is malformed: ${error.message}")
+                    throw CredentialFormatException(
+                        "Stored credential for $providerId is malformed: ${error.message}"
+                    )
                 }
             }
         }
@@ -115,7 +118,7 @@ class EncryptedCredentialStore(
 
     override suspend fun modify(
         providerId: String,
-        update: suspend (current: Credential?) -> Credential?,
+        update: suspend (current: Credential?) -> Credential?
     ): Credential? = lockFor(providerId).withLock {
         val current = decodeRaw(providerId)
         val next = update(current)

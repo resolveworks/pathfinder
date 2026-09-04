@@ -1,20 +1,20 @@
 package works.resolve.pathfinder.ai.api
 
-import works.resolve.pathfinder.ai.testing.FakeClock
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelCost
-import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.Usage
+import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
-import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.test.runTest
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertIs
 
 class AnthropicCacheWrite1hCostTest {
 
@@ -26,7 +26,7 @@ class AnthropicCacheWrite1hCostTest {
         provider = "anthropic",
         baseUrl = "https://api.anthropic.com",
         input = listOf(InputModality.TEXT),
-        cost = ModelCost(input = 5.0, output = 25.0, cacheRead = 0.5, cacheWrite = 6.25),
+        cost = ModelCost(input = 5.0, output = 25.0, cacheRead = 0.5, cacheWrite = 6.25)
     )
 
     private val context = Context(messages = listOf(UserMessage.ofText("hi")))
@@ -45,7 +45,7 @@ class AnthropicCacheWrite1hCostTest {
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
             "message_delta" to
                 """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":100,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":1000000}}""",
-            "message_stop" to """{"type":"message_stop"}""",
+            "message_stop" to """{"type":"message_stop"}"""
         )
     }
 
@@ -56,9 +56,9 @@ class AnthropicCacheWrite1hCostTest {
             AnthropicMessagesApi(
                 transport,
 
-ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
-clock = FakeClock(1_770_000_000_000L),
-            ).stream(opus, context, AnthropicMessagesOptions(apiKey = "test-key")).toList().last(),
+                ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
+                clock = FakeClock(1_770_000_000_000L)
+            ).stream(opus, context, AnthropicMessagesOptions(apiKey = "test-key")).toList().last()
         )
         return done.message.usage
     }
@@ -67,8 +67,8 @@ clock = FakeClock(1_770_000_000_000L),
     fun `prices the 1h portion at 2x input and the rest at the 5m rate`() = runTest {
         val usage = streamResult(
             eventsWithCacheCreation(
-                """{"ephemeral_5m_input_tokens":600000,"ephemeral_1h_input_tokens":400000}""",
-            ),
+                """{"ephemeral_5m_input_tokens":600000,"ephemeral_1h_input_tokens":400000}"""
+            )
         )
         assertEquals(1_000_000, usage.cacheWrite)
         assertEquals(400_000, usage.cacheWrite1h)

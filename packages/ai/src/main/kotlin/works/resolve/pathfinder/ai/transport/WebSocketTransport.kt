@@ -37,7 +37,7 @@ interface WebSocketStreamingTransport {
     suspend fun connect(
         url: String,
         headers: Map<String, String>,
-        connectTimeoutMs: Long = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS,
+        connectTimeoutMs: Long = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS
     ): WebSocketConnection
 
     companion object {
@@ -89,7 +89,7 @@ sealed interface WebSocketEvent {
         val code: Int?,
         val reason: String?,
         val wasClean: Boolean?,
-        val message: String,
+        val message: String
     ) : WebSocketEvent {
         override fun toString(): String =
             "Closed(code=$code, reason=$reason, wasClean=$wasClean, message=$message)"
@@ -112,5 +112,5 @@ class WebSocketCloseException(
     message: String,
     val code: Int?,
     val reason: String?,
-    val wasClean: Boolean?,
+    val wasClean: Boolean?
 ) : IOException(message)

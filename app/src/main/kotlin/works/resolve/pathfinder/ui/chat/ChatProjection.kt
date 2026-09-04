@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.agent.AgentState
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Content
@@ -14,7 +15,6 @@ import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import kotlinx.serialization.json.JsonObject
 
 /**
  * UI projection of the committed transcript: the active conversation path is
@@ -24,7 +24,10 @@ import kotlinx.serialization.json.JsonObject
  * keeps them in history, exactly like pi's UI. Keys are stable per path
  * index+role+timestamp so same-millisecond messages can never collide.
  */
-internal fun projectCommitted(liveMessages: List<Message>, conversation: Conversation): List<ChatMessage> {
+internal fun projectCommitted(
+    liveMessages: List<Message>,
+    conversation: Conversation
+): List<ChatMessage> {
     val live = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Message, Boolean>())
     live.addAll(liveMessages)
     // Committed calls by id: a tool-result row titles itself from its
@@ -42,23 +45,32 @@ internal fun projectCommitted(liveMessages: List<Message>, conversation: Convers
             // pi shows the compaction summary in a collapsible; the marker
             // stays minimal — the summary lives in LLM context only.
             entry is CompactionEntry -> projected.add(
-                ChatMessage(id = "compacted-${entry.id}", role = ChatRole.Assistant, blocks = emptyList(), isCompactionMarker = true),
+                ChatMessage(
+                    id = "compacted-${entry.id}",
+                    role = ChatRole.Assistant,
+                    blocks = emptyList(),
+                    isCompactionMarker = true
+                )
             )
+
             entry !is MessageEntry || !live.contains(entry.message) -> Unit
+
             else -> {
                 val message = entry.message
                 val chat = when (message) {
                     is UserMessage -> ChatMessage(
                         id = "msg-$index-${message.timestamp}",
                         role = ChatRole.User,
-                        blocks = message.content.toChatBlocks(),
+                        blocks = message.content.toChatBlocks()
                     )
+
                     is AssistantMessage -> ChatMessage(
                         id = "msg-$index-${message.timestamp}",
                         role = ChatRole.Assistant,
                         blocks = message.content.toChatBlocks(),
-                        error = message.errorMessage,
+                        error = message.errorMessage
                     )
+
                     // Distinct id namespace so a tool row can never collide
                     // with a message row.
                     is ToolResultMessage -> ChatMessage(
@@ -71,8 +83,8 @@ internal fun projectCommitted(liveMessages: List<Message>, conversation: Convers
                             isError = message.isError,
                             output = toolResultOutput(message),
                             input = liveCalls[message.toolCallId]
-                                ?.let { toolCallInput(it.name, it.arguments) },
-                        ),
+                                ?.let { toolCallInput(it.name, it.arguments) }
+                        )
                     )
                 }
                 projected.add(chat)
@@ -86,13 +98,12 @@ internal fun projectCommitted(liveMessages: List<Message>, conversation: Convers
  * Pi's streaming message is role-generic (user/tool-result starts transiently
  * occupy it); this contract is assistant-only, so non-assistant partials
  * project to nothing at the call site. */
-internal fun projectStreaming(message: AssistantMessage): ChatMessage =
-    ChatMessage(
-        id = "streaming-${message.timestamp}",
-        role = ChatRole.Assistant,
-        blocks = message.content.toChatBlocks(),
-        error = message.errorMessage,
-    )
+internal fun projectStreaming(message: AssistantMessage): ChatMessage = ChatMessage(
+    id = "streaming-${message.timestamp}",
+    role = ChatRole.Assistant,
+    blocks = message.content.toChatBlocks(),
+    error = message.errorMessage
+)
 
 /** Ordered blocks: consecutive thinking parts merge into one, blank parts drop. */
 internal fun List<Content>.toChatBlocks(): List<ChatBlock> {
@@ -108,15 +119,22 @@ internal fun List<Content>.toChatBlocks(): List<ChatBlock> {
     }
     for (part in this) {
         when (part) {
-            is ThinkingContent -> (thinkingRun ?: mutableListOf<String>().also { thinkingRun = it }).add(part.thinking)
+            is ThinkingContent -> (
+                thinkingRun ?: mutableListOf<String>().also {
+                    thinkingRun = it
+                }
+                ).add(part.thinking)
+
             is TextContent -> {
                 flushThinking()
                 part.text.takeIf { it.isNotBlank() }?.let { blocks.add(ChatBlock.Text(it)) }
             }
+
             is ToolCall -> {
                 flushThinking()
                 blocks.add(ChatBlock.ToolCall(part.id, part.name))
             }
+
             else -> flushThinking()
         }
     }
@@ -144,7 +162,9 @@ internal fun toolResultOutput(message: ToolResultMessage): String? {
  */
 internal fun toolCallInput(toolName: String, arguments: String): String? {
     val argument = ToolCallTitles.specFor(toolName)?.argument ?: return null
-    val parsed = runCatching { lenientJson.parseToJsonElement(arguments) }.getOrNull() as? JsonObject ?: return null
+    val parsed =
+        runCatching { lenientJson.parseToJsonElement(arguments) }.getOrNull() as? JsonObject
+            ?: return null
     return parsed.string(argument)?.takeIf { it.isNotEmpty() }
 }
 
@@ -162,7 +182,13 @@ internal fun pendingToolExecutions(state: AgentState): List<PendingToolExecution
         val content = (message as? AssistantMessage)?.content ?: continue
         for (part in content) {
             if (part is ToolCall && part.id in state.pendingToolCalls && resolved.add(part.id)) {
-                rows.add(PendingToolExecution(part.id, part.name, toolCallInput(part.name, part.arguments)))
+                rows.add(
+                    PendingToolExecution(
+                        part.id,
+                        part.name,
+                        toolCallInput(part.name, part.arguments)
+                    )
+                )
             }
         }
     }

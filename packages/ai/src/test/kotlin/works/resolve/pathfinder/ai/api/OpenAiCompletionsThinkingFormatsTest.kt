@@ -1,5 +1,12 @@
 package works.resolve.pathfinder.ai.api
 
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import works.resolve.pathfinder.ai.ChatTemplateKwargValue
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
@@ -8,13 +15,6 @@ import works.resolve.pathfinder.ai.OpenAiCompletionsCompat
 import works.resolve.pathfinder.ai.ThinkingFormat
 import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.UserMessage
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 class OpenAiCompletionsThinkingFormatsTest {
 
@@ -22,7 +22,7 @@ class OpenAiCompletionsThinkingFormatsTest {
         format: ThinkingFormat,
         map: ThinkingLevelMap? = null,
         supportsReasoningEffort: Boolean = true,
-        chatTemplateArgs: Map<String, ChatTemplateKwargValue> = emptyMap(),
+        chatTemplateArgs: Map<String, ChatTemplateKwargValue> = emptyMap()
     ): Model = Model(
         id = "test-model",
         name = "Test",
@@ -35,18 +35,16 @@ class OpenAiCompletionsThinkingFormatsTest {
             supportsStore = false,
             supportsReasoningEffort = supportsReasoningEffort,
             thinkingFormat = format,
-            chatTemplateArgs = chatTemplateArgs,
-        ),
+            chatTemplateArgs = chatTemplateArgs
+        )
     )
 
-    private fun body(
-        model: Model,
-        effort: ModelThinkingLevel? = null,
-    ): JsonObject = OpenAiCompletionsPayload.buildRequestBody(
-        model,
-        Context(messages = listOf(UserMessage.ofText("hi"))),
-        OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = effort),
-    )
+    private fun body(model: Model, effort: ModelThinkingLevel? = null): JsonObject =
+        OpenAiCompletionsPayload.buildRequestBody(
+            model,
+            Context(messages = listOf(UserMessage.ofText("hi"))),
+            OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = effort)
+        )
 
     @Test
     fun `qwen enables thinking and maps effort`() {
@@ -64,7 +62,11 @@ class OpenAiCompletionsThinkingFormatsTest {
 
     @Test
     fun `qwen without effort support sends only the toggle`() {
-        val b = body(model(ThinkingFormat.QWEN, supportsReasoningEffort = false), ModelThinkingLevel.HIGH)
+        val b =
+            body(
+                model(ThinkingFormat.QWEN, supportsReasoningEffort = false),
+                ModelThinkingLevel.HIGH
+            )
         assertEquals(true, b["enable_thinking"]!!.jsonPrimitive.booleanOrNull)
         assertFalse(b.containsKey("reasoning_effort"))
     }
@@ -72,8 +74,11 @@ class OpenAiCompletionsThinkingFormatsTest {
     @Test
     fun `deepseek enabled thinking`() {
         val b = body(
-            model(ThinkingFormat.DEEPSEEK, map = ThinkingLevelMap.of(ModelThinkingLevel.HIGH to "high")),
-            ModelThinkingLevel.HIGH,
+            model(
+                ThinkingFormat.DEEPSEEK,
+                map = ThinkingLevelMap.of(ModelThinkingLevel.HIGH to "high")
+            ),
+            ModelThinkingLevel.HIGH
         )
         assertEquals("enabled", b["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("high", b["reasoning_effort"]!!.jsonPrimitive.content)
@@ -91,8 +96,8 @@ class OpenAiCompletionsThinkingFormatsTest {
         val b = body(
             model(
                 ThinkingFormat.DEEPSEEK,
-                map = ThinkingLevelMap.of(ModelThinkingLevel.OFF to "none"),
-            ),
+                map = ThinkingLevelMap.of(ModelThinkingLevel.OFF to "none")
+            )
         )
         assertEquals("disabled", b["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
     }
@@ -102,8 +107,8 @@ class OpenAiCompletionsThinkingFormatsTest {
         val b = body(
             model(
                 ThinkingFormat.DEEPSEEK,
-                map = ThinkingLevelMap.of(ModelThinkingLevel.OFF to null),
-            ),
+                map = ThinkingLevelMap.of(ModelThinkingLevel.OFF to null)
+            )
         )
         assertFalse(b.containsKey("thinking"))
         assertFalse(b.containsKey("reasoning_effort"))
@@ -111,7 +116,11 @@ class OpenAiCompletionsThinkingFormatsTest {
 
     @Test
     fun `deepseek without effort support omits reasoning_effort`() {
-        val b = body(model(ThinkingFormat.DEEPSEEK, supportsReasoningEffort = false), ModelThinkingLevel.HIGH)
+        val b =
+            body(
+                model(ThinkingFormat.DEEPSEEK, supportsReasoningEffort = false),
+                ModelThinkingLevel.HIGH
+            )
         assertEquals("enabled", b["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertFalse(b.containsKey("reasoning_effort"))
     }
@@ -121,9 +130,9 @@ class OpenAiCompletionsThinkingFormatsTest {
         val b = body(
             model(
                 ThinkingFormat.OPENROUTER,
-                map = ThinkingLevelMap.of(ModelThinkingLevel.HIGH to "high"),
+                map = ThinkingLevelMap.of(ModelThinkingLevel.HIGH to "high")
             ),
-            ModelThinkingLevel.HIGH,
+            ModelThinkingLevel.HIGH
         )
         assertEquals("high", b["reasoning"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
     }
@@ -139,8 +148,8 @@ class OpenAiCompletionsThinkingFormatsTest {
         val b = body(
             model(
                 ThinkingFormat.OPENROUTER,
-                map = ThinkingLevelMap.of(ModelThinkingLevel.OFF to "off"),
-            ),
+                map = ThinkingLevelMap.of(ModelThinkingLevel.OFF to "off")
+            )
         )
         assertEquals("off", b["reasoning"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
     }
@@ -150,8 +159,8 @@ class OpenAiCompletionsThinkingFormatsTest {
         val b = body(
             model(
                 ThinkingFormat.OPENROUTER,
-                map = ThinkingLevelMap.of(ModelThinkingLevel.OFF to null),
-            ),
+                map = ThinkingLevelMap.of(ModelThinkingLevel.OFF to null)
+            )
         )
         assertFalse(b.containsKey("reasoning"))
         assertFalse(b.containsKey("reasoning_effort"))
@@ -162,9 +171,9 @@ class OpenAiCompletionsThinkingFormatsTest {
         val b = body(
             model(
                 ThinkingFormat.TOGETHER,
-                map = ThinkingLevelMap.of(ModelThinkingLevel.HIGH to "high"),
+                map = ThinkingLevelMap.of(ModelThinkingLevel.HIGH to "high")
             ),
-            ModelThinkingLevel.HIGH,
+            ModelThinkingLevel.HIGH
         )
         assertEquals(true, b["reasoning"]!!.jsonObject["enabled"]!!.jsonPrimitive.booleanOrNull)
         assertEquals("high", b["reasoning_effort"]!!.jsonPrimitive.content)
@@ -179,7 +188,11 @@ class OpenAiCompletionsThinkingFormatsTest {
 
     @Test
     fun `together without effort support omits reasoning_effort`() {
-        val b = body(model(ThinkingFormat.TOGETHER, supportsReasoningEffort = false), ModelThinkingLevel.HIGH)
+        val b =
+            body(
+                model(ThinkingFormat.TOGETHER, supportsReasoningEffort = false),
+                ModelThinkingLevel.HIGH
+            )
         assertEquals(true, b["reasoning"]!!.jsonObject["enabled"]!!.jsonPrimitive.booleanOrNull)
         assertFalse(b.containsKey("reasoning_effort"))
     }
@@ -189,9 +202,9 @@ class OpenAiCompletionsThinkingFormatsTest {
         val b = body(
             model(
                 ThinkingFormat.ANT_LING,
-                map = ThinkingLevelMap.of(ModelThinkingLevel.HIGH to "high"),
+                map = ThinkingLevelMap.of(ModelThinkingLevel.HIGH to "high")
             ),
-            ModelThinkingLevel.HIGH,
+            ModelThinkingLevel.HIGH
         )
         assertEquals("high", b["reasoning"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
     }
@@ -209,8 +222,8 @@ class OpenAiCompletionsThinkingFormatsTest {
         val b = body(
             model(
                 ThinkingFormat.ANT_LING,
-                map = ThinkingLevelMap.of(ModelThinkingLevel.HIGH to "high"),
-            ),
+                map = ThinkingLevelMap.of(ModelThinkingLevel.HIGH to "high")
+            )
         )
         assertFalse(b.containsKey("reasoning"))
     }
@@ -219,11 +232,11 @@ class OpenAiCompletionsThinkingFormatsTest {
         ThinkingFormat.BASETEN,
         map = ThinkingLevelMap.of(
             ModelThinkingLevel.OFF to "none",
-            ModelThinkingLevel.HIGH to "high",
+            ModelThinkingLevel.HIGH to "high"
         ),
         chatTemplateArgs = mapOf(
-            "enable_thinking" to ChatTemplateKwargValue.Ref("thinking.enabled"),
-        ),
+            "enable_thinking" to ChatTemplateKwargValue.Ref("thinking.enabled")
+        )
     )
 
     @Test
@@ -247,15 +260,18 @@ class OpenAiCompletionsThinkingFormatsTest {
         val m = model(
             ThinkingFormat.BASETEN,
             chatTemplateArgs = mapOf(
-                "enable_thinking" to ChatTemplateKwargValue.Ref("thinking.enabled"),
-            ),
+                "enable_thinking" to ChatTemplateKwargValue.Ref("thinking.enabled")
+            )
         )
         val b = body(m, ModelThinkingLevel.HIGH)
         assertEquals("high", b["reasoning_effort"]!!.jsonPrimitive.content)
         // Off with no map: pi leaves reasoning_effort unset (requestedEffort is undefined).
         val bOff = body(m)
         assertFalse(bOff.containsKey("reasoning_effort"))
-        assertEquals(false, bOff["chat_template_args"]!!.jsonObject["enable_thinking"]!!.jsonPrimitive.booleanOrNull)
+        assertEquals(
+            false,
+            bOff["chat_template_args"]!!.jsonObject["enable_thinking"]!!.jsonPrimitive.booleanOrNull
+        )
     }
 
     @Test
@@ -264,11 +280,14 @@ class OpenAiCompletionsThinkingFormatsTest {
             ThinkingFormat.BASETEN,
             chatTemplateArgs = mapOf(
                 "effort" to ChatTemplateKwargValue.Ref("thinking.effort", omitWhenOff = true),
-                "enable_thinking" to ChatTemplateKwargValue.Ref("thinking.enabled"),
-            ),
+                "enable_thinking" to ChatTemplateKwargValue.Ref("thinking.enabled")
+            )
         )
         val bOn = body(m, ModelThinkingLevel.HIGH)
-        assertEquals("high", bOn["chat_template_args"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
+        assertEquals(
+            "high",
+            bOn["chat_template_args"]!!.jsonObject["effort"]!!.jsonPrimitive.content
+        )
         val bOff = body(m)
         assertFalse(bOff["chat_template_args"]!!.jsonObject.containsKey("effort"))
     }
@@ -279,11 +298,14 @@ class OpenAiCompletionsThinkingFormatsTest {
             ThinkingFormat.BASETEN,
             chatTemplateArgs = mapOf(
                 "temperature" to ChatTemplateKwargValue.of(0.5),
-                "label" to ChatTemplateKwargValue.of("x"),
-            ),
+                "label" to ChatTemplateKwargValue.of("x")
+            )
         )
         val b = body(m, ModelThinkingLevel.HIGH)
-        assertEquals(0.5, b["chat_template_args"]!!.jsonObject["temperature"]!!.jsonPrimitive.content.toDouble())
+        assertEquals(
+            0.5,
+            b["chat_template_args"]!!.jsonObject["temperature"]!!.jsonPrimitive.content.toDouble()
+        )
         assertEquals("x", b["chat_template_args"]!!.jsonObject["label"]!!.jsonPrimitive.content)
 
         val empty = body(model(ThinkingFormat.BASETEN), ModelThinkingLevel.HIGH)
@@ -303,7 +325,10 @@ class OpenAiCompletionsThinkingFormatsTest {
         for (format in listOf(ThinkingFormat.OPENROUTER, ThinkingFormat.ANT_LING)) {
             for (effort in listOf(null, ModelThinkingLevel.HIGH)) {
                 val b = body(model(format), effort)
-                assertFalse(b.containsKey("reasoning_effort"), "$format must not send reasoning_effort")
+                assertFalse(
+                    b.containsKey("reasoning_effort"),
+                    "$format must not send reasoning_effort"
+                )
             }
         }
     }
@@ -314,7 +339,11 @@ class OpenAiCompletionsThinkingFormatsTest {
     // OpenAiCompletionsPayloadTest).
     @Test
     fun `openai format without effort support sends no thinking params`() {
-        val b = body(model(ThinkingFormat.OPENAI, supportsReasoningEffort = false), ModelThinkingLevel.HIGH)
+        val b =
+            body(
+                model(ThinkingFormat.OPENAI, supportsReasoningEffort = false),
+                ModelThinkingLevel.HIGH
+            )
         assertFalse(b.containsKey("reasoning_effort"))
         assertFalse(b.containsKey("thinking"))
     }

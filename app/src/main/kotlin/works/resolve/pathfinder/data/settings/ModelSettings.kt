@@ -1,10 +1,9 @@
 package works.resolve.pathfinder.data.settings
 
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.codingagent.core.RetrySettings
-
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
 import works.resolve.pathfinder.codingagent.core.compaction.DEFAULT_COMPACTION_SETTINGS
-import works.resolve.pathfinder.ai.ModelThinkingLevel
 
 /** Model configuration; the API key is intentionally excluded — it lives in the credential store. */
 data class ModelSettings(
@@ -26,5 +25,5 @@ data class ModelSettings(
      * downstream, as in pi. Order is significant (model cycling).
      */
     val enabledModels: List<String>? = null,
-    val compaction: CompactionSettings = DEFAULT_COMPACTION_SETTINGS,
+    val compaction: CompactionSettings = DEFAULT_COMPACTION_SETTINGS
 )

@@ -1,20 +1,6 @@
 package works.resolve.pathfinder.agent
 
-import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.Message
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.ModelThinkingLevel
-import works.resolve.pathfinder.ai.SimpleStreamOptions
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.Tool
-import works.resolve.pathfinder.ai.ToolCall
-import works.resolve.pathfinder.ai.ToolResultMessage
-import works.resolve.pathfinder.ai.UserMessage
 import java.util.concurrent.CopyOnWriteArrayList
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -30,12 +16,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.Message
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.SimpleStreamOptions
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.Tool
+import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.UserMessage
 
 class AgentTest {
 
@@ -44,13 +44,13 @@ class AgentTest {
         name = "GLM",
         api = "openai-completions",
         provider = "zai",
-        baseUrl = "https://example.invalid",
+        baseUrl = "https://example.invalid"
     )
 
     private fun assistant(
         text: String = "hello",
         stopReason: StopReason = StopReason.STOP,
-        errorMessage: String? = null,
+        errorMessage: String? = null
     ) = AssistantMessage(
         content = listOf(TextContent(text)),
         api = model.api,
@@ -58,13 +58,13 @@ class AgentTest {
         model = model.id,
         stopReason = stopReason,
         errorMessage = errorMessage,
-        timestamp = 42L,
+        timestamp = 42L
     )
 
     private fun okStream(): Flow<AssistantMessageEvent> = flowOf(
         AssistantMessageEvent.Start(assistant(text = "")),
         AssistantMessageEvent.TextDelta(0, "he", assistant(text = "he")),
-        AssistantMessageEvent.Done(StopReason.STOP, assistant(text = "hello")),
+        AssistantMessageEvent.Done(StopReason.STOP, assistant(text = "hello"))
     )
 
     /** Stream that starts but never terminates; only cancellation ends it. */
@@ -76,13 +76,13 @@ class AgentTest {
     private fun agent(
         streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
         tools: List<AgentTool> = emptyList(),
-        streamFn: StreamFn,
+        streamFn: StreamFn
     ) = Agent(
         model = model,
         systemPrompt = "be brief",
         streamOptions = streamOptions,
         tools = tools,
-        streamFn = streamFn,
+        streamFn = streamFn
     )
 
     @Test
@@ -105,7 +105,10 @@ class AgentTest {
 
     @Test
     fun `constructor system prompt reaches state and setters update it`() {
-        val agent = Agent(model, "You are a helpful assistant.", SimpleStreamOptions()) { _, _, _ -> okStream() }
+        val agent =
+            Agent(model, "You are a helpful assistant.", SimpleStreamOptions()) { _, _, _ ->
+                okStream()
+            }
 
         assertEquals("You are a helpful assistant.", agent.state.value.systemPrompt)
         assertEquals(model, agent.state.value.model)
@@ -139,14 +142,17 @@ class AgentTest {
                 "AgentStart", "TurnStart",
                 "MessageStart", "MessageEnd", // user
                 "MessageStart", "MessageUpdate", "MessageEnd", // assistant
-                "TurnEnd", "AgentEnd",
+                "TurnEnd", "AgentEnd"
             ),
-            types,
+            types
         )
 
         val final = agent.state.value
         assertEquals(2, final.messages.size)
-        assertEquals("hi", ((final.messages[0] as UserMessage).content.single() as TextContent).text)
+        assertEquals(
+            "hi",
+            ((final.messages[0] as UserMessage).content.single() as TextContent).text
+        )
         val reply = final.messages[1] as AssistantMessage
         assertEquals("hello", (reply.content.single() as TextContent).text)
         assertEquals(StopReason.STOP, reply.stopReason)
@@ -186,29 +192,30 @@ class AgentTest {
     }
 
     @Test
-    fun `events have no replay, mutators emit nothing, and cancelled collectors stop receiving`() = runTest {
-        val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
+    fun `events have no replay, mutators emit nothing, and cancelled collectors stop receiving`() =
+        runTest {
+            val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
 
-        val received = CopyOnWriteArrayList<AgentEvent>()
-        val collector = launch { agent.events.collect { received.add(it) } }
-        yield() // subscribe before asserting
-        assertTrue("no initial event on subscribe", received.isEmpty())
+            val received = CopyOnWriteArrayList<AgentEvent>()
+            val collector = launch { agent.events.collect { received.add(it) } }
+            yield() // subscribe before asserting
+            assertTrue("no initial event on subscribe", received.isEmpty())
 
-        // State mutators do not emit events.
-        agent.setSystemPrompt("mutated")
-        agent.setTools(emptyList())
-        assertTrue(received.isEmpty())
+            // State mutators do not emit events.
+            agent.setSystemPrompt("mutated")
+            agent.setTools(emptyList())
+            assertTrue(received.isEmpty())
 
-        agent.prompt(listOf(UserMessage.ofText("hi")))
-        assertTrue(received.isNotEmpty())
-        val countAfterFirstRun = received.size
+            agent.prompt(listOf(UserMessage.ofText("hi")))
+            assertTrue(received.isNotEmpty())
+            val countAfterFirstRun = received.size
 
-        collector.cancelAndJoin()
-        agent.prompt(listOf(UserMessage.ofText("again")))
-        assertEquals(countAfterFirstRun, received.size)
-        // Unsubscribed observers do not affect reduction.
-        assertEquals(4, agent.state.value.messages.size)
-    }
+            collector.cancelAndJoin()
+            agent.prompt(listOf(UserMessage.ofText("again")))
+            assertEquals(countAfterFirstRun, received.size)
+            // Unsubscribed observers do not affect reduction.
+            assertEquals(4, agent.state.value.messages.size)
+        }
 
     @Test
     fun `replace and reset transcript copy caller lists while idle`() = runTest {
@@ -247,7 +254,7 @@ class AgentTest {
         assertEquals(2, agent.state.value.messages.size)
         assertEquals(
             StopReason.ABORTED,
-            (agent.state.value.messages[1] as AssistantMessage).stopReason,
+            (agent.state.value.messages[1] as AssistantMessage).stopReason
         )
     }
 
@@ -300,10 +307,12 @@ class AgentTest {
     @Test
     fun `continueRun streams a follow-up assistant from the committed transcript`() = runTest {
         val contexts = CopyOnWriteArrayList<List<Message>>()
-        val agent = agent(streamFn = StreamFn { _, context, _ ->
-            contexts.add(context.messages)
-            okStream()
-        })
+        val agent = agent(
+            streamFn = StreamFn { _, context, _ ->
+                contexts.add(context.messages)
+                okStream()
+            }
+        )
         // Seeded like pi's continue(): the committed tail is a user message.
         agent.replaceTranscript(listOf(UserMessage.ofText("hi")))
 
@@ -327,10 +336,12 @@ class AgentTest {
     @Test
     fun `continueRun on an empty transcript is rejected`() = runTest {
         var streams = 0
-        val agent = agent(streamFn = StreamFn { _, _, _ ->
-            streams++
-            okStream()
-        })
+        val agent = agent(
+            streamFn = StreamFn { _, _, _ ->
+                streams++
+                okStream()
+            }
+        )
 
         try {
             agent.continueRun()
@@ -346,10 +357,12 @@ class AgentTest {
     @Test
     fun `continueRun from an assistant tail without queued messages is rejected`() = runTest {
         var streams = 0
-        val agent = agent(streamFn = StreamFn { _, _, _ ->
-            streams++
-            okStream()
-        })
+        val agent = agent(
+            streamFn = StreamFn { _, _, _ ->
+                streams++
+                okStream()
+            }
+        )
         // Upstream drains steer()/followUp() queues from an assistant tail;
         // those queues are unported, so the tail is never continuable.
         agent.replaceTranscript(listOf(UserMessage.ofText("hi"), assistant()))
@@ -368,16 +381,18 @@ class AgentTest {
     @Test
     fun `continueRun from a tool-result tail streams a follow-up assistant`() = runTest {
         val contexts = CopyOnWriteArrayList<List<Message>>()
-        val agent = agent(streamFn = StreamFn { _, context, _ ->
-            contexts.add(context.messages)
-            okStream()
-        })
+        val agent = agent(
+            streamFn = StreamFn { _, context, _ ->
+                contexts.add(context.messages)
+                okStream()
+            }
+        )
         agent.replaceTranscript(
             listOf(
                 UserMessage.ofText("weather?"),
                 assistant(text = "", stopReason = StopReason.TOOL_USE),
-                toolResult("call-1"),
-            ),
+                toolResult("call-1")
+            )
         )
 
         agent.continueRun()
@@ -453,7 +468,7 @@ class AgentTest {
             streamFn = StreamFn { _, _, _ ->
                 throw RuntimeException("boom with key sk-supersecret")
             },
-            streamOptions = SimpleStreamOptions(apiKey = "sk-supersecret"),
+            streamOptions = SimpleStreamOptions(apiKey = "sk-supersecret")
         )
 
         val failureTypes = mutableListOf<String>()
@@ -466,12 +481,16 @@ class AgentTest {
 
         assertEquals(
             listOf(
-                "AgentStart", "TurnStart",
-                "MessageStart", "MessageEnd",
-                "MessageStart", "MessageEnd",
-                "TurnEnd", "AgentEnd",
+                "AgentStart",
+                "TurnStart",
+                "MessageStart",
+                "MessageEnd",
+                "MessageStart",
+                "MessageEnd",
+                "TurnEnd",
+                "AgentEnd"
             ),
-            failureTypes,
+            failureTypes
         )
 
         val final = agent.state.value
@@ -487,11 +506,20 @@ class AgentTest {
     @Test
     fun `provider error errorMessage is cleared by the next successful run`() = runTest {
         var call = 0
-        val error = assistant(text = "", stopReason = StopReason.ERROR, errorMessage = "500 upstream")
-        val agent = agent(streamFn = StreamFn { _, _, _ ->
-            call++
-            if (call == 1) flowOf(AssistantMessageEvent.Error(StopReason.ERROR, error)) else okStream()
-        })
+        val error =
+            assistant(text = "", stopReason = StopReason.ERROR, errorMessage = "500 upstream")
+        val agent = agent(
+            streamFn = StreamFn { _, _, _ ->
+                call++
+                if (call ==
+                    1
+                ) {
+                    flowOf(AssistantMessageEvent.Error(StopReason.ERROR, error))
+                } else {
+                    okStream()
+                }
+            }
+        )
 
         agent.prompt(listOf(UserMessage.ofText("hi")))
         assertEquals("500 upstream", agent.state.value.errorMessage)
@@ -516,7 +544,7 @@ class AgentTest {
             streamFn = StreamFn { _, _, options ->
                 receivedSessionIds.add(options.sessionId)
                 okStream()
-            },
+            }
         )
 
         agent.prompt(listOf(UserMessage.ofText("hello")))
@@ -527,15 +555,18 @@ class AgentTest {
         override val definition = Tool(name, "fake $name", JsonPrimitive("object"))
         override val label = name
         override fun validateArguments(arguments: JsonObject) = arguments
-        override suspend fun execute(toolCallId: String, arguments: JsonObject, onUpdate: AgentToolUpdateCallback) =
-            AgentToolResult(content = listOf(TextContent("done")))
+        override suspend fun execute(
+            toolCallId: String,
+            arguments: JsonObject,
+            onUpdate: AgentToolUpdateCallback
+        ) = AgentToolResult(content = listOf(TextContent("done")))
     }
 
     private fun toolResult(id: String) = ToolResultMessage(
         toolCallId = id,
         toolName = "get_weather",
         content = listOf(TextContent("sunny")),
-        timestamp = 43L,
+        timestamp = 43L
     )
 
     @Test
@@ -548,43 +579,52 @@ class AgentTest {
     }
 
     @Test
-    fun `pendingToolCalls populate before start observers and clear before end observers`() = runTest {
-        val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
-        val observed = CompletableDeferred<String>()
-        val collector = launch {
-            agent.events.collect { event ->
-                when (event) {
-                    is AgentEvent.ToolExecutionStart ->
-                        observed.complete(agent.state.value.pendingToolCalls.single())
-                    is AgentEvent.ToolExecutionEnd -> {
-                        assertTrue(event.toolCallId !in agent.state.value.pendingToolCalls)
+    fun `pendingToolCalls populate before start observers and clear before end observers`() =
+        runTest {
+            val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
+            val observed = CompletableDeferred<String>()
+            val collector = launch {
+                agent.events.collect { event ->
+                    when (event) {
+                        is AgentEvent.ToolExecutionStart ->
+                            observed.complete(agent.state.value.pendingToolCalls.single())
+
+                        is AgentEvent.ToolExecutionEnd -> {
+                            assertTrue(event.toolCallId !in agent.state.value.pendingToolCalls)
+                        }
+
+                        else -> Unit
                     }
-                    else -> Unit
                 }
             }
-        }
-        yield() // subscribe before driving the reduction
+            yield() // subscribe before driving the reduction
 
-        agent.processEvent(AgentEvent.ToolExecutionStart("call-1", "get_weather", JsonObject(emptyMap())))
-        assertEquals("call-1", observed.await())
-        agent.processEvent(
-            AgentEvent.ToolExecutionEnd(
-                "call-1",
-                "get_weather",
-                AgentToolResult(content = listOf(TextContent("sunny"))),
-                isError = false,
-            ),
-        )
-        assertTrue(agent.state.value.pendingToolCalls.isEmpty())
-        collector.cancelAndJoin()
-    }
+            agent.processEvent(
+                AgentEvent.ToolExecutionStart("call-1", "get_weather", JsonObject(emptyMap()))
+            )
+            assertEquals("call-1", observed.await())
+            agent.processEvent(
+                AgentEvent.ToolExecutionEnd(
+                    "call-1",
+                    "get_weather",
+                    AgentToolResult(content = listOf(TextContent("sunny"))),
+                    isError = false
+                )
+            )
+            assertTrue(agent.state.value.pendingToolCalls.isEmpty())
+            collector.cancelAndJoin()
+        }
 
     @Test
     fun `parallel tool completion cannot lose pending ids`() = runTest {
         val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
         coroutineScope {
             repeat(50) { i ->
-                launch { agent.processEvent(AgentEvent.ToolExecutionStart("id-$i", "t", JsonObject(emptyMap()))) }
+                launch {
+                    agent.processEvent(
+                        AgentEvent.ToolExecutionStart("id-$i", "t", JsonObject(emptyMap()))
+                    )
+                }
             }
         }
         assertEquals(50, agent.state.value.pendingToolCalls.size)
@@ -592,7 +632,12 @@ class AgentTest {
             repeat(50) { i ->
                 launch {
                     agent.processEvent(
-                        AgentEvent.ToolExecutionEnd("id-$i", "t", AgentToolResult(content = emptyList()), isError = false),
+                        AgentEvent.ToolExecutionEnd(
+                            "id-$i",
+                            "t",
+                            AgentToolResult(content = emptyList()),
+                            isError = false
+                        )
                     )
                 }
             }
@@ -642,74 +687,79 @@ class AgentTest {
     }
 
     @Test
-    fun `full tool run persists user toolCall toolResult and follow-up assistant in source order`() = runTest {
-        val tool = fakeTool("get_weather")
-        val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
-            content = listOf(ToolCall("call-1", "get_weather", "{}")),
-        )
-        var call = 0
-        val agent = agent(
-            tools = listOf(tool),
-            streamFn = StreamFn { _, _, _ ->
-                call++
-                if (call == 1) {
-                    flowOf(AssistantMessageEvent.Done(StopReason.TOOL_USE, toolUse))
-                } else {
-                    flowOf(
-                        AssistantMessageEvent.Start(assistant(text = "")),
-                        AssistantMessageEvent.Done(StopReason.STOP, assistant(text = "It is sunny")),
-                    )
+    fun `full tool run persists user toolCall toolResult and follow-up assistant in source order`() =
+        runTest {
+            val tool = fakeTool("get_weather")
+            val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
+                content = listOf(ToolCall("call-1", "get_weather", "{}"))
+            )
+            var call = 0
+            val agent = agent(
+                tools = listOf(tool),
+                streamFn = StreamFn { _, _, _ ->
+                    call++
+                    if (call == 1) {
+                        flowOf(AssistantMessageEvent.Done(StopReason.TOOL_USE, toolUse))
+                    } else {
+                        flowOf(
+                            AssistantMessageEvent.Start(assistant(text = "")),
+                            AssistantMessageEvent.Done(
+                                StopReason.STOP,
+                                assistant(text = "It is sunny")
+                            )
+                        )
+                    }
                 }
-            },
-        )
+            )
 
-        val pendingAtAgentEnd = CompletableDeferred<Set<String>>()
-        val events = mutableListOf<AgentEvent>()
-        val collector = launch {
-            agent.events.collect { event ->
-                events.add(event)
-                if (event is AgentEvent.AgentEnd) {
-                    pendingAtAgentEnd.complete(agent.state.value.pendingToolCalls)
+            val pendingAtAgentEnd = CompletableDeferred<Set<String>>()
+            val events = mutableListOf<AgentEvent>()
+            val collector = launch {
+                agent.events.collect { event ->
+                    events.add(event)
+                    if (event is AgentEvent.AgentEnd) {
+                        pendingAtAgentEnd.complete(agent.state.value.pendingToolCalls)
+                    }
                 }
             }
+            yield() // subscribe before the run starts
+
+            agent.prompt(listOf(UserMessage.ofText("weather?")))
+            collector.cancelAndJoin()
+
+            val final = agent.state.value
+            assertEquals(4, final.messages.size)
+            assertTrue(final.messages[0] is UserMessage)
+            val toolCallMessage = final.messages[1] as AssistantMessage
+            assertEquals(StopReason.TOOL_USE, toolCallMessage.stopReason)
+            assertEquals("call-1", (toolCallMessage.content.single() as ToolCall).id)
+            val toolResult = final.messages[2] as ToolResultMessage
+            assertEquals("call-1", toolResult.toolCallId)
+            assertEquals("get_weather", toolResult.toolName)
+            val followUp = final.messages[3] as AssistantMessage
+            assertEquals("It is sunny", (followUp.content.single() as TextContent).text)
+            assertNull(final.streamingMessage)
+            assertFalse(final.isStreaming)
+
+            assertTrue(pendingAtAgentEnd.await().isEmpty())
+            val toolStarts = events.filterIsInstance<AgentEvent.ToolExecutionStart>()
+            val toolEnds = events.filterIsInstance<AgentEvent.ToolExecutionEnd>()
+            assertEquals(listOf("call-1"), toolStarts.map { it.toolCallId })
+            assertEquals(listOf("call-1"), toolEnds.map { it.toolCallId })
         }
-        yield() // subscribe before the run starts
-
-        agent.prompt(listOf(UserMessage.ofText("weather?")))
-        collector.cancelAndJoin()
-
-        val final = agent.state.value
-        assertEquals(4, final.messages.size)
-        assertTrue(final.messages[0] is UserMessage)
-        val toolCallMessage = final.messages[1] as AssistantMessage
-        assertEquals(StopReason.TOOL_USE, toolCallMessage.stopReason)
-        assertEquals("call-1", (toolCallMessage.content.single() as ToolCall).id)
-        val toolResult = final.messages[2] as ToolResultMessage
-        assertEquals("call-1", toolResult.toolCallId)
-        assertEquals("get_weather", toolResult.toolName)
-        val followUp = final.messages[3] as AssistantMessage
-        assertEquals("It is sunny", (followUp.content.single() as TextContent).text)
-        assertNull(final.streamingMessage)
-        assertFalse(final.isStreaming)
-
-        assertTrue(pendingAtAgentEnd.await().isEmpty())
-        val toolStarts = events.filterIsInstance<AgentEvent.ToolExecutionStart>()
-        val toolEnds = events.filterIsInstance<AgentEvent.ToolExecutionEnd>()
-        assertEquals(listOf("call-1"), toolStarts.map { it.toolCallId })
-        assertEquals(listOf("call-1"), toolEnds.map { it.toolCallId })
-    }
 
     @Test
     fun `tool updates after the run settles are ignored`() = runTest {
         lateinit var delayedUpdate: AgentToolUpdateCallback
         val tool = object : AgentTool {
-            override val definition = Tool("delayed_tool", "captures progress callbacks", JsonPrimitive("object"))
+            override val definition =
+                Tool("delayed_tool", "captures progress callbacks", JsonPrimitive("object"))
             override val label = "delayed_tool"
             override fun validateArguments(arguments: JsonObject) = arguments
             override suspend fun execute(
                 toolCallId: String,
                 arguments: JsonObject,
-                onUpdate: AgentToolUpdateCallback,
+                onUpdate: AgentToolUpdateCallback
             ): AgentToolResult {
                 delayedUpdate = onUpdate
                 onUpdate(AgentToolResult(content = listOf(TextContent("running"))))
@@ -717,15 +767,21 @@ class AgentTest {
             }
         }
         val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
-            content = listOf(ToolCall("call-1", "delayed_tool", "{}")),
+            content = listOf(ToolCall("call-1", "delayed_tool", "{}"))
         )
         var call = 0
         val agent = agent(
             tools = listOf(tool),
             streamFn = StreamFn { _, _, _ ->
                 call++
-                if (call == 1) flowOf(AssistantMessageEvent.Done(StopReason.TOOL_USE, toolUse)) else okStream()
-            },
+                if (call ==
+                    1
+                ) {
+                    flowOf(AssistantMessageEvent.Done(StopReason.TOOL_USE, toolUse))
+                } else {
+                    okStream()
+                }
+            }
         )
 
         val events = CopyOnWriteArrayList<AgentEvent>()
@@ -752,26 +808,28 @@ class AgentTest {
         val releaseSlow = CompletableDeferred<Unit>()
         lateinit var settledUpdate: AgentToolUpdateCallback
         val settledTool = object : AgentTool {
-            override val definition = Tool("settled_tool", "settles immediately", JsonPrimitive("object"))
+            override val definition =
+                Tool("settled_tool", "settles immediately", JsonPrimitive("object"))
             override val label = "settled_tool"
             override fun validateArguments(arguments: JsonObject) = arguments
             override suspend fun execute(
                 toolCallId: String,
                 arguments: JsonObject,
-                onUpdate: AgentToolUpdateCallback,
+                onUpdate: AgentToolUpdateCallback
             ): AgentToolResult {
                 settledUpdate = onUpdate
                 return AgentToolResult(content = listOf(TextContent("done")))
             }
         }
         val slowTool = object : AgentTool {
-            override val definition = Tool("slow_tool", "keeps the run active", JsonPrimitive("object"))
+            override val definition =
+                Tool("slow_tool", "keeps the run active", JsonPrimitive("object"))
             override val label = "slow_tool"
             override fun validateArguments(arguments: JsonObject) = arguments
             override suspend fun execute(
                 toolCallId: String,
                 arguments: JsonObject,
-                onUpdate: AgentToolUpdateCallback,
+                onUpdate: AgentToolUpdateCallback
             ): AgentToolResult {
                 slowStarted.complete(Unit)
                 releaseSlow.await()
@@ -781,16 +839,22 @@ class AgentTest {
         val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
             content = listOf(
                 ToolCall("call-1", "settled_tool", "{}"),
-                ToolCall("call-2", "slow_tool", "{}"),
-            ),
+                ToolCall("call-2", "slow_tool", "{}")
+            )
         )
         var call = 0
         val agent = agent(
             tools = listOf(settledTool, slowTool),
             streamFn = StreamFn { _, _, _ ->
                 call++
-                if (call == 1) flowOf(AssistantMessageEvent.Done(StopReason.TOOL_USE, toolUse)) else okStream()
-            },
+                if (call ==
+                    1
+                ) {
+                    flowOf(AssistantMessageEvent.Done(StopReason.TOOL_USE, toolUse))
+                } else {
+                    okStream()
+                }
+            }
         )
 
         val events = CopyOnWriteArrayList<AgentEvent>()
@@ -820,7 +884,7 @@ class AgentTest {
         assertEquals(0, events.count { it is AgentEvent.ToolExecutionUpdate })
         assertEquals(
             listOf("call-1", "call-2"),
-            events.filterIsInstance<AgentEvent.ToolExecutionEnd>().map { it.toolCallId },
+            events.filterIsInstance<AgentEvent.ToolExecutionEnd>().map { it.toolCallId }
         )
         collector.cancelAndJoin()
     }

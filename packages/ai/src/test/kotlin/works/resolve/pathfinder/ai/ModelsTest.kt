@@ -1,13 +1,5 @@
 package works.resolve.pathfinder.ai
 
-import works.resolve.pathfinder.ai.ChatApi
-import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.Context
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.SimpleStreamOptions
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.testing.TestCatalogs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -16,6 +8,14 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.ChatApi
+import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.SimpleStreamOptions
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.testing.TestCatalogs
 
 class ModelsTest {
     private fun model() = Model(
@@ -23,7 +23,7 @@ class ModelsTest {
         name = "Model One",
         api = "openai-completions",
         provider = "prov",
-        baseUrl = "https://example.test",
+        baseUrl = "https://example.test"
     )
 
     private class RecordingApi : ChatApi {
@@ -36,22 +36,21 @@ class ModelsTest {
         override fun streamSimple(
             model: Model,
             context: Context,
-            options: SimpleStreamOptions,
-        ): Flow<AssistantMessageEvent> =
-            flow {
-                calls += 1
-                lastApiKey = options.apiKey
-                lastEnv = options.env
-                lastHeaders = options.headers
-                val done = AssistantMessage(
-                    content = emptyList(),
-                    api = model.api,
-                    provider = model.provider,
-                    model = model.id,
-                    stopReason = StopReason.STOP,
-                )
-                emit(AssistantMessageEvent.Done(done.stopReason, done))
-            }
+            options: SimpleStreamOptions
+        ): Flow<AssistantMessageEvent> = flow {
+            calls += 1
+            lastApiKey = options.apiKey
+            lastEnv = options.env
+            lastHeaders = options.headers
+            val done = AssistantMessage(
+                content = emptyList(),
+                api = model.api,
+                provider = model.provider,
+                model = model.id,
+                stopReason = StopReason.STOP
+            )
+            emit(AssistantMessageEvent.Done(done.stopReason, done))
+        }
     }
 
     @Test
@@ -65,9 +64,9 @@ class ModelsTest {
                     name = "Provider",
                     baseUrl = "https://example.test",
                     models = listOf(model(), unsupported),
-                    apis = mapOf("openai-completions" to api),
-                ),
-            ),
+                    apis = mapOf("openai-completions" to api)
+                )
+            )
         )
         val error = runCatching {
             registry.stream(unsupported, Context(messages = emptyList()))
@@ -89,9 +88,9 @@ class ModelsTest {
                     authResolver = { _, _ -> throw IllegalStateException("keystore exploded") },
                     models = listOf(model()),
                     apiId = "openai-completions",
-                    api = api,
-                ),
-            ),
+                    api = api
+                )
+            )
         )
 
         val events = registry.stream(model(), Context(messages = emptyList())).toList()
@@ -123,9 +122,9 @@ class ModelsTest {
                     authResolver = { _, _ -> null },
                     models = listOf(model()),
                     apiId = "openai-completions",
-                    api = api,
-                ),
-            ),
+                    api = api
+                )
+            )
         )
 
         val events = registry.stream(model(), Context(messages = emptyList())).toList()
@@ -148,9 +147,9 @@ class ModelsTest {
                     baseUrl = "https://example.test",
                     models = listOf(model()),
                     apiId = "openai-completions",
-                    api = api,
-                ),
-            ),
+                    api = api
+                )
+            )
         )
 
         val events = registry.stream(model(), Context(messages = emptyList())).toList()
@@ -184,9 +183,9 @@ class ModelsTest {
                     authResolver = { _, _ -> throw CancellationException() },
                     models = listOf(model()),
                     apiId = "openai-completions",
-                    api = api,
-                ),
-            ),
+                    api = api
+                )
+            )
         )
 
         var thrown: Exception? = null
@@ -215,13 +214,17 @@ class ModelsTest {
                     },
                     models = listOf(model()),
                     apiId = "openai-completions",
-                    api = api,
-                ),
-            ),
+                    api = api
+                )
+            )
         )
 
         val events = registry
-            .stream(model(), Context(messages = emptyList()), SimpleStreamOptions(apiKey = "explicit"))
+            .stream(
+                model(),
+                Context(messages = emptyList()),
+                SimpleStreamOptions(apiKey = "explicit")
+            )
             .toList()
 
         assertEquals(1, events.size)
@@ -241,13 +244,17 @@ class ModelsTest {
                     baseUrl = "https://example.test",
                     models = listOf(model()),
                     apiId = "openai-completions",
-                    api = api,
-                ),
-            ),
+                    api = api
+                )
+            )
         )
 
         val events = registry
-            .stream(model(), Context(messages = emptyList()), SimpleStreamOptions(apiKey = "explicit"))
+            .stream(
+                model(),
+                Context(messages = emptyList()),
+                SimpleStreamOptions(apiKey = "explicit")
+            )
             .toList()
 
         assertEquals(1, api.calls)
@@ -276,16 +283,16 @@ class ModelsTest {
                     },
                     models = listOf(model()),
                     apiId = "openai-completions",
-                    api = api,
-                ),
-            ),
+                    api = api
+                )
+            )
         )
 
         val events = registry
             .stream(
                 model(),
                 Context(messages = emptyList()),
-                SimpleStreamOptions(apiKey = "explicit", env = mapOf("A" to "explicit-a")),
+                SimpleStreamOptions(apiKey = "explicit", env = mapOf("A" to "explicit-a"))
             )
             .toList()
 
@@ -295,7 +302,7 @@ class ModelsTest {
         assertTrue(events.single() is AssistantMessageEvent.Done)
         assertEquals(
             "explicit" to mapOf("A" to "explicit-a"),
-            api.lastResolverOverrides,
+            api.lastResolverOverrides
         )
     }
 
@@ -306,7 +313,10 @@ class ModelsTest {
         val api = RecordingApi()
         // Factory-style resolver: explicit keys bypass the store but keep the
         // provider's auth shaping (cf-aig-authorization).
-        val authResolver: suspend (String?, Map<String, String>) -> ResolvedAuth? = { explicitKey, explicitEnv ->
+        val authResolver: suspend (
+            String?,
+            Map<String, String>
+        ) -> ResolvedAuth? = { explicitKey, explicitEnv ->
             if (explicitKey != null && entry.isCredentialComplete(explicitKey, explicitEnv)) {
                 entry.toResolvedAuth(explicitKey, explicitEnv)
             } else if (explicitKey != null) {
@@ -325,9 +335,9 @@ class ModelsTest {
                     authResolver = authResolver,
                     models = entry.models,
                     apiId = "openai-completions",
-                    api = api,
-                ),
-            ),
+                    api = api
+                )
+            )
         )
 
         val events = registry.stream(
@@ -337,9 +347,9 @@ class ModelsTest {
                 apiKey = "explicit-cf-key",
                 env = mapOf(
                     "CLOUDFLARE_ACCOUNT_ID" to "acct-explicit",
-                    "CLOUDFLARE_GATEWAY_ID" to "gw-explicit",
-                ),
-            ),
+                    "CLOUDFLARE_GATEWAY_ID" to "gw-explicit"
+                )
+            )
         ).toList()
 
         assertEquals(0, storeReads)
@@ -349,16 +359,16 @@ class ModelsTest {
             mapOf(
                 "cf-aig-authorization" to "Bearer explicit-cf-key",
                 "Authorization" to null,
-                "x-api-key" to null,
+                "x-api-key" to null
             ),
-            api.lastHeaders,
+            api.lastHeaders
         )
         assertEquals(
             mapOf(
                 "CLOUDFLARE_ACCOUNT_ID" to "acct-explicit",
-                "CLOUDFLARE_GATEWAY_ID" to "gw-explicit",
+                "CLOUDFLARE_GATEWAY_ID" to "gw-explicit"
             ),
-            api.lastEnv,
+            api.lastEnv
         )
     }
 
@@ -377,15 +387,15 @@ class ModelsTest {
                             env = mapOf("A" to "resolved-a", "B" to "resolved-b"),
                             headers = mapOf(
                                 "cf-aig-authorization" to "Bearer resolved-key",
-                                "Authorization" to null,
-                            ),
+                                "Authorization" to null
+                            )
                         )
                     },
                     models = listOf(model()),
                     apiId = "openai-completions",
-                    api = api,
-                ),
-            ),
+                    api = api
+                )
+            )
         )
 
         val events = registry.stream(
@@ -393,20 +403,23 @@ class ModelsTest {
             Context(messages = emptyList()),
             SimpleStreamOptions(
                 env = mapOf("B" to "explicit-b", "C" to "explicit-c"),
-                headers = mapOf("CF-AIG-AUTHORIZATION" to "Bearer explicit-override"),
-            ),
+                headers = mapOf("CF-AIG-AUTHORIZATION" to "Bearer explicit-override")
+            )
         ).toList()
 
         assertTrue(events.single() is AssistantMessageEvent.Done)
         assertEquals("resolved-key", api.lastApiKey)
-        assertEquals(mapOf("A" to "resolved-a", "B" to "explicit-b", "C" to "explicit-c"), api.lastEnv)
+        assertEquals(
+            mapOf("A" to "resolved-a", "B" to "explicit-b", "C" to "explicit-c"),
+            api.lastEnv
+        )
         // Explicit request headers win over resolved auth headers case-insensitively.
         assertEquals(
             mapOf(
                 "Authorization" to null,
-                "CF-AIG-AUTHORIZATION" to "Bearer explicit-override",
+                "CF-AIG-AUTHORIZATION" to "Bearer explicit-override"
             ),
-            api.lastHeaders,
+            api.lastHeaders
         )
     }
 

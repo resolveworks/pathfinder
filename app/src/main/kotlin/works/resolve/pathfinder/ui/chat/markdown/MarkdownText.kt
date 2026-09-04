@@ -14,11 +14,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -45,7 +45,11 @@ import org.commonmark.node.ThematicBreak
  * Prose styling for a rendered block: the block-level analog of pi's
  * thinking/quote style overrides.
  */
-private data class ProseStyle(val color: Color = Color.Unspecified, val italic: Boolean = false, val dimmed: Boolean = false)
+private data class ProseStyle(
+    val color: Color = Color.Unspecified,
+    val italic: Boolean = false,
+    val dimmed: Boolean = false
+)
 
 /**
  * Renders a markdown string as structured Compose content. Inline styling is
@@ -59,13 +63,13 @@ fun MarkdownText(
     markdown: String,
     modifier: Modifier = Modifier,
     color: Color = Color.Unspecified,
-    italic: Boolean = false,
+    italic: Boolean = false
 ) {
     val document: Node = remember(markdown) { MarkdownParser.parser.parse(markdown) }
     val inlineStyles = InlineMarkdownStyles(
         linkColor = MaterialTheme.colorScheme.primary,
         codeBackgroundColor = MaterialTheme.colorScheme.surfaceVariant,
-        codeTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        codeTextColor = MaterialTheme.colorScheme.onSurfaceVariant
     )
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         RenderBlocks(document, inlineStyles, ProseStyle(color, italic))
@@ -86,7 +90,7 @@ private fun RenderBlock(node: Node, styles: InlineMarkdownStyles, prose: ProseSt
             text = node.buildInlineMarkdown(styles),
             style = MaterialTheme.typography.bodyLarge,
             fontStyle = if (prose.italic) FontStyle.Italic else null,
-            color = prose.resolveColor(),
+            color = prose.resolveColor()
         )
 
         is Heading -> Text(
@@ -96,11 +100,12 @@ private fun RenderBlock(node: Node, styles: InlineMarkdownStyles, prose: ProseSt
                 2 -> MaterialTheme.typography.titleMedium
                 else -> MaterialTheme.typography.titleSmall
             },
-            color = prose.resolveColor(),
+            color = prose.resolveColor()
         )
 
         // node.info is available; syntax highlighting is not ported.
         is FencedCodeBlock -> CodeBlock(node.literal)
+
         is IndentedCodeBlock -> CodeBlock(node.literal)
 
         is BlockQuote -> {
@@ -113,18 +118,18 @@ private fun RenderBlock(node: Node, styles: InlineMarkdownStyles, prose: ProseSt
                             color = barColor,
                             start = Offset(1.dp.toPx(), 0f),
                             end = Offset(1.dp.toPx(), size.height),
-                            strokeWidth = 2.dp.toPx(),
+                            strokeWidth = 2.dp.toPx()
                         )
                     }
                     .padding(start = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 // Quotes render their content italic + dimmed; merge with any outer prose override.
                 val quoted = ProseStyle(
                     color = prose.color.takeIf { it != Color.Unspecified }
                         ?: MaterialTheme.colorScheme.onSurfaceVariant,
                     italic = true,
-                    dimmed = true,
+                    dimmed = true
                 )
                 RenderBlocks(node, styles, quoted)
             }
@@ -141,29 +146,36 @@ private fun RenderBlock(node: Node, styles: InlineMarkdownStyles, prose: ProseSt
         is HtmlBlock -> Text(
             text = node.literal,
             style = MaterialTheme.typography.bodyLarge,
-            color = if (prose.color != Color.Unspecified) prose.color else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (prose.color !=
+                Color.Unspecified
+            ) {
+                prose.color
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
         )
 
-        is TaskListItemMarker -> Unit // rendered as a checkbox by the owning ListItem
+        is TaskListItemMarker -> Unit
+
+        // rendered as a checkbox by the owning ListItem
 
         else -> RenderBlocks(node, styles, prose) // unknown block: walk children
     }
 }
 
 @Composable
-private fun ProseStyle.resolveColor(): Color =
-    when {
-        color != Color.Unspecified -> color
-        dimmed -> MaterialTheme.colorScheme.onSurfaceVariant
-        else -> Color.Unspecified
-    }
+private fun ProseStyle.resolveColor(): Color = when {
+    color != Color.Unspecified -> color
+    dimmed -> MaterialTheme.colorScheme.onSurfaceVariant
+    else -> Color.Unspecified
+}
 
 @Composable
 private fun CodeBlock(literal: String) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = RoundedCornerShape(8.dp),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth()
     ) {
         Text(
             text = literal,
@@ -171,13 +183,18 @@ private fun CodeBlock(literal: String) {
             fontFamily = FontFamily.Monospace,
             modifier = Modifier
                 .padding(12.dp)
-                .horizontalScroll(rememberScrollState()),
+                .horizontalScroll(rememberScrollState())
         )
     }
 }
 
 @Composable
-private fun ListBlock(listNode: Node, ordered: Boolean, styles: InlineMarkdownStyles, prose: ProseStyle) {
+private fun ListBlock(
+    listNode: Node,
+    ordered: Boolean,
+    styles: InlineMarkdownStyles,
+    prose: ProseStyle
+) {
     val startNumber = (listNode as? OrderedList)?.markerStartNumber ?: 1
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         var itemIndex = 0
@@ -194,11 +211,11 @@ private fun ListBlock(listNode: Node, ordered: Boolean, styles: InlineMarkdownSt
                         text = marker,
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(28.dp),
+                        modifier = Modifier.width(28.dp)
                     )
                     Column(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.padding(start = 12.dp),
+                        modifier = Modifier.padding(start = 12.dp)
                     ) {
                         RenderBlocks(child, styles, prose)
                     }
@@ -229,7 +246,7 @@ private fun Table(table: TableBlock, styles: InlineMarkdownStyles, prose: ProseS
                                         .weight(1f)
                                         .padding(horizontal = 8.dp, vertical = 4.dp),
                                     fontStyle = if (prose.italic) FontStyle.Italic else null,
-                                    color = prose.resolveColor(),
+                                    color = prose.resolveColor()
                                 )
                             }
                         }
@@ -289,7 +306,7 @@ private fun MarkdownTextPreview() {
             ---
 
             <div>literal html</div>
-            """.trimIndent(),
+            """.trimIndent()
         )
         MarkdownText(
             markdown = """
@@ -302,7 +319,7 @@ private fun MarkdownTextPreview() {
             > A quote inside thinking stays italic + dimmed.
             """.trimIndent(),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            italic = true,
+            italic = true
         )
     }
 }

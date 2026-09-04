@@ -24,7 +24,7 @@ fun addUsage(left: Usage, right: Usage): Usage = Usage(
     cacheWrite1h = left.cacheWrite1h + right.cacheWrite1h,
     reasoning = left.reasoning + right.reasoning,
     totalTokens = left.totalTokens + right.totalTokens,
-    cost = left.cost + right.cost,
+    cost = left.cost + right.cost
 )
 
 private operator fun Cost.plus(other: Cost): Cost = Cost(
@@ -32,5 +32,5 @@ private operator fun Cost.plus(other: Cost): Cost = Cost(
     output = output + other.output,
     cacheRead = cacheRead + other.cacheRead,
     cacheWrite = cacheWrite + other.cacheWrite,
-    total = total + other.total,
+    total = total + other.total
 )

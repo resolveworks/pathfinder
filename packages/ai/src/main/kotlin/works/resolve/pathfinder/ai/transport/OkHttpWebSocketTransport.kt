@@ -19,14 +19,13 @@ import okhttp3.WebSocketListener
  * Never logs headers, auth values, or message content; the connection's
  * [toString][OkHttpWebSocketConnection.toString] carries no URL or headers.
  */
-class OkHttpWebSocketTransport(
-    private val client: OkHttpClient = OkHttpClient(),
-) : WebSocketStreamingTransport {
+class OkHttpWebSocketTransport(private val client: OkHttpClient = OkHttpClient()) :
+    WebSocketStreamingTransport {
 
     override suspend fun connect(
         url: String,
         headers: Map<String, String>,
-        connectTimeoutMs: Long,
+        connectTimeoutMs: Long
     ): WebSocketConnection {
         val callerJob = currentCoroutineContext()[Job]
         requireNotNull(callerJob) { "connect must be called from a coroutine scope" }
@@ -52,7 +51,10 @@ class OkHttpWebSocketTransport(
         val timeoutJob = if (connectTimeoutMs > 0) {
             CoroutineScope(callerJob).launch {
                 delay(connectTimeoutMs)
-                if (connection.failConnect(IOException("WebSocket connect timeout after ${connectTimeoutMs}ms"))) {
+                if (connection.failConnect(
+                        IOException("WebSocket connect timeout after ${connectTimeoutMs}ms")
+                    )
+                ) {
                     connection.teardown("connect_timeout")
                 }
             }
@@ -173,7 +175,7 @@ internal fun closeEvent(code: Int, reason: String, wasClean: Boolean?): WebSocke
         code = code,
         reason = reason.ifEmpty { null },
         wasClean = wasClean,
-        message = "WebSocket closed$codeText$reasonText".trim(),
+        message = "WebSocket closed$codeText$reasonText".trim()
     )
 }
 

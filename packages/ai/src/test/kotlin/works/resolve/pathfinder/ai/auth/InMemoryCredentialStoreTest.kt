@@ -63,7 +63,7 @@ class InMemoryCredentialStoreTest {
                     OAuthCredential(
                         access = "a$i",
                         refresh = "r",
-                        expires = current?.let { (it as OAuthCredential).expires + 1 } ?: 0L,
+                        expires = current?.let { (it as OAuthCredential).expires + 1 } ?: 0L
                     )
                 }
             }
@@ -75,7 +75,12 @@ class InMemoryCredentialStoreTest {
     fun `different providers are not serialized against each other`() = runTest {
         val store = InMemoryCredentialStore()
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
-        val blocked = async { store.modify("openai") { gate.await(); ApiKeyCredential("k") } }
+        val blocked = async {
+            store.modify("openai") {
+                gate.await()
+                ApiKeyCredential("k")
+            }
+        }
         store.modify("anthropic") { ApiKeyCredential("other") }
         assertEquals(ApiKeyCredential("other"), store.read("anthropic"))
         gate.complete(Unit)
@@ -100,7 +105,7 @@ class InMemoryCredentialStoreTest {
                         OAuthCredential(
                             access = "a$i",
                             refresh = "r",
-                            expires = current?.let { (it as OAuthCredential).expires + 1 } ?: 0L,
+                            expires = current?.let { (it as OAuthCredential).expires + 1 } ?: 0L
                         )
                     }
                 } else {
@@ -149,14 +154,16 @@ class InMemoryCredentialStoreTest {
     fun `list exposes metadata without secrets`() = runTest {
         val store = InMemoryCredentialStore()
         store.modify("openai") { ApiKeyCredential(key = "sk-SECRET") }
-        store.modify("anthropic") { OAuthCredential(access = "SECRET", refresh = "SECRET", expires = 1L) }
+        store.modify("anthropic") {
+            OAuthCredential(access = "SECRET", refresh = "SECRET", expires = 1L)
+        }
         val list = store.list()
         assertEquals(
             listOf(
                 CredentialInfo("anthropic", CredentialType.OAUTH),
-                CredentialInfo("openai", CredentialType.API_KEY),
+                CredentialInfo("openai", CredentialType.API_KEY)
             ),
-            list.sortedBy { it.providerId },
+            list.sortedBy { it.providerId }
         )
         assertTrue(list.none { it.toString().contains("SECRET") })
     }

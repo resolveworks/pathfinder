@@ -11,8 +11,8 @@ class CloudflareTest {
             "https://gateway.acc.cloudflare.com/v1",
             resolveCloudflareBaseUrl(
                 "https://gateway.{CLOUDFLARE_ACCOUNT_ID}.cloudflare.com/v1",
-                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc"),
-            ),
+                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc")
+            )
         )
     }
 
@@ -22,8 +22,8 @@ class CloudflareTest {
             "https://acc.gw.cloudflare.com/v1",
             resolveCloudflareBaseUrl(
                 "https://{CLOUDFLARE_ACCOUNT_ID}.{CLOUDFLARE_GATEWAY_ID}.cloudflare.com/v1",
-                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
-            ),
+                mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw")
+            )
         )
     }
 
@@ -33,8 +33,8 @@ class CloudflareTest {
             "https://{CLOUDFLARE_ACCOUNT_ID}.example/v1",
             resolveCloudflareBaseUrl(
                 "https://{CLOUDFLARE_ACCOUNT_ID}.example/v1",
-                mapOf("OTHER" to "x"),
-            ),
+                mapOf("OTHER" to "x")
+            )
         )
     }
 

@@ -3,6 +3,7 @@ package works.resolve.pathfinder.ai.auth.oauth
 import java.io.IOException
 import java.net.URI
 import java.net.URLEncoder
+import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -16,9 +17,8 @@ import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.utils.lenientJson
-import works.resolve.pathfinder.ai.utils.string
-import kotlin.time.Clock
 import works.resolve.pathfinder.ai.utils.strictDouble
+import works.resolve.pathfinder.ai.utils.string
 /**
  * Divergence from pi: pi resolves the OAuth host from
  * `KIMI_CODE_OAUTH_HOST`/`KIMI_OAUTH_HOST` provider env overrides; the
@@ -30,7 +30,7 @@ import works.resolve.pathfinder.ai.utils.strictDouble
  */
 class KimiCodingOAuthAuth(
     private val http: OAuthHttpClient,
-    private val clock: Clock = Clock.System,
+    private val clock: Clock = Clock.System
 ) : OAuthAuth {
 
     override val name: String = "Kimi Code (subscription)"
@@ -44,8 +44,8 @@ class KimiCodingOAuthAuth(
                 userCode = device.userCode,
                 verificationUri = device.verificationUriComplete,
                 intervalSeconds = device.intervalSeconds.toInt(),
-                expiresInSeconds = device.expiresInSeconds.toInt(),
-            ),
+                expiresInSeconds = device.expiresInSeconds.toInt()
+            )
         )
         val token = pollForToken(device)
         return token.toCredential()
@@ -63,14 +63,10 @@ class KimiCodingOAuthAuth(
         val verificationUri: String,
         val verificationUriComplete: String,
         val intervalSeconds: Double,
-        val expiresInSeconds: Long,
+        val expiresInSeconds: Long
     )
 
-    internal data class TokenResponse(
-        val access: String,
-        val refresh: String,
-        val expires: Long,
-    )
+    internal data class TokenResponse(val access: String, val refresh: String, val expires: Long)
 
     private suspend fun startDeviceAuthorization(): DeviceAuthorization {
         val response = http.execute(
@@ -79,13 +75,13 @@ class KimiCodingOAuthAuth(
                 url = "$OAUTH_HOST/api/oauth/device_authorization",
                 headers = FORM_HEADERS,
                 body = formUrlEncode(mapOf("client_id" to CLIENT_ID)),
-                timeoutMs = REQUEST_TIMEOUT_MS,
-            ),
+                timeoutMs = REQUEST_TIMEOUT_MS
+            )
         )
 
         if (response.status !in 200..299) {
             throw IllegalStateException(
-                "Kimi Code device authorization failed with status ${response.status}${response.errorTextSuffix()}",
+                "Kimi Code device authorization failed with status ${response.status}${response.errorTextSuffix()}"
             )
         }
 
@@ -95,11 +91,13 @@ class KimiCodingOAuthAuth(
         val userCode = record.string("user_code")
         val verificationUri = record.string("verification_uri")
         val verificationUriComplete = record.string("verification_uri_complete")
-        if (deviceCode == null || userCode == null || verificationUri == null || verificationUriComplete == null ||
-            trustedHttpUrl(verificationUriComplete) == null || trustedHttpUrl(verificationUri) == null
+        if (deviceCode == null || userCode == null || verificationUri == null ||
+            verificationUriComplete == null ||
+            trustedHttpUrl(verificationUriComplete) == null ||
+            trustedHttpUrl(verificationUri) == null
         ) {
             throw IllegalStateException(
-                "Invalid Kimi Code device authorization response: ${json.jsonString()}",
+                "Invalid Kimi Code device authorization response: ${json.jsonString()}"
             )
         }
 
@@ -110,8 +108,20 @@ class KimiCodingOAuthAuth(
             userCode = userCode,
             verificationUri = verificationUri,
             verificationUriComplete = verificationUriComplete,
-            intervalSeconds = if (interval != null && interval.isFinite() && interval > 0) interval else DEFAULT_POLL_INTERVAL_SECONDS.toDouble(),
-            expiresInSeconds = if (expiresIn != null && expiresIn.isFinite() && expiresIn > 0) expiresIn.toLong() else DEVICE_CODE_TIMEOUT_SECONDS,
+            intervalSeconds = if (interval != null && interval.isFinite() &&
+                interval > 0
+            ) {
+                interval
+            } else {
+                DEFAULT_POLL_INTERVAL_SECONDS.toDouble()
+            },
+            expiresInSeconds = if (expiresIn != null && expiresIn.isFinite() &&
+                expiresIn > 0
+            ) {
+                expiresIn.toLong()
+            } else {
+                DEVICE_CODE_TIMEOUT_SECONDS
+            }
         )
     }
 
@@ -126,13 +136,13 @@ class KimiCodingOAuthAuth(
             expiresIn == null || !expiresIn.isFinite() || expiresIn <= 0
         ) {
             throw IllegalStateException(
-                "Kimi Code token $operation response missing fields: ${json.jsonString()}",
+                "Kimi Code token $operation response missing fields: ${json.jsonString()}"
             )
         }
         return TokenResponse(
             access = accessToken,
             refresh = refreshToken,
-            expires = clock.now().toEpochMilliseconds() + (expiresIn * 1000).toLong(),
+            expires = clock.now().toEpochMilliseconds() + (expiresIn * 1000).toLong()
         )
     }
 
@@ -142,12 +152,14 @@ class KimiCodingOAuthAuth(
                 intervalSeconds = device.intervalSeconds,
                 expiresInSeconds = device.expiresInSeconds,
                 waitBeforeFirstPoll = true,
-                poll = { pollTokenRequest(device) },
+                poll = { pollTokenRequest(device) }
             ),
-            clock = clock,
+            clock = clock
         )
 
-    private suspend fun pollTokenRequest(device: DeviceAuthorization): OAuthDeviceCodePollResult<TokenResponse> {
+    private suspend fun pollTokenRequest(
+        device: DeviceAuthorization
+    ): OAuthDeviceCodePollResult<TokenResponse> {
         val response = http.execute(
             OAuthHttpRequest(
                 method = "POST",
@@ -157,16 +169,16 @@ class KimiCodingOAuthAuth(
                     mapOf(
                         "client_id" to CLIENT_ID,
                         "device_code" to device.deviceCode,
-                        "grant_type" to DEVICE_CODE_GRANT_TYPE,
-                    ),
+                        "grant_type" to DEVICE_CODE_GRANT_TYPE
+                    )
                 ),
-                timeoutMs = REQUEST_TIMEOUT_MS,
-            ),
+                timeoutMs = REQUEST_TIMEOUT_MS
+            )
         )
 
         if (response.status >= 500) {
             return OAuthDeviceCodePollResult.Failed(
-                "Kimi Code device token request failed with status ${response.status}${response.errorTextSuffix()}",
+                "Kimi Code device token request failed with status ${response.status}${response.errorTextSuffix()}"
             )
         }
 
@@ -184,19 +196,23 @@ class KimiCodingOAuthAuth(
         val description = record.string("error_description")?.let { ": $it" } ?: ""
         return when (error) {
             "authorization_pending" -> OAuthDeviceCodePollResult.Pending
+
             "slow_down" -> {
                 val interval = record.strictDouble("interval")
                 OAuthDeviceCodePollResult.SlowDown(
-                    if (interval != null && interval > 0) interval else null,
+                    if (interval != null && interval > 0) interval else null
                 )
             }
+
             "expired_token" -> OAuthDeviceCodePollResult.Failed(
-                "Kimi Code device authorization expired. Please restart login.",
+                "Kimi Code device authorization expired. Please restart login."
             )
+
             "access_denied" -> OAuthDeviceCodePollResult.Failed("Kimi Code login was denied.")
+
             else -> OAuthDeviceCodePollResult.Failed(
                 "Kimi Code device token request failed (status ${response.status})" +
-                    (error?.let { ": $it$description" } ?: ""),
+                    (error?.let { ": $it$description" } ?: "")
             )
         }
     }
@@ -227,11 +243,11 @@ class KimiCodingOAuthAuth(
                             mapOf(
                                 "client_id" to CLIENT_ID,
                                 "grant_type" to "refresh_token",
-                                "refresh_token" to refreshTokenValue,
-                            ),
+                                "refresh_token" to refreshTokenValue
+                            )
                         ),
-                        timeoutMs = REQUEST_TIMEOUT_MS,
-                    ),
+                        timeoutMs = REQUEST_TIMEOUT_MS
+                    )
                 )
             } catch (error: CancellationException) {
                 throw error
@@ -248,21 +264,26 @@ class KimiCodingOAuthAuth(
             }
 
             // Unauthorized: the stored credential is dead; Models clears it and prompts re-login.
-            if (response.status == 401 || response.status == 403 || record.string("error") == "invalid_grant") {
+            if (response.status == 401 || response.status == 403 ||
+                record.string("error") == "invalid_grant"
+            ) {
                 val description = record.string("error_description")?.let { ": $it" } ?: ""
                 throw IllegalStateException(
-                    "Kimi Code token refresh unauthorized (status ${response.status})$description",
+                    "Kimi Code token refresh unauthorized (status ${response.status})$description"
                 )
             }
 
             if (isRetryableRefreshFailure(response.status) && attempt < REFRESH_MAX_RETRIES) {
-                lastError = IllegalStateException("Kimi Code token refresh failed with status ${response.status}")
+                lastError =
+                    IllegalStateException(
+                        "Kimi Code token refresh failed with status ${response.status}"
+                    )
                 continue
             }
 
             val text = json.jsonString()
             throw IllegalStateException(
-                "Kimi Code token refresh failed with status ${response.status}${if (text.isNotEmpty()) ": $text" else ""}",
+                "Kimi Code token refresh failed with status ${response.status}${if (text.isNotEmpty()) ": $text" else ""}"
             )
         }
 
@@ -289,10 +310,11 @@ class KimiCodingOAuthAuth(
 
         private val FORM_HEADERS = mapOf(
             "Content-Type" to "application/x-www-form-urlencoded",
-            "Accept" to "application/json",
+            "Accept" to "application/json"
         )
 
-        internal fun isRetryableRefreshFailure(status: Int): Boolean = status == 429 || status >= 500
+        internal fun isRetryableRefreshFailure(status: Int): Boolean =
+            status == 429 || status >= 500
 
         /**
          * application/x-www-form-urlencoded serialization — space becomes `+`,
@@ -348,7 +370,9 @@ class KimiCodingOAuthAuth(
                         append(scheme).append("://")
                         uri.rawUserInfo?.let { append(it).append('@') }
                         append(host)
-                        if (port != -1 && !(scheme == "http" && port == 80) && !(scheme == "https" && port == 443)) {
+                        if (port != -1 && !(scheme == "http" && port == 80) &&
+                            !(scheme == "https" && port == 443)
+                        ) {
                             append(':').append(port)
                         }
                         append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")

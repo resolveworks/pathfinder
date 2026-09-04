@@ -1,4 +1,4 @@
-/**
+/*
  * Partial twin of pi's `providers/github-copilot.ts`: the provider def
  * itself is catalog data baked into the generated asset (upstream's
  * `github-copilot.models.ts` generated binding has no Kotlin twin), so this
@@ -9,9 +9,9 @@ package works.resolve.pathfinder.ai.providers
 
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
+import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.auth.OAuthCredential
-import works.resolve.pathfinder.ai.Model
 
 /** pi's GitHub Copilot provider id. */
 const val GITHUB_COPILOT_PROVIDER_ID = "github-copilot"

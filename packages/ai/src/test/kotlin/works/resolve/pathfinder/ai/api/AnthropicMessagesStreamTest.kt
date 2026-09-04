@@ -1,26 +1,12 @@
 package works.resolve.pathfinder.ai.api
 
-import works.resolve.pathfinder.ai.testing.FakeClock
-import works.resolve.pathfinder.ai.AnthropicAllowedFallbackModel
-import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.CacheRetention
-import works.resolve.pathfinder.ai.Context
-import works.resolve.pathfinder.ai.InputModality
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.ModelCost
-import works.resolve.pathfinder.ai.SimpleStreamOptions
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.ThinkingContent
-import works.resolve.pathfinder.ai.ThinkingLevel
-import works.resolve.pathfinder.ai.Tool
-import works.resolve.pathfinder.ai.SimpleToolChoice
-import works.resolve.pathfinder.ai.ToolCall
-import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.testing.FakeTransport
-import works.resolve.pathfinder.ai.providers.ProviderCatalog
-import works.resolve.pathfinder.ai.transport.ProviderHttpException
-import works.resolve.pathfinder.ai.utils.ProviderRetry
+import java.io.File
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
@@ -31,13 +17,27 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assume.assumeTrue
-import java.io.File
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertIs
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
+import works.resolve.pathfinder.ai.AnthropicAllowedFallbackModel
+import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.CacheRetention
+import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.InputModality
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelCost
+import works.resolve.pathfinder.ai.SimpleStreamOptions
+import works.resolve.pathfinder.ai.SimpleToolChoice
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingContent
+import works.resolve.pathfinder.ai.ThinkingLevel
+import works.resolve.pathfinder.ai.Tool
+import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.providers.ProviderCatalog
+import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.testing.FakeTransport
+import works.resolve.pathfinder.ai.transport.ProviderHttpException
+import works.resolve.pathfinder.ai.utils.ProviderRetry
 
 class AnthropicMessagesStreamTest {
 
@@ -51,7 +51,7 @@ class AnthropicMessagesStreamTest {
         input = listOf(InputModality.TEXT, InputModality.IMAGE),
         cost = ModelCost(input = 3.0, output = 15.0, cacheRead = 0.3, cacheWrite = 3.75),
         contextWindow = 200_000,
-        maxTokens = 64_000,
+        maxTokens = 64_000
     )
 
     private val context = Context(messages = listOf(UserMessage.ofText("hi")))
@@ -59,8 +59,8 @@ class AnthropicMessagesStreamTest {
     private fun api(transport: FakeTransport) = AnthropicMessagesApi(
         transport,
 
-ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
-clock = FakeClock(1_770_000_000_000L),
+        ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
+        clock = FakeClock(1_770_000_000_000L)
     )
 
     private fun messageStart(
@@ -68,7 +68,7 @@ clock = FakeClock(1_770_000_000_000L),
         output: Int = 0,
         cacheRead: Int = 0,
         cacheWrite: Int = 0,
-        model: String = "claude-sonnet-4-5",
+        model: String = "claude-sonnet-4-5"
     ) = "message_start" to
         """{"type":"message_start","message":{"id":"msg_test","model":"$model","usage":{"input_tokens":$input,"output_tokens":$output,"cache_read_input_tokens":$cacheRead,"cache_creation_input_tokens":$cacheWrite}}}"""
 
@@ -79,14 +79,14 @@ clock = FakeClock(1_770_000_000_000L),
         cacheRead: Int? = null,
         cacheWrite: Int? = null,
         thinkingTokens: Int? = null,
-        stopDetails: String? = null,
+        stopDetails: String? = null
     ): Pair<String, String> {
         val usageFields = listOfNotNull(
             input?.let { """"input_tokens":$it""" },
             output?.let { """"output_tokens":$it""" },
             cacheRead?.let { """"cache_read_input_tokens":$it""" },
             cacheWrite?.let { """"cache_creation_input_tokens":$it""" },
-            thinkingTokens?.let { """"output_tokens_details":{"thinking_tokens":$it}""" },
+            thinkingTokens?.let { """"output_tokens_details":{"thinking_tokens":$it}""" }
         ).joinToString(",")
         val details = stopDetails?.let { ""","stop_details":$it""" } ?: ""
         val stop = stopReason?.let { "\"$it\"" } ?: "null"
@@ -113,13 +113,15 @@ clock = FakeClock(1_770_000_000_000L),
 
     private fun textStream(vararg deltas: String) = listOf(
         messageStart(),
-        "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+        "content_block_start" to
+            """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
         *deltas.map {
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"$it"}}"""
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"$it"}}"""
         }.toTypedArray(),
         "content_block_stop" to """{"type":"content_block_stop","index":0}""",
         messageDelta(output = 5),
-        messageStop,
+        messageStop
     )
 
     @Test
@@ -133,7 +135,11 @@ clock = FakeClock(1_770_000_000_000L),
         assertIs<AssistantMessageEvent.Start>(events.first())
         val deltas = events.filterIsInstance<AssistantMessageEvent.TextDelta>()
         assertEquals(listOf("Hel", "lo"), deltas.map { it.delta })
-        assertIs<AssistantMessageEvent.TextEnd>(events.filter { it is AssistantMessageEvent.TextEnd }.single())
+        assertIs<AssistantMessageEvent.TextEnd>(
+            events.filter {
+                it is AssistantMessageEvent.TextEnd
+            }.single()
+        )
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(StopReason.STOP, done.reason)
         assertEquals("Hello", assertIs<TextContent>(done.message.content.single()).text)
@@ -151,13 +157,18 @@ clock = FakeClock(1_770_000_000_000L),
             SimpleStreamOptions(
                 apiKey = "k",
                 reasoning = ThinkingLevel.MEDIUM,
-                thinkingBudgets = mapOf(ThinkingLevel.MEDIUM to 4096),
-            ),
+                thinkingBudgets = mapOf(ThinkingLevel.MEDIUM to 4096)
+            )
         ).toList()
 
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals(64_000, body["max_tokens"]!!.jsonPrimitive.content.toInt())
-        assertEquals(4096, body["thinking"]!!.jsonObject["budget_tokens"]!!.jsonPrimitive.content.toInt())
+        assertEquals(
+            4096,
+            body["thinking"]!!.jsonObject["budget_tokens"]!!.jsonPrimitive.content.toInt()
+        )
 
         // xhigh clamps to the high budget.
         val xhigh = FakeTransport()
@@ -165,10 +176,15 @@ clock = FakeClock(1_770_000_000_000L),
         api(xhigh).streamSimple(
             claude,
             context,
-            SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.XHIGH),
+            SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.XHIGH)
         ).toList()
-        val xhighBody = Json.parseToJsonElement(xhigh.requests.single().body.decodeToString()).jsonObject
-        assertEquals(16_384, xhighBody["thinking"]!!.jsonObject["budget_tokens"]!!.jsonPrimitive.content.toInt())
+        val xhighBody = Json.parseToJsonElement(
+            xhigh.requests.single().body.decodeToString()
+        ).jsonObject
+        assertEquals(
+            16_384,
+            xhighBody["thinking"]!!.jsonObject["budget_tokens"]!!.jsonPrimitive.content.toInt()
+        )
     }
 
     @Test
@@ -176,14 +192,18 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(input = 100, cacheRead = 40, cacheWrite = 10),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
             messageDelta(output = 7, thinkingTokens = 3),
-            messageStop,
+            messageStop
         )
         val done = assertIs<AssistantMessageEvent.Done>(
-            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         )
         val usage = done.message.usage
         assertEquals(100, usage.input)
@@ -203,10 +223,12 @@ clock = FakeClock(1_770_000_000_000L),
         transport.enqueueNamedResponse(
             messageStart(input = 100, output = 1),
             messageDelta(input = 120, output = 9, cacheRead = 2, cacheWrite = 3),
-            messageStop,
+            messageStop
         )
         val done = assertIs<AssistantMessageEvent.Done>(
-            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         )
         assertEquals(120, done.message.usage.input)
         assertEquals(9, done.message.usage.output)
@@ -220,15 +242,21 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"thin"}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"king"}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-1"}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"thin"}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"king"}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-1"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
             messageDelta(output = 20),
-            messageStop,
+            messageStop
         )
-        val events = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList()
+        val events = api(
+            transport
+        ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList()
         val deltas = events.filterIsInstance<AssistantMessageEvent.ThinkingDelta>()
         assertEquals(listOf("thin", "king"), deltas.map { it.delta })
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
@@ -239,13 +267,16 @@ clock = FakeClock(1_770_000_000_000L),
 
         transport.enqueueNamedResponse(
             messageStart(),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"opaque"}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"opaque"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
             messageDelta(output = 1),
-            messageStop,
+            messageStop
         )
         val done2 = assertIs<AssistantMessageEvent.Done>(
-            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         )
         val redacted = assertIs<ThinkingContent>(done2.message.content.single())
         assertEquals("[Reasoning redacted]", redacted.thinking)
@@ -258,18 +289,26 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}""",
-            "content_block_start" to """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"edit"}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"pa"}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"th\":1}"}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"edit"}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"pa"}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"th\":1}"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":1}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"s"}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"s"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
             messageDelta(stopReason = "tool_use"),
-            messageStop,
+            messageStop
         )
-        val events = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList()
+        val events = api(
+            transport
+        ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(StopReason.TOOL_USE, done.reason)
         val thinking = assertIs<ThinkingContent>(done.message.content[0])
@@ -289,13 +328,16 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_2","name":"noop"}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_2","name":"noop"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
             messageDelta(stopReason = "tool_use"),
-            messageStop,
+            messageStop
         )
         val done = assertIs<AssistantMessageEvent.Done>(
-            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         )
         assertEquals("{}", assertIs<ToolCall>(done.message.content.single()).arguments)
     }
@@ -305,36 +347,41 @@ clock = FakeClock(1_770_000_000_000L),
         val tool = Tool(
             name = "read",
             description = "reads a file",
-            parameters = Json.parseToJsonElement("{}"),
+            parameters = Json.parseToJsonElement("{}")
         )
         val toolContext = Context(
             messages = listOf(UserMessage.ofText("hi")),
-            tools = listOf(tool),
+            tools = listOf(tool)
         )
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_3","name":"Read","input":{"path":"a.txt"}}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"pa"}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"th\":2}"}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_3","name":"Read","input":{"path":"a.txt"}}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"pa"}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"th\":2}"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
             messageDelta(stopReason = "tool_use"),
-            messageStop,
+            messageStop
         )
         val done = assertIs<AssistantMessageEvent.Done>(
             api(transport)
                 .stream(claude, toolContext, AnthropicMessagesOptions(apiKey = "sk-ant-oat-abc"))
                 .toList()
-                .last(),
+                .last()
         )
         val call = assertIs<ToolCall>(done.message.content.single())
         assertEquals("read", call.name)
         // Streamed partial JSON wins over the content_block_start seed.
         assertEquals("""{"path":2}""", call.arguments)
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals(
             "Read",
-            body["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content,
+            body["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content
         )
     }
 
@@ -343,17 +390,20 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_4","name":"noop","input":{"path":"a.txt"}}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_4","name":"noop","input":{"path":"a.txt"}}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
             messageDelta(stopReason = "tool_use"),
-            messageStop,
+            messageStop
         )
         val done = assertIs<AssistantMessageEvent.Done>(
-            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         )
         assertEquals(
             """{"path":"a.txt"}""",
-            assertIs<ToolCall>(done.message.content.single()).arguments,
+            assertIs<ToolCall>(done.message.content.single()).arguments
         )
     }
 
@@ -362,13 +412,16 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_5","name":"Read"}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_5","name":"Read"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
             messageDelta(stopReason = "tool_use"),
-            messageStop,
+            messageStop
         )
         val done = assertIs<AssistantMessageEvent.Done>(
-            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         )
         assertEquals("Read", assertIs<ToolCall>(done.message.content.single()).name)
     }
@@ -381,88 +434,127 @@ clock = FakeClock(1_770_000_000_000L),
      * here against the fake transport instead.
      */
     @Test
-    fun `claude code name normalization is a case-insensitive lookup, never a name mapping`() = runTest {
-        assertEquals("TodoWrite", toClaudeCodeName("todowrite"))
-        // "find" is not a Claude Code tool name: it must pass through unmapped.
-        assertEquals("find", toClaudeCodeName("find"))
-        val tools = listOf(
-            Tool("todowrite", "Write a todo item.", Json.parseToJsonElement("{}")),
-            Tool("find", "Find files by pattern.", Json.parseToJsonElement("{}")),
-            Tool("my_custom_tool", "A custom tool.", Json.parseToJsonElement("{}")),
-        )
-        assertEquals("todowrite", fromClaudeCodeName("TodoWrite", tools))
-        // Unmatched names pass through unchanged in both directions.
-        assertEquals("Glob", fromClaudeCodeName("Glob", tools))
-        assertEquals("my_custom_tool", fromClaudeCodeName("my_custom_tool", tools))
+    fun `claude code name normalization is a case-insensitive lookup, never a name mapping`() =
+        runTest {
+            assertEquals("TodoWrite", toClaudeCodeName("todowrite"))
+            // "find" is not a Claude Code tool name: it must pass through unmapped.
+            assertEquals("find", toClaudeCodeName("find"))
+            val tools = listOf(
+                Tool("todowrite", "Write a todo item.", Json.parseToJsonElement("{}")),
+                Tool("find", "Find files by pattern.", Json.parseToJsonElement("{}")),
+                Tool("my_custom_tool", "A custom tool.", Json.parseToJsonElement("{}"))
+            )
+            assertEquals("todowrite", fromClaudeCodeName("TodoWrite", tools))
+            // Unmatched names pass through unchanged in both directions.
+            assertEquals("Glob", fromClaudeCodeName("Glob", tools))
+            assertEquals("my_custom_tool", fromClaudeCodeName("my_custom_tool", tools))
 
-        val toolContext = Context(messages = listOf(UserMessage.ofText("hi")), tools = tools)
-        val transport = FakeTransport()
-        transport.enqueueNamedResponse(
-            messageStart(),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_a","name":"TodoWrite"}}""",
-            "content_block_stop" to """{"type":"content_block_stop","index":0}""",
-            "content_block_start" to """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_b","name":"find"}}""",
-            "content_block_stop" to """{"type":"content_block_stop","index":1}""",
-            messageDelta(stopReason = "tool_use"),
-            messageStop,
-        )
-        val done = assertIs<AssistantMessageEvent.Done>(
-            api(transport)
-                .stream(claude, toolContext, AnthropicMessagesOptions(apiKey = "sk-ant-oat-abc"))
-                .toList()
-                .last(),
-        )
-        // Inbound calls come back with the tools' original casing.
-        assertEquals(
-            listOf("todowrite", "find"),
-            done.message.content.map { assertIs<ToolCall>(it).name },
-        )
-        // Outbound tool definitions carry the Claude Code casing where one matches.
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
-        assertEquals(
-            listOf("TodoWrite", "find", "my_custom_tool"),
-            body["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content },
-        )
-    }
+            val toolContext = Context(messages = listOf(UserMessage.ofText("hi")), tools = tools)
+            val transport = FakeTransport()
+            transport.enqueueNamedResponse(
+                messageStart(),
+                "content_block_start" to
+                    """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_a","name":"TodoWrite"}}""",
+                "content_block_stop" to """{"type":"content_block_stop","index":0}""",
+                "content_block_start" to
+                    """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_b","name":"find"}}""",
+                "content_block_stop" to """{"type":"content_block_stop","index":1}""",
+                messageDelta(stopReason = "tool_use"),
+                messageStop
+            )
+            val done = assertIs<AssistantMessageEvent.Done>(
+                api(transport)
+                    .stream(
+                        claude,
+                        toolContext,
+                        AnthropicMessagesOptions(apiKey = "sk-ant-oat-abc")
+                    )
+                    .toList()
+                    .last()
+            )
+            // Inbound calls come back with the tools' original casing.
+            assertEquals(
+                listOf("todowrite", "find"),
+                done.message.content.map { assertIs<ToolCall>(it).name }
+            )
+            // Outbound tool definitions carry the Claude Code casing where one matches.
+            val body = Json.parseToJsonElement(
+                transport.requests.single().body.decodeToString()
+            ).jsonObject
+            assertEquals(
+                listOf("TodoWrite", "find", "my_custom_tool"),
+                body["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
+            )
+        }
 
     @Test
     fun `stop reason mapping covers length refusal pause and sensitive`() = runTest {
         val transport = FakeTransport()
 
-        transport.enqueueNamedResponse(messageStart(), messageDelta(stopReason = "max_tokens"), messageStop)
-        var last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        transport.enqueueNamedResponse(
+            messageStart(),
+            messageDelta(stopReason = "max_tokens"),
+            messageStop
+        )
+        var last = api(
+            transport
+        ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         assertEquals(StopReason.LENGTH, assertIs<AssistantMessageEvent.Done>(last).reason)
 
         transport.enqueueNamedResponse(
             messageStart(),
             messageDelta(
                 stopReason = "refusal",
-                stopDetails = """{"explanation":"cannot help with that"}""",
+                stopDetails = """{"explanation":"cannot help with that"}"""
             ),
-            messageStop,
+            messageStop
         )
-        last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        last =
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         val error = assertIs<AssistantMessageEvent.Error>(last)
         assertEquals(StopReason.ERROR, error.reason)
         assertEquals("cannot help with that", error.error.errorMessage)
         assertEquals("refusal", error.error.rawStopReason)
 
-        transport.enqueueNamedResponse(messageStart(), messageDelta(stopReason = "pause_turn"), messageStop)
-        last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        transport.enqueueNamedResponse(
+            messageStart(),
+            messageDelta(stopReason = "pause_turn"),
+            messageStop
+        )
+        last =
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         assertEquals(StopReason.STOP, assertIs<AssistantMessageEvent.Done>(last).reason)
 
-        transport.enqueueNamedResponse(messageStart(), messageDelta(stopReason = "sensitive"), messageStop)
-        last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        transport.enqueueNamedResponse(
+            messageStart(),
+            messageDelta(stopReason = "sensitive"),
+            messageStop
+        )
+        last =
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         assertEquals(
             "Provider stopped with: sensitive",
-            assertIs<AssistantMessageEvent.Error>(last).error.errorMessage,
+            assertIs<AssistantMessageEvent.Error>(last).error.errorMessage
         )
 
-        transport.enqueueNamedResponse(messageStart(), messageDelta(stopReason = "brand_new_reason"), messageStop)
-        last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        transport.enqueueNamedResponse(
+            messageStart(),
+            messageDelta(stopReason = "brand_new_reason"),
+            messageStop
+        )
+        last =
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         assertTrue(
             "Unhandled stop reason: brand_new_reason" in
-                (assertIs<AssistantMessageEvent.Error>(last).error.errorMessage ?: ""),
+                (assertIs<AssistantMessageEvent.Error>(last).error.errorMessage ?: "")
         )
     }
 
@@ -471,11 +563,15 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}""",
-            messageDelta(output = 1),
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}""",
+            messageDelta(output = 1)
         )
-        val last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        val last = api(
+            transport
+        ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         val error = assertIs<AssistantMessageEvent.Error>(last)
         assertTrue("ended before message_stop" in (error.error.errorMessage ?: ""))
         assertEquals("partial", assertIs<TextContent>(error.error.content.single()).text)
@@ -485,9 +581,12 @@ clock = FakeClock(1_770_000_000_000L),
     fun `stream without a stop reason is an error`() = runTest {
         val transport = FakeTransport()
         transport.enqueueNamedResponse(messageStart(), messageDelta(stopReason = null), messageStop)
-        val last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        val last = api(
+            transport
+        ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         assertTrue(
-            "without a stop reason" in (assertIs<AssistantMessageEvent.Error>(last).error.errorMessage ?: ""),
+            "without a stop reason" in
+                (assertIs<AssistantMessageEvent.Error>(last).error.errorMessage ?: "")
         )
     }
 
@@ -496,9 +595,12 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(),
-            "error" to """{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}""",
+            "error" to
+                """{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"""
         )
-        val last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        val last = api(
+            transport
+        ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         val error = assertIs<AssistantMessageEvent.Error>(last)
         assertTrue("Overloaded" in (error.error.errorMessage ?: ""))
     }
@@ -506,8 +608,15 @@ clock = FakeClock(1_770_000_000_000L),
     @Test
     fun `non-message sse events are ignored`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueNamedResponse(*(listOf(messageStart(), "ping" to """{}""") + textStream("x").drop(1)).toTypedArray())
-        val last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        transport.enqueueNamedResponse(
+            *(
+                listOf(messageStart(), "ping" to """{}""") +
+                    textStream("x").drop(1)
+                ).toTypedArray()
+        )
+        val last = api(
+            transport
+        ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         assertIs<AssistantMessageEvent.Done>(last)
     }
 
@@ -517,18 +626,25 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"Initial text"}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" plus delta"}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"Initial text"}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" plus delta"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
-            "content_block_start" to """{"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":"Initial thinking","signature":"initial signature"}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":" plus delta"}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":1,"delta":{"type":"signature_delta","signature":" plus delta"}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":"Initial thinking","signature":"initial signature"}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":" plus delta"}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":1,"delta":{"type":"signature_delta","signature":" plus delta"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":1}""",
             messageDelta(output = 5),
-            messageStop,
+            messageStop
         )
         val done = assertIs<AssistantMessageEvent.Done>(
-            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         )
         assertEquals("Initial text plus delta", assertIs<TextContent>(done.message.content[0]).text)
         val thinking = assertIs<ThinkingContent>(done.message.content[1])
@@ -542,14 +658,18 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(input = 12),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
             messageDelta(stopReason = "end_turn"),
-            messageStop,
+            messageStop
         )
         val done = assertIs<AssistantMessageEvent.Done>(
-            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         )
         assertEquals(StopReason.STOP, done.reason)
         assertNull(done.message.errorMessage)
@@ -563,10 +683,16 @@ clock = FakeClock(1_770_000_000_000L),
     fun `ignores unknown sse events after message_stop`() = runTest {
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
-            *(textStream("Hello") + listOf("done" to "[DONE]", "proxy.stats" to "not json")).toTypedArray(),
+            *(
+                textStream(
+                    "Hello"
+                ) + listOf("done" to "[DONE]", "proxy.stats" to "not json")
+                ).toTypedArray()
         )
         val done = assertIs<AssistantMessageEvent.Done>(
-            api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+            api(
+                transport
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         )
         assertEquals(StopReason.STOP, done.reason)
         assertNull(done.message.errorMessage)
@@ -578,10 +704,14 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
             messageStart(),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","te""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","te"""
         )
-        val last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        val last = api(
+            transport
+        ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         val error = assertIs<AssistantMessageEvent.Error>(last)
         assertTrue("Could not parse Anthropic SSE event" in (error.error.errorMessage ?: ""))
     }
@@ -589,13 +719,18 @@ clock = FakeClock(1_770_000_000_000L),
     @Test
     fun `non-2xx response produces error event with whole body`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueError(401, """{"type":"error","error":{"type":"auth_error","message":"Invalid API key"}}""")
-        val last = api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
+        transport.enqueueError(
+            401,
+            """{"type":"error","error":{"type":"auth_error","message":"Invalid API key"}}"""
+        )
+        val last = api(
+            transport
+        ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         val error = assertIs<AssistantMessageEvent.Error>(last)
         assertEquals(StopReason.ERROR, error.reason)
         assertEquals(
             """401: {"type":"error","error":{"type":"auth_error","message":"Invalid API key"}}""",
-            error.error.errorMessage,
+            error.error.errorMessage
         )
     }
 
@@ -613,7 +748,11 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(textStream("ok"))
         api(transport)
-            .stream(claude, context, AnthropicMessagesOptions(headers = mapOf("authorization" to "Bearer gateway")))
+            .stream(
+                claude,
+                context,
+                AnthropicMessagesOptions(headers = mapOf("authorization" to "Bearer gateway"))
+            )
             .toList()
         assertEquals(1, transport.requests.size)
         // The merged explicit x-api-key wins over the empty internal one.
@@ -622,7 +761,7 @@ clock = FakeClock(1_770_000_000_000L),
             .stream(
                 claude,
                 context,
-                AnthropicMessagesOptions(headers = mapOf("x-api-key" to "gateway-key")),
+                AnthropicMessagesOptions(headers = mapOf("x-api-key" to "gateway-key"))
             )
             .toList()
         assertEquals("gateway-key", transport.requests.last().headers["x-api-key"])
@@ -633,7 +772,9 @@ clock = FakeClock(1_770_000_000_000L),
     fun `api key request carries x-api-key version and beta headers`() = runTest {
         val transport = FakeTransport()
         transport.enqueueNamedResponse(textStream("ok"))
-        api(transport).stream(claude, context, AnthropicMessagesOptions(apiKey = "test-key")).toList()
+        api(
+            transport
+        ).stream(claude, context, AnthropicMessagesOptions(apiKey = "test-key")).toList()
         val request = transport.requests.single()
         // The beta-namespace endpoint carries ?beta=true unconditionally.
         assertEquals("https://api.anthropic.com/v1/messages?beta=true", request.url)
@@ -660,14 +801,18 @@ clock = FakeClock(1_770_000_000_000L),
             .toList()
         assertEquals(
             "interleaved-thinking-2025-05-14",
-            transport.requests.single().headers["anthropic-beta"],
+            transport.requests.single().headers["anthropic-beta"]
         )
 
         // Explicitly disabled: still omitted.
         val disabled = FakeTransport()
         disabled.enqueueNamedResponse(textStream("ok"))
         api(disabled)
-            .stream(claude, context, AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = false))
+            .stream(
+                claude,
+                context,
+                AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = false)
+            )
             .toList()
         assertNull(disabled.requests.single().headers["anthropic-beta"])
     }
@@ -677,22 +822,22 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(textStream("ok"))
         val tools = listOf(
-            Tool("edit", "Edit.", Json.parseToJsonElement("""{"type":"object"}""")),
+            Tool("edit", "Edit.", Json.parseToJsonElement("""{"type":"object"}"""))
         )
         val legacy = claude.copy(
-            anthropicCompat = claude.anthropicCompat.copy(supportsEagerToolInputStreaming = false),
+            anthropicCompat = claude.anthropicCompat.copy(supportsEagerToolInputStreaming = false)
         )
         api(transport)
             .stream(
                 legacy,
                 Context(messages = listOf(UserMessage.ofText("hi")), tools = tools),
-                AnthropicMessagesOptions(apiKey = "k"),
+                AnthropicMessagesOptions(apiKey = "k")
             )
             .toList()
         // Thinking not enabled: no interleaved beta.
         assertEquals(
             "fine-grained-tool-streaming-2025-05-14",
-            transport.requests.single().headers["anthropic-beta"],
+            transport.requests.single().headers["anthropic-beta"]
         )
 
         val thinking = FakeTransport()
@@ -701,12 +846,12 @@ clock = FakeClock(1_770_000_000_000L),
             .stream(
                 legacy,
                 Context(messages = listOf(UserMessage.ofText("hi")), tools = tools),
-                AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true),
+                AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true)
             )
             .toList()
         assertEquals(
             "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
-            thinking.requests.single().headers["anthropic-beta"],
+            thinking.requests.single().headers["anthropic-beta"]
         )
     }
 
@@ -715,44 +860,54 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(textStream("ok"))
         val adaptive = claude.copy(
-            anthropicCompat = claude.anthropicCompat.copy(forceAdaptiveThinking = true),
+            anthropicCompat = claude.anthropicCompat.copy(forceAdaptiveThinking = true)
         )
         api(transport).stream(adaptive, context, AnthropicMessagesOptions(apiKey = "k")).toList()
         assertNull(transport.requests.single().headers["anthropic-beta"])
     }
 
     @Test
-    fun `allowedFallbackModels add the server-side fallback beta after the interleaved beta`() = runTest {
-        val transport = FakeTransport()
-        transport.enqueueNamedResponse(textStream("ok"))
-        val fable = claude.copy(
-            anthropicCompat = claude.anthropicCompat.copy(
-                allowedFallbackModels = listOf(
-                    AnthropicAllowedFallbackModel(
-                        provider = "anthropic",
-                        model = "claude-opus-4-8",
-                        cost = ModelCost(input = 5.0, output = 25.0, cacheRead = 0.5, cacheWrite = 6.25),
-                    ),
-                ),
-            ),
-        )
-        api(transport)
-            .stream(fable, context, AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true))
-            .toList()
-        assertEquals(
-            "interleaved-thinking-2025-05-14,server-side-fallback-2026-07-01",
-            transport.requests.single().headers["anthropic-beta"],
-        )
+    fun `allowedFallbackModels add the server-side fallback beta after the interleaved beta`() =
+        runTest {
+            val transport = FakeTransport()
+            transport.enqueueNamedResponse(textStream("ok"))
+            val fable = claude.copy(
+                anthropicCompat = claude.anthropicCompat.copy(
+                    allowedFallbackModels = listOf(
+                        AnthropicAllowedFallbackModel(
+                            provider = "anthropic",
+                            model = "claude-opus-4-8",
+                            cost = ModelCost(
+                                input = 5.0,
+                                output = 25.0,
+                                cacheRead = 0.5,
+                                cacheWrite = 6.25
+                            )
+                        )
+                    )
+                )
+            )
+            api(transport)
+                .stream(
+                    fable,
+                    context,
+                    AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true)
+                )
+                .toList()
+            assertEquals(
+                "interleaved-thinking-2025-05-14,server-side-fallback-2026-07-01",
+                transport.requests.single().headers["anthropic-beta"]
+            )
 
-        // Without thinking enabled the fallback beta stands alone.
-        val plain = FakeTransport()
-        plain.enqueueNamedResponse(textStream("ok"))
-        api(plain).stream(fable, context, AnthropicMessagesOptions(apiKey = "k")).toList()
-        assertEquals(
-            "server-side-fallback-2026-07-01",
-            plain.requests.single().headers["anthropic-beta"],
-        )
-    }
+            // Without thinking enabled the fallback beta stands alone.
+            val plain = FakeTransport()
+            plain.enqueueNamedResponse(textStream("ok"))
+            api(plain).stream(fable, context, AnthropicMessagesOptions(apiKey = "k")).toList()
+            assertEquals(
+                "server-side-fallback-2026-07-01",
+                plain.requests.single().headers["anthropic-beta"]
+            )
+        }
 
     private val fableWithFallbacks = claude.copy(
         anthropicCompat = claude.anthropicCompat.copy(
@@ -760,15 +915,20 @@ clock = FakeClock(1_770_000_000_000L),
                 AnthropicAllowedFallbackModel(
                     provider = "anthropic",
                     model = "claude-opus-4-8",
-                    cost = ModelCost(input = 5.0, output = 25.0, cacheRead = 0.5, cacheWrite = 6.25),
+                    cost = ModelCost(
+                        input = 5.0,
+                        output = 25.0,
+                        cacheRead = 0.5,
+                        cacheWrite = 6.25
+                    )
                 ),
                 AnthropicAllowedFallbackModel(
                     provider = "openrouter",
                     model = "claude-opus-5",
-                    cost = ModelCost(input = 99.0, output = 99.0),
-                ),
-            ),
-        ),
+                    cost = ModelCost(input = 99.0, output = 99.0)
+                )
+            )
+        )
     )
 
     @Test
@@ -777,13 +937,13 @@ clock = FakeClock(1_770_000_000_000L),
         transport.enqueueNamedResponse(
             messageStart(input = 100, model = "claude-opus-4-8"),
             messageDelta(output = 7),
-            messageStop,
+            messageStop
         )
         val done = assertIs<AssistantMessageEvent.Done>(
             api(transport)
                 .stream(fableWithFallbacks, context, AnthropicMessagesOptions(apiKey = "k"))
                 .toList()
-                .last(),
+                .last()
         )
         assertEquals("claude-opus-4-8", done.message.responseModel)
         assertEquals("claude-opus-4-8", done.message.model)
@@ -797,13 +957,13 @@ clock = FakeClock(1_770_000_000_000L),
         transport.enqueueNamedResponse(
             messageStart(input = 100, model = "claude-sonnet-4-5"),
             messageDelta(output = 7),
-            messageStop,
+            messageStop
         )
         val done = assertIs<AssistantMessageEvent.Done>(
             api(transport)
                 .stream(fableWithFallbacks, context, AnthropicMessagesOptions(apiKey = "k"))
                 .toList()
-                .last(),
+                .last()
         )
         assertEquals(100 * 3.0 / 1_000_000, done.message.usage.cost.input, 1e-12)
         assertEquals(7 * 15.0 / 1_000_000, done.message.usage.cost.output, 1e-12)
@@ -817,13 +977,13 @@ clock = FakeClock(1_770_000_000_000L),
         transport.enqueueNamedResponse(
             messageStart(input = 100, model = "claude-opus-5"),
             messageDelta(output = 7),
-            messageStop,
+            messageStop
         )
         val done = assertIs<AssistantMessageEvent.Done>(
             api(transport)
                 .stream(fableWithFallbacks, context, AnthropicMessagesOptions(apiKey = "k"))
                 .toList()
-                .last(),
+                .last()
         )
         assertEquals("claude-opus-5", done.message.responseModel)
         assertEquals(100 * 3.0 / 1_000_000, done.message.usage.cost.input, 1e-12)
@@ -843,7 +1003,7 @@ clock = FakeClock(1_770_000_000_000L),
         // Thinking not enabled, so no interleaved beta after the OAuth pair.
         assertEquals(
             "claude-code-20250219,oauth-2025-04-20",
-            request.headers["anthropic-beta"],
+            request.headers["anthropic-beta"]
         )
         assertEquals("claude-cli/2.1.251", request.headers["user-agent"])
         assertEquals("cli", request.headers["x-app"])
@@ -855,9 +1015,9 @@ clock = FakeClock(1_770_000_000_000L),
         baseUrl = "https://api.individual.githubcopilot.com",
         headers = mapOf(
             "User-Agent" to "GitHubCopilotChat/1.0",
-            "Copilot-Integration-Id" to "vscode-chat",
+            "Copilot-Integration-Id" to "vscode-chat"
         ),
-        anthropicCompat = claude.anthropicCompat.copy(forceAdaptiveThinking = true),
+        anthropicCompat = claude.anthropicCompat.copy(forceAdaptiveThinking = true)
     )
 
     @Test
@@ -865,7 +1025,11 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(textStream("ok"))
         api(transport)
-            .stream(copilotClaude, context, AnthropicMessagesOptions(apiKey = "tid_copilot_session_test_token"))
+            .stream(
+                copilotClaude,
+                context,
+                AnthropicMessagesOptions(apiKey = "tid_copilot_session_test_token")
+            )
             .toList()
         val request = transport.requests.single()
         assertEquals("https://api.individual.githubcopilot.com/v1/messages?beta=true", request.url)
@@ -892,7 +1056,11 @@ clock = FakeClock(1_770_000_000_000L),
         // Anthropic-shaped token stays on Bearer with isOAuth false (no
         // Claude Code system prompt or tool-name renaming).
         api(transport)
-            .stream(copilotClaude, context, AnthropicMessagesOptions(apiKey = "sk-ant-api03-copilot"))
+            .stream(
+                copilotClaude,
+                context,
+                AnthropicMessagesOptions(apiKey = "sk-ant-api03-copilot")
+            )
             .toList()
         val request = transport.requests.single()
         assertEquals("sk-ant-api03-copilot", request.bearerToken)
@@ -904,37 +1072,38 @@ clock = FakeClock(1_770_000_000_000L),
     }
 
     @Test
-    fun `copilot explicit request headers override static and dynamic ones case-insensitively`() = runTest {
-        val transport = FakeTransport()
-        transport.enqueueNamedResponse(textStream("ok"))
-        api(transport)
-            .stream(
-                copilotClaude,
-                context,
-                AnthropicMessagesOptions(
-                    apiKey = "tid_token",
-                    headers = mapOf(
-                        "copilot-integration-id" to "jetbrains",
-                        "OPENAI-INTENT" to "completion",
-                        // A null explicit header suppresses the dynamic one.
-                        "x-initiator" to null,
-                    ),
-                ),
-            )
-            .toList()
-        val request = transport.requests.single()
-        assertEquals("jetbrains", request.headers["copilot-integration-id"])
-        assertEquals("completion", request.headers["OPENAI-INTENT"])
-        assertTrue(request.headers.keys.none { it.equals("x-initiator", ignoreCase = true) })
-        assertEquals("tid_token", request.bearerToken)
-    }
+    fun `copilot explicit request headers override static and dynamic ones case-insensitively`() =
+        runTest {
+            val transport = FakeTransport()
+            transport.enqueueNamedResponse(textStream("ok"))
+            api(transport)
+                .stream(
+                    copilotClaude,
+                    context,
+                    AnthropicMessagesOptions(
+                        apiKey = "tid_token",
+                        headers = mapOf(
+                            "copilot-integration-id" to "jetbrains",
+                            "OPENAI-INTENT" to "completion",
+                            // A null explicit header suppresses the dynamic one.
+                            "x-initiator" to null
+                        )
+                    )
+                )
+                .toList()
+            val request = transport.requests.single()
+            assertEquals("jetbrains", request.headers["copilot-integration-id"])
+            assertEquals("completion", request.headers["OPENAI-INTENT"])
+            assertTrue(request.headers.keys.none { it.equals("x-initiator", ignoreCase = true) })
+            assertEquals("tid_token", request.bearerToken)
+        }
 
     @Test
     fun `session affinity header sent only when enabled with a session`() = runTest {
         val transport = FakeTransport()
         transport.enqueueNamedResponse(textStream("ok"))
         val affinity = claude.copy(
-            anthropicCompat = claude.anthropicCompat.copy(sendSessionAffinityHeaders = true),
+            anthropicCompat = claude.anthropicCompat.copy(sendSessionAffinityHeaders = true)
         )
         api(transport)
             .stream(affinity, context, AnthropicMessagesOptions(apiKey = "k", sessionId = "sess-1"))
@@ -962,7 +1131,12 @@ clock = FakeClock(1_770_000_000_000L),
             .stream(claude, context, AnthropicMessagesOptions(apiKey = "k"))
             .take(3) // Start, TextStart, first TextDelta
             .toList()
-        assertTrue(events.none { it is AssistantMessageEvent.Error }, "cancellation must not emit Error")
+        assertTrue(
+            events.none {
+                it is AssistantMessageEvent.Error
+            },
+            "cancellation must not emit Error"
+        )
         assertTrue(transport.cancelled.value, "transport must observe cancellation")
     }
 
@@ -973,7 +1147,9 @@ clock = FakeClock(1_770_000_000_000L),
         api(transport)
             .streamSimple(claude, context, SimpleStreamOptions(apiKey = "k"))
             .toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals("disabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
     }
 
@@ -985,10 +1161,12 @@ clock = FakeClock(1_770_000_000_000L),
             .streamSimple(
                 claude,
                 context,
-                SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.MEDIUM),
+                SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.MEDIUM)
             )
             .toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         val thinking = body["thinking"]!!.jsonObject
         assertEquals("enabled", thinking["type"]!!.jsonPrimitive.content)
         // medium -> 8192 budget.
@@ -1005,10 +1183,12 @@ clock = FakeClock(1_770_000_000_000L),
             .streamSimple(
                 small,
                 context,
-                SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.HIGH, maxTokens = 2048),
+                SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.HIGH, maxTokens = 2048)
             )
             .toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         val thinking = body["thinking"]!!.jsonObject
         // high -> 16384 budget; ceiling 2048+16384 capped at 4096, budget clamped
         // to ceiling - 1024.
@@ -1021,16 +1201,18 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(textStream("ok"))
         val adaptive = claude.copy(
-            anthropicCompat = claude.anthropicCompat.copy(forceAdaptiveThinking = true),
+            anthropicCompat = claude.anthropicCompat.copy(forceAdaptiveThinking = true)
         )
         api(transport)
             .streamSimple(
                 adaptive,
                 context,
-                SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.LOW),
+                SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.LOW)
             )
             .toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals("adaptive", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("low", body["output_config"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
     }
@@ -1043,32 +1225,45 @@ clock = FakeClock(1_770_000_000_000L),
      * the generated asset provides the same models.
      */
     @Test
-    fun `thinking off sends disabled for budget and adaptive models and omits it when off is null`() = runTest {
-        val catalog = realAsset()
-        val budget = catalog.getModel("anthropic", "claude-sonnet-4-5")!!
-        val adaptive = catalog.getModel("anthropic", "claude-opus-4-8")!!
-        val offUnsupported = catalog.getModel("anthropic", "claude-fable-5")!!
+    fun `thinking off sends disabled for budget and adaptive models and omits it when off is null`() =
+        runTest {
+            val catalog = realAsset()
+            val budget = catalog.getModel("anthropic", "claude-sonnet-4-5")!!
+            val adaptive = catalog.getModel("anthropic", "claude-opus-4-8")!!
+            val offUnsupported = catalog.getModel("anthropic", "claude-fable-5")!!
 
-        for (model in listOf(budget, adaptive)) {
+            for (model in listOf(budget, adaptive)) {
+                val transport = FakeTransport()
+                transport.enqueueNamedResponse(textStream("ok"))
+                api(
+                    transport
+                ).streamSimple(model, context, SimpleStreamOptions(apiKey = "fake-key")).toList()
+                val body = Json.parseToJsonElement(
+                    transport.requests.single().body.decodeToString()
+                ).jsonObject
+                assertEquals(
+                    """{"type":"disabled"}""",
+                    body["thinking"].toString(),
+                    "model ${model.id}"
+                )
+                assertNull(body["output_config"], "model ${model.id}")
+            }
+
             val transport = FakeTransport()
             transport.enqueueNamedResponse(textStream("ok"))
-            api(transport).streamSimple(model, context, SimpleStreamOptions(apiKey = "fake-key")).toList()
-            val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
-            assertEquals(
-                """{"type":"disabled"}""",
-                body["thinking"].toString(),
-                "model ${model.id}",
-            )
-            assertNull(body["output_config"], "model ${model.id}")
+            api(
+                transport
+            ).streamSimple(
+                offUnsupported,
+                context,
+                SimpleStreamOptions(apiKey = "fake-key")
+            ).toList()
+            val body = Json.parseToJsonElement(
+                transport.requests.single().body.decodeToString()
+            ).jsonObject
+            assertNull(body["thinking"])
+            assertNull(body["output_config"])
         }
-
-        val transport = FakeTransport()
-        transport.enqueueNamedResponse(textStream("ok"))
-        api(transport).streamSimple(offUnsupported, context, SimpleStreamOptions(apiKey = "fake-key")).toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
-        assertNull(body["thinking"])
-        assertNull(body["output_config"])
-    }
 
     /**
      * Ports anthropic-thinking-disable: adaptive models map reasoning levels
@@ -1083,25 +1278,31 @@ clock = FakeClock(1_770_000_000_000L),
 
         val cases = mapOf(
             opus48 to mapOf(ThinkingLevel.HIGH to "high", ThinkingLevel.XHIGH to "xhigh"),
-            sonnet5 to mapOf(ThinkingLevel.HIGH to "high"),
+            sonnet5 to mapOf(ThinkingLevel.HIGH to "high")
         )
         for ((model, levels) in cases) {
             for ((level, expectedEffort) in levels) {
                 val transport = FakeTransport()
                 transport.enqueueNamedResponse(textStream("ok"))
                 api(transport)
-                    .streamSimple(model, context, SimpleStreamOptions(apiKey = "fake-key", reasoning = level))
+                    .streamSimple(
+                        model,
+                        context,
+                        SimpleStreamOptions(apiKey = "fake-key", reasoning = level)
+                    )
                     .toList()
-                val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+                val body = Json.parseToJsonElement(
+                    transport.requests.single().body.decodeToString()
+                ).jsonObject
                 assertEquals(
                     """{"type":"adaptive","display":"summarized"}""",
                     body["thinking"].toString(),
-                    "model ${model.id} level $level",
+                    "model ${model.id} level $level"
                 )
                 assertEquals(
                     expectedEffort,
                     body["output_config"]!!.jsonObject["effort"]!!.jsonPrimitive.content,
-                    "model ${model.id} level $level",
+                    "model ${model.id} level $level"
                 )
             }
         }
@@ -1114,19 +1315,30 @@ clock = FakeClock(1_770_000_000_000L),
      */
     @Test
     fun `streamSimple forwards each toolChoice shape to the wire`() = runTest {
-        val tool = Tool(name = "edit", description = "Edit a file.", parameters = Json.parseToJsonElement("""{"type":"object"}"""))
+        val tool =
+            Tool(
+                name = "edit",
+                description = "Edit a file.",
+                parameters = Json.parseToJsonElement("""{"type":"object"}""")
+            )
         val tooledContext = context.copy(tools = listOf(tool))
         val cases = mapOf(
             SimpleToolChoice.Auto to "auto",
-            SimpleToolChoice.None to "none",
+            SimpleToolChoice.None to "none"
         )
         for ((choice, expected) in cases) {
             val transport = FakeTransport()
             transport.enqueueNamedResponse(textStream("ok"))
             api(transport)
-                .streamSimple(claude, tooledContext, SimpleStreamOptions(apiKey = "k", toolChoice = choice))
+                .streamSimple(
+                    claude,
+                    tooledContext,
+                    SimpleStreamOptions(apiKey = "k", toolChoice = choice)
+                )
                 .toList()
-            val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+            val body = Json.parseToJsonElement(
+                transport.requests.single().body.decodeToString()
+            ).jsonObject
             assertEquals(expected, body["tool_choice"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         }
         // Provider-level options still carry the full Anthropic union.
@@ -1136,11 +1348,16 @@ clock = FakeClock(1_770_000_000_000L),
             .stream(
                 claude,
                 tooledContext,
-                AnthropicMessagesOptions(apiKey = "k", toolChoice = AnthropicToolChoice.Tool("edit")),
+                AnthropicMessagesOptions(
+                    apiKey = "k",
+                    toolChoice = AnthropicToolChoice.Tool("edit")
+                )
             )
             .toList()
         val forcedChoice =
-            Json.parseToJsonElement(forced.requests.single().body.decodeToString()).jsonObject["tool_choice"]!!.jsonObject
+            Json.parseToJsonElement(
+                forced.requests.single().body.decodeToString()
+            ).jsonObject["tool_choice"]!!.jsonObject
         assertEquals("tool", forcedChoice["type"]!!.jsonPrimitive.content)
         assertEquals("edit", forcedChoice["name"]!!.jsonPrimitive.content)
     }
@@ -1153,14 +1370,16 @@ clock = FakeClock(1_770_000_000_000L),
             .streamSimple(
                 claude,
                 Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi"))),
-                SimpleStreamOptions(apiKey = "k", cacheRetention = CacheRetention.LONG),
+                SimpleStreamOptions(apiKey = "k", cacheRetention = CacheRetention.LONG)
             )
             .toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals(
             "1h",
             body["system"]!!.jsonArray.single().jsonObject["cache_control"]!!
-                .jsonObject["ttl"]!!.jsonPrimitive.content,
+                .jsonObject["ttl"]!!.jsonPrimitive.content
         )
     }
 
@@ -1169,13 +1388,17 @@ clock = FakeClock(1_770_000_000_000L),
         val transport = FakeTransport()
         transport.enqueueNamedResponse(textStream("ok"))
         val affinity = claude.copy(
-            anthropicCompat = claude.anthropicCompat.copy(sendSessionAffinityHeaders = true),
+            anthropicCompat = claude.anthropicCompat.copy(sendSessionAffinityHeaders = true)
         )
         api(transport)
             .streamSimple(
                 affinity,
                 Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi"))),
-                SimpleStreamOptions(apiKey = "k", sessionId = "sess-1", cacheRetention = CacheRetention.NONE),
+                SimpleStreamOptions(
+                    apiKey = "k",
+                    sessionId = "sess-1",
+                    cacheRetention = CacheRetention.NONE
+                )
             )
             .toList()
         val request = transport.requests.single()
@@ -1204,27 +1427,35 @@ clock = FakeClock(1_770_000_000_000L),
             api = "openai-completions",
             provider = "openai",
             model = "gpt-5",
-            stopReason = StopReason.STOP,
+            stopReason = StopReason.STOP
         )
         api(transport)
             .stream(
                 claude,
                 Context(
                     systemPrompt = "sys",
-                    messages = listOf(foreign, UserMessage.ofText("next")),
+                    messages = listOf(foreign, UserMessage.ofText("next"))
                 ),
-                AnthropicMessagesOptions(apiKey = "k"),
+                AnthropicMessagesOptions(apiKey = "k")
             )
             .toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         val messages = body["messages"]!!.jsonArray
         assertEquals(2, messages.size)
         // Assistant thinking became a text block ahead of its original text.
         val assistantBlocks = messages[0].jsonObject["content"]!!
             .let { it as kotlinx.serialization.json.JsonArray }
-        assertEquals("foreign thoughts", assistantBlocks[0].jsonObject["text"]!!.jsonPrimitive.content)
+        assertEquals(
+            "foreign thoughts",
+            assistantBlocks[0].jsonObject["text"]!!.jsonPrimitive.content
+        )
         assertEquals("hello", assistantBlocks[1].jsonObject["text"]!!.jsonPrimitive.content)
-        assertEquals("sys", body["system"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content)
+        assertEquals(
+            "sys",
+            body["system"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content
+        )
     }
 
     // ---- Mid-conversation effort stream behavior (ports
@@ -1234,8 +1465,8 @@ clock = FakeClock(1_770_000_000_000L),
         id = "claude-fable-5-1",
         anthropicCompat = claude.anthropicCompat.copy(
             forceAdaptiveThinking = true,
-            supportsMidConvoEffort = true,
-        ),
+            supportsMidConvoEffort = true
+        )
     )
 
     /** Ports "sends the effort and binding beta headers". */
@@ -1247,13 +1478,16 @@ clock = FakeClock(1_770_000_000_000L),
             .stream(
                 managedClaude(),
                 context,
-                AnthropicMessagesOptions(apiKey = "test-key", cacheRetention = CacheRetention.NONE),
+                AnthropicMessagesOptions(apiKey = "test-key", cacheRetention = CacheRetention.NONE)
             )
             .toList()
         val beta = transport.requests.single().headers["anthropic-beta"]!!
         assertTrue("mid-conversation-output-config-2026-07-01" in beta, beta)
         assertTrue("thinking-binding-controls-2026-08-01" in beta, beta)
-        assertEquals("https://api.anthropic.com/v1/messages?beta=true", transport.requests.single().url)
+        assertEquals(
+            "https://api.anthropic.com/v1/messages?beta=true",
+            transport.requests.single().url
+        )
     }
 
     /** Ports the providerThinkingLevel assertions of the payload-capture cases. */
@@ -1266,10 +1500,10 @@ clock = FakeClock(1_770_000_000_000L),
                 .stream(
                     managedClaude(),
                     context,
-                    AnthropicMessagesOptions(apiKey = "k", effort = AnthropicEffort.LOW),
+                    AnthropicMessagesOptions(apiKey = "k", effort = AnthropicEffort.LOW)
                 )
                 .toList()
-                .last(),
+                .last()
         )
         assertEquals("low", done.message.providerThinkingLevel)
 
@@ -1280,7 +1514,7 @@ clock = FakeClock(1_770_000_000_000L),
             api(defaulted)
                 .stream(managedClaude(), context, AnthropicMessagesOptions(apiKey = "k"))
                 .toList()
-                .last(),
+                .last()
         )
         assertEquals("high", doneDefault.message.providerThinkingLevel)
 
@@ -1291,7 +1525,7 @@ clock = FakeClock(1_770_000_000_000L),
             api(plain)
                 .stream(claude, context, AnthropicMessagesOptions(apiKey = "k"))
                 .toList()
-                .last(),
+                .last()
         )
         assertNull(donePlain.message.providerThinkingLevel)
     }
@@ -1301,29 +1535,45 @@ clock = FakeClock(1_770_000_000_000L),
     fun `input transformations from the final stream event become a diagnostic`() = runTest {
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
-            "message_start" to """{"type":"message_start","message":{"id":"msg_transformations","model":"claude-fable-5-1","usage":{"input_tokens":12,"output_tokens":0},"input_transformations":[{"type":"thinking_dropped","path":"messages.1.content.0","reason":"prefix_binding_mismatch"}]}}""",
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}""",
+            "message_start" to
+                """{"type":"message_start","message":{"id":"msg_transformations","model":"claude-fable-5-1","usage":{"input_tokens":12,"output_tokens":0},"input_transformations":[{"type":"thinking_dropped","path":"messages.1.content.0","reason":"prefix_binding_mismatch"}]}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
-            "message_delta" to """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":12,"output_tokens":5},"input_transformations":[{"type":"thinking_dropped","path":"messages.3.content.0","reason":"model_binding_mismatch"}]}""",
-            messageStop,
+            "message_delta" to
+                """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":12,"output_tokens":5},"input_transformations":[{"type":"thinking_dropped","path":"messages.3.content.0","reason":"model_binding_mismatch"}]}""",
+            messageStop
         )
         val done = assertIs<AssistantMessageEvent.Done>(
-            api(transport).stream(managedClaude(), context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+            api(
+                transport
+            ).stream(
+                managedClaude(),
+                context,
+                AnthropicMessagesOptions(apiKey = "k")
+            ).toList().last()
         )
         // message_delta's list replaces message_start's.
         val diagnostic = done.message.diagnostics.single()
         assertEquals("anthropic_input_transformations", diagnostic.type)
         assertEquals(
             """{"transformations":[{"type":"thinking_dropped","path":"messages.3.content.0","reason":"model_binding_mismatch"}]}""",
-            diagnostic.details.toString(),
+            diagnostic.details.toString()
         )
 
         // Streams without transformations carry no diagnostics.
         val plain = FakeTransport()
         plain.enqueueNamedResponse(textStream("ok"))
         val donePlain = assertIs<AssistantMessageEvent.Done>(
-            api(plain).stream(managedClaude(), context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+            api(
+                plain
+            ).stream(
+                managedClaude(),
+                context,
+                AnthropicMessagesOptions(apiKey = "k")
+            ).toList().last()
         )
         assertTrue(donePlain.message.diagnostics.isEmpty())
     }
@@ -1335,15 +1585,20 @@ clock = FakeClock(1_770_000_000_000L),
         val leading = FakeTransport()
         leading.enqueueNamedResponse(
             "message_start" to messageStart(model = "claude-opus-4-8").second,
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"fallback","from":{"model":"claude-opus-5"},"to":{"model":"claude-opus-4-8"}}}""",
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
-            "content_block_delta" to """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"fallback","from":{"model":"claude-opus-5"},"to":{"model":"claude-opus-4-8"}}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            "content_block_delta" to
+                """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
             messageDelta(output = 5),
-            messageStop,
+            messageStop
         )
         val done = assertIs<AssistantMessageEvent.Done>(
-            api(leading).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+            api(
+                leading
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         )
         assertEquals(StopReason.STOP, done.reason)
 
@@ -1351,12 +1606,16 @@ clock = FakeClock(1_770_000_000_000L),
         val midOutput = FakeTransport()
         midOutput.enqueueNamedResponse(
             messageStart(),
-            "content_block_start" to """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"partial"}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"partial"}}""",
             "content_block_stop" to """{"type":"content_block_stop","index":0}""",
-            "content_block_start" to """{"type":"content_block_start","index":1,"content_block":{"type":"fallback","from":{"model":"claude-opus-5"},"to":{"model":"claude-opus-4-8"}}}""",
+            "content_block_start" to
+                """{"type":"content_block_start","index":1,"content_block":{"type":"fallback","from":{"model":"claude-opus-5"},"to":{"model":"claude-opus-4-8"}}}"""
         )
         val error = assertIs<AssistantMessageEvent.Error>(
-            api(midOutput).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last(),
+            api(
+                midOutput
+            ).stream(claude, context, AnthropicMessagesOptions(apiKey = "k")).toList().last()
         )
         assertTrue("unsupported mid-output model fallback" in (error.error.errorMessage ?: ""))
     }
@@ -1374,9 +1633,13 @@ clock = FakeClock(1_770_000_000_000L),
                     apiKey = "k",
                     thinkingEnabled = true,
                     onPayload = { payload, _ ->
-                        JsonObject(payload.toMutableMap().apply { put("stream", JsonPrimitive(false)) })
-                    },
-                ),
+                        JsonObject(
+                            payload.toMutableMap().apply {
+                                put("stream", JsonPrimitive(false))
+                            }
+                        )
+                    }
+                )
             )
             .toList()
         val request = transport.requests.single()
@@ -1396,7 +1659,11 @@ clock = FakeClock(1_770_000_000_000L),
             .stream(
                 claude,
                 context,
-                AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true, headers = mapOf("anthropic-beta" to "custom-beta")),
+                AnthropicMessagesOptions(
+                    apiKey = "k",
+                    thinkingEnabled = true,
+                    headers = mapOf("anthropic-beta" to "custom-beta")
+                )
             )
             .toList()
         assertEquals("custom-beta", override.requests.single().headers["anthropic-beta"])
@@ -1407,7 +1674,11 @@ clock = FakeClock(1_770_000_000_000L),
             .stream(
                 claude,
                 context,
-                AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true, headers = mapOf("anthropic-beta" to null)),
+                AnthropicMessagesOptions(
+                    apiKey = "k",
+                    thinkingEnabled = true,
+                    headers = mapOf("anthropic-beta" to null)
+                )
             )
             .toList()
         assertNull(suppressed.requests.single().headers["anthropic-beta"])
@@ -1424,7 +1695,7 @@ clock = FakeClock(1_770_000_000_000L),
             .stream(
                 claude.copy(headers = mapOf("anthropic-beta" to " b ,,a ")),
                 context,
-                AnthropicMessagesOptions(apiKey = "k"),
+                AnthropicMessagesOptions(apiKey = "k")
             )
             .toList()
         assertEquals(" b ,,a ", modelOverride.requests.single().headers["anthropic-beta"])

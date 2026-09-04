@@ -1,9 +1,7 @@
 package works.resolve.pathfinder.ai.api
 
+import java.io.File
 import java.util.Base64
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -12,17 +10,21 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import org.junit.Assume.assumeTrue
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
@@ -34,20 +36,18 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
-import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.NetworkException
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
-import works.resolve.pathfinder.ai.providers.ProviderCatalog
-import java.io.File
-import org.junit.Assume.assumeTrue
 
 class OpenAiCodexResponsesApiTest {
 
@@ -61,10 +61,11 @@ class OpenAiCodexResponsesApiTest {
         cost = ModelCost(input = 1.0, output = 2.0),
         contextWindow = 400_000,
         maxTokens = 128_000,
-        responsesCompat = OpenAiResponsesCompat(supportsStrictMode = true),
+        responsesCompat = OpenAiResponsesCompat(supportsStrictMode = true)
     )
 
-    private val context = Context(systemPrompt = "You are Codex.", messages = listOf(UserMessage.ofText("hi")))
+    private val context =
+        Context(systemPrompt = "You are Codex.", messages = listOf(UserMessage.ofText("hi")))
 
     private val apiKey = jwt("acc-123")
 
@@ -72,20 +73,22 @@ class OpenAiCodexResponsesApiTest {
         transport: FakeTransport,
         calls: MutableList<Long> = mutableListOf(),
         compressRequestBody: (String) -> ByteArray? = ::compressRequestBodyZstd,
-        ioDispatcher: CoroutineDispatcher = Dispatchers.Unconfined,
+        ioDispatcher: CoroutineDispatcher = Dispatchers.Unconfined
     ) = OpenAICodexResponsesApi(
         transport,
         clock = FakeClock(0L),
         sleep = { calls.add(it) },
         compressRequestBody = compressRequestBody,
         ioDispatcher = ioDispatcher,
-        webSocketTransport = NoWebSocketTransport,
+        webSocketTransport = NoWebSocketTransport
     )
 
     private fun requestBodyText(transport: FakeTransport, index: Int = 0): String {
         val request = transport.requests[index]
         if (request.headers["content-encoding"] != "zstd") return request.body.decodeToString()
-        return com.github.luben.zstd.ZstdInputStream(request.body.inputStream()).readBytes().decodeToString()
+        return com.github.luben.zstd.ZstdInputStream(
+            request.body.inputStream()
+        ).readBytes().decodeToString()
     }
 
     private fun bodyOf(transport: FakeTransport, index: Int = 0) =
@@ -95,23 +98,23 @@ class OpenAiCodexResponsesApiTest {
     fun `codex urls resolve from base url variants`() {
         assertEquals(
             "https://chatgpt.com/backend-api/codex/responses",
-            resolveCodexUrl(null),
+            resolveCodexUrl(null)
         )
         assertEquals(
             "https://chatgpt.com/backend-api/codex/responses",
-            resolveCodexUrl("https://chatgpt.com/backend-api/"),
+            resolveCodexUrl("https://chatgpt.com/backend-api/")
         )
         assertEquals(
             "https://chatgpt.com/backend-api/codex/responses",
-            resolveCodexUrl("https://chatgpt.com/backend-api/codex"),
+            resolveCodexUrl("https://chatgpt.com/backend-api/codex")
         )
         assertEquals(
             "https://chatgpt.com/backend-api/codex/responses",
-            resolveCodexUrl("https://chatgpt.com/backend-api/codex/responses/"),
+            resolveCodexUrl("https://chatgpt.com/backend-api/codex/responses/")
         )
         assertEquals(
             "https://proxy.example/codex/responses",
-            resolveCodexUrl("https://proxy.example"),
+            resolveCodexUrl("https://proxy.example")
         )
     }
 
@@ -120,7 +123,7 @@ class OpenAiCodexResponsesApiTest {
         assertEquals("acc-123", extractAccountId(apiKey))
         assertTrue(
             kotlin.test.assertFailsWith<IllegalStateException> { extractAccountId("not-a-jwt") }
-                .message!!.contains("Failed to extract accountId"),
+                .message!!.contains("Failed to extract accountId")
         )
     }
 
@@ -130,7 +133,7 @@ class OpenAiCodexResponsesApiTest {
         """{"type":"response.output_text.delta","output_index":0,"delta":"$text"}""",
         """{"type":"response.done","response":{"id":"resp_1","status":"completed","end_turn":true,
             "usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}""",
-        "[DONE]",
+        "[DONE]"
     )
 
     @Test
@@ -140,7 +143,7 @@ class OpenAiCodexResponsesApiTest {
         val events = api(transport).stream(
             model,
             context,
-            OpenAICodexResponsesOptions(apiKey = apiKey, sessionId = "session-1"),
+            OpenAICodexResponsesOptions(apiKey = apiKey, sessionId = "session-1")
         ).toList()
         assertIs<AssistantMessageEvent.Done>(events.last())
         val request = transport.requests.single()
@@ -172,15 +175,18 @@ class OpenAiCodexResponsesApiTest {
         val events = api(transport).stream(
             model,
             context,
-            OpenAICodexResponsesOptions(apiKey = apiKey, sessionId = "session-1"),
+            OpenAICodexResponsesOptions(apiKey = apiKey, sessionId = "session-1")
         ).toList()
         assertIs<AssistantMessageEvent.Done>(events.last())
         val request = transport.requests.single()
         assertEquals("zstd", request.headers["content-encoding"])
         assertTrue(
             request.body.contentEquals(
-                com.github.luben.zstd.Zstd.compress(requestBodyText(transport).toByteArray(Charsets.UTF_8), 3),
-            ),
+                com.github.luben.zstd.Zstd.compress(
+                    requestBodyText(transport).toByteArray(Charsets.UTF_8),
+                    3
+                )
+            )
         )
         assertEquals("gpt-5.1-codex", bodyOf(transport)["model"]!!.jsonPrimitive.content)
     }
@@ -192,14 +198,14 @@ class OpenAiCodexResponsesApiTest {
         val events = api(transport, compressRequestBody = { null }).stream(
             model,
             context,
-            OpenAICodexResponsesOptions(apiKey = apiKey),
+            OpenAICodexResponsesOptions(apiKey = apiKey)
         ).toList()
         assertIs<AssistantMessageEvent.Done>(events.last())
         val request = transport.requests.single()
         assertNull(request.headers["content-encoding"])
         assertEquals(
             responsesJson.parseToJsonElement(request.body.decodeToString()).jsonObject,
-            bodyOf(transport),
+            bodyOf(transport)
         )
         assertEquals("gpt-5.1-codex", bodyOf(transport)["model"]!!.jsonPrimitive.content)
     }
@@ -218,8 +224,8 @@ class OpenAiCodexResponsesApiTest {
                         payload.forEach { (k, v) -> put(k, v) }
                         put("model", kotlinx.serialization.json.JsonPrimitive("replaced-model"))
                     }
-                },
-            ),
+                }
+            )
         ).toList()
         assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals("zstd", transport.requests.single().headers["content-encoding"])
@@ -235,23 +241,33 @@ class OpenAiCodexResponsesApiTest {
                 put("type", "object")
                 put(
                     "properties",
-                    buildJsonObject { put("payload", buildJsonObject { put("type", "string") }) },
+                    buildJsonObject { put("payload", buildJsonObject { put("type", "string") }) }
                 )
-                put("required", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("payload")) })
+                put(
+                    "required",
+                    buildJsonArray {
+                        add(kotlinx.serialization.json.JsonPrimitive("payload"))
+                    }
+                )
                 put("additionalProperties", false)
             },
             constrainedSampling = ConstrainedSamplingConfig.Grammar(
-                mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/"),
-            ),
+                mapOf(GrammarFormat.OPENAI_LARK to "start: /[a-z]+/")
+            )
         )
         val grammarModel = model.copy(
-            responsesCompat = OpenAiResponsesCompat(supportsStrictMode = true, supportsOpenAIGrammarTools = true),
+            responsesCompat = OpenAiResponsesCompat(
+                supportsStrictMode = true,
+                supportsOpenAIGrammarTools = true
+            )
         )
         val toolContext = context.copy(tools = listOf(grammarTool))
 
         val enabled = FakeTransport()
         enabled.enqueueResponse(sse(*doneEvents().toTypedArray()))
-        api(enabled).stream(grammarModel, toolContext, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        api(
+            enabled
+        ).stream(grammarModel, toolContext, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         val custom = bodyOf(enabled)["tools"]!!.jsonArray.single().jsonObject
         assertEquals("custom", custom["type"]!!.jsonPrimitive.content)
         val format = custom["format"]!!.jsonObject
@@ -261,7 +277,9 @@ class OpenAiCodexResponsesApiTest {
 
         val fallback = FakeTransport()
         fallback.enqueueResponse(sse(*doneEvents().toTypedArray()))
-        api(fallback).stream(model, toolContext, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        api(
+            fallback
+        ).stream(model, toolContext, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         val function = bodyOf(fallback)["tools"]!!.jsonArray.single().jsonObject
         assertEquals("function", function["type"]!!.jsonPrimitive.content)
         assertNull(function["strict"])
@@ -274,11 +292,11 @@ class OpenAiCodexResponsesApiTest {
         api(transport).stream(
             model,
             context.copy(systemPrompt = null),
-            OpenAICodexResponsesOptions(apiKey = apiKey),
+            OpenAICodexResponsesOptions(apiKey = apiKey)
         ).toList()
         assertEquals(
             "You are a helpful assistant.",
-            bodyOf(transport)["instructions"]!!.jsonPrimitive.content,
+            bodyOf(transport)["instructions"]!!.jsonPrimitive.content
         )
     }
 
@@ -289,7 +307,10 @@ class OpenAiCodexResponsesApiTest {
         api(transport).stream(
             model,
             context,
-            OpenAICodexResponsesOptions(apiKey = apiKey, reasoningEffort = works.resolve.pathfinder.ai.ModelThinkingLevel.HIGH),
+            OpenAICodexResponsesOptions(
+                apiKey = apiKey,
+                reasoningEffort = works.resolve.pathfinder.ai.ModelThinkingLevel.HIGH
+            )
         ).toList()
         val body = bodyOf(transport)
         assertEquals("high", body["reasoning"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
@@ -303,7 +324,7 @@ class OpenAiCodexResponsesApiTest {
         api(transport).stream(
             model.copy(thinkingLevelMap = ThinkingLevelMap.of(ModelThinkingLevel.OFF to null)),
             context,
-            OpenAICodexResponsesOptions(apiKey = apiKey, reasoningEffort = ModelThinkingLevel.OFF),
+            OpenAICodexResponsesOptions(apiKey = apiKey, reasoningEffort = ModelThinkingLevel.OFF)
         ).toList()
         assertNull(bodyOf(transport)["reasoning"])
     }
@@ -312,7 +333,9 @@ class OpenAiCodexResponsesApiTest {
     fun `response done normalizes to completed with end turn and usage`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*doneEvents("answer").toTypedArray()))
-        val events = api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(StopReason.STOP, done.reason)
         assertEquals(true, done.message.endTurn)
@@ -330,9 +353,11 @@ class OpenAiCodexResponsesApiTest {
             "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
             """{"type":"response.output_text.delta","output_index":0,"delta":"Hello"}""",
             """{"type":"response.completed","response":{"id":"resp_1","status":"completed","end_turn":false,
-            "usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}""",
+            "usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}"""
         )
-        val events = api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(StopReason.STOP, done.reason)
         assertEquals(false, done.message.endTurn)
@@ -348,9 +373,11 @@ class OpenAiCodexResponsesApiTest {
             """{"type":"response.output_text.delta","output_index":0,"delta":"Hello"}""",
             """{"type":"response.incomplete","response":{"id":"resp_1","status":"incomplete",
             "incomplete_details":{"reason":"max_output_tokens"},
-            "usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}""",
+            "usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}"""
         )
-        val events = api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(StopReason.LENGTH, done.reason)
         assertEquals("Hello", (done.message.content.single() as TextContent).text)
@@ -362,12 +389,14 @@ class OpenAiCodexResponsesApiTest {
         transport.enqueueHangingResponse(
             """{"type":"response.output_item.added","output_index":0,
             "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
-            """{"type":"response.output_text.delta","output_index":0,"delta":"partial"}""",
+            """{"type":"response.output_text.delta","output_index":0,"delta":"partial"}"""
         )
         val events = ArrayList<AssistantMessageEvent>()
         try {
             withTimeout(1_000) {
-                api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).collect {
+                api(
+                    transport
+                ).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).collect {
                     events.add(it)
                 }
             }
@@ -385,10 +414,12 @@ class OpenAiCodexResponsesApiTest {
         transport.enqueueResponse(
             sse(
                 """{"type":"response.done","response":{"id":"r","status":"bogus"}}""",
-                """{"type":"response.completed","response":{"id":"r","status":"completed"}}""",
-            ),
+                """{"type":"response.completed","response":{"id":"r","status":"completed"}}"""
+            )
         )
-        val events = api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         assertIs<AssistantMessageEvent.Done>(events.last())
     }
 
@@ -396,9 +427,11 @@ class OpenAiCodexResponsesApiTest {
     fun `codex error events surface code and message`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(
-            sse("""{"type":"error","code":"usage_limit_reached","message":"limit"}"""),
+            sse("""{"type":"error","code":"usage_limit_reached","message":"limit"}""")
         )
-        val events = api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals("Codex error: limit", error.error.errorMessage)
     }
@@ -407,9 +440,13 @@ class OpenAiCodexResponsesApiTest {
     fun `response failed events throw the provider error`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(
-            sse("""{"type":"response.failed","response":{"error":{"code":"x","message":"boom"}}}"""),
+            sse(
+                """{"type":"response.failed","response":{"error":{"code":"x","message":"boom"}}}"""
+            )
         )
-        val events = api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals("boom", error.error.errorMessage)
     }
@@ -418,7 +455,9 @@ class OpenAiCodexResponsesApiTest {
     fun `malformed sse json is a protocol error`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("not json"))
-        val events = api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertTrue(error.error.errorMessage!!.startsWith("Invalid Codex SSE JSON"))
     }
@@ -438,7 +477,7 @@ class OpenAiCodexResponsesApiTest {
         val events = api(transport).stream(
             model,
             context,
-            OpenAICodexResponsesOptions(apiKey = "not-a-jwt"),
+            OpenAICodexResponsesOptions(apiKey = "not-a-jwt")
         ).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.single())
         assertEquals("Failed to extract accountId from token", error.error.errorMessage)
@@ -449,16 +488,20 @@ class OpenAiCodexResponsesApiTest {
         val transport = FakeTransport()
         transport.enqueueError(
             429,
-            """{"error":{"code":"usage_limit_reached","message":"limit","plan_type":"Plus","resets_at":1893456000}}""",
+            """{"error":{"code":"usage_limit_reached","message":"limit","plan_type":"Plus","resets_at":1893456000}}"""
         )
         val delays = mutableListOf<Long>()
         val events = api(transport, delays).stream(
             model,
             context,
-            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 3),
+            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 3)
         ).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
-        assertTrue(error.error.errorMessage!!.startsWith("You have hit your ChatGPT usage limit (plus plan)."))
+        assertTrue(
+            error.error.errorMessage!!.startsWith(
+                "You have hit your ChatGPT usage limit (plus plan)."
+            )
+        )
         assertEquals(1, transport.requests.size)
         assertTrue(delays.isEmpty())
     }
@@ -472,7 +515,7 @@ class OpenAiCodexResponsesApiTest {
         val events = api(transport, delays).stream(
             model,
             context,
-            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 1),
+            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 1)
         ).toList()
         assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(listOf(1000L), delays)
@@ -485,14 +528,14 @@ class OpenAiCodexResponsesApiTest {
         transport.enqueueError(
             429,
             "rate limit",
-            headers = mapOf("retry-after-ms" to listOf("1500")),
+            headers = mapOf("retry-after-ms" to listOf("1500"))
         )
         transport.enqueueResponse(sse(*doneEvents().toTypedArray()))
         val delays = mutableListOf<Long>()
         val events = api(transport, delays).stream(
             model,
             context,
-            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 1),
+            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 1)
         ).toList()
         assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(listOf(1500L), delays)
@@ -502,13 +545,13 @@ class OpenAiCodexResponsesApiTest {
         transport2.enqueueError(
             429,
             "rate limit",
-            headers = mapOf("retry-after" to listOf("120")),
+            headers = mapOf("retry-after" to listOf("120"))
         )
         val delays2 = mutableListOf<Long>()
         val events2 = api(transport2, delays2).stream(
             model,
             context,
-            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 1, maxRetryDelayMs = 60_000),
+            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 1, maxRetryDelayMs = 60_000)
         ).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events2.last())
         assertTrue(error.error.errorMessage!!.contains("retry delay"))
@@ -524,7 +567,7 @@ class OpenAiCodexResponsesApiTest {
         val events = api(transport, delays).stream(
             model,
             context,
-            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 1),
+            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 1)
         ).toList()
         assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(listOf(1000L), delays)
@@ -534,7 +577,9 @@ class OpenAiCodexResponsesApiTest {
     fun `non retryable errors surface the parsed provider message`() = runTest {
         val transport = FakeTransport()
         transport.enqueueError(400, """{"error":{"code":"bad","message":"nope"}}""")
-        val events = api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals("nope", error.error.errorMessage)
     }
@@ -545,15 +590,15 @@ class OpenAiCodexResponsesApiTest {
         // Retry-After format) must parse, not just ISO-8601.
         assertEquals(
             5000L,
-            getRetryAfterDelayMs(null, "Wed, 21 Oct 2015 07:28:00 GMT") { 1_445_412_475_000L },
+            getRetryAfterDelayMs(null, "Wed, 21 Oct 2015 07:28:00 GMT") { 1_445_412_475_000L }
         )
         assertEquals(
             5000L,
-            getRetryAfterDelayMs(null, "2015-10-21T07:28:00Z") { 1_445_412_475_000L },
+            getRetryAfterDelayMs(null, "2015-10-21T07:28:00Z") { 1_445_412_475_000L }
         )
         assertEquals(
             0L,
-            getRetryAfterDelayMs(null, "Wed, 21 Oct 2015 07:28:00 GMT") { 1_445_412_490_000L },
+            getRetryAfterDelayMs(null, "Wed, 21 Oct 2015 07:28:00 GMT") { 1_445_412_490_000L }
         )
         assertNull(getRetryAfterDelayMs(null, "not a date") { 0L })
     }
@@ -564,7 +609,7 @@ class OpenAiCodexResponsesApiTest {
         transport.enqueueError(
             429,
             "rate limit",
-            headers = mapOf("retry-after" to listOf("Wed, 21 Oct 2015 07:28:00 GMT")),
+            headers = mapOf("retry-after" to listOf("Wed, 21 Oct 2015 07:28:00 GMT"))
         )
         transport.enqueueResponse(sse(*doneEvents().toTypedArray()))
         val delays = mutableListOf<Long>()
@@ -572,11 +617,11 @@ class OpenAiCodexResponsesApiTest {
             transport,
             clock = FakeClock(1_445_412_475_000L),
             sleep = { delays.add(it) },
-            webSocketTransport = NoWebSocketTransport,
+            webSocketTransport = NoWebSocketTransport
         ).stream(
             model,
             context,
-            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 1),
+            OpenAICodexResponsesOptions(apiKey = apiKey, maxRetries = 1)
         ).toList()
         assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(listOf(5000L), delays)
@@ -586,14 +631,18 @@ class OpenAiCodexResponsesApiTest {
     fun `empty error bodies fall back to the status line text`() = runTest {
         val transport = FakeTransport()
         transport.enqueueError(503, "", statusText = "Service Unavailable")
-        val events = api(transport).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals("Service Unavailable", error.error.errorMessage)
 
         // No status line either: the generic fallback applies.
         val transport2 = FakeTransport()
         transport2.enqueueError(503, "")
-        val events2 = api(transport2).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
+        val events2 = api(
+            transport2
+        ).stream(model, context, OpenAICodexResponsesOptions(apiKey = apiKey)).toList()
         val error2 = assertIs<AssistantMessageEvent.Error>(events2.last())
         assertEquals("Request failed", error2.error.errorMessage)
     }
@@ -604,7 +653,7 @@ class OpenAiCodexResponsesApiTest {
         transport.enqueueHangingResponse(
             """{"type":"response.output_item.added","output_index":0,
                 "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
-            """{"type":"response.output_text.delta","output_index":0,"delta":"partial"}""",
+            """{"type":"response.output_text.delta","output_index":0,"delta":"partial"}"""
         )
         val collected = mutableListOf<AssistantMessageEvent>()
         val job = launch(start = CoroutineStart.UNDISPATCHED) {
@@ -636,13 +685,13 @@ class OpenAiCodexResponsesApiTest {
             sse(
                 """{"type":"response.done","response":{"id":"r","status":"completed",
                     "service_tier":"default",
-                    "usage":{"input_tokens":1000,"output_tokens":1000,"total_tokens":2000}}}""",
-            ),
+                    "usage":{"input_tokens":1000,"output_tokens":1000,"total_tokens":2000}}}"""
+            )
         )
         val events = api(transport).stream(
             model,
             context,
-            OpenAICodexResponsesOptions(apiKey = apiKey, serviceTier = "priority"),
+            OpenAICodexResponsesOptions(apiKey = apiKey, serviceTier = "priority")
         ).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         // 1000 input * 1 + 1000 output * 2 per million, doubled.
@@ -673,7 +722,7 @@ class OpenAiCodexResponsesApiTest {
         val catalog = realAsset()
         val tools = listOf(
             Tool("base_tool", "The base_tool tool", buildJsonObject { put("type", "object") }),
-            Tool("late_tool", "The late_tool tool", buildJsonObject { put("type", "object") }),
+            Tool("late_tool", "The late_tool tool", buildJsonObject { put("type", "object") })
         )
         val context = Context(
             messages = listOf(
@@ -684,23 +733,25 @@ class OpenAiCodexResponsesApiTest {
                     provider = "anthropic",
                     model = "claude-opus-4-6",
                     stopReason = StopReason.TOOL_USE,
-                    timestamp = 2,
+                    timestamp = 2
                 ),
                 ToolResultMessage(
                     toolCallId = "call_1",
                     toolName = "base_tool",
                     content = listOf(TextContent("done")),
                     addedToolNames = listOf("late_tool"),
-                    timestamp = 3,
+                    timestamp = 3
                 ),
-                UserMessage.ofText("again", 4),
+                UserMessage.ofText("again", 4)
             ),
-            tools = tools,
+            tools = tools
         )
 
         fun inputOf(modelId: String): List<JsonObject> {
             val model = catalog.getModel("openai-codex", modelId)!!
-            return buildCodexRequestBody(model, context, null, null)["input"]!!.jsonArray.map { it.jsonObject }
+            return buildCodexRequestBody(model, context, null, null)["input"]!!.jsonArray.map {
+                it.jsonObject
+            }
         }
 
         fun toolNamesOf(modelId: String): List<String> {

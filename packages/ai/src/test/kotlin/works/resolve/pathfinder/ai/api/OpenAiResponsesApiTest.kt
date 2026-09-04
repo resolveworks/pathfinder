@@ -1,12 +1,6 @@
 package works.resolve.pathfinder.ai.api
 
-import works.resolve.pathfinder.ai.testing.FakeClock
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.buildJsonObject
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -17,6 +11,13 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import org.junit.Assume.assumeTrue
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
@@ -33,12 +34,11 @@ import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.providers.ProviderCatalog
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
-import works.resolve.pathfinder.ai.providers.ProviderCatalog
-import java.io.File
-import org.junit.Assume.assumeTrue
 
 class OpenAiResponsesApiTest {
 
@@ -53,7 +53,7 @@ class OpenAiResponsesApiTest {
         cost = ModelCost(input = 1.0, output = 2.0, cacheRead = 0.25, cacheWrite = 0.5),
         contextWindow = 400_000,
         maxTokens = 128_000,
-        responsesCompat = OpenAiResponsesCompat(),
+        responsesCompat = OpenAiResponsesCompat()
     )
 
     private val context = Context(messages = listOf(UserMessage.ofText("hi")))
@@ -61,7 +61,7 @@ class OpenAiResponsesApiTest {
     private fun api(transport: FakeTransport) = OpenAiResponsesApi(
         transport,
         ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
-        clock = FakeClock(1_770_000_000_000L),
+        clock = FakeClock(1_770_000_000_000L)
     )
 
     private fun completedChunk(text: String = "ok") = listOf(
@@ -73,17 +73,20 @@ class OpenAiResponsesApiTest {
                 "content":[{"type":"output_text","text":"$text","annotations":[]}]}}""",
         """{"type":"response.completed","response":{"id":"resp_1","status":"completed",
             "usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}""",
-        "[DONE]",
+        "[DONE]"
     )
 
-    private fun body(transport: FakeTransport) =
-        responsesJson.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+    private fun body(transport: FakeTransport) = responsesJson.parseToJsonElement(
+        transport.requests.single().body.decodeToString()
+    ).jsonObject
 
     @Test
     fun `posts to the responses endpoint with store false`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
-        val events = api(transport).stream(model, context, OpenAiResponsesOptions(apiKey = "k")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiResponsesOptions(apiKey = "k")).toList()
         assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals("https://api.openai.com/v1/responses", transport.requests.single().url)
         assertEquals("k", transport.requests.single().bearerToken)
@@ -100,7 +103,7 @@ class OpenAiResponsesApiTest {
         api(transport).stream(
             model.copy(headers = mapOf("User-Agent" to "provider-agent")),
             context,
-            OpenAiResponsesOptions(apiKey = "k"),
+            OpenAiResponsesOptions(apiKey = "k")
         ).toList()
         assertEquals("provider-agent", transport.requests.single().headers["User-Agent"])
     }
@@ -113,7 +116,7 @@ class OpenAiResponsesApiTest {
         api(transport).stream(
             model,
             context,
-            OpenAiResponsesOptions(apiKey = "k", sessionId = sessionId),
+            OpenAiResponsesOptions(apiKey = "k", sessionId = sessionId)
         ).toList()
         val request = transport.requests.single()
         // pi sends the raw session id in the affinity headers; only the
@@ -122,7 +125,7 @@ class OpenAiResponsesApiTest {
         assertEquals(sessionId, request.headers["x-client-request-id"])
         assertEquals(
             "s".repeat(64),
-            body(transport)["prompt_cache_key"]!!.jsonPrimitive.content,
+            body(transport)["prompt_cache_key"]!!.jsonPrimitive.content
         )
     }
 
@@ -133,9 +136,17 @@ class OpenAiResponsesApiTest {
         val routerModel = model.copy(
             provider = "openrouter",
             baseUrl = "https://openrouter.ai/api/v1",
-            responsesCompat = OpenAiResponsesCompat(sessionAffinityFormat = SessionAffinityFormat.OPENROUTER),
+            responsesCompat = OpenAiResponsesCompat(
+                sessionAffinityFormat = SessionAffinityFormat.OPENROUTER
+            )
         )
-        api(transport).stream(routerModel, context, OpenAiResponsesOptions(apiKey = "k", sessionId = "s1")).toList()
+        api(
+            transport
+        ).stream(
+            routerModel,
+            context,
+            OpenAiResponsesOptions(apiKey = "k", sessionId = "s1")
+        ).toList()
         val headers = transport.requests.single().headers
         assertEquals("s1", headers["x-session-id"])
         assertNull(headers["session_id"])
@@ -145,7 +156,9 @@ class OpenAiResponsesApiTest {
     fun `max output tokens clamp to the minimum of 16`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
-        api(transport).stream(model, context, OpenAiResponsesOptions(apiKey = "k", maxTokens = 4)).toList()
+        api(
+            transport
+        ).stream(model, context, OpenAiResponsesOptions(apiKey = "k", maxTokens = 4)).toList()
         assertEquals(16, body(transport)["max_output_tokens"]!!.jsonPrimitive.content.toInt())
     }
 
@@ -154,9 +167,11 @@ class OpenAiResponsesApiTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
         val gated = model.copy(
-            responsesCompat = OpenAiResponsesCompat(supportsMaxOutputTokens = false),
+            responsesCompat = OpenAiResponsesCompat(supportsMaxOutputTokens = false)
         )
-        api(transport).stream(gated, context, OpenAiResponsesOptions(apiKey = "k", maxTokens = 100)).toList()
+        api(
+            transport
+        ).stream(gated, context, OpenAiResponsesOptions(apiKey = "k", maxTokens = 100)).toList()
         assertNull(body(transport)["max_output_tokens"])
     }
 
@@ -169,20 +184,20 @@ class OpenAiResponsesApiTest {
                 ModelThinkingLevel.OFF to "none",
                 ModelThinkingLevel.LOW to "low",
                 ModelThinkingLevel.MEDIUM to null,
-                ModelThinkingLevel.HIGH to "high",
-            ),
+                ModelThinkingLevel.HIGH to "high"
+            )
         )
         api(transport).stream(
             mapped,
             context,
-            OpenAiResponsesOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.LOW),
+            OpenAiResponsesOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.LOW)
         ).toList()
         val body = body(transport)
         assertEquals("low", body["reasoning"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
         assertEquals("auto", body["reasoning"]!!.jsonObject["summary"]!!.jsonPrimitive.content)
         assertEquals(
             "reasoning.encrypted_content",
-            body["include"]!!.jsonArray.single().jsonPrimitive.content,
+            body["include"]!!.jsonArray.single().jsonPrimitive.content
         )
     }
 
@@ -191,7 +206,7 @@ class OpenAiResponsesApiTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
         val mapped = model.copy(
-            thinkingLevelMap = ThinkingLevelMap.of(ModelThinkingLevel.OFF to "none"),
+            thinkingLevelMap = ThinkingLevelMap.of(ModelThinkingLevel.OFF to "none")
         )
         api(transport).stream(mapped, context, OpenAiResponsesOptions(apiKey = "k")).toList()
         val body = body(transport)
@@ -204,7 +219,7 @@ class OpenAiResponsesApiTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
         val mapped = model.copy(
-            thinkingLevelMap = ThinkingLevelMap.of(ModelThinkingLevel.OFF to null),
+            thinkingLevelMap = ThinkingLevelMap.of(ModelThinkingLevel.OFF to null)
         )
         api(transport).stream(mapped, context, OpenAiResponsesOptions(apiKey = "k")).toList()
         assertNull(body(transport)["reasoning"])
@@ -218,12 +233,12 @@ class OpenAiResponsesApiTest {
         api(transport).stream(
             model,
             context.copy(tools = listOf(tool)),
-            OpenAiResponsesOptions(apiKey = "k", toolChoice = "required"),
+            OpenAiResponsesOptions(apiKey = "k", toolChoice = "required")
         ).toList()
         val body = body(transport)
         assertEquals(
             "get_weather",
-            body["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content,
+            body["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content
         )
         assertEquals("required", body["tool_choice"]!!.jsonPrimitive.content)
     }
@@ -233,7 +248,7 @@ class OpenAiResponsesApiTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
         val explicit = model.copy(
-            responsesCompat = OpenAiResponsesCompat(supportsExplicitPromptCacheMode = true),
+            responsesCompat = OpenAiResponsesCompat(supportsExplicitPromptCacheMode = true)
         )
         api(transport).stream(
             explicit,
@@ -241,12 +256,15 @@ class OpenAiResponsesApiTest {
             OpenAiResponsesOptions(
                 apiKey = "k",
                 sessionId = "s1",
-                cacheRetention = works.resolve.pathfinder.ai.CacheRetention.NONE,
-            ),
+                cacheRetention = works.resolve.pathfinder.ai.CacheRetention.NONE
+            )
         ).toList()
         val body = body(transport)
         assertNull(body["prompt_cache_key"])
-        assertEquals("explicit", body["prompt_cache_options"]!!.jsonObject["mode"]!!.jsonPrimitive.content)
+        assertEquals(
+            "explicit",
+            body["prompt_cache_options"]!!.jsonObject["mode"]!!.jsonPrimitive.content
+        )
     }
 
     @Test
@@ -259,8 +277,8 @@ class OpenAiResponsesApiTest {
             OpenAiResponsesOptions(
                 apiKey = "k",
                 sessionId = "s1",
-                cacheRetention = works.resolve.pathfinder.ai.CacheRetention.LONG,
-            ),
+                cacheRetention = works.resolve.pathfinder.ai.CacheRetention.LONG
+            )
         ).toList()
         assertEquals("24h", body(transport)["prompt_cache_retention"]!!.jsonPrimitive.content)
     }
@@ -282,7 +300,7 @@ class OpenAiResponsesApiTest {
         val events = api(transport).stream(
             model,
             context,
-            OpenAiResponsesOptions(headers = mapOf("authorization" to "Bearer x")),
+            OpenAiResponsesOptions(headers = mapOf("authorization" to "Bearer x"))
         ).toList()
         assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals("unused", transport.requests.single().bearerToken)
@@ -292,13 +310,15 @@ class OpenAiResponsesApiTest {
     fun `early stream end surfaces the terminal-event error`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(
-            sse("""{"type":"response.created","response":{"id":"r1"}}"""),
+            sse("""{"type":"response.created","response":{"id":"r1"}}""")
         )
-        val events = api(transport).stream(model, context, OpenAiResponsesOptions(apiKey = "k")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiResponsesOptions(apiKey = "k")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals(
             "OpenAI Responses stream ended before a terminal response event",
-            error.error.errorMessage,
+            error.error.errorMessage
         )
     }
 
@@ -306,11 +326,13 @@ class OpenAiResponsesApiTest {
     fun `http errors format status and whole body`() = runTest {
         val transport = FakeTransport()
         transport.enqueueError(500, """{"error":{"code":"server_error","message":"boom"}}""")
-        val events = api(transport).stream(model, context, OpenAiResponsesOptions(apiKey = "k")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiResponsesOptions(apiKey = "k")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals(
             """OpenAI API error (500): {"error":{"code":"server_error","message":"boom"}}""",
-            error.error.errorMessage,
+            error.error.errorMessage
         )
     }
 
@@ -320,7 +342,7 @@ class OpenAiResponsesApiTest {
         transport.enqueueHangingResponse(
             """{"type":"response.output_item.added","output_index":0,
                 "item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress"}}""",
-            """{"type":"response.output_text.delta","output_index":0,"delta":"partial"}""",
+            """{"type":"response.output_text.delta","output_index":0,"delta":"partial"}"""
         )
         val collected = mutableListOf<AssistantMessageEvent>()
         val job = launch(start = CoroutineStart.UNDISPATCHED) {
@@ -340,7 +362,9 @@ class OpenAiResponsesApiTest {
     fun `done carries usage costs and block content`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completedChunk("hello").toTypedArray()))
-        val events = api(transport).stream(model, context, OpenAiResponsesOptions(apiKey = "k")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiResponsesOptions(apiKey = "k")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(StopReason.STOP, done.reason)
         assertEquals("hello", (done.message.content.single() as TextContent).text)
@@ -361,7 +385,7 @@ class OpenAiResponsesApiTest {
         api(transport).stream(
             model.copy(provider = "github-copilot"),
             context,
-            OpenAiResponsesOptions(apiKey = "k"),
+            OpenAiResponsesOptions(apiKey = "k")
         ).toList()
         assertNull(body(transport)["reasoning"])
     }
@@ -370,7 +394,9 @@ class OpenAiResponsesApiTest {
     fun `sends max output tokens above the floor by default`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
-        api(transport).stream(model, context, OpenAiResponsesOptions(apiKey = "k", maxTokens = 1024)).toList()
+        api(
+            transport
+        ).stream(model, context, OpenAiResponsesOptions(apiKey = "k", maxTokens = 1024)).toList()
         assertEquals(1024, body(transport)["max_output_tokens"]!!.jsonPrimitive.content.toInt())
     }
 
@@ -384,7 +410,12 @@ class OpenAiResponsesApiTest {
         val schema = {
             buildJsonObject {
                 put("type", "object")
-                put("properties", buildJsonObject { put("value", buildJsonObject { put("type", "string") }) })
+                put(
+                    "properties",
+                    buildJsonObject {
+                        put("value", buildJsonObject { put("type", "string") })
+                    }
+                )
                 put("additionalProperties", false)
             }
         }
@@ -394,13 +425,13 @@ class OpenAiResponsesApiTest {
             "A constrained tool",
             schema(),
             constrainedSampling = works.resolve.pathfinder.ai.ConstrainedSamplingConfig.JsonSchema(
-                works.resolve.pathfinder.ai.StrictJsonSchemaMode.PREFER,
-            ),
+                works.resolve.pathfinder.ai.StrictJsonSchemaMode.PREFER
+            )
         )
         api(transport).stream(
             model.copy(responsesCompat = OpenAiResponsesCompat(supportsStrictMode = true)),
             context.copy(tools = listOf(ordinary, constrained)),
-            OpenAiResponsesOptions(apiKey = "k"),
+            OpenAiResponsesOptions(apiKey = "k")
         ).toList()
         val tools = body(transport)["tools"]!!.jsonArray
         assertEquals("ordinary", tools[0]!!.jsonObject["name"]!!.jsonPrimitive.content)
@@ -418,9 +449,17 @@ class OpenAiResponsesApiTest {
         val nosession = model.copy(
             provider = "proxy",
             baseUrl = "https://proxy.example.com/v1",
-            responsesCompat = OpenAiResponsesCompat(sessionAffinityFormat = SessionAffinityFormat.OPENAI_NOSESSION),
+            responsesCompat = OpenAiResponsesCompat(
+                sessionAffinityFormat = SessionAffinityFormat.OPENAI_NOSESSION
+            )
         )
-        api(transport).stream(nosession, context, OpenAiResponsesOptions(apiKey = "k", sessionId = "session-proxy"))
+        api(
+            transport
+        ).stream(
+            nosession,
+            context,
+            OpenAiResponsesOptions(apiKey = "k", sessionId = "session-proxy")
+        )
             .toList()
         val headers = transport.requests.single().headers
         assertEquals("session-proxy", headers["x-client-request-id"])
@@ -435,8 +474,17 @@ class OpenAiResponsesApiTest {
         // session-affinity header for OpenRouter Responses endpoints".
         val transport = FakeTransport()
         transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
-        val openrouter = model.copy(provider = "openrouter", baseUrl = "https://openrouter.ai/api/v1")
-        api(transport).stream(openrouter, context, OpenAiResponsesOptions(apiKey = "k", sessionId = "session-or"))
+        val openrouter = model.copy(
+            provider = "openrouter",
+            baseUrl = "https://openrouter.ai/api/v1"
+        )
+        api(
+            transport
+        ).stream(
+            openrouter,
+            context,
+            OpenAiResponsesOptions(apiKey = "k", sessionId = "session-or")
+        )
             .toList()
         val headers = transport.requests.single().headers
         assertEquals("session-or", headers["x-session-id"])
@@ -455,8 +503,11 @@ class OpenAiResponsesApiTest {
             OpenAiResponsesOptions(
                 apiKey = "k",
                 sessionId = "session-123",
-                headers = mapOf("session_id" to "override-session", "x-client-request-id" to "override-request"),
-            ),
+                headers = mapOf(
+                    "session_id" to "override-session",
+                    "x-client-request-id" to "override-request"
+                )
+            )
         ).toList()
         val headers = transport.requests.single().headers
         assertEquals("override-session", headers["session_id"])
@@ -473,8 +524,8 @@ class OpenAiResponsesApiTest {
             OpenAiResponsesOptions(
                 apiKey = "k",
                 sessionId = "session-123",
-                cacheRetention = works.resolve.pathfinder.ai.CacheRetention.NONE,
-            ),
+                cacheRetention = works.resolve.pathfinder.ai.CacheRetention.NONE
+            )
         ).toList()
         val headers = transport.requests.single().headers
         assertNull(headers["session_id"])
@@ -492,10 +543,12 @@ class OpenAiResponsesApiTest {
                     "service_tier":"priority",
                     "usage":{"input_tokens":20000,"output_tokens":10000,"total_tokens":30000,
                         "input_tokens_details":{"cached_tokens":0}}}}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiResponsesOptions(apiKey = "k")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiResponsesOptions(apiKey = "k")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         // Model cost input 1.0 / output 2.0 per million; priority ×2 for
         // non-gpt-5.5 models.
@@ -509,11 +562,21 @@ class OpenAiResponsesApiTest {
         transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
         api(transport).streamSimple(
             model,
-            context.copy(tools = listOf(Tool("read", "Read a file", buildJsonObject { put("type", "object") }))),
+            context.copy(
+                tools = listOf(
+                    Tool(
+                        "read",
+                        "Read a file",
+                        buildJsonObject {
+                            put("type", "object")
+                        }
+                    )
+                )
+            ),
             works.resolve.pathfinder.ai.SimpleStreamOptions(
                 apiKey = "k",
-                toolChoice = works.resolve.pathfinder.ai.SimpleToolChoice.None,
-            ),
+                toolChoice = works.resolve.pathfinder.ai.SimpleToolChoice.None
+            )
         ).toList()
         val body = body(transport)
         assertEquals("none", body["tool_choice"]!!.jsonPrimitive.content)
@@ -536,7 +599,13 @@ class OpenAiResponsesApiTest {
         return cached
     }
 
-    private fun makeTool(name: String) = Tool(name, "The $name tool", buildJsonObject { put("type", "object") })
+    private fun makeTool(name: String) = Tool(
+        name,
+        "The $name tool",
+        buildJsonObject {
+            put("type", "object")
+        }
+    )
 
     /** Upstream makeContext(): base tool call, then a result that loads late_tool. */
     private fun deferredContext(tools: List<Tool>): Context = Context(
@@ -548,28 +617,27 @@ class OpenAiResponsesApiTest {
                 provider = "anthropic",
                 model = "claude-opus-4-6",
                 stopReason = StopReason.TOOL_USE,
-                timestamp = 2,
+                timestamp = 2
             ),
             ToolResultMessage(
                 toolCallId = "call_1",
                 toolName = "base_tool",
                 content = listOf(TextContent("done")),
                 addedToolNames = listOf("late_tool"),
-                timestamp = 3,
+                timestamp = 3
             ),
-            UserMessage.ofText("again", 4),
+            UserMessage.ofText("again", 4)
         ),
-        tools = tools,
+        tools = tools
     )
 
-    private fun params(model: Model, context: Context): JsonObject =
-        buildParams(
-            model,
-            context,
-            OpenAiResponsesOptions(apiKey = "k"),
-            getCompat(model),
-            CacheRetention.SHORT,
-        )
+    private fun params(model: Model, context: Context): JsonObject = buildParams(
+        model,
+        context,
+        OpenAiResponsesOptions(apiKey = "k"),
+        getCompat(model),
+        CacheRetention.SHORT
+    )
 
     private fun toolNames(json: JsonObject): List<String> =
         json["tools"]!!.jsonArray.map { it.jsonObject["name"]!!.jsonPrimitive.content }
@@ -579,7 +647,8 @@ class OpenAiResponsesApiTest {
     @Test
     fun `deferred tools load through additional_tools for gpt-5_4`() {
         val model = realAsset().getModel("openai", "gpt-5.4")!!
-        val json = params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))
+        val json =
+            params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))
         assertEquals(listOf("base_tool"), toolNames(json))
         val input = json["input"]!!.jsonArray.map { it.jsonObject }
         val additional = input.single { it.typeName() == "additional_tools" }
@@ -593,7 +662,9 @@ class OpenAiResponsesApiTest {
     @Test
     fun `additional_tools marker is preserved after the loaded tool is used`() {
         val model = realAsset().getModel("openai", "gpt-5.4")!!
-        val messages = deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))).messages.toMutableList()
+        val messages = deferredContext(
+            listOf(makeTool("base_tool"), makeTool("late_tool"))
+        ).messages.toMutableList()
         messages.addAll(
             3,
             listOf(
@@ -603,18 +674,22 @@ class OpenAiResponsesApiTest {
                     provider = "openai",
                     model = "gpt-5.4",
                     stopReason = StopReason.TOOL_USE,
-                    timestamp = 3,
+                    timestamp = 3
                 ),
                 ToolResultMessage(
                     toolCallId = "call_late|fc_late",
                     toolName = "late_tool",
                     content = listOf(TextContent("done")),
                     addedToolNames = listOf("late_tool"),
-                    timestamp = 3,
-                ),
-            ),
+                    timestamp = 3
+                )
+            )
         )
-        val context = Context(messages = messages, tools = listOf(makeTool("base_tool"), makeTool("late_tool")))
+        val context =
+            Context(
+                messages = messages,
+                tools = listOf(makeTool("base_tool"), makeTool("late_tool"))
+            )
         val json = params(model, context)
         assertEquals(listOf("base_tool"), toolNames(json))
         val input = json["input"]!!.jsonArray.map { it.jsonObject }
@@ -630,16 +705,20 @@ class OpenAiResponsesApiTest {
     fun `falls back to client tool search when additional_tools is unsupported`() {
         val model = this.model.copy(
             provider = "openai-proxy",
-            responsesCompat = OpenAiResponsesCompat(supportsToolSearch = true),
+            responsesCompat = OpenAiResponsesCompat(supportsToolSearch = true)
         )
-        val json = params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))
+        val json =
+            params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))
         assertEquals(listOf("base_tool"), toolNames(json))
         val input = json["input"]!!.jsonArray.map { it.jsonObject }
         val call = input.single { it.typeName() == "tool_search_call" }
         val output = input.single { it.typeName() == "tool_search_output" }
         assertEquals("client", call["execution"]!!.jsonPrimitive.content)
         assertEquals("completed", call["status"]!!.jsonPrimitive.content)
-        assertEquals(call["call_id"]!!.jsonPrimitive.content, output["call_id"]!!.jsonPrimitive.content)
+        assertEquals(
+            call["call_id"]!!.jsonPrimitive.content,
+            output["call_id"]!!.jsonPrimitive.content
+        )
         val tool = output["tools"]!!.jsonArray.single().jsonObject
         assertEquals("late_tool", tool["name"]!!.jsonPrimitive.content)
         assertEquals(true, tool["defer_loading"]!!.jsonPrimitive.content.toBoolean())
@@ -651,11 +730,15 @@ class OpenAiResponsesApiTest {
         val catalog = realAsset()
         for (modelId in listOf("gpt-5.2", "gpt-5.4-nano", "gpt-5.5-pro")) {
             val model = catalog.getModel("openai", modelId)!!
-            val json = params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))
+            val json =
+                params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))
             assertEquals(listOf("base_tool", "late_tool"), toolNames(json), modelId)
             assertTrue(
-                json["input"]!!.jsonArray.map { it.jsonObject }.none { it.typeName() == "tool_search_output" },
-                modelId,
+                json["input"]!!.jsonArray.map { it.jsonObject }.none {
+                    it.typeName() ==
+                        "tool_search_output"
+                },
+                modelId
             )
         }
     }
@@ -664,12 +747,13 @@ class OpenAiResponsesApiTest {
     fun `uses the normal tool list when OpenAI tool search is explicitly disabled`() {
         val model = realAsset().getModel("openai", "gpt-5.4")!!
             .copy(provider = "openai-proxy", responsesCompat = OpenAiResponsesCompat())
-        val json = params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))
+        val json =
+            params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))
         assertEquals(listOf("base_tool", "late_tool"), toolNames(json))
         assertTrue(
             json["input"]!!.jsonArray.map { it.jsonObject }.none {
                 it.typeName() == "tool_search_output" || it.typeName() == "additional_tools"
-            },
+            }
         )
     }
 }

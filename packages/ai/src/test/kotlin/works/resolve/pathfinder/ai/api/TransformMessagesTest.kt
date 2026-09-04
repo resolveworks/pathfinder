@@ -1,5 +1,10 @@
 package works.resolve.pathfinder.ai.api
 
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.InputModality
@@ -11,11 +16,6 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertIs
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 /**
  * OpenAI to Anthropic session migration for Copilot Claude. Ports
@@ -24,7 +24,10 @@ import kotlin.test.assertTrue
 class TransformMessagesTest {
 
     // Normalize function matching what AnthropicMessagesApi uses
-    private val anthropicNormalizeToolCallId: (id: String, source: AssistantMessage) -> String = { id, _ ->
+    private val anthropicNormalizeToolCallId: (
+        id: String,
+        source: AssistantMessage
+    ) -> String = { id, _ ->
         id.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(64)
     }
 
@@ -37,7 +40,7 @@ class TransformMessagesTest {
         reasoning = true,
         input = listOf(InputModality.TEXT, InputModality.IMAGE),
         contextWindow = 128000,
-        maxTokens = 16000,
+        maxTokens = 16000
     )
 
     private fun makeAssistantMessage(content: List<Content>): AssistantMessage = AssistantMessage(
@@ -45,7 +48,7 @@ class TransformMessagesTest {
         api = "openai-responses",
         provider = "github-copilot",
         model = "gpt-5",
-        stopReason = StopReason.TOOL_USE,
+        stopReason = StopReason.TOOL_USE
     )
 
     @Test
@@ -57,15 +60,15 @@ class TransformMessagesTest {
                 content = listOf(
                     ThinkingContent(
                         thinking = "Let me think about this...",
-                        thinkingSignature = "reasoning_content",
+                        thinkingSignature = "reasoning_content"
                     ),
-                    TextContent("Hi there!"),
+                    TextContent("Hi there!")
                 ),
                 api = "openai-completions",
                 provider = "github-copilot",
                 model = "gpt-4o",
-                stopReason = StopReason.STOP,
-            ),
+                stopReason = StopReason.STOP
+            )
         )
 
         val result = transformMessages(messages, model, anthropicNormalizeToolCallId)
@@ -90,15 +93,15 @@ class TransformMessagesTest {
                         name = "bash",
                         arguments = """{"command":"ls"}""",
                         thoughtSignature =
-                            """{"type":"reasoning.encrypted","id":"call_123","data":"encrypted"}""",
-                    ),
-                ),
+                            """{"type":"reasoning.encrypted","id":"call_123","data":"encrypted"}"""
+                    )
+                )
             ),
             ToolResultMessage(
                 toolCallId = "call_123",
                 toolName = "bash",
-                content = listOf(TextContent("output")),
-            ),
+                content = listOf(TextContent("output"))
+            )
         )
 
         val result = transformMessages(messages, model, anthropicNormalizeToolCallId)
@@ -118,10 +121,10 @@ class TransformMessagesTest {
                     ToolCall(
                         id = "call_123|fc_123",
                         name = "read",
-                        arguments = """{"path":"README.md"}""",
-                    ),
-                ),
-            ),
+                        arguments = """{"path":"README.md"}"""
+                    )
+                )
+            )
         )
 
         val result = transformMessages(messages, model, anthropicNormalizeToolCallId)
@@ -143,20 +146,20 @@ class TransformMessagesTest {
                     ToolCall(
                         id = "call_1|fc_1",
                         name = "read",
-                        arguments = """{"path":"README.md"}""",
+                        arguments = """{"path":"README.md"}"""
                     ),
                     ToolCall(
                         id = "call_2|fc_2",
                         name = "bash",
-                        arguments = """{"command":"pwd"}""",
-                    ),
-                ),
+                        arguments = """{"command":"pwd"}"""
+                    )
+                )
             ),
             ToolResultMessage(
                 toolCallId = "call_1|fc_1",
                 toolName = "read",
-                content = listOf(TextContent("done")),
-            ),
+                content = listOf(TextContent("done"))
+            )
         )
 
         val result = transformMessages(messages, model, anthropicNormalizeToolCallId)
@@ -180,8 +183,8 @@ class TransformMessagesTest {
                 api = "openai-completions",
                 provider = "github-copilot",
                 model = "gpt-4o",
-                stopReason = StopReason.STOP,
-            ),
+                stopReason = StopReason.STOP
+            )
         )
         val sameModel: List<Message> = listOf(
             UserMessage.ofText("hello"),
@@ -190,8 +193,8 @@ class TransformMessagesTest {
                 api = "anthropic-messages",
                 provider = "github-copilot",
                 model = model.id,
-                stopReason = StopReason.STOP,
-            ),
+                stopReason = StopReason.STOP
+            )
         )
 
         val cross = transformMessages(crossModel, model, anthropicNormalizeToolCallId)

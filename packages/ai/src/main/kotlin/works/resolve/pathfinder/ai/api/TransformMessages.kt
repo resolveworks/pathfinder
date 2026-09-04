@@ -20,10 +20,15 @@ import works.resolve.pathfinder.ai.ToolResultMessage
  * tagging belongs to callers that want it (mirrors pi's handoff behavior).
  */
 
-private const val NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)"
-private const val NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)"
+private const val NON_VISION_USER_IMAGE_PLACEHOLDER =
+    "(image omitted: model does not support images)"
+private const val NON_VISION_TOOL_IMAGE_PLACEHOLDER =
+    "(tool image omitted: model does not support images)"
 
-private fun replaceImagesWithPlaceholder(content: List<Content>, placeholder: String): List<Content> {
+private fun replaceImagesWithPlaceholder(
+    content: List<Content>,
+    placeholder: String
+): List<Content> {
     val result = mutableListOf<Content>()
     var previousWasPlaceholder = false
     for (block in content) {
@@ -46,14 +51,24 @@ private fun downgradeUnsupportedImages(messages: List<Message>, model: Model): L
             when (msg.role) {
                 MessageRole.USER -> {
                     val user = msg as works.resolve.pathfinder.ai.UserMessage
-                    user.copy(content = replaceImagesWithPlaceholder(user.content, NON_VISION_USER_IMAGE_PLACEHOLDER))
+                    user.copy(
+                        content = replaceImagesWithPlaceholder(
+                            user.content,
+                            NON_VISION_USER_IMAGE_PLACEHOLDER
+                        )
+                    )
                 }
+
                 MessageRole.TOOL_RESULT -> {
                     val toolResult = msg as ToolResultMessage
                     toolResult.copy(
-                        content = replaceImagesWithPlaceholder(toolResult.content, NON_VISION_TOOL_IMAGE_PLACEHOLDER),
+                        content = replaceImagesWithPlaceholder(
+                            toolResult.content,
+                            NON_VISION_TOOL_IMAGE_PLACEHOLDER
+                        )
                     )
                 }
+
                 else -> msg
             }
         }
@@ -80,7 +95,7 @@ private fun downgradeUnsupportedImages(messages: List<Message>, model: Model): L
 internal fun transformMessages(
     messages: List<Message>,
     model: Model,
-    normalizeToolCallId: ((id: String, source: AssistantMessage) -> String)? = null,
+    normalizeToolCallId: ((id: String, source: AssistantMessage) -> String)? = null
 ): List<Message> {
     val toolCallIdMap = mutableMapOf<String, String>()
     val imageAwareMessages = downgradeUnsupportedImages(messages, model)
@@ -88,6 +103,7 @@ internal fun transformMessages(
     val transformed = imageAwareMessages.map { msg ->
         when (msg.role) {
             MessageRole.USER -> msg
+
             MessageRole.TOOL_RESULT -> {
                 val toolResult = msg as ToolResultMessage
                 val normalizedId = toolCallIdMap[toolResult.toolCallId]
@@ -97,6 +113,7 @@ internal fun transformMessages(
                     toolResult
                 }
             }
+
             MessageRole.ASSISTANT -> {
                 val assistantMsg = msg as AssistantMessage
                 val isSameModel =
@@ -121,6 +138,7 @@ internal fun transformMessages(
                                 listOf(TextContent(block.thinking))
                             }
                         }
+
                         // Cross-model text is recreated without textSignature: the
                         // signature is opaque replay data only meaningful for the same
                         // provider/model (upstream recreates `{type:"text", text}`).
@@ -130,6 +148,7 @@ internal fun transformMessages(
                             } else {
                                 listOf(TextContent(block.text))
                             }
+
                         is ToolCall -> {
                             var normalized = if (!isSameModel && block.thoughtSignature != null) {
                                 block.copy(thoughtSignature = null)
@@ -145,6 +164,7 @@ internal fun transformMessages(
                             }
                             listOf(normalized)
                         }
+
                         else -> listOf(block)
                     }
                 }
@@ -166,8 +186,8 @@ internal fun transformMessages(
                         toolName = tc.name,
                         content = listOf(TextContent("No result provided")),
                         isError = true,
-                        timestamp = now,
-                    ),
+                        timestamp = now
+                    )
                 )
             }
         }
@@ -192,10 +212,12 @@ internal fun transformMessages(
                 }
                 result.add(msg)
             }
+
             MessageRole.TOOL_RESULT -> {
                 existingToolResultIds.add((msg as ToolResultMessage).toolCallId)
                 result.add(msg)
             }
+
             MessageRole.USER -> {
                 insertSyntheticToolResults(msg.timestamp)
                 result.add(msg)

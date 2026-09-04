@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.api
 
+import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -9,7 +10,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import kotlin.time.Clock
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ChatApi
@@ -18,31 +18,31 @@ import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.ProviderAuthException
+import works.resolve.pathfinder.ai.ProviderResponse
 import works.resolve.pathfinder.ai.ProviderStreamException
 import works.resolve.pathfinder.ai.SessionAffinityFormat
 import works.resolve.pathfinder.ai.SimpleStreamOptions
-import works.resolve.pathfinder.ai.toModelThinkingLevel
-import works.resolve.pathfinder.ai.ProviderResponse
-import works.resolve.pathfinder.ai.Usage
-import works.resolve.pathfinder.ai.headersToRecord
-import works.resolve.pathfinder.ai.hasHeader
-import works.resolve.pathfinder.ai.mergeSamplingParams
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.ToolChoice
+import works.resolve.pathfinder.ai.Usage
+import works.resolve.pathfinder.ai.hasHeader
+import works.resolve.pathfinder.ai.headersToRecord
 import works.resolve.pathfinder.ai.mergeHeaders
+import works.resolve.pathfinder.ai.mergeSamplingParams
+import works.resolve.pathfinder.ai.toModelThinkingLevel
 import works.resolve.pathfinder.ai.toToolChoice
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
-import works.resolve.pathfinder.ai.utils.formatProviderError
-import works.resolve.pathfinder.ai.utils.normalizeProviderError
-import works.resolve.pathfinder.ai.utils.splitDeferredTools
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.optionsToString
-import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.ai.utils.splitDeferredTools
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
@@ -57,9 +57,17 @@ import works.resolve.pathfinder.telemetry.TelemetryContext
 private const val OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16
 
 /** Header-based auth stands in for a key ("unused" sentinel). */
-internal fun getClientApiKey(provider: String, apiKey: String?, headers: Map<String, String?>): String {
+internal fun getClientApiKey(
+    provider: String,
+    apiKey: String?,
+    headers: Map<String, String?>
+): String {
     if (apiKey != null) return apiKey
-    if (hasHeader(headers, "authorization") || hasHeader(headers, "cf-aig-authorization")) return "unused"
+    if (hasHeader(headers, "authorization") ||
+        hasHeader(headers, "cf-aig-authorization")
+    ) {
+        return "unused"
+    }
     throw ProviderAuthException("No API key for provider: $provider")
 }
 
@@ -81,7 +89,7 @@ internal fun getCompat(model: Model): ResolvedResponsesCompat {
         supportsAdditionalTools = compat?.supportsAdditionalTools ?: false,
         supportsToolSearch = compat?.supportsToolSearch ?: false,
         supportsExplicitPromptCacheMode = compat?.supportsExplicitPromptCacheMode ?: false,
-        supportsMaxOutputTokens = compat?.supportsMaxOutputTokens ?: true,
+        supportsMaxOutputTokens = compat?.supportsMaxOutputTokens ?: true
     )
 }
 
@@ -95,23 +103,28 @@ internal data class ResolvedResponsesCompat(
     val supportsToolSearch: Boolean,
     val supportsExplicitPromptCacheMode: Boolean,
     /** Default true; when false, `max_output_tokens` is not sent (some gateways reject it). */
-    val supportsMaxOutputTokens: Boolean,
+    val supportsMaxOutputTokens: Boolean
 )
 
 internal fun getPromptCacheRetention(
     compat: ResolvedResponsesCompat,
-    cacheRetention: CacheRetention,
+    cacheRetention: CacheRetention
 ): String? =
     if (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention) "24h" else null
 
-internal fun sessionAffinityHeaders(sessionId: String?, compat: ResolvedResponsesCompat): Map<String, String> {
+internal fun sessionAffinityHeaders(
+    sessionId: String?,
+    compat: ResolvedResponsesCompat
+): Map<String, String> {
     if (sessionId == null) return emptyMap()
     return when (compat.sessionAffinityFormat) {
         SessionAffinityFormat.OPENROUTER -> mapOf("x-session-id" to sessionId)
+
         SessionAffinityFormat.OPENAI_NOSESSION -> mapOf("x-client-request-id" to sessionId)
+
         SessionAffinityFormat.OPENAI -> mapOf(
             "session_id" to sessionId,
-            "x-client-request-id" to sessionId,
+            "x-client-request-id" to sessionId
         )
     }
 }
@@ -120,11 +133,11 @@ internal fun mergeClientHeaders(
     modelHeaders: Map<String, String>,
     sessionId: String?,
     compat: ResolvedResponsesCompat,
-    optionsHeaders: Map<String, String?>,
+    optionsHeaders: Map<String, String?>
 ): Map<String, String> {
     val merged = mergeHeaders(
         mergeHeaders(modelHeaders, sessionAffinityHeaders(sessionId, compat)),
-        optionsHeaders,
+        optionsHeaders
     )
     return merged.filterValues { it != null }.mapValues { it.value!! }
 }
@@ -145,7 +158,8 @@ data class OpenAiResponsesOptions(
     val cacheRetention: CacheRetention? = null,
     val timeoutMs: Long? = null,
     val maxRetries: Int = 0,
-    val maxRetryDelayMs: Long = works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
+    val maxRetryDelayMs: Long =
+        works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
     /**
@@ -165,7 +179,7 @@ data class OpenAiResponsesOptions(
      * Explicit parent telemetry context for this request. Dormant in this
      * port — carried for shape fidelity.
      */
-    val telemetryContext: TelemetryContext? = null,
+    val telemetryContext: TelemetryContext? = null
 ) {
     override fun toString(): String = optionsToString(
         "OpenAiResponsesOptions",
@@ -186,7 +200,7 @@ data class OpenAiResponsesOptions(
         "onPayload" to (onPayload != null),
         "onResponse" to (onResponse != null),
         "samplingParams" to samplingParams?.keys,
-        "telemetryContext" to (telemetryContext != null),
+        "telemetryContext" to (telemetryContext != null)
     )
 }
 
@@ -194,7 +208,7 @@ internal fun buildOpenAiResponsesOptions(
     model: Model,
     context: Context,
     options: SimpleStreamOptions,
-    reasoningEffort: ModelThinkingLevel?,
+    reasoningEffort: ModelThinkingLevel?
 ): OpenAiResponsesOptions = OpenAiResponsesOptions(
     apiKey = options.apiKey,
     sessionId = options.sessionId,
@@ -202,7 +216,7 @@ internal fun buildOpenAiResponsesOptions(
     maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
         model,
         context,
-        options.maxTokens ?: model.maxTokens,
+        options.maxTokens ?: model.maxTokens
     ),
     reasoningEffort = reasoningEffort,
     toolChoice = options.toolChoice?.toToolChoice()?.let(::mapResponsesToolChoice),
@@ -215,19 +229,19 @@ internal fun buildOpenAiResponsesOptions(
     onPayload = options.onPayload,
     onResponse = options.onResponse,
     samplingParams = mergeSamplingParams(model, options),
-    telemetryContext = options.telemetryContext,
+    telemetryContext = options.telemetryContext
 )
 
 class OpenAiResponsesApi(
     private val transport: works.resolve.pathfinder.ai.transport.HttpStreamingTransport,
     private val retry: ProviderRetry = ProviderRetry(),
-    private val clock: Clock = Clock.System,
+    private val clock: Clock = Clock.System
 ) : ChatApi {
 
     override fun streamSimple(
         model: Model,
         context: Context,
-        options: SimpleStreamOptions,
+        options: SimpleStreamOptions
     ): Flow<AssistantMessageEvent> {
         val apiKey = options.apiKey
         val clamped = options.reasoning?.let {
@@ -237,19 +251,19 @@ class OpenAiResponsesApi(
         return stream(
             model,
             context,
-            buildOpenAiResponsesOptions(model, context, options, reasoningEffort),
+            buildOpenAiResponsesOptions(model, context, options, reasoningEffort)
         )
     }
     fun stream(
         model: Model,
         context: Context,
-        options: OpenAiResponsesOptions = OpenAiResponsesOptions(),
+        options: OpenAiResponsesOptions = OpenAiResponsesOptions()
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = clock.now().toEpochMilliseconds()
         val compatForGrammar = getCompat(model)
         val grammarToolInputProperties = createGrammarToolInputProperties(
             context.tools,
-            compatForGrammar.supportsOpenAIGrammarTools,
+            compatForGrammar.supportsOpenAIGrammarTools
         )
         val state = OpenAiResponsesShared.ResponsesStreamState(
             model,
@@ -259,29 +273,35 @@ class OpenAiResponsesApi(
                 grammarToolInputProperties = grammarToolInputProperties,
                 applyServiceTierPricing = { usage, tier ->
                     applyServiceTierPricing(usage, tier, model.id)
-                },
-            ),
+                }
+            )
         )
         try {
             val apiKey = getClientApiKey(
                 model.provider,
                 options.apiKey,
-                options.headers,
+                options.headers
             )
             val compat = getCompat(model)
             val cacheRetention = resolveCacheRetention(options.cacheRetention, options.env)
-            val cacheSessionId = if (cacheRetention == CacheRetention.NONE) null else options.sessionId
+            val cacheSessionId = if (cacheRetention ==
+                CacheRetention.NONE
+            ) {
+                null
+            } else {
+                options.sessionId
+            }
 
             val headers = mergeClientHeaders(
                 // Copilot dynamic headers (github-copilot only) sit between
                 // the model headers and the affinity/options headers.
                 mergeHeaders(
                     mapOf("User-Agent" to getPiUserAgent()),
-                    mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context)),
+                    mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context))
                 ).filterValues { it != null }.mapValues { it.value!! },
                 cacheSessionId,
                 compat,
-                options.headers,
+                options.headers
             ) + mapOf("Accept" to "text/event-stream")
             var params = buildParams(model, context, options, compat, cacheRetention)
             options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
@@ -293,17 +313,20 @@ class OpenAiResponsesApi(
                 bearerToken = apiKey,
                 headers = headers,
                 body = body,
-                timeoutMs = options.timeoutMs,
+                timeoutMs = options.timeoutMs
             )
 
             val response = retry.retryProviderRequest<TransportResponse>(
                 options.maxRetries,
-                options.maxRetryDelayMs,
+                options.maxRetryDelayMs
             ) { transport.post(request) }
 
             // Only runs for 2xx: the transport throws ProviderHttpException
             // on non-2xx before reaching this point.
-            options.onResponse?.invoke(ProviderResponse(response.status, headersToRecord(response.headers)), model)
+            options.onResponse?.invoke(
+                ProviderResponse(response.status, headersToRecord(response.headers)),
+                model
+            )
 
             emit(AssistantMessageEvent.Start(state.partialSnapshot()))
             for (event in response.events.toList()) {
@@ -318,9 +341,9 @@ class OpenAiResponsesApi(
                     StopReason.ERROR,
                     state.partialSnapshot().copy(
                         stopReason = StopReason.ERROR,
-                        errorMessage = formatResponsesProviderError(error, "OpenAI API error"),
-                    ),
-                ),
+                        errorMessage = formatResponsesProviderError(error, "OpenAI API error")
+                    )
+                )
             )
         }
     }
@@ -349,7 +372,7 @@ class OpenAiResponsesApi(
     companion object {
         internal fun resolveCacheRetention(
             cacheRetention: CacheRetention?,
-            env: Map<String, String>,
+            env: Map<String, String>
         ): CacheRetention = when {
             cacheRetention != null -> cacheRetention
             env["PI_CACHE_RETENTION"] == "long" -> CacheRetention.LONG
@@ -366,8 +389,8 @@ internal fun buildParams(
     cacheRetention: CacheRetention,
     grammarToolInputProperties: Map<String, String> = createGrammarToolInputProperties(
         context.tools,
-        compat.supportsOpenAIGrammarTools,
-    ),
+        compat.supportsOpenAIGrammarTools
+    )
 ): JsonObject {
     val deferredToolsMode = when {
         compat.supportsAdditionalTools -> OpenAiResponsesShared.DeferredToolsMode.ADDITIONAL_TOOLS
@@ -385,9 +408,9 @@ internal fun buildParams(
             deferredToolsMode = deferredToolsMode,
             toolOptions = OpenAiResponsesShared.ConvertResponsesToolsOptions(
                 supportsStrictMode = compat.supportsStrictMode,
-                supportsOpenAIGrammarTools = compat.supportsOpenAIGrammarTools,
-            ),
-        ),
+                supportsOpenAIGrammarTools = compat.supportsOpenAIGrammarTools
+            )
+        )
     )
 
     val disableImplicitPromptCache =
@@ -413,7 +436,7 @@ internal fun buildParams(
         if (options?.maxTokens != null && compat.supportsMaxOutputTokens) {
             put(
                 "max_output_tokens",
-                maxOf(options.maxTokens, OPENAI_RESPONSES_MIN_OUTPUT_TOKENS),
+                maxOf(options.maxTokens, OPENAI_RESPONSES_MIN_OUTPUT_TOKENS)
             )
         }
         options?.temperature?.let { put("temperature", it) }
@@ -426,10 +449,10 @@ internal fun buildParams(
                         toolPlacement.immediate,
                         OpenAiResponsesShared.ConvertResponsesToolsOptions(
                             supportsStrictMode = compat.supportsStrictMode,
-                            supportsOpenAIGrammarTools = compat.supportsOpenAIGrammarTools,
-                        ),
-                    ),
-                ),
+                            supportsOpenAIGrammarTools = compat.supportsOpenAIGrammarTools
+                        )
+                    )
+                )
             )
         }
         options?.toolChoice?.let { put("tool_choice", it) }
@@ -439,22 +462,31 @@ internal fun buildParams(
                 val effort = OpenAiResponsesShared.resolveReasoningEffort(
                     model,
                     options?.reasoningEffort,
-                    "medium",
+                    "medium"
                 )
                 put(
                     "reasoning",
                     buildJsonObject {
                         put("effort", effort)
-                        put("summary", options?.reasoningSummary?.takeIf { it.isNotEmpty() } ?: "auto")
-                    },
+                        put(
+                            "summary",
+                            options?.reasoningSummary?.takeIf { it.isNotEmpty() } ?: "auto"
+                        )
+                    }
                 )
                 put(
                     "include",
-                    kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("reasoning.encrypted_content"))),
+                    kotlinx.serialization.json.JsonArray(
+                        listOf(
+                            kotlinx.serialization.json.JsonPrimitive("reasoning.encrypted_content")
+                        )
+                    )
                 )
             } else if (model.provider != "github-copilot" &&
-                !(model.thinkingLevelMap?.isSpecified(ModelThinkingLevel.OFF) == true &&
-                    model.thinkingLevelMap?.forLevel(ModelThinkingLevel.OFF) == null)
+                !(
+                    model.thinkingLevelMap?.isSpecified(ModelThinkingLevel.OFF) == true &&
+                        model.thinkingLevelMap?.forLevel(ModelThinkingLevel.OFF) == null
+                    )
             ) {
                 val off = model.thinkingLevelMap?.takeIf {
                     it.isSpecified(ModelThinkingLevel.OFF)
@@ -465,7 +497,11 @@ internal fun buildParams(
             if (model.provider == "xai") {
                 put(
                     "include",
-                    kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("reasoning.encrypted_content"))),
+                    kotlinx.serialization.json.JsonArray(
+                        listOf(
+                            kotlinx.serialization.json.JsonPrimitive("reasoning.encrypted_content")
+                        )
+                    )
                 )
             }
         }
@@ -475,11 +511,12 @@ internal fun buildParams(
     return params
 }
 
-internal fun getServiceTierCostMultiplier(modelId: String, serviceTier: String?): Double = when (serviceTier) {
-    "flex" -> 0.5
-    "priority" -> if (modelId == "gpt-5.5") 2.5 else 2.0
-    else -> 1.0
-}
+internal fun getServiceTierCostMultiplier(modelId: String, serviceTier: String?): Double =
+    when (serviceTier) {
+        "flex" -> 0.5
+        "priority" -> if (modelId == "gpt-5.5") 2.5 else 2.0
+        else -> 1.0
+    }
 
 internal fun applyServiceTierPricing(usage: Usage, serviceTier: String?, modelId: String): Usage {
     val multiplier = getServiceTierCostMultiplier(modelId, serviceTier)
@@ -489,10 +526,13 @@ internal fun applyServiceTierPricing(usage: Usage, serviceTier: String?, modelId
         input = cost.input * multiplier,
         output = cost.output * multiplier,
         cacheRead = cost.cacheRead * multiplier,
-        cacheWrite = cost.cacheWrite * multiplier,
+        cacheWrite = cost.cacheWrite * multiplier
     )
     return usage.copy(
-        cost = scaled.copy(total = scaled.input + scaled.output + scaled.cacheRead + scaled.cacheWrite),
+        cost = scaled.copy(
+            total =
+                scaled.input + scaled.output + scaled.cacheRead + scaled.cacheWrite
+        )
     )
 }
 
@@ -504,8 +544,11 @@ internal fun applyServiceTierPricing(usage: Usage, serviceTier: String?, modelId
  * properly escaped. */
 internal fun mapResponsesToolChoice(choice: ToolChoice): String = when (choice) {
     ToolChoice.Auto -> "auto"
+
     ToolChoice.None -> "none"
+
     ToolChoice.Any, ToolChoice.Required -> "required"
+
     is ToolChoice.Function -> buildJsonObject {
         put("type", "function")
         put("function", buildJsonObject { put("name", choice.name) })
@@ -516,14 +559,14 @@ internal val responsesJson: Json = lenientJson
 
 internal fun processSseEvent(
     event: SseEvent,
-    state: OpenAiResponsesShared.ResponsesStreamState,
+    state: OpenAiResponsesShared.ResponsesStreamState
 ): List<AssistantMessageEvent>? {
     if (event.data.trim() == "[DONE]") return null
     val parsed = try {
         responsesJson.parseToJsonElement(event.data)
     } catch (error: Exception) {
         throw ProviderStreamException(
-            "Malformed SSE JSON payload: ${error.message ?: error::class.simpleName}",
+            "Malformed SSE JSON payload: ${error.message ?: error::class.simpleName}"
         )
     }
     if (parsed !is JsonObject) {
@@ -547,6 +590,8 @@ internal fun formatResponsesProviderError(error: Exception, prefix: String): Str
             "$prefix (${error.status})"
         }
     }
+
     is ProviderStreamException -> error.message ?: "Provider stream error"
+
     else -> error.message ?: error::class.simpleName ?: "Unknown error"
 }

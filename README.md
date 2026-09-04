@@ -78,6 +78,24 @@ configuration, set `ANDROID_HOME`, then run:
 
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
+## Code style
+
+Formatting is [Spotless](https://github.com/diffplug/spotless) running
+[ktlint](https://github.com/ktlint/ktlint) with the `android_studio` code
+style, configured by the root `.editorconfig` and `build.gradle.kts`:
+
+```bash
+./gradlew spotlessApply   # format
+./gradlew spotlessCheck   # verify
+```
+
+After cloning, enable the pre-commit hook (runs `spotlessCheck` before each
+commit) with this one-time command:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Security and diagnostics
 
 Provider credentials are stored per provider behind Android Keystore-backed

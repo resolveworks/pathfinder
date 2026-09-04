@@ -13,7 +13,7 @@ data class Session(
     val createdAt: Long,
     val updatedAt: Long,
     val entries: List<SessionEntry>,
-    val leafId: String?,
+    val leafId: String?
 ) {
     init {
         requireId(id)
@@ -35,7 +35,7 @@ data class SessionSummary(
     val title: String,
     val createdAt: Long,
     val updatedAt: Long,
-    val messageCount: Int,
+    val messageCount: Int
 )
 
 enum class SessionErrorCode {
@@ -46,7 +46,7 @@ enum class SessionErrorCode {
     INVALID_LANE,
     INVALID_QUERY,
     INVALID_FORK_TARGET,
-    STORAGE,
+    STORAGE
 }
 
 /**

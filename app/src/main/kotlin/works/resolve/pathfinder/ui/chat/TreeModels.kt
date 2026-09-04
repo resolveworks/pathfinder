@@ -2,7 +2,7 @@ package works.resolve.pathfinder.ui.chat
 
 enum class TreeFilter {
     DEFAULT,
-    USER_ONLY,
+    USER_ONLY
 }
 
 enum class TreeConnector {
@@ -13,7 +13,7 @@ enum class TreeConnector {
     TEE,
 
     /** Parent branches and this row is its last visible child (└─). */
-    ELBOW,
+    ELBOW
 }
 
 data class TreeRow(
@@ -41,5 +41,5 @@ data class TreeRow(
      */
     val isFoldable: Boolean,
     /** Single-line preview: role-prefixed, whitespace-normalized, bounded. */
-    val preview: String,
+    val preview: String
 )

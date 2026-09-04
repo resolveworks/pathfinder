@@ -1,5 +1,8 @@
 package works.resolve.pathfinder.ai.testing
 
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flow
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
@@ -7,9 +10,6 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.transport.WebSocketConnection
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
-import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.flow
 
 internal class FakeTransport : HttpStreamingTransport {
     val requests = mutableListOf<TransportRequest>()
@@ -39,7 +39,7 @@ internal class FakeTransport : HttpStreamingTransport {
             TransportResponse(
                 status = status,
                 headers = mapOf("content-type" to listOf("text/event-stream")),
-                events = events,
+                events = events
             )
         }
     }
@@ -62,7 +62,7 @@ internal class FakeTransport : HttpStreamingTransport {
             TransportResponse(
                 status = status,
                 headers = mapOf("content-type" to listOf("text/event-stream")),
-                events = flow,
+                events = flow
             )
         }
     }
@@ -81,7 +81,7 @@ internal class FakeTransport : HttpStreamingTransport {
             TransportResponse(
                 status = 200,
                 headers = mapOf("content-type" to listOf("text/event-stream")),
-                events = events,
+                events = events
             )
         }
     }
@@ -90,7 +90,7 @@ internal class FakeTransport : HttpStreamingTransport {
         status: Int,
         body: String,
         headers: Map<String, List<String>> = emptyMap(),
-        statusText: String? = null,
+        statusText: String? = null
     ) {
         outcomes.add { throw ProviderHttpException(status, headers, body, statusText) }
     }
@@ -106,6 +106,6 @@ internal object NoWebSocketTransport : WebSocketStreamingTransport {
     override suspend fun connect(
         url: String,
         headers: Map<String, String>,
-        connectTimeoutMs: Long,
+        connectTimeoutMs: Long
     ): WebSocketConnection = throw java.io.IOException("no websocket transport in this test")
 }

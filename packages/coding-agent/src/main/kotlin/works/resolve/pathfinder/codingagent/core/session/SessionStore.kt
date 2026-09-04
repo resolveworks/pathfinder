@@ -3,13 +3,13 @@ package works.resolve.pathfinder.codingagent.core.session
 import java.io.File
 import java.io.IOException
 import kotlin.time.Clock
-import works.resolve.pathfinder.ai.utils.uuidv7
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.logging.PathfinderDiagnostics
 
 /**
@@ -39,7 +39,7 @@ class SessionStore(
     private val idFactory: () -> String = ::uuidv7,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     maxFileBytes: Long = MAX_FILE_BYTES,
-    private val diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP,
+    private val diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP
 ) : SessionRepository {
 
     /** Upper bound on a single session file to avoid reading unbounded/corrupt files. */
@@ -61,7 +61,10 @@ class SessionStore(
             writeSpanned(id) {
                 ensureRoot()
                 val createdAt = clock.now().toEpochMilliseconds()
-                val storage = JsonlSessionStorage.create(fileFor(id), JsonlCodec.JsonlV4Header(id = id, createdAt = createdAt))
+                val storage = JsonlSessionStorage.create(
+                    fileFor(id),
+                    JsonlCodec.JsonlV4Header(id = id, createdAt = createdAt)
+                )
                 // The title rides as the name fact; a session always carries
                 // one so summaries stay complete.
                 storage.setName(title)
@@ -87,7 +90,7 @@ class SessionStore(
                             title = session.title,
                             createdAt = session.createdAt,
                             updatedAt = session.updatedAt,
-                            messageCount = session.messages.size,
+                            messageCount = session.messages.size
                         )
                     }
                 }
@@ -119,7 +122,7 @@ class SessionStore(
                     id = session.id,
                     entries = session.entries.toList(),
                     leafId = session.leafId,
-                    title = session.title,
+                    title = session.title
                 )
             }
         }
@@ -143,23 +146,24 @@ class SessionStore(
      * @throws SessionError when the session does not exist (not_found) or
      * the record violates the log invariants.
      */
-    override suspend fun appendRecord(sessionId: String, record: LaneRecord): LaneRecord = mutex.withLock {
-        withContext(ioDispatcher) {
-            val id = requireId(sessionId)
-            val storage = storageFor(id, fileFor(id))
-                ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
-            try {
-                storage.appendRecord(record)
-            } catch (e: IOException) {
-                throw SessionError(SessionErrorCode.STORAGE, "Failed to append session", e)
+    override suspend fun appendRecord(sessionId: String, record: LaneRecord): LaneRecord =
+        mutex.withLock {
+            withContext(ioDispatcher) {
+                val id = requireId(sessionId)
+                val storage = storageFor(id, fileFor(id))
+                    ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
+                try {
+                    storage.appendRecord(record)
+                } catch (e: IOException) {
+                    throw SessionError(SessionErrorCode.STORAGE, "Failed to append session", e)
+                }
             }
         }
-    }
 
     override suspend fun openOperations(
         sessionId: String,
         lane: String,
-        limit: Int?,
+        limit: Int?
     ): List<LaneRecord.OperationStartedRecord> = mutex.withLock {
         withContext(ioDispatcher) {
             val id = requireId(sessionId)
@@ -191,7 +195,7 @@ class SessionStore(
         sourceId: String,
         options: ForkOptions,
         id: String? = null,
-        parentSessionId: String? = null,
+        parentSessionId: String? = null
     ): Session = mutex.withLock {
         withContext(ioDispatcher) {
             val source = requireId(sourceId)
@@ -202,17 +206,20 @@ class SessionStore(
                 val newId = requireId(id ?: idFactory())
                 val destination = fileFor(newId)
                 if (destination.isFile) {
-                    throw SessionError(SessionErrorCode.ALREADY_EXISTS, "Session already exists: $newId")
+                    throw SessionError(
+                        SessionErrorCode.ALREADY_EXISTS,
+                        "Session already exists: $newId"
+                    )
                 }
                 val forked = sourceStorage.fork(
                     destination = destination,
                     header = JsonlCodec.JsonlV4Header(
                         id = newId,
                         createdAt = clock.now().toEpochMilliseconds(),
-                        parentSessionId = parentSessionId ?: source,
+                        parentSessionId = parentSessionId ?: source
                     ),
                     options = options,
-                    maxFileBytes = maxFileBytes,
+                    maxFileBytes = maxFileBytes
                 )
                 openStorages[newId] = forked
                 forked.toSession(destination.lastModified())
@@ -221,47 +228,66 @@ class SessionStore(
     }
 
     /** A lane-scoped projection ([LaneView]) whose writes serialize through this store's mutex + dispatcher. */
-    suspend fun view(sessionId: String, lane: String = SessionState.LANE_MAIN): LaneView = mutex.withLock {
-        withContext(ioDispatcher) {
-            val id = requireId(sessionId)
-            val storage = storageFor(id, fileFor(id))
-                ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
-            storage.requireLane(lane)
-            LaneView(lane, storage, object : LaneView.Writer {
-                override suspend fun <T> write(block: (JsonlSessionStorage) -> T): T = withOpenStorage(sessionId, block)
-            })
+    suspend fun view(sessionId: String, lane: String = SessionState.LANE_MAIN): LaneView =
+        mutex.withLock {
+            withContext(ioDispatcher) {
+                val id = requireId(sessionId)
+                val storage = storageFor(id, fileFor(id))
+                    ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
+                storage.requireLane(lane)
+                LaneView(
+                    lane,
+                    storage,
+                    object : LaneView.Writer {
+                        override suspend fun <T> write(block: (JsonlSessionStorage) -> T): T =
+                            withOpenStorage(sessionId, block)
+                    }
+                )
+            }
         }
-    }
 
-    suspend fun createLane(sessionId: String, lane: String, at: String?) = withOpenStorage(sessionId) {
-        it.createLane(lane, at)
-    }
+    suspend fun createLane(sessionId: String, lane: String, at: String?) =
+        withOpenStorage(sessionId) {
+            it.createLane(lane, at)
+        }
 
-    suspend fun moveLane(sessionId: String, lane: String, to: String?) = withOpenStorage(sessionId) {
-        it.moveLane(lane, to)
-    }
+    suspend fun moveLane(sessionId: String, lane: String, to: String?) =
+        withOpenStorage(sessionId) {
+            it.moveLane(lane, to)
+        }
 
     override suspend fun findRecords(sessionId: String, query: RecordQuery): List<LaneRecord> =
         withOpenStorage(sessionId) {
             if (query.operationKind != null && query.type != RecordType.OPERATION_STARTED) {
                 throw SessionError(
                     SessionErrorCode.INVALID_QUERY,
-                    "operationKind requires type \"operation_started\"",
+                    "operationKind requires type \"operation_started\""
                 )
             }
             it.findRecords(query)
         }
 
     /** Log items after [afterSeq] (exclusive), oldest first, up to [limit]. */
-    suspend fun getLog(sessionId: String, afterSeq: Long? = null, limit: Int? = null): List<LogItem> =
-        withOpenStorage(sessionId) { it.getLog(afterSeq, limit) }
+    suspend fun getLog(
+        sessionId: String,
+        afterSeq: Long? = null,
+        limit: Int? = null
+    ): List<LogItem> = withOpenStorage(sessionId) { it.getLog(afterSeq, limit) }
 
-    suspend fun parentSessionId(sessionId: String): String? = withOpenStorage(sessionId) { it.header.parentSessionId }
+    suspend fun parentSessionId(sessionId: String): String? = withOpenStorage(sessionId) {
+        it.header.parentSessionId
+    }
 
-    private suspend fun <T> withOpenStorage(sessionId: String, block: (JsonlSessionStorage) -> T): T = mutex.withLock {
+    private suspend fun <T> withOpenStorage(
+        sessionId: String,
+        block: (JsonlSessionStorage) -> T
+    ): T = mutex.withLock {
         withContext(ioDispatcher) {
             val id = requireId(sessionId)
-            block(storageFor(id, fileFor(id)) ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id"))
+            block(
+                storageFor(id, fileFor(id))
+                    ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
+            )
         }
     }
 
@@ -296,9 +322,16 @@ class SessionStore(
      * its storage-assigned seq. Finally the lane moves to [leafId] and the
      * name fact is updated to [title] when they changed.
      */
-    private fun syncSession(id: String, entries: List<SessionEntry>, leafId: String?, title: String): Session {
+    private fun syncSession(
+        id: String,
+        entries: List<SessionEntry>,
+        leafId: String?,
+        title: String
+    ): Session {
         val file = fileFor(id)
-        val storage = storageFor(id, file) ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
+        val storage =
+            storageFor(id, file)
+                ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
         for (entry in entries) {
             if (storage.hasEntry(entry.id)) continue
             if (entry.parentId != storage.leafId()) storage.moveLane(to = entry.parentId)
@@ -309,16 +342,19 @@ class SessionStore(
         return storage.toSession(file.lastModified())
     }
 
-    private suspend fun writeSpanned(id: String, kind: PathfinderDiagnostics.SessionWrite = PathfinderDiagnostics.SessionWrite.SAVE, operation: () -> Session): Session =
-        try {
-            // The span records the original failure type; the rewrap below is
-            // business behavior and stays outside the recorded boundary.
-            diagnostics.sessionWrite(kind, id) { operation() }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            throw SessionError(SessionErrorCode.STORAGE, "Failed to write session", e)
-        }
+    private suspend fun writeSpanned(
+        id: String,
+        kind: PathfinderDiagnostics.SessionWrite = PathfinderDiagnostics.SessionWrite.SAVE,
+        operation: () -> Session
+    ): Session = try {
+        // The span records the original failure type; the rewrap below is
+        // business behavior and stays outside the recorded boundary.
+        diagnostics.sessionWrite(kind, id) { operation() }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        throw SessionError(SessionErrorCode.STORAGE, "Failed to write session", e)
+    }
 
     /** Replays [file], caching the storage so later appends continue its state. */
     private fun replay(file: File, id: String): Session {

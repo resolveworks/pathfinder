@@ -1,6 +1,16 @@
 package works.resolve.pathfinder.ai.api
 
-import works.resolve.pathfinder.ai.testing.FakeClock
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ImageContent
@@ -10,20 +20,10 @@ import works.resolve.pathfinder.ai.OpenAiResponsesCompat
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
-import kotlinx.coroutines.flow.take
-import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 class GithubCopilotHeadersTest {
 
@@ -32,7 +32,7 @@ class GithubCopilotHeadersTest {
         assertEquals(CopilotInitiator.USER, inferCopilotInitiator(emptyList()))
         assertEquals(
             CopilotInitiator.USER,
-            inferCopilotInitiator(listOf(UserMessage.ofText("hi"))),
+            inferCopilotInitiator(listOf(UserMessage.ofText("hi")))
         )
         assertEquals(
             CopilotInitiator.AGENT,
@@ -43,19 +43,19 @@ class GithubCopilotHeadersTest {
                         content = listOf(TextContent("hello")),
                         api = "openai-completions",
                         provider = "github-copilot",
-                        model = "gpt-5",
-                    ),
-                ),
-            ),
+                        model = "gpt-5"
+                    )
+                )
+            )
         )
         assertEquals(
             CopilotInitiator.AGENT,
             inferCopilotInitiator(
                 listOf(
                     UserMessage.ofText("hi"),
-                    ToolResultMessage("call_1", "tool", listOf(TextContent("result"))),
-                ),
-            ),
+                    ToolResultMessage("call_1", "tool", listOf(TextContent("result")))
+                )
+            )
         )
     }
 
@@ -65,15 +65,15 @@ class GithubCopilotHeadersTest {
         assertFalse(hasCopilotVisionInput(emptyList()))
         assertFalse(hasCopilotVisionInput(listOf(UserMessage.ofText("hi"))))
         assertTrue(
-            hasCopilotVisionInput(listOf(UserMessage(listOf(TextContent("look"), image)))),
+            hasCopilotVisionInput(listOf(UserMessage(listOf(TextContent("look"), image))))
         )
         assertTrue(
             hasCopilotVisionInput(
                 listOf(
                     UserMessage.ofText("hi"),
-                    ToolResultMessage("call_1", "tool", listOf(image)),
-                ),
-            ),
+                    ToolResultMessage("call_1", "tool", listOf(image))
+                )
+            )
         )
         assertFalse(
             hasCopilotVisionInput(
@@ -82,10 +82,10 @@ class GithubCopilotHeadersTest {
                         content = listOf(image),
                         api = "openai-completions",
                         provider = "github-copilot",
-                        model = "gpt-5",
-                    ),
-                ),
-            ),
+                        model = "gpt-5"
+                    )
+                )
+            )
         )
     }
 
@@ -95,23 +95,23 @@ class GithubCopilotHeadersTest {
         assertEquals(
             mapOf(
                 "X-Initiator" to "user",
-                "Openai-Intent" to "conversation-edits",
+                "Openai-Intent" to "conversation-edits"
             ),
-            buildCopilotDynamicHeaders(messages, hasImages = false),
+            buildCopilotDynamicHeaders(messages, hasImages = false)
         )
         assertEquals(
             mapOf(
                 "X-Initiator" to "user",
                 "Openai-Intent" to "conversation-edits",
-                "Copilot-Vision-Request" to "true",
+                "Copilot-Vision-Request" to "true"
             ),
-            buildCopilotDynamicHeaders(messages, hasImages = true),
+            buildCopilotDynamicHeaders(messages, hasImages = true)
         )
     }
 
     private fun copilotModel(
         api: String,
-        headers: Map<String, String> = mapOf("Copilot-Integration-Id" to "vscode"),
+        headers: Map<String, String> = mapOf("Copilot-Integration-Id" to "vscode")
     ) = Model(
         id = "gpt-5",
         name = "GPT-5",
@@ -121,13 +121,13 @@ class GithubCopilotHeadersTest {
         headers = headers,
         contextWindow = 400_000,
         maxTokens = 128_000,
-        responsesCompat = if (api == "openai-responses") OpenAiResponsesCompat() else null,
+        responsesCompat = if (api == "openai-responses") OpenAiResponsesCompat() else null
     )
 
     private val image = ImageContent(data = "aGk=", mimeType = "image/png")
 
     private fun userContext() = Context(
-        messages = listOf(UserMessage(listOf(TextContent("hello")))),
+        messages = listOf(UserMessage(listOf(TextContent("hello"))))
     )
 
     private fun toolInitiatedContext() = Context(
@@ -137,14 +137,14 @@ class GithubCopilotHeadersTest {
                 content = listOf(TextContent("calling")),
                 api = "openai-completions",
                 provider = "github-copilot",
-                model = "gpt-5",
+                model = "gpt-5"
             ),
-            ToolResultMessage("call_1", "tool", listOf(TextContent("result"))),
-        ),
+            ToolResultMessage("call_1", "tool", listOf(TextContent("result")))
+        )
     )
 
     private fun visionContext() = Context(
-        messages = listOf(UserMessage(listOf(TextContent("look"), image))),
+        messages = listOf(UserMessage(listOf(TextContent("look"), image)))
     )
 
     private fun retry() = ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 })
@@ -154,11 +154,13 @@ class GithubCopilotHeadersTest {
      * duplicate names were sent (replacements must not coexist), then return
      * the sent headers.
      */
-    private fun sent(request: works.resolve.pathfinder.ai.transport.TransportRequest): Map<String, String> {
+    private fun sent(
+        request: works.resolve.pathfinder.ai.transport.TransportRequest
+    ): Map<String, String> {
         val lowered = request.headers.keys.groupBy { it.lowercase() }
         assertTrue(
             lowered.values.all { it.size == 1 },
-            "duplicate header keys (case-insensitive): ${request.headers.keys}",
+            "duplicate header keys (case-insensitive): ${request.headers.keys}"
         )
         return request.headers
     }
@@ -174,30 +176,39 @@ class GithubCopilotHeadersTest {
 
         val userTransport = FakeTransport()
         userTransport.enqueueResponse(
-            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"),
+            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]")
         )
-        completions(userTransport).stream(copilot, userContext(), OpenAiCompletionsOptions(apiKey = "tok"))
+        completions(
+            userTransport
+        ).stream(copilot, userContext(), OpenAiCompletionsOptions(apiKey = "tok"))
             .take(1).toList()
         val userHeaders = sent(userTransport.requests.single())
         assertEquals("user", userHeaders["X-Initiator"])
         assertEquals("conversation-edits", userHeaders["Openai-Intent"])
         assertNull(userHeaders["Copilot-Vision-Request"])
-        assertEquals("gpt-5", jsonBody(userTransport.requests.single())["model"]!!.jsonPrimitive.content)
+        assertEquals(
+            "gpt-5",
+            jsonBody(userTransport.requests.single())["model"]!!.jsonPrimitive.content
+        )
 
         val toolTransport = FakeTransport()
         toolTransport.enqueueResponse(
-            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"),
+            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]")
         )
-        completions(toolTransport).stream(copilot, toolInitiatedContext(), OpenAiCompletionsOptions(apiKey = "tok"))
+        completions(
+            toolTransport
+        ).stream(copilot, toolInitiatedContext(), OpenAiCompletionsOptions(apiKey = "tok"))
             .take(1).toList()
         val toolHeaders = sent(toolTransport.requests.single())
         assertEquals("agent", toolHeaders["X-Initiator"])
 
         val visionTransport = FakeTransport()
         visionTransport.enqueueResponse(
-            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"),
+            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]")
         )
-        completions(visionTransport).stream(copilot, visionContext(), OpenAiCompletionsOptions(apiKey = "tok"))
+        completions(
+            visionTransport
+        ).stream(copilot, visionContext(), OpenAiCompletionsOptions(apiKey = "tok"))
             .take(1).toList()
         assertEquals("true", sent(visionTransport.requests.single())["Copilot-Vision-Request"])
     }
@@ -206,18 +217,18 @@ class GithubCopilotHeadersTest {
     fun `completions dynamic headers override model headers but options headers win`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(
-            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"),
+            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]")
         )
         OpenAiCompletionsApi(transport, retry()).stream(
             copilotModel(
                 "openai-completions",
-                headers = mapOf("x-initiator" to "stale", "Copilot-Integration-Id" to "vscode"),
+                headers = mapOf("x-initiator" to "stale", "Copilot-Integration-Id" to "vscode")
             ),
             userContext(),
             OpenAiCompletionsOptions(
                 apiKey = "tok",
-                headers = mapOf("openai-intent" to "custom-intent"),
-            ),
+                headers = mapOf("openai-intent" to "custom-intent")
+            )
         ).take(1).toList()
         val headers = sent(transport.requests.single())
         // Dynamic headers override the model's static headers case-insensitively...
@@ -232,12 +243,12 @@ class GithubCopilotHeadersTest {
     fun `completions sends no copilot headers for other providers`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(
-            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"),
+            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]")
         )
         OpenAiCompletionsApi(transport, retry()).stream(
             copilotModel("openai-completions").copy(provider = "zai"),
             userContext(),
-            OpenAiCompletionsOptions(apiKey = "tok"),
+            OpenAiCompletionsOptions(apiKey = "tok")
         ).take(1).toList()
         val headers = sent(transport.requests.single())
         assertNull(headers["X-Initiator"])
@@ -253,7 +264,7 @@ class GithubCopilotHeadersTest {
                 "content":[{"type":"output_text","text":"ok","annotations":[]}]}}""",
         """{"type":"response.completed","response":{"id":"resp_1","status":"completed",
             "usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}""",
-        "[DONE]",
+        "[DONE]"
     )
 
     @Test
@@ -264,22 +275,31 @@ class GithubCopilotHeadersTest {
 
         val userTransport = FakeTransport()
         userTransport.enqueueResponse(sse(*responsesChunk().toTypedArray()))
-        responses(userTransport).stream(copilot, userContext(), OpenAiResponsesOptions(apiKey = "tok")).take(1).toList()
+        responses(
+            userTransport
+        ).stream(copilot, userContext(), OpenAiResponsesOptions(apiKey = "tok")).take(1).toList()
         val userHeaders = sent(userTransport.requests.single())
         assertEquals("user", userHeaders["X-Initiator"])
         assertEquals("conversation-edits", userHeaders["Openai-Intent"])
         assertNull(userHeaders["Copilot-Vision-Request"])
-        assertEquals("gpt-5", jsonBody(userTransport.requests.single())["model"]!!.jsonPrimitive.content)
+        assertEquals(
+            "gpt-5",
+            jsonBody(userTransport.requests.single())["model"]!!.jsonPrimitive.content
+        )
 
         val toolTransport = FakeTransport()
         toolTransport.enqueueResponse(sse(*responsesChunk().toTypedArray()))
-        responses(toolTransport).stream(copilot, toolInitiatedContext(), OpenAiResponsesOptions(apiKey = "tok"))
+        responses(
+            toolTransport
+        ).stream(copilot, toolInitiatedContext(), OpenAiResponsesOptions(apiKey = "tok"))
             .take(1).toList()
         assertEquals("agent", sent(toolTransport.requests.single())["X-Initiator"])
 
         val visionTransport = FakeTransport()
         visionTransport.enqueueResponse(sse(*responsesChunk().toTypedArray()))
-        responses(visionTransport).stream(copilot, visionContext(), OpenAiResponsesOptions(apiKey = "tok"))
+        responses(
+            visionTransport
+        ).stream(copilot, visionContext(), OpenAiResponsesOptions(apiKey = "tok"))
             .take(1).toList()
         assertEquals("true", sent(visionTransport.requests.single())["Copilot-Vision-Request"])
     }
@@ -291,13 +311,13 @@ class GithubCopilotHeadersTest {
         OpenAiResponsesApi(transport, retry()).stream(
             copilotModel(
                 "openai-responses",
-                headers = mapOf("x-initiator" to "stale", "user-agent" to "GitHubCopilotChat/1.0"),
+                headers = mapOf("x-initiator" to "stale", "user-agent" to "GitHubCopilotChat/1.0")
             ),
             userContext(),
             OpenAiResponsesOptions(
                 apiKey = "tok",
-                headers = mapOf("openai-intent" to "custom-intent"),
-            ),
+                headers = mapOf("openai-intent" to "custom-intent")
+            )
         ).take(1).toList()
         val headers = sent(transport.requests.single())
         // Dynamic headers override the model's static headers case-insensitively...
@@ -316,7 +336,7 @@ class GithubCopilotHeadersTest {
             "usage":{"input_tokens":10,"output_tokens":0}}}""",
         null to """{"type":"message_delta","delta":{"stop_reason":"end_turn"},
             "usage":{"output_tokens":5}}}""",
-        null to """{"type":"message_stop"}""",
+        null to """{"type":"message_stop"}"""
     )
 
     @Test
@@ -327,23 +347,32 @@ class GithubCopilotHeadersTest {
 
         val userTransport = FakeTransport()
         userTransport.enqueueNamedResponse(anthropicChunk())
-        anthropic(userTransport).stream(copilot, userContext(), AnthropicMessagesOptions(apiKey = "tok"))
+        anthropic(
+            userTransport
+        ).stream(copilot, userContext(), AnthropicMessagesOptions(apiKey = "tok"))
             .take(1).toList()
         val userHeaders = sent(userTransport.requests.single())
         assertEquals("user", userHeaders["X-Initiator"])
         assertEquals("conversation-edits", userHeaders["Openai-Intent"])
         assertNull(userHeaders["Copilot-Vision-Request"])
-        assertEquals("gpt-5", jsonBody(userTransport.requests.single())["model"]!!.jsonPrimitive.content)
+        assertEquals(
+            "gpt-5",
+            jsonBody(userTransport.requests.single())["model"]!!.jsonPrimitive.content
+        )
 
         val toolTransport = FakeTransport()
         toolTransport.enqueueNamedResponse(anthropicChunk())
-        anthropic(toolTransport).stream(copilot, toolInitiatedContext(), AnthropicMessagesOptions(apiKey = "tok"))
+        anthropic(
+            toolTransport
+        ).stream(copilot, toolInitiatedContext(), AnthropicMessagesOptions(apiKey = "tok"))
             .take(1).toList()
         assertEquals("agent", sent(toolTransport.requests.single())["X-Initiator"])
 
         val visionTransport = FakeTransport()
         visionTransport.enqueueNamedResponse(anthropicChunk())
-        anthropic(visionTransport).stream(copilot, visionContext(), AnthropicMessagesOptions(apiKey = "tok"))
+        anthropic(
+            visionTransport
+        ).stream(copilot, visionContext(), AnthropicMessagesOptions(apiKey = "tok"))
             .take(1).toList()
         assertEquals("true", sent(visionTransport.requests.single())["Copilot-Vision-Request"])
     }
@@ -355,13 +384,13 @@ class GithubCopilotHeadersTest {
         AnthropicMessagesApi(transport, retry()).stream(
             copilotModel(
                 "anthropic-messages",
-                headers = mapOf("x-initiator" to "stale", "User-Agent" to "GitHubCopilotChat/1.0"),
+                headers = mapOf("x-initiator" to "stale", "User-Agent" to "GitHubCopilotChat/1.0")
             ),
             userContext(),
             AnthropicMessagesOptions(
                 apiKey = "tok",
-                headers = mapOf("openai-intent" to "custom-intent"),
-            ),
+                headers = mapOf("openai-intent" to "custom-intent")
+            )
         ).take(1).toList()
         val headers = sent(transport.requests.single())
         // Dynamic headers override the model's static headers case-insensitively...

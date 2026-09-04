@@ -1,17 +1,17 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
+import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.currentTime
-import kotlin.time.Clock
-import kotlin.time.Instant
 import kotlinx.coroutines.test.runTest
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
 
 /** Virtual time (`runTest` + a scheduler-bound [Clock]) keeps the poll sleeps and deadline checks instant. */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -25,7 +25,7 @@ class DeviceCodePollerTest {
     fun `complete on first poll returns value`() = runTest {
         val value = pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(poll = { OAuthDeviceCodePollResult.Complete("token") }),
-        clock = virtualClock(),
+            clock = virtualClock()
         )
         assertEquals("token", value)
     }
@@ -40,10 +40,16 @@ class DeviceCodePollerTest {
                 poll = {
                     times += currentTime
                     calls += 1
-                    if (calls == 3) OAuthDeviceCodePollResult.Complete("ok") else OAuthDeviceCodePollResult.Pending
-                },
+                    if (calls ==
+                        3
+                    ) {
+                        OAuthDeviceCodePollResult.Complete("ok")
+                    } else {
+                        OAuthDeviceCodePollResult.Pending
+                    }
+                }
             ),
-        clock = virtualClock(),
+            clock = virtualClock()
         )
         assertEquals(listOf(0L, 5000L, 10000L), times)
     }
@@ -59,10 +65,16 @@ class DeviceCodePollerTest {
                 poll = {
                     times += currentTime
                     calls += 1
-                    if (calls == 2) OAuthDeviceCodePollResult.Complete("ok") else OAuthDeviceCodePollResult.Pending
-                },
+                    if (calls ==
+                        2
+                    ) {
+                        OAuthDeviceCodePollResult.Complete("ok")
+                    } else {
+                        OAuthDeviceCodePollResult.Pending
+                    }
+                }
             ),
-        clock = virtualClock(),
+            clock = virtualClock()
         )
         assertEquals(listOf(0L, 1000L), times)
     }
@@ -79,10 +91,16 @@ class DeviceCodePollerTest {
                 poll = {
                     times += currentTime
                     calls += 1
-                    if (calls == 2) OAuthDeviceCodePollResult.Complete("ok") else OAuthDeviceCodePollResult.Pending
-                },
+                    if (calls ==
+                        2
+                    ) {
+                        OAuthDeviceCodePollResult.Complete("ok")
+                    } else {
+                        OAuthDeviceCodePollResult.Pending
+                    }
+                }
             ),
-        clock = virtualClock(),
+            clock = virtualClock()
         )
         assertEquals(listOf(2000L, 4000L), times)
     }
@@ -92,9 +110,9 @@ class DeviceCodePollerTest {
         val error = assertFailsWith<IllegalStateException> {
             pollOAuthDeviceCodeFlow(
                 OAuthDeviceCodePollOptions(
-                    poll = { OAuthDeviceCodePollResult.Failed("authorization_pending is bad") },
+                    poll = { OAuthDeviceCodePollResult.Failed("authorization_pending is bad") }
                 ),
-                clock = virtualClock(),
+                clock = virtualClock()
             )
         }
         assertEquals("authorization_pending is bad", error.message)
@@ -106,9 +124,9 @@ class DeviceCodePollerTest {
             pollOAuthDeviceCodeFlow(
                 OAuthDeviceCodePollOptions(
                     expiresInSeconds = 12,
-                    poll = { OAuthDeviceCodePollResult.Pending },
+                    poll = { OAuthDeviceCodePollResult.Pending }
                 ),
-                clock = virtualClock(),
+                clock = virtualClock()
             )
         }
         assertEquals("Device flow timed out", error.message)
@@ -123,17 +141,23 @@ class DeviceCodePollerTest {
                     expiresInSeconds = 12,
                     poll = {
                         calls += 1
-                        if (calls == 1) OAuthDeviceCodePollResult.SlowDown() else OAuthDeviceCodePollResult.Pending
-                    },
+                        if (calls ==
+                            1
+                        ) {
+                            OAuthDeviceCodePollResult.SlowDown()
+                        } else {
+                            OAuthDeviceCodePollResult.Pending
+                        }
+                    }
                 ),
-                clock = virtualClock(),
+                clock = virtualClock()
             )
         }
         assertEquals(
             "Device flow timed out after one or more slow_down responses. " +
                 "This is often caused by clock drift in WSL or VM environments. " +
                 "Please sync or restart the VM clock and try again.",
-            error.message,
+            error.message
         )
     }
 
@@ -153,9 +177,9 @@ class DeviceCodePollerTest {
                         calls == 3 -> OAuthDeviceCodePollResult.Complete("ok")
                         else -> OAuthDeviceCodePollResult.Pending
                     }
-                },
+                }
             ),
-        clock = virtualClock(),
+            clock = virtualClock()
         )
         assertEquals(listOf(0L, 6000L, 12000L), times)
     }
@@ -176,9 +200,9 @@ class DeviceCodePollerTest {
                         calls == 3 -> OAuthDeviceCodePollResult.Complete("ok")
                         else -> OAuthDeviceCodePollResult.Pending
                     }
-                },
+                }
             ),
-        clock = virtualClock(),
+            clock = virtualClock()
         )
         assertEquals(listOf(0L, 10000L, 20000L), times)
     }
@@ -195,14 +219,19 @@ class DeviceCodePollerTest {
                     times += currentTime
                     calls += 1
                     when {
-                        calls == 1 -> OAuthDeviceCodePollResult.SlowDown(intervalSeconds = Double.NaN)
+                        calls == 1 -> OAuthDeviceCodePollResult.SlowDown(
+                            intervalSeconds = Double.NaN
+                        )
+
                         calls == 2 -> OAuthDeviceCodePollResult.SlowDown(intervalSeconds = -1.0)
+
                         calls == 3 -> OAuthDeviceCodePollResult.Complete("ok")
+
                         else -> OAuthDeviceCodePollResult.Pending
                     }
-                },
+                }
             ),
-        clock = virtualClock(),
+            clock = virtualClock()
         )
         assertEquals(listOf(0L, 7000L, 19000L), times)
     }
@@ -220,9 +249,9 @@ class DeviceCodePollerTest {
                         times += currentTime
                         calls += 1
                         OAuthDeviceCodePollResult.Pending
-                    },
+                    }
                 ),
-                clock = virtualClock(),
+                clock = virtualClock()
             )
         }
         assertEquals(listOf(0L), times)
@@ -235,10 +264,16 @@ class DeviceCodePollerTest {
             OAuthDeviceCodePollOptions(
                 poll = {
                     calls += 1
-                    if (calls >= 3) OAuthDeviceCodePollResult.Complete("ok") else OAuthDeviceCodePollResult.Pending
-                },
+                    if (calls >=
+                        3
+                    ) {
+                        OAuthDeviceCodePollResult.Complete("ok")
+                    } else {
+                        OAuthDeviceCodePollResult.Pending
+                    }
+                }
             ),
-        clock = virtualClock(),
+            clock = virtualClock()
         )
         assertEquals("ok", value)
     }
@@ -254,10 +289,10 @@ class DeviceCodePollerTest {
                         poll = {
                             started = true
                             OAuthDeviceCodePollResult.Pending
-                        },
+                        }
                     ),
-                    clock = virtualClock(),
-            )
+                    clock = virtualClock()
+                )
             } catch (e: CancellationException) {
                 assertEquals("Login cancelled", e.message)
                 throw e

@@ -16,7 +16,7 @@ class OverflowTest {
         model = "qwen3.5:35b",
         usage = Usage(),
         stopReason = StopReason.ERROR,
-        errorMessage = errorMessage,
+        errorMessage = errorMessage
     )
 
     private fun createLengthStopMessage(
@@ -26,7 +26,7 @@ class OverflowTest {
         cacheWrite: Int = 0,
         api: String = "openai-completions",
         provider: String = "test-provider",
-        model: String = "test-model",
+        model: String = "test-model"
     ): AssistantMessage = AssistantMessage(
         content = emptyList(),
         api = api,
@@ -37,21 +37,24 @@ class OverflowTest {
             output = output,
             cacheRead = cacheRead,
             cacheWrite = cacheWrite,
-            totalTokens = input + cacheRead + cacheWrite + output,
+            totalTokens = input + cacheRead + cacheWrite + output
         ),
-        stopReason = StopReason.LENGTH,
+        stopReason = StopReason.LENGTH
     )
 
     @Test
     fun `detects explicit Ollama prompt-too-long errors`() {
-        val message = createErrorMessage("400 `prompt too long; exceeded max context length by 100918 tokens`")
+        val message =
+            createErrorMessage(
+                "400 `prompt too long; exceeded max context length by 100918 tokens`"
+            )
         assertTrue(isContextOverflow(message, 32768))
     }
 
     @Test
     fun `detects Together AI context length errors`() {
         val message = createErrorMessage(
-            "400 The input (516368 tokens) is longer than the model's context length (262144 tokens).",
+            "400 The input (516368 tokens) is longer than the model's context length (262144 tokens)."
         )
         assertTrue(isContextOverflow(message, 262144))
     }
@@ -60,8 +63,9 @@ class OverflowTest {
     fun `detects LiteLLM-wrapped OpenAI maximum context length errors`() {
         val message = createErrorMessage(
             "Error: 503 litellm.ServiceUnavailableError: litellm.MidStreamFallbackError: " +
-                "litellm.APIConnectionError: APIConnectionError: OpenAIException - Requested token count " +
-                "exceeds the model's maximum context length of 131072 tokens.",
+                "litellm.APIConnectionError: APIConnectionError: OpenAIException - " +
+                "Requested token count " +
+                "exceeds the model's maximum context length of 131072 tokens."
         )
         assertTrue(isContextOverflow(message, 131072))
     }
@@ -69,7 +73,7 @@ class OverflowTest {
     @Test
     fun `detects OpenAI-compatible parenthesized maximum context length errors`() {
         val message = createErrorMessage(
-            "Error: 400 Input length (265330) exceeds model's maximum context length (262144).",
+            "Error: 400 Input length (265330) exceeds model's maximum context length (262144)."
         )
         assertTrue(isContextOverflow(message, 262144))
     }
@@ -77,7 +81,7 @@ class OverflowTest {
     @Test
     fun `detects OpenRouter Poolside maximum allowed input length errors`() {
         val message = createErrorMessage(
-            "Provider returned error: Input length 131393 exceeds the maximum allowed input length of 131040 tokens.",
+            "Provider returned error: Input length 131393 exceeds the maximum allowed input length of 131040 tokens."
         )
         assertTrue(isContextOverflow(message, 131072))
     }
@@ -85,12 +89,12 @@ class OverflowTest {
     @Test
     fun `detects DS4 configured context size errors`() {
         val message = createErrorMessage(
-            "400 Prompt has 256468 tokens, but the configured context size is 256000 tokens",
+            "400 Prompt has 256468 tokens, but the configured context size is 256000 tokens"
         )
         assertTrue(isContextOverflow(message, 256000))
 
         val commaMessage = createErrorMessage(
-            "Prompt has 5,958,968 tokens, but the configured context size is 256,000 tokens",
+            "Prompt has 5,958,968 tokens, but the configured context size is 256,000 tokens"
         )
         assertTrue(isContextOverflow(commaMessage, 256000))
     }
@@ -105,13 +109,17 @@ class OverflowTest {
     fun `does not treat Bedrock throttling Too many tokens as overflow`() {
         // Bedrock returns this for HTTP 429 rate limiting, NOT context overflow.
         // formatBedrockError uses a human-readable prefix for ThrottlingException.
-        val message = createErrorMessage("Throttling error: Too many tokens, please wait before trying again.")
+        val message =
+            createErrorMessage(
+                "Throttling error: Too many tokens, please wait before trying again."
+            )
         assertFalse(isContextOverflow(message, 200000))
     }
 
     @Test
     fun `does not treat Bedrock service unavailable as overflow`() {
-        val message = createErrorMessage("Service unavailable: The service is temporarily unavailable.")
+        val message =
+            createErrorMessage("Service unavailable: The service is temporarily unavailable.")
         assertFalse(isContextOverflow(message, 200000))
     }
 
@@ -134,7 +142,7 @@ class OverflowTest {
             cacheRead = 1048512,
             output = 0,
             provider = "xiaomi",
-            model = "mimo-v2.5-pro",
+            model = "mimo-v2.5-pro"
         )
         assertTrue(isContextOverflow(message, 1048576))
     }
@@ -148,7 +156,7 @@ class OverflowTest {
             output = 16,
             api = "openai-responses",
             provider = "openai",
-            model = "gpt-5.6-sol",
+            model = "gpt-5.6-sol"
         )
         assertTrue(isRecoverableLength(message, 128000))
     }

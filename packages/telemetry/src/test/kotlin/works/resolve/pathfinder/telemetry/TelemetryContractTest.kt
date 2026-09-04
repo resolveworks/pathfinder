@@ -43,7 +43,15 @@ class TelemetryContractTest {
         assertEquals(listOf("pf.outer", "pf.inner"), spans.map { it.name })
         assertEquals(1, spans[1].parentId)
         assertEquals(mapOf("a" to attr("1")), spans[0].attributes)
-        assertEquals(listOf(InMemoryTelemetryContext.RecordedTelemetryEvent("happened", mapOf("detail" to attr(true)))), spans[1].events)
+        assertEquals(
+            listOf(
+                InMemoryTelemetryContext.RecordedTelemetryEvent(
+                    "happened",
+                    mapOf("detail" to attr(true))
+                )
+            ),
+            spans[1].events
+        )
         assertTrue(spans.all { it.settled })
         assertTrue(spans[0].endSequence!! > spans[1].endSequence!!)
         assertEquals(SpanStatus.Ok, spans[0].status)
@@ -111,12 +119,14 @@ class TelemetryContractTest {
     @Test
     fun `setAttributes merge over start attributes with later values winning`() = runTest {
         val context = InMemoryTelemetryContext()
-        context.startSpan(SpanOptions("pf.merge", mapOf("a" to attr(1), "b" to attr("old")))) { span ->
+        context.startSpan(
+            SpanOptions("pf.merge", mapOf("a" to attr(1), "b" to attr("old")))
+        ) { span ->
             span.setAttributes(mapOf("b" to attr("new"), "c" to attr(false)))
         }
         assertEquals(
             mapOf("a" to attr(1), "b" to attr("new"), "c" to attr(false)),
-            context.getSpans().single().attributes,
+            context.getSpans().single().attributes
         )
     }
 
@@ -137,30 +147,33 @@ class TelemetryContractTest {
     }
 
     @Test
-    fun `repeated setStatus calls are last-write-wins and suppress the automatic status`() = runTest {
-        val context = InMemoryTelemetryContext()
-        context.startSpan(SpanOptions("pf.last-status")) { span ->
-            span.setStatus(SpanStatus.Error(TelemetryError("Expected", "first")))
-            span.setStatus(SpanStatus.Ok)
-        }
-        assertEquals(SpanStatus.Ok, context.getSpans().single().status)
-
-        try {
-            context.startSpan(SpanOptions("pf.explicit-before-throw")) { span ->
+    fun `repeated setStatus calls are last-write-wins and suppress the automatic status`() =
+        runTest {
+            val context = InMemoryTelemetryContext()
+            context.startSpan(SpanOptions("pf.last-status")) { span ->
+                span.setStatus(SpanStatus.Error(TelemetryError("Expected", "first")))
                 span.setStatus(SpanStatus.Ok)
-                throw IllegalStateException("suppressed")
             }
-        } catch (_: IllegalStateException) {
+            assertEquals(SpanStatus.Ok, context.getSpans().single().status)
+
+            try {
+                context.startSpan(SpanOptions("pf.explicit-before-throw")) { span ->
+                    span.setStatus(SpanStatus.Ok)
+                    throw IllegalStateException("suppressed")
+                }
+            } catch (_: IllegalStateException) {
+            }
+            assertEquals(SpanStatus.Ok, context.getSpans().last().status)
         }
-        assertEquals(SpanStatus.Ok, context.getSpans().last().status)
-    }
 
     @Test
     fun `array attributes are recorded as defensive copies`() = runTest {
         val context = InMemoryTelemetryContext()
         val startModels = mutableListOf("gpt-4o")
         val eventIds = mutableListOf<Number>(1)
-        context.startSpan(SpanOptions("pf.arrays", mapOf("models" to attr(*startModels.toTypedArray())))) { span ->
+        context.startSpan(
+            SpanOptions("pf.arrays", mapOf("models" to attr(*startModels.toTypedArray())))
+        ) { span ->
             startModels.add("o3") // later caller mutation must not leak in
             span.setAttributes(mapOf("codes" to attr(*arrayOf<Number>(4, 2))))
             span.addEvent("listed", mapOf("ids" to attr(*eventIds.toTypedArray())))
@@ -172,13 +185,18 @@ class TelemetryContractTest {
             mapOf(
                 "models" to attr(*arrayOf<String>("gpt-4o")),
                 "codes" to attr(*arrayOf<Number>(4, 2)),
-                "flags" to attr(*booleanArrayOf(true, false)),
+                "flags" to attr(*booleanArrayOf(true, false))
             ),
-            recorded.attributes,
+            recorded.attributes
         )
         assertEquals(
-            listOf(InMemoryTelemetryContext.RecordedTelemetryEvent("listed", mapOf("ids" to attr(*arrayOf<Number>(1))))),
-            recorded.events,
+            listOf(
+                InMemoryTelemetryContext.RecordedTelemetryEvent(
+                    "listed",
+                    mapOf("ids" to attr(*arrayOf<Number>(1)))
+                )
+            ),
+            recorded.events
         )
         val array = recorded.attributes["codes"] as AttributeValue.Nums
         (array.values as MutableList<Number>).add(99)
@@ -194,7 +212,7 @@ class TelemetryContractTest {
         }
         assertEquals(
             mapOf("attempted" to attr(*arrayOf<String>("a", "b"))),
-            context.getSpans().single().attributes,
+            context.getSpans().single().attributes
         )
     }
 
@@ -215,7 +233,12 @@ class TelemetryContractTest {
             first.join()
         }
         val spans = context.getSpans()
-        assertEquals(listOf("pf.parent", "pf.first-child", "pf.second-child"), spans.map { it.name })
+        assertEquals(
+            listOf("pf.parent", "pf.first-child", "pf.second-child"),
+            spans.map {
+                it.name
+            }
+        )
         val parent = spans.first { it.name == "pf.parent" }
         val first = spans.first { it.name == "pf.first-child" }
         val second = spans.first { it.name == "pf.second-child" }

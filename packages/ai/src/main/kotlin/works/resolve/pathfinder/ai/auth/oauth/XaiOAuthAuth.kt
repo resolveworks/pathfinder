@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
+import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.ai.auth.AuthEvent
@@ -8,9 +9,8 @@ import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.utils.lenientJson
-import works.resolve.pathfinder.ai.utils.string
-import kotlin.time.Clock
 import works.resolve.pathfinder.ai.utils.strictDouble
+import works.resolve.pathfinder.ai.utils.string
 
 /**
  * xAI OAuth device-code flow (RFC 8628): the user approves at the verification
@@ -29,10 +29,8 @@ import works.resolve.pathfinder.ai.utils.strictDouble
  * Nothing secret is ever logged or placed in exception messages: errors carry
  * only HTTP statuses and server-provided `error`/`error_description` strings.
  */
-class XaiOAuthAuth(
-    private val http: OAuthHttpClient,
-    private val clock: Clock = Clock.System,
-) : OAuthAuth {
+class XaiOAuthAuth(private val http: OAuthHttpClient, private val clock: Clock = Clock.System) :
+    OAuthAuth {
 
     override val name: String = "xAI (Grok/X subscription)"
 
@@ -47,8 +45,8 @@ class XaiOAuthAuth(
                 userCode = device.userCode,
                 verificationUri = device.verificationUriComplete ?: device.verificationUri,
                 intervalSeconds = device.intervalSeconds?.toInt(),
-                expiresInSeconds = device.expiresInSeconds.toInt(),
-            ),
+                expiresInSeconds = device.expiresInSeconds.toInt()
+            )
         )
         return pollForTokens(device)
     }
@@ -56,7 +54,8 @@ class XaiOAuthAuth(
     override suspend fun refresh(credential: OAuthCredential): OAuthCredential =
         refreshXaiToken(credential.refresh)
 
-    override suspend fun toAuth(credential: OAuthCredential): ModelAuth = ModelAuth(apiKey = credential.access)
+    override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
+        ModelAuth(apiKey = credential.access)
 
     internal data class XaiDeviceCode(
         val deviceCode: String,
@@ -64,7 +63,7 @@ class XaiOAuthAuth(
         val verificationUri: String,
         val verificationUriComplete: String?,
         val intervalSeconds: Double?,
-        val expiresInSeconds: Long,
+        val expiresInSeconds: Long
     )
 
     internal suspend fun requestDeviceCode(): XaiDeviceCode {
@@ -73,8 +72,8 @@ class XaiOAuthAuth(
             mapOf(
                 "client_id" to CLIENT_ID,
                 "scope" to SCOPE,
-                "referrer" to REFERRER,
-            ),
+                "referrer" to REFERRER
+            )
         )
         if (!response.ok) {
             throw requestFailure("device authorization", response)
@@ -99,7 +98,7 @@ class XaiOAuthAuth(
             verificationUri = validateVerificationUri(requiredString(body, "verification_uri")),
             verificationUriComplete = verificationUriComplete,
             intervalSeconds = intervalSeconds,
-            expiresInSeconds = positiveNumber(body, "expires_in"),
+            expiresInSeconds = positiveNumber(body, "expires_in")
         )
     }
 
@@ -115,31 +114,39 @@ class XaiOAuthAuth(
                         mapOf(
                             "grant_type" to DEVICE_GRANT_TYPE,
                             "client_id" to CLIENT_ID,
-                            "device_code" to device.deviceCode,
-                        ),
+                            "device_code" to device.deviceCode
+                        )
                     )
 
                     if (response.ok) {
                         OAuthDeviceCodePollResult.Complete(
-                            credentialsFromTokenResponse(response.body),
+                            credentialsFromTokenResponse(response.body)
                         )
                     } else {
                         when (val error = response.body.string("error")) {
-                        "authorization_pending" -> OAuthDeviceCodePollResult.Pending
-                        "slow_down" -> OAuthDeviceCodePollResult.SlowDown(
-                            intervalSeconds = response.body.strictDouble("interval"),
-                        )
-                        "access_denied", "authorization_denied" ->
-                            OAuthDeviceCodePollResult.Failed("xAI device authorization was denied")
-                        "expired_token" -> OAuthDeviceCodePollResult.Failed("xAI device code expired")
-                        else -> OAuthDeviceCodePollResult.Failed(
-                            requestFailure("device token polling", response).message!!,
-                        )
+                            "authorization_pending" -> OAuthDeviceCodePollResult.Pending
+
+                            "slow_down" -> OAuthDeviceCodePollResult.SlowDown(
+                                intervalSeconds = response.body.strictDouble("interval")
+                            )
+
+                            "access_denied", "authorization_denied" ->
+                                OAuthDeviceCodePollResult.Failed(
+                                    "xAI device authorization was denied"
+                                )
+
+                            "expired_token" -> OAuthDeviceCodePollResult.Failed(
+                                "xAI device code expired"
+                            )
+
+                            else -> OAuthDeviceCodePollResult.Failed(
+                                requestFailure("device token polling", response).message!!
+                            )
                         }
                     }
-                },
+                }
             ),
-            clock = clock,
+            clock = clock
         )
 
     private suspend fun refreshXaiToken(refreshToken: String): OAuthCredential {
@@ -148,8 +155,8 @@ class XaiOAuthAuth(
             mapOf(
                 "grant_type" to "refresh_token",
                 "client_id" to CLIENT_ID,
-                "refresh_token" to refreshToken,
-            ),
+                "refresh_token" to refreshToken
+            )
         )
         if (!response.ok) {
             throw requestFailure("token refresh", response)
@@ -161,18 +168,29 @@ class XaiOAuthAuth(
      * xAI may omit `refresh_token` on refresh when the token is not rotated,
      * in which case the previous refresh token is retained.
      */
-    internal fun credentialsFromTokenResponse(body: JsonObject, previousRefreshToken: String? = null): OAuthCredential {
+    internal fun credentialsFromTokenResponse(
+        body: JsonObject,
+        previousRefreshToken: String? = null
+    ): OAuthCredential {
         val access = requiredString(body, "access_token")
         val refresh =
-            if (body["refresh_token"] == null && !previousRefreshToken.isNullOrEmpty()) previousRefreshToken
-            else requiredString(body, "refresh_token")
+            if (body["refresh_token"] == null &&
+                !previousRefreshToken.isNullOrEmpty()
+            ) {
+                previousRefreshToken
+            } else {
+                requiredString(body, "refresh_token")
+            }
         val expiresInSeconds =
-            if (body["expires_in"] == null) DEFAULT_TOKEN_LIFETIME_SECONDS
-            else positiveNumber(body, "expires_in")
+            if (body["expires_in"] == null) {
+                DEFAULT_TOKEN_LIFETIME_SECONDS
+            } else {
+                positiveNumber(body, "expires_in")
+            }
         return OAuthCredential(
             access = access,
             refresh = refresh,
-            expires = clock.now().toEpochMilliseconds() + expiresInSeconds * 1000 - REFRESH_SKEW_MS,
+            expires = clock.now().toEpochMilliseconds() + expiresInSeconds * 1000 - REFRESH_SKEW_MS
         )
     }
 
@@ -223,11 +241,7 @@ class XaiOAuthAuth(
         return url.toString()
     }
 
-    private data class FormResponse(
-        val ok: Boolean,
-        val status: Int,
-        val body: JsonObject,
-    )
+    private data class FormResponse(val ok: Boolean, val status: Int, val body: JsonObject)
 
     private suspend fun postForm(url: String, fields: Map<String, String>): FormResponse {
         val response: OAuthHttpResponse
@@ -238,11 +252,11 @@ class XaiOAuthAuth(
                     url = url,
                     headers = mapOf(
                         "accept" to "application/json",
-                        "content-type" to "application/x-www-form-urlencoded",
+                        "content-type" to "application/x-www-form-urlencoded"
                     ),
                     body = formUrlEncode(fields),
-                    timeoutMs = REQUEST_TIMEOUT_MS,
-                ),
+                    timeoutMs = REQUEST_TIMEOUT_MS
+                )
             )
         } catch (error: CancellationException) {
             throw error
@@ -257,7 +271,7 @@ class XaiOAuthAuth(
         return FormResponse(
             ok = response.status in 200..299,
             status = response.status,
-            body = parsed as? JsonObject ?: JsonObject(emptyMap()),
+            body = parsed as? JsonObject ?: JsonObject(emptyMap())
         )
     }
 
@@ -266,7 +280,7 @@ class XaiOAuthAuth(
         val description = response.body.string("error_description")
         val detail = listOfNotNull(error, description).joinToString(": ")
         return IllegalStateException(
-            "xAI OAuth $action failed (HTTP ${response.status})${if (detail.isNotEmpty()) ": $detail" else ""}",
+            "xAI OAuth $action failed (HTTP ${response.status})${if (detail.isNotEmpty()) ": $detail" else ""}"
         )
     }
 

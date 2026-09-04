@@ -1,19 +1,18 @@
 package works.resolve.pathfinder.ai
 
-import works.resolve.pathfinder.ai.api.AzureOpenAiResponsesOptions
-import works.resolve.pathfinder.ai.api.OpenAiResponsesOptions
-import works.resolve.pathfinder.ai.api.OpenAiCompletionsOptions
-import works.resolve.pathfinder.ai.SimpleStreamOptions
-import works.resolve.pathfinder.ai.StreamOptions
-import works.resolve.pathfinder.ai.ThinkingLevel
-import works.resolve.pathfinder.ai.ResolvedAuth
-import works.resolve.pathfinder.ai.transport.TransportRequest
 import kotlinx.serialization.json.JsonPrimitive
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import works.resolve.pathfinder.ai.ResolvedAuth
+import works.resolve.pathfinder.ai.SimpleStreamOptions
+import works.resolve.pathfinder.ai.StreamOptions
+import works.resolve.pathfinder.ai.ThinkingLevel
+import works.resolve.pathfinder.ai.api.AzureOpenAiResponsesOptions
+import works.resolve.pathfinder.ai.api.OpenAiCompletionsOptions
+import works.resolve.pathfinder.ai.api.OpenAiResponsesOptions
+import works.resolve.pathfinder.ai.transport.TransportRequest
 
 class SecretRedactionTest {
 
@@ -40,17 +39,18 @@ class SecretRedactionTest {
         assertEquals(
             "StreamOptions(apiKey=<redacted>, sessionId=s1, temperature=0.5, maxTokens=null, " +
                 "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, telemetryContext=false)",
-            StreamOptions(apiKey = secret, sessionId = "s1", temperature = 0.5).toString(),
+            StreamOptions(apiKey = secret, sessionId = "s1", temperature = 0.5).toString()
         )
         assertEquals(
             "StreamOptions(apiKey=null, sessionId=null, temperature=null, maxTokens=null, " +
                 "timeoutMs=null, maxRetries=0, maxRetryDelayMs=60000, telemetryContext=false)",
-            StreamOptions().toString(),
+            StreamOptions().toString()
         )
 
         assertEquals(
             "SimpleStreamOptions(apiKey=<redacted>, sessionId=s1, temperature=0.7, maxTokens=42, " +
-                "reasoning=MINIMAL, toolChoice=Auto, cacheRetention=null, timeoutMs=null, maxRetries=1, " +
+                "reasoning=MINIMAL, toolChoice=Auto, cacheRetention=null, " +
+                "timeoutMs=null, maxRetries=1, " +
                 "maxRetryDelayMs=60000, env=[PI_ENV_A], headers=[Authorization], " +
                 "onPayload=true, onResponse=false, samplingParams=[top_k], transport=null, " +
                 "websocketConnectTimeoutMs=null, telemetryContext=false)",
@@ -65,15 +65,16 @@ class SecretRedactionTest {
                 env = mapOf("PI_ENV_A" to secret),
                 headers = mapOf("Authorization" to "Bearer $secret"),
                 onPayload = { _, _ -> null },
-                samplingParams = mapOf("top_k" to JsonPrimitive(1)),
-            ).toString(),
+                samplingParams = mapOf("top_k" to JsonPrimitive(1))
+            ).toString()
         )
         assertEquals(
             "SimpleStreamOptions(apiKey=null, sessionId=null, temperature=null, maxTokens=null, " +
-                "reasoning=null, toolChoice=null, cacheRetention=null, timeoutMs=null, maxRetries=0, " +
+                "reasoning=null, toolChoice=null, cacheRetention=null, " +
+                "timeoutMs=null, maxRetries=0, " +
                 "maxRetryDelayMs=60000, env=[], headers=[], onPayload=false, onResponse=false, " +
                 "samplingParams=null, transport=null, websocketConnectTimeoutMs=null, telemetryContext=false)",
-            SimpleStreamOptions().toString(),
+            SimpleStreamOptions().toString()
         )
 
         assertEquals(
@@ -86,8 +87,8 @@ class SecretRedactionTest {
                 env = mapOf("PI_ENV_A" to secret),
                 headers = mapOf("Authorization" to "Bearer $secret"),
                 onResponse = { _, _ -> },
-                samplingParams = mapOf("top_k" to JsonPrimitive(1)),
-            ).toString(),
+                samplingParams = mapOf("top_k" to JsonPrimitive(1))
+            ).toString()
         )
 
         assertEquals(
@@ -99,8 +100,8 @@ class SecretRedactionTest {
             OpenAiResponsesOptions(
                 apiKey = secret,
                 env = mapOf("PI_ENV_A" to secret),
-                headers = mapOf("Authorization" to "Bearer $secret"),
-            ).toString(),
+                headers = mapOf("Authorization" to "Bearer $secret")
+            ).toString()
         )
 
         assertEquals(
@@ -113,8 +114,8 @@ class SecretRedactionTest {
             AzureOpenAiResponsesOptions(
                 azureApiVersion = "v1",
                 env = mapOf("PI_ENV_A" to secret),
-                headers = mapOf("Authorization" to "Bearer $secret"),
-            ).toString(),
+                headers = mapOf("Authorization" to "Bearer $secret")
+            ).toString()
         )
     }
 
@@ -122,7 +123,10 @@ class SecretRedactionTest {
     fun `StreamOptions keeps copy and equality`() {
         val options = StreamOptions(apiKey = secret, maxTokens = 42)
         assertEquals(options, options.copy())
-        assertEquals(StreamOptions(apiKey = "other", maxTokens = 42), options.copy(apiKey = "other"))
+        assertEquals(
+            StreamOptions(apiKey = "other", maxTokens = 42),
+            options.copy(apiKey = "other")
+        )
         assertEquals(42, options.copy(temperature = 1.0).maxTokens)
     }
 
@@ -131,7 +135,7 @@ class SecretRedactionTest {
         val options = SimpleStreamOptions(
             apiKey = secret,
             temperature = 0.7,
-            headers = mapOf("cf-aig-authorization" to "Bearer $secret"),
+            headers = mapOf("cf-aig-authorization" to "Bearer $secret")
         )
         assertFalse(options.toString().contains(secret))
         assertTrue(options.toString().contains("<redacted>"))
@@ -145,7 +149,7 @@ class SecretRedactionTest {
         val options = OpenAiCompletionsOptions(
             apiKey = secret,
             maxTokens = 100,
-            headers = mapOf("cf-aig-authorization" to "Bearer $secret"),
+            headers = mapOf("cf-aig-authorization" to "Bearer $secret")
         )
         assertFalse(options.toString().contains(secret))
         assertTrue(options.toString().contains("<redacted>"))
@@ -161,8 +165,8 @@ class SecretRedactionTest {
             env = mapOf("CLOUDFLARE_ACCOUNT_ID" to "acct"),
             headers = mapOf(
                 "cf-aig-authorization" to "Bearer $secret",
-                "Authorization" to null,
-            ),
+                "Authorization" to null
+            )
         )
         val rendered = auth.toString()
         assertFalse(rendered.contains(secret))
@@ -181,7 +185,7 @@ class SecretRedactionTest {
             url = "https://api.example.com/v1/chat/completions",
             bearerToken = secret,
             headers = mapOf("Accept" to "text/event-stream"),
-            body = "{}".toByteArray(),
+            body = "{}".toByteArray()
         )
         val rendered = request.toString()
         assertFalse(rendered.contains(secret))
@@ -199,12 +203,12 @@ class SecretRedactionTest {
             url = "https://api.example.com",
             bearerToken = secret,
             headers = emptyMap(),
-            body = "ping".toByteArray(),
+            body = "ping".toByteArray()
         )
         assertEquals(request, request.copy())
         assertEquals(
             TransportRequest("https://api.example.com", "other", body = "ping".toByteArray()),
-            request.copy(bearerToken = "other"),
+            request.copy(bearerToken = "other")
         )
     }
 }

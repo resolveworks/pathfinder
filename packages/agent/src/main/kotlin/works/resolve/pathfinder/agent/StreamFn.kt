@@ -13,5 +13,9 @@ import works.resolve.pathfinder.ai.SimpleStreamOptions
  * per assistant turn.
  */
 fun interface StreamFn {
-    fun stream(model: Model, context: Context, options: SimpleStreamOptions): Flow<AssistantMessageEvent>
+    fun stream(
+        model: Model,
+        context: Context,
+        options: SimpleStreamOptions
+    ): Flow<AssistantMessageEvent>
 }

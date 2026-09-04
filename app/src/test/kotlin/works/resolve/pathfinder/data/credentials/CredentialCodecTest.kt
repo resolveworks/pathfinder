@@ -14,7 +14,7 @@ class CredentialCodecTest {
     fun `round trips key and env`() {
         val credential = ApiKeyCredential(
             key = "sk-test",
-            env = mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
+            env = mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw")
         )
         assertEquals(credential, CredentialCodec.decode(CredentialCodec.encode(credential)))
     }
@@ -29,14 +29,18 @@ class CredentialCodecTest {
     fun `malformed object-intended json is rejected, not treated as a bare key`() {
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{bad}") }
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{}") }
-        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{\"type\":\"api_key\",\"key\":}") }
+        assertFailsWith<CredentialFormatException> {
+            CredentialCodec.decode("{\"type\":\"api_key\",\"key\":}")
+        }
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("{\"type\":\"oauth\"") }
     }
 
     @Test
     fun `non-object strings are rejected, not treated as bare keys`() {
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("sk-legacy") }
-        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("weird {braces} inside") }
+        assertFailsWith<CredentialFormatException> {
+            CredentialCodec.decode("weird {braces} inside")
+        }
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("") }
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("   ") }
     }
@@ -44,21 +48,31 @@ class CredentialCodecTest {
     @Test
     fun `non-string type tag is rejected`() {
         assertFailsWith<CredentialFormatException> { CredentialCodec.decode("""{"type":123}""") }
-        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("""{"type":["api_key"]}""") }
+        assertFailsWith<CredentialFormatException> {
+            CredentialCodec.decode("""{"type":["api_key"]}""")
+        }
     }
 
     @Test
     fun `non-string api key is rejected instead of silently becoming null`() {
-        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("""{"type":"api_key","key":123}""") }
-        assertFailsWith<CredentialFormatException> { CredentialCodec.decode("""{"key":null,"env":{}}""") }
+        assertFailsWith<CredentialFormatException> {
+            CredentialCodec.decode("""{"type":"api_key","key":123}""")
+        }
+        assertFailsWith<CredentialFormatException> {
+            CredentialCodec.decode("""{"key":null,"env":{}}""")
+        }
     }
 
     @Test
     fun `numeric-string oauth expires is rejected, json number is required`() {
         assertFailsWith<CredentialFormatException> {
-            CredentialCodec.decode("""{"type":"oauth","access":"a","refresh":"r","expires":"123"}""")
+            CredentialCodec.decode(
+                """{"type":"oauth","access":"a","refresh":"r","expires":"123"}"""
+            )
         }
-        val decoded = CredentialCodec.decode("""{"type":"oauth","access":"a","refresh":"r","expires":123}""")
+        val decoded = CredentialCodec.decode(
+            """{"type":"oauth","access":"a","refresh":"r","expires":123}"""
+        )
         assertEquals(123L, (decoded as OAuthCredential).expires)
     }
 
@@ -98,7 +112,7 @@ class CredentialCodecTest {
         val credential = OAuthCredential(
             access = "access-token",
             refresh = "refresh-token",
-            expires = 1234567890L,
+            expires = 1234567890L
         )
         assertEquals(credential, CredentialCodec.decode(CredentialCodec.encode(credential)))
     }
@@ -110,9 +124,11 @@ class CredentialCodecTest {
             refresh = "r",
             expires = 42L,
             extras = mapOf(
-                "enterpriseUrl" to kotlinx.serialization.json.JsonPrimitive("https://company.ghe.com"),
-                "scopes" to kotlinx.serialization.json.Json.parseToJsonElement("""["read","write"]"""),
-            ),
+                "enterpriseUrl" to
+                    kotlinx.serialization.json.JsonPrimitive("https://company.ghe.com"),
+                "scopes" to
+                    kotlinx.serialization.json.Json.parseToJsonElement("""["read","write"]""")
+            )
         )
         val encoded = CredentialCodec.encode(credential)
         assertTrue(encoded.contains("enterpriseUrl"))
@@ -121,9 +137,22 @@ class CredentialCodecTest {
 
     @Test
     fun `oauth decode preserves unknown fields into extras`() {
-        val raw = """{"type":"oauth","access":"a","refresh":"r","expires":1,"futureField":{"x":true}}"""
+        val raw = """{"type":"oauth","access":"a","refresh":"r","expires":1,""" +
+            """"futureField":{"x":true}}"""
         val decoded = CredentialCodec.decode(raw) as OAuthCredential
-        assertEquals(OAuthCredential("a", "r", 1, extras = mapOf("futureField" to kotlinx.serialization.json.Json.parseToJsonElement("""{"x":true}"""))), decoded)
+        assertEquals(
+            OAuthCredential(
+                "a",
+                "r",
+                1,
+                extras = mapOf(
+                    "futureField" to kotlinx.serialization.json.Json.parseToJsonElement(
+                        """{"x":true}"""
+                    )
+                )
+            ),
+            decoded
+        )
     }
 
     @Test
@@ -157,7 +186,7 @@ class CredentialCodecTest {
                 access = "a",
                 refresh = "r",
                 expires = 1L,
-                extras = mapOf("refresh" to kotlinx.serialization.json.JsonPrimitive("evil")),
+                extras = mapOf("refresh" to kotlinx.serialization.json.JsonPrimitive("evil"))
             )
         }
         assertTrue(error.message.orEmpty().contains("refresh"))
@@ -169,7 +198,10 @@ class CredentialCodecTest {
             access = "SECRET-ACCESS",
             refresh = "SECRET-REFRESH",
             expires = 1L,
-            extras = mapOf("enterpriseUrl" to kotlinx.serialization.json.JsonPrimitive("https://secret.example")),
+            extras = mapOf(
+                "enterpriseUrl" to
+                    kotlinx.serialization.json.JsonPrimitive("https://secret.example")
+            )
         )
         val text = credential.toString()
         assertFalse(text.contains("SECRET-ACCESS"))

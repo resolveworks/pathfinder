@@ -14,10 +14,7 @@ package works.resolve.pathfinder.telemetry
  */
 class InMemoryTelemetryContext : TelemetryContext {
 
-    data class RecordedTelemetryEvent(
-        val name: String,
-        val attributes: SpanAttributes,
-    )
+    data class RecordedTelemetryEvent(val name: String, val attributes: SpanAttributes)
 
     data class RecordedTelemetrySpan(
         val id: Int,
@@ -28,14 +25,10 @@ class InMemoryTelemetryContext : TelemetryContext {
         val status: SpanStatus,
         val settled: Boolean,
         /** Assigned in settle order when the span ends; null while in flight. */
-        val endSequence: Int?,
+        val endSequence: Int?
     )
 
-    private class MutableSpan(
-        val id: Int,
-        val parentId: Int?,
-        val name: String,
-    ) {
+    private class MutableSpan(val id: Int, val parentId: Int?, val name: String) {
         var attributes: SpanAttributes = emptyMap()
         val events = mutableListOf<RecordedTelemetryEvent>()
         var status: SpanStatus = SpanStatus.Ok
@@ -52,13 +45,13 @@ class InMemoryTelemetryContext : TelemetryContext {
 
     override suspend fun <T> startSpan(
         options: SpanOptions,
-        callback: suspend (TelemetrySpan) -> T,
+        callback: suspend (TelemetrySpan) -> T
     ): T = startSpan(parent = null, options, callback)
 
     private suspend fun <T> startSpan(
         parent: MutableSpan?,
         options: SpanOptions,
-        callback: suspend (TelemetrySpan) -> T,
+        callback: suspend (TelemetrySpan) -> T
     ): T {
         // One atomic admission: the parent cannot settle between the
         // settled-parent check and the append, and attributes are copied
@@ -70,7 +63,7 @@ class InMemoryTelemetryContext : TelemetryContext {
                 MutableSpan(
                     id = nextSpanId,
                     parentId = parent?.id,
-                    name = options.name,
+                    name = options.name
                 ).also { span ->
                     span.attributes = attributes
                     spans += span
@@ -85,7 +78,7 @@ class InMemoryTelemetryContext : TelemetryContext {
         val span: TelemetrySpan = object : TelemetrySpan {
             override suspend fun <R> startSpan(
                 options: SpanOptions,
-                callback: suspend (TelemetrySpan) -> R,
+                callback: suspend (TelemetrySpan) -> R
             ): R = this@InMemoryTelemetryContext.startSpan(recorded, options, callback)
 
             override fun addEvent(name: String, attributes: SpanAttributes) {
@@ -150,10 +143,12 @@ class InMemoryTelemetryContext : TelemetryContext {
                 parentId = span.parentId,
                 name = span.name,
                 attributes = copyAttributes(span.attributes),
-                events = span.events.map { RecordedTelemetryEvent(it.name, copyAttributes(it.attributes)) },
+                events = span.events.map {
+                    RecordedTelemetryEvent(it.name, copyAttributes(it.attributes))
+                },
                 status = copyStatus(span.status),
                 settled = span.settled,
-                endSequence = span.endSequence,
+                endSequence = span.endSequence
             )
         }
     }
@@ -185,6 +180,7 @@ private fun mergeAttributes(current: SpanAttributes, attributes: SpanAttributes)
 /** Error details copy defensively so snapshots detach from the caller's [TelemetryError]. */
 private fun copyStatus(status: SpanStatus): SpanStatus = when (status) {
     is SpanStatus.Ok -> SpanStatus.Ok
+
     is SpanStatus.Error -> status.error?.let {
         SpanStatus.Error(TelemetryError(it.name, it.message))
     } ?: SpanStatus.Error()

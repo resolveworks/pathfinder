@@ -19,13 +19,15 @@ class PkceGenerator(private val randomBytes: (Int) -> ByteArray) {
 
     fun generate(): Pkce {
         val verifier = base64url(randomBytes(32))
-        val digest = MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII))
+        val digest = MessageDigest.getInstance(
+            "SHA-256"
+        ).digest(verifier.toByteArray(Charsets.US_ASCII))
         return Pkce(verifier, base64url(digest))
     }
 
     companion object {
         fun challengeFor(verifier: String): String = base64url(
-            MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII)),
+            MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII))
         )
 
         internal fun base64url(bytes: ByteArray): String =

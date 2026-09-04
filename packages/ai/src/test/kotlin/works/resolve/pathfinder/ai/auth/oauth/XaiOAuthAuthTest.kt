@@ -6,13 +6,13 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
-import works.resolve.pathfinder.ai.testing.FakeClock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.OAuthCredential
+import works.resolve.pathfinder.ai.testing.FakeClock
 
 class XaiOAuthAuthTest {
 
@@ -95,7 +95,7 @@ class XaiOAuthAuthTest {
             "client_id=b1a00492-073a-47ea-816f-4c329264a828" +
                 "&scope=openid+profile+email+offline_access+grok-cli%3Aaccess+api%3Aaccess" +
                 "&referrer=pathfinder",
-            requestBody(request),
+            requestBody(request)
         )
         assertTrue(request.timeoutMs > 0)
     }
@@ -110,7 +110,7 @@ class XaiOAuthAuthTest {
         val error = assertFailsWith<IllegalStateException> { auth.requestDeviceCodeForTest() }
         assertEquals(
             "xAI OAuth device authorization failed (HTTP 400): invalid_request: bad scope",
-            error.message,
+            error.message
         )
     }
 
@@ -121,8 +121,11 @@ class XaiOAuthAuthTest {
         val interaction = RecordingInteraction()
         http.respond = { json(200, deviceCodeBody()) }
         http.respond = { request ->
-            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
-            else json(200, tokenBody())
+            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) {
+                json(200, deviceCodeBody())
+            } else {
+                json(200, tokenBody())
+            }
         }
 
         auth.login(interaction)
@@ -139,7 +142,9 @@ class XaiOAuthAuthTest {
         val http = FakeHttpClient()
         val auth = XaiOAuthAuth(http)
         val error = assertFailsWith<IllegalStateException> {
-            auth.parseDeviceCodeForTest("""{"device_code":"d","user_code":"u","verification_uri":"http://auth.x.ai/activate","expires_in":900}""")
+            auth.parseDeviceCodeForTest(
+                """{"device_code":"d","user_code":"u","verification_uri":"http://auth.x.ai/activate","expires_in":900}"""
+            )
         }
         assertEquals("Untrusted verification URI in xAI OAuth response", error.message)
     }
@@ -149,7 +154,9 @@ class XaiOAuthAuthTest {
         val http = FakeHttpClient()
         val auth = XaiOAuthAuth(http)
         val error = assertFailsWith<IllegalStateException> {
-            auth.parseDeviceCodeForTest("""{"device_code":"d","user_code":"u","verification_uri":"not a url","expires_in":900}""")
+            auth.parseDeviceCodeForTest(
+                """{"device_code":"d","user_code":"u","verification_uri":"not a url","expires_in":900}"""
+            )
         }
         assertEquals("Untrusted verification URI in xAI OAuth response", error.message)
     }
@@ -160,7 +167,7 @@ class XaiOAuthAuthTest {
         for (body in listOf(
             """{"user_code":"u","verification_uri":"https://x.ai","expires_in":900}""",
             """{"device_code":"","user_code":"u","verification_uri":"https://x.ai","expires_in":900}""",
-            """{"device_code":1,"user_code":"u","verification_uri":"https://x.ai","expires_in":900}""",
+            """{"device_code":1,"user_code":"u","verification_uri":"https://x.ai","expires_in":900}"""
         )) {
             val error = assertFailsWith<IllegalStateException> { auth.parseDeviceCodeForTest(body) }
             assertEquals("Invalid xAI OAuth response field: device_code", error.message)
@@ -171,12 +178,14 @@ class XaiOAuthAuthTest {
     fun `non-positive expires_in is rejected and interval falls back to default`() = runTest {
         val auth = XaiOAuthAuth(FakeHttpClient())
         val error = assertFailsWith<IllegalStateException> {
-            auth.parseDeviceCodeForTest("""{"device_code":"d","user_code":"u","verification_uri":"https://x.ai","expires_in":0}""")
+            auth.parseDeviceCodeForTest(
+                """{"device_code":"d","user_code":"u","verification_uri":"https://x.ai","expires_in":0}"""
+            )
         }
         assertEquals("Invalid xAI OAuth response field: expires_in", error.message)
 
         val device = auth.parseDeviceCodeForTest(
-            """{"device_code":"d","user_code":"u","verification_uri":"https://x.ai","interval":0,"expires_in":900}""",
+            """{"device_code":"d","user_code":"u","verification_uri":"https://x.ai","interval":0,"expires_in":900}"""
         )
         assertNull(device.intervalSeconds) // RFC 8628 interval 0 → poller default
     }
@@ -185,7 +194,7 @@ class XaiOAuthAuthTest {
     fun `expiry uses lifetime minus 5-minute skew`() {
         val auth = XaiOAuthAuth(FakeHttpClient(), clock = FakeClock(100_000L))
         val credential = auth.credentialsFromTokenResponse(
-            Json.parseToJsonElement(tokenBody()) as JsonObject,
+            Json.parseToJsonElement(tokenBody()) as JsonObject
         )
         assertEquals("acc-1", credential.access)
         assertEquals("ref-1", credential.refresh)
@@ -196,7 +205,7 @@ class XaiOAuthAuthTest {
     fun `missing expires_in defaults to one hour`() {
         val auth = XaiOAuthAuth(FakeHttpClient(), clock = FakeClock(0L))
         val credential = auth.credentialsFromTokenResponse(
-            Json.parseToJsonElement("""{"access_token":"a","refresh_token":"r"}""") as JsonObject,
+            Json.parseToJsonElement("""{"access_token":"a","refresh_token":"r"}""") as JsonObject
         )
         assertEquals(3600 * 1000 - XaiOAuthAuth.REFRESH_SKEW_MS, credential.expires)
     }
@@ -206,7 +215,7 @@ class XaiOAuthAuthTest {
         val auth = XaiOAuthAuth(FakeHttpClient(), clock = FakeClock(0L))
         val credential = auth.credentialsFromTokenResponse(
             Json.parseToJsonElement("""{"access_token":"a2"}""") as JsonObject,
-            previousRefreshToken = "kept-refresh",
+            previousRefreshToken = "kept-refresh"
         )
         assertEquals("kept-refresh", credential.refresh)
     }
@@ -219,7 +228,7 @@ class XaiOAuthAuthTest {
         val error = assertFailsWith<IllegalStateException> {
             auth.credentialsFromTokenResponse(
                 Json.parseToJsonElement("""{"access_token":"a2"}""") as JsonObject,
-                previousRefreshToken = "",
+                previousRefreshToken = ""
             )
         }
         assertEquals("Invalid xAI OAuth response field: refresh_token", error.message)
@@ -231,11 +240,15 @@ class XaiOAuthAuthTest {
         val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         var polls = 0
         http.respond = { request ->
-            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
-            else {
+            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) {
+                json(200, deviceCodeBody())
+            } else {
                 polls += 1
-                if (polls == 1) json(400, """{"error":"authorization_pending"}""")
-                else json(200, tokenBody())
+                if (polls == 1) {
+                    json(400, """{"error":"authorization_pending"}""")
+                } else {
+                    json(200, tokenBody())
+                }
             }
         }
 
@@ -247,7 +260,7 @@ class XaiOAuthAuthTest {
         assertEquals(
             "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code" +
                 "&client_id=b1a00492-073a-47ea-816f-4c329264a828&device_code=dev-123",
-            requestBody(tokenRequest),
+            requestBody(tokenRequest)
         )
     }
 
@@ -257,11 +270,15 @@ class XaiOAuthAuthTest {
         val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         var polls = 0
         http.respond = { request ->
-            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
-            else {
+            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) {
+                json(200, deviceCodeBody())
+            } else {
                 polls += 1
-                if (polls == 1) json(400, """{"error":"slow_down","interval":10}""")
-                else json(200, tokenBody())
+                if (polls == 1) {
+                    json(400, """{"error":"slow_down","interval":10}""")
+                } else {
+                    json(200, tokenBody())
+                }
             }
         }
         val credential = auth.login(RecordingInteraction())
@@ -273,8 +290,11 @@ class XaiOAuthAuthTest {
         val http = FakeHttpClient()
         val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         http.respond = { request ->
-            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
-            else json(400, """{"error":"access_denied"}""")
+            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) {
+                json(200, deviceCodeBody())
+            } else {
+                json(400, """{"error":"access_denied"}""")
+            }
         }
         val error = assertFailsWith<IllegalStateException> { auth.login(RecordingInteraction()) }
         assertEquals("xAI device authorization was denied", error.message)
@@ -285,8 +305,11 @@ class XaiOAuthAuthTest {
         val http = FakeHttpClient()
         val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         http.respond = { request ->
-            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
-            else json(400, """{"error":"authorization_denied"}""")
+            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) {
+                json(200, deviceCodeBody())
+            } else {
+                json(400, """{"error":"authorization_denied"}""")
+            }
         }
         val error = assertFailsWith<IllegalStateException> { auth.login(RecordingInteraction()) }
         assertEquals("xAI device authorization was denied", error.message)
@@ -297,8 +320,11 @@ class XaiOAuthAuthTest {
         val http = FakeHttpClient()
         val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         http.respond = { request ->
-            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
-            else json(400, """{"error":"expired_token"}""")
+            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) {
+                json(200, deviceCodeBody())
+            } else {
+                json(400, """{"error":"expired_token"}""")
+            }
         }
         val error = assertFailsWith<IllegalStateException> { auth.login(RecordingInteraction()) }
         assertEquals("xAI device code expired", error.message)
@@ -309,13 +335,16 @@ class XaiOAuthAuthTest {
         val http = FakeHttpClient()
         val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         http.respond = { request ->
-            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) json(200, deviceCodeBody())
-            else json(500, """{"error":"server_error","error_description":"boom"}""")
+            if (request.url == XaiOAuthAuth.DEVICE_CODE_URL) {
+                json(200, deviceCodeBody())
+            } else {
+                json(500, """{"error":"server_error","error_description":"boom"}""")
+            }
         }
         val error = assertFailsWith<IllegalStateException> { auth.login(RecordingInteraction()) }
         assertEquals(
             "xAI OAuth device token polling failed (HTTP 500): server_error: boom",
-            error.message,
+            error.message
         )
     }
 
@@ -334,13 +363,15 @@ class XaiOAuthAuthTest {
         val auth = XaiOAuthAuth(http, clock = FakeClock(0L))
         http.respond = { json(200, """{"access_token":"acc-2"}""") }
 
-        val refreshed = auth.refresh(OAuthCredential(access = "acc-1", refresh = "ref-1", expires = 1))
+        val refreshed = auth.refresh(
+            OAuthCredential(access = "acc-1", refresh = "ref-1", expires = 1)
+        )
 
         val request = lastRequest(http)
         assertEquals(XaiOAuthAuth.TOKEN_URL, request.url)
         assertEquals(
             "grant_type=refresh_token&client_id=b1a00492-073a-47ea-816f-4c329264a828&refresh_token=ref-1",
-            requestBody(request),
+            requestBody(request)
         )
         assertEquals("acc-2", refreshed.access)
         assertEquals("ref-1", refreshed.refresh)
@@ -360,7 +391,7 @@ class XaiOAuthAuthTest {
     @Test
     fun `form encoding matches URLSearchParams semantics`() {
         val encoded = XaiOAuthAuth.formUrlEncode(
-            mapOf("a b" to "c/d", "e" to "ü~*.-_1\uD83D\uDE00"),
+            mapOf("a b" to "c/d", "e" to "ü~*.-_1\uD83D\uDE00")
         ).toString(Charsets.UTF_8)
         // URLSearchParams percent-encodes `~`, keeps `*`, `.-_` and
         // alphanumerics, encodes spaces as `+`, and encodes the supplementary

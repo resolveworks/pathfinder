@@ -1,7 +1,5 @@
 package works.resolve.pathfinder.data.settings
 
-import works.resolve.pathfinder.codingagent.core.RetrySettings
-
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -17,10 +15,9 @@ import kotlinx.serialization.json.JsonPrimitive
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.codingagent.core.RetrySettings
 
-class SettingsRepository(
-    private val dataStore: DataStore<Preferences>,
-) : SettingsStore {
+class SettingsRepository(private val dataStore: DataStore<Preferences>) : SettingsStore {
 
     private object Keys {
         val PROVIDER_ID = stringPreferencesKey("provider_id")
@@ -51,18 +48,20 @@ class SettingsRepository(
             modelId = prefs[Keys.MODEL_ID] ?: "",
             activeSessionId = prefs[Keys.ACTIVE_SESSION_ID]?.takeIf { it.isNotBlank() },
             showThinking = prefs[Keys.SHOW_THINKING] ?: false,
-            defaultThinkingLevel = prefs[Keys.DEFAULT_THINKING_LEVEL]?.let { modelThinkingLevelFromWire(it) },
+            defaultThinkingLevel = prefs[Keys.DEFAULT_THINKING_LEVEL]?.let {
+                modelThinkingLevelFromWire(it)
+            },
             retry = RetrySettings(
                 enabled = prefs[Keys.RETRY_ENABLED] ?: true,
                 maxRetries = prefs[Keys.RETRY_MAX_RETRIES] ?: 3,
-                baseDelayMs = prefs[Keys.RETRY_BASE_DELAY_MS] ?: 2000,
+                baseDelayMs = prefs[Keys.RETRY_BASE_DELAY_MS] ?: 2000
             ),
             compaction = works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings(
                 enabled = prefs[Keys.COMPACTION_ENABLED] ?: true,
                 reserveTokens = prefs[Keys.COMPACTION_RESERVE_TOKENS] ?: 16384,
-                keepRecentTokens = prefs[Keys.COMPACTION_KEEP_RECENT_TOKENS] ?: 20000,
+                keepRecentTokens = prefs[Keys.COMPACTION_KEEP_RECENT_TOKENS] ?: 20000
             ),
-            enabledModels = prefs[Keys.ENABLED_MODELS]?.let(::decodeEnabledModels),
+            enabledModels = prefs[Keys.ENABLED_MODELS]?.let(::decodeEnabledModels)
         )
     }
 
@@ -74,7 +73,9 @@ class SettingsRepository(
         }
     }
 
-    override suspend fun setCompactionSettings(settings: works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings) {
+    override suspend fun setCompactionSettings(
+        settings: works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
+    ) {
         dataStore.edit { prefs ->
             prefs[Keys.COMPACTION_ENABLED] = settings.enabled
             prefs[Keys.COMPACTION_RESERVE_TOKENS] = settings.reserveTokens
@@ -86,22 +87,25 @@ class SettingsRepository(
     internal fun decodeEnabledModels(encoded: String): List<String> {
         val array = lenientJson.parseToJsonElement(encoded) as? JsonArray
             ?: throw IllegalArgumentException(
-                "Malformed enabled_models setting: expected a JSON array of strings, got: $encoded",
+                "Malformed enabled_models setting: expected a JSON array of strings, got: $encoded"
             )
         return array.map { element ->
             (element as? JsonPrimitive)
                 ?.takeIf { it.isString }
                 ?.content
                 ?: throw IllegalArgumentException(
-                    "Malformed enabled_models setting: expected string elements, got: $encoded",
+                    "Malformed enabled_models setting: expected string elements, got: $encoded"
                 )
         }
     }
 
     override suspend fun setEnabledModels(models: List<String>?) {
         dataStore.edit { prefs ->
-            if (models == null) prefs.remove(Keys.ENABLED_MODELS)
-            else prefs[Keys.ENABLED_MODELS] = JsonArray(models.map { JsonPrimitive(it) }).toString()
+            if (models == null) {
+                prefs.remove(Keys.ENABLED_MODELS)
+            } else {
+                prefs[Keys.ENABLED_MODELS] = JsonArray(models.map { JsonPrimitive(it) }).toString()
+            }
         }
     }
 
@@ -115,8 +119,11 @@ class SettingsRepository(
 
     override suspend fun setActiveSessionId(sessionId: String?) {
         dataStore.edit { prefs ->
-            if (sessionId == null) prefs.remove(Keys.ACTIVE_SESSION_ID)
-            else prefs[Keys.ACTIVE_SESSION_ID] = sessionId
+            if (sessionId == null) {
+                prefs.remove(Keys.ACTIVE_SESSION_ID)
+            } else {
+                prefs[Keys.ACTIVE_SESSION_ID] = sessionId
+            }
         }
     }
 
@@ -126,8 +133,11 @@ class SettingsRepository(
 
     override suspend fun setDefaultThinkingLevel(level: ModelThinkingLevel?) {
         dataStore.edit { prefs ->
-            if (level == null) prefs.remove(Keys.DEFAULT_THINKING_LEVEL)
-            else prefs[Keys.DEFAULT_THINKING_LEVEL] = level.wire
+            if (level == null) {
+                prefs.remove(Keys.DEFAULT_THINKING_LEVEL)
+            } else {
+                prefs[Keys.DEFAULT_THINKING_LEVEL] = level.wire
+            }
         }
     }
 

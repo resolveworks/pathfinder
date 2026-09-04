@@ -1,11 +1,5 @@
 package works.resolve.pathfinder.agent
 
-import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.UserMessage
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
@@ -13,6 +7,12 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.UserMessage
 
 /**
  * The selected model is agent state: each prompt snapshots it at run start,
@@ -25,7 +25,7 @@ class AgentModelSwitchTest {
         name = "A",
         api = "openai-completions",
         provider = "provider-a",
-        baseUrl = "https://a.example.invalid",
+        baseUrl = "https://a.example.invalid"
     )
 
     private val modelB = Model(
@@ -33,7 +33,7 @@ class AgentModelSwitchTest {
         name = "B",
         api = "openai-completions",
         provider = "provider-b",
-        baseUrl = "https://b.example.invalid",
+        baseUrl = "https://b.example.invalid"
     )
 
     private fun assistant(model: Model, text: String) = AssistantMessage(
@@ -42,12 +42,12 @@ class AgentModelSwitchTest {
         provider = model.provider,
         model = model.id,
         stopReason = StopReason.STOP,
-        timestamp = 42L,
+        timestamp = 42L
     )
 
     private fun okStream(model: Model): Flow<AssistantMessageEvent> = flowOf(
         AssistantMessageEvent.Start(assistant(model, "")),
-        AssistantMessageEvent.Done(StopReason.STOP, assistant(model, "ok")),
+        AssistantMessageEvent.Done(StopReason.STOP, assistant(model, "ok"))
     )
 
     @Test
@@ -63,22 +63,23 @@ class AgentModelSwitchTest {
     }
 
     @Test
-    fun `prompt snapshots the model at run start so a mid-run switch changes only later runs`() = runTest {
-        val streamedModels = CopyOnWriteArrayList<Model>()
-        lateinit var agent: Agent
-        agent = Agent(model = modelA) { requested, _, _ ->
-            streamedModels.add(requested)
-            agent.setModel(modelB)
-            okStream(requested)
+    fun `prompt snapshots the model at run start so a mid-run switch changes only later runs`() =
+        runTest {
+            val streamedModels = CopyOnWriteArrayList<Model>()
+            lateinit var agent: Agent
+            agent = Agent(model = modelA) { requested, _, _ ->
+                streamedModels.add(requested)
+                agent.setModel(modelB)
+                okStream(requested)
+            }
+
+            agent.prompt(listOf(UserMessage.ofText("hi")))
+
+            assertEquals(listOf(modelA), streamedModels)
+            assertEquals(modelB, agent.model)
+            agent.prompt(listOf(UserMessage.ofText("again")))
+            assertEquals(listOf(modelA, modelB), streamedModels)
         }
-
-        agent.prompt(listOf(UserMessage.ofText("hi")))
-
-        assertEquals(listOf(modelA), streamedModels)
-        assertEquals(modelB, agent.model)
-        agent.prompt(listOf(UserMessage.ofText("again")))
-        assertEquals(listOf(modelA, modelB), streamedModels)
-    }
 
     @Test
     fun `transcript accumulates across a switch`() = runTest {

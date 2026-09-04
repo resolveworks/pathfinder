@@ -1,11 +1,14 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
+import java.net.SocketTimeoutException
+import java.net.URI
+import java.net.URLDecoder
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -20,9 +23,6 @@ import works.resolve.pathfinder.ai.auth.oauth.PkceGenerator
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.string
-import java.net.SocketTimeoutException
-import java.net.URI
-import java.net.URLDecoder
 
 /**
  * OpenRouter OAuth PKCE flow: OpenRouter exchanges an authorization code for
@@ -48,7 +48,7 @@ class OpenRouterOAuthAuth(
     /** Injectable seam so tests can exercise the timeout race quickly. */
     private val loginTimeoutMs: Long = LOGIN_TIMEOUT_MS,
     /** Android foreground gate for the loopback wait. */
-    private val gate: OAuthForegroundGate? = null,
+    private val gate: OAuthForegroundGate? = null
 ) : OAuthAuth {
 
     /**
@@ -80,7 +80,7 @@ class OpenRouterOAuthAuth(
                     settled.set(true)
                     settle(result)
                 }, callbackPath, challenge.verifier, claimed, settled)
-            },
+            }
         ).start()
             // The shared server reports bind failure as null; like pi's
             // listen error, the login fails rather than degrading to manual
@@ -96,13 +96,15 @@ class OpenRouterOAuthAuth(
                 append("&code_challenge_method=S256")
             }
 
-            interaction.notify(AuthEvent.Progress("Listening for OpenRouter OAuth callback on $callbackUrl"))
+            interaction.notify(
+                AuthEvent.Progress("Listening for OpenRouter OAuth callback on $callbackUrl")
+            )
             interaction.notify(
                 AuthEvent.AuthUrl(
                     url = authorizeUrl,
                     instructions =
-                        "Complete sign-in in your browser. If the browser is on another machine, paste the final redirect URL here.",
-                ),
+                        "Complete sign-in in your browser. If the browser is on another machine, paste the final redirect URL here."
+                )
             )
 
             var manualInput: String? = null
@@ -118,9 +120,10 @@ class OpenRouterOAuthAuth(
                     try {
                         manualInput = interaction.prompt(
                             AuthPrompt.ManualCode(
-                                message = "Complete sign-in in your browser, or paste the authorization code / redirect URL here:",
-                                placeholder = callbackUrl,
-                            ),
+                                message = "Complete sign-in in your browser, " +
+                                    "or paste the authorization code / redirect URL here:",
+                                placeholder = callbackUrl
+                            )
                         )
                     } catch (error: CancellationException) {
                         throw error
@@ -145,13 +148,17 @@ class OpenRouterOAuthAuth(
                         manualJob.cancel()
                         result.credential
                     }
+
                     is CallbackResult.Failure -> throw result.error
+
                     null -> {
                         manualJob.join()
                         manualError?.let { throw it }
                         val code = manualInput?.let(::parseAuthorizationCodeInput)
                             ?: throw IllegalStateException("Missing authorization code")
-                        interaction.notify(AuthEvent.Progress("Exchanging authorization code for an API key..."))
+                        interaction.notify(
+                            AuthEvent.Progress("Exchanging authorization code for an API key...")
+                        )
                         exchangeAuthorizationCode(code, challenge.verifier)
                     }
                 }
@@ -167,53 +174,76 @@ class OpenRouterOAuthAuth(
         callbackPath: String,
         verifier: String,
         claimed: AtomicBoolean,
-        settled: AtomicBoolean,
+        settled: AtomicBoolean
     ): LoopbackCallbackResponse {
         if (request.method != "GET" || request.path != callbackPath) {
             return LoopbackCallbackResponse(404, oauthErrorHtml("OAuth callback route not found."))
         }
         if (claimed.get() || settled.get()) {
-            return LoopbackCallbackResponse(409, oauthErrorHtml("This OAuth callback has already been used."))
+            return LoopbackCallbackResponse(
+                409,
+                oauthErrorHtml("This OAuth callback has already been used.")
+            )
         }
 
         val oauthError = request.query["error"]
         if (!oauthError.isNullOrEmpty()) {
             val description = request.query["error_description"] ?: oauthError
-            settle(CallbackResult.Failure(IllegalStateException("OpenRouter authorization failed: $description")))
-            return LoopbackCallbackResponse(400, oauthErrorHtml("OpenRouter authorization was denied.", description))
+            settle(
+                CallbackResult.Failure(
+                    IllegalStateException("OpenRouter authorization failed: $description")
+                )
+            )
+            return LoopbackCallbackResponse(
+                400,
+                oauthErrorHtml("OpenRouter authorization was denied.", description)
+            )
         }
 
         val code = request.query["code"]
         if (code.isNullOrEmpty()) {
-            return LoopbackCallbackResponse(400, oauthErrorHtml("OpenRouter returned no authorization code."))
+            return LoopbackCallbackResponse(
+                400,
+                oauthErrorHtml("OpenRouter returned no authorization code.")
+            )
         }
         claimed.set(true)
 
         return try {
             val credential = exchangeAuthorizationCode(code, verifier)
             settle(CallbackResult.Credential(credential))
-            LoopbackCallbackResponse(200, oauthSuccessHtml("Signed in to OpenRouter. You may now close this page."))
+            LoopbackCallbackResponse(
+                200,
+                oauthSuccessHtml("Signed in to OpenRouter. You may now close this page.")
+            )
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
             val message = error.message ?: "Unknown token exchange error"
             settle(CallbackResult.Failure(error))
-            LoopbackCallbackResponse(502, oauthErrorHtml("OpenRouter key exchange failed.", message))
+            LoopbackCallbackResponse(
+                502,
+                oauthErrorHtml("OpenRouter key exchange failed.", message)
+            )
         }
     }
 
     override suspend fun refresh(credential: OAuthCredential): OAuthCredential = credential
 
-    override suspend fun toAuth(credential: OAuthCredential): ModelAuth = ModelAuth(apiKey = credential.access)
+    override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
+        ModelAuth(apiKey = credential.access)
 
     /** POSTs the code/verifier pair and shapes the response credential; error message wording mirrors pi verbatim. */
-    internal suspend fun exchangeAuthorizationCode(code: String, verifier: String): OAuthCredential {
+    internal suspend fun exchangeAuthorizationCode(
+        code: String,
+        verifier: String
+    ): OAuthCredential {
         val request = OAuthHttpRequest(
             method = "POST",
             url = TOKEN_URL,
             headers = mapOf("accept" to "application/json", "content-type" to "application/json"),
             body = jsonRequest(code, verifier),
-            timeoutMs = TOKEN_EXCHANGE_TIMEOUT_MS,
+            timeoutMs = TOKEN_EXCHANGE_TIMEOUT_MS
         )
 
         val response: OAuthHttpResponse
@@ -230,7 +260,9 @@ class OpenRouterOAuthAuth(
         if (response.status !in 200..299) {
             val detail = errorDetail(body)
             throw IllegalStateException(
-                "OpenRouter OAuth key exchange failed (HTTP ${response.status})${detail?.let { ": $it" } ?: ""}",
+                "OpenRouter OAuth key exchange failed (HTTP ${response.status})${detail?.let {
+                    ": $it"
+                } ?: ""}"
             )
         }
 
@@ -241,7 +273,7 @@ class OpenRouterOAuthAuth(
         return OAuthCredential(
             access = key,
             refresh = "",
-            expires = NON_EXPIRING_EPOCH_MS,
+            expires = NON_EXPIRING_EPOCH_MS
         )
     }
 
@@ -287,12 +319,11 @@ class OpenRouterOAuthAuth(
             return result
         }
 
-        private fun String.urlDecode(): String =
-            try {
-                URLDecoder.decode(this, "UTF-8")
-            } catch (_: IllegalArgumentException) {
-                this
-            }
+        private fun String.urlDecode(): String = try {
+            URLDecoder.decode(this, "UTF-8")
+        } catch (_: IllegalArgumentException) {
+            this
+        }
 
         internal fun errorDetail(body: JsonObject): String? {
             body.string("error_description")?.let { return it }
@@ -320,15 +351,14 @@ class OpenRouterOAuthAuth(
             return parsed as? JsonObject ?: JsonObject(emptyMap())
         }
 
-        private fun jsonRequest(code: String, verifier: String): ByteArray =
-            json.encodeToString(
-                JsonObject.serializer(),
-                buildJsonObject {
-                    put("code", code)
-                    put("code_verifier", verifier)
-                    put("code_challenge_method", "S256")
-                },
-            ).toByteArray(Charsets.UTF_8)
+        private fun jsonRequest(code: String, verifier: String): ByteArray = json.encodeToString(
+            JsonObject.serializer(),
+            buildJsonObject {
+                put("code", code)
+                put("code_verifier", verifier)
+                put("code_challenge_method", "S256")
+            }
+        ).toByteArray(Charsets.UTF_8)
 
         private fun urlEncode(value: String): String =
             java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")

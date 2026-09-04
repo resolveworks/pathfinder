@@ -1,17 +1,17 @@
 package works.resolve.pathfinder.ui.chat.markdown
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withLink
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.withStyle
 import org.commonmark.ext.gfm.strikethrough.Strikethrough
 import org.commonmark.node.Code
 import org.commonmark.node.Emphasis
@@ -33,7 +33,7 @@ data class InlineMarkdownStyles(
     val linkColor: Color,
     val codeBackgroundColor: Color,
     val codeTextColor: Color = Color.Unspecified,
-    val monospaceFontFamily: FontFamily = FontFamily.Monospace,
+    val monospaceFontFamily: FontFamily = FontFamily.Monospace
 )
 
 fun Node.buildInlineMarkdown(styles: InlineMarkdownStyles): AnnotatedString =
@@ -51,20 +51,24 @@ private fun AnnotatedString.Builder.render(node: Node, styles: InlineMarkdownSty
     when (node) {
         is Text -> append(node.literal)
 
-        is Emphasis -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { renderChildren(node, styles) }
+        is Emphasis -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+            renderChildren(node, styles)
+        }
 
-        is StrongEmphasis -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { renderChildren(node, styles) }
+        is StrongEmphasis -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+            renderChildren(node, styles)
+        }
 
         is Strikethrough -> withStyle(
-            SpanStyle(textDecoration = TextDecoration.LineThrough),
+            SpanStyle(textDecoration = TextDecoration.LineThrough)
         ) { renderChildren(node, styles) }
 
         is Code -> withStyle(
             SpanStyle(
                 fontFamily = styles.monospaceFontFamily,
                 background = styles.codeBackgroundColor,
-                color = styles.codeTextColor,
-            ),
+                color = styles.codeTextColor
+            )
         ) { append(node.literal) }
 
         is Link -> renderLink(node, styles)
@@ -97,7 +101,7 @@ private fun literalOf(node: Node): String? = when (node) {
 private fun AnnotatedString.Builder.renderLink(node: Link, styles: InlineMarkdownStyles) {
     val linkStyle = SpanStyle(
         color = styles.linkColor,
-        textDecoration = TextDecoration.Underline,
+        textDecoration = TextDecoration.Underline
     )
     withStyle(linkStyle) {
         withLink(LinkAnnotation.Url(node.destination, TextLinkStyles(linkStyle))) {
@@ -117,7 +121,9 @@ private fun plainText(node: Node): String = buildString {
 private fun StringBuilder.appendNodeText(node: Node) {
     when (node) {
         is SoftLineBreak -> append(' ')
+
         is HardLineBreak -> append('\n')
+
         else -> {
             literalOf(node)?.let { append(it) }
             var child = node.firstChild

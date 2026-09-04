@@ -28,7 +28,7 @@ object ChatApiRegistry {
         MISTRAL_CONVERSATIONS,
         OPENAI_RESPONSES,
         OPENAI_CODEX_RESPONSES,
-        AZURE_OPENAI_RESPONSES,
+        AZURE_OPENAI_RESPONSES
     )
 
     fun isSupported(apiId: String): Boolean = apiId in SUPPORTED_API_IDS
@@ -37,20 +37,27 @@ object ChatApiRegistry {
         apiId: String,
         transport: HttpStreamingTransport,
         retry: ProviderRetry,
-        webSocketTransport: WebSocketStreamingTransport? = null,
-    ): ChatApi? =
-        when (apiId) {
-            OPENAI_COMPLETIONS -> OpenAiCompletionsApi(transport, retry)
-            ANTHROPIC_MESSAGES -> AnthropicMessagesApi(transport, retry)
-            GOOGLE_GENERATIVE_AI -> GoogleGenerativeAiApi(transport, retry)
-            MISTRAL_CONVERSATIONS -> MistralConversationsApi(transport) // pi: no retry wrapper for Mistral
-            OPENAI_RESPONSES -> OpenAiResponsesApi(transport, retry)
-            OPENAI_CODEX_RESPONSES -> OpenAICodexResponsesApi(
-                transport,
-                webSocketTransport = webSocketTransport
-                    ?: error("openai-codex-responses requires a WebSocket streaming transport"),
-            )
-            AZURE_OPENAI_RESPONSES -> AzureOpenAiResponsesApi(transport, retry)
-            else -> null
-        }
+        webSocketTransport: WebSocketStreamingTransport? = null
+    ): ChatApi? = when (apiId) {
+        OPENAI_COMPLETIONS -> OpenAiCompletionsApi(transport, retry)
+
+        ANTHROPIC_MESSAGES -> AnthropicMessagesApi(transport, retry)
+
+        GOOGLE_GENERATIVE_AI -> GoogleGenerativeAiApi(transport, retry)
+
+        MISTRAL_CONVERSATIONS -> MistralConversationsApi(transport)
+
+        // pi: no retry wrapper for Mistral
+        OPENAI_RESPONSES -> OpenAiResponsesApi(transport, retry)
+
+        OPENAI_CODEX_RESPONSES -> OpenAICodexResponsesApi(
+            transport,
+            webSocketTransport = webSocketTransport
+                ?: error("openai-codex-responses requires a WebSocket streaming transport")
+        )
+
+        AZURE_OPENAI_RESPONSES -> AzureOpenAiResponsesApi(transport, retry)
+
+        else -> null
+    }
 }

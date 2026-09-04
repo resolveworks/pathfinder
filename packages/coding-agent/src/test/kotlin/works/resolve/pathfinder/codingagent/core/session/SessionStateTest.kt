@@ -1,18 +1,21 @@
 package works.resolve.pathfinder.codingagent.core.session
 
-import works.resolve.pathfinder.agent.*
-
-import works.resolve.pathfinder.ai.UserMessage
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import works.resolve.pathfinder.ai.UserMessage
 
 class SessionStateTest {
 
-    private fun entry(seq: Long, id: String, parentId: String? = null) =
-        MessageEntry(id = id, seq = seq, parentId = parentId, timestamp = seq, message = UserMessage.ofText(id, seq))
+    private fun entry(seq: Long, id: String, parentId: String? = null) = MessageEntry(
+        id = id,
+        seq = seq,
+        parentId = parentId,
+        timestamp = seq,
+        message = UserMessage.ofText(id, seq)
+    )
 
     @Test
     fun `seq must start at one and stay consecutive`() {
@@ -44,7 +47,9 @@ class SessionStateTest {
     fun `dangling parent rejected`() {
         val state = SessionState()
         assertFailsWith<SessionError> {
-            state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(1, "a", parentId = "ghost")))
+            state.applyMutation(
+                SessionMutation.Entry(lane = null, entry = entry(1, "a", parentId = "ghost"))
+            )
         }
     }
 
@@ -52,12 +57,18 @@ class SessionStateTest {
     fun `lane-addressed entry must chain to the lane leaf`() {
         val state = SessionState()
         state.applyMutation(SessionMutation.Entry(lane = "main", entry = entry(1, "a")))
-        state.applyMutation(SessionMutation.Entry(lane = "main", entry = entry(2, "b", parentId = "a")))
+        state.applyMutation(
+            SessionMutation.Entry(lane = "main", entry = entry(2, "b", parentId = "a"))
+        )
         assertFailsWith<SessionError> {
-            state.applyMutation(SessionMutation.Entry(lane = "main", entry = entry(3, "c", parentId = "a")))
+            state.applyMutation(
+                SessionMutation.Entry(lane = "main", entry = entry(3, "c", parentId = "a"))
+            )
         }
         // Non-lane-addressed entries skip the chaining check.
-        state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(3, "c", parentId = "a")))
+        state.applyMutation(
+            SessionMutation.Entry(lane = null, entry = entry(3, "c", parentId = "a"))
+        )
     }
 
     @Test
@@ -92,7 +103,9 @@ class SessionStateTest {
 
         // The rejected label does not consume its seq.
         assertFailsWith<SessionError> {
-            state.applyMutation(SessionMutation.Fact.Label(seq = 4, targetId = "ghost", label = "l"))
+            state.applyMutation(
+                SessionMutation.Fact.Label(seq = 4, targetId = "ghost", label = "l")
+            )
         }
         state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(4, "a")))
         state.applyMutation(SessionMutation.Fact.Label(seq = 5, targetId = "a", label = "l"))
@@ -106,11 +119,21 @@ class SessionStateTest {
         val state = SessionState()
         val empty = kotlinx.serialization.json.JsonObject(mapOf())
         assertFailsWith<SessionError> {
-            state.applyMutation(SessionMutation.Record(LaneRecord.DeferredRecord("r0", "ghost", 1, 1L, "usage", empty)))
+            state.applyMutation(
+                SessionMutation.Record(
+                    LaneRecord.DeferredRecord("r0", "ghost", 1, 1L, "usage", empty)
+                )
+            )
         }
-        state.applyMutation(SessionMutation.Record(LaneRecord.DeferredRecord("r1", "main", 1, 1L, "usage", empty)))
+        state.applyMutation(
+            SessionMutation.Record(LaneRecord.DeferredRecord("r1", "main", 1, 1L, "usage", empty))
+        )
         assertFailsWith<SessionError> {
-            state.applyMutation(SessionMutation.Record(LaneRecord.DeferredRecord("r1", "main", 2, 2L, "usage", empty)))
+            state.applyMutation(
+                SessionMutation.Record(
+                    LaneRecord.DeferredRecord("r1", "main", 2, 2L, "usage", empty)
+                )
+            )
         }
         assertEquals(1, state.records().size)
     }
@@ -120,7 +143,17 @@ class SessionStateTest {
         val state = SessionState()
         state.applyMutation(SessionMutation.Entry(lane = null, entry = entry(1, "a")))
         state.applyMutation(
-            SessionMutation.Entry(lane = null, entry = ModelChangeEntry(id = "m", seq = 2, parentId = "a", timestamp = 2, provider = "p", modelId = "m1")),
+            SessionMutation.Entry(
+                lane = null,
+                entry = ModelChangeEntry(
+                    id = "m",
+                    seq = 2,
+                    parentId = "a",
+                    timestamp = 2,
+                    provider = "p",
+                    modelId = "m1"
+                )
+            )
         )
         assertEquals(1, state.messageCount())
         assertTrue(state.entry("m") is ModelChangeEntry)
@@ -133,7 +166,9 @@ class SessionStateTest {
         state.applyMutation(SessionMutation.Lane(seq = 2, lane = "main", leafId = "a"))
         state.applyMutation(SessionMutation.Fact.Name(seq = 3, name = "renamed"))
         state.applyMutation(SessionMutation.Fact.Label(seq = 4, targetId = "a", label = "l"))
-        state.applyMutation(SessionMutation.Entry(lane = "main", entry = entry(5, "b", parentId = "a")))
+        state.applyMutation(
+            SessionMutation.Entry(lane = "main", entry = entry(5, "b", parentId = "a"))
+        )
 
         val full = state.getLog()
         assertEquals(
@@ -142,9 +177,9 @@ class SessionStateTest {
                 LogItem.Lane::class,
                 LogItem.FactName::class,
                 LogItem.FactLabel::class,
-                LogItem.Entry::class,
+                LogItem.Entry::class
             ),
-            full.map { it::class },
+            full.map { it::class }
         )
         assertEquals(1L..5L, full.map { it.seq }.let { it.first()..it.last() })
         assertEquals(3, state.getLog(afterSeq = 2).size)
@@ -159,20 +194,50 @@ class SessionStateTest {
     fun `errors carry pi's typed codes`() {
         val state = SessionState()
         state.applyMutation(SessionMutation.Entry(lane = "main", entry = entry(1, "a")))
-        assertEquals(SessionErrorCode.INVALID_LANE, assertFailsWith<SessionError> { state.requireLane("ghost") }.code)
-        assertEquals(SessionErrorCode.ALREADY_EXISTS, assertFailsWith<SessionError> { state.validateUnusedId("a") }.code)
-        assertEquals(SessionErrorCode.NOT_FOUND, assertFailsWith<SessionError> { state.validateTarget("ghost") }.code)
-        assertEquals(SessionErrorCode.INVALID_QUERY, assertFailsWith<SessionError> { state.findEntries(EntryQuery(limit = 0)) }.code)
+        assertEquals(
+            SessionErrorCode.INVALID_LANE,
+            assertFailsWith<SessionError> {
+                state.requireLane("ghost")
+            }.code
+        )
+        assertEquals(
+            SessionErrorCode.ALREADY_EXISTS,
+            assertFailsWith<SessionError> {
+                state.validateUnusedId("a")
+            }.code
+        )
+        assertEquals(
+            SessionErrorCode.NOT_FOUND,
+            assertFailsWith<SessionError> {
+                state.validateTarget("ghost")
+            }.code
+        )
+        assertEquals(
+            SessionErrorCode.INVALID_QUERY,
+            assertFailsWith<SessionError> {
+                state.findEntries(EntryQuery(limit = 0))
+            }.code
+        )
         assertEquals(
             SessionErrorCode.INVALID_FORK_TARGET,
             assertFailsWith<SessionError> {
                 // A non-message entry cannot be a branch fork target.
-                state.applyMutation(SessionMutation.Entry(lane = "main", entry = works.resolve.pathfinder.codingagent.core.session.CompactionEntry(
-                    id = "c", seq = 2, parentId = "a", timestamp = 2, summary = "s",
-                    retainedTail = emptyList(), tokensBefore = 0,
-                )))
+                state.applyMutation(
+                    SessionMutation.Entry(
+                        lane = "main",
+                        entry = works.resolve.pathfinder.codingagent.core.session.CompactionEntry(
+                            id = "c",
+                            seq = 2,
+                            parentId = "a",
+                            timestamp = 2,
+                            summary = "s",
+                            retainedTail = emptyList(),
+                            tokensBefore = 0
+                        )
+                    )
+                )
                 state.createForkMutations(ForkOptions.Branch(entryId = "c"))
-            }.code,
+            }.code
         )
     }
 }

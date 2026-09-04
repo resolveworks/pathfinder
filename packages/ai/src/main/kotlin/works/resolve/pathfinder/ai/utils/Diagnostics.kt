@@ -1,8 +1,8 @@
 package works.resolve.pathfinder.ai.utils
 
-import works.resolve.pathfinder.ai.AssistantMessage
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import works.resolve.pathfinder.ai.AssistantMessage
 
 /** Structured shape of a thrown value, carried by [AssistantMessageDiagnostic.error]. */
 data class DiagnosticErrorInfo(
@@ -15,7 +15,7 @@ data class DiagnosticErrorInfo(
      * exception type exposes one; the opaque-element type keeps the union
      * representable for future producers.
      */
-    val code: JsonElement? = null,
+    val code: JsonElement? = null
 )
 
 /** Redacted provider/runtime diagnostic attached to an [AssistantMessage]. */
@@ -23,7 +23,7 @@ data class AssistantMessageDiagnostic(
     val type: String,
     val timestamp: Long,
     val error: DiagnosticErrorInfo? = null,
-    val details: JsonObject? = null,
+    val details: JsonObject? = null
 )
 
 fun formatThrownValue(value: Any?): String = when (value) {
@@ -39,20 +39,20 @@ fun extractDiagnosticError(error: Any?): DiagnosticErrorInfo {
     return DiagnosticErrorInfo(
         name = error::class.simpleName,
         message = error.message ?: error::class.simpleName ?: "Throwable",
-        stack = error.stackTraceToString(),
+        stack = error.stackTraceToString()
     )
 }
 
 fun createAssistantMessageDiagnostic(
     type: String,
     error: Any?,
-    details: JsonObject? = null,
+    details: JsonObject? = null
 ): AssistantMessageDiagnostic = AssistantMessageDiagnostic(
     type = type,
     // pi stamps Date.now() here; reading wall time is this helper's job.
     timestamp = System.currentTimeMillis(),
     error = extractDiagnosticError(error),
-    details = details,
+    details = details
 )
 
 /**
@@ -61,5 +61,5 @@ fun createAssistantMessageDiagnostic(
  */
 fun appendAssistantMessageDiagnostic(
     message: AssistantMessage,
-    diagnostic: AssistantMessageDiagnostic,
+    diagnostic: AssistantMessageDiagnostic
 ): AssistantMessage = message.copy(diagnostics = message.diagnostics + diagnostic)

@@ -1,7 +1,15 @@
 package works.resolve.pathfinder.agent
 
+import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
@@ -10,14 +18,6 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.UserMessage
-import java.util.concurrent.CopyOnWriteArrayList
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.test.runTest
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
 
 class AgentStateAssignablesTest {
 
@@ -26,15 +26,18 @@ class AgentStateAssignablesTest {
         name = "A",
         api = "openai-completions",
         provider = "provider-a",
-        baseUrl = "https://a.example.invalid",
+        baseUrl = "https://a.example.invalid"
     )
 
     private fun fakeTool(name: String): AgentTool = object : AgentTool {
         override val definition = Tool(name, "fake $name", JsonPrimitive("object"))
         override val label = name
         override fun validateArguments(arguments: JsonObject) = arguments
-        override suspend fun execute(toolCallId: String, arguments: JsonObject, onUpdate: AgentToolUpdateCallback) =
-            AgentToolResult(content = listOf(TextContent("done")))
+        override suspend fun execute(
+            toolCallId: String,
+            arguments: JsonObject,
+            onUpdate: AgentToolUpdateCallback
+        ) = AgentToolResult(content = listOf(TextContent("done")))
     }
 
     private fun okStream(): Flow<AssistantMessageEvent> {
@@ -44,11 +47,11 @@ class AgentStateAssignablesTest {
             provider = model.provider,
             model = model.id,
             stopReason = StopReason.STOP,
-            timestamp = 42L,
+            timestamp = 42L
         )
         return flowOf(
             AssistantMessageEvent.Start(final.copy(content = emptyList())),
-            AssistantMessageEvent.Done(StopReason.STOP, final),
+            AssistantMessageEvent.Done(StopReason.STOP, final)
         )
     }
 
@@ -104,7 +107,7 @@ class AgentStateAssignablesTest {
             streamFn = { _, context, _ ->
                 captured.add(context)
                 okStream()
-            },
+            }
         )
 
         agent.prompt(listOf(UserMessage.ofText("hi")))
@@ -131,7 +134,7 @@ class AgentStateAssignablesTest {
                 captured.add(context)
                 agent.setSystemPrompt("mid-run")
                 okStream()
-            },
+            }
         )
 
         agent.prompt(listOf(UserMessage.ofText("hi")))
@@ -144,10 +147,11 @@ class AgentStateAssignablesTest {
     @Test
     fun `prompt snapshots messages and tools together from state`() = runTest {
         val captured = CopyOnWriteArrayList<Context>()
-        val agent = Agent(model = model, tools = listOf(fakeTool("initial")), streamFn = { _, context, _ ->
-            captured.add(context)
-            okStream()
-        })
+        val agent =
+            Agent(model = model, tools = listOf(fakeTool("initial")), streamFn = { _, context, _ ->
+                captured.add(context)
+                okStream()
+            })
 
         agent.prompt(listOf(UserMessage.ofText("hi")))
         assertEquals(listOf("initial"), captured[0].tools.map { it.name })

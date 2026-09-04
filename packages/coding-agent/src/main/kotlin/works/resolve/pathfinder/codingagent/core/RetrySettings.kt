@@ -9,5 +9,5 @@ package works.resolve.pathfinder.codingagent.core
 data class RetrySettings(
     val enabled: Boolean = true,
     val maxRetries: Int = 3,
-    val baseDelayMs: Long = 2000,
+    val baseDelayMs: Long = 2000
 )

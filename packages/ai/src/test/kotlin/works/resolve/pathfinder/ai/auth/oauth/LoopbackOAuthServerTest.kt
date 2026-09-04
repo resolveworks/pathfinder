@@ -1,10 +1,5 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
@@ -17,6 +12,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 class LoopbackOAuthServerTest {
 
@@ -29,7 +29,7 @@ class LoopbackOAuthServerTest {
 
     private fun <R> started(
         port: Int = 0,
-        handler: suspend (LoopbackCallbackRequest, (R?) -> Unit) -> LoopbackCallbackResponse,
+        handler: suspend (LoopbackCallbackRequest, (R?) -> Unit) -> LoopbackCallbackResponse
     ): LoopbackCallbackHandle<R> = runBlocking {
         val handle = LoopbackOAuthServer<R>(port = port, handler = handler).start()
         handles += assertNotNull(handle)
@@ -39,14 +39,20 @@ class LoopbackOAuthServerTest {
     private fun get(
         port: Int,
         path: String,
-        method: String = "GET",
+        method: String = "GET"
     ): Triple<Int, Map<String, String>, String> {
         val connection = URL("http://127.0.0.1:$port$path").openConnection() as HttpURLConnection
         return try {
             connection.requestMethod = method
             connection.connectTimeout = 5_000
             connection.readTimeout = 5_000
-            val stream = if (connection.responseCode < 400) connection.inputStream else connection.errorStream
+            val stream = if (connection.responseCode <
+                400
+            ) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            }
             val bytes = stream.use { it.readBytes() }
             val headers = connection.headerFields.entries
                 .filter { it.key != null }
@@ -171,7 +177,10 @@ class LoopbackOAuthServerTest {
                 LoopbackCallbackResponse(200, "claimed")
             } else {
                 // OpenRouter 409 reuse guard lives in flow code.
-                LoopbackCallbackResponse(409, oauthErrorHtml("This OAuth callback has already been used."))
+                LoopbackCallbackResponse(
+                    409,
+                    oauthErrorHtml("This OAuth callback has already been used.")
+                )
             }
         }
         val (status1, _, body1) = get(handle.port, "/cb")
@@ -205,7 +214,9 @@ class LoopbackOAuthServerTest {
         }
 
         val first = assertNotNull(
-            LoopbackOAuthServer<String>(port = fixedPort) { _, _ -> LoopbackCallbackResponse(200, "first") }.start(),
+            LoopbackOAuthServer<String>(port = fixedPort) { _, _ ->
+                LoopbackCallbackResponse(200, "first")
+            }.start()
         )
         assertEquals(200, get(first.port, "/").first)
         first.close()
@@ -213,7 +224,9 @@ class LoopbackOAuthServerTest {
 
         // SO_REUSEADDR (Node default) lets back-to-back logins rebind.
         val second = assertNotNull(
-            LoopbackOAuthServer<String>(port = fixedPort) { _, _ -> LoopbackCallbackResponse(200, "second") }.start(),
+            LoopbackOAuthServer<String>(port = fixedPort) { _, _ ->
+                LoopbackCallbackResponse(200, "second")
+            }.start()
         )
         handles += second
         val (status, _, body) = get(second.port, "/")

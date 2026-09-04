@@ -19,33 +19,50 @@ import works.resolve.pathfinder.ai.StopReason
  */
 private val OVERFLOW_PATTERNS = listOf(
     Regex("prompt is too long", RegexOption.IGNORE_CASE), // Anthropic token overflow
-    Regex("request_too_large", RegexOption.IGNORE_CASE), // Anthropic request byte-size overflow (HTTP 413)
+    // Anthropic request byte-size overflow (HTTP 413)
+    Regex("request_too_large", RegexOption.IGNORE_CASE),
     Regex("input is too long for requested model", RegexOption.IGNORE_CASE), // Amazon Bedrock
-    Regex("exceeds the context window", RegexOption.IGNORE_CASE), // OpenAI (Completions & Responses API)
+    // OpenAI (Completions & Responses API)
+    Regex("exceeds the context window", RegexOption.IGNORE_CASE),
     Regex(
         "exceeds (?:the )?(?:model'?s )?maximum context length(?: of [\\d,]+ tokens?|\\s*\\([\\d,]+\\))",
-        RegexOption.IGNORE_CASE,
+        RegexOption.IGNORE_CASE
     ), // OpenAI-compatible proxies (LiteLLM)
     Regex("input token count.*exceeds the maximum", RegexOption.IGNORE_CASE), // Google (Gemini)
     Regex("maximum prompt length is \\d+", RegexOption.IGNORE_CASE), // xAI (Grok)
     Regex("reduce the length of the messages", RegexOption.IGNORE_CASE), // Groq
-    Regex("maximum context length is \\d+ tokens", RegexOption.IGNORE_CASE), // OpenRouter (most backends)
-    Regex("exceeds (?:the )?maximum allowed input length of [\\d,]+ tokens?", RegexOption.IGNORE_CASE), // OpenRouter/Poolside
-    Regex("input \\(\\d+ tokens\\) is longer than the model'?s context length \\(\\d+ tokens\\)", RegexOption.IGNORE_CASE), // Together AI
+    // OpenRouter (most backends)
+    Regex("maximum context length is \\d+ tokens", RegexOption.IGNORE_CASE),
+    Regex(
+        "exceeds (?:the )?maximum allowed input length of [\\d,]+ tokens?",
+        RegexOption.IGNORE_CASE
+    ), // OpenRouter/Poolside
+    Regex(
+        "input \\(\\d+ tokens\\) is longer than the model'?s context length \\(\\d+ tokens\\)",
+        RegexOption.IGNORE_CASE
+    ), // Together AI
     Regex("exceeds the limit of \\d+", RegexOption.IGNORE_CASE), // GitHub Copilot
     Regex("exceeds the available context size", RegexOption.IGNORE_CASE), // llama.cpp server
     Regex("greater than the context length", RegexOption.IGNORE_CASE), // LM Studio
     Regex("context window exceeds limit", RegexOption.IGNORE_CASE), // MiniMax
     Regex("exceeded model token limit", RegexOption.IGNORE_CASE), // Kimi For Coding
-    Regex("too large for model with \\d+ maximum context length", RegexOption.IGNORE_CASE), // Mistral
-    Regex("prompt has [\\d,]+ tokens?, but the configured context size is [\\d,]+ tokens?", RegexOption.IGNORE_CASE), // DS4 server
-    Regex("model_context_window_exceeded", RegexOption.IGNORE_CASE), // z.ai non-standard finish_reason surfaced as error text
-    Regex("prompt too long; exceeded (?:max )?context length", RegexOption.IGNORE_CASE), // Ollama explicit overflow error
-    Regex("range of input length should be", RegexOption.IGNORE_CASE), // DashScope / Qwen Token Plan
+    // Mistral
+    Regex("too large for model with \\d+ maximum context length", RegexOption.IGNORE_CASE),
+    Regex(
+        "prompt has [\\d,]+ tokens?, but the configured context size is [\\d,]+ tokens?",
+        RegexOption.IGNORE_CASE
+    ), // DS4 server
+    // z.ai non-standard finish_reason surfaced as error text
+    Regex("model_context_window_exceeded", RegexOption.IGNORE_CASE),
+    // Ollama explicit overflow error
+    Regex("prompt too long; exceeded (?:max )?context length", RegexOption.IGNORE_CASE),
+    // DashScope / Qwen Token Plan
+    Regex("range of input length should be", RegexOption.IGNORE_CASE),
     Regex("context[_ ]length[_ ]exceeded", RegexOption.IGNORE_CASE), // Generic fallback
     Regex("too many tokens", RegexOption.IGNORE_CASE), // Generic fallback
     Regex("token limit exceeded", RegexOption.IGNORE_CASE), // Generic fallback
-    Regex("^4(?:00|13)\\s*(?:status code)?\\s*\\(no body\\)", RegexOption.IGNORE_CASE), // Cerebras: 400/413 with no body
+    // Cerebras: 400/413 with no body
+    Regex("^4(?:00|13)\\s*(?:status code)?\\s*\\(no body\\)", RegexOption.IGNORE_CASE)
 )
 
 /**
@@ -56,9 +73,10 @@ private val OVERFLOW_PATTERNS = listOf(
  * this exclusion.
  */
 private val NON_OVERFLOW_PATTERNS = listOf(
-    Regex("^(Throttling error|Service unavailable):", RegexOption.IGNORE_CASE), // AWS Bedrock non-overflow errors (formatBedrockError prefixes)
+    // AWS Bedrock non-overflow errors (formatBedrockError prefixes)
+    Regex("^(Throttling error|Service unavailable):", RegexOption.IGNORE_CASE),
     Regex("rate limit", RegexOption.IGNORE_CASE), // Generic rate limiting
-    Regex("too many requests", RegexOption.IGNORE_CASE), // Generic HTTP 429 style
+    Regex("too many requests", RegexOption.IGNORE_CASE) // Generic HTTP 429 style
 )
 
 /**
@@ -116,6 +134,7 @@ fun isContextOverflow(message: AssistantMessage, contextWindow: Int? = null): Bo
  * context-based clamping.
  */
 fun isRecoverableLength(message: AssistantMessage, desiredMaxOutput: Int): Boolean =
-    message.stopReason == StopReason.LENGTH && desiredMaxOutput > 0 && message.usage.output < desiredMaxOutput
+    message.stopReason == StopReason.LENGTH && desiredMaxOutput > 0 &&
+        message.usage.output < desiredMaxOutput
 
 internal fun getOverflowPatterns(): List<Regex> = OVERFLOW_PATTERNS.toList()

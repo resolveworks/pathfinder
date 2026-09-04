@@ -18,7 +18,7 @@ class InlineMarkdownTest {
     private val styles = InlineMarkdownStyles(
         linkColor = Color.Blue,
         codeBackgroundColor = Color.LightGray,
-        codeTextColor = Color.Red,
+        codeTextColor = Color.Red
     )
 
     private fun render(markdown: String) =
@@ -90,7 +90,9 @@ class InlineMarkdownTest {
         assertTrue(link is LinkAnnotation.Url)
         assertEquals("https://example.com", link.url)
 
-        val linkSpan = result.spanStyles.first { it.item.textDecoration == TextDecoration.Underline }
+        val linkSpan = result.spanStyles.first {
+            it.item.textDecoration == TextDecoration.Underline
+        }
         assertEquals(4..8, linkSpan.start..linkSpan.end)
     }
 
@@ -139,7 +141,9 @@ class InlineMarkdownTest {
         val ranges = result.spanStyles.map { it.start..it.end }
         assertEquals(listOf(0..1, 2..3, 4..5), ranges)
         ranges.forEachIndexed { i, r ->
-            ranges.take(i).forEach { prev -> assertTrue(prev.last <= r.first, "overlap: $prev vs $r") }
+            ranges.take(i).forEach { prev ->
+                assertTrue(prev.last <= r.first, "overlap: $prev vs $r")
+            }
         }
     }
 

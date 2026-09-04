@@ -1,18 +1,18 @@
 package works.resolve.pathfinder.data.credentials
 
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.CredentialType
 import works.resolve.pathfinder.ai.auth.OAuthCredential
-import java.io.File
-import kotlinx.coroutines.CancellationException
 import works.resolve.pathfinder.logging.PathfinderDiagnostics
 import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
 import works.resolve.pathfinder.telemetry.SpanStatus
@@ -24,15 +24,18 @@ import works.resolve.pathfinder.telemetry.attr
  */
 class EncryptedCredentialStoreTest {
 
-    private fun newStore(dir: File): EncryptedCredentialStore =
-        EncryptedCredentialStore(
-            dir = dir,
-            encrypt = { bytes -> bytes.map { (it + 1).toByte() }.toByteArray() },
-            decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() },
-        )
+    private fun newStore(dir: File): EncryptedCredentialStore = EncryptedCredentialStore(
+        dir = dir,
+        encrypt = { bytes -> bytes.map { (it + 1).toByte() }.toByteArray() },
+        decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() }
+    )
 
     private fun writeRaw(dir: File, providerId: String, raw: String) {
-        File(dir, "$providerId.bin").writeBytes(raw.toByteArray().map { (it + 1).toByte() }.toByteArray())
+        File(dir, "$providerId.bin").writeBytes(
+            raw.toByteArray().map {
+                (it + 1).toByte()
+            }.toByteArray()
+        )
     }
 
     @Test
@@ -46,7 +49,14 @@ class EncryptedCredentialStoreTest {
         val dir = createTempDirectory()
         val store = newStore(dir)
         store.modify("openai") { ApiKeyCredential(key = "sk", env = mapOf("A" to "1")) }
-        store.modify("anthropic") { OAuthCredential(access = "a", refresh = "r", expires = 7L, extras = mapOf("x" to kotlinx.serialization.json.JsonPrimitive(1))) }
+        store.modify("anthropic") {
+            OAuthCredential(
+                access = "a",
+                refresh = "r",
+                expires = 7L,
+                extras = mapOf("x" to kotlinx.serialization.json.JsonPrimitive(1))
+            )
+        }
         assertEquals(ApiKeyCredential(key = "sk", env = mapOf("A" to "1")), store.read("openai"))
         val oauth = store.read("anthropic") as OAuthCredential
         assertEquals(7L, oauth.expires)
@@ -89,7 +99,12 @@ class EncryptedCredentialStoreTest {
         val updates = List(16) { i ->
             async {
                 store.modify("openai") { current ->
-                    OAuthCredential(access = "a$i", refresh = "r", expires = current?.let { (it as OAuthCredential).expires + 1 } ?: 0L)
+                    OAuthCredential(
+                        access = "a$i",
+                        refresh = "r",
+                        expires =
+                            current?.let { (it as OAuthCredential).expires + 1 } ?: 0L
+                    )
                 }
             }
         }.awaitAll()
@@ -126,7 +141,7 @@ class EncryptedCredentialStoreTest {
         val failing = EncryptedCredentialStore(
             dir = dir,
             encrypt = { it },
-            decrypt = { error("keystore failure") },
+            decrypt = { error("keystore failure") }
         )
         assertFailsWith<IllegalStateException> { failing.list() }
         assertFailsWith<IllegalStateException> { failing.read("openai") }
@@ -146,16 +161,28 @@ class EncryptedCredentialStoreTest {
             dir = createTempDirectory(),
             encrypt = { bytes -> bytes.map { (it + 1).toByte() }.toByteArray() },
             decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() },
-            diagnostics = PathfinderDiagnostics(telemetry),
+            diagnostics = PathfinderDiagnostics(telemetry)
         )
         store.modify("openai") { ApiKeyCredential("sk") }
         assertEquals(ApiKeyCredential("sk"), store.read("openai"))
 
         val byName = telemetry.getSpans().associateBy { it.name }
-        assertEquals(setOf("pf.credentials.write", "pf.credentials.read", "pf.credentials.decode"), byName.keys)
-        assertEquals(attr("openai"), byName.getValue("pf.credentials.write").attributes["pf.credentials.provider"])
-        assertEquals(attr("persisted"), byName.getValue("pf.credentials.write").attributes["pf.credentials.outcome"])
-        assertEquals(attr("decrypted"), byName.getValue("pf.credentials.read").attributes["pf.credentials.outcome"])
+        assertEquals(
+            setOf("pf.credentials.write", "pf.credentials.read", "pf.credentials.decode"),
+            byName.keys
+        )
+        assertEquals(
+            attr("openai"),
+            byName.getValue("pf.credentials.write").attributes["pf.credentials.provider"]
+        )
+        assertEquals(
+            attr("persisted"),
+            byName.getValue("pf.credentials.write").attributes["pf.credentials.outcome"]
+        )
+        assertEquals(
+            attr("decrypted"),
+            byName.getValue("pf.credentials.read").attributes["pf.credentials.outcome"]
+        )
         assertEquals(SpanStatus.Ok, byName.getValue("pf.credentials.write").status)
         assertEquals(SpanStatus.Ok, byName.getValue("pf.credentials.read").status)
         assertEquals(SpanStatus.Ok, byName.getValue("pf.credentials.decode").status)
@@ -169,7 +196,7 @@ class EncryptedCredentialStoreTest {
             dir = dir,
             encrypt = { error("keystore failure") },
             decrypt = { error("keystore failure") },
-            diagnostics = PathfinderDiagnostics(telemetry),
+            diagnostics = PathfinderDiagnostics(telemetry)
         )
 
         assertNull(failing.read("openai"))
@@ -194,7 +221,7 @@ class EncryptedCredentialStoreTest {
             dir = dir,
             encrypt = { bytes -> bytes.map { (it + 1).toByte() }.toByteArray() },
             decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() },
-            diagnostics = PathfinderDiagnostics(telemetry),
+            diagnostics = PathfinderDiagnostics(telemetry)
         )
 
         writeRaw(dir, "openai", "sk-legacy")
@@ -209,9 +236,11 @@ class EncryptedCredentialStoreTest {
             dir = dir,
             encrypt = { error("keystore failure") },
             decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() },
-            diagnostics = PathfinderDiagnostics(telemetry),
+            diagnostics = PathfinderDiagnostics(telemetry)
         )
-        assertFailsWith<IllegalStateException> { failingWrite.modify("zai") { ApiKeyCredential("k") } }
+        assertFailsWith<IllegalStateException> {
+            failingWrite.modify("zai") { ApiKeyCredential("k") }
+        }
         val writeFailed = telemetry.getSpans().last()
         assertEquals("pf.credentials.write", writeFailed.name)
         assertEquals("IllegalStateException", (writeFailed.status as SpanStatus.Error).error?.name)
@@ -224,7 +253,7 @@ class EncryptedCredentialStoreTest {
             dir = createTempDirectory(),
             encrypt = { bytes -> bytes.map { (it + 1).toByte() }.toByteArray() },
             decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() },
-            diagnostics = PathfinderDiagnostics(telemetry),
+            diagnostics = PathfinderDiagnostics(telemetry)
         )
         store.delete("openai")
         store.modify("openai") { ApiKeyCredential("sk") }
@@ -246,7 +275,7 @@ class EncryptedCredentialStoreTest {
             dir = dir,
             encrypt = { throw cancelled },
             decrypt = { throw cancelled },
-            diagnostics = PathfinderDiagnostics(telemetry),
+            diagnostics = PathfinderDiagnostics(telemetry)
         )
         writeRaw(dir, "openai", "{}")
 
@@ -260,5 +289,8 @@ class EncryptedCredentialStoreTest {
         assertEquals(SpanStatus.Ok, write.status)
     }
 
-    private fun createTempDirectory(): File = kotlin.io.path.createTempDirectory("credstore").toFile().apply { deleteOnExit() }
+    private fun createTempDirectory(): File =
+        kotlin.io.path.createTempDirectory("credstore").toFile().apply {
+            deleteOnExit()
+        }
 }

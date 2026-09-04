@@ -1,6 +1,19 @@
 package works.resolve.pathfinder.tools.websearch
 
-import works.resolve.pathfinder.codingagent.core.AgentSession
+import java.io.IOException
+import java.net.URLEncoder
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import okhttp3.Call
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.ai.TextContent
@@ -12,20 +25,7 @@ import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.truncateErrorText
-import java.io.IOException
-import java.net.URLEncoder
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import okhttp3.Call
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
+import works.resolve.pathfinder.codingagent.core.AgentSession
 
 /**
  * Brave web search agent tool, ported from the Scry pi extension. Divergences
@@ -44,7 +44,7 @@ import kotlin.coroutines.resumeWithException
 class BraveWebSearchTool(
     private val client: OkHttpClient,
     private val apiKeyResolver: suspend () -> String?,
-    private val baseUrl: String = DEFAULT_BASE_URL,
+    private val baseUrl: String = DEFAULT_BASE_URL
 ) : AgentTool {
 
     override val definition: Tool = Tool(
@@ -60,7 +60,7 @@ class BraveWebSearchTool(
                         buildJsonObject {
                             put("type", "string")
                             put("description", "Search query")
-                        },
+                        }
                     )
                     put(
                         "freshness",
@@ -69,14 +69,14 @@ class BraveWebSearchTool(
                             put("enum", JsonArray(FRESHNESS_VALUES.map { JsonPrimitive(it) }))
                             put(
                                 "description",
-                                "Filter by recency: pd (last 24h), pw (last 7 days), pm (last 31 days), py (last year)",
+                                "Filter by recency: pd (last 24h), pw (last 7 days), pm (last 31 days), py (last year)"
                             )
-                        },
+                        }
                     )
-                },
+                }
             )
             put("required", JsonArray(listOf(JsonPrimitive("query"))))
-        },
+        }
     )
 
     override val label: String = "Web Search"
@@ -84,7 +84,7 @@ class BraveWebSearchTool(
     override val promptSnippet: String = "Search the web for information on a topic"
 
     override val promptGuidelines: List<String> = listOf(
-        "Use web_search when the user asks you to look up current information, facts, or content from the web.",
+        "Use web_search when the user asks you to look up current information, facts, or content from the web."
     )
 
     override fun validateArguments(arguments: JsonObject): JsonObject {
@@ -92,6 +92,7 @@ class BraveWebSearchTool(
         when {
             arguments["query"] == null ->
                 throw IllegalArgumentException("web_search: missing required argument 'query'")
+
             query == null || !query.isString ->
                 throw IllegalArgumentException("web_search: 'query' must be a string")
         }
@@ -100,7 +101,7 @@ class BraveWebSearchTool(
             val value = (freshness as? JsonPrimitive)?.takeIf { it.isString }?.content
             if (value == null || value !in FRESHNESS_VALUES) {
                 throw IllegalArgumentException(
-                    "web_search: 'freshness' must be one of ${FRESHNESS_VALUES.joinToString("/")}",
+                    "web_search: 'freshness' must be one of ${FRESHNESS_VALUES.joinToString("/")}"
                 )
             }
         }
@@ -110,7 +111,7 @@ class BraveWebSearchTool(
     override suspend fun execute(
         toolCallId: String,
         arguments: JsonObject,
-        onUpdate: (AgentToolResult) -> Unit,
+        onUpdate: (AgentToolResult) -> Unit
     ): AgentToolResult {
         val query = arguments.str("query")
             ?: throw IllegalArgumentException("web_search: missing required argument 'query'")
@@ -120,7 +121,7 @@ class BraveWebSearchTool(
         if (apiKey == null || apiKey.isBlank()) {
             return AgentToolResult(
                 content = listOf(TextContent(MISSING_KEY_MESSAGE)),
-                details = EMPTY_DETAILS,
+                details = EMPTY_DETAILS
             )
         }
 
@@ -158,7 +159,7 @@ class BraveWebSearchTool(
                     override fun onResponse(call: Call, response: Response) {
                         continuation.resume(response) { _, value, _ -> value.close() }
                     }
-                },
+                }
             )
         }
 
@@ -180,7 +181,7 @@ class BraveWebSearchTool(
                     .ifEmpty { it.message }
                 return AgentToolResult(
                     content = listOf(TextContent("Search failed (${it.code}): $reason")),
-                    details = EMPTY_DETAILS,
+                    details = EMPTY_DETAILS
                 )
             }
 
@@ -190,13 +191,14 @@ class BraveWebSearchTool(
             if (results == null || results.isEmpty()) {
                 return AgentToolResult(
                     content = listOf(TextContent("No results found for \"$query\".")),
-                    details = EMPTY_DETAILS,
+                    details = EMPTY_DETAILS
                 )
             }
 
             val lines = results.mapIndexed { i, element ->
                 val r = element as? JsonObject ?: JsonObject(emptyMap())
-                val parts = mutableListOf("${i + 1}. **[${r.str("title") ?: ""}](${r.str("url") ?: ""})**")
+                val parts =
+                    mutableListOf("${i + 1}. **[${r.str("title") ?: ""}](${r.str("url") ?: ""})**")
                 // Mirrors Scry's JS truthiness: skip empty descriptions.
                 r.str("description")?.takeIf { it.isNotEmpty() }?.let { parts.add("   $it") }
                 r.arr("extra_snippets")?.forEach { snippet ->
@@ -207,7 +209,7 @@ class BraveWebSearchTool(
 
             return AgentToolResult(
                 content = listOf(TextContent(lines.joinToString("\n\n"))),
-                details = EMPTY_DETAILS,
+                details = EMPTY_DETAILS
             )
         }
     }

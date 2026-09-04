@@ -11,26 +11,26 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.ResolvedAuth
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.auth.CatalogAuthProviderRef
 import works.resolve.pathfinder.ai.auth.InMemoryCredentialStore
+import works.resolve.pathfinder.ai.auth.MapCatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.NoopAuthContext
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.resolveProviderAuth
-import works.resolve.pathfinder.ai.auth.CatalogAuthProviderRef
-import works.resolve.pathfinder.ai.auth.MapCatalogAuthRegistry
-import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.Context
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
-import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
+import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
 
 class OpenAiCodexOAuthRuntimeTest {
 
-    private object NO_NETWORK : OAuthHttpClient {
+    private object NoNetwork : OAuthHttpClient {
         override suspend fun execute(request: OAuthHttpRequest): OAuthHttpResponse =
             error("unexpected OAuth network call: ${request.url}")
     }
@@ -54,12 +54,12 @@ class OpenAiCodexOAuthRuntimeTest {
 
                         data: [DONE]
 
-                        """.trimIndent(),
-                    ),
+                        """.trimIndent()
+                    )
             )
 
             val catalog = ProviderCatalog.parse(
-                File("src/main/assets/models-catalog.json").readText(),
+                File("src/main/assets/models-catalog.json").readText()
             )
             val provider = assertNotNull(catalog.getProvider("openai-codex"))
             val model = assertNotNull(provider.models.first { it.id == "gpt-5.3-codex-spark" })
@@ -73,7 +73,7 @@ class OpenAiCodexOAuthRuntimeTest {
                         access = accessJwt,
                         refresh = "runtime-refresh-token",
                         expires = System.currentTimeMillis() + 3_600_000,
-                        extras = mapOf("accountId" to JsonPrimitive(accountId)),
+                        extras = mapOf("accountId" to JsonPrimitive(accountId))
                     )
                 }
             }
@@ -83,11 +83,11 @@ class OpenAiCodexOAuthRuntimeTest {
                     CatalogAuthProviderRef(
                         provider,
                         MapCatalogAuthRegistry(
-                            mapOf("openai-codex" to OpenAiCodexOAuthAuth(NO_NETWORK)),
-                        ),
+                            mapOf("openai-codex" to OpenAiCodexOAuthAuth(NoNetwork))
+                        )
                     ),
                     credentials,
-                    NoopAuthContext,
+                    NoopAuthContext
                 )
             }
             assertNotNull(resolved)
@@ -97,14 +97,18 @@ class OpenAiCodexOAuthRuntimeTest {
             val runtimeProvider = provider.toRuntimeProvider(
                 transport = OkHttpTransport(),
                 authResolver = { _, _ -> ResolvedAuth(resolved.auth.apiKey, resolved.env) },
-                webSocketTransport = NoWebSocketTransport,
+                webSocketTransport = NoWebSocketTransport
             )
             val models = Models(listOf(runtimeProvider))
 
             val events = runBlocking {
                 models.stream(
-                    model.copy(baseUrl = works.resolve.pathfinder.ai.providers.normalizeBaseUrl(server.url("/backend-api").toString())),
-                    Context(messages = listOf(UserMessage.ofText("hi"))),
+                    model.copy(
+                        baseUrl = works.resolve.pathfinder.ai.providers.normalizeBaseUrl(
+                            server.url("/backend-api").toString()
+                        )
+                    ),
+                    Context(messages = listOf(UserMessage.ofText("hi")))
                 ).toList()
             }
 
@@ -128,12 +132,12 @@ class OpenAiCodexOAuthRuntimeTest {
     @Test
     fun `openai-codex projects a single subscription oauth method`() {
         val catalog = ProviderCatalog.parse(
-            File("src/main/assets/models-catalog.json").readText(),
+            File("src/main/assets/models-catalog.json").readText()
         )
         val authService = works.resolve.pathfinder.ai.auth.ProviderAuthService(
             catalog,
             works.resolve.pathfinder.ai.auth.ProductionCatalogAuthRegistry(),
-            InMemoryCredentialStore(),
+            InMemoryCredentialStore()
         )
         val methods = authService.authMethods("openai-codex")
         assertEquals(1, methods.size)
@@ -146,7 +150,7 @@ class OpenAiCodexOAuthRuntimeTest {
         val encoder = java.util.Base64.getUrlEncoder().withoutPadding()
         val header = encoder.encodeToString("""{"alg":"none"}""".toByteArray())
         val payload = encoder.encodeToString(
-            """{"https://api.openai.com/auth":{"chatgpt_account_id":"$accountId"}}""".toByteArray(),
+            """{"https://api.openai.com/auth":{"chatgpt_account_id":"$accountId"}}""".toByteArray()
         )
         return "$header.$payload.signature"
     }

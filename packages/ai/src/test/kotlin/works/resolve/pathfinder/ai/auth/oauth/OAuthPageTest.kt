@@ -23,7 +23,9 @@ class OAuthPageTest {
         assertTrue(html.startsWith("<!doctype html>\n<html lang=\"en\">"))
         assertTrue(html.contains("<title>Authentication successful</title>"))
         assertTrue(html.contains("<h1>Authentication successful</h1>"))
-        assertTrue(html.contains("<p>OpenAI authentication completed. You can close this window.</p>"))
+        assertTrue(
+            html.contains("<p>OpenAI authentication completed. You can close this window.</p>")
+        )
         assertFalse(html.contains("class=\"details\""))
     }
 
@@ -38,16 +40,23 @@ class OAuthPageTest {
 
     @Test
     fun `error page renders details block only when details are given`() {
-        val html = oauthErrorHtml("Anthropic authentication did not complete.", "Error: access_denied")
+        val html =
+            oauthErrorHtml("Anthropic authentication did not complete.", "Error: access_denied")
         assertTrue(html.contains("<div class=\"details\">Error: access_denied</div>"))
-        assertFalse(oauthErrorHtml("Missing code or state parameter.").contains("class=\"details\""))
+        assertFalse(
+            oauthErrorHtml("Missing code or state parameter.").contains("class=\"details\"")
+        )
     }
 
     @Test
     fun `message and details are html-escaped`() {
         val html = oauthErrorHtml("<script>&", "\"injected\" <b>details</b>")
         assertTrue(html.contains("<p>&lt;script&gt;&amp;</p>"))
-        assertTrue(html.contains("<div class=\"details\">&quot;injected&quot; &lt;b&gt;details&lt;/b&gt;</div>"))
+        assertTrue(
+            html.contains(
+                "<div class=\"details\">&quot;injected&quot; &lt;b&gt;details&lt;/b&gt;</div>"
+            )
+        )
         assertFalse(html.contains("<script>"))
         assertFalse(html.contains("<b>details</b>"))
     }

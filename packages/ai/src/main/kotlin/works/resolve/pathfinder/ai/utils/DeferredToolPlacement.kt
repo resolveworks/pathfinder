@@ -14,7 +14,7 @@ data class DeferredToolPlacement(val immediate: List<Tool>, val deferred: Map<St
 fun splitDeferredTools(
     context: Context,
     enabled: Boolean,
-    normalizeName: (String) -> String = identityToolName,
+    normalizeName: (String) -> String = identityToolName
 ): DeferredToolPlacement {
     val uniqueTools = LinkedHashMap<String, Tool>()
     for (tool in context.tools) uniqueTools[normalizeName(tool.name)] = tool
@@ -27,11 +27,13 @@ fun splitDeferredTools(
             is AssistantMessage ->
                 message.content.filterIsInstance<ToolCall>()
                     .forEach { usedNames.add(normalizeName(it.name)) }
+
             is ToolResultMessage ->
                 for (name in message.addedToolNames) {
                     val normalizedName = normalizeName(name)
                     if (normalizedName !in usedNames) deferredNames.add(normalizedName)
                 }
+
             else -> {}
         }
     }

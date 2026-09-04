@@ -2,7 +2,7 @@ package works.resolve.pathfinder.ai.auth
 
 import kotlinx.serialization.json.JsonElement
 
-/**
+/*
  * pi's `AbortSignal` parameters map to Kotlin structured concurrency: every
  * suspend function is cancellation-friendly, and flow implementations must
  * honor cancellation for blocking work.
@@ -16,7 +16,7 @@ import kotlinx.serialization.json.JsonElement
 data class ModelAuth(
     val apiKey: String? = null,
     val headers: Map<String, String?> = emptyMap(),
-    val baseUrl: String? = null,
+    val baseUrl: String? = null
 )
 
 /**
@@ -24,14 +24,11 @@ data class ModelAuth(
  * values such as Cloudflare account or gateway ids; `key` is null for
  * env-only credentials.
  */
-data class ApiKeyCredential(
-    val key: String? = null,
-    val env: Map<String, String> = emptyMap(),
-) : Credential {
+data class ApiKeyCredential(val key: String? = null, val env: Map<String, String> = emptyMap()) :
+    Credential {
     override val type: CredentialType = CredentialType.API_KEY
 
-    override fun toString(): String =
-        "ApiKeyCredential(key=<redacted>, env=${env.keys})"
+    override fun toString(): String = "ApiKeyCredential(key=<redacted>, env=${env.keys})"
 }
 
 /**
@@ -45,7 +42,7 @@ data class OAuthCredential(
     val access: String,
     val refresh: String,
     val expires: Long,
-    val extras: Map<String, JsonElement> = emptyMap(),
+    val extras: Map<String, JsonElement> = emptyMap()
 ) : Credential {
     init {
         // Extra fields are written verbatim next to the canonical fields;
@@ -75,14 +72,11 @@ sealed interface Credential {
 
 enum class CredentialType {
     API_KEY,
-    OAUTH,
+    OAUTH
 }
 
 /** Non-secret credential metadata for account/status enumeration. */
-data class CredentialInfo(
-    val providerId: String,
-    val type: CredentialType,
-)
+data class CredentialInfo(val providerId: String, val type: CredentialType)
 
 /** Environment access for auth resolution; injectable for tests. */
 interface AuthContext {
@@ -97,17 +91,14 @@ data class AuthResult(
     /** Provider-scoped environment/config values resolved from credentials and ambient context. */
     val env: Map<String, String> = emptyMap(),
     /** Human-readable label for status UI: "ANTHROPIC_API_KEY", "OAuth", "~/.aws/credentials". */
-    val source: String? = null,
+    val source: String? = null
 )
 
-data class AuthCheck(
-    val source: String? = null,
-    val type: AuthType,
-)
+data class AuthCheck(val source: String? = null, val type: AuthType)
 
 enum class AuthType(val wire: String) {
     API_KEY("api_key"),
-    OAUTH("oauth"),
+    OAUTH("oauth")
 }
 
 /**
@@ -121,10 +112,7 @@ sealed interface AuthPrompt {
     /** Secret input (never logged, never persisted outside the credential boundary). */
     data class Secret(val message: String, val placeholder: String? = null) : AuthPrompt
 
-    data class Select(
-        val message: String,
-        val options: List<Option>,
-    ) : AuthPrompt {
+    data class Select(val message: String, val options: List<Option>) : AuthPrompt {
         data class Option(val id: String, val label: String, val description: String? = null)
     }
 
@@ -132,10 +120,7 @@ sealed interface AuthPrompt {
     data class ManualCode(val message: String, val placeholder: String? = null) : AuthPrompt
 }
 
-data class AuthInfoLink(
-    val url: String,
-    val label: String? = null,
-)
+data class AuthInfoLink(val url: String, val label: String? = null)
 
 sealed interface AuthEvent {
     data class Info(val message: String, val links: List<AuthInfoLink> = emptyList()) : AuthEvent
@@ -146,7 +131,7 @@ sealed interface AuthEvent {
         val userCode: String,
         val verificationUri: String,
         val intervalSeconds: Int? = null,
-        val expiresInSeconds: Int? = null,
+        val expiresInSeconds: Int? = null
     ) : AuthEvent
 
     data class Progress(val message: String) : AuthEvent

@@ -11,7 +11,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
-import works.resolve.pathfinder.ai.testing.FakeClock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
@@ -19,6 +18,7 @@ import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.OAuthCredential
+import works.resolve.pathfinder.ai.testing.FakeClock
 
 class OpenAiCodexOAuthAuthTest {
 
@@ -46,7 +46,7 @@ class OpenAiCodexOAuthAuthTest {
         OAuthHttpResponse(status, emptyMap(), body.toByteArray())
 
     private class RecordingInteraction(
-        val answers: Map<String, suspend (AuthPrompt) -> String> = emptyMap(),
+        val answers: Map<String, suspend (AuthPrompt) -> String> = emptyMap()
     ) : AuthInteraction {
         val events = mutableListOf<AuthEvent>()
         val prompts = mutableListOf<AuthPrompt>()
@@ -63,24 +63,30 @@ class OpenAiCodexOAuthAuthTest {
     }
 
     /** Raw entropy injected through the PKCE seam; the flow sees its base64url form. */
-    private val rawVerifierBytes = "unit-test-verifier-unit-test-verifier".toByteArray(Charsets.US_ASCII)
+    private val rawVerifierBytes = "unit-test-verifier-unit-test-verifier".toByteArray(
+        Charsets.US_ASCII
+    )
 
-    private val fixedVerifier = works.resolve.pathfinder.ai.auth.oauth.PkceGenerator.base64url(rawVerifierBytes)
+    private val fixedVerifier = works.resolve.pathfinder.ai.auth.oauth.PkceGenerator.base64url(
+        rawVerifierBytes
+    )
 
     private fun auth(
         http: OAuthHttpClient,
         nowMs: Long = 1_000_000L,
         state: String = "0123456789abcdef",
-        callbackPort: Int = 0,
+        callbackPort: Int = 0
     ) = OpenAiCodexOAuthAuth(
         http = http,
         clock = FakeClock(nowMs),
         createState = { state },
         pkce = fixedPkce(),
-        callbackPort = callbackPort,
+        callbackPort = callbackPort
     )
 
-    private fun fixedPkce() = works.resolve.pathfinder.ai.auth.oauth.PkceGenerator { rawVerifierBytes }
+    private fun fixedPkce() = works.resolve.pathfinder.ai.auth.oauth.PkceGenerator {
+        rawVerifierBytes
+    }
 
     private fun accessToken(accountId: String, urlSafe: Boolean = false): String {
         val payload = """{"https://api.openai.com/auth":{"chatgpt_account_id":"$accountId"}}"""
@@ -96,7 +102,8 @@ class OpenAiCodexOAuthAuthTest {
             it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('='), "UTF-8")
         }
 
-    private fun requestBody(request: OAuthHttpRequest): String = request.body.toString(Charsets.UTF_8)
+    private fun requestBody(request: OAuthHttpRequest): String =
+        request.body.toString(Charsets.UTF_8)
 
     @Test
     fun `select prompt offers browser first then device code with pi labels`() = runTest {
@@ -104,17 +111,22 @@ class OpenAiCodexOAuthAuthTest {
         http.enqueue(
             json(
                 200,
-                """{"device_auth_id":"device-auth-id","user_code":"ABCD-1234","interval":"5"}""",
+                """{"device_auth_id":"device-auth-id","user_code":"ABCD-1234","interval":"5"}"""
             ),
             json(403, """{"error":{"code":"deviceauth_authorization_pending"}}"""),
-            json(200, """{"authorization_code":"oauth-code","code_verifier":"device-code-verifier"}"""),
             json(
                 200,
-                """{"access_token":"${accessToken("account-456")}","refresh_token":"refresh-token","expires_in":3600}""",
+                """{"authorization_code":"oauth-code","code_verifier":"device-code-verifier"}"""
             ),
+            json(
+                200,
+                """{"access_token":"${accessToken(
+                    "account-456"
+                )}","refresh_token":"refresh-token","expires_in":3600}"""
+            )
         )
         val interaction = RecordingInteraction(
-            mapOf("Select" to { "device_code" }),
+            mapOf("Select" to { "device_code" })
         )
 
         val credential = auth(http).login(interaction)
@@ -124,9 +136,9 @@ class OpenAiCodexOAuthAuthTest {
         assertEquals(
             listOf(
                 AuthPrompt.Select.Option("browser", "Browser login (default)"),
-                AuthPrompt.Select.Option("device_code", "Device code login (headless)"),
+                AuthPrompt.Select.Option("device_code", "Device code login (headless)")
             ),
-            select.options,
+            select.options
         )
         val deviceCode = assertIs<AuthEvent.DeviceCode>(interaction.events.single())
         assertEquals("ABCD-1234", deviceCode.userCode)
@@ -154,26 +166,48 @@ class OpenAiCodexOAuthAuthTest {
         val http = FakeHttpClient()
         http.enqueue(
             json(200, """{"device_auth_id":"d1","user_code":"WXYZ-7890","interval":4}"""),
-            json(200, """{"authorization_code":"oauth-code","code_verifier":"device-code-verifier"}"""),
             json(
                 200,
-                """{"access_token":"${accessToken("account-1")}","refresh_token":"refresh-token","expires_in":1800}""",
+                """{"authorization_code":"oauth-code","code_verifier":"device-code-verifier"}"""
             ),
+            json(
+                200,
+                """{"access_token":"${accessToken(
+                    "account-1"
+                )}","refresh_token":"refresh-token","expires_in":1800}"""
+            )
         )
 
-        val credential = auth(http).login(RecordingInteraction(mapOf("Select" to { "device_code" })))
+        val credential = auth(http).login(
+            RecordingInteraction(
+                mapOf(
+                    "Select" to {
+                        "device_code"
+                    }
+                )
+            )
+        )
 
         assertEquals(1_000_000L + 1800 * 1000, credential.expires)
 
         val userCodeRequest = http.requests[0]
-        assertEquals("https://auth.openai.com/api/accounts/deviceauth/usercode", userCodeRequest.url)
+        assertEquals(
+            "https://auth.openai.com/api/accounts/deviceauth/usercode",
+            userCodeRequest.url
+        )
         assertEquals("POST", userCodeRequest.method)
         assertEquals("application/json", userCodeRequest.headers["content-type"])
-        assertEquals("""{"client_id":"app_EMoamEEZ73f0CkXaXp7hrann"}""", requestBody(userCodeRequest))
+        assertEquals(
+            """{"client_id":"app_EMoamEEZ73f0CkXaXp7hrann"}""",
+            requestBody(userCodeRequest)
+        )
 
         val pollRequest = http.requests[1]
         assertEquals("https://auth.openai.com/api/accounts/deviceauth/token", pollRequest.url)
-        assertEquals("""{"device_auth_id":"d1","user_code":"WXYZ-7890"}""", requestBody(pollRequest))
+        assertEquals(
+            """{"device_auth_id":"d1","user_code":"WXYZ-7890"}""",
+            requestBody(pollRequest)
+        )
 
         val tokenRequest = http.requests[2]
         assertEquals("https://auth.openai.com/oauth/token", tokenRequest.url)
@@ -183,9 +217,9 @@ class OpenAiCodexOAuthAuthTest {
                 "client_id" to "app_EMoamEEZ73f0CkXaXp7hrann",
                 "code" to "oauth-code",
                 "code_verifier" to "device-code-verifier",
-                "redirect_uri" to "https://auth.openai.com/deviceauth/callback",
+                "redirect_uri" to "https://auth.openai.com/deviceauth/callback"
             ),
-            formFields(tokenRequest),
+            formFields(tokenRequest)
         )
     }
 
@@ -199,7 +233,7 @@ class OpenAiCodexOAuthAuthTest {
         assertEquals(
             "OpenAI Codex device code login is not enabled for this server. " +
                 "Use browser login or verify the server URL.",
-            error.message,
+            error.message
         )
     }
 
@@ -212,7 +246,7 @@ class OpenAiCodexOAuthAuthTest {
         }
         assertEquals(
             "OpenAI Codex device code request failed with status 500: error=nope",
-            error.message,
+            error.message
         )
 
         val raw = FakeHttpClient()
@@ -222,7 +256,7 @@ class OpenAiCodexOAuthAuthTest {
         }
         assertEquals(
             "OpenAI Codex device code request failed with status 502: <redacted>",
-            rawError.message,
+            rawError.message
         )
     }
 
@@ -234,7 +268,7 @@ class OpenAiCodexOAuthAuthTest {
             """{"device_auth_id":"d","user_code":"ABCD","interval":-1}""" to "interval",
             """{"device_auth_id":"d","user_code":"ABCD","interval":"soon"}""" to "interval",
             """{"device_auth_id":"d","user_code":"ABCD"}""" to "interval",
-            "not json" to "device_auth_id, user_code, interval",
+            "not json" to "device_auth_id, user_code, interval"
         )) {
             val http = FakeHttpClient()
             http.enqueue(json(200, body))
@@ -243,7 +277,7 @@ class OpenAiCodexOAuthAuthTest {
             }
             assertEquals(
                 "Invalid OpenAI Codex device code response: missing fields: $missing",
-                error.message,
+                error.message
             )
             // pi echoes the raw body here; the port never does.
             assertTrue(body !in error.message!!, error.message)
@@ -258,9 +292,22 @@ class OpenAiCodexOAuthAuthTest {
             json(403, """{"error":"access_denied","error_description":"denied"}"""),
             json(404, "not ready"),
             json(200, """{"authorization_code":"c","code_verifier":"v"}"""),
-            json(200, """{"access_token":"${accessToken("account-403-404")}","refresh_token":"r","expires_in":60}"""),
+            json(
+                200,
+                """{"access_token":"${accessToken(
+                    "account-403-404"
+                )}","refresh_token":"r","expires_in":60}"""
+            )
         )
-        val credential = auth(http).login(RecordingInteraction(mapOf("Select" to { "device_code" })))
+        val credential = auth(http).login(
+            RecordingInteraction(
+                mapOf(
+                    "Select" to {
+                        "device_code"
+                    }
+                )
+            )
+        )
         assertEquals("account-403-404", credential.extras["accountId"]!!.jsonPrimitive.content)
         assertEquals(5, http.requests.size)
     }
@@ -270,7 +317,7 @@ class OpenAiCodexOAuthAuthTest {
         val http = FakeHttpClient()
         http.enqueue(
             json(200, """{"device_auth_id":"d","user_code":"ABCD","interval":5}"""),
-            json(500, """{"error":"server_error","error_description":"try again later"}"""),
+            json(500, """{"error":"server_error","error_description":"try again later"}""")
         )
         val error = assertFailsWith<IllegalStateException> {
             auth(http).login(RecordingInteraction(mapOf("Select" to { "device_code" })))
@@ -278,7 +325,7 @@ class OpenAiCodexOAuthAuthTest {
         assertEquals(
             "OpenAI Codex device auth failed with status 500: " +
                 "error=server_error: try again later",
-            error.message,
+            error.message
         )
     }
 
@@ -289,8 +336,8 @@ class OpenAiCodexOAuthAuthTest {
             json(200, """{"device_auth_id":"device-secret-123","user_code":"ABCD","interval":5}"""),
             json(
                 500,
-                """{"error":"failed for device-secret-123","error_description":"user ABCD retry"}""",
-            ),
+                """{"error":"failed for device-secret-123","error_description":"user ABCD retry"}"""
+            )
         )
         val error = assertFailsWith<IllegalStateException> {
             auth(http).login(RecordingInteraction(mapOf("Select" to { "device_code" })))
@@ -298,7 +345,7 @@ class OpenAiCodexOAuthAuthTest {
         assertEquals(
             "OpenAI Codex device auth failed with status 500: " +
                 "error=failed for <redacted>: user <redacted> retry",
-            error.message,
+            error.message
         )
     }
 
@@ -307,14 +354,14 @@ class OpenAiCodexOAuthAuthTest {
         val http = FakeHttpClient()
         http.enqueue(
             json(200, """{"device_auth_id":"d","user_code":"ABCD","interval":5}"""),
-            json(200, """{"authorization_code":"auth-code-secret","code_challenge":"x"}"""),
+            json(200, """{"authorization_code":"auth-code-secret","code_challenge":"x"}""")
         )
         val error = assertFailsWith<IllegalStateException> {
             auth(http).login(RecordingInteraction(mapOf("Select" to { "device_code" })))
         }
         assertEquals(
             "Invalid OpenAI Codex device auth token response: missing fields: code_verifier",
-            error.message,
+            error.message
         )
         // pi echoes the raw body, which here carries the authorization code.
         assertTrue("auth-code-secret" !in error.message!!, error.message)
@@ -347,14 +394,17 @@ class OpenAiCodexOAuthAuthTest {
         http.enqueue(
             json(
                 200,
-                """{"access_token":"${accessToken("account-9", urlSafe = true)}","refresh_token":"r","expires_in":100}""",
-            ),
+                """{"access_token":"${accessToken(
+                    "account-9",
+                    urlSafe = true
+                )}","refresh_token":"r","expires_in":100}"""
+            )
         )
         val interaction = RecordingInteraction(
             mapOf(
                 "Select" to { "browser" },
-                "ManualCode" to { "pasted-code" },
-            ),
+                "ManualCode" to { "pasted-code" }
+            )
         )
 
         val credential = auth(http).login(interaction)
@@ -367,19 +417,19 @@ class OpenAiCodexOAuthAuthTest {
                 "&client_id=app_EMoamEEZ73f0CkXaXp7hrann" +
                 "&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback" +
                 "&scope=openid+profile+email+offline_access" +
-                "&code_challenge=${works.resolve.pathfinder.ai.auth.oauth.PkceGenerator.challengeFor(fixedVerifier)}" +
+                "&code_challenge=${PkceGenerator.challengeFor(fixedVerifier)}" +
                 "&code_challenge_method=S256" +
                 "&state=0123456789abcdef" +
                 "&id_token_add_organizations=true" +
                 "&codex_cli_simplified_flow=true" +
                 "&originator=pathfinder",
-            url.url,
+            url.url
         )
 
         val manual = assertIs<AuthPrompt.ManualCode>(interaction.prompts[1])
         assertEquals(
             "Complete login in your browser, or paste the authorization code / redirect URL here:",
-            manual.message,
+            manual.message
         )
         assertEquals(OpenAiCodexOAuthAuth.REDIRECT_URI, manual.placeholder)
 
@@ -389,9 +439,9 @@ class OpenAiCodexOAuthAuthTest {
                 "client_id" to "app_EMoamEEZ73f0CkXaXp7hrann",
                 "code" to "pasted-code",
                 "code_verifier" to fixedVerifier,
-                "redirect_uri" to "http://localhost:1455/auth/callback",
+                "redirect_uri" to "http://localhost:1455/auth/callback"
             ),
-            formFields(http.requests.single()),
+            formFields(http.requests.single())
         )
         assertEquals("account-9", credential.extras["accountId"]!!.jsonPrimitive.content)
     }
@@ -400,7 +450,12 @@ class OpenAiCodexOAuthAuthTest {
     fun `browser login accepts a redirect url with matching state`() = runTest {
         val http = FakeHttpClient()
         http.enqueue(
-            json(200, """{"access_token":"${accessToken("account-10")}","refresh_token":"r","expires_in":10}"""),
+            json(
+                200,
+                """{"access_token":"${accessToken(
+                    "account-10"
+                )}","refresh_token":"r","expires_in":10}"""
+            )
         )
         auth(http).login(
             RecordingInteraction(
@@ -408,9 +463,9 @@ class OpenAiCodexOAuthAuthTest {
                     "Select" to { "browser" },
                     "ManualCode" to {
                         "http://localhost:1455/auth/callback?code=redir-code&state=0123456789abcdef"
-                    },
-                ),
-            ),
+                    }
+                )
+            )
         )
         assertEquals("redir-code", formFields(http.requests.single())["code"])
     }
@@ -419,22 +474,24 @@ class OpenAiCodexOAuthAuthTest {
     fun `browser login treats an empty state as absent like pi`() = runTest {
         for (answer in listOf(
             "code-from-fragment#",
-            "http://localhost:1455/auth/callback?code=code-from-url&state=",
+            "http://localhost:1455/auth/callback?code=code-from-url&state="
         )) {
             val http = FakeHttpClient()
             http.enqueue(
                 json(
                     200,
-                    """{"access_token":"${accessToken("empty-state-account")}","refresh_token":"r","expires_in":10}""",
-                ),
+                    """{"access_token":"${accessToken(
+                        "empty-state-account"
+                    )}","refresh_token":"r","expires_in":10}"""
+                )
             )
             auth(http).login(
                 RecordingInteraction(
                     mapOf(
                         "Select" to { "browser" },
-                        "ManualCode" to { answer },
-                    ),
-                ),
+                        "ManualCode" to { answer }
+                    )
+                )
             )
             assertEquals(1, http.requests.size)
         }
@@ -448,9 +505,9 @@ class OpenAiCodexOAuthAuthTest {
                 RecordingInteraction(
                     mapOf(
                         "Select" to { "browser" },
-                        "ManualCode" to { "http://localhost:1455/auth/callback?code=c&state=evil" },
-                    ),
-                ),
+                        "ManualCode" to { "http://localhost:1455/auth/callback?code=c&state=evil" }
+                    )
+                )
             )
         }
         assertEquals("State mismatch", error.message)
@@ -467,9 +524,9 @@ class OpenAiCodexOAuthAuthTest {
                         "Select" to { "browser" },
                         "ManualCode" to {
                             "http://localhost:1455/auth/callback?error=access_denied&state=0123456789abcdef"
-                        },
-                    ),
-                ),
+                        }
+                    )
+                )
             )
         }
         assertEquals("Missing authorization code", error.message)
@@ -481,7 +538,7 @@ class OpenAiCodexOAuthAuthTest {
         for (answer in listOf(
             "http://localhost:1455/auth/callback?code=&state=0123456789abcdef",
             "code=",
-            "   ",
+            "   "
         )) {
             val http = FakeHttpClient()
             val error = assertFailsWith<IllegalStateException> {
@@ -489,9 +546,9 @@ class OpenAiCodexOAuthAuthTest {
                     RecordingInteraction(
                         mapOf(
                             "Select" to { "browser" },
-                            "ManualCode" to { answer },
-                        ),
-                    ),
+                            "ManualCode" to { answer }
+                        )
+                    )
                 )
             }
             assertEquals("Missing authorization code", error.message)
@@ -532,7 +589,10 @@ class OpenAiCodexOAuthAuthTest {
         }
     }
 
-    private suspend fun awaitBrowserPrompt(interaction: GatedManualInteraction, flow: OpenAiCodexOAuthAuth): Int {
+    private suspend fun awaitBrowserPrompt(
+        interaction: GatedManualInteraction,
+        flow: OpenAiCodexOAuthAuth
+    ): Int {
         while (interaction.prompts.size < 2 || flow.lastCallbackPort == null) {
             kotlinx.coroutines.yield()
         }
@@ -543,7 +603,12 @@ class OpenAiCodexOAuthAuthTest {
     fun `browser login completes from the loopback callback server`() = runTest {
         val http = FakeHttpClient()
         http.enqueue(
-            json(200, """{"access_token":"${accessToken("account-server")}","refresh_token":"r","expires_in":10}"""),
+            json(
+                200,
+                """{"access_token":"${accessToken(
+                    "account-server"
+                )}","refresh_token":"r","expires_in":10}"""
+            )
         )
         val interaction = GatedManualInteraction()
         val flow = auth(http)
@@ -566,7 +631,12 @@ class OpenAiCodexOAuthAuthTest {
     fun `callback state mismatch yields 400 and falls back to the manual prompt`() = runTest {
         val http = FakeHttpClient()
         http.enqueue(
-            json(200, """{"access_token":"${accessToken("account-mismatch")}","refresh_token":"r","expires_in":10}"""),
+            json(
+                200,
+                """{"access_token":"${accessToken(
+                    "account-mismatch"
+                )}","refresh_token":"r","expires_in":10}"""
+            )
         )
         val interaction = GatedManualInteraction()
         val flow = auth(http)
@@ -590,7 +660,12 @@ class OpenAiCodexOAuthAuthTest {
     fun `callback without a code yields 400`() = runTest {
         val http = FakeHttpClient()
         http.enqueue(
-            json(200, """{"access_token":"${accessToken("account-nocode")}","refresh_token":"r","expires_in":10}"""),
+            json(
+                200,
+                """{"access_token":"${accessToken(
+                    "account-nocode"
+                )}","refresh_token":"r","expires_in":10}"""
+            )
         )
         val interaction = GatedManualInteraction()
         val flow = auth(http)
@@ -614,7 +689,12 @@ class OpenAiCodexOAuthAuthTest {
     fun `callback on the wrong path yields 404`() = runTest {
         val http = FakeHttpClient()
         http.enqueue(
-            json(200, """{"access_token":"${accessToken("account-404")}","refresh_token":"r","expires_in":10}"""),
+            json(
+                200,
+                """{"access_token":"${accessToken(
+                    "account-404"
+                )}","refresh_token":"r","expires_in":10}"""
+            )
         )
         val interaction = GatedManualInteraction()
         val flow = auth(http)
@@ -638,7 +718,12 @@ class OpenAiCodexOAuthAuthTest {
     fun `manual prompt answer wins when no callback arrives`() = runTest {
         val http = FakeHttpClient()
         http.enqueue(
-            json(200, """{"access_token":"${accessToken("account-manual")}","refresh_token":"r","expires_in":10}"""),
+            json(
+                200,
+                """{"access_token":"${accessToken(
+                    "account-manual"
+                )}","refresh_token":"r","expires_in":10}"""
+            )
         )
         val interaction = GatedManualInteraction()
         val flow = auth(http)
@@ -657,7 +742,12 @@ class OpenAiCodexOAuthAuthTest {
     fun `bind conflict on the callback port degrades to the manual-only flow`() = runTest {
         val http = FakeHttpClient()
         http.enqueue(
-            json(200, """{"access_token":"${accessToken("account-bindfail")}","refresh_token":"r","expires_in":10}"""),
+            json(
+                200,
+                """{"access_token":"${accessToken(
+                    "account-bindfail"
+                )}","refresh_token":"r","expires_in":10}"""
+            )
         )
         val blocker = java.net.ServerSocket(0)
         try {
@@ -666,9 +756,9 @@ class OpenAiCodexOAuthAuthTest {
                 RecordingInteraction(
                     mapOf(
                         "Select" to { "browser" },
-                        "ManualCode" to { "pasted-when-port-taken" },
-                    ),
-                ),
+                        "ManualCode" to { "pasted-when-port-taken" }
+                    )
+                )
             )
             assertNull(flow.lastCallbackPort, "bind failure must not record a port")
             assertEquals("pasted-when-port-taken", formFields(http.requests.single())["code"])
@@ -683,7 +773,13 @@ class OpenAiCodexOAuthAuthTest {
         val http = FakeHttpClient()
         val interaction = object : AuthInteraction {
             override suspend fun prompt(prompt: AuthPrompt): String =
-                if (prompt is AuthPrompt.Select) "browser" else throw IllegalStateException("prompt dismissed")
+                if (prompt is AuthPrompt.Select) {
+                    "browser"
+                } else {
+                    throw IllegalStateException(
+                        "prompt dismissed"
+                    )
+                }
 
             override suspend fun notify(event: AuthEvent) {}
         }
@@ -724,7 +820,7 @@ class OpenAiCodexOAuthAuthTest {
         for ((interval, expected) in listOf(" 5 " to 5.0, "0x10" to 16.0, " " to 0.0)) {
             val http = FakeHttpClient()
             http.enqueue(
-                json(200, """{"device_auth_id":"d","user_code":"ABCD","interval":"$interval"}"""),
+                json(200, """{"device_auth_id":"d","user_code":"ABCD","interval":"$interval"}""")
             )
             val device = auth(http).startOpenAICodexDeviceAuth()
             assertEquals(expected, device.intervalSeconds)
@@ -737,12 +833,12 @@ class OpenAiCodexOAuthAuthTest {
         // stays literal, a space becomes `+` — exactly java.net.URLEncoder.
         assertEquals(
             "k=%7E+*",
-            XaiOAuthAuth.formUrlEncode(mapOf("k" to "~ *")).toString(Charsets.UTF_8),
+            XaiOAuthAuth.formUrlEncode(mapOf("k" to "~ *")).toString(Charsets.UTF_8)
         )
         assertEquals(
             "a=1&b=two+words",
             XaiOAuthAuth.formUrlEncode(linkedMapOf("a" to "1", "b" to "two words"))
-                .toString(Charsets.UTF_8),
+                .toString(Charsets.UTF_8)
         )
     }
 
@@ -752,28 +848,43 @@ class OpenAiCodexOAuthAuthTest {
         http.enqueue(
             json(200, """{"device_auth_id":"d","user_code":"ABCD","interval":4}"""),
             json(200, """{"authorization_code":"c","code_verifier":"v"}"""),
-            json(200, """{"access_token":"${accessToken("acc")}","refresh_token":"r","expires_in":60}"""),
+            json(
+                200,
+                """{"access_token":"${accessToken("acc")}","refresh_token":"r","expires_in":60}"""
+            )
         )
         auth(http).login(RecordingInteraction(mapOf("Select" to { "device_code" })))
         assertTrue(http.requests.isNotEmpty())
         assertTrue(
             http.requests.all { it.timeoutMs == OpenAiCodexOAuthAuth.REQUEST_TIMEOUT_MS },
-            http.requests.map { it.timeoutMs }.toString(),
+            http.requests.map { it.timeoutMs }.toString()
         )
     }
 
     @Test
     fun `internal result shapes redact secrets in toString`() {
         assertTrue(
-            "verifier-value" !in OpenAiCodexOAuthAuth.AuthorizationFlow("verifier-value", "state", "https://example.invalid")
-                .toString(),
+            "verifier-value" !in
+                OpenAiCodexOAuthAuth.AuthorizationFlow(
+                    "verifier-value",
+                    "state",
+                    "https://example.invalid"
+                )
+                    .toString()
         )
         assertTrue("<redacted>" in OpenAiCodexOAuthAuth.AuthorizationFlow("v", "s", "u").toString())
         val token = OpenAiCodexOAuthAuth.OAuthToken("access-secret", "refresh-secret", 1).toString()
         assertTrue("access-secret" !in token && "refresh-secret" !in token && "<redacted>" in token)
-        val success = OpenAiCodexOAuthAuth.DeviceTokenSuccess("auth-code-secret", "verifier-secret").toString()
+        val success = OpenAiCodexOAuthAuth.DeviceTokenSuccess(
+            "auth-code-secret",
+            "verifier-secret"
+        ).toString()
         assertTrue("auth-code-secret" !in success && "verifier-secret" !in success)
-        val device = OpenAiCodexOAuthAuth.DeviceAuthInfo("device-secret", "ABCD-1234", 5.0).toString()
+        val device = OpenAiCodexOAuthAuth.DeviceAuthInfo(
+            "device-secret",
+            "ABCD-1234",
+            5.0
+        ).toString()
         assertTrue("device-secret" !in device && "ABCD-1234" in device)
     }
 
@@ -782,37 +893,37 @@ class OpenAiCodexOAuthAuthTest {
         val flow = OpenAiCodexOAuthAuth(FakeHttpClient())
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("c1", "s1"),
-            flow.parseAuthorizationInput("http://localhost:1455/auth/callback?code=c1&state=s1"),
+            flow.parseAuthorizationInput("http://localhost:1455/auth/callback?code=c1&state=s1")
         )
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("c2", "s2"),
-            flow.parseAuthorizationInput("c2#s2"),
+            flow.parseAuthorizationInput("c2#s2")
         )
         // JS value.split("#", 2): the third segment is discarded, not glued
         // onto the state like Kotlin's split(limit = 2) remainder.
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("c2", "s2"),
-            flow.parseAuthorizationInput("c2#s2#ignored"),
+            flow.parseAuthorizationInput("c2#s2#ignored")
         )
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("c3", "s3"),
-            flow.parseAuthorizationInput("code=c3&state=s3"),
+            flow.parseAuthorizationInput("code=c3&state=s3")
         )
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("c4", null),
-            flow.parseAuthorizationInput("  c4  "),
+            flow.parseAuthorizationInput("  c4  ")
         )
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput(null, null),
-            flow.parseAuthorizationInput("   "),
+            flow.parseAuthorizationInput("   ")
         )
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("with space", null),
-            flow.parseAuthorizationInput("code=with+space"),
+            flow.parseAuthorizationInput("code=with+space")
         )
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput(null, "only"),
-            flow.parseAuthorizationInput("http://localhost:1455/auth/callback?state=only"),
+            flow.parseAuthorizationInput("http://localhost:1455/auth/callback?state=only")
         )
     }
 
@@ -825,26 +936,26 @@ class OpenAiCodexOAuthAuthTest {
         // percent-encoded name never satisfies.)
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("decoded-name", null),
-            flow.parseAuthorizationInput("http://localhost:1455/auth/callback?%63ode=decoded-name"),
+            flow.parseAuthorizationInput("http://localhost:1455/auth/callback?%63ode=decoded-name")
         )
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("first", null),
-            flow.parseAuthorizationInput("code=first&code=second"),
+            flow.parseAuthorizationInput("code=first&code=second")
         )
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("a b", null),
-            flow.parseAuthorizationInput("http://localhost:1455/auth/callback?c%6Fde=a+b"),
+            flow.parseAuthorizationInput("http://localhost:1455/auth/callback?c%6Fde=a+b")
         )
         // A bare percent-encoded name never matches pi's literal code= check;
         // the whole input is the code, exactly like upstream.
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("%63ode=decoded-name", null),
-            flow.parseAuthorizationInput("%63ode=decoded-name"),
+            flow.parseAuthorizationInput("%63ode=decoded-name")
         )
         // A bare key yields the empty string (pi: get() ?? undefined → "").
         assertEquals(
             OpenAiCodexOAuthAuth.AuthorizationInput("", null),
-            flow.parseAuthorizationInput("http://localhost:1455/auth/callback?code"),
+            flow.parseAuthorizationInput("http://localhost:1455/auth/callback?code")
         )
     }
 
@@ -853,14 +964,17 @@ class OpenAiCodexOAuthAuthTest {
         val flow = OpenAiCodexOAuthAuth(FakeHttpClient())
         val error = assertFailsWith<IllegalStateException> {
             flow.readTokenResponse(
-                json(401, """{"error":{"message":"Could not validate your token. Please try signing in again."}}"""),
-                OpenAiCodexOAuthAuth.TokenOperation.REFRESH,
+                json(
+                    401,
+                    """{"error":{"message":"Could not validate your token. Please try signing in again."}}"""
+                ),
+                OpenAiCodexOAuthAuth.TokenOperation.REFRESH
             )
         }
         assertEquals(
             "OpenAI Codex token refresh failed (401): " +
                 "error=Could not validate your token. Please try signing in again.",
-            error.message,
+            error.message
         )
 
         val empty = assertFailsWith<IllegalStateException> {
@@ -876,12 +990,12 @@ class OpenAiCodexOAuthAuthTest {
             flow.readTokenResponse(
                 json(400, """{"error":"bad code verifier: leaked-verifier-secret"}"""),
                 OpenAiCodexOAuthAuth.TokenOperation.EXCHANGE,
-                secrets = listOf("leaked-verifier-secret"),
+                secrets = listOf("leaked-verifier-secret")
             )
         }
         assertEquals(
             "OpenAI Codex token exchange failed (400): error=bad code verifier: <redacted>",
-            error.message,
+            error.message
         )
     }
 
@@ -891,12 +1005,12 @@ class OpenAiCodexOAuthAuthTest {
         val error = assertFailsWith<IllegalStateException> {
             flow.readTokenResponse(
                 json(200, """{"access_token":"secret-access","expires_in":3600}"""),
-                OpenAiCodexOAuthAuth.TokenOperation.EXCHANGE,
+                OpenAiCodexOAuthAuth.TokenOperation.EXCHANGE
             )
         }
         assertEquals(
             "OpenAI Codex token exchange response missing fields: refresh_token",
-            error.message,
+            error.message
         )
         assertTrue("secret-access" !in error.message!!)
 
@@ -905,7 +1019,7 @@ class OpenAiCodexOAuthAuthTest {
         }
         assertEquals(
             "OpenAI Codex token refresh response missing fields: access_token, refresh_token, expires_in",
-            both.message,
+            both.message
         )
     }
 
@@ -914,10 +1028,13 @@ class OpenAiCodexOAuthAuthTest {
         val flow = OpenAiCodexOAuthAuth(FakeHttpClient())
         for (body in listOf(
             """{"access_token":"a","refresh_token":"r","expires_in":"3600"}""",
-            """{"access_token":"a","refresh_token":"r"}""",
+            """{"access_token":"a","refresh_token":"r"}"""
         )) {
             val error = assertFailsWith<IllegalStateException> {
-                flow.readTokenResponse(json(200, body), OpenAiCodexOAuthAuth.TokenOperation.EXCHANGE)
+                flow.readTokenResponse(
+                    json(200, body),
+                    OpenAiCodexOAuthAuth.TokenOperation.EXCHANGE
+                )
             }
             assertTrue(error.message!!.endsWith("expires_in"), error.message)
         }
@@ -929,12 +1046,14 @@ class OpenAiCodexOAuthAuthTest {
         http.enqueue(
             json(
                 200,
-                """{"access_token":"${accessToken("account-refreshed")}","refresh_token":"rotated","expires_in":7200}""",
-            ),
+                """{"access_token":"${accessToken(
+                    "account-refreshed"
+                )}","refresh_token":"rotated","expires_in":7200}"""
+            )
         )
         val flow = auth(http, nowMs = 5_000_000L)
         val credential = flow.refresh(
-            OAuthCredential(access = "old", refresh = "old-refresh", expires = 0),
+            OAuthCredential(access = "old", refresh = "old-refresh", expires = 0)
         )
         assertEquals("rotated", credential.refresh)
         assertEquals(5_000_000L + 7200 * 1000, credential.expires)
@@ -943,9 +1062,9 @@ class OpenAiCodexOAuthAuthTest {
             mapOf(
                 "grant_type" to "refresh_token",
                 "refresh_token" to "old-refresh",
-                "client_id" to "app_EMoamEEZ73f0CkXaXp7hrann",
+                "client_id" to "app_EMoamEEZ73f0CkXaXp7hrann"
             ),
-            formFields(http.requests.single()),
+            formFields(http.requests.single())
         )
     }
 
@@ -957,7 +1076,7 @@ class OpenAiCodexOAuthAuthTest {
         }
         val error = assertFailsWith<IllegalStateException> {
             OpenAiCodexOAuthAuth(http).refresh(
-                OAuthCredential(access = "a", refresh = "r", expires = 0),
+                OAuthCredential(access = "a", refresh = "r", expires = 0)
             )
         }
         assertEquals("OpenAI Codex token refresh error: connection reset", error.message)
@@ -980,7 +1099,10 @@ class OpenAiCodexOAuthAuthTest {
         http.enqueue(
             json(200, """{"device_auth_id":"d","user_code":"ABCD","interval":5}"""),
             json(200, """{"authorization_code":"c","code_verifier":"v"}"""),
-            json(200, """{"access_token":"opaque-not-a-jwt","refresh_token":"r","expires_in":60}"""),
+            json(
+                200,
+                """{"access_token":"opaque-not-a-jwt","refresh_token":"r","expires_in":60}"""
+            )
         )
         val error = assertFailsWith<IllegalStateException> {
             auth(http).login(RecordingInteraction(mapOf("Select" to { "device_code" })))
@@ -994,13 +1116,16 @@ class OpenAiCodexOAuthAuthTest {
             fixedVerifier,
             "device-code-verifier",
             "pasted-code",
-            "secret-access",
+            "secret-access"
         )
         val http = FakeHttpClient()
         http.enqueue(
             json(200, """{"device_auth_id":"d","user_code":"ABCD","interval":5}"""),
-            json(200, """{"authorization_code":"pasted-code","code_verifier":"device-code-verifier"}"""),
-            json(400, """{"error":"invalid_grant"}"""),
+            json(
+                200,
+                """{"authorization_code":"pasted-code","code_verifier":"device-code-verifier"}"""
+            ),
+            json(400, """{"error":"invalid_grant"}""")
         )
         val error = assertFailsWith<IllegalStateException> {
             auth(http).login(RecordingInteraction(mapOf("Select" to { "device_code" })))
@@ -1016,7 +1141,7 @@ class OpenAiCodexOAuthAuthTest {
             method = "POST",
             url = "https://auth.openai.com/oauth/token?code=secret",
             body = "code=secret&code_verifier=secret".toByteArray(),
-            timeoutMs = 1000,
+            timeoutMs = 1000
         )
         assertTrue("secret" !in request.toString())
     }

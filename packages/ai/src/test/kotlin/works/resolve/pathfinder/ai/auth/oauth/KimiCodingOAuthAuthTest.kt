@@ -4,10 +4,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-import kotlinx.coroutines.async
-import kotlinx.coroutines.test.runTest
 import kotlin.time.Clock
 import kotlin.time.Instant
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runTest
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.OAuthCredential
@@ -26,7 +26,7 @@ class KimiCodingOAuthAuthTest {
 
     private class FakeHttpClient(
         private val scheduler: kotlinx.coroutines.test.TestCoroutineScheduler,
-        private val respond: suspend (request: OAuthHttpRequest) -> OAuthHttpResponse,
+        private val respond: suspend (request: OAuthHttpRequest) -> OAuthHttpResponse
     ) : OAuthHttpClient {
         val requests = mutableListOf<Pair<Long, OAuthHttpRequest>>()
         override suspend fun execute(request: OAuthHttpRequest): OAuthHttpResponse {
@@ -35,29 +35,33 @@ class KimiCodingOAuthAuthTest {
         }
     }
 
-    private fun json(status: Int, body: String): OAuthHttpResponse =
-        OAuthHttpResponse(status, mapOf("content-type" to listOf("application/json")), body.toByteArray())
+    private fun json(status: Int, body: String): OAuthHttpResponse = OAuthHttpResponse(
+        status,
+        mapOf("content-type" to listOf("application/json")),
+        body.toByteArray()
+    )
 
     private fun deviceAuthorizationBody(
         interval: String? = "\"interval\":2",
-        expires: String? = "\"expires_in\":600",
-    ): String =
-        "{" +
-            "\"device_code\":\"dev-1\"," +
-            "\"user_code\":\"ABCD-EFGH\"," +
-            "\"verification_uri\":\"https://auth.kimi.com/device\"," +
-            "\"verification_uri_complete\":\"https://auth.kimi.com/device?code=ABCD-EFGH\"" +
-            (interval?.let { ",$it" } ?: "") +
-            (expires?.let { ",$it" } ?: "") +
-            "}"
+        expires: String? = "\"expires_in\":600"
+    ): String = "{" +
+        "\"device_code\":\"dev-1\"," +
+        "\"user_code\":\"ABCD-EFGH\"," +
+        "\"verification_uri\":\"https://auth.kimi.com/device\"," +
+        "\"verification_uri_complete\":\"https://auth.kimi.com/device?code=ABCD-EFGH\"" +
+        (interval?.let { ",$it" } ?: "") +
+        (expires?.let { ",$it" } ?: "") +
+        "}"
 
     private suspend fun kotlinx.coroutines.test.TestScope.newFlow(
-        respond: suspend (OAuthHttpRequest) -> OAuthHttpResponse,
+        respond: suspend (OAuthHttpRequest) -> OAuthHttpResponse
     ): Pair<KimiCodingOAuthAuth, FakeHttpClient> {
         val http = FakeHttpClient(testScheduler, respond)
         val flow = KimiCodingOAuthAuth(
             http,
-            clock = object : Clock { override fun now() = Instant.fromEpochMilliseconds(testScheduler.currentTime) },
+            clock = object : Clock {
+                override fun now() = Instant.fromEpochMilliseconds(testScheduler.currentTime)
+            }
         )
         return flow to http
     }
@@ -70,7 +74,7 @@ class KimiCodingOAuthAuthTest {
             } else {
                 json(
                     200,
-                    "{\"access_token\":\"acc-1\",\"refresh_token\":\"ref-1\",\"expires_in\":3600}",
+                    "{\"access_token\":\"acc-1\",\"refresh_token\":\"ref-1\",\"expires_in\":3600}"
                 )
             }
         }
@@ -79,16 +83,25 @@ class KimiCodingOAuthAuthTest {
         val credential = flow.login(interaction)
 
         // expires_in=3600 measured at poll time, which is t=2s (after wait-before-first-poll)
-        assertEquals(OAuthCredential(access = "acc-1", refresh = "ref-1", expires = 3_602_000), credential)
+        assertEquals(
+            OAuthCredential(access = "acc-1", refresh = "ref-1", expires = 3_602_000),
+            credential
+        )
 
         val auth = http.requests.first().second
         assertEquals("POST", auth.method)
         assertEquals("https://auth.kimi.com/api/oauth/device_authorization", auth.url)
         assertEquals(
-            mapOf("Content-Type" to "application/x-www-form-urlencoded", "Accept" to "application/json"),
-            auth.headers,
+            mapOf(
+                "Content-Type" to "application/x-www-form-urlencoded",
+                "Accept" to "application/json"
+            ),
+            auth.headers
         )
-        assertEquals("client_id=17e5f671-d194-4dfb-9706-5516cb48c098", auth.body.toString(Charsets.UTF_8))
+        assertEquals(
+            "client_id=17e5f671-d194-4dfb-9706-5516cb48c098",
+            auth.body.toString(Charsets.UTF_8)
+        )
         assertEquals(KimiCodingOAuthAuth.REQUEST_TIMEOUT_MS, auth.timeoutMs)
 
         assertEquals(
@@ -96,9 +109,9 @@ class KimiCodingOAuthAuthTest {
                 userCode = "ABCD-EFGH",
                 verificationUri = "https://auth.kimi.com/device?code=ABCD-EFGH",
                 intervalSeconds = 2,
-                expiresInSeconds = 600,
+                expiresInSeconds = 600
             ),
-            interaction.events.single(),
+            interaction.events.single()
         )
 
         // waitBeforeFirstPoll: the first token poll happens after one 2s interval
@@ -106,7 +119,7 @@ class KimiCodingOAuthAuthTest {
         assertEquals(
             "client_id=17e5f671-d194-4dfb-9706-5516cb48c098&device_code=dev-1&" +
                 "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code",
-            http.requests[1].second.body.toString(Charsets.UTF_8),
+            http.requests[1].second.body.toString(Charsets.UTF_8)
         )
     }
 
@@ -114,7 +127,13 @@ class KimiCodingOAuthAuthTest {
     fun `fallback interval and expiry when fields are missing or invalid`() = runTest {
         val (flow, http) = newFlow { request ->
             if (request.url.endsWith("device_authorization")) {
-                json(200, deviceAuthorizationBody(interval = "\"interval\":\"nope\"", expires = "\"expires_in\":0"))
+                json(
+                    200,
+                    deviceAuthorizationBody(
+                        interval = "\"interval\":\"nope\"",
+                        expires = "\"expires_in\":0"
+                    )
+                )
             } else {
                 json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}")
             }
@@ -123,8 +142,16 @@ class KimiCodingOAuthAuthTest {
 
         flow.login(interaction)
 
-        assertEquals(5, interaction.events.single().let { (it as AuthEvent.DeviceCode).intervalSeconds })
-        assertEquals(15 * 60, (interaction.events.single() as AuthEvent.DeviceCode).expiresInSeconds)
+        assertEquals(
+            5,
+            interaction.events.single().let {
+                (it as AuthEvent.DeviceCode).intervalSeconds
+            }
+        )
+        assertEquals(
+            15 * 60,
+            (interaction.events.single() as AuthEvent.DeviceCode).expiresInSeconds
+        )
         assertEquals(5_000, http.requests[1].first)
     }
 
@@ -140,7 +167,10 @@ class KimiCodingOAuthAuthTest {
         val (flow, _) = newFlow {
             json(
                 200,
-                deviceAuthorizationBody().replace("https://auth.kimi.com/device?code=ABCD-EFGH", "ftp://auth.kimi.com/device"),
+                deviceAuthorizationBody().replace(
+                    "https://auth.kimi.com/device?code=ABCD-EFGH",
+                    "ftp://auth.kimi.com/device"
+                )
             )
         }
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
@@ -162,8 +192,11 @@ class KimiCodingOAuthAuthTest {
                 json(200, deviceAuthorizationBody(interval = "\"interval\":1"))
             } else {
                 polls++
-                if (polls < 3) json(400, "{\"error\":\"authorization_pending\"}")
-                else json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}")
+                if (polls < 3) {
+                    json(400, "{\"error\":\"authorization_pending\"}")
+                } else {
+                    json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}")
+                }
             }
         }
 
@@ -181,8 +214,11 @@ class KimiCodingOAuthAuthTest {
                 json(200, deviceAuthorizationBody(interval = "\"interval\":1"))
             } else {
                 polls++
-                if (polls == 1) json(400, "{\"error\":\"slow_down\",\"interval\":4}")
-                else json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}")
+                if (polls == 1) {
+                    json(400, "{\"error\":\"slow_down\",\"interval\":4}")
+                } else {
+                    json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}")
+                }
             }
         }
 
@@ -199,8 +235,11 @@ class KimiCodingOAuthAuthTest {
                 json(200, deviceAuthorizationBody(interval = "\"interval\":1"))
             } else {
                 polls++
-                if (polls == 1) json(400, "{\"error\":\"slow_down\"}")
-                else json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}")
+                if (polls == 1) {
+                    json(400, "{\"error\":\"slow_down\"}")
+                } else {
+                    json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}")
+                }
             }
         }
 
@@ -213,8 +252,11 @@ class KimiCodingOAuthAuthTest {
     @Test
     fun `expired_token fails with pi's message`() = runTest {
         val (flow, _) = newFlow { request ->
-            if (request.url.endsWith("device_authorization")) json(200, deviceAuthorizationBody())
-            else json(400, "{\"error\":\"expired_token\"}")
+            if (request.url.endsWith("device_authorization")) {
+                json(200, deviceAuthorizationBody())
+            } else {
+                json(400, "{\"error\":\"expired_token\"}")
+            }
         }
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
         assertEquals("Kimi Code device authorization expired. Please restart login.", error.message)
@@ -223,8 +265,11 @@ class KimiCodingOAuthAuthTest {
     @Test
     fun `access_denied fails with pi's message`() = runTest {
         val (flow, _) = newFlow { request ->
-            if (request.url.endsWith("device_authorization")) json(200, deviceAuthorizationBody())
-            else json(400, "{\"error\":\"access_denied\"}")
+            if (request.url.endsWith("device_authorization")) {
+                json(200, deviceAuthorizationBody())
+            } else {
+                json(400, "{\"error\":\"access_denied\"}")
+            }
         }
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
         assertEquals("Kimi Code login was denied.", error.message)
@@ -233,39 +278,48 @@ class KimiCodingOAuthAuthTest {
     @Test
     fun `unknown poll error fails with status and error`() = runTest {
         val (flow, _) = newFlow { request ->
-            if (request.url.endsWith("device_authorization")) json(200, deviceAuthorizationBody())
-            else json(400, "{\"error\":\"server_error\",\"error_description\":\"nope\"}")
+            if (request.url.endsWith("device_authorization")) {
+                json(200, deviceAuthorizationBody())
+            } else {
+                json(400, "{\"error\":\"server_error\",\"error_description\":\"nope\"}")
+            }
         }
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
         assertEquals(
             "Kimi Code device token request failed (status 400): server_error: nope",
-            error.message,
+            error.message
         )
     }
 
     @Test
     fun `poll response with status 500 fails immediately`() = runTest {
         val (flow, _) = newFlow { request ->
-            if (request.url.endsWith("device_authorization")) json(200, deviceAuthorizationBody())
-            else json(503, "overloaded")
+            if (request.url.endsWith("device_authorization")) {
+                json(200, deviceAuthorizationBody())
+            } else {
+                json(503, "overloaded")
+            }
         }
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
         assertEquals(
             "Kimi Code device token request failed with status 503: overloaded",
-            error.message,
+            error.message
         )
     }
 
     @Test
     fun `token parse failure on ok poll response becomes a failed poll`() = runTest {
         val (flow, _) = newFlow { request ->
-            if (request.url.endsWith("device_authorization")) json(200, deviceAuthorizationBody())
-            else json(200, "{\"access_token\":\"a\"}")
+            if (request.url.endsWith("device_authorization")) {
+                json(200, deviceAuthorizationBody())
+            } else {
+                json(200, "{\"access_token\":\"a\"}")
+            }
         }
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
         assertEquals(
             "Kimi Code token poll response missing fields: {\"access_token\":\"a\"}",
-            error.message,
+            error.message
         )
     }
 
@@ -273,7 +327,13 @@ class KimiCodingOAuthAuthTest {
     fun `device flow timeout surfaces pi's message`() = runTest {
         val (flow, _) = newFlow { request ->
             if (request.url.endsWith("device_authorization")) {
-                json(200, deviceAuthorizationBody(interval = "\"interval\":1", expires = "\"expires_in\":1"))
+                json(
+                    200,
+                    deviceAuthorizationBody(
+                        interval = "\"interval\":1",
+                        expires = "\"expires_in\":1"
+                    )
+                )
             } else {
                 json(400, "{\"error\":\"authorization_pending\"}")
             }
@@ -288,14 +348,19 @@ class KimiCodingOAuthAuthTest {
             json(200, "{\"access_token\":\"acc-2\",\"refresh_token\":\"ref-2\",\"expires_in\":120}")
         }
 
-        val credential = flow.refresh(OAuthCredential(access = "old", refresh = "ref-1", expires = 0))
+        val credential = flow.refresh(
+            OAuthCredential(access = "old", refresh = "ref-1", expires = 0)
+        )
 
-        assertEquals(OAuthCredential(access = "acc-2", refresh = "ref-2", expires = 120_000), credential)
+        assertEquals(
+            OAuthCredential(access = "acc-2", refresh = "ref-2", expires = 120_000),
+            credential
+        )
         val request = http.requests.single().second
         assertEquals("https://auth.kimi.com/api/oauth/token", request.url)
         assertEquals(
             "client_id=17e5f671-d194-4dfb-9706-5516cb48c098&grant_type=refresh_token&refresh_token=ref-1",
-            request.body.toString(Charsets.UTF_8),
+            request.body.toString(Charsets.UTF_8)
         )
     }
 
@@ -304,7 +369,13 @@ class KimiCodingOAuthAuthTest {
         var attempts = 0
         val (flow, http) = newFlow {
             attempts++
-            if (attempts <= 3) json(500, "{}") else json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}")
+            if (attempts <=
+                3
+            ) {
+                json(500, "{}")
+            } else {
+                json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}")
+            }
         }
 
         val credential = flow.refresh(OAuthCredential(access = "", refresh = "ref", expires = 0))
@@ -320,12 +391,20 @@ class KimiCodingOAuthAuthTest {
             attempts++
             when (attempts) {
                 1 -> throw java.io.IOException("connection reset")
+
                 2 -> json(429, "{}")
-                else -> json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}")
+
+                else -> json(
+                    200,
+                    "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}"
+                )
             }
         }
 
-        assertEquals("a", flow.refresh(OAuthCredential(access = "", refresh = "ref", expires = 0)).access)
+        assertEquals(
+            "a",
+            flow.refresh(OAuthCredential(access = "", refresh = "ref", expires = 0)).access
+        )
         assertEquals(3, http.requests.size)
     }
 
@@ -382,7 +461,10 @@ class KimiCodingOAuthAuthTest {
         val error = assertFailsWith<IllegalStateException> {
             flow.refresh(OAuthCredential(access = "", refresh = "ref", expires = 0))
         }
-        assertEquals("Kimi Code token refresh failed with status 404: {\"error\":\"not_found\"}", error.message)
+        assertEquals(
+            "Kimi Code token refresh failed with status 404: {\"error\":\"not_found\"}",
+            error.message
+        )
         assertEquals(1, http.requests.size)
     }
 
@@ -395,7 +477,7 @@ class KimiCodingOAuthAuthTest {
         }
         assertEquals(
             "Kimi Code token refresh response missing fields: {\"access_token\":\"a\",\"expires_in\":60}",
-            error.message,
+            error.message
         )
     }
 
@@ -434,14 +516,17 @@ class KimiCodingOAuthAuthTest {
         assertEquals(
             "a=1&b=hello+world&c=x%2By",
             KimiCodingOAuthAuth.formUrlEncode(
-                linkedMapOf("a" to "1", "b" to "hello world", "c" to "x+y"),
-            ).toString(Charsets.UTF_8),
+                linkedMapOf("a" to "1", "b" to "hello world", "c" to "x+y")
+            ).toString(Charsets.UTF_8)
         )
     }
 
     @Test
     fun `trustedHttpUrl accepts only http and https and normalizes like URL href`() {
-        assertEquals("https://a.example/x", KimiCodingOAuthAuth.trustedHttpUrl("https://a.example/x"))
+        assertEquals(
+            "https://a.example/x",
+            KimiCodingOAuthAuth.trustedHttpUrl("https://a.example/x")
+        )
         assertEquals("http://a.example/x", KimiCodingOAuthAuth.trustedHttpUrl("http://a.example/x"))
         // URL.href adds the root path for authority-only URLs
         assertEquals("https://a.example/", KimiCodingOAuthAuth.trustedHttpUrl("https://a.example"))
@@ -461,15 +546,30 @@ class KimiCodingOAuthAuthTest {
 
     @Test
     fun `trustedHttpUrl normalizes scheme and host case like URL href`() {
-        assertEquals("https://auth.example/Device", KimiCodingOAuthAuth.trustedHttpUrl("HTTPS://AUTH.EXAMPLE/Device"))
-        assertEquals("https://a.example/?q=1#f", KimiCodingOAuthAuth.trustedHttpUrl("https://A.EXAMPLE/?q=1#f"))
+        assertEquals(
+            "https://auth.example/Device",
+            KimiCodingOAuthAuth.trustedHttpUrl("HTTPS://AUTH.EXAMPLE/Device")
+        )
+        assertEquals(
+            "https://a.example/?q=1#f",
+            KimiCodingOAuthAuth.trustedHttpUrl("https://A.EXAMPLE/?q=1#f")
+        )
     }
 
     @Test
     fun `trustedHttpUrl omits default ports but keeps explicit others`() {
-        assertEquals("http://a.example/", KimiCodingOAuthAuth.trustedHttpUrl("http://a.example:80/"))
-        assertEquals("https://a.example/", KimiCodingOAuthAuth.trustedHttpUrl("https://a.example:443/"))
-        assertEquals("https://a.example:8443/", KimiCodingOAuthAuth.trustedHttpUrl("https://a.example:8443/"))
+        assertEquals(
+            "http://a.example/",
+            KimiCodingOAuthAuth.trustedHttpUrl("http://a.example:80/")
+        )
+        assertEquals(
+            "https://a.example/",
+            KimiCodingOAuthAuth.trustedHttpUrl("https://a.example:443/")
+        )
+        assertEquals(
+            "https://a.example:8443/",
+            KimiCodingOAuthAuth.trustedHttpUrl("https://a.example:8443/")
+        )
     }
 
     @Test
@@ -477,7 +577,13 @@ class KimiCodingOAuthAuthTest {
         // typeof number is required: '"interval":"2"' is a string, so the fallback applies
         val (flow, http) = newFlow { request ->
             if (request.url.endsWith("device_authorization")) {
-                json(200, deviceAuthorizationBody(interval = "\"interval\":\"2\"", expires = "\"expires_in\":\"600\""))
+                json(
+                    200,
+                    deviceAuthorizationBody(
+                        interval = "\"interval\":\"2\"",
+                        expires = "\"expires_in\":\"600\""
+                    )
+                )
             } else {
                 json(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":60}")
             }
@@ -487,7 +593,10 @@ class KimiCodingOAuthAuthTest {
         flow.login(interaction)
 
         assertEquals(5, (interaction.events.single() as AuthEvent.DeviceCode).intervalSeconds)
-        assertEquals(15 * 60, (interaction.events.single() as AuthEvent.DeviceCode).expiresInSeconds)
+        assertEquals(
+            15 * 60,
+            (interaction.events.single() as AuthEvent.DeviceCode).expiresInSeconds
+        )
         assertEquals(5_000, http.requests[1].first)
     }
 
@@ -505,7 +614,7 @@ class KimiCodingOAuthAuthTest {
         assertEquals(
             "Kimi Code token poll response missing fields: " +
                 "{\"access_token\":\"a\",\"refresh_token\":\"r\",\"expires_in\":\"60\"}",
-            error.message,
+            error.message
         )
     }
 
@@ -518,7 +627,7 @@ class KimiCodingOAuthAuthTest {
         val error = assertFailsWith<IllegalStateException> { flow.login(RecordingInteraction()) }
         assertEquals(
             "Invalid Kimi Code device authorization response: [\"device_code\"]",
-            error.message,
+            error.message
         )
     }
 }

@@ -1,11 +1,5 @@
 package works.resolve.pathfinder.ai.auth
 
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.providers.CatalogProvider
-import works.resolve.pathfinder.ai.providers.ProviderAuth as CatalogProviderAuthMetadata
-import works.resolve.pathfinder.ai.providers.ProviderCatalog
-import works.resolve.pathfinder.ai.providers.ProviderOAuth
-import works.resolve.pathfinder.ai.providers.AuthPrompt as CatalogPrompt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonArray
@@ -15,12 +9,18 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.providers.AuthPrompt as CatalogPrompt
+import works.resolve.pathfinder.ai.providers.CatalogProvider
+import works.resolve.pathfinder.ai.providers.ProviderAuth as CatalogProviderAuthMetadata
+import works.resolve.pathfinder.ai.providers.ProviderCatalog
+import works.resolve.pathfinder.ai.providers.ProviderOAuth
 
 class ProviderAuthServiceTest {
 
     private class FakeInteraction(
         val answers: MutableList<String>,
-        val events: MutableList<AuthEvent> = mutableListOf(),
+        val events: MutableList<AuthEvent> = mutableListOf()
     ) : AuthInteraction {
         override suspend fun prompt(prompt: AuthPrompt): String {
             prompts += prompt
@@ -39,7 +39,7 @@ class ProviderAuthServiceTest {
         override val name: String = "Acme (subscription)",
         override val loginLabel: String? = null,
         override val isSubscription: Boolean = false,
-        private val onLogin: suspend () -> OAuthCredential = { oauthCredential() },
+        private val onLogin: suspend () -> OAuthCredential = { oauthCredential() }
     ) : OAuthAuth {
         var refreshCalls = 0
 
@@ -53,14 +53,15 @@ class ProviderAuthServiceTest {
             return credential
         }
 
-        override suspend fun toAuth(credential: OAuthCredential) = ModelAuth(apiKey = credential.access)
+        override suspend fun toAuth(credential: OAuthCredential) =
+            ModelAuth(apiKey = credential.access)
     }
 
     private class FailingStore(
         private val delegate: CredentialStore = InMemoryCredentialStore(),
         var failModify: Boolean = false,
         var failDelete: Boolean = false,
-        var failRead: Boolean = false,
+        var failRead: Boolean = false
     ) : CredentialStore {
         override suspend fun read(providerId: String): Credential? {
             if (failRead) throw IllegalStateException("disk error")
@@ -71,7 +72,7 @@ class ProviderAuthServiceTest {
 
         override suspend fun modify(
             providerId: String,
-            update: suspend (Credential?) -> Credential?,
+            update: suspend (Credential?) -> Credential?
         ): Credential? {
             if (failModify) throw IllegalStateException("disk error")
             return delegate.modify(providerId, update)
@@ -85,21 +86,18 @@ class ProviderAuthServiceTest {
 
     companion object {
         fun oauthCredential() = OAuthCredential(
-        access = "access-token",
-        refresh = "refresh-token",
-        expires = 1L,
-            extras = mapOf("account" to JsonPrimitive("account-id")),
+            access = "access-token",
+            refresh = "refresh-token",
+            expires = 1L,
+            extras = mapOf("account" to JsonPrimitive("account-id"))
         )
     }
 
-    private fun catalog(
-        apiKey: Boolean = true,
-        oauth: Boolean = false,
-    ): ProviderCatalog {
+    private fun catalog(apiKey: Boolean = true, oauth: Boolean = false): ProviderCatalog {
         val prompts = if (apiKey) {
             listOf(
                 CatalogPrompt("ACME_API_KEY", "Enter Acme API key", secret = true),
-                CatalogPrompt("ACME_ACCOUNT_ID", "Enter Acme account id", secret = false),
+                CatalogPrompt("ACME_ACCOUNT_ID", "Enter Acme account id", secret = false)
             )
         } else {
             emptyList()
@@ -110,8 +108,15 @@ class ProviderAuthServiceTest {
             baseUrl = "https://api.acme.test",
             auth = CatalogProviderAuthMetadata(
                 label = "Acme API key",
-                oauth = if (oauth) ProviderOAuth("Acme (subscription)", loginLabel = "Sign in with Acme") else null,
-                prompts = prompts,
+                oauth = if (oauth) {
+                    ProviderOAuth(
+                        "Acme (subscription)",
+                        loginLabel = "Sign in with Acme"
+                    )
+                } else {
+                    null
+                },
+                prompts = prompts
             ),
             models = listOf(
                 Model(
@@ -119,9 +124,9 @@ class ProviderAuthServiceTest {
                     name = "Acme One",
                     api = "openai-completions",
                     provider = "acme",
-                    baseUrl = "https://api.acme.test",
-                ),
-            ),
+                    baseUrl = "https://api.acme.test"
+                )
+            )
         )
         return ProviderCatalog(listOf(provider))
     }
@@ -129,11 +134,11 @@ class ProviderAuthServiceTest {
     private fun service(
         catalog: ProviderCatalog,
         store: CredentialStore = InMemoryCredentialStore(),
-        oauth: OAuthAuth? = null,
+        oauth: OAuthAuth? = null
     ) = ProviderAuthService(
         catalog,
         MapCatalogAuthRegistry(if (oauth != null) mapOf("acme" to oauth) else emptyMap()),
-        store,
+        store
     )
 
     @Test
@@ -151,7 +156,7 @@ class ProviderAuthServiceTest {
             auth = CatalogProviderAuthMetadata(
                 label = "OpenRouter API key",
                 oauth = ProviderOAuth("OpenRouter OAuth", loginLabel = "Sign in with OpenRouter"),
-                prompts = listOf(CatalogPrompt("OPENROUTER_API_KEY", "Enter OpenRouter API key")),
+                prompts = listOf(CatalogPrompt("OPENROUTER_API_KEY", "Enter OpenRouter API key"))
             ),
             models = listOf(
                 Model(
@@ -159,22 +164,22 @@ class ProviderAuthServiceTest {
                     name = "Test Model",
                     api = "openai-completions",
                     provider = "openrouter",
-                    baseUrl = "https://openrouter.ai/api/v1",
-                ),
-            ),
+                    baseUrl = "https://openrouter.ai/api/v1"
+                )
+            )
         )
         val methods = ProviderAuthService(
             ProviderCatalog(listOf(provider)),
             ProductionCatalogAuthRegistry(),
-            InMemoryCredentialStore(),
+            InMemoryCredentialStore()
         ).authMethods("openrouter")
 
         assertEquals(
             listOf(
                 AuthMethodInfo(AuthType.API_KEY, "OpenRouter API key", false),
-                AuthMethodInfo(AuthType.OAUTH, "Sign in with OpenRouter", false),
+                AuthMethodInfo(AuthType.OAUTH, "Sign in with OpenRouter", false)
             ),
-            methods,
+            methods
         )
     }
 
@@ -187,23 +192,23 @@ class ProviderAuthServiceTest {
             auth = CatalogProviderAuthMetadata(
                 label = "Anthropic API key",
                 oauth = ProviderOAuth("Anthropic (Claude Pro/Max)", isSubscription = true),
-                prompts = listOf(CatalogPrompt("ANTHROPIC_API_KEY", "Enter Anthropic API key")),
+                prompts = listOf(CatalogPrompt("ANTHROPIC_API_KEY", "Enter Anthropic API key"))
             ),
-            models = emptyList(),
+            models = emptyList()
         )
         val methods = ProviderAuthService(
             ProviderCatalog(listOf(provider)),
             ProductionCatalogAuthRegistry(),
-            InMemoryCredentialStore(),
+            InMemoryCredentialStore()
         ).authMethods("anthropic")
 
         assertEquals(
             listOf(
                 AuthMethodInfo(AuthType.API_KEY, "Anthropic API key", false),
                 // No loginLabel on the flow: falls back to its name (pi's default).
-                AuthMethodInfo(AuthType.OAUTH, "Anthropic (Claude Pro/Max)", true),
+                AuthMethodInfo(AuthType.OAUTH, "Anthropic (Claude Pro/Max)", true)
             ),
-            methods,
+            methods
         )
     }
 
@@ -211,7 +216,7 @@ class ProviderAuthServiceTest {
     fun `lists oauth method for oauth-only provider`() {
         val methods = service(
             catalog(apiKey = false, oauth = true),
-            oauth = FakeOAuthAuth(isSubscription = true),
+            oauth = FakeOAuthAuth(isSubscription = true)
         ).authMethods("acme")
         assertEquals(listOf(AuthMethodInfo(AuthType.OAUTH, "Acme (subscription)", true)), methods)
     }
@@ -223,15 +228,15 @@ class ProviderAuthServiceTest {
             oauth = FakeOAuthAuth(
                 name = "Acme (subscription)",
                 loginLabel = "Sign in with Acme",
-                isSubscription = true,
-            ),
+                isSubscription = true
+            )
         ).authMethods("acme")
         assertEquals(
             listOf(
                 AuthMethodInfo(AuthType.API_KEY, "Acme API key", false),
-                AuthMethodInfo(AuthType.OAUTH, "Sign in with Acme", true),
+                AuthMethodInfo(AuthType.OAUTH, "Sign in with Acme", true)
             ),
-            methods,
+            methods
         )
     }
 
@@ -242,7 +247,7 @@ class ProviderAuthServiceTest {
             { service.authMethods("nope") },
             { service.authStatus("nope") },
             { service.login("nope", AuthType.API_KEY, FakeInteraction(mutableListOf())) },
-            { service.logout("nope") },
+            { service.logout("nope") }
         )
         operations.forEach { operation ->
             try {
@@ -263,9 +268,9 @@ class ProviderAuthServiceTest {
         assertEquals(
             listOf(
                 AuthPrompt.Secret("Enter Acme API key"),
-                AuthPrompt.Text("Enter Acme account id"),
+                AuthPrompt.Text("Enter Acme account id")
             ),
-            interaction.prompts,
+            interaction.prompts
         )
     }
 
@@ -275,7 +280,7 @@ class ProviderAuthServiceTest {
         service(catalog(), store).login(
             "acme",
             AuthType.API_KEY,
-            FakeInteraction(mutableListOf("sk-test", "account-42")),
+            FakeInteraction(mutableListOf("sk-test", "account-42"))
         )
         val credential = store.read("acme")
         assertTrue(credential is ApiKeyCredential)
@@ -306,7 +311,7 @@ class ProviderAuthServiceTest {
             service(catalog(), store).login(
                 "acme",
                 AuthType.API_KEY,
-                FakeInteraction(mutableListOf("sk-test", "")),
+                FakeInteraction(mutableListOf("sk-test", ""))
             )
             fail("expected ModelsError")
         } catch (error: ModelsError) {
@@ -364,7 +369,7 @@ class ProviderAuthServiceTest {
         val store = InMemoryCredentialStore()
         store.modify("acme") { ApiKeyCredential(key = "old") }
         val cancellingOAuth = FakeOAuthAuth(
-            onLogin = { throw CancellationException("user cancelled") },
+            onLogin = { throw CancellationException("user cancelled") }
         )
         try {
             service(catalog(apiKey = false, oauth = true), store, cancellingOAuth)
@@ -382,7 +387,8 @@ class ProviderAuthServiceTest {
     fun `cancelled prompt propagates cancellation and does not mutate`() = runTest {
         val store = InMemoryCredentialStore()
         val cancellingInteraction = object : AuthInteraction {
-            override suspend fun prompt(prompt: AuthPrompt): String = throw CancellationException("cancelled")
+            override suspend fun prompt(prompt: AuthPrompt): String =
+                throw CancellationException("cancelled")
 
             override suspend fun notify(event: AuthEvent) {}
         }
@@ -417,7 +423,7 @@ class ProviderAuthServiceTest {
             service(catalog(), store).login(
                 "acme",
                 AuthType.API_KEY,
-                FakeInteraction(mutableListOf("sk", "acct")),
+                FakeInteraction(mutableListOf("sk", "acct"))
             )
             fail("expected ModelsError")
         } catch (error: ModelsError) {
@@ -477,7 +483,9 @@ class ProviderAuthServiceTest {
 
         assertTrue(!service.isConfigured("acme"))
 
-        store.modify("acme") { ApiKeyCredential(key = "sk", env = mapOf("ACME_ACCOUNT_ID" to "acct")) }
+        store.modify("acme") {
+            ApiKeyCredential(key = "sk", env = mapOf("ACME_ACCOUNT_ID" to "acct"))
+        }
         assertTrue(service.isConfigured("acme"))
 
         // Incomplete prompt values (missing env slot) leave it unconfigured.
@@ -485,9 +493,17 @@ class ProviderAuthServiceTest {
         assertTrue(!service.isConfigured("acme"))
 
         // A stored OAuth credential is configured only with a registered flow.
-        store.modify("acme") { OAuthCredential(access = "a", refresh = "r", expires = Long.MAX_VALUE) }
+        store.modify("acme") {
+            OAuthCredential(access = "a", refresh = "r", expires = Long.MAX_VALUE)
+        }
         assertTrue(!service(catalog(apiKey = false, oauth = true), store).isConfigured("acme"))
-        assertTrue(service(catalog(apiKey = false, oauth = true), store, FakeOAuthAuth()).isConfigured("acme"))
+        assertTrue(
+            service(
+                catalog(apiKey = false, oauth = true),
+                store,
+                FakeOAuthAuth()
+            ).isConfigured("acme")
+        )
     }
 
     /**
@@ -505,11 +521,12 @@ class ProviderAuthServiceTest {
                 refresh = "r",
                 expires = Long.MAX_VALUE,
                 extras = mapOf(
-                    "availableModelIds" to JsonArray(listOf(JsonPrimitive("gpt-4.1"))),
-                ),
+                    "availableModelIds" to JsonArray(listOf(JsonPrimitive("gpt-4.1")))
+                )
             )
         }
-        val service = ProviderAuthService(copilotCatalog(), MapCatalogAuthRegistry(emptyMap()), store)
+        val service =
+            ProviderAuthService(copilotCatalog(), MapCatalogAuthRegistry(emptyMap()), store)
 
         assertEquals(listOf("gpt-4.1"), service.availableModels("github-copilot").map { it.id })
     }
@@ -522,11 +539,16 @@ class ProviderAuthServiceTest {
      */
     @Test
     fun `availableModels lists the full static catalog without a credential`() = runTest {
-        val service = ProviderAuthService(copilotCatalog(), MapCatalogAuthRegistry(emptyMap()), InMemoryCredentialStore())
+        val service =
+            ProviderAuthService(
+                copilotCatalog(),
+                MapCatalogAuthRegistry(emptyMap()),
+                InMemoryCredentialStore()
+            )
 
         assertEquals(
             listOf("gpt-4.5", "gpt-4.1", "claude-haiku-4.5"),
-            service.availableModels("github-copilot").map { it.id },
+            service.availableModels("github-copilot").map { it.id }
         )
     }
 
@@ -536,13 +558,31 @@ class ProviderAuthServiceTest {
             name = "GitHub Copilot",
             baseUrl = "https://api.individual.githubcopilot.com",
             auth = CatalogProviderAuthMetadata(
-                oauth = ProviderOAuth("GitHub Copilot", isSubscription = true),
+                oauth = ProviderOAuth("GitHub Copilot", isSubscription = true)
             ),
             models = listOf(
-                Model("gpt-4.5", "GPT 4.5", "openai-completions", "github-copilot", "https://api.individual.githubcopilot.com"),
-                Model("gpt-4.1", "GPT 4.1", "openai-completions", "github-copilot", "https://api.individual.githubcopilot.com"),
-                Model("claude-haiku-4.5", "Claude Haiku 4.5", "anthropic-messages", "github-copilot", "https://api.individual.githubcopilot.com"),
-            ),
+                Model(
+                    "gpt-4.5",
+                    "GPT 4.5",
+                    "openai-completions",
+                    "github-copilot",
+                    "https://api.individual.githubcopilot.com"
+                ),
+                Model(
+                    "gpt-4.1",
+                    "GPT 4.1",
+                    "openai-completions",
+                    "github-copilot",
+                    "https://api.individual.githubcopilot.com"
+                ),
+                Model(
+                    "claude-haiku-4.5",
+                    "Claude Haiku 4.5",
+                    "anthropic-messages",
+                    "github-copilot",
+                    "https://api.individual.githubcopilot.com"
+                )
+            )
         )
         return ProviderCatalog(listOf(provider))
     }
@@ -574,17 +614,26 @@ class ProviderAuthServiceTest {
                     baseUrl = "https://api.acme.test",
                     auth = CatalogProviderAuthMetadata(
                         label = "Acme API key",
-                        prompts = listOf(CatalogPrompt("ACME_API_KEY", "Enter Acme API key")),
+                        prompts = listOf(CatalogPrompt("ACME_API_KEY", "Enter Acme API key"))
                     ),
                     models = listOf(
-                        Model("acme-1", "Acme One", "openai-completions", "acme", "https://api.acme.test"),
-                    ),
-                ),
-            ),
+                        Model(
+                            "acme-1",
+                            "Acme One",
+                            "openai-completions",
+                            "acme",
+                            "https://api.acme.test"
+                        )
+                    )
+                )
+            )
         )
         val store = InMemoryCredentialStore()
         try {
-            service(singlePrompt, store).login("acme", AuthType.API_KEY, FakeInteraction(mutableListOf("")))
+            service(
+                singlePrompt,
+                store
+            ).login("acme", AuthType.API_KEY, FakeInteraction(mutableListOf("")))
             fail("expected ModelsError")
         } catch (error: ModelsError) {
             assertEquals(ModelsErrorCode.AUTH, error.code)

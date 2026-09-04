@@ -1,6 +1,25 @@
 package works.resolve.pathfinder.ai.api
 
-import works.resolve.pathfinder.ai.testing.FakeClock
+import java.io.File
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
+import org.junit.Assume.assumeTrue
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
@@ -14,34 +33,15 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
+import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.TestCatalogs
+import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
-import works.resolve.pathfinder.ai.testing.FakeTransport
-import works.resolve.pathfinder.ai.testing.sse
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertIs
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
-import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.flow.take
-import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
-import org.junit.Assume.assumeTrue
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
-import java.io.File
 
 class OpenAiCompletionsStreamTest {
 
@@ -50,8 +50,9 @@ class OpenAiCompletionsStreamTest {
 
     private fun api(transport: FakeTransport) = OpenAiCompletionsApi(
         transport,
-        works.resolve.pathfinder.ai.utils.ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
-        clock = FakeClock(1_770_000_000_000L),
+        works.resolve.pathfinder.ai.utils.ProviderRetry(sleep = {
+        }, clock = FakeClock(0L), random = { 0.0 }),
+        clock = FakeClock(1_770_000_000_000L)
     )
 
     @Test
@@ -61,8 +62,8 @@ class OpenAiCompletionsStreamTest {
         transport.enqueueResponse(
             sse(
                 """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
         val done = api(transport)
             .stream(
@@ -70,15 +71,15 @@ class OpenAiCompletionsStreamTest {
                 context,
                 OpenAiCompletionsOptions(
                     apiKey = "cf-key",
-                    env = mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw"),
-                ),
+                    env = mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc", "CLOUDFLARE_GATEWAY_ID" to "gw")
+                )
             )
             .toList()
             .last()
         assertIs<AssistantMessageEvent.Done>(done)
         assertEquals(
             "https://gateway.test/v1/acc/gw/compat/chat/completions",
-            transport.requests.single().url,
+            transport.requests.single().url
         )
     }
 
@@ -86,13 +87,13 @@ class OpenAiCompletionsStreamTest {
     fun `header auth replaces model headers and needs no api key`() = runTest {
         val transport = FakeTransport()
         val headerModel = model.copy(
-            headers = mapOf("X-Model-Header" to "model-value", "Accept" to "text/plain"),
+            headers = mapOf("X-Model-Header" to "model-value", "Accept" to "text/plain")
         )
         transport.enqueueResponse(
             sse(
                 """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
         val done = api(transport)
             .stream(
@@ -102,9 +103,9 @@ class OpenAiCompletionsStreamTest {
                     headers = mapOf(
                         "cf-aig-authorization" to "Bearer cf-key",
                         "authorization" to null,
-                        "x-model-header" to "request-value",
-                    ),
-                ),
+                        "x-model-header" to "request-value"
+                    )
+                )
             )
             .toList()
             .last()
@@ -127,7 +128,7 @@ class OpenAiCompletionsStreamTest {
             .stream(
                 model,
                 context,
-                OpenAiCompletionsOptions(headers = mapOf("cf-aig-authorization" to " ")),
+                OpenAiCompletionsOptions(headers = mapOf("cf-aig-authorization" to " "))
             )
             .toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.single())
@@ -141,8 +142,8 @@ class OpenAiCompletionsStreamTest {
         transport.enqueueResponse(
             sse(
                 """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
         val done = api(transport)
             .stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key"))
@@ -162,15 +163,21 @@ class OpenAiCompletionsStreamTest {
                 """{"id":"resp-1","choices":[{"delta":{"content":"Hel"}}]}""",
                 """{"choices":[{"delta":{"content":"lo"}}]}""",
                 """{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
 
         assertIs<AssistantMessageEvent.Start>(events.first())
         val deltas = events.filterIsInstance<AssistantMessageEvent.TextDelta>()
         assertEquals(listOf("Hel", "lo"), deltas.map { it.delta })
-        assertIs<AssistantMessageEvent.TextEnd>(events.filter { it is AssistantMessageEvent.TextEnd }.single())
+        assertIs<AssistantMessageEvent.TextEnd>(
+            events.filter {
+                it is AssistantMessageEvent.TextEnd
+            }.single()
+        )
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(StopReason.STOP, done.reason)
         val text = assertIs<TextContent>(done.message.content.single())
@@ -185,10 +192,12 @@ class OpenAiCompletionsStreamTest {
             sse(
                 """{"choices":[{"delta":{"content":"a"}}]}""",
                 """{"choices":[{"delta":{},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         assertEquals(1_770_000_000_000L, events.first().partial.timestamp)
         assertEquals(1_770_000_000_000L, events.last().partial.timestamp)
     }
@@ -201,10 +210,12 @@ class OpenAiCompletionsStreamTest {
                 """{"choices":[{"delta":{"reasoning_content":"think "}}]}""",
                 """{"choices":[{"delta":{"reasoning_content":"hard"}}]}""",
                 """{"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val thinkingDeltas = events.filterIsInstance<AssistantMessageEvent.ThinkingDelta>()
         assertEquals(listOf("think ", "hard"), thinkingDeltas.map { it.delta })
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
@@ -222,57 +233,68 @@ class OpenAiCompletionsStreamTest {
             sse(
                 """{"choices":[{"delta":{"reasoning_content":"a","reasoning":"b"}}]}""",
                 """{"choices":[{"delta":{},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         val thinking = assertIs<ThinkingContent>(done.message.content.single())
         assertEquals("a", thinking.thinking)
     }
 
     @Test
-    fun `reasoning_details accumulate into the thinking signature and replay on the next request`() = runTest {
-        val detail = """{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}"""
-        val transport = FakeTransport()
-        transport.enqueueResponse(
-            sse(
-                """{"choices":[{"delta":{"reasoning_details":[$detail]}}]}""",
-                """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{\"path\":\"README.md\"}"}}]}}]}""",
-                """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
-                "[DONE]",
-            ),
-        )
-        transport.enqueueResponse(
-            sse(
-                """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
-        )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
-        // reasoning_details deltas open the thinking block but never emit deltas.
-        assertEquals(0, events.filterIsInstance<AssistantMessageEvent.ThinkingDelta>().size)
-        val done = assertIs<AssistantMessageEvent.Done>(events.last())
-        val thinking = assertIs<ThinkingContent>(done.message.content[0])
-        assertEquals("", thinking.thinking)
-        assertEquals(Json.parseToJsonElement("[$detail]"), Json.parseToJsonElement(thinking.thinkingSignature!!))
-        val toolCall = assertIs<ToolCall>(done.message.content[1])
-        assertEquals("call_1", toolCall.id)
-        assertEquals("read", toolCall.name)
-        assertEquals("""{"path":"README.md"}""", toolCall.arguments)
-
-        api(transport)
-            .stream(
-                model,
-                Context(messages = listOf(UserMessage.ofText("hi"), done.message)),
-                OpenAiCompletionsOptions(apiKey = "test-key"),
+    fun `reasoning_details accumulate into the thinking signature and replay on the next request`() =
+        runTest {
+            val detail =
+                """{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}"""
+            val transport = FakeTransport()
+            transport.enqueueResponse(
+                sse(
+                    """{"choices":[{"delta":{"reasoning_details":[$detail]}}]}""",
+                    """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{\"path\":\"README.md\"}"}}]}}]}""",
+                    """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
+                    "[DONE]"
+                )
             )
-            .toList()
-        val replayBody = Json.parseToJsonElement(transport.requests[1].body.decodeToString()).jsonObject
-        val assistant = replayBody["messages"]!!.jsonArray
-            .first { it.jsonObject["role"]!!.jsonPrimitive.content == "assistant" }.jsonObject
-        assertEquals(Json.parseToJsonElement("[$detail]"), assistant["reasoning_details"])
-    }
+            transport.enqueueResponse(
+                sse(
+                    """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
+                    "[DONE]"
+                )
+            )
+            val events = api(
+                transport
+            ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+            // reasoning_details deltas open the thinking block but never emit deltas.
+            assertEquals(0, events.filterIsInstance<AssistantMessageEvent.ThinkingDelta>().size)
+            val done = assertIs<AssistantMessageEvent.Done>(events.last())
+            val thinking = assertIs<ThinkingContent>(done.message.content[0])
+            assertEquals("", thinking.thinking)
+            assertEquals(
+                Json.parseToJsonElement("[$detail]"),
+                Json.parseToJsonElement(thinking.thinkingSignature!!)
+            )
+            val toolCall = assertIs<ToolCall>(done.message.content[1])
+            assertEquals("call_1", toolCall.id)
+            assertEquals("read", toolCall.name)
+            assertEquals("""{"path":"README.md"}""", toolCall.arguments)
+
+            api(transport)
+                .stream(
+                    model,
+                    Context(messages = listOf(UserMessage.ofText("hi"), done.message)),
+                    OpenAiCompletionsOptions(apiKey = "test-key")
+                )
+                .toList()
+            val replayBody = Json.parseToJsonElement(
+                transport.requests[1].body.decodeToString()
+            ).jsonObject
+            val assistant = replayBody["messages"]!!.jsonArray
+                .first { it.jsonObject["role"]!!.jsonPrimitive.content == "assistant" }.jsonObject
+            assertEquals(Json.parseToJsonElement("[$detail]"), assistant["reasoning_details"])
+        }
 
     @Test
     fun `consecutive text and summary reasoning_details deltas merge before replay`() = runTest {
@@ -287,10 +309,12 @@ class OpenAiCompletionsStreamTest {
                 """{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"After encrypted block.","format":"openai-responses-v1","index":0}]}}]}""",
                 """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}]}}]}""",
                 """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         val thinking = assertIs<ThinkingContent>(done.message.content[0])
         assertEquals("", thinking.thinking)
@@ -302,57 +326,70 @@ class OpenAiCompletionsStreamTest {
               {"type":"reasoning.summary","summary":"After encrypted block.","format":"openai-responses-v1","index":0}
             ]
         """.trimIndent()
-        assertEquals(Json.parseToJsonElement(expected), Json.parseToJsonElement(thinking.thinkingSignature!!))
+        assertEquals(
+            Json.parseToJsonElement(expected),
+            Json.parseToJsonElement(thinking.thinkingSignature!!)
+        )
     }
 
     @Test
-    fun `reasoning field plus reasoning_details keep visible thinking and structured signature`() = runTest {
-        val signedText =
-            """{"type":"reasoning.text","text":"I should call the read tool.","signature":"sha256:signed-text","id":"reasoning-text-1","format":"anthropic-claude-v1","index":0}"""
-        val encrypted = """{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}"""
-        val summary =
-            """{"type":"reasoning.summary","summary":"Decided to inspect the requested file.","id":"reasoning-summary-1","format":"anthropic-claude-v1","index":1}"""
-        val transport = FakeTransport()
-        transport.enqueueResponse(
-            sse(
-                """{"choices":[{"delta":{"reasoning":"I should call the read tool.","reasoning_details":[$signedText]}}]}""",
-                """{"choices":[{"delta":{"reasoning_details":[$encrypted,$summary]}}]}""",
-                """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}]}}]}""",
-                """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
-                "[DONE]",
-            ),
-        )
-        transport.enqueueResponse(
-            sse(
-                """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
-        )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
-        val done = assertIs<AssistantMessageEvent.Done>(events.last())
-        val thinking = assertIs<ThinkingContent>(done.message.content[0])
-        assertEquals("I should call the read tool.", thinking.thinking)
-        assertEquals(
-            Json.parseToJsonElement("[$signedText,$encrypted,$summary]"),
-            Json.parseToJsonElement(thinking.thinkingSignature!!),
-        )
-
-        // Replay: the structured details replace the raw reasoning field.
-        api(transport)
-            .stream(
-                model,
-                Context(messages = listOf(UserMessage.ofText("hi"), done.message)),
-                OpenAiCompletionsOptions(apiKey = "test-key"),
+    fun `reasoning field plus reasoning_details keep visible thinking and structured signature`() =
+        runTest {
+            val signedText =
+                """{"type":"reasoning.text","text":"I should call the read tool.","signature":"sha256:signed-text","id":"reasoning-text-1","format":"anthropic-claude-v1","index":0}"""
+            val encrypted =
+                """{"type":"reasoning.encrypted","id":"call_1",""" +
+                    """"data":"encrypted-signature"}"""
+            val summary =
+                """{"type":"reasoning.summary","summary":"Decided to inspect the requested file.","id":"reasoning-summary-1","format":"anthropic-claude-v1","index":1}"""
+            val transport = FakeTransport()
+            transport.enqueueResponse(
+                sse(
+                    """{"choices":[{"delta":{"reasoning":"I should call the read tool.","reasoning_details":[$signedText]}}]}""",
+                    """{"choices":[{"delta":{"reasoning_details":[$encrypted,$summary]}}]}""",
+                    """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}]}}]}""",
+                    """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
+                    "[DONE]"
+                )
             )
-            .toList()
-        val replayBody = Json.parseToJsonElement(transport.requests[1].body.decodeToString()).jsonObject
-        val assistant = replayBody["messages"]!!.jsonArray
-            .first { it.jsonObject["role"]!!.jsonPrimitive.content == "assistant" }.jsonObject
-        assertEquals(Json.parseToJsonElement("[$signedText,$encrypted,$summary]"), assistant["reasoning_details"])
-        assertNull(assistant["reasoning"])
-        assertNull(assistant["reasoning_content"])
-        assertNull(assistant["reasoning_text"])
-    }
+            transport.enqueueResponse(
+                sse(
+                    """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
+                    "[DONE]"
+                )
+            )
+            val events = api(
+                transport
+            ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+            val done = assertIs<AssistantMessageEvent.Done>(events.last())
+            val thinking = assertIs<ThinkingContent>(done.message.content[0])
+            assertEquals("I should call the read tool.", thinking.thinking)
+            assertEquals(
+                Json.parseToJsonElement("[$signedText,$encrypted,$summary]"),
+                Json.parseToJsonElement(thinking.thinkingSignature!!)
+            )
+
+            // Replay: the structured details replace the raw reasoning field.
+            api(transport)
+                .stream(
+                    model,
+                    Context(messages = listOf(UserMessage.ofText("hi"), done.message)),
+                    OpenAiCompletionsOptions(apiKey = "test-key")
+                )
+                .toList()
+            val replayBody = Json.parseToJsonElement(
+                transport.requests[1].body.decodeToString()
+            ).jsonObject
+            val assistant = replayBody["messages"]!!.jsonArray
+                .first { it.jsonObject["role"]!!.jsonPrimitive.content == "assistant" }.jsonObject
+            assertEquals(
+                Json.parseToJsonElement("[$signedText,$encrypted,$summary]"),
+                assistant["reasoning_details"]
+            )
+            assertNull(assistant["reasoning"])
+            assertNull(assistant["reasoning_content"])
+            assertNull(assistant["reasoning_text"])
+        }
 
     @Test
     fun `fragmented tool calls accumulate raw arguments by stream index`() = runTest {
@@ -364,17 +401,24 @@ class OpenAiCompletionsStreamTest {
                 """{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\"/tmp\"}"}}]}}]}""",
                 """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
                 """{"usage":{"prompt_tokens":5,"completion_tokens":9},"choices":[]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(StopReason.TOOL_USE, done.reason)
         val call = assertIs<ToolCall>(done.message.content.single())
         assertEquals("call_1", call.id)
         assertEquals("read_file", call.name)
         assertEquals("""{"path":"/tmp"}""", call.arguments)
-        val end = assertIs<AssistantMessageEvent.ToolCallEnd>(events.filter { it is AssistantMessageEvent.ToolCallEnd }.single())
+        val end =
+            assertIs<AssistantMessageEvent.ToolCallEnd>(
+                events.filter {
+                    it is AssistantMessageEvent.ToolCallEnd
+                }.single()
+            )
         assertEquals("""{"path":"/tmp"}""", end.toolCall.arguments)
     }
 
@@ -387,10 +431,12 @@ class OpenAiCompletionsStreamTest {
                 """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"a","arguments":"{}"}}]}}]}""",
                 """{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"c2","function":{"name":"b","arguments":"{}"}}]}}]}""",
                 """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(3, done.message.content.size)
         assertIs<TextContent>(done.message.content[0])
@@ -409,10 +455,12 @@ class OpenAiCompletionsStreamTest {
                 """{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"c2","function":{"name":"b","arguments":"{\"y\":2}"}}]}}]}""",
                 """{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":",\"z\":3}"}}]}}]}""",
                 """{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals("""{"x":1,"z":3}""", assertIs<ToolCall>(done.message.content[0]).arguments)
         assertEquals("""{"y":2}""", assertIs<ToolCall>(done.message.content[1]).arguments)
@@ -425,10 +473,12 @@ class OpenAiCompletionsStreamTest {
             sse(
                 """{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}""",
                 """{"usage":{"prompt_tokens":110,"completion_tokens":50,"prompt_tokens_details":{"cached_tokens":10,"cache_write_tokens":5},"completion_tokens_details":{"reasoning_tokens":30}}}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         val usage = done.message.usage
         assertEquals(95, usage.input)
@@ -449,10 +499,12 @@ class OpenAiCompletionsStreamTest {
             sse(
                 """{"choices":[{"delta":{},"finish_reason":"stop"}]}""",
                 """{"usage":{"prompt_tokens":10,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":0},"prompt_cache_hit_tokens":7}}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val usage = assertIs<AssistantMessageEvent.Done>(events.last()).message.usage
         assertEquals(0, usage.cacheRead)
         assertEquals(10, usage.input)
@@ -465,20 +517,25 @@ class OpenAiCompletionsStreamTest {
             sse(
                 """{"choices":[{"delta":{},"finish_reason":"stop"}]}""",
                 """{"usage":{"prompt_tokens":10,"completion_tokens":1,"prompt_cache_hit_tokens":4}}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        var events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        var events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         assertEquals(4, assertIs<AssistantMessageEvent.Done>(events.last()).message.usage.cacheRead)
 
         transport.enqueueResponse(
             sse(
                 """{"choices":[{"delta":{},"finish_reason":"stop"}]}""",
                 """{"usage":{"prompt_tokens":10,"completion_tokens":1,"cached_tokens":6}}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        events =
+            api(
+                transport
+            ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         assertEquals(6, assertIs<AssistantMessageEvent.Done>(events.last()).message.usage.cacheRead)
     }
 
@@ -488,10 +545,12 @@ class OpenAiCompletionsStreamTest {
         transport.enqueueResponse(
             sse(
                 """{"choices":[{"delta":{"content":"partial"}}]}""",
-                """{"choices":[{"delta":{"content":""""",
-            ),
+                """{"choices":[{"delta":{"content":"""""
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertTrue("Malformed SSE JSON" in (error.error.errorMessage ?: ""))
         assertEquals("partial", assertIs<TextContent>(error.error.content.single()).text)
@@ -502,14 +561,16 @@ class OpenAiCompletionsStreamTest {
         val transport = FakeTransport()
         transport.enqueueError(
             401,
-            """{"error":{"message":"Invalid API key","type":"auth_error"}}""",
+            """{"error":{"message":"Invalid API key","type":"auth_error"}}"""
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals(StopReason.ERROR, error.reason)
         assertEquals(
             """401: {"error":{"message":"Invalid API key","type":"auth_error"}}""",
-            error.error.errorMessage,
+            error.error.errorMessage
         )
     }
 
@@ -519,10 +580,12 @@ class OpenAiCompletionsStreamTest {
         transport.enqueueResponse(
             sse(
                 """{"choices":[{"delta":{"content":"partial"}}]}""",
-                """{"error":{"message":"upstream overloaded","type":"server_error"}}""",
-            ),
+                """{"error":{"message":"upstream overloaded","type":"server_error"}}"""
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals(StopReason.ERROR, error.reason)
         assertTrue("upstream overloaded" in (error.error.errorMessage ?: ""))
@@ -532,8 +595,12 @@ class OpenAiCompletionsStreamTest {
     @Test
     fun `unknown finish reason becomes error event`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"safety_violation"}]}""", "[DONE]"))
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"safety_violation"}]}""", "[DONE]")
+        )
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertTrue("safety_violation" in (error.error.errorMessage ?: ""))
     }
@@ -548,10 +615,12 @@ class OpenAiCompletionsStreamTest {
         transport.enqueueResponse(
             sse(
                 """{"choices":[{"delta":{"content":"hi"},"finish_reason":""}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals("Stream ended without finish_reason", error.error.errorMessage)
     }
@@ -560,7 +629,9 @@ class OpenAiCompletionsStreamTest {
     fun `stream without finish reason fails`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"choices":[{"delta":{"content":"x"}}]}"""))
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertTrue("finish_reason" in (error.error.errorMessage ?: ""))
     }
@@ -571,10 +642,12 @@ class OpenAiCompletionsStreamTest {
         transport.enqueueResponse(
             sse(
                 "{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        var events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
+        var events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
         var done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(StopReason.STOP, done.reason)
         assertEquals("stop", done.message.rawStopReason)
@@ -583,10 +656,11 @@ class OpenAiCompletionsStreamTest {
         transport.enqueueResponse(
             sse(
                 "{\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
+        events =
+            api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals("content_filter", error.error.rawStopReason)
         assertEquals("Provider finish_reason: content_filter", error.error.errorMessage)
@@ -599,10 +673,12 @@ class OpenAiCompletionsStreamTest {
             sse(
                 "{\"id\":\"r1\",\"model\":\"glm-5.2-air\",\"choices\":[{\"delta\":{\"content\":\"x\"}}]}",
                 "{\"model\":\"glm-5.2\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals("glm-5.2-air", done.message.responseModel)
         assertEquals("glm-5.2", done.message.model)
@@ -612,8 +688,12 @@ class OpenAiCompletionsStreamTest {
     @Test
     fun `length finish reason mapped`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"length"}]}""", "[DONE]"))
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"length"}]}""", "[DONE]")
+        )
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         assertEquals(StopReason.LENGTH, assertIs<AssistantMessageEvent.Done>(events.last()).reason)
     }
 
@@ -624,10 +704,12 @@ class OpenAiCompletionsStreamTest {
             sse(
                 """{"choices":[{"delta":{"content":"x"},"finish_reason":"stop"}]}""",
                 """{"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1}}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(3, done.message.usage.input)
         assertEquals(1, done.message.usage.output)
@@ -647,11 +729,17 @@ class OpenAiCompletionsStreamTest {
     @Test
     fun `request posts to chat completions endpoint with bearer auth`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         api(transport).stream(
             model,
             context,
-            OpenAiCompletionsOptions(apiKey = "test-key", maxTokens = 64, reasoningEffort = ModelThinkingLevel.HIGH),
+            OpenAiCompletionsOptions(
+                apiKey = "test-key",
+                maxTokens = 64,
+                reasoningEffort = ModelThinkingLevel.HIGH
+            )
         ).toList()
 
         val request = transport.requests.single()
@@ -662,7 +750,7 @@ class OpenAiCompletionsStreamTest {
         assertEquals(64L, body["max_tokens"]!!.jsonPrimitive.longOrNull)
         assertEquals(
             "enabled",
-            body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content,
+            body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content
         )
     }
 
@@ -670,7 +758,9 @@ class OpenAiCompletionsStreamTest {
     fun `retries retryable http failure before content begins`() = runTest {
         val transport = FakeTransport()
         transport.enqueueError(429, "slow down", mapOf("retry-after-ms" to listOf("10")))
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         val events = api(transport)
             .stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key", maxRetries = 1))
             .toList()
@@ -685,9 +775,11 @@ class OpenAiCompletionsStreamTest {
         // body after [DONE] this test would time out instead of completing.
         transport.enqueueHangingResponse(
             """{"choices":[{"delta":{},"finish_reason":"stop"}]}""",
-            "[DONE]",
+            "[DONE]"
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(StopReason.STOP, done.reason)
         assertTrue(done.message.content.isEmpty())
@@ -702,14 +794,19 @@ class OpenAiCompletionsStreamTest {
                 """{"choices":[{"delta":{"content":"a"}}]}""",
                 """{"choices":[{"delta":{"content":"b"}}]}""",
                 """{"choices":[{"delta":{},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
         val events = api(transport)
             .stream(model, context, OpenAiCompletionsOptions(apiKey = "k"))
             .take(3) // Start, TextStart, first TextDelta
             .toList()
-        assertTrue(events.none { it is AssistantMessageEvent.Error }, "cancellation must not emit Error")
+        assertTrue(
+            events.none {
+                it is AssistantMessageEvent.Error
+            },
+            "cancellation must not emit Error"
+        )
         assertTrue(transport.cancelled.value, "transport must observe cancellation")
     }
 
@@ -721,10 +818,12 @@ class OpenAiCompletionsStreamTest {
                 """{"choices":[{"delta":{"content":"a"}}]}""",
                 """{"choices":[{"delta":{"content":"b"}}]}""",
                 """{"choices":[{"delta":{},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val deltas = events.filterIsInstance<AssistantMessageEvent.TextDelta>()
         assertEquals(listOf("a", "b"), deltas.map { it.delta })
         // TextDelta snapshots carry the accumulated text at that point.
@@ -737,111 +836,169 @@ class OpenAiCompletionsStreamTest {
     @Test
     fun `streamSimple defaults max tokens to the model limit`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         api(transport).streamSimple(model, context, SimpleStreamOptions(apiKey = "k")).toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals(model.maxTokens.toLong(), body["max_tokens"]!!.jsonPrimitive.longOrNull)
     }
 
     @Test
     fun `streamSimple forwards toolChoice to the payload`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         api(transport)
-            .streamSimple(model, context, SimpleStreamOptions(apiKey = "k", toolChoice = SimpleToolChoice.None))
+            .streamSimple(
+                model,
+                context,
+                SimpleStreamOptions(apiKey = "k", toolChoice = SimpleToolChoice.None)
+            )
             .toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals("none", body["tool_choice"]!!.jsonPrimitive.content)
     }
 
     @Test
     fun `streamSimple retains explicit max tokens when room exists`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
-        api(transport).streamSimple(model, context, SimpleStreamOptions(apiKey = "k", maxTokens = 512)).toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
+        api(
+            transport
+        ).streamSimple(model, context, SimpleStreamOptions(apiKey = "k", maxTokens = 512)).toList()
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals(512L, body["max_tokens"]!!.jsonPrimitive.longOrNull)
     }
 
     @Test
     fun `streamSimple clamps oversized max tokens against context`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         api(transport).streamSimple(
             model,
             context,
-            SimpleStreamOptions(apiKey = "k", maxTokens = 1_000_000),
+            SimpleStreamOptions(apiKey = "k", maxTokens = 1_000_000)
         ).toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals(
-            works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(model, context, 1_000_000).toLong(),
-            body["max_tokens"]!!.jsonPrimitive.longOrNull,
+            works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
+                model,
+                context,
+                1_000_000
+            ).toLong(),
+            body["max_tokens"]!!.jsonPrimitive.longOrNull
         )
     }
 
     @Test
     fun `streamSimple clamps to minimum one in a tight window`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         val tiny = model.copy(contextWindow = 4097) // 1 estimated token + 4096 safety
         api(transport).streamSimple(
             tiny,
             context,
-            SimpleStreamOptions(apiKey = "k", maxTokens = 5000),
+            SimpleStreamOptions(apiKey = "k", maxTokens = 5000)
         ).toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals(1L, body["max_tokens"]!!.jsonPrimitive.longOrNull)
     }
 
     @Test
     fun `toggle-only model enables reasoning through streamSimple without effort`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         api(transport).streamSimple(
             TestCatalogs.GLM_4_7,
             context,
-            SimpleStreamOptions(apiKey = "k", reasoning = works.resolve.pathfinder.ai.ThinkingLevel.LOW),
+            SimpleStreamOptions(
+                apiKey = "k",
+                reasoning = works.resolve.pathfinder.ai.ThinkingLevel.LOW
+            )
         ).toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals("enabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
-        assertTrue(!body.containsKey("reasoning_effort"), "toggle model must not get reasoning_effort")
+        assertTrue(
+            !body.containsKey("reasoning_effort"),
+            "toggle model must not get reasoning_effort"
+        )
     }
 
     @Test
     fun `streamSimple maps clamped off to disabled thinking`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         // glm-5.3 clamps MEDIUM up to HIGH; a non-reasoning model clamps to OFF.
         api(transport).streamSimple(
             TestCatalogs.GLM_5_3,
             context,
-            SimpleStreamOptions(apiKey = "k", reasoning = works.resolve.pathfinder.ai.ThinkingLevel.MEDIUM),
+            SimpleStreamOptions(
+                apiKey = "k",
+                reasoning = works.resolve.pathfinder.ai.ThinkingLevel.MEDIUM
+            )
         ).toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals("enabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("high", body["reasoning_effort"]!!.jsonPrimitive.content)
 
         val nonReasoning = TestCatalogs.GLM_4_7.copy(reasoning = false)
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         api(transport).streamSimple(
             nonReasoning,
             context,
-            SimpleStreamOptions(apiKey = "k", reasoning = works.resolve.pathfinder.ai.ThinkingLevel.HIGH),
+            SimpleStreamOptions(
+                apiKey = "k",
+                reasoning = works.resolve.pathfinder.ai.ThinkingLevel.HIGH
+            )
         ).toList()
-        val body2 = Json.parseToJsonElement(transport.requests.last().body.decodeToString()).jsonObject
+        val body2 = Json.parseToJsonElement(
+            transport.requests.last().body.decodeToString()
+        ).jsonObject
         assertTrue(!body2.containsKey("thinking"), "non-reasoning model must not get thinking")
     }
 
     @Test
     fun `direct off never enables zai thinking`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         api(transport).stream(
             model,
             context,
-            OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.OFF),
+            OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.OFF)
         ).toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals("disabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertTrue(!body.containsKey("reasoning_effort"))
     }
@@ -849,15 +1006,19 @@ class OpenAiCompletionsStreamTest {
     @Test
     fun `explicit null effort map omits reasoning_effort for unsupported level`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         // glm-5.3 maps MINIMAL to explicit null: thinking enabled but no
         // reasoning_effort sent.
         api(transport).stream(
             TestCatalogs.GLM_5_3,
             context,
-            OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.MINIMAL),
+            OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.MINIMAL)
         ).toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals("enabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertTrue(!body.containsKey("reasoning_effort"))
     }
@@ -865,51 +1026,52 @@ class OpenAiCompletionsStreamTest {
     private fun affinityModel(
         format: works.resolve.pathfinder.ai.SessionAffinityFormat? = null,
         provider: String = "openai",
-        baseUrl: String = "https://api.openai.com/v1",
+        baseUrl: String = "https://api.openai.com/v1"
     ): works.resolve.pathfinder.ai.Model = TestCatalogs.GPT_4O.copy(
         provider = provider,
         baseUrl = baseUrl,
         compat = TestCatalogs.GPT_4O.compat.copy(
             sendSessionAffinityHeaders = true,
-            sessionAffinityFormat = format,
-        ),
+            sessionAffinityFormat = format
+        )
     )
 
     private suspend fun headersFor(
         model: works.resolve.pathfinder.ai.Model = TestCatalogs.GPT_4O,
-        options: OpenAiCompletionsOptions = OpenAiCompletionsOptions(apiKey = "k"),
+        options: OpenAiCompletionsOptions = OpenAiCompletionsOptions(apiKey = "k")
     ): Map<String, String> {
         val transport = FakeTransport()
         transport.enqueueResponse(
             sse(
                 """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
         api(transport).stream(model, context, options).toList()
         return transport.requests.single().headers
     }
 
     @Test
-    fun `openai affinity format sends session id client request id and session affinity headers`() = runTest {
-        val headers = headersFor(
-            affinityModel(baseUrl = "https://proxy.example.com/v1"),
-            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-affinity"),
-        )
-        assertEquals("session-affinity", headers["session_id"])
-        assertEquals("session-affinity", headers["x-client-request-id"])
-        assertEquals("session-affinity", headers["x-session-affinity"])
-        assertNull(headers["x-session-id"])
-    }
+    fun `openai affinity format sends session id client request id and session affinity headers`() =
+        runTest {
+            val headers = headersFor(
+                affinityModel(baseUrl = "https://proxy.example.com/v1"),
+                OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-affinity")
+            )
+            assertEquals("session-affinity", headers["session_id"])
+            assertEquals("session-affinity", headers["x-client-request-id"])
+            assertEquals("session-affinity", headers["x-session-affinity"])
+            assertNull(headers["x-session-id"])
+        }
 
     @Test
     fun `openrouter affinity format sends only x-session-id`() = runTest {
         val headers = headersFor(
             affinityModel(
                 format = works.resolve.pathfinder.ai.SessionAffinityFormat.OPENROUTER,
-                baseUrl = "https://proxy.example.com/v1",
+                baseUrl = "https://proxy.example.com/v1"
             ),
-            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-proxy"),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-proxy")
         )
         assertEquals("session-proxy", headers["x-session-id"])
         assertNull(headers["session_id"])
@@ -921,7 +1083,7 @@ class OpenAiCompletionsStreamTest {
     fun `openrouter format auto-detected from provider and base url`() = runTest {
         val headers = headersFor(
             affinityModel(provider = "openrouter", baseUrl = "https://openrouter.ai/api/v1"),
-            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-openrouter"),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-openrouter")
         )
         assertEquals("session-openrouter", headers["x-session-id"])
         assertNull(headers["session_id"])
@@ -932,17 +1094,21 @@ class OpenAiCompletionsStreamTest {
     @Test
     fun `openai-nosession format omits session id header`() = runTest {
         val model = affinityModel(
-            format = works.resolve.pathfinder.ai.SessionAffinityFormat.OPENAI_NOSESSION,
+            format = works.resolve.pathfinder.ai.SessionAffinityFormat.OPENAI_NOSESSION
         )
         val transport = FakeTransport()
         transport.enqueueResponse(
             sse(
                 """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
         api(transport)
-            .stream(model, context, OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-nosession"))
+            .stream(
+                model,
+                context,
+                OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-nosession")
+            )
             .toList()
         val headers = transport.requests.single().headers
         assertNull(headers["session_id"])
@@ -950,7 +1116,9 @@ class OpenAiCompletionsStreamTest {
         assertEquals("session-nosession", headers["x-client-request-id"])
         assertEquals("session-nosession", headers["x-session-affinity"])
         // prompt_cache_key is governed by cache retention, not the affinity format.
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals("session-nosession", body["prompt_cache_key"]!!.jsonPrimitive.content)
     }
 
@@ -958,7 +1126,7 @@ class OpenAiCompletionsStreamTest {
     fun `no affinity headers without a session id`() = runTest {
         val headers = headersFor(
             affinityModel(baseUrl = "https://proxy.example.com/v1"),
-            OpenAiCompletionsOptions(apiKey = "k"),
+            OpenAiCompletionsOptions(apiKey = "k")
         )
         assertNull(headers["session_id"])
         assertNull(headers["x-client-request-id"])
@@ -971,9 +1139,9 @@ class OpenAiCompletionsStreamTest {
         val headers = headersFor(
             TestCatalogs.GPT_4O.copy(
                 provider = "openrouter",
-                baseUrl = "https://openrouter.ai/api/v1",
+                baseUrl = "https://openrouter.ai/api/v1"
             ),
-            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-openrouter"),
+            OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-openrouter")
         )
         assertNull(headers["x-session-id"])
         assertNull(headers["session_id"])
@@ -988,8 +1156,8 @@ class OpenAiCompletionsStreamTest {
             OpenAiCompletionsOptions(
                 apiKey = "k",
                 sessionId = "session-affinity",
-                cacheRetention = CacheRetention.NONE,
-            ),
+                cacheRetention = CacheRetention.NONE
+            )
         )
         assertNull(headers["session_id"])
         assertNull(headers["x-client-request-id"])
@@ -1006,9 +1174,9 @@ class OpenAiCompletionsStreamTest {
                 headers = mapOf(
                     "session_id" to "override-session",
                     "x-client-request-id" to "override-request",
-                    "x-session-affinity" to "override-affinity",
-                ),
-            ),
+                    "x-session-affinity" to "override-affinity"
+                )
+            )
         )
         assertEquals("override-session", headers["session_id"])
         assertEquals("override-request", headers["x-client-request-id"])
@@ -1023,8 +1191,8 @@ class OpenAiCompletionsStreamTest {
         val overridden = headersFor(
             options = OpenAiCompletionsOptions(
                 apiKey = "k",
-                headers = mapOf("User-Agent" to "custom-agent/1"),
-            ),
+                headers = mapOf("User-Agent" to "custom-agent/1")
+            )
         )
         assertEquals("custom-agent/1", overridden["User-Agent"])
     }
@@ -1032,7 +1200,7 @@ class OpenAiCompletionsStreamTest {
     @Test
     fun `model headers override the default user agent`() = runTest {
         val headers = headersFor(
-            model = TestCatalogs.GPT_4O.copy(headers = mapOf("User-Agent" to "model-agent")),
+            model = TestCatalogs.GPT_4O.copy(headers = mapOf("User-Agent" to "model-agent"))
         )
         assertEquals("model-agent", headers["User-Agent"])
     }
@@ -1044,12 +1212,15 @@ class OpenAiCompletionsStreamTest {
         transport.enqueueResponse(
             sse(
                 """{"choices":[{"delta":{"reasoning":"hmm","content":"answer"},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(goModel, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
+        val events = api(
+            transport
+        ).stream(goModel, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
-        val thinking = assertIs<ThinkingContent>(done.message.content.first { it is ThinkingContent })
+        val thinking =
+            assertIs<ThinkingContent>(done.message.content.first { it is ThinkingContent })
         assertEquals("hmm", thinking.thinking)
         assertEquals("reasoning_content", thinking.thinkingSignature)
 
@@ -1057,12 +1228,14 @@ class OpenAiCompletionsStreamTest {
         // reasoning_content wire field.
         val replay = OpenAiCompletionsPayload.convertMessages(
             goModel,
-            Context(messages = listOf(context.messages.single(), done.message)),
+            Context(messages = listOf(context.messages.single(), done.message))
         )
         val assistant = replay.last()
         assertEquals(
             "hmm",
-            assistant["reasoning_content"]?.let { (it as kotlinx.serialization.json.JsonPrimitive).content },
+            assistant["reasoning_content"]?.let {
+                (it as kotlinx.serialization.json.JsonPrimitive).content
+            }
         )
         assertTrue("reasoning" !in assistant)
     }
@@ -1073,10 +1246,12 @@ class OpenAiCompletionsStreamTest {
         transport.enqueueResponse(
             sse(
                 """{"choices":[{"delta":{"reasoning":"hmm"},"finish_reason":"stop"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "k")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         val thinking = assertIs<ThinkingContent>(done.message.content.single())
         assertEquals("reasoning", thinking.thinkingSignature)
@@ -1090,9 +1265,11 @@ class OpenAiCompletionsStreamTest {
         val transport = FakeTransport()
         transport.enqueueError(
             403,
-            """{"error":{"message":"$padding","code":403,"metadata":{"raw":"upstream WAF blocked policy XYZ"}}}""",
+            """{"error":{"message":"$padding","code":403,"metadata":{"raw":"upstream WAF blocked policy XYZ"}}}"""
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         val message = error.error.errorMessage!!
         assertEquals(1, Regex("upstream WAF blocked policy XYZ").findAll(message).count())
@@ -1104,9 +1281,11 @@ class OpenAiCompletionsStreamTest {
         val transport = FakeTransport()
         transport.enqueueError(
             403,
-            """{"error":{"message":"Provider returned error","code":403,"metadata":{"raw":"upstream WAF blocked policy XYZ"}}}""",
+            """{"error":{"message":"Provider returned error","code":403,"metadata":{"raw":"upstream WAF blocked policy XYZ"}}}"""
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         val message = error.error.errorMessage!!
         assertEquals(1, Regex("upstream WAF blocked policy XYZ").findAll(message).count())
@@ -1126,10 +1305,12 @@ class OpenAiCompletionsStreamTest {
                 "null",
                 """{"id":"chatcmpl-test","choices":[{"delta":{"content":"OK"},"finish_reason":null}]}""",
                 """{"id":"chatcmpl-test","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(StopReason.STOP, done.reason)
         assertNull(done.message.errorMessage)
@@ -1144,10 +1325,12 @@ class OpenAiCompletionsStreamTest {
         val transport = FakeTransport()
         transport.enqueueResponse(
             sse(
-                """{"id":"chatcmpl-no-finish-reason","choices":[{"delta":{"content":"complete answer"},"finish_reason":null}]}""",
-            ),
+                """{"id":"chatcmpl-no-finish-reason","choices":[{"delta":{"content":"complete answer"},"finish_reason":null}]}"""
+            )
         )
-        var events = api(transport).stream(lenient, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
+        var events = api(
+            transport
+        ).stream(lenient, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
         var done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(StopReason.STOP, done.reason)
         assertNull(done.message.errorMessage)
@@ -1156,10 +1339,13 @@ class OpenAiCompletionsStreamTest {
         // Tool calls map to toolUse on the same lenient path.
         transport.enqueueResponse(
             sse(
-                """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read","arguments":"{}"}}]}}]}""",
-            ),
+                """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read","arguments":"{}"}}]}}]}"""
+            )
         )
-        events = api(transport).stream(lenient, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
+        events =
+            api(
+                transport
+            ).stream(lenient, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
         done = assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(StopReason.TOOL_USE, done.reason)
     }
@@ -1171,10 +1357,12 @@ class OpenAiCompletionsStreamTest {
             sse(
                 """{"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}""",
                 """{"choices":[{"delta":{},"finish_reason":"network_error"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals("Provider finish_reason: network_error", error.error.errorMessage)
         assertEquals("network_error", error.error.rawStopReason)
@@ -1188,10 +1376,12 @@ class OpenAiCompletionsStreamTest {
             sse(
                 """{"choices":[{"delta":{"content":"OK"},"finish_reason":null}]}""",
                 """{"choices":[{"delta":{},"finish_reason":"stop","usage":{"prompt_tokens":100,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":50,"cache_write_tokens":30}}}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
         val usage = assertIs<AssistantMessageEvent.Done>(events.last()).message.usage
         assertEquals(20, usage.input)
         assertEquals(50, usage.cacheRead)
@@ -1200,103 +1390,127 @@ class OpenAiCompletionsStreamTest {
     }
 
     @Test
-    fun `coalesces tool call deltas by stable index when provider mutates ids mid-stream`() = runTest {
-        val transport = FakeTransport()
-        transport.enqueueResponse(
-            sse(
-                """{"id":"chatcmpl-kimi-bad-stream","choices":[{"delta":{"tool_calls":[{"index":0,"id":"functions.read:0","type":"function","function":{"name":"read","arguments":""}}]},"finish_reason":null}]}""",
-                """{"id":"chatcmpl-kimi-bad-stream","choices":[{"delta":{"tool_calls":[{"index":0,"id":"chatcmpl-tool-a","type":"function","function":{"name":null,"arguments":"{\"path\":\"README"}}]},"finish_reason":null}]}""",
-                """{"id":"chatcmpl-kimi-bad-stream","choices":[{"delta":{"tool_calls":[{"index":0,"id":"chatcmpl-tool-b","type":"function","function":{"name":null,"arguments":".md\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}""",
-                "[DONE]",
-            ),
-        )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
-        val toolEventIndexes = events.mapNotNull { e ->
-            when (e) {
-                is AssistantMessageEvent.ToolCallStart -> e.contentIndex
-                is AssistantMessageEvent.ToolCallDelta -> e.contentIndex
-                is AssistantMessageEvent.ToolCallEnd -> e.contentIndex
-                else -> null
+    fun `coalesces tool call deltas by stable index when provider mutates ids mid-stream`() =
+        runTest {
+            val transport = FakeTransport()
+            transport.enqueueResponse(
+                sse(
+                    """{"id":"chatcmpl-kimi-bad-stream","choices":[{"delta":{"tool_calls":[{"index":0,"id":"functions.read:0","type":"function","function":{"name":"read","arguments":""}}]},"finish_reason":null}]}""",
+                    """{"id":"chatcmpl-kimi-bad-stream","choices":[{"delta":{"tool_calls":[{"index":0,"id":"chatcmpl-tool-a","type":"function","function":{"name":null,"arguments":"{\"path\":\"README"}}]},"finish_reason":null}]}""",
+                    """{"id":"chatcmpl-kimi-bad-stream","choices":[{"delta":{"tool_calls":[{"index":0,"id":"chatcmpl-tool-b","type":"function","function":{"name":null,"arguments":".md\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}""",
+                    "[DONE]"
+                )
+            )
+            val events = api(
+                transport
+            ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
+            val toolEventIndexes = events.mapNotNull { e ->
+                when (e) {
+                    is AssistantMessageEvent.ToolCallStart -> e.contentIndex
+                    is AssistantMessageEvent.ToolCallDelta -> e.contentIndex
+                    is AssistantMessageEvent.ToolCallEnd -> e.contentIndex
+                    else -> null
+                }
             }
+            assertEquals(List(5) { 0 }, toolEventIndexes)
+            val done = assertIs<AssistantMessageEvent.Done>(events.last())
+            assertEquals(StopReason.TOOL_USE, done.reason)
+            val toolCall = assertIs<ToolCall>(done.message.content.single())
+            assertEquals("functions.read:0", toolCall.id)
+            assertEquals("read", toolCall.name)
+            assertEquals("""{"path":"README.md"}""", toolCall.arguments)
         }
-        assertEquals(List(5) { 0 }, toolEventIndexes)
-        val done = assertIs<AssistantMessageEvent.Done>(events.last())
-        assertEquals(StopReason.TOOL_USE, done.reason)
-        val toolCall = assertIs<ToolCall>(done.message.content.single())
-        assertEquals("functions.read:0", toolCall.id)
-        assertEquals("read", toolCall.name)
-        assertEquals("""{"path":"README.md"}""", toolCall.arguments)
-    }
 
     @Test
-    fun `accumulates mixed content reasoning and parallel tool call deltas independently`() = runTest {
-        val transport = FakeTransport()
-        transport.enqueueResponse(
-            sse(
-                """{"id":"chatcmpl-mixed-deltas","choices":[{"delta":{"content":"answer 1","reasoning_content":"think 1","tool_calls":[{"index":0,"id":"tc_read_initial","type":"function","function":{"name":"read","arguments":"{\"path\":\"README"}},{"index":1,"id":"tc_grep_initial","type":"function","function":{"name":"grep","arguments":"{\"pattern\":\"TODO"}},{"id":"tc_list_no_index","type":"function","function":{"name":"list","arguments":"{\"path\":\"packages"}},{"id":"tc_write_no_index","type":"function","function":{"name":"write","arguments":"{\"path\":\"out"}}]},"finish_reason":null}]}""",
-                """{"id":"chatcmpl-mixed-deltas","choices":[{"delta":{"content":" answer 2","tool_calls":[{"index":1,"id":"tc_grep_changed","type":"function","function":{"arguments":"\",\"path\":\"src"}},{"id":"tc_write_no_index","type":"function","function":{"arguments":".txt\",\"content\":\"ok\"}"}},{"id":"tc_list_no_index","type":"function","function":{"arguments":"/ai\"}"}}]},"finish_reason":null}]}""",
-                """{"id":"chatcmpl-mixed-deltas","choices":[{"delta":{"content":"\n","reasoning_content":" think 2","tool_calls":[{"index":0,"id":"tc_read_changed","type":"function","function":{"arguments":".md\"}"}},{"index":1,"type":"function","function":{"arguments":"\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":8}}""",
-                "[DONE]",
-            ),
-        )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
+    fun `accumulates mixed content reasoning and parallel tool call deltas independently`() =
+        runTest {
+            val transport = FakeTransport()
+            transport.enqueueResponse(
+                sse(
+                    """{"id":"chatcmpl-mixed-deltas","choices":[{"delta":{"content":"answer 1","reasoning_content":"think 1","tool_calls":[{"index":0,"id":"tc_read_initial","type":"function","function":{"name":"read","arguments":"{\"path\":\"README"}},{"index":1,"id":"tc_grep_initial","type":"function","function":{"name":"grep","arguments":"{\"pattern\":\"TODO"}},{"id":"tc_list_no_index","type":"function","function":{"name":"list","arguments":"{\"path\":\"packages"}},{"id":"tc_write_no_index","type":"function","function":{"name":"write","arguments":"{\"path\":\"out"}}]},"finish_reason":null}]}""",
+                    """{"id":"chatcmpl-mixed-deltas","choices":[{"delta":{"content":" answer 2","tool_calls":[{"index":1,"id":"tc_grep_changed","type":"function","function":{"arguments":"\",\"path\":\"src"}},{"id":"tc_write_no_index","type":"function","function":{"arguments":".txt\",\"content\":\"ok\"}"}},{"id":"tc_list_no_index","type":"function","function":{"arguments":"/ai\"}"}}]},"finish_reason":null}]}""",
+                    """{"id":"chatcmpl-mixed-deltas","choices":[{"delta":{"content":"\n","reasoning_content":" think 2","tool_calls":[{"index":0,"id":"tc_read_changed","type":"function","function":{"arguments":".md\"}"}},{"index":1,"type":"function","function":{"arguments":"\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":8}}""",
+                    "[DONE]"
+                )
+            )
+            val events = api(
+                transport
+            ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
 
-        fun count(events: List<AssistantMessageEvent>, type: Class<out AssistantMessageEvent>) =
-            events.count { type.isInstance(it) }
-        assertEquals(1, count(events, AssistantMessageEvent.TextStart::class.java))
-        assertEquals(3, count(events, AssistantMessageEvent.TextDelta::class.java))
-        assertEquals(1, count(events, AssistantMessageEvent.TextEnd::class.java))
-        assertEquals(1, count(events, AssistantMessageEvent.ThinkingStart::class.java))
-        assertEquals(2, count(events, AssistantMessageEvent.ThinkingDelta::class.java))
-        assertEquals(1, count(events, AssistantMessageEvent.ThinkingEnd::class.java))
-        assertEquals(4, count(events, AssistantMessageEvent.ToolCallStart::class.java))
-        assertEquals(9, count(events, AssistantMessageEvent.ToolCallDelta::class.java))
-        assertEquals(4, count(events, AssistantMessageEvent.ToolCallEnd::class.java))
+            fun count(events: List<AssistantMessageEvent>, type: Class<out AssistantMessageEvent>) =
+                events.count { type.isInstance(it) }
+            assertEquals(1, count(events, AssistantMessageEvent.TextStart::class.java))
+            assertEquals(3, count(events, AssistantMessageEvent.TextDelta::class.java))
+            assertEquals(1, count(events, AssistantMessageEvent.TextEnd::class.java))
+            assertEquals(1, count(events, AssistantMessageEvent.ThinkingStart::class.java))
+            assertEquals(2, count(events, AssistantMessageEvent.ThinkingDelta::class.java))
+            assertEquals(1, count(events, AssistantMessageEvent.ThinkingEnd::class.java))
+            assertEquals(4, count(events, AssistantMessageEvent.ToolCallStart::class.java))
+            assertEquals(9, count(events, AssistantMessageEvent.ToolCallDelta::class.java))
+            assertEquals(4, count(events, AssistantMessageEvent.ToolCallEnd::class.java))
 
-        fun eventsFor(index: Int) = events.mapNotNull { e ->
-            when (e) {
-                is AssistantMessageEvent.ToolCallStart -> "ToolCallStart".takeIf { e.contentIndex == index }
-                is AssistantMessageEvent.ToolCallDelta -> "ToolCallDelta".takeIf { e.contentIndex == index }
-                is AssistantMessageEvent.ToolCallEnd -> "ToolCallEnd".takeIf { e.contentIndex == index }
-                else -> null
+            fun eventsFor(index: Int) = events.mapNotNull { e ->
+                when (e) {
+                    is AssistantMessageEvent.ToolCallStart -> "ToolCallStart".takeIf {
+                        e.contentIndex ==
+                            index
+                    }
+
+                    is AssistantMessageEvent.ToolCallDelta -> "ToolCallDelta".takeIf {
+                        e.contentIndex ==
+                            index
+                    }
+
+                    is AssistantMessageEvent.ToolCallEnd -> "ToolCallEnd".takeIf {
+                        e.contentIndex ==
+                            index
+                    }
+
+                    else -> null
+                }
             }
-        }
-        assertEquals(
-            listOf("ToolCallStart", "ToolCallDelta", "ToolCallDelta", "ToolCallEnd"),
-            eventsFor(2),
-        )
-        assertEquals(
-            listOf("ToolCallStart", "ToolCallDelta", "ToolCallDelta", "ToolCallDelta", "ToolCallEnd"),
-            eventsFor(3),
-        )
-        assertEquals(
-            listOf("ToolCallStart", "ToolCallDelta", "ToolCallDelta", "ToolCallEnd"),
-            eventsFor(4),
-        )
-        assertEquals(
-            listOf("ToolCallStart", "ToolCallDelta", "ToolCallDelta", "ToolCallEnd"),
-            eventsFor(5),
-        )
+            assertEquals(
+                listOf("ToolCallStart", "ToolCallDelta", "ToolCallDelta", "ToolCallEnd"),
+                eventsFor(2)
+            )
+            assertEquals(
+                listOf(
+                    "ToolCallStart",
+                    "ToolCallDelta",
+                    "ToolCallDelta",
+                    "ToolCallDelta",
+                    "ToolCallEnd"
+                ),
+                eventsFor(3)
+            )
+            assertEquals(
+                listOf("ToolCallStart", "ToolCallDelta", "ToolCallDelta", "ToolCallEnd"),
+                eventsFor(4)
+            )
+            assertEquals(
+                listOf("ToolCallStart", "ToolCallDelta", "ToolCallDelta", "ToolCallEnd"),
+                eventsFor(5)
+            )
 
-        val done = assertIs<AssistantMessageEvent.Done>(events.last())
-        assertEquals(StopReason.TOOL_USE, done.reason)
-        assertEquals("answer 1 answer 2\n", assertIs<TextContent>(done.message.content[0]).text)
-        val thinking = assertIs<ThinkingContent>(done.message.content[1])
-        assertEquals("think 1 think 2", thinking.thinking)
-        assertEquals("reasoning_content", thinking.thinkingSignature)
-        val read = assertIs<ToolCall>(done.message.content[2])
-        val grep = assertIs<ToolCall>(done.message.content[3])
-        val list = assertIs<ToolCall>(done.message.content[4])
-        val write = assertIs<ToolCall>(done.message.content[5])
-        assertEquals("tc_read_initial", read.id)
-        assertEquals("""{"path":"README.md"}""", read.arguments)
-        assertEquals("tc_grep_initial", grep.id)
-        assertEquals("""{"pattern":"TODO","path":"src"}""", grep.arguments)
-        assertEquals("tc_list_no_index", list.id)
-        assertEquals("""{"path":"packages/ai"}""", list.arguments)
-        assertEquals("tc_write_no_index", write.id)
-        assertEquals("""{"path":"out.txt","content":"ok"}""", write.arguments)
-    }
+            val done = assertIs<AssistantMessageEvent.Done>(events.last())
+            assertEquals(StopReason.TOOL_USE, done.reason)
+            assertEquals("answer 1 answer 2\n", assertIs<TextContent>(done.message.content[0]).text)
+            val thinking = assertIs<ThinkingContent>(done.message.content[1])
+            assertEquals("think 1 think 2", thinking.thinking)
+            assertEquals("reasoning_content", thinking.thinkingSignature)
+            val read = assertIs<ToolCall>(done.message.content[2])
+            val grep = assertIs<ToolCall>(done.message.content[3])
+            val list = assertIs<ToolCall>(done.message.content[4])
+            val write = assertIs<ToolCall>(done.message.content[5])
+            assertEquals("tc_read_initial", read.id)
+            assertEquals("""{"path":"README.md"}""", read.arguments)
+            assertEquals("tc_grep_initial", grep.id)
+            assertEquals("""{"pattern":"TODO","path":"src"}""", grep.arguments)
+            assertEquals("tc_list_no_index", list.id)
+            assertEquals("""{"path":"packages/ai"}""", list.arguments)
+            assertEquals("tc_write_no_index", write.id)
+            assertEquals("""{"path":"out.txt","content":"ok"}""", write.arguments)
+        }
 
     @Test
     fun `ignores empty custom objects on function tool call deltas`() = runTest {
@@ -1304,10 +1518,12 @@ class OpenAiCompletionsStreamTest {
         transport.enqueueResponse(
             sse(
                 """{"id":"chatcmpl-empty-custom","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{\"path\":\"README.md\"}"},"custom":{}}]},"finish_reason":"tool_calls"}]}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
-        val events = api(transport).stream(model, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
+        val events = api(
+            transport
+        ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test")).toList()
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
         val toolCall = assertIs<ToolCall>(done.message.content.single())
         assertEquals("call_1", toolCall.id)
@@ -1324,9 +1540,15 @@ class OpenAiCompletionsStreamTest {
         val transport = FakeTransport()
         transport.enqueueError(429, "rate limited", mapOf("retry-after-ms" to listOf("10")))
         transport.enqueueError(500, "server error", mapOf("retry-after-ms" to listOf("10")))
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         val events = api(transport)
-            .stream(model, context, OpenAiCompletionsOptions(apiKey = "test", maxRetries = 2, maxRetryDelayMs = 100))
+            .stream(
+                model,
+                context,
+                OpenAiCompletionsOptions(apiKey = "test", maxRetries = 2, maxRetryDelayMs = 100)
+            )
             .toList()
         assertIs<AssistantMessageEvent.Done>(events.last())
         assertEquals(3, transport.requests.size)
@@ -1337,14 +1559,20 @@ class OpenAiCompletionsStreamTest {
         val transport = FakeTransport()
         transport.enqueueError(429, "rate limited", mapOf("retry-after" to listOf("277403")))
         val events = api(transport)
-            .stream(model, context, OpenAiCompletionsOptions(apiKey = "test", maxRetries = 2, maxRetryDelayMs = 1000))
+            .stream(
+                model,
+                context,
+                OpenAiCompletionsOptions(apiKey = "test", maxRetries = 2, maxRetryDelayMs = 1000)
+            )
             .toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals(StopReason.ERROR, error.reason)
         // Pin-identical prefix; the suffix carries the transport exception
         // message ("Provider returned HTTP 429") where pi appends the SDK
         // error text including the body.
-        assertTrue("Server requested 277403s retry delay (max: 1s)" in (error.error.errorMessage ?: ""))
+        assertTrue(
+            "Server requested 277403s retry delay (max: 1s)" in (error.error.errorMessage ?: "")
+        )
         assertEquals(1, transport.requests.size)
     }
 
@@ -1374,38 +1602,46 @@ class OpenAiCompletionsStreamTest {
 
     private fun cloudflareEnv() = mapOf(
         "CLOUDFLARE_ACCOUNT_ID" to "account-id",
-        "CLOUDFLARE_GATEWAY_ID" to "gateway-id",
+        "CLOUDFLARE_GATEWAY_ID" to "gateway-id"
     )
 
     @Test
     fun `cloudflare compat gateway model uses conservative openai-compatible fields`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         api(transport)
             .stream(
                 cloudflareKimi(),
-                Context(systemPrompt = "You are helpful.", messages = listOf(UserMessage.ofText("hi"))),
+                Context(
+                    systemPrompt = "You are helpful.",
+                    messages = listOf(UserMessage.ofText("hi"))
+                ),
                 OpenAiCompletionsOptions(
                     headers = mapOf(
                         "cf-aig-authorization" to "Bearer cf-token",
-                        "Authorization" to null,
+                        "Authorization" to null
                     ),
                     env = cloudflareEnv(),
                     maxTokens = 1234,
-                    reasoningEffort = ModelThinkingLevel.HIGH,
-                ),
+                    reasoningEffort = ModelThinkingLevel.HIGH
+                )
             )
             .toList()
         val request = transport.requests.single()
         assertEquals(
             "https://gateway.ai.cloudflare.com/v1/account-id/gateway-id/compat/chat/completions",
-            request.url,
+            request.url
         )
         assertNull(request.bearerToken)
         assertEquals("Bearer cf-token", request.headers["cf-aig-authorization"])
         assertTrue(request.headers.keys.none { it.equals("Authorization", ignoreCase = true) })
         val body = Json.parseToJsonElement(request.body.decodeToString()).jsonObject
-        assertEquals("system", body["messages"]!!.jsonArray[0].jsonObject["role"]!!.jsonPrimitive.content)
+        assertEquals(
+            "system",
+            body["messages"]!!.jsonArray[0].jsonObject["role"]!!.jsonPrimitive.content
+        )
         assertEquals(1234L, body["max_tokens"]!!.jsonPrimitive.longOrNull)
         assertNull(body["max_completion_tokens"])
         assertNull(body["reasoning_effort"])
@@ -1415,7 +1651,9 @@ class OpenAiCompletionsStreamTest {
     @Test
     fun `cloudflare byok keeps inline upstream authorization alongside gateway auth`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         api(transport)
             .stream(
                 cloudflareKimi(),
@@ -1423,10 +1661,10 @@ class OpenAiCompletionsStreamTest {
                 OpenAiCompletionsOptions(
                     headers = mapOf(
                         "Authorization" to "Bearer upstream-token",
-                        "cf-aig-authorization" to "Bearer cf-token",
+                        "cf-aig-authorization" to "Bearer cf-token"
                     ),
-                    env = cloudflareEnv(),
-                ),
+                    env = cloudflareEnv()
+                )
             )
             .toList()
         val headers = transport.requests.single().headers
@@ -1438,12 +1676,18 @@ class OpenAiCompletionsStreamTest {
     @Test
     fun `cloudflare workers ai model sends session affinity headers`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         api(transport)
             .stream(
                 cloudflareKimi(),
                 context,
-                OpenAiCompletionsOptions(apiKey = "k", sessionId = "session-1", env = cloudflareEnv()),
+                OpenAiCompletionsOptions(
+                    apiKey = "k",
+                    sessionId = "session-1",
+                    env = cloudflareEnv()
+                )
             )
             .toList()
         val headers = transport.requests.single().headers
@@ -1454,11 +1698,19 @@ class OpenAiCompletionsStreamTest {
 
     @Test
     fun `fireworks catalog model sends session affinity header`() = runTest {
-        val fireworks = realAsset().getProvider("fireworks")!!.model("accounts/fireworks/models/glm-5p2")!!
+        val fireworks = realAsset().getProvider(
+            "fireworks"
+        )!!.model("accounts/fireworks/models/glm-5p2")!!
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         api(transport)
-            .stream(fireworks, context, OpenAiCompletionsOptions(apiKey = "k", sessionId = "fireworks-session"))
+            .stream(
+                fireworks,
+                context,
+                OpenAiCompletionsOptions(apiKey = "k", sessionId = "fireworks-session")
+            )
             .toList()
         val headers = transport.requests.single().headers
         assertEquals("fireworks-session", headers["x-session-affinity"])
@@ -1472,15 +1724,30 @@ class OpenAiCompletionsStreamTest {
     @Test
     fun `streamSimple uses max_completion_tokens for openai models`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
-        api(transport).streamSimple(TestCatalogs.GPT_4O, context, SimpleStreamOptions(apiKey = "k")).toList()
-        var body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
-        assertEquals(TestCatalogs.GPT_4O.maxTokens.toLong(), body["max_completion_tokens"]!!.jsonPrimitive.longOrNull)
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
+        api(
+            transport
+        ).streamSimple(TestCatalogs.GPT_4O, context, SimpleStreamOptions(apiKey = "k")).toList()
+        var body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
+        assertEquals(
+            TestCatalogs.GPT_4O.maxTokens.toLong(),
+            body["max_completion_tokens"]!!.jsonPrimitive.longOrNull
+        )
         assertNull(body["max_tokens"])
 
-        transport.enqueueResponse(sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]"))
+        transport.enqueueResponse(
+            sse("""{"choices":[{"delta":{},"finish_reason":"stop"}]}""", "[DONE]")
+        )
         api(transport)
-            .streamSimple(TestCatalogs.GPT_4O, context, SimpleStreamOptions(apiKey = "k", maxTokens = 1234))
+            .streamSimple(
+                TestCatalogs.GPT_4O,
+                context,
+                SimpleStreamOptions(apiKey = "k", maxTokens = 1234)
+            )
             .toList()
         body = Json.parseToJsonElement(transport.requests.last().body.decodeToString()).jsonObject
         assertEquals(1234L, body["max_completion_tokens"]!!.jsonPrimitive.longOrNull)
@@ -1493,14 +1760,16 @@ class OpenAiCompletionsStreamTest {
 
     @Test
     fun `requiresThinkingAsText replay reaches the endpoint`() = runTest {
-        val asText = TestCatalogs.GPT_4O.copy(compat = TestCatalogs.GPT_4O.compat.copy(requiresThinkingAsText = true))
+        val asText = TestCatalogs.GPT_4O.copy(
+            compat = TestCatalogs.GPT_4O.compat.copy(requiresThinkingAsText = true)
+        )
         val transport = FakeTransport()
         transport.enqueueResponse(
             sse(
                 """{"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}""",
                 """{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}""",
-                "[DONE]",
-            ),
+                "[DONE]"
+            )
         )
         val events = api(transport)
             .stream(
@@ -1511,26 +1780,28 @@ class OpenAiCompletionsStreamTest {
                         AssistantMessage(
                             content = listOf(
                                 ThinkingContent("internal reasoning"),
-                                TextContent("visible answer"),
+                                TextContent("visible answer")
                             ),
                             api = "openai-completions",
                             provider = "openai",
-                            model = asText.id,
+                            model = asText.id
                         ),
-                        UserMessage.ofText("continue"),
-                    ),
+                        UserMessage.ofText("continue")
+                    )
                 ),
-                OpenAiCompletionsOptions(apiKey = "test-key"),
+                OpenAiCompletionsOptions(apiKey = "test-key")
             )
             .toList()
         assertEquals(1, transport.requests.size)
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         val assistant = body["messages"]!!.jsonArray[1].jsonObject
         assertEquals(
             Json.parseToJsonElement(
-                """[{"type":"text","text":"internal reasoning"},{"type":"text","text":"visible answer"}]""",
+                """[{"type":"text","text":"internal reasoning"},{"type":"text","text":"visible answer"}]"""
             ),
-            assistant["content"],
+            assistant["content"]
         )
         assertIs<AssistantMessageEvent.Done>(events.last())
     }

@@ -57,15 +57,9 @@ sealed interface AttributeValue {
 /** Iteration order is producer order. */
 typealias SpanAttributes = Map<String, AttributeValue>
 
-data class SpanOptions(
-    val name: String,
-    val attributes: SpanAttributes = emptyMap(),
-)
+data class SpanOptions(val name: String, val attributes: SpanAttributes = emptyMap())
 
-data class TelemetryError(
-    val name: String,
-    val message: String,
-)
+data class TelemetryError(val name: String, val message: String)
 
 sealed interface SpanStatus {
     data object Ok : SpanStatus
@@ -125,7 +119,7 @@ fun automaticErrorStatus(error: Throwable): SpanStatus = try {
 object NoopTelemetry : TelemetrySpan {
     override suspend fun <T> startSpan(
         options: SpanOptions,
-        callback: suspend (TelemetrySpan) -> T,
+        callback: suspend (TelemetrySpan) -> T
     ): T = callback(this)
 
     override fun addEvent(name: String, attributes: SpanAttributes) {}

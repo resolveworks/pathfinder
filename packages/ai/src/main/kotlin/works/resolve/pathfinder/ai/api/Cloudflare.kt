@@ -18,7 +18,12 @@ private const val CLOUDFLARE_GATEWAY_ID = "CLOUDFLARE_GATEWAY_ID"
  * ported at all (no ambient env on Android); this file has no upstream
  * twin.
  */
-fun resolveCloudflareBaseUrl(baseUrl: String, env: Map<String, String>): String =
-    baseUrl
-        .replace("{$CLOUDFLARE_ACCOUNT_ID}", env[CLOUDFLARE_ACCOUNT_ID] ?: "{$CLOUDFLARE_ACCOUNT_ID}")
-        .replace("{$CLOUDFLARE_GATEWAY_ID}", env[CLOUDFLARE_GATEWAY_ID] ?: "{$CLOUDFLARE_GATEWAY_ID}")
+fun resolveCloudflareBaseUrl(baseUrl: String, env: Map<String, String>): String = baseUrl
+    .replace(
+        "{$CLOUDFLARE_ACCOUNT_ID}",
+        env[CLOUDFLARE_ACCOUNT_ID] ?: "{$CLOUDFLARE_ACCOUNT_ID}"
+    )
+    .replace(
+        "{$CLOUDFLARE_GATEWAY_ID}",
+        env[CLOUDFLARE_GATEWAY_ID] ?: "{$CLOUDFLARE_GATEWAY_ID}"
+    )

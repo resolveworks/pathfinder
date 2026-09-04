@@ -3,11 +3,11 @@ package works.resolve.pathfinder.ai.auth.oauth
 import java.io.IOException
 import java.net.ServerSocket
 import java.net.SocketTimeoutException
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-import kotlin.concurrent.thread
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -20,7 +20,7 @@ class UrlConnectionOAuthHttpClientTest {
         url = url,
         headers = mapOf("content-type" to "application/json"),
         body = "{\"code\":\"c\"}".toByteArray(),
-        timeoutMs = timeoutMs,
+        timeoutMs = timeoutMs
     )
 
     @Test
@@ -31,17 +31,21 @@ class UrlConnectionOAuthHttpClientTest {
                     readRequest(socket)
                     socket.getOutputStream().apply {
                         write(
-                            ("HTTP/1.1 403 Forbidden\r\n" +
-                                "Content-Type: application/json\r\n" +
-                                "Content-Length: 42\r\n\r\n" +
-                                "{\"error_description\":\"expired code value\"}").toByteArray(),
+                            (
+                                "HTTP/1.1 403 Forbidden\r\n" +
+                                    "Content-Type: application/json\r\n" +
+                                    "Content-Length: 42\r\n\r\n" +
+                                    "{\"error_description\":\"expired code value\"}"
+                                ).toByteArray()
                         )
                         flush()
                     }
                 }
             }
             val response = runBlocking {
-                UrlConnectionOAuthHttpClient().execute(request("http://127.0.0.1:${server.localPort}/api/v1/auth/keys"))
+                UrlConnectionOAuthHttpClient().execute(
+                    request("http://127.0.0.1:${server.localPort}/api/v1/auth/keys")
+                )
             }
             worker.join(5_000)
 
@@ -64,7 +68,7 @@ class UrlConnectionOAuthHttpClientTest {
                 val error = assertFailsWith<SocketTimeoutException> {
                     runBlocking {
                         UrlConnectionOAuthHttpClient().execute(
-                            request("http://127.0.0.1:${server.localPort}/", timeoutMs = 300),
+                            request("http://127.0.0.1:${server.localPort}/", timeoutMs = 300)
                         )
                     }
                 }
@@ -88,7 +92,7 @@ class UrlConnectionOAuthHttpClientTest {
                 runBlocking {
                     val pending = async {
                         UrlConnectionOAuthHttpClient().execute(
-                            request("http://127.0.0.1:${server.localPort}/", timeoutMs = 4_000),
+                            request("http://127.0.0.1:${server.localPort}/", timeoutMs = 4_000)
                         )
                     }
                     delay(200)
@@ -108,7 +112,9 @@ class UrlConnectionOAuthHttpClientTest {
         // Bind then close: nothing listens on this port.
         val port = ServerSocket(0).use { it.localPort }
         assertFailsWith<IOException> {
-            runBlocking { UrlConnectionOAuthHttpClient().execute(request("http://127.0.0.1:$port/")) }
+            runBlocking {
+                UrlConnectionOAuthHttpClient().execute(request("http://127.0.0.1:$port/"))
+            }
         }
     }
 
@@ -140,7 +146,7 @@ class UrlConnectionOAuthHttpClientTest {
             "https://user:pass123@openrouter.ai/api/v1/auth/keys",
             emptyMap(),
             ByteArray(0),
-            30_000,
+            30_000
         )
         assertTrue("pass123" !in withUserInfo.toString())
         assertTrue("user:pass123@" !in withUserInfo.toString())
@@ -151,7 +157,7 @@ class UrlConnectionOAuthHttpClientTest {
             "http://127.0.0.1:8080/callback?code=$secret",
             emptyMap(),
             ByteArray(0),
-            30_000,
+            30_000
         )
         assertTrue("url=http://127.0.0.1:8080/callback" in ported.toString())
         assertTrue(secret !in ported.toString())
@@ -171,7 +177,10 @@ class UrlConnectionOAuthHttpClientTest {
                     if (byte != '\r'.code) append(byte.toChar())
                 }
             }
-            if (line.startsWith("Content-Length:")) contentLength = line.substringAfter(':').trim().toInt()
+            if (line.startsWith("Content-Length:")) {
+                contentLength =
+                    line.substringAfter(':').trim().toInt()
+            }
             if (line.isEmpty()) break
         }
         var remaining = contentLength

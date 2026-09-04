@@ -3,10 +3,7 @@ package works.resolve.pathfinder.tools.websearch
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.CredentialStore
 
-data class SearchProvider(
-    val id: String,
-    val name: String,
-)
+data class SearchProvider(val id: String, val name: String)
 
 /**
  * Upstream Scry reads the key from the `BRAVE_API_KEY` environment variable;
@@ -19,7 +16,7 @@ data class SearchProvider(
 class SearchProviderService(private val credentials: CredentialStore) {
 
     val providers: List<SearchProvider> = listOf(
-        SearchProvider(BRAVE_PROVIDER_ID, "Brave Search"),
+        SearchProvider(BRAVE_PROVIDER_ID, "Brave Search")
     )
 
     suspend fun isConfigured(providerId: String): Boolean = apiKey(providerId) != null

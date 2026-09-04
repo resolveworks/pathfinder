@@ -1,11 +1,11 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 import kotlin.math.max
 import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 
 private const val CANCEL_MESSAGE = "Login cancelled"
 private const val TIMEOUT_MESSAGE = "Device flow timed out"
@@ -34,7 +34,7 @@ class OAuthDeviceCodePollOptions<T>(
     val intervalSeconds: Double? = null,
     val expiresInSeconds: Long? = null,
     val waitBeforeFirstPoll: Boolean = false,
-    val poll: suspend () -> OAuthDeviceCodePollResult<T>,
+    val poll: suspend () -> OAuthDeviceCodePollResult<T>
 )
 
 /**
@@ -59,14 +59,14 @@ private suspend fun abortableSleep(ms: Long, cancelMessage: String) {
  */
 internal suspend fun <T> pollOAuthDeviceCodeFlow(
     options: OAuthDeviceCodePollOptions<T>,
-    clock: Clock = Clock.System,
+    clock: Clock = Clock.System
 ): T {
     fun now() = clock.now().toEpochMilliseconds()
     val deadline =
         options.expiresInSeconds?.let { now() + it * 1000 } ?: Long.MAX_VALUE
     var intervalMs = max(
         MINIMUM_INTERVAL_MS,
-        Math.floor((options.intervalSeconds ?: DEFAULT_POLL_INTERVAL_SECONDS) * 1000).toLong(),
+        Math.floor((options.intervalSeconds ?: DEFAULT_POLL_INTERVAL_SECONDS) * 1000).toLong()
     )
 
     var slowDownResponses = 0
@@ -88,7 +88,9 @@ internal suspend fun <T> pollOAuthDeviceCodeFlow(
 
         when (val result = options.poll()) {
             is OAuthDeviceCodePollResult.Complete -> return result.value
+
             is OAuthDeviceCodePollResult.Failed -> throw IllegalStateException(result.message)
+
             is OAuthDeviceCodePollResult.SlowDown -> {
                 slowDownResponses += 1
                 // Use the server-provided interval when given (GitHub reports the new required
@@ -105,6 +107,7 @@ internal suspend fun <T> pollOAuthDeviceCodeFlow(
                         max(MINIMUM_INTERVAL_MS, intervalMs + SLOW_DOWN_INTERVAL_INCREMENT_MS)
                     }
             }
+
             OAuthDeviceCodePollResult.Pending -> {}
         }
 
@@ -117,6 +120,6 @@ internal suspend fun <T> pollOAuthDeviceCodeFlow(
     }
 
     throw IllegalStateException(
-        if (slowDownResponses > 0) SLOW_DOWN_TIMEOUT_MESSAGE else TIMEOUT_MESSAGE,
+        if (slowDownResponses > 0) SLOW_DOWN_TIMEOUT_MESSAGE else TIMEOUT_MESSAGE
     )
 }

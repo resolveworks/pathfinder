@@ -1,5 +1,11 @@
 package works.resolve.pathfinder.ai.api
 
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.ContentType
 import works.resolve.pathfinder.ai.Context
@@ -15,16 +21,10 @@ import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.arr
-import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strictBoolean
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 /**
  * Shared logic for the Google Generative AI adapter.
@@ -43,7 +43,7 @@ object GoogleShared {
         MINIMAL("MINIMAL"),
         LOW("LOW"),
         MEDIUM("MEDIUM"),
-        HIGH("HIGH"),
+        HIGH("HIGH")
     }
 
     /** A [ModelThinkingLevel] without the xhigh/max variants. */
@@ -57,7 +57,7 @@ object GoogleShared {
     /** Resolves to a standard Google level; "off" maps to "high" (upstream behavior). */
     fun resolveGoogleThinkingLevel(
         model: Model,
-        level: ModelThinkingLevel,
+        level: ModelThinkingLevel
     ): ResolvedGoogleThinkingLevel {
         if (level == ModelThinkingLevel.OFF) return ResolvedGoogleThinkingLevel.HIGH
 
@@ -65,12 +65,16 @@ object GoogleShared {
         val resolvedLevel = mapped?.lowercase() ?: level.name.lowercase()
         return when (resolvedLevel) {
             "minimal" -> ResolvedGoogleThinkingLevel.MINIMAL
+
             "low" -> ResolvedGoogleThinkingLevel.LOW
+
             "medium" -> ResolvedGoogleThinkingLevel.MEDIUM
+
             "high" -> ResolvedGoogleThinkingLevel.HIGH
+
             else -> throw IllegalStateException(
                 "Unsupported Google thinking level mapping for ${model.provider}/${model.id}: " +
-                    "${level.name.lowercase()} -> $mapped",
+                    "${level.name.lowercase()} -> $mapped"
             )
         }
     }
@@ -100,7 +104,10 @@ object GoogleShared {
     }
 
     /** Only keep signatures from the same provider/model and with valid base64. */
-    private fun resolveThoughtSignature(isSameProviderAndModel: Boolean, signature: String?): String? =
+    private fun resolveThoughtSignature(
+        isSameProviderAndModel: Boolean,
+        signature: String?
+    ): String? =
         if (isSameProviderAndModel && isValidThoughtSignature(signature)) signature else null
 
     private fun getGeminiMajorVersion(modelId: String): Int? =
@@ -134,13 +141,18 @@ object GoogleShared {
     fun convertMessages(model: Model, context: Context): JsonArray {
         val contents = mutableListOf<JsonObject>()
         val normalizeToolCallId = { id: String, _: AssistantMessage ->
-            if (!requiresToolCallId(model.id)) id
-            else id.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(64)
+            if (!requiresToolCallId(model.id)) {
+                id
+            } else {
+                id.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(64)
+            }
         }
 
         for (msg in transformMessages(context.messages, model, normalizeToolCallId)) {
             when (msg.role) {
-                MessageRole.USER -> convertUserMessage(msg as UserMessage, model)?.let { contents.add(it) }
+                MessageRole.USER -> convertUserMessage(msg as UserMessage, model)?.let {
+                    contents.add(it)
+                }
 
                 MessageRole.ASSISTANT -> {
                     val assistant = msg as AssistantMessage
@@ -153,7 +165,10 @@ object GoogleShared {
                             ContentType.TEXT -> {
                                 block as TextContent
                                 val thoughtSignature =
-                                    resolveThoughtSignature(isSameProviderAndModel, block.textSignature)
+                                    resolveThoughtSignature(
+                                        isSameProviderAndModel,
+                                        block.textSignature
+                                    )
                                 // Skip empty text blocks — unless they carry a thought
                                 // signature. Gemini attaches the signature to a part whose
                                 // visible text is empty and requires it echoed back; dropping
@@ -163,22 +178,27 @@ object GoogleShared {
                                     buildJsonObject {
                                         put("text", sanitizeSurrogates(block.text))
                                         thoughtSignature?.let { put("thoughtSignature", it) }
-                                    },
+                                    }
                                 )
                             }
 
                             ContentType.THINKING -> {
                                 block as ThinkingContent
                                 if (isSameProviderAndModel) {
-                                    val thoughtSignature = resolveThoughtSignature(true, block.thinkingSignature)
+                                    val thoughtSignature =
+                                        resolveThoughtSignature(true, block.thinkingSignature)
                                     // Same empty-block rule as text blocks.
-                                    if (block.thinking.isBlank() && thoughtSignature == null) continue
+                                    if (block.thinking.isBlank() &&
+                                        thoughtSignature == null
+                                    ) {
+                                        continue
+                                    }
                                     parts.add(
                                         buildJsonObject {
                                             put("thought", true)
                                             put("text", sanitizeSurrogates(block.thinking))
                                             thoughtSignature?.let { put("thoughtSignature", it) }
-                                        },
+                                        }
                                     )
                                 } else {
                                     // Cross-provider/model: the signature is unusable; convert
@@ -187,7 +207,7 @@ object GoogleShared {
                                     parts.add(
                                         buildJsonObject {
                                             put("text", sanitizeSurrogates(block.thinking))
-                                        },
+                                        }
                                     )
                                 }
                             }
@@ -195,7 +215,10 @@ object GoogleShared {
                             ContentType.TOOL_CALL -> {
                                 block as ToolCall
                                 val thoughtSignature =
-                                    resolveThoughtSignature(isSameProviderAndModel, block.thoughtSignature)
+                                    resolveThoughtSignature(
+                                        isSameProviderAndModel,
+                                        block.thoughtSignature
+                                    )
                                 parts.add(
                                     buildJsonObject {
                                         put(
@@ -203,20 +226,31 @@ object GoogleShared {
                                             buildJsonObject {
                                                 put("name", block.name)
                                                 put("args", parseArgsOrEmpty(block.arguments))
-                                                if (requiresToolCallId(model.id)) put("id", block.id)
-                                            },
+                                                if (requiresToolCallId(
+                                                        model.id
+                                                    )
+                                                ) {
+                                                    put("id", block.id)
+                                                }
+                                            }
                                         )
                                         thoughtSignature?.let { put("thoughtSignature", it) }
-                                    },
+                                    }
                                 )
                             }
 
-                            ContentType.IMAGE -> Unit // assistant images are not replayed upstream either
+                            // assistant images are not replayed upstream either
+                            ContentType.IMAGE -> Unit
                         }
                     }
 
                     if (parts.isNotEmpty()) {
-                        contents.add(buildJsonObject { put("role", "model"); put("parts", JsonArray(parts)) })
+                        contents.add(
+                            buildJsonObject {
+                                put("role", "model")
+                                put("parts", JsonArray(parts))
+                            }
+                        )
                     }
                 }
 
@@ -235,7 +269,8 @@ object GoogleShared {
                         }
 
                     val hasImages = imageContent.isNotEmpty()
-                    val modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id)
+                    val modelSupportsMultimodalFunctionResponse =
+                        supportsMultimodalFunctionResponse(model.id)
 
                     // Use "output" for success, "error" for errors, per SDK docs.
                     val responseValue = when {
@@ -251,7 +286,7 @@ object GoogleShared {
                                 buildJsonObject {
                                     put("mimeType", imageBlock.mimeType)
                                     put("data", imageBlock.data)
-                                },
+                                }
                             )
                         }
                     }
@@ -267,15 +302,15 @@ object GoogleShared {
                                     buildJsonObject {
                                         put(
                                             if (toolMsg.isError) "error" else "output",
-                                            responseValue,
+                                            responseValue
                                         )
-                                    },
+                                    }
                                 )
                                 if (hasImages && modelSupportsMultimodalFunctionResponse) {
                                     put("parts", JsonArray(imageParts))
                                 }
                                 if (includeId) put("id", toolMsg.toolCallId)
-                            },
+                            }
                         )
                     }
 
@@ -285,7 +320,9 @@ object GoogleShared {
                     val lastParts = lastContent?.arr("parts")
                     if (lastContent?.str("role") == "user" &&
                         lastParts != null &&
-                        lastParts.filterIsInstance<JsonObject>().any { it.containsKey("functionResponse") }
+                        lastParts.filterIsInstance<JsonObject>().any {
+                            it.containsKey("functionResponse")
+                        }
                     ) {
                         contents[contents.size - 1] = buildJsonObject {
                             put("role", "user")
@@ -293,7 +330,10 @@ object GoogleShared {
                         }
                     } else {
                         contents.add(
-                            buildJsonObject { put("role", "user"); put("parts", JsonArray(listOf(functionResponsePart))) },
+                            buildJsonObject {
+                                put("role", "user")
+                                put("parts", JsonArray(listOf(functionResponsePart)))
+                            }
                         )
                     }
 
@@ -305,10 +345,15 @@ object GoogleShared {
                                 put(
                                     "parts",
                                     JsonArray(
-                                        listOf(buildJsonObject { put("text", "Tool result image:") }) + imageParts,
-                                    ),
+                                        listOf(
+                                            buildJsonObject {
+                                                put("text", "Tool result image:")
+                                            }
+                                        ) +
+                                            imageParts
+                                    )
                                 )
-                            },
+                            }
                         )
                     }
                 }
@@ -335,7 +380,7 @@ object GoogleShared {
                             buildJsonObject {
                                 put("mimeType", item.mimeType)
                                 put("data", item.data)
-                            },
+                            }
                         )
                     }
                 }
@@ -344,7 +389,10 @@ object GoogleShared {
             }
         }
         if (parts.isEmpty()) return null
-        return buildJsonObject { put("role", "user"); put("parts", JsonArray(parts)) }
+        return buildJsonObject {
+            put("role", "user")
+            put("parts", JsonArray(parts))
+        }
     }
 
     private fun parseArgsOrEmpty(raw: String): JsonElement = try {
@@ -356,17 +404,23 @@ object GoogleShared {
 
     // JSON Schema meta-declarations stripped when using legacy OpenAPI `parameters`.
     private val JSON_SCHEMA_META_DECLARATIONS = setOf(
-        "${'$'}schema", "${'$'}id", "${'$'}anchor", "${'$'}dynamicAnchor", "${'$'}vocabulary",
-        "${'$'}comment", "${'$'}defs",
-        "definitions", // pre-draft-2019-09 equivalent of $defs
+        "${'$'}schema",
+        "${'$'}id",
+        "${'$'}anchor",
+        "${'$'}dynamicAnchor",
+        "${'$'}vocabulary",
+        "${'$'}comment",
+        "${'$'}defs",
+        "definitions" // pre-draft-2019-09 equivalent of $defs
     )
 
     internal fun sanitizeForOpenApi(schema: JsonElement): JsonElement = when (schema) {
         !is JsonObject -> schema
+
         else -> JsonObject(
             schema.entries
                 .filter { it.key !in JSON_SCHEMA_META_DECLARATIONS }
-                .associate { it.key to sanitizeForOpenApi(it.value) },
+                .associate { it.key to sanitizeForOpenApi(it.value) }
         )
     }
 
@@ -379,7 +433,7 @@ object GoogleShared {
     fun convertTools(
         tools: List<Tool>,
         useParameters: Boolean = false,
-        supportsStrictMode: Boolean = true,
+        supportsStrictMode: Boolean = true
     ): JsonArray? {
         if (tools.isEmpty()) return null
         return JsonArray(
@@ -389,7 +443,8 @@ object GoogleShared {
                         "functionDeclarations",
                         JsonArray(
                             tools.map { tool ->
-                                val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictMode)
+                                val strict =
+                                    resolveJsonSchemaStrictSampling(tool, supportsStrictMode)
                                 val parameters = getJsonSchemaToolParameters(tool, strict)
                                 buildJsonObject {
                                     put("name", tool.name)
@@ -400,11 +455,11 @@ object GoogleShared {
                                         put("parametersJsonSchema", parameters)
                                     }
                                 }
-                            },
-                        ),
+                            }
+                        )
                     )
-                },
-            ),
+                }
+            )
         )
     }
 
@@ -424,9 +479,12 @@ object GoogleShared {
     fun resolveGoogleFunctionCallingMode(
         tools: List<Tool>,
         toolChoice: String?,
-        supportsStrictMode: Boolean,
+        supportsStrictMode: Boolean
     ): String? {
-        val useStrictMode = tools.any { resolveJsonSchemaStrictSampling(it, supportsStrictMode) == true }
+        val useStrictMode = tools.any {
+            resolveJsonSchemaStrictSampling(it, supportsStrictMode) ==
+                true
+        }
         if (toolChoice == "none" || toolChoice == "any") {
             return mapToolChoice(toolChoice)
         }
@@ -442,6 +500,4 @@ object GoogleShared {
         "MAX_TOKENS" -> StopReason.LENGTH
         else -> StopReason.ERROR
     }
-
 }
-

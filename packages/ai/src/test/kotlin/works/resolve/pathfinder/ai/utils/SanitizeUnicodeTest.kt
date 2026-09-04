@@ -30,13 +30,13 @@ class SanitizeUnicodeTest {
     @Test
     fun `unpaired high surrogate is removed`() {
         val unpaired = String(charArrayOf(0xD83D.toChar()))
-        assertEquals("Text  here", sanitizeSurrogates("Text ${unpaired} here"))
+        assertEquals("Text  here", sanitizeSurrogates("Text $unpaired here"))
     }
 
     @Test
     fun `unpaired low surrogate is removed`() {
         val unpaired = String(charArrayOf(0xDE48.toChar()))
-        assertEquals("Text  here", sanitizeSurrogates("Text ${unpaired} here"))
+        assertEquals("Text  here", sanitizeSurrogates("Text $unpaired here"))
     }
 
     // -----------------------------------------------------------------------
@@ -103,7 +103,7 @@ class SanitizeUnicodeTest {
     @Test
     fun `upstream unpaired high surrogate payload is sanitized`() {
         val unpaired = String(charArrayOf(0xD83D.toChar()))
-        val payload = "Text with unpaired surrogate: ${unpaired} <- should be sanitized"
+        val payload = "Text with unpaired surrogate: $unpaired <- should be sanitized"
         val sanitized = sanitizeSurrogates(payload)
         assertEquals("Text with unpaired surrogate:  <- should be sanitized", sanitized)
         assertNoUnpairedSurrogates(sanitized)
@@ -121,7 +121,7 @@ class SanitizeUnicodeTest {
             "你好",
             "∑∫∂√",
             "\"curly\" 'quotes'",
-            "äußersr",
+            "äußersr"
         )
         for (text in preserved) {
             assertEquals(text, sanitizeSurrogates(text))
@@ -150,12 +150,16 @@ class SanitizeUnicodeTest {
             Triple("payload pair forms 🙈", "$highPayload$lowPayload", "🙈"),
             Triple("unpaired high at string start", "${highStart}a", "a"),
             Triple("unpaired high at string end", "a$highPayload", "a"),
-            Triple("unpaired high before BMP char", "${highPayload}!", "!"),
+            Triple("unpaired high before BMP char", "$highPayload!", "!"),
             Triple("unpaired low at string start", "${lowStart}a", "a"),
             Triple("unpaired low after BMP char", "a$lowPayload", "a"),
-            Triple("second high pairs with trailing low", "$highStart$highPayload$lowPayload", "$highPayload$lowPayload"),
+            Triple(
+                "second high pairs with trailing low",
+                "$highStart$highPayload$lowPayload",
+                "$highPayload$lowPayload"
+            ),
             Triple("low then high are both dropped", "$lowPayload$highPayload", ""),
-            Triple("pair chain stays intact", "🙈🙈", "🙈🙈"),
+            Triple("pair chain stays intact", "🙈🙈", "🙈🙈")
         )
         for ((name, input, expected) in cases) {
             assertEquals(expected, sanitizeSurrogates(input), name)
@@ -176,7 +180,7 @@ class SanitizeUnicodeTest {
             assertEquals(
                 sanitizeSurrogatesUpstream(text),
                 sanitizeSurrogates(text),
-                "divergence from pi's regex for input ${escapeSurrogates(text)}",
+                "divergence from pi's regex for input ${escapeSurrogates(text)}"
             )
         }
     }
@@ -188,7 +192,11 @@ class SanitizeUnicodeTest {
         for (text in inputs) {
             val sanitized = sanitizeSurrogates(text)
             assertNoUnpairedSurrogates(sanitized)
-            assertEquals(sanitized, sanitizeSurrogates(sanitized), "not idempotent for ${escapeSurrogates(text)}")
+            assertEquals(
+                sanitized,
+                sanitizeSurrogates(sanitized),
+                "not idempotent for ${escapeSurrogates(text)}"
+            )
         }
     }
 
@@ -197,11 +205,10 @@ class SanitizeUnicodeTest {
     // -----------------------------------------------------------------------
 
     /** pi's implementation: drop unpaired high/low surrogates via regex. */
-    private fun sanitizeSurrogatesUpstream(text: String): String =
-        text.replace(
-            Regex("[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]"),
-            "",
-        )
+    private fun sanitizeSurrogatesUpstream(text: String): String = text.replace(
+        Regex("[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]"),
+        ""
+    )
 
     private val surrogateTableAlphabet = listOf(
         'a',
@@ -210,7 +217,7 @@ class SanitizeUnicodeTest {
         0xDBFF.toChar(), // high surrogate range end
         0xDC00.toChar(), // low surrogate range start
         0xDE48.toChar(), // low half of 🙈 (U+1F648)
-        0xDFFF.toChar(), // low surrogate range end
+        0xDFFF.toChar() // low surrogate range end
     )
 
     /** All strings of length 1..4 over [surrogateTableAlphabet] (2800 cases). */

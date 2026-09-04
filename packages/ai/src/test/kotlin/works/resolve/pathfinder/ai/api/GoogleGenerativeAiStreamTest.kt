@@ -1,19 +1,5 @@
 package works.resolve.pathfinder.ai.api
 
-import works.resolve.pathfinder.ai.testing.FakeClock
-import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.Context
-import works.resolve.pathfinder.ai.InputModality
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.SimpleStreamOptions
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.ThinkingContent
-import works.resolve.pathfinder.ai.ThinkingLevel
-import works.resolve.pathfinder.ai.ToolCall
-import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.testing.FakeTransport
-import works.resolve.pathfinder.ai.testing.sse
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -26,6 +12,20 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.InputModality
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.SimpleStreamOptions
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingContent
+import works.resolve.pathfinder.ai.ThinkingLevel
+import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.testing.FakeTransport
+import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
 
 class GoogleGenerativeAiStreamTest {
@@ -33,19 +33,21 @@ class GoogleGenerativeAiStreamTest {
     private val model = geminiModel()
     private val context = Context(messages = listOf(UserMessage.ofText("hi")))
 
-    private fun geminiModel(
-        id: String = "gemini-2.5-flash",
-        baseUrl: String = "",
-    ) = Model(
+    private fun geminiModel(id: String = "gemini-2.5-flash", baseUrl: String = "") = Model(
         id = id, name = id, api = "google-generative-ai", provider = "google",
-        baseUrl = baseUrl, reasoning = true, input = listOf(InputModality.TEXT, InputModality.IMAGE),
-        contextWindow = 128000, maxTokens = 8192,
+        baseUrl = baseUrl, reasoning = true,
+        input = listOf(
+            InputModality.TEXT,
+            InputModality.IMAGE
+        ),
+        contextWindow = 128000, maxTokens = 8192
     )
 
     private fun api(transport: FakeTransport) = GoogleGenerativeAiApi(
         transport,
-        works.resolve.pathfinder.ai.utils.ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 }),
-        clock = FakeClock(startEpochMs = 1_770_000_000_000L),
+        works.resolve.pathfinder.ai.utils.ProviderRetry(sleep = {
+        }, clock = FakeClock(0L), random = { 0.0 }),
+        clock = FakeClock(startEpochMs = 1_770_000_000_000L)
     )
 
     private suspend fun events(transport: FakeTransport) = api(transport)
@@ -62,8 +64,8 @@ class GoogleGenerativeAiStreamTest {
                     "responseId":"resp-1"}""",
                 """{"candidates":[{"content":{"role":"model","parts":[{"text":"lo"}]}}],
                     "usageMetadata":{"promptTokenCount":10,"cachedContentTokenCount":4,
-                    "candidatesTokenCount":4,"thoughtsTokenCount":2,"totalTokenCount":16}}""",
-            ),
+                    "candidatesTokenCount":4,"thoughtsTokenCount":2,"totalTokenCount":16}}"""
+            )
         )
         val events = events(transport)
 
@@ -95,8 +97,8 @@ class GoogleGenerativeAiStreamTest {
                     {"text":"thinking hard","thought":true,"thoughtSignature":"AAAAAAAAAAAAAAAAAAAAAA=="},
                     {"text":"answer"},
                     {"text":" more","thought":true}
-                    ]},"finishReason":"STOP"}]}""",
-            ),
+                    ]},"finishReason":"STOP"}]}"""
+            )
         )
         val events = events(transport)
         val thinkingStarts = events.filterIsInstance<AssistantMessageEvent.ThinkingStart>()
@@ -126,8 +128,8 @@ class GoogleGenerativeAiStreamTest {
                 """{"candidates":[{"content":{"parts":[
                     {"text":"let me check"},
                     {"functionCall":{"name":"bash","args":{"command":"ls"}}}
-                    ]},"finishReason":"STOP"}]}""",
-            ),
+                    ]},"finishReason":"STOP"}]}"""
+            )
         )
         val events = events(transport)
         val toolEnd = events.filterIsInstance<AssistantMessageEvent.ToolCallEnd>().single()
@@ -152,8 +154,8 @@ class GoogleGenerativeAiStreamTest {
                 """{"candidates":[{"content":{"parts":[
                     {"functionCall":{"id":"dup","name":"a","args":{}}},
                     {"functionCall":{"id":"dup","name":"b","args":{}}}
-                    ]},"finishReason":"STOP"}]}""",
-            ),
+                    ]},"finishReason":"STOP"}]}"""
+            )
         )
         val events = events(transport)
         val calls = events.filterIsInstance<AssistantMessageEvent.ToolCallEnd>().map { it.toolCall }
@@ -171,8 +173,8 @@ class GoogleGenerativeAiStreamTest {
             sse(
                 """{"candidates":[{"content":{"parts":[
                     {"functionCall":{"id":"call-1","name":"echo","args":{"value":"truncated"}}}
-                    ]},"finishReason":"MAX_TOKENS"}]}""",
-            ),
+                    ]},"finishReason":"MAX_TOKENS"}]}"""
+            )
         )
         val events = events(transport)
         val done = assertIs<AssistantMessageEvent.Done>(events.last())
@@ -195,7 +197,9 @@ class GoogleGenerativeAiStreamTest {
     @Test
     fun `stream without finish reason is an error`() = runTest {
         val transport = FakeTransport()
-        transport.enqueueResponse(sse("""{"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}"""))
+        transport.enqueueResponse(
+            sse("""{"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}""")
+        )
         val events = events(transport)
         val error = assertIs<AssistantMessageEvent.Error>(events.last())
         assertEquals("Google stream ended without a finish reason", error.error.errorMessage)
@@ -217,13 +221,13 @@ class GoogleGenerativeAiStreamTest {
         val transport = FakeTransport()
         transport.enqueueError(
             400,
-            """{"error":{"code":400,"message":"API key not valid","status":"INVALID_ARGUMENT"}}""",
+            """{"error":{"code":400,"message":"API key not valid","status":"INVALID_ARGUMENT"}}"""
         )
         val events = events(transport)
         val error = assertIs<AssistantMessageEvent.Error>(events.single())
         assertEquals(
             """400: {"error":{"code":400,"message":"API key not valid","status":"INVALID_ARGUMENT"}}""",
-            error.error.errorMessage,
+            error.error.errorMessage
         )
     }
 
@@ -232,21 +236,21 @@ class GoogleGenerativeAiStreamTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
         val headerModel = model.copy(
-            headers = mapOf("X-Model" to "model-value"),
+            headers = mapOf("X-Model" to "model-value")
         )
         api(transport).stream(
             headerModel,
             context,
             GoogleGenerativeAiApi.GoogleOptions(
                 apiKey = "k",
-                headers = mapOf("x-model" to "request-value"),
-            ),
+                headers = mapOf("x-model" to "request-value")
+            )
         ).toList()
 
         val request = transport.requests.single()
         assertEquals(
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
-            request.url,
+            request.url
         )
         assertEquals("k", request.headers["x-goog-api-key"])
         assertEquals("request-value", request.headers["x-model"])
@@ -257,7 +261,7 @@ class GoogleGenerativeAiStreamTest {
         assertTrue(body.containsKey("contents"))
         assertEquals(
             "user",
-            body["contents"]!!.jsonArray[0].jsonObject["role"]!!.jsonPrimitive.content,
+            body["contents"]!!.jsonArray[0].jsonObject["role"]!!.jsonPrimitive.content
         )
     }
 
@@ -268,11 +272,11 @@ class GoogleGenerativeAiStreamTest {
         api(transport).stream(
             geminiModel(baseUrl = "https://proxy.example/v1beta"),
             context,
-            GoogleGenerativeAiApi.GoogleOptions(apiKey = "k"),
+            GoogleGenerativeAiApi.GoogleOptions(apiKey = "k")
         ).toList()
         assertEquals(
             "https://proxy.example/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
-            transport.requests.single().url,
+            transport.requests.single().url
         )
     }
 
@@ -289,24 +293,27 @@ class GoogleGenerativeAiStreamTest {
                     works.resolve.pathfinder.ai.Tool(
                         name = "bash",
                         description = "run",
-                        parameters = Json.parseToJsonElement("""{"type":"object"}"""),
-                    ),
-                ),
+                        parameters = Json.parseToJsonElement("""{"type":"object"}""")
+                    )
+                )
             ),
             GoogleGenerativeAiApi.GoogleOptions(
                 apiKey = "k",
                 toolChoice = "any",
                 temperature = 0.5,
-                maxTokens = 128,
-            ),
+                maxTokens = 128
+            )
         ).toList()
 
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals("be brief", body["systemInstruction"]!!.jsonPrimitive.content)
         assertTrue(body.containsKey("tools"))
         assertEquals(
             "ANY",
-            body["toolConfig"]!!.jsonObject["functionCallingConfig"]!!.jsonObject["mode"]!!.jsonPrimitive.content,
+            body["toolConfig"]!!.jsonObject["functionCallingConfig"]!!.jsonObject["mode"]!!
+                .jsonPrimitive.content
         )
         val generationConfig = body["generationConfig"]!!.jsonObject
         assertEquals(0.5, generationConfig["temperature"]!!.jsonPrimitive.content.toDouble())
@@ -320,10 +327,12 @@ class GoogleGenerativeAiStreamTest {
         api(transport).streamSimple(
             model,
             context,
-            SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.MEDIUM),
+            SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.MEDIUM)
         ).toList()
 
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
         assertEquals(true, thinkingConfig["includeThoughts"]!!.jsonPrimitive.content.toBoolean())
         assertEquals(8192, thinkingConfig["thinkingBudget"]!!.jsonPrimitive.content.toInt())
@@ -335,7 +344,9 @@ class GoogleGenerativeAiStreamTest {
         transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
         api(transport).streamSimple(model, context, SimpleStreamOptions(apiKey = "k")).toList()
 
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
         assertEquals(0, thinkingConfig["thinkingBudget"]!!.jsonPrimitive.content.toInt())
         assertNull(thinkingConfig["includeThoughts"])
@@ -350,7 +361,7 @@ class GoogleGenerativeAiStreamTest {
             .stream(
                 model,
                 context,
-                GoogleGenerativeAiApi.GoogleOptions(apiKey = "k", maxRetries = 1),
+                GoogleGenerativeAiApi.GoogleOptions(apiKey = "k", maxRetries = 1)
             )
             .toList()
             .last()
@@ -365,9 +376,11 @@ class GoogleGenerativeAiStreamTest {
         api(transport).streamSimple(
             geminiModel(id = "gemini-3-pro-preview"),
             context,
-            SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.MEDIUM),
+            SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.MEDIUM)
         ).toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
         assertEquals("HIGH", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
         assertNull(thinkingConfig["thinkingBudget"])
@@ -381,10 +394,13 @@ class GoogleGenerativeAiStreamTest {
             api(transport).streamSimple(
                 geminiModel(id = "gemini-3-pro-preview"),
                 context,
-                SimpleStreamOptions(apiKey = "k", reasoning = level),
+                SimpleStreamOptions(apiKey = "k", reasoning = level)
             ).toList()
-            val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
-            val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
+            val body = Json.parseToJsonElement(
+                transport.requests.single().body.decodeToString()
+            ).jsonObject
+            val thinkingConfig =
+                body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
             // Gemini 3 Pro has no MINIMAL level: minimal and low both floor to LOW.
             assertEquals("LOW", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
         }
@@ -397,13 +413,15 @@ class GoogleGenerativeAiStreamTest {
         api(transport).streamSimple(
             geminiModel(id = "gemini-3-flash-preview"),
             context,
-            SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.MINIMAL),
+            SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.MINIMAL)
         ).toList()
-        var body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        var body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         assertEquals(
             "MINIMAL",
             body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject["thinkingLevel"]!!
-                .jsonPrimitive.content,
+                .jsonPrimitive.content
         )
 
         // Thinking-off still sends the lowest supported level (Gemini 3 Flash
@@ -413,9 +431,12 @@ class GoogleGenerativeAiStreamTest {
         api(disableTransport).streamSimple(
             geminiModel(id = "gemini-3-flash-preview"),
             context,
-            SimpleStreamOptions(apiKey = "k"),
+            SimpleStreamOptions(apiKey = "k")
         ).toList()
-        body = Json.parseToJsonElement(disableTransport.requests.single().body.decodeToString()).jsonObject
+        body =
+            Json.parseToJsonElement(
+                disableTransport.requests.single().body.decodeToString()
+            ).jsonObject
         val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
         assertEquals("MINIMAL", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
         assertNull(thinkingConfig["includeThoughts"])
@@ -429,9 +450,11 @@ class GoogleGenerativeAiStreamTest {
         api(transport).streamSimple(
             geminiModel(id = "gemini-3.1-pro-preview"),
             context,
-            SimpleStreamOptions(apiKey = "k"),
+            SimpleStreamOptions(apiKey = "k")
         ).toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
         assertEquals("LOW", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
         assertNull(thinkingConfig["includeThoughts"])
@@ -439,19 +462,25 @@ class GoogleGenerativeAiStreamTest {
 
     @Test
     fun `gemma4 maps low to MINIMAL and high to HIGH`() = runTest {
-        for ((level, expected) in listOf(ThinkingLevel.LOW to "MINIMAL", ThinkingLevel.HIGH to "HIGH")) {
+        for ((level, expected) in listOf(
+            ThinkingLevel.LOW to "MINIMAL",
+            ThinkingLevel.HIGH to "HIGH"
+        )) {
             val transport = FakeTransport()
             transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
             api(transport).streamSimple(
                 geminiModel(id = "gemma-4-xel"),
                 context,
-                SimpleStreamOptions(apiKey = "k", reasoning = level),
+                SimpleStreamOptions(apiKey = "k", reasoning = level)
             ).toList()
-            val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+            val body = Json.parseToJsonElement(
+                transport.requests.single().body.decodeToString()
+            ).jsonObject
             assertEquals(
                 expected,
-                body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject["thinkingLevel"]!!
-                    .jsonPrimitive.content,
+                body["generationConfig"]!!.jsonObject["thinkingConfig"]!!
+                    .jsonObject["thinkingLevel"]!!
+                    .jsonPrimitive.content
             )
         }
     }
@@ -463,9 +492,11 @@ class GoogleGenerativeAiStreamTest {
         api(transport).streamSimple(
             geminiModel(id = "gemma-4-xel"),
             context,
-            SimpleStreamOptions(apiKey = "k"),
+            SimpleStreamOptions(apiKey = "k")
         ).toList()
-        val body = Json.parseToJsonElement(transport.requests.single().body.decodeToString()).jsonObject
+        val body = Json.parseToJsonElement(
+            transport.requests.single().body.decodeToString()
+        ).jsonObject
         val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
         assertEquals("MINIMAL", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
         assertNull(thinkingConfig["includeThoughts"])
@@ -481,8 +512,8 @@ class GoogleGenerativeAiStreamTest {
             context,
             GoogleGenerativeAiApi.GoogleOptions(
                 apiKey = "k",
-                headers = mapOf("User-Agent" to "custom-agent"),
-            ),
+                headers = mapOf("User-Agent" to "custom-agent")
+            )
         ).toList()
         assertEquals("custom-agent", transport.requests.single().headers["User-Agent"])
     }
@@ -494,14 +525,19 @@ class GoogleGenerativeAiStreamTest {
             sse(
                 """{"candidates":[{"content":{"parts":[{"text":"a"}]}}]}""",
                 """{"candidates":[{"content":{"parts":[{"text":"b"}]}}]}""",
-                """{"candidates":[{"content":{"parts":[{"text":"c"}]},"finishReason":"STOP"}]}""",
-            ),
+                """{"candidates":[{"content":{"parts":[{"text":"c"}]},"finishReason":"STOP"}]}"""
+            )
         )
         val events = api(transport)
             .stream(model, context, GoogleGenerativeAiApi.GoogleOptions(apiKey = "k"))
             .take(3) // Start, TextStart, first TextDelta
             .toList()
-        assertTrue(events.none { it is AssistantMessageEvent.Error }, "cancellation must not emit Error")
+        assertTrue(
+            events.none {
+                it is AssistantMessageEvent.Error
+            },
+            "cancellation must not emit Error"
+        )
         assertTrue(transport.cancelled.value, "transport must observe cancellation")
     }
 
@@ -516,8 +552,8 @@ class GoogleGenerativeAiStreamTest {
             sse(
                 """{"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],
                     "usageMetadata":{"promptTokenCount":"10","candidatesTokenCount":2.5,
-                    "totalTokenCount":12}}""",
-            ),
+                    "totalTokenCount":12}}"""
+            )
         )
         val events = events(transport)
         val done = assertIs<AssistantMessageEvent.Done>(events.last())

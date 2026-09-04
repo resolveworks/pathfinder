@@ -1,9 +1,9 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 
 /**
  * Platform gate that suspends OAuth network work while the app is
@@ -32,7 +32,7 @@ fun interface OAuthForegroundGate {
  */
 internal class ForegroundGatedOAuthHttpClient(
     private val delegate: OAuthHttpClient,
-    private val gate: OAuthForegroundGate,
+    private val gate: OAuthForegroundGate
 ) : OAuthHttpClient {
     override suspend fun execute(request: OAuthHttpRequest): OAuthHttpResponse {
         gate.awaitForeground()

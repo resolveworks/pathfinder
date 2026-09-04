@@ -1,39 +1,48 @@
 package works.resolve.pathfinder.ai.utils
 
-import works.resolve.pathfinder.ai.StreamOptions
-import works.resolve.pathfinder.ai.testing.FakeClock
-import works.resolve.pathfinder.ai.transport.NetworkException
-import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
+import works.resolve.pathfinder.ai.StreamOptions
+import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.transport.NetworkException
+import works.resolve.pathfinder.ai.transport.ProviderHttpException
 
 class ProviderRetryTest {
 
     private class Harness(
         val sleeps: MutableList<Long> = mutableListOf(),
-        var randomValue: Double = 0.0,
+        var randomValue: Double = 0.0
     ) {
         val retry = ProviderRetry(
             sleep = { sleeps.add(it) },
             clock = FakeClock(1_000_000L),
-            random = { randomValue },
+            random = { randomValue }
         )
     }
 
     private fun httpError(
         status: Int,
-        headers: Map<String, List<String>> = emptyMap(),
-    ): ProviderHttpException = ProviderHttpException(status, headers.mapKeys { it.key.lowercase() }, "")
+        headers: Map<String, List<String>> = emptyMap()
+    ): ProviderHttpException = ProviderHttpException(
+        status,
+        headers.mapKeys {
+            it.key.lowercase()
+        },
+        ""
+    )
 
     @Test
     fun `retries 408 409 429 and 5xx`() = runTest {
         for (status in listOf(408, 409, 429, 500, 503)) {
             val h = Harness()
             var calls = 0
-            h.retry.retryProviderRequest(maxRetries = 2, maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS) {
+            h.retry.retryProviderRequest(
+                maxRetries = 2,
+                maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS
+            ) {
                 calls++
                 if (calls < 3) throw httpError(status)
                 "ok"
@@ -47,7 +56,10 @@ class ProviderRetryTest {
         val h = Harness()
         var calls = 0
         val error = assertFailsWith<ProviderHttpException> {
-            h.retry.retryProviderRequest(maxRetries = 3, maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS) {
+            h.retry.retryProviderRequest(
+                maxRetries = 3,
+                maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS
+            ) {
                 calls++
                 throw httpError(400)
             }
@@ -61,7 +73,10 @@ class ProviderRetryTest {
         run {
             val h = Harness()
             var calls = 0
-            h.retry.retryProviderRequest(maxRetries = 1, maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS) {
+            h.retry.retryProviderRequest(
+                maxRetries = 1,
+                maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS
+            ) {
                 calls++
                 if (calls == 1) throw httpError(400, mapOf("X-Should-Retry" to listOf("true")))
                 "ok"
@@ -72,7 +87,10 @@ class ProviderRetryTest {
             val h = Harness()
             var calls = 0
             assertFailsWith<ProviderHttpException> {
-                h.retry.retryProviderRequest(maxRetries = 1, maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS) {
+                h.retry.retryProviderRequest(
+                    maxRetries = 1,
+                    maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS
+                ) {
                     calls++
                     throw httpError(500, mapOf("x-should-retry" to listOf("false")))
                 }
@@ -85,7 +103,10 @@ class ProviderRetryTest {
     fun `retries network exceptions`() = runTest {
         val h = Harness()
         var calls = 0
-        h.retry.retryProviderRequest(maxRetries = 1, maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS) {
+        h.retry.retryProviderRequest(
+            maxRetries = 1,
+            maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS
+        ) {
             calls++
             if (calls == 1) throw NetworkException(java.io.IOException("boom"))
             "ok"
@@ -98,7 +119,10 @@ class ProviderRetryTest {
         val h = Harness()
         var calls = 0
         assertFailsWith<IllegalStateException> {
-            h.retry.retryProviderRequest(maxRetries = 5, maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS) {
+            h.retry.retryProviderRequest(
+                maxRetries = 5,
+                maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS
+            ) {
                 calls++
                 throw IllegalStateException("nope")
             }
@@ -110,7 +134,10 @@ class ProviderRetryTest {
     fun `uses retry-after-ms and validates against cap`() = runTest {
         val h = Harness()
         var calls = 0
-        h.retry.retryProviderRequest(maxRetries = 1, maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS) {
+        h.retry.retryProviderRequest(
+            maxRetries = 1,
+            maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS
+        ) {
             calls++
             if (calls == 1) throw httpError(429, mapOf("Retry-After-Ms" to listOf("2500")))
             "ok"
@@ -148,17 +175,42 @@ class ProviderRetryTest {
     @Test
     fun `retry-after-ms takes precedence over retry-after`() = runTest {
         val h = Harness()
-        val error = httpError(429, mapOf("Retry-After-Ms" to listOf("100"), "Retry-After" to listOf("30")))
+        val error = httpError(
+            429,
+            mapOf(
+                "Retry-After-Ms" to listOf("100"),
+                "Retry-After" to listOf("30")
+            )
+        )
         assertEquals(100L, h.retry.retryDelayMs(error, 0, 60_000))
     }
 
     @Test
     fun `parses numeric prefixes like parseFloat`() = runTest {
         val h = Harness()
-        assertEquals(1200L, h.retry.retryDelayMs(httpError(429, mapOf("retry-after-ms" to listOf("1200ms"))), 0, 60_000))
-        val error = httpError(429, mapOf("Retry-After-Ms" to listOf("soon"), "Retry-After" to listOf("2")))
+        assertEquals(
+            1200L,
+            h.retry.retryDelayMs(
+                httpError(429, mapOf("retry-after-ms" to listOf("1200ms"))),
+                0,
+                60_000
+            )
+        )
+        val error = httpError(
+            429,
+            mapOf(
+                "Retry-After-Ms" to listOf("soon"),
+                "Retry-After" to listOf("2")
+            )
+        )
         assertEquals(2000L, h.retry.retryDelayMs(error, 0, 60_000))
-        val nan = httpError(429, mapOf("Retry-After-Ms" to listOf("NaN"), "Retry-After" to listOf("2")))
+        val nan = httpError(
+            429,
+            mapOf(
+                "Retry-After-Ms" to listOf("NaN"),
+                "Retry-After" to listOf("2")
+            )
+        )
         assertEquals(2000L, h.retry.retryDelayMs(nan, 0, 60_000))
     }
 
@@ -168,10 +220,13 @@ class ProviderRetryTest {
         var calls = 0
         val retry = ProviderRetry(
             sleep = { throw kotlinx.coroutines.CancellationException("aborted") },
-            clock = FakeClock(0L),
+            clock = FakeClock(0L)
         )
         assertFailsWith<kotlinx.coroutines.CancellationException> {
-            retry.retryProviderRequest(maxRetries = 2, maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS) {
+            retry.retryProviderRequest(
+                maxRetries = 2,
+                maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS
+            ) {
                 calls++
                 throw httpError(429)
             }
@@ -204,13 +259,19 @@ class ProviderRetryTest {
             .atZone(java.time.ZoneOffset.UTC)
             .format(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
         var calls = 0
-        h.retry.retryProviderRequest(maxRetries = 1, maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS) {
+        h.retry.retryProviderRequest(
+            maxRetries = 1,
+            maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS
+        ) {
             calls++
             if (calls == 1) throw httpError(503, mapOf("Retry-After" to listOf(stale)))
             "ok"
         }
         // Raw delay is negative (pi returns it unclamped); the sleep clamps to zero.
-        assertTrue(h.retry.retryDelayMs(httpError(503, mapOf("Retry-After" to listOf(stale))), 0, 60_000) < 0)
+        assertTrue(
+            h.retry.retryDelayMs(httpError(503, mapOf("Retry-After" to listOf(stale))), 0, 60_000) <
+                0
+        )
         assertEquals(listOf(0L), h.sleeps)
     }
 
@@ -236,7 +297,10 @@ class ProviderRetryTest {
         val h = Harness()
         var calls = 0
         assertFailsWith<ProviderHttpException> {
-            h.retry.retryProviderRequest(maxRetries = 2, maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS) {
+            h.retry.retryProviderRequest(
+                maxRetries = 2,
+                maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS
+            ) {
                 calls++
                 throw httpError(500)
             }
@@ -250,7 +314,10 @@ class ProviderRetryTest {
         val h = Harness()
         var calls = 0
         assertFailsWith<ProviderHttpException> {
-            h.retry.retryProviderRequest(maxRetries = 0, maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS) {
+            h.retry.retryProviderRequest(
+                maxRetries = 0,
+                maxRetryDelayMs = StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS
+            ) {
                 calls++
                 throw httpError(500)
             }

@@ -1,22 +1,5 @@
 package works.resolve.pathfinder.codingagent.core
 
-import works.resolve.pathfinder.agent.*
-
-import works.resolve.pathfinder.ai.ChatApi
-import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.Context
-import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.SimpleStreamOptions
-import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.Usage
-import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
-import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
-import works.resolve.pathfinder.codingagent.core.compaction.createCompactionSummaryMessage
-import works.resolve.pathfinder.codingagent.core.RetrySettings
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
@@ -34,6 +17,26 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import works.resolve.pathfinder.agent.Agent
+import works.resolve.pathfinder.agent.AgentEvent
+import works.resolve.pathfinder.agent.StreamFn
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.AssistantMessageEvent
+import works.resolve.pathfinder.ai.ChatApi
+import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.Provider
+import works.resolve.pathfinder.ai.ResolvedAuth
+import works.resolve.pathfinder.ai.SimpleStreamOptions
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.Usage
+import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.codingagent.core.RetrySettings
+import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
+import works.resolve.pathfinder.codingagent.core.compaction.createCompactionSummaryMessage
+import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
 
 class AgentCompactionTest {
 
@@ -44,7 +47,7 @@ class AgentCompactionTest {
         provider = "zai",
         baseUrl = "https://example.invalid",
         contextWindow = 200_000,
-        maxTokens = 8_192,
+        maxTokens = 8_192
     )
 
     private fun assistant(
@@ -54,7 +57,7 @@ class AgentCompactionTest {
         usage: Usage = Usage(),
         timestamp: Long = System.currentTimeMillis(),
         provider: String = model.provider,
-        modelId: String = model.id,
+        modelId: String = model.id
     ) = AssistantMessage(
         content = if (text.isEmpty()) emptyList() else listOf(TextContent(text)),
         api = model.api,
@@ -63,7 +66,7 @@ class AgentCompactionTest {
         stopReason = stopReason,
         errorMessage = errorMessage,
         usage = usage,
-        timestamp = timestamp,
+        timestamp = timestamp
     )
 
     private class FauxApi : ChatApi {
@@ -73,12 +76,14 @@ class AgentCompactionTest {
         override fun streamSimple(
             model: Model,
             context: Context,
-            options: SimpleStreamOptions,
+            options: SimpleStreamOptions
         ): Flow<AssistantMessageEvent> = flow {
             gate?.await()
             val response = responses.removeFirstOrNull()
                 ?: error("No faux summary response queued")
-            if (response.stopReason == StopReason.ERROR || response.stopReason == StopReason.ABORTED) {
+            if (response.stopReason == StopReason.ERROR ||
+                response.stopReason == StopReason.ABORTED
+            ) {
                 emit(AssistantMessageEvent.Error(response.stopReason, response))
             } else {
                 emit(AssistantMessageEvent.Done(response.stopReason, response))
@@ -96,9 +101,9 @@ class AgentCompactionTest {
                     "https://faux.test",
                     authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
                     models = listOf(model),
-                    apis = mapOf(model.api to api),
-                ),
-            ),
+                    apis = mapOf(model.api to api)
+                )
+            )
         )
         return api to models
     }
@@ -115,28 +120,30 @@ class AgentCompactionTest {
     private fun session(
         streams: ScriptedStreams,
         models: Models?,
-        compactionSettings: CompactionSettings = CompactionSettings(enabled = true, reserveTokens = 16_384, keepRecentTokens = 20_000),
+        compactionSettings: CompactionSettings =
+            CompactionSettings(enabled = true, reserveTokens = 16_384, keepRecentTokens = 20_000),
         retrySettings: RetrySettings = RetrySettings(enabled = false),
-        sleep: suspend (Long) -> Unit = { },
+        sleep: suspend (Long) -> Unit = { }
     ) = AgentSession(
         agent = Agent(
             model = model,
-            streamFn = streams.streamFn,
+            streamFn = streams.streamFn
         ),
         retrySettings = retrySettings,
         compactionSettings = compactionSettings,
         models = models,
-        sleep = sleep,
+        sleep = sleep
     )
 
-    private suspend fun collectEvents(agent: AgentSession): MutableList<AgentEvent> = kotlinx.coroutines.coroutineScope {
-        val events = mutableListOf<AgentEvent>()
-        val collector = launch { agent.events.toList(events) }
-        yield()
-        agent.prompt("hi")
-        collector.cancelAndJoin()
-        events
-    }
+    private suspend fun collectEvents(agent: AgentSession): MutableList<AgentEvent> =
+        kotlinx.coroutines.coroutineScope {
+            val events = mutableListOf<AgentEvent>()
+            val collector = launch { agent.events.toList(events) }
+            yield()
+            agent.prompt("hi")
+            collector.cancelAndJoin()
+            events
+        }
 
     @Test
     fun `threshold usage triggers compaction, rebuild, and a full end event`() = runTest {
@@ -147,12 +154,17 @@ class AgentCompactionTest {
                     AssistantMessageEvent.Start(assistant("")),
                     AssistantMessageEvent.Done(
                         StopReason.STOP,
-                        assistant("long", usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)),
-                    ),
-                ),
+                        assistant(
+                            "long",
+                            usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)
+                        )
+                    )
+                )
             )
         }
-        api.responses.add(assistant("SUMMARY", usage = Usage(input = 100, output = 50, totalTokens = 150)))
+        api.responses.add(
+            assistant("SUMMARY", usage = Usage(input = 100, output = 50, totalTokens = 150))
+        )
         val agent = session(streams, models)
 
         val events = collectEvents(agent)
@@ -172,12 +184,19 @@ class AgentCompactionTest {
 
         assertEquals(1, streams.seenContexts.size)
         val entries = agent.conversation.activeEntries()
-        val compaction = entries.last() as works.resolve.pathfinder.codingagent.core.session.CompactionEntry
+        val compaction = entries.last() as CompactionEntry
         assertEquals("SUMMARY", compaction.summary)
         val rebuilt = agent.state.value.messages
         assertEquals(compaction.retainedTail.size + 1, rebuilt.size)
-        val summaryMessage = rebuilt.first() as works.resolve.pathfinder.ai.UserMessage
-        assertEquals(createCompactionSummaryMessage("SUMMARY", compaction.tokensBefore, summaryMessage.timestamp), summaryMessage)
+        val summaryMessage = rebuilt.first() as UserMessage
+        assertEquals(
+            createCompactionSummaryMessage(
+                "SUMMARY",
+                compaction.tokensBefore,
+                summaryMessage.timestamp
+            ),
+            summaryMessage
+        )
     }
 
     @Test
@@ -185,35 +204,46 @@ class AgentCompactionTest {
         val (api, models) = fauxModels()
         val bigTail = "x".repeat(900_000) // estimate ≫ threshold without usage (chars/4 heuristic)
         val streams = ScriptedStreams().apply {
-            streams.add(flowOf(AssistantMessageEvent.Error(StopReason.ERROR, assistant("", StopReason.ERROR, "boom"))))
+            streams.add(
+                flowOf(
+                    AssistantMessageEvent.Error(
+                        StopReason.ERROR,
+                        assistant("", StopReason.ERROR, "boom")
+                    )
+                )
+            )
         }
         // Previous assistant with huge text gives a pure-size estimate.
         val seed = works.resolve.pathfinder.codingagent.core.session.Conversation(
             listOf(
                 works.resolve.pathfinder.codingagent.core.session.MessageEntry(
-                    id = "u1", parentId = null, timestamp = 1L,
-                    message = works.resolve.pathfinder.ai.UserMessage.ofText("hi", 1L),
+                    id = "u1",
+                    parentId = null,
+                    timestamp = 1L,
+                    message = works.resolve.pathfinder.ai.UserMessage.ofText("hi", 1L)
                 ),
                 works.resolve.pathfinder.codingagent.core.session.MessageEntry(
-                    id = "a1", parentId = "u1", timestamp = 2L,
-                    message = assistant(bigTail, timestamp = 2L),
-                ),
+                    id = "a1",
+                    parentId = "u1",
+                    timestamp = 2L,
+                    message = assistant(bigTail, timestamp = 2L)
+                )
             ),
-            "a1",
+            "a1"
         )
         api.responses.add(assistant("SUMMARY"))
         val agent = AgentSession(
             agent = Agent(model = model, streamFn = streams.streamFn),
             conversation = seed,
             retrySettings = RetrySettings(enabled = false),
-            models = models,
+            models = models
         )
 
         val events = collectEvents(agent)
 
         assertEquals(
             AgentEvent.CompactionReason.THRESHOLD,
-            events.filterIsInstance<AgentEvent.CompactionStart>().single().reason,
+            events.filterIsInstance<AgentEvent.CompactionStart>().single().reason
         )
         assertTrue(events.filterIsInstance<AgentEvent.CompactionEnd>().single().result != null)
     }
@@ -225,12 +255,24 @@ class AgentCompactionTest {
                 flowOf(
                     AssistantMessageEvent.Done(
                         StopReason.STOP,
-                        assistant("long", usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)),
-                    ),
-                ),
+                        assistant(
+                            "long",
+                            usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)
+                        )
+                    )
+                )
             )
         }
-        val agent = session(streams, null, CompactionSettings(enabled = false, reserveTokens = 16_384, keepRecentTokens = 20_000))
+        val agent =
+            session(
+                streams,
+                null,
+                CompactionSettings(
+                    enabled = false,
+                    reserveTokens = 16_384,
+                    keepRecentTokens = 20_000
+                )
+            )
 
         val events = collectEvents(agent)
 
@@ -242,49 +284,55 @@ class AgentCompactionTest {
         assistant("", StopReason.ERROR, "prompt is too long: 300000 tokens > 200000 maximum")
 
     @Test
-    fun `overflow error compacts once and retries the turn, second overflow fails without looping`() = runTest {
-        val (api, models) = fauxModels()
-        val streams = ScriptedStreams().apply {
-            streams.add(flowOf(AssistantMessageEvent.Error(StopReason.ERROR, overflowError())))
-            // The retried turn overflows again: recovery must give up. The
-            // message is created lazily with an explicitly post-compaction
-            // timestamp so the pre-compaction-boundary guard cannot swallow
-            // it when wall-clock and the appended entry share a millisecond.
-            streams.add(flow {
-                emit(
-                    AssistantMessageEvent.Error(
-                        StopReason.ERROR,
-                        overflowError().copy(timestamp = System.currentTimeMillis() + 10_000),
-                    ),
+    fun `overflow error compacts once and retries the turn, second overflow fails without looping`() =
+        runTest {
+            val (api, models) = fauxModels()
+            val streams = ScriptedStreams().apply {
+                streams.add(flowOf(AssistantMessageEvent.Error(StopReason.ERROR, overflowError())))
+                // The retried turn overflows again: recovery must give up. The
+                // message is created lazily with an explicitly post-compaction
+                // timestamp so the pre-compaction-boundary guard cannot swallow
+                // it when wall-clock and the appended entry share a millisecond.
+                streams.add(
+                    flow {
+                        emit(
+                            AssistantMessageEvent.Error(
+                                StopReason.ERROR,
+                                overflowError().copy(
+                                    timestamp = System.currentTimeMillis() + 10_000
+                                )
+                            )
+                        )
+                    }
                 )
-            })
-        }
-        api.responses.add(assistant("SUMMARY"))
-        val agent = session(streams, models)
+            }
+            api.responses.add(assistant("SUMMARY"))
+            val agent = session(streams, models)
 
-        val events = collectEvents(agent)
-        val ends = events.filterIsInstance<AgentEvent.CompactionEnd>()
-        assertEquals(2, ends.size)
-        val recovery = ends[0]
-        assertEquals(AgentEvent.CompactionReason.OVERFLOW, recovery.reason)
-        assertTrue(recovery.willRetry)
-        assertFalse(recovery.aborted)
-        assertNotNull(recovery.result)
-        val failure = ends[1]
-        assertEquals(AgentEvent.CompactionReason.OVERFLOW, failure.reason)
-        assertFalse(failure.willRetry)
-        assertFalse(failure.aborted)
-        assertNull(failure.result)
-        assertEquals(
-            "Context overflow recovery failed after one compact-and-retry attempt. " +
-                "Try reducing context or switching to a larger-context model.",
-            failure.errorMessage,
-        )
-        assertEquals(2, streams.seenContexts.size)
-        // The first overflow error is removed before the retry; the second stays as the final message.
-        val last = agent.state.value.messages.last() as AssistantMessage
-        assertEquals(overflowError().errorMessage, last.errorMessage)
-    }
+            val events = collectEvents(agent)
+            val ends = events.filterIsInstance<AgentEvent.CompactionEnd>()
+            assertEquals(2, ends.size)
+            val recovery = ends[0]
+            assertEquals(AgentEvent.CompactionReason.OVERFLOW, recovery.reason)
+            assertTrue(recovery.willRetry)
+            assertFalse(recovery.aborted)
+            assertNotNull(recovery.result)
+            val failure = ends[1]
+            assertEquals(AgentEvent.CompactionReason.OVERFLOW, failure.reason)
+            assertFalse(failure.willRetry)
+            assertFalse(failure.aborted)
+            assertNull(failure.result)
+            assertEquals(
+                "Context overflow recovery failed after one compact-and-retry attempt. " +
+                    "Try reducing context or switching to a larger-context model.",
+                failure.errorMessage
+            )
+            assertEquals(2, streams.seenContexts.size)
+            // The first overflow error is removed before the retry; the second stays as
+            // the final message.
+            val last = agent.state.value.messages.last() as AssistantMessage
+            assertEquals(overflowError().errorMessage, last.errorMessage)
+        }
 
     @Test
     fun `overflow retry strips the restored trailing error after the rebuild`() = runTest {
@@ -294,8 +342,8 @@ class AgentCompactionTest {
             streams.add(
                 flowOf(
                     AssistantMessageEvent.Start(assistant("")),
-                    AssistantMessageEvent.Done(StopReason.STOP, assistant("recovered")),
-                ),
+                    AssistantMessageEvent.Done(StopReason.STOP, assistant("recovered"))
+                )
             )
         }
         api.responses.add(assistant("SUMMARY"))
@@ -310,7 +358,7 @@ class AgentCompactionTest {
         // The overflow error was removed twice: pre-compaction and post-rebuild.
         val retryContext = streams.seenContexts[1]
         assertFalse(
-            retryContext.any { it is AssistantMessage && it.stopReason == StopReason.ERROR },
+            retryContext.any { it is AssistantMessage && it.stopReason == StopReason.ERROR }
         )
     }
 
@@ -322,9 +370,13 @@ class AgentCompactionTest {
                 flowOf(
                     AssistantMessageEvent.Done(
                         StopReason.LENGTH,
-                        assistant("partial", stopReason = StopReason.LENGTH, usage = Usage(input = 100, output = 16)),
-                    ),
-                ),
+                        assistant(
+                            "partial",
+                            stopReason = StopReason.LENGTH,
+                            usage = Usage(input = 100, output = 16)
+                        )
+                    )
+                )
             )
             streams.add(flowOf(AssistantMessageEvent.Done(StopReason.STOP, assistant("full"))))
         }
@@ -347,9 +399,9 @@ class AgentCompactionTest {
                 flowOf(
                     AssistantMessageEvent.Error(
                         StopReason.ERROR,
-                        overflowError().copy(provider = "other", model = "opus"),
-                    ),
-                ),
+                        overflowError().copy(provider = "other", model = "opus")
+                    )
+                )
             )
         }
         val agent = session(streams, models)
@@ -365,7 +417,12 @@ class AgentCompactionTest {
         val (_, models) = fauxModels()
         val streams = ScriptedStreams().apply {
             streams.add(
-                flowOf(AssistantMessageEvent.Error(StopReason.ABORTED, assistant("", StopReason.ABORTED))),
+                flowOf(
+                    AssistantMessageEvent.Error(
+                        StopReason.ABORTED,
+                        assistant("", StopReason.ABORTED)
+                    )
+                )
             )
         }
         val agent = session(streams, models)
@@ -383,13 +440,23 @@ class AgentCompactionTest {
                 flowOf(
                     AssistantMessageEvent.Done(
                         StopReason.STOP,
-                        assistant("long", usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)),
-                    ),
-                ),
+                        assistant(
+                            "long",
+                            usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)
+                        )
+                    )
+                )
             )
             // The zero-usage error estimate falls back to the retained
             // (pre-compaction) assistant's huge usage, which must not compact again.
-            streams.add(flowOf(AssistantMessageEvent.Error(StopReason.ERROR, assistant("", StopReason.ERROR, "boom"))))
+            streams.add(
+                flowOf(
+                    AssistantMessageEvent.Error(
+                        StopReason.ERROR,
+                        assistant("", StopReason.ERROR, "boom")
+                    )
+                )
+            )
         }
         api.responses.add(assistant("SUMMARY"))
         val agent = session(streams, models)
@@ -416,9 +483,12 @@ class AgentCompactionTest {
                 flowOf(
                     AssistantMessageEvent.Done(
                         StopReason.STOP,
-                        assistant("long", usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)),
-                    ),
-                ),
+                        assistant(
+                            "long",
+                            usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)
+                        )
+                    )
+                )
             )
         }
         api.responses.add(assistant("", StopReason.ERROR, "boom"))
@@ -430,7 +500,11 @@ class AgentCompactionTest {
         assertFalse(end.aborted)
         assertNull(end.result)
         assertEquals("Auto-compaction failed: Summarization failed: boom", end.errorMessage)
-        assertTrue(agent.conversation.activeEntries().none { it is works.resolve.pathfinder.codingagent.core.session.CompactionEntry })
+        assertTrue(
+            agent.conversation.activeEntries().none {
+                it is works.resolve.pathfinder.codingagent.core.session.CompactionEntry
+            }
+        )
     }
 
     @Test
@@ -441,9 +515,12 @@ class AgentCompactionTest {
                 flowOf(
                     AssistantMessageEvent.Done(
                         StopReason.STOP,
-                        assistant("long", usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)),
-                    ),
-                ),
+                        assistant(
+                            "long",
+                            usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)
+                        )
+                    )
+                )
             )
         }
         api.responses.add(assistant("SUMMARY"))
@@ -466,8 +543,9 @@ class AgentCompactionTest {
             org.junit.Assert.fail("expected IllegalStateException")
         } catch (e: IllegalStateException) {
             assertEquals(
-                "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.",
-                e.message,
+                "Cannot submit a prompt while compaction is in progress. Wait for compaction " +
+                    "to finish and retry.",
+                e.message
             )
         }
         gate.complete(Unit)
@@ -484,9 +562,12 @@ class AgentCompactionTest {
                 flowOf(
                     AssistantMessageEvent.Done(
                         StopReason.STOP,
-                        assistant("long", usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)),
-                    ),
-                ),
+                        assistant(
+                            "long",
+                            usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)
+                        )
+                    )
+                )
             )
         }
         api.responses.add(assistant("", StopReason.ERROR, "terminated"))
@@ -496,7 +577,7 @@ class AgentCompactionTest {
             streams,
             models,
             retrySettings = RetrySettings(enabled = true, maxRetries = 3, baseDelayMs = 2000),
-            sleep = { delays.add(it) },
+            sleep = { delays.add(it) }
         )
 
         val events = collectEvents(agent)
@@ -507,8 +588,10 @@ class AgentCompactionTest {
         assertEquals(2000L, scheduled.delayMs)
         assertEquals("terminated", scheduled.errorMessage)
         assertEquals(
-            listOf(AgentEvent.SummarizationSource.Compaction(AgentEvent.CompactionReason.THRESHOLD)),
-            events.filterIsInstance<AgentEvent.SummarizationRetryAttemptStart>().map { it.source },
+            listOf(
+                AgentEvent.SummarizationSource.Compaction(AgentEvent.CompactionReason.THRESHOLD)
+            ),
+            events.filterIsInstance<AgentEvent.SummarizationRetryAttemptStart>().map { it.source }
         )
         assertEquals(1, events.filterIsInstance<AgentEvent.SummarizationRetryFinished>().size)
         assertTrue(events.filterIsInstance<AgentEvent.CompactionEnd>().single().result != null)

@@ -60,8 +60,10 @@ private object Uuidv7 {
                     ((bytes[3].toLong() and 0xff) shl 16) or
                     ((bytes[4].toLong() and 0xff) shl 8) or
                     (bytes[5].toLong() and 0xff)
+
             seeded == MAX_SEQUENCE ->
                 throw IllegalArgumentException("UUIDv7 generator sequence exhausted")
+
             else -> seeded + 1
         }
         val seq = sequence!!

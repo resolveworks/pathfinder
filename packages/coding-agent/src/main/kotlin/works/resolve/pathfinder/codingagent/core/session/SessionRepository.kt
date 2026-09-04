@@ -30,7 +30,7 @@ interface SessionRepository {
     suspend fun openOperations(
         sessionId: String,
         lane: String,
-        limit: Int?,
+        limit: Int?
     ): List<LaneRecord.OperationStartedRecord>
 
     suspend fun findRecords(sessionId: String, query: RecordQuery = RecordQuery()): List<LaneRecord>

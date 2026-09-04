@@ -19,9 +19,11 @@ fun Context.openInCustomTab(url: String) {
     } catch (_: ActivityNotFoundException) {
     }
     try {
-        startActivity(Intent(Intent.ACTION_VIEW, uri).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        })
+        startActivity(
+            Intent(Intent.ACTION_VIEW, uri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
     } catch (_: ActivityNotFoundException) {
     }
 }

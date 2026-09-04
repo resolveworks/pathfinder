@@ -40,6 +40,7 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
         // Bookkeeping entries (compaction cuts, model_change, ...) are
         // elided in both filters, as in pi's default view.
         TreeFilter.DEFAULT -> entry is MessageEntry
+
         TreeFilter.USER_ONLY -> entry is MessageEntry && entry.message is UserMessage
     }
 
@@ -104,7 +105,7 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
         val isRoot: Boolean,
         val connector: TreeConnector,
         val isLast: Boolean,
-        val gutters: List<Int>,
+        val gutters: List<Int>
     )
 
     val rows = ArrayList<TreeRow>(conversation.entries.size)
@@ -122,8 +123,8 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
                 // branching root.
                 connector = TreeConnector.NONE,
                 isLast = index == orderedRoots.lastIndex,
-                gutters = emptyList(),
-            ),
+                gutters = emptyList()
+            )
         )
     }
     while (stack.isNotEmpty()) {
@@ -141,7 +142,7 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
             // Pi's isFoldable: a segment start (root or child of a branch
             // point) with visible children; folding hides its descendants.
             isFoldable = children.isNotEmpty() && (frame.isRoot || frame.justBranched),
-            preview = frame.entry.previewOf(),
+            preview = frame.entry.previewOf()
         )
         val childIndent = when {
             multipleChildren -> frame.internalIndent + 1
@@ -169,8 +170,8 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
                         TreeConnector.NONE
                     },
                     isLast = isLast,
-                    gutters = childGutters,
-                ),
+                    gutters = childGutters
+                )
             )
         }
     }
@@ -186,7 +187,9 @@ private fun SessionEntry.previewOf(): String {
         is ToolResultMessage -> "Tool"
     }
     val body = when {
-        entryMessage is AssistantMessage && entryMessage.errorMessage != null -> entryMessage.errorMessage.orEmpty()
+        entryMessage is AssistantMessage && entryMessage.errorMessage != null ->
+            entryMessage.errorMessage.orEmpty()
+
         else -> when (entryMessage) {
             is UserMessage -> entryMessage.content
             is AssistantMessage -> entryMessage.content

@@ -1,5 +1,9 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
+import java.net.URL
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -20,16 +24,11 @@ import works.resolve.pathfinder.ai.auth.ModelAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.oauth.Pkce
 import works.resolve.pathfinder.ai.auth.oauth.PkceGenerator
-import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.SocketTimeoutException
-import java.net.URL
 
 class OpenRouterOAuthAuthTest {
 
-    private class RecordingInteraction(
-        val manualCodeResponse: String = "the-code",
-    ) : AuthInteraction {
+    private class RecordingInteraction(val manualCodeResponse: String = "the-code") :
+        AuthInteraction {
         val events = mutableListOf<AuthEvent>()
         val prompts = mutableListOf<AuthPrompt>()
 
@@ -62,8 +61,12 @@ class OpenRouterOAuthAuthTest {
 
     private class FakeHttpClient(
         var respond: suspend (OAuthHttpRequest) -> OAuthHttpResponse = {
-            OAuthHttpResponse(200, mapOf("content-type" to listOf("application/json")), "{\"key\":\"sk-or-key\"}".toByteArray())
-        },
+            OAuthHttpResponse(
+                200,
+                mapOf("content-type" to listOf("application/json")),
+                "{\"key\":\"sk-or-key\"}".toByteArray()
+            )
+        }
     ) : OAuthHttpClient {
         val requests = mutableListOf<OAuthHttpRequest>()
         override suspend fun execute(request: OAuthHttpRequest): OAuthHttpResponse {
@@ -73,7 +76,9 @@ class OpenRouterOAuthAuthTest {
     }
 
     /** Deterministic PKCE: fixed bytes make verifier/challenge stable reference vectors. */
-    private fun fixedPkce(): PkceGenerator = PkceGenerator(randomBytes = { count -> ByteArray(count) { it.toByte() } })
+    private fun fixedPkce(): PkceGenerator = PkceGenerator(randomBytes = { count ->
+        ByteArray(count) { it.toByte() }
+    })
 
     private fun jsonResponse(status: Int, body: String): OAuthHttpResponse =
         OAuthHttpResponse(status, emptyMap(), body.toByteArray())
@@ -93,7 +98,13 @@ class OpenRouterOAuthAuthTest {
             connection.readTimeout = 15_000
             try {
                 val status = connection.responseCode
-                val stream = if (status in 200..399) connection.inputStream else connection.errorStream
+                val stream = if (status in
+                    200..399
+                ) {
+                    connection.inputStream
+                } else {
+                    connection.errorStream
+                }
                 status to (stream?.bufferedReader()?.use { it.readText() } ?: "")
             } finally {
                 connection.disconnect()
@@ -107,99 +118,120 @@ class OpenRouterOAuthAuthTest {
     }
 
     @Test
-    fun `authorize URL carries the loopback callback_url with pi's exact param order`() = runBlocking {
-        val (auth, http) = flow()
-        val interaction = RecordingInteraction()
+    fun `authorize URL carries the loopback callback_url with pi's exact param order`() =
+        runBlocking {
+            val (auth, http) = flow()
+            val interaction = RecordingInteraction()
 
-        auth.login(interaction)
+            auth.login(interaction)
 
-        val urlEvent = interaction.events.filterIsInstance<AuthEvent.AuthUrl>().single()
-        val pkcePair = pkce()
-        val callbackUrl = callbackUrlFrom(urlEvent.url)
-        assertTrue(
-            Regex("""^http://127\.0\.0\.1:\d+/oauth/callback/[0-9a-f-]{36}$""").matches(callbackUrl),
-            "callback_url: $callbackUrl",
-        )
-        assertEquals(
-            "https://openrouter.ai/auth?callback_url=" + java.net.URLEncoder.encode(callbackUrl, "UTF-8").replace("+", "%20") +
-                "&code_challenge=${pkcePair.challenge}&code_challenge_method=S256",
-            urlEvent.url,
-        )
-        assertTrue("key_label" !in urlEvent.url)
-        assertEquals(
-            "Complete sign-in in your browser. If the browser is on another machine, paste the final redirect URL here.",
-            urlEvent.instructions,
-        )
+            val urlEvent = interaction.events.filterIsInstance<AuthEvent.AuthUrl>().single()
+            val pkcePair = pkce()
+            val callbackUrl = callbackUrlFrom(urlEvent.url)
+            assertTrue(
+                Regex(
+                    """^http://127\.0\.0\.1:\d+/oauth/callback/[0-9a-f-]{36}$"""
+                ).matches(callbackUrl),
+                "callback_url: $callbackUrl"
+            )
+            assertEquals(
+                "https://openrouter.ai/auth?callback_url=" +
+                    java.net.URLEncoder.encode(callbackUrl, "UTF-8").replace("+", "%20") +
+                    "&code_challenge=${pkcePair.challenge}&code_challenge_method=S256",
+                urlEvent.url
+            )
+            assertTrue("key_label" !in urlEvent.url)
+            assertEquals(
+                "Complete sign-in in your browser. If the browser is on another machine, paste the final redirect URL here.",
+                urlEvent.instructions
+            )
 
-        // Progress announcing the callback URL precedes the auth URL (pi's order).
-        val progress = interaction.events.filterIsInstance<AuthEvent.Progress>().first()
-        assertEquals("Listening for OpenRouter OAuth callback on $callbackUrl", progress.message)
-        assertTrue(interaction.events.indexOf(progress) < interaction.events.indexOf(urlEvent))
+            // Progress announcing the callback URL precedes the auth URL (pi's order).
+            val progress = interaction.events.filterIsInstance<AuthEvent.Progress>().first()
+            assertEquals(
+                "Listening for OpenRouter OAuth callback on $callbackUrl",
+                progress.message
+            )
+            assertTrue(interaction.events.indexOf(progress) < interaction.events.indexOf(urlEvent))
 
-        assertEquals(1, http.requests.size)
-    }
-
-    @Test
-    fun `manual code prompt mirrors pi's message and uses the callback URL as placeholder`() = runBlocking {
-        val (auth, _) = flow()
-        val interaction = RecordingInteraction()
-
-        auth.login(interaction)
-
-        val prompt = interaction.prompts.single() as AuthPrompt.ManualCode
-        assertEquals(
-            "Complete sign-in in your browser, or paste the authorization code / redirect URL here:",
-            prompt.message,
-        )
-        val urlEvent = interaction.events.filterIsInstance<AuthEvent.AuthUrl>().single()
-        assertEquals(callbackUrlFrom(urlEvent.url), prompt.placeholder)
-    }
+            assertEquals(1, http.requests.size)
+        }
 
     @Test
-    fun `server-driven login exchanges the code inside the handler and returns the credential`() = runBlocking {
-        val http = FakeHttpClient()
-        val auth = OpenRouterOAuthAuth(http, fixedPkce())
-        val interaction = HangingInteraction()
+    fun `manual code prompt mirrors pi's message and uses the callback URL as placeholder`() =
+        runBlocking {
+            val (auth, _) = flow()
+            val interaction = RecordingInteraction()
 
-        val login = async { auth.login(interaction) }
-        val callbackUrl = callbackUrlFrom(interaction.authUrl.await().url)
-        val (status, body) = httpGet("$callbackUrl?code=or-v1-xyz")
+            auth.login(interaction)
 
-        assertEquals(200, status)
-        assertTrue("Signed in to OpenRouter. You may now close this page." in body, body)
-        val credential = login.await()
-        assertEquals("sk-or-key", credential.access)
-        assertEquals("", credential.refresh)
-        assertEquals(OpenRouterOAuthAuth.NON_EXPIRING_EPOCH_MS, credential.expires)
-
-        // The exchange ran inside the handler (manual prompt never answered).
-        assertEquals(1, http.requests.size)
-        assertEquals("or-v1-xyz", parseCode(http.requests.single()))
-    }
+            val prompt = interaction.prompts.single() as AuthPrompt.ManualCode
+            assertEquals(
+                "Complete sign-in in your browser, or paste the authorization code / redirect URL here:",
+                prompt.message
+            )
+            val urlEvent = interaction.events.filterIsInstance<AuthEvent.AuthUrl>().single()
+            assertEquals(callbackUrlFrom(urlEvent.url), prompt.placeholder)
+        }
 
     @Test
-    fun `exchange failure inside the handler yields a 502 page and fails the login`() = runBlocking {
-        val http = FakeHttpClient(respond = { jsonResponse(403, "{\"error_description\":\"code expired\"}") })
-        val auth = OpenRouterOAuthAuth(http, fixedPkce())
-        val interaction = HangingInteraction()
+    fun `server-driven login exchanges the code inside the handler and returns the credential`() =
+        runBlocking {
+            val http = FakeHttpClient()
+            val auth = OpenRouterOAuthAuth(http, fixedPkce())
+            val interaction = HangingInteraction()
 
-        supervisorScope {
             val login = async { auth.login(interaction) }
             val callbackUrl = callbackUrlFrom(interaction.authUrl.await().url)
-            val (status, body) = httpGet("$callbackUrl?code=or-v1-bad")
+            val (status, body) = httpGet("$callbackUrl?code=or-v1-xyz")
 
-            assertEquals(502, status)
-            assertTrue("OpenRouter key exchange failed." in body, body)
-            assertTrue("OpenRouter OAuth key exchange failed (HTTP 403): code expired" in body, body)
-            val error = try {
-                login.await()
-                null
-            } catch (error: IllegalStateException) {
-                error
-            }
-            assertEquals("OpenRouter OAuth key exchange failed (HTTP 403): code expired", requireNotNull(error) { "login completed" }.message)
+            assertEquals(200, status)
+            assertTrue("Signed in to OpenRouter. You may now close this page." in body, body)
+            val credential = login.await()
+            assertEquals("sk-or-key", credential.access)
+            assertEquals("", credential.refresh)
+            assertEquals(OpenRouterOAuthAuth.NON_EXPIRING_EPOCH_MS, credential.expires)
+
+            // The exchange ran inside the handler (manual prompt never answered).
+            assertEquals(1, http.requests.size)
+            assertEquals("or-v1-xyz", parseCode(http.requests.single()))
         }
-    }
+
+    @Test
+    fun `exchange failure inside the handler yields a 502 page and fails the login`() =
+        runBlocking {
+            val http =
+                FakeHttpClient(respond = {
+                    jsonResponse(403, "{\"error_description\":\"code expired\"}")
+                })
+            val auth = OpenRouterOAuthAuth(http, fixedPkce())
+            val interaction = HangingInteraction()
+
+            supervisorScope {
+                val login = async { auth.login(interaction) }
+                val callbackUrl = callbackUrlFrom(interaction.authUrl.await().url)
+                val (status, body) = httpGet("$callbackUrl?code=or-v1-bad")
+
+                assertEquals(502, status)
+                assertTrue("OpenRouter key exchange failed." in body, body)
+                assertTrue(
+                    "OpenRouter OAuth key exchange failed (HTTP 403): code expired" in body,
+                    body
+                )
+                val error = try {
+                    login.await()
+                    null
+                } catch (error: IllegalStateException) {
+                    error
+                }
+                assertEquals(
+                    "OpenRouter OAuth key exchange failed (HTTP 403): code expired",
+                    requireNotNull(error) {
+                        "login completed"
+                    }.message
+                )
+            }
+        }
 
     @Test
     fun `error query param yields a 400 denied page and fails the login`() = runBlocking {
@@ -209,7 +241,9 @@ class OpenRouterOAuthAuthTest {
         supervisorScope {
             val login = async { auth.login(interaction) }
             val callbackUrl = callbackUrlFrom(interaction.authUrl.await().url)
-            val (status, body) = httpGet("$callbackUrl?error=access_denied&error_description=user+said+no")
+            val (status, body) = httpGet(
+                "$callbackUrl?error=access_denied&error_description=user+said+no"
+            )
 
             assertEquals(400, status)
             assertTrue("OpenRouter authorization was denied." in body, body)
@@ -220,7 +254,12 @@ class OpenRouterOAuthAuthTest {
             } catch (error: IllegalStateException) {
                 error
             }
-            assertEquals("OpenRouter authorization failed: user said no", requireNotNull(error) { "login completed" }.message)
+            assertEquals(
+                "OpenRouter authorization failed: user said no",
+                requireNotNull(error) {
+                    "login completed"
+                }.message
+            )
         }
         // Denied before any claim: no token exchange request was made.
         assertTrue(http.requests.isEmpty())
@@ -273,7 +312,10 @@ class OpenRouterOAuthAuthTest {
         val callbackUrl = callbackUrlFrom(interaction.authUrl.await().url)
         val port = callbackUrl.substringAfterLast(":").substringBefore("/").toInt()
 
-        assertEquals(404, httpGet("http://127.0.0.1:$port/oauth/callback/not-the-path?code=x").first)
+        assertEquals(
+            404,
+            httpGet("http://127.0.0.1:$port/oauth/callback/not-the-path?code=x").first
+        )
         assertEquals(400, httpGet("$callbackUrl?state=1").first)
         assertEquals(200, httpGet("$callbackUrl?code=or-v1-late").first)
 
@@ -298,7 +340,9 @@ class OpenRouterOAuthAuthTest {
     @Test
     fun `manual-prompt answer wins when no callback arrives`() = runBlocking {
         val (auth, http) = flow()
-        val credential = auth.login(RecordingInteraction("https://openrouter.ai/auth?code=or-v1-manual"))
+        val credential = auth.login(
+            RecordingInteraction("https://openrouter.ai/auth?code=or-v1-manual")
+        )
 
         assertEquals("sk-or-key", credential.access)
         assertEquals("or-v1-manual", parseCode(http.requests.single()))
@@ -313,7 +357,7 @@ class OpenRouterOAuthAuthTest {
             "foo=1&code=or-v1-abc123&state=x" to "or-v1-abc123",
             "https://openrouter.ai/auth?code=or-v1-abc123" to "or-v1-abc123",
             "https://127.0.0.1:5173/oauth/callback/x?code=or-v1-abc" to "or-v1-abc",
-            "https://example.com/cb?code=a%2Bb%3Dc" to "a+b=c",
+            "https://example.com/cb?code=a%2Bb%3Dc" to "a+b=c"
         )
         for ((input, expected) in inputs) {
             val sent = CompletableDeferred<String>()
@@ -350,51 +394,93 @@ class OpenRouterOAuthAuthTest {
         assertEquals(OpenRouterOAuthAuth.TOKEN_URL, request.url)
         assertEquals(
             mapOf("accept" to "application/json", "content-type" to "application/json"),
-            request.headers,
+            request.headers
         )
         assertEquals(OpenRouterOAuthAuth.TOKEN_EXCHANGE_TIMEOUT_MS, request.timeoutMs)
-        val sent = Json.parseToJsonElement(request.body.decodeToString()) as kotlinx.serialization.json.JsonObject
+        val sent = Json.parseToJsonElement(
+            request.body.decodeToString()
+        ) as kotlinx.serialization.json.JsonObject
         val pkcePair = pkce()
         assertEquals("or-v1-xyz", sent["code"]!!.jsonPrimitiveContent())
         assertEquals(pkcePair.verifier, sent["code_verifier"]!!.jsonPrimitiveContent())
         assertEquals("S256", sent["code_challenge_method"]!!.jsonPrimitiveContent())
 
-        assertTrue(interaction.events.filterIsInstance<AuthEvent.Progress>().any { it.message == "Exchanging authorization code for an API key..." })
+        assertTrue(
+            interaction.events.filterIsInstance<AuthEvent.Progress>().any {
+                it.message ==
+                    "Exchanging authorization code for an API key..."
+            }
+        )
     }
 
     @Test
     fun `missing, empty, and non-string key fields fail with pi's message`() {
-        for (body in listOf("{}", "{\"key\":\"\"}", "{\"key\":42}", "{\"key\":{\"a\":1}}", "\"scalar\"", "[1,2]")) {
+        for (body in listOf(
+            "{}",
+            "{\"key\":\"\"}",
+            "{\"key\":42}",
+            "{\"key\":{\"a\":1}}",
+            "\"scalar\"",
+            "[1,2]"
+        )) {
             val http = FakeHttpClient(respond = { jsonResponse(200, body) })
             val auth = OpenRouterOAuthAuth(http, fixedPkce())
             val error = assertFailsWith<IllegalStateException> {
                 runBlocking { auth.login(RecordingInteraction("the-code")) }
             }
-            assertEquals("OpenRouter OAuth response carries no \"key\"", error.message, "body: $body")
+            assertEquals(
+                "OpenRouter OAuth response carries no \"key\"",
+                error.message,
+                "body: $body"
+            )
         }
     }
 
     @Test
     fun `HTTP errors carry status and every error envelope detail variant`() {
         val cases = listOf(
-            Triple(400, "{\"error\":\"bad_request\"}",
-                "OpenRouter OAuth key exchange failed (HTTP 400): bad_request"),
-            Triple(403, "{\"error_description\":\"code expired\"}",
-                "OpenRouter OAuth key exchange failed (HTTP 403): code expired"),
-            Triple(403, "{\"message\":\"Invalid code or code_verifier\"}",
-                "OpenRouter OAuth key exchange failed (HTTP 403): Invalid code or code_verifier"),
-            Triple(403, "{\"error\":{\"message\":\"denied\"}}",
-                "OpenRouter OAuth key exchange failed (HTTP 403): denied"),
+            Triple(
+                400,
+                "{\"error\":\"bad_request\"}",
+                "OpenRouter OAuth key exchange failed (HTTP 400): bad_request"
+            ),
+            Triple(
+                403,
+                "{\"error_description\":\"code expired\"}",
+                "OpenRouter OAuth key exchange failed (HTTP 403): code expired"
+            ),
+            Triple(
+                403,
+                "{\"message\":\"Invalid code or code_verifier\"}",
+                "OpenRouter OAuth key exchange failed (HTTP 403): Invalid code or code_verifier"
+            ),
+            Triple(
+                403,
+                "{\"error\":{\"message\":\"denied\"}}",
+                "OpenRouter OAuth key exchange failed (HTTP 403): denied"
+            )
         )
         for ((status, body, expected) in cases) {
-            val auth = OpenRouterOAuthAuth(FakeHttpClient(respond = { jsonResponse(status, body) }), fixedPkce())
+            val auth =
+                OpenRouterOAuthAuth(
+                    FakeHttpClient(respond = {
+                        jsonResponse(status, body)
+                    }),
+                    fixedPkce()
+                )
             val error = assertFailsWith<IllegalStateException> {
                 runBlocking { auth.login(RecordingInteraction("the-code")) }
             }
             assertEquals(expected, error.message, "body: $body")
         }
         // No recognizable detail: status only. Non-JSON error bodies are tolerated.
-        val auth = OpenRouterOAuthAuth(FakeHttpClient(respond = { jsonResponse(500, "<html>oops") }), fixedPkce())
+        val auth =
+            OpenRouterOAuthAuth(
+                FakeHttpClient(respond = {
+                    jsonResponse(500, "<html>oops")
+                }),
+                fixedPkce()
+            )
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.login(RecordingInteraction("the-code")) }
         }
@@ -403,7 +489,13 @@ class OpenRouterOAuthAuthTest {
 
     @Test
     fun `invalid JSON on a successful response fails with pi's message`() {
-        val auth = OpenRouterOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, "not json") }), fixedPkce())
+        val auth =
+            OpenRouterOAuthAuth(
+                FakeHttpClient(respond = {
+                    jsonResponse(200, "not json")
+                }),
+                fixedPkce()
+            )
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.login(RecordingInteraction("the-code")) }
         }
@@ -414,7 +506,7 @@ class OpenRouterOAuthAuthTest {
     fun `bounded exchange timeout maps to pi's timeout error`() {
         val auth = OpenRouterOAuthAuth(
             FakeHttpClient(respond = { throw SocketTimeoutException("read timed out") }),
-            fixedPkce(),
+            fixedPkce()
         )
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.login(RecordingInteraction("the-code")) }
@@ -426,7 +518,7 @@ class OpenRouterOAuthAuthTest {
     fun `cancellation at the HTTP boundary propagates unwrapped`() {
         val auth = OpenRouterOAuthAuth(
             FakeHttpClient(respond = { throw CancellationException("Login cancelled") }),
-            fixedPkce(),
+            fixedPkce()
         )
         assertFailsWith<CancellationException> {
             runBlocking { auth.login(RecordingInteraction("the-code")) }
@@ -437,7 +529,7 @@ class OpenRouterOAuthAuthTest {
     fun `network failures propagate as IOException for orchestration to wrap`() {
         val auth = OpenRouterOAuthAuth(
             FakeHttpClient(respond = { throw IOException("connection reset") }),
-            fixedPkce(),
+            fixedPkce()
         )
         assertFailsWith<IOException> {
             runBlocking { auth.login(RecordingInteraction("the-code")) }
@@ -462,7 +554,10 @@ class OpenRouterOAuthAuthTest {
     @Test
     fun `no secret material leaks into errors, events, or toString`() = runBlocking {
         val pkcePair = pkce()
-        val http = FakeHttpClient(respond = { jsonResponse(403, "{\"error_description\":\"denied: or-v1-secret\"}") })
+        val http =
+            FakeHttpClient(respond = {
+                jsonResponse(403, "{\"error_description\":\"denied: or-v1-secret\"}")
+            })
         val auth = OpenRouterOAuthAuth(http, fixedPkce())
         val interaction = RecordingInteraction("or-v1-secret")
 
@@ -480,9 +575,14 @@ class OpenRouterOAuthAuthTest {
         assertTrue("sk-or-key" !in credential.toString())
     }
 
-    private fun parseCode(request: OAuthHttpRequest): String =
-        ((Json.parseToJsonElement(request.body.decodeToString()) as kotlinx.serialization.json.JsonObject)["code"]
-            as kotlinx.serialization.json.JsonPrimitive).content
+    private fun parseCode(request: OAuthHttpRequest): String = (
+        (
+            Json.parseToJsonElement(
+                request.body.decodeToString()
+            ) as kotlinx.serialization.json.JsonObject
+            )["code"]
+            as kotlinx.serialization.json.JsonPrimitive
+        ).content
 
     private fun kotlinx.serialization.json.JsonElement.jsonPrimitiveContent(): String =
         (this as kotlinx.serialization.json.JsonPrimitive).content

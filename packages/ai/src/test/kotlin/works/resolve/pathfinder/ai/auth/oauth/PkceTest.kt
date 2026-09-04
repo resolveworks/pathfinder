@@ -46,6 +46,11 @@ class PkceTest {
         val a = PkceGenerator { bytes.copyOf(it) }.generate()
         val b = PkceGenerator { bytes.copyOf(it) }.generate()
         assertEquals(a, b)
-        assertNotEquals(a.verifier, PkceGenerator { ByteArray(it) { 0 }.copyOf(it) }.generate().verifier)
+        assertNotEquals(
+            a.verifier,
+            PkceGenerator {
+                ByteArray(it) { 0 }.copyOf(it)
+            }.generate().verifier
+        )
     }
 }

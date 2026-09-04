@@ -1,25 +1,19 @@
 package works.resolve.pathfinder.ai.auth
 
+import kotlinx.coroutines.CancellationException
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.filterCatalogModels
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
-import kotlinx.coroutines.CancellationException
 
 /** One selectable auth method for a provider; never carries secret material. */
-data class AuthMethodInfo(
-    val type: AuthType,
-    val label: String,
-    val isSubscription: Boolean,
-) {
-    override fun toString(): String = "AuthMethodInfo(type=$type, label=$label, isSubscription=$isSubscription)"
+data class AuthMethodInfo(val type: AuthType, val label: String, val isSubscription: Boolean) {
+    override fun toString(): String =
+        "AuthMethodInfo(type=$type, label=$label, isSubscription=$isSubscription)"
 }
 
 /** Stored-credential status for a provider; never exposes credential values. */
-data class AuthStatus(
-    val providerId: String,
-    val storedType: CredentialType?,
-) {
+data class AuthStatus(val providerId: String, val storedType: CredentialType?) {
     override fun toString(): String = "AuthStatus(providerId=$providerId, storedType=$storedType)"
 }
 
@@ -35,7 +29,7 @@ data class AuthStatus(
 class ProviderAuthService(
     private val catalog: ProviderCatalog,
     private val registry: CatalogAuthRegistry,
-    private val credentials: CredentialStore,
+    private val credentials: CredentialStore
 ) {
     private fun requireProvider(providerId: String): CatalogProvider =
         catalog.getProvider(providerId)
@@ -45,13 +39,14 @@ class ProviderAuthService(
         val provider = requireProvider(providerId)
         val methods = mutableListOf<AuthMethodInfo>()
         if (provider.auth.prompts.isNotEmpty()) {
-            methods += AuthMethodInfo(AuthType.API_KEY, apiKeyLabel(provider), isSubscription = false)
+            methods +=
+                AuthMethodInfo(AuthType.API_KEY, apiKeyLabel(provider), isSubscription = false)
         }
         registry.oauthAuth(provider)?.let { oauth ->
             methods += AuthMethodInfo(
                 AuthType.OAUTH,
                 oauth.loginLabel ?: oauth.name,
-                oauth.isSubscription,
+                oauth.isSubscription
             )
         }
         return methods
@@ -67,7 +62,7 @@ class ProviderAuthService(
             throw ModelsError(
                 ModelsErrorCode.AUTH,
                 "Failed to read stored credential for provider '$providerId'",
-                error,
+                error
             )
         }
         return AuthStatus(providerId, credential?.type)
@@ -83,7 +78,7 @@ class ProviderAuthService(
             throw ModelsError(
                 ModelsErrorCode.AUTH,
                 "Failed to read stored credential for provider '$providerId'",
-                error,
+                error
             )
         }
         return when (credential) {
@@ -109,7 +104,7 @@ class ProviderAuthService(
             throw ModelsError(
                 ModelsErrorCode.AUTH,
                 "Failed to read stored credential for provider '$providerId'",
-                error,
+                error
             )
         }
         return filterCatalogModels(provider, credential)
@@ -121,7 +116,11 @@ class ProviderAuthService(
      * Android caller boundary, not here — pi's login takes no telemetry
      * context.
      */
-    suspend fun login(providerId: String, type: AuthType, interaction: AuthInteraction): AuthStatus {
+    suspend fun login(
+        providerId: String,
+        type: AuthType,
+        interaction: AuthInteraction
+    ): AuthStatus {
         val provider = requireProvider(providerId)
         val credential = try {
             when (type) {
@@ -133,7 +132,11 @@ class ProviderAuthService(
         } catch (error: ModelsError) {
             throw error
         } catch (error: Exception) {
-            throw ModelsError(ModelsErrorCode.AUTH, "Login failed for provider '${provider.id}'", error)
+            throw ModelsError(
+                ModelsErrorCode.AUTH,
+                "Login failed for provider '${provider.id}'",
+                error
+            )
         }
         try {
             credentials.modify(providerId) { credential }
@@ -143,7 +146,7 @@ class ProviderAuthService(
             throw ModelsError(
                 ModelsErrorCode.AUTH,
                 "Credential store modify failed for $providerId",
-                error,
+                error
             )
         }
         return AuthStatus(providerId, credential.type)
@@ -159,32 +162,32 @@ class ProviderAuthService(
             throw ModelsError(
                 ModelsErrorCode.AUTH,
                 "Credential store delete failed for $providerId",
-                error,
+                error
             )
         }
     }
 
     private suspend fun runApiKeyLogin(
         provider: CatalogProvider,
-        interaction: AuthInteraction,
+        interaction: AuthInteraction
     ): Credential {
         val auth = CatalogProviderAuth(provider, registry).apiKey
         val login = auth?.login
             ?: throw ModelsError(
                 ModelsErrorCode.AUTH,
-                "${provider.name} does not support ${AuthType.API_KEY} login",
+                "${provider.name} does not support ${AuthType.API_KEY} login"
             )
         return login(interaction)
     }
 
     private suspend fun runOAuthLogin(
         provider: CatalogProvider,
-        interaction: AuthInteraction,
+        interaction: AuthInteraction
     ): Credential {
         val oauth = registry.oauthAuth(provider)
             ?: throw ModelsError(
                 ModelsErrorCode.AUTH,
-                "${provider.name} does not support ${AuthType.OAUTH} login",
+                "${provider.name} does not support ${AuthType.OAUTH} login"
             )
         return oauth.login(interaction)
     }

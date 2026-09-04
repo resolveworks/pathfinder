@@ -13,7 +13,10 @@ class Uuidv7Test {
     @Test
     fun `produces canonical lowercase uuid format`() {
         val id = uuidv7()
-        assertTrue(Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$").matches(id), "not canonical: $id")
+        assertTrue(
+            Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$").matches(id),
+            "not canonical: $id"
+        )
     }
 
     @Test

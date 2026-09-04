@@ -1,10 +1,15 @@
 package works.resolve.pathfinder.ai.auth.oauth
 
+import java.net.HttpURLConnection
+import java.net.ServerSocket
+import java.net.SocketTimeoutException
+import java.net.URL
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -12,8 +17,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlin.time.Clock
-import works.resolve.pathfinder.ai.testing.FakeClock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -23,16 +26,12 @@ import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.oauth.Pkce
 import works.resolve.pathfinder.ai.auth.oauth.PkceGenerator
-import java.net.HttpURLConnection
-import java.net.ServerSocket
-import java.net.SocketTimeoutException
-import java.net.URL
+import works.resolve.pathfinder.ai.testing.FakeClock
 
 class AnthropicOAuthAuthTest {
 
-    private class RecordingInteraction(
-        val manualCodeResponse: String = "the-code",
-    ) : AuthInteraction {
+    private class RecordingInteraction(val manualCodeResponse: String = "the-code") :
+        AuthInteraction {
         val events = mutableListOf<AuthEvent>()
         val prompts = mutableListOf<AuthPrompt>()
 
@@ -47,7 +46,7 @@ class AnthropicOAuthAuthTest {
     }
 
     private class PendingInteraction(
-        val answer: CompletableDeferred<String> = CompletableDeferred(),
+        val answer: CompletableDeferred<String> = CompletableDeferred()
     ) : AuthInteraction {
         val events = mutableListOf<AuthEvent>()
         val prompts = mutableListOf<AuthPrompt>()
@@ -64,8 +63,12 @@ class AnthropicOAuthAuthTest {
 
     private class FakeHttpClient(
         var respond: suspend (OAuthHttpRequest) -> OAuthHttpResponse = {
-            OAuthHttpResponse(200, emptyMap(), anthropicTokenBody("access", "refresh").toByteArray())
-        },
+            OAuthHttpResponse(
+                200,
+                emptyMap(),
+                anthropicTokenBody("access", "refresh").toByteArray()
+            )
+        }
     ) : OAuthHttpClient {
         val requests = mutableListOf<OAuthHttpRequest>()
         override suspend fun execute(request: OAuthHttpRequest): OAuthHttpResponse {
@@ -74,13 +77,15 @@ class AnthropicOAuthAuthTest {
         }
     }
 
-    private fun fixedPkce(): PkceGenerator = PkceGenerator(randomBytes = { count -> ByteArray(count) { it.toByte() } })
+    private fun fixedPkce(): PkceGenerator = PkceGenerator(randomBytes = { count ->
+        ByteArray(count) { it.toByte() }
+    })
 
     private fun pkce(): Pkce = fixedPkce().generate()
 
     private fun flow(
         clock: Clock = FakeClock(1_000_000L),
-        port: Int = 0,
+        port: Int = 0
     ): Pair<AnthropicOAuthAuth, FakeHttpClient> {
         val http = FakeHttpClient()
         return AnthropicOAuthAuth(http, fixedPkce(), clock, callbackPort = port) to http
@@ -93,32 +98,33 @@ class AnthropicOAuthAuthTest {
         OAuthHttpResponse(status, emptyMap(), body.toByteArray())
 
     @Test
-    fun `authorize URL carries pi's exact params, pkce challenge and verifier state`() = runBlocking {
-        val (auth, http) = flow()
-        val interaction = RecordingInteraction()
-        val pair = pkce()
+    fun `authorize URL carries pi's exact params, pkce challenge and verifier state`() =
+        runBlocking {
+            val (auth, http) = flow()
+            val interaction = RecordingInteraction()
+            val pair = pkce()
 
-        auth.login(interaction)
+            auth.login(interaction)
 
-        val urlEvent = interaction.events.filterIsInstance<AuthEvent.AuthUrl>().single()
-        assertEquals(
-            "https://claude.ai/oauth/authorize?code=true" +
-                "&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e" +
-                "&response_type=code" +
-                "&redirect_uri=http%3A%2F%2Flocalhost%3A53692%2Fcallback" +
-                "&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+" +
-                "user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload" +
-                "&code_challenge=${pair.challenge}" +
-                "&code_challenge_method=S256" +
-                "&state=${pair.verifier}",
-            urlEvent.url,
-        )
-        assertEquals(
-            "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.",
-            urlEvent.instructions,
-        )
-        assertEquals(1, http.requests.size)
-    }
+            val urlEvent = interaction.events.filterIsInstance<AuthEvent.AuthUrl>().single()
+            assertEquals(
+                "https://claude.ai/oauth/authorize?code=true" +
+                    "&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e" +
+                    "&response_type=code" +
+                    "&redirect_uri=http%3A%2F%2Flocalhost%3A53692%2Fcallback" +
+                    "&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+" +
+                    "user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload" +
+                    "&code_challenge=${pair.challenge}" +
+                    "&code_challenge_method=S256" +
+                    "&state=${pair.verifier}",
+                urlEvent.url
+            )
+            assertEquals(
+                "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.",
+                urlEvent.instructions
+            )
+            assertEquals(1, http.requests.size)
+        }
 
     @Test
     fun `manual code prompt mirrors pi's message and placeholder`() = runBlocking {
@@ -130,7 +136,7 @@ class AnthropicOAuthAuthTest {
         val prompt = assertIs<AuthPrompt.ManualCode>(interaction.prompts.single())
         assertEquals(
             "Complete login in your browser, or paste the authorization code / redirect URL here:",
-            prompt.message,
+            prompt.message
         )
         assertEquals(AnthropicOAuthAuth.REDIRECT_URI, prompt.placeholder)
     }
@@ -139,16 +145,19 @@ class AnthropicOAuthAuthTest {
     fun `redirect URL, code-state, query string, and raw code inputs all resolve`() = runBlocking {
         val pair = pkce()
         val inputs = mapOf(
-            "http://localhost:53692/callback?code=manual-code&state=${pair.verifier}" to "manual-code",
+            "http://localhost:53692/callback?code=manual-code&state=${pair.verifier}" to
+                "manual-code",
             "manual-code#${pair.verifier}" to "manual-code",
             "code=the-code&state=${pair.verifier}" to "the-code",
-            "  raw-code  " to "raw-code",
+            "  raw-code  " to "raw-code"
         )
         for ((input, expected) in inputs) {
             val (auth, http) = flow()
             val credential = auth.login(RecordingInteraction(input))
             assertEquals("access", credential.access, "input: $input")
-            val sent = Json.parseToJsonElement(http.requests.single().body.decodeToString()).jsonObject
+            val sent = Json.parseToJsonElement(
+                http.requests.single().body.decodeToString()
+            ).jsonObject
             assertEquals(expected, sent["code"]!!.jsonPrimitive.content, "input: $input")
             assertEquals(pair.verifier, sent["state"]!!.jsonPrimitive.content, "input: $input")
         }
@@ -193,7 +202,11 @@ class AnthropicOAuthAuthTest {
     fun `state mismatch fails with pi's message`() {
         val (auth, http) = flow()
         val error = assertFailsWith<IllegalStateException> {
-            runBlocking { auth.login(RecordingInteraction("https://localhost:53692/callback?code=c&state=other")) }
+            runBlocking {
+                auth.login(
+                    RecordingInteraction("https://localhost:53692/callback?code=c&state=other")
+                )
+            }
         }
         assertEquals("OAuth state mismatch", error.message)
         assertTrue(http.requests.isEmpty())
@@ -212,7 +225,7 @@ class AnthropicOAuthAuthTest {
         assertEquals(AnthropicOAuthAuth.TOKEN_URL, request.url)
         assertEquals(
             mapOf("Content-Type" to "application/json", "Accept" to "application/json"),
-            request.headers,
+            request.headers
         )
         assertEquals(AnthropicOAuthAuth.REQUEST_TIMEOUT_MS, request.timeoutMs)
         val sent = Json.parseToJsonElement(request.body.decodeToString()).jsonObject
@@ -236,7 +249,9 @@ class AnthropicOAuthAuthTest {
         val (auth, http) = flow(clock = FakeClock(2_000_000L))
         http.respond = { jsonResponse(200, anthropicTokenBody("new-access", "new-refresh")) }
 
-        val credential = auth.refresh(OAuthCredential(access = "old-access", refresh = "refresh", expires = 0))
+        val credential = auth.refresh(
+            OAuthCredential(access = "old-access", refresh = "refresh", expires = 0)
+        )
 
         val sent = Json.parseToJsonElement(http.requests.single().body.decodeToString()).jsonObject
         assertEquals(setOf("grant_type", "client_id", "refresh_token"), sent.keys)
@@ -252,7 +267,9 @@ class AnthropicOAuthAuthTest {
     @Test
     fun `toAuth derives request auth from the access token`() = runBlocking {
         val (auth, _) = flow()
-        val modelAuth = auth.toAuth(OAuthCredential(access = "access", refresh = "refresh", expires = 0))
+        val modelAuth = auth.toAuth(
+            OAuthCredential(access = "access", refresh = "refresh", expires = 0)
+        )
         assertEquals("access", modelAuth.apiKey)
         assertEquals(0, modelAuth.headers.size)
         assertEquals(null, modelAuth.baseUrl)
@@ -269,29 +286,43 @@ class AnthropicOAuthAuthTest {
     @Test
     fun `invalid JSON on exchange fails with pi's invalid JSON message`() {
         val (auth, _) = flow()
-        val auth2 = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, "not json") }), fixedPkce(), callbackPort = 0)
+        val auth2 =
+            AnthropicOAuthAuth(
+                FakeHttpClient(respond = {
+                    jsonResponse(200, "not json")
+                }),
+                fixedPkce(),
+                callbackPort = 0
+            )
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth2.login(RecordingInteraction("the-code")) }
         }
         assertTrue(
             error.message!!.startsWith(
-                "Token exchange returned invalid JSON. url=${AnthropicOAuthAuth.TOKEN_URL}; details=",
+                "Token exchange returned invalid JSON. url=${AnthropicOAuthAuth.TOKEN_URL}; details="
             ),
-            error.message,
+            error.message
         )
     }
 
     @Test
     fun `invalid JSON on refresh fails with pi's invalid JSON message`() {
-        val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, "{\"a\":1") }), fixedPkce(), callbackPort = 0)
+        val auth =
+            AnthropicOAuthAuth(
+                FakeHttpClient(respond = {
+                    jsonResponse(200, "{\"a\":1")
+                }),
+                fixedPkce(),
+                callbackPort = 0
+            )
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.refresh(OAuthCredential("a", "r", 0)) }
         }
         assertTrue(
             error.message!!.startsWith(
-                "Anthropic token refresh returned invalid JSON. url=${AnthropicOAuthAuth.TOKEN_URL}; details=",
+                "Anthropic token refresh returned invalid JSON. url=${AnthropicOAuthAuth.TOKEN_URL}; details="
             ),
-            error.message,
+            error.message
         )
     }
 
@@ -304,16 +335,23 @@ class AnthropicOAuthAuthTest {
             """{"access_token":"a","refresh_token":"","expires_in":3600}""",
             """{"access_token":"a","refresh_token":"r","expires_in":"3600"}""",
             """{"access_token":"a","refresh_token":"r","expires_in":0}""",
-            """{"access_token":"a"}""",
+            """{"access_token":"a"}"""
         )
         for (body in bodies) {
-            val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, body) }), fixedPkce(), callbackPort = 0)
+            val auth =
+                AnthropicOAuthAuth(
+                    FakeHttpClient(respond = {
+                        jsonResponse(200, body)
+                    }),
+                    fixedPkce(),
+                    callbackPort = 0
+                )
             val error = assertFailsWith<IllegalStateException> {
                 runBlocking { auth.refresh(OAuthCredential("a", "r", 0)) }
             }
             assertTrue(
                 error.message!!.startsWith("Invalid Anthropic OAuth response field: "),
-                "body: $body -> ${error.message}",
+                "body: $body -> ${error.message}"
             )
         }
     }
@@ -321,34 +359,47 @@ class AnthropicOAuthAuthTest {
     @Test
     fun `non-2xx exchange carries pi's shape with a sanitized structured error`() {
         val auth = AnthropicOAuthAuth(
-            FakeHttpClient(respond = { jsonResponse(400, """{"error":"invalid_grant","error_description":"code expired"}""") }),
-            fixedPkce(),
+            FakeHttpClient(respond = {
+                jsonResponse(
+                    400,
+                    """{"error":"invalid_grant","error_description":"code expired"}"""
+                )
+            }),
+            fixedPkce()
         )
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.login(RecordingInteraction("the-code")) }
         }
         assertEquals(
             "Token exchange request failed. url=${AnthropicOAuthAuth.TOKEN_URL}; " +
-                "redirect_uri=${AnthropicOAuthAuth.REDIRECT_URI}; response_type=authorization_code; " +
-                "details=IllegalStateException: HTTP request failed. status=400; " +
+                "redirect_uri=${AnthropicOAuthAuth.REDIRECT_URI}; " +
+                "response_type=authorization_code; details=IllegalStateException: " +
+                "HTTP request failed. status=400; " +
                 "url=${AnthropicOAuthAuth.TOKEN_URL}; body=error=invalid_grant: code expired",
-            error.message,
+            error.message
         )
     }
 
     @Test
     fun `non-2xx refresh carries pi's shape and redacts an unparseable body`() {
-        val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(401, "unauthorized") }), fixedPkce(), callbackPort = 0)
+        val auth =
+            AnthropicOAuthAuth(
+                FakeHttpClient(respond = {
+                    jsonResponse(401, "unauthorized")
+                }),
+                fixedPkce(),
+                callbackPort = 0
+            )
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.refresh(OAuthCredential("a", "stale", 0)) }
         }
         assertTrue(
             error.message!!.startsWith(
                 "Anthropic token refresh request failed. url=${AnthropicOAuthAuth.TOKEN_URL}; " +
-                    "details=IllegalStateException: HTTP request failed. status=401; "+
-                    "url=${AnthropicOAuthAuth.TOKEN_URL}; body=<redacted>",
+                    "details=IllegalStateException: HTTP request failed. status=401; " +
+                    "url=${AnthropicOAuthAuth.TOKEN_URL}; body=<redacted>"
             ),
-            error.message,
+            error.message
         )
     }
 
@@ -356,7 +407,7 @@ class AnthropicOAuthAuthTest {
     fun `bounded exchange timeout surfaces in pi's request failed details`() {
         val auth = AnthropicOAuthAuth(
             FakeHttpClient(respond = { throw SocketTimeoutException("read timed out") }),
-            fixedPkce(),
+            fixedPkce()
         )
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.login(RecordingInteraction("the-code")) }
@@ -364,10 +415,10 @@ class AnthropicOAuthAuthTest {
         assertTrue(
             error.message!!.startsWith(
                 "Token exchange request failed. url=${AnthropicOAuthAuth.TOKEN_URL}; " +
-                    "redirect_uri=${AnthropicOAuthAuth.REDIRECT_URI}; response_type=authorization_code; " +
-                    "details=SocketTimeoutException",
+                    "redirect_uri=${AnthropicOAuthAuth.REDIRECT_URI}; " +
+                    "response_type=authorization_code; details=SocketTimeoutException"
             ),
-            error.message,
+            error.message
         )
     }
 
@@ -375,7 +426,7 @@ class AnthropicOAuthAuthTest {
     fun `cancellation propagates unwrapped from the exchange`() {
         val auth = AnthropicOAuthAuth(
             FakeHttpClient(respond = { throw CancellationException("cancelled") }),
-            fixedPkce(),
+            fixedPkce()
         )
         val error = assertFailsWith<CancellationException> {
             runBlocking { auth.login(RecordingInteraction("the-code")) }
@@ -385,7 +436,14 @@ class AnthropicOAuthAuthTest {
 
     @Test
     fun `error messages and request tostring never carry secrets`() {
-        val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(403, """{"error":"denied"}""") }), fixedPkce(), callbackPort = 0)
+        val auth =
+            AnthropicOAuthAuth(
+                FakeHttpClient(respond = {
+                    jsonResponse(403, """{"error":"denied"}""")
+                }),
+                fixedPkce(),
+                callbackPort = 0
+            )
         val error = assertFailsWith<IllegalStateException> {
             runBlocking { auth.login(RecordingInteraction("secret-code")) }
         }
@@ -401,18 +459,31 @@ class AnthropicOAuthAuthTest {
             "<html>bad code the-secret-code verifier the-secret-verifier</html>",
             // Valid JSON but no error envelope: other fields are not echoed.
             """{"access_token":"sk-ant-oat-distinctive-access","refresh_token":"distinctive-refresh"}""",
-            "[\"sk-ant-oat-distinctive-access\"]",
+            "[\"sk-ant-oat-distinctive-access\"]"
         )
         for (body in bodies) {
-            val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(500, body) }), fixedPkce(), callbackPort = 0)
+            val auth =
+                AnthropicOAuthAuth(
+                    FakeHttpClient(respond = {
+                        jsonResponse(500, body)
+                    }),
+                    fixedPkce(),
+                    callbackPort = 0
+                )
             val error = assertFailsWith<IllegalStateException> {
                 runBlocking { auth.login(RecordingInteraction("the-secret-code")) }
             }
             val verifier = pkce().verifier
             assertNoSecrets(
                 error.message,
-                listOf("sk-ant-oat-distinctive-access", "distinctive-refresh", "the-secret-code", verifier, "the-secret-verifier"),
-                "body: $body",
+                listOf(
+                    "sk-ant-oat-distinctive-access",
+                    "distinctive-refresh",
+                    "the-secret-code",
+                    verifier,
+                    "the-secret-verifier"
+                ),
+                "body: $body"
             )
         }
     }
@@ -421,17 +492,24 @@ class AnthropicOAuthAuthTest {
     fun `invalid json bodies carrying secrets are never echoed`() {
         val bodies = listOf(
             "not json sk-ant-oat-distinctive-access",
-            """{"access_token":"sk-ant-oat-distinctive-access"""",
+            """{"access_token":"sk-ant-oat-distinctive-access""""
         )
         for (body in bodies) {
-            val auth = AnthropicOAuthAuth(FakeHttpClient(respond = { jsonResponse(200, body) }), fixedPkce(), callbackPort = 0)
+            val auth =
+                AnthropicOAuthAuth(
+                    FakeHttpClient(respond = {
+                        jsonResponse(200, body)
+                    }),
+                    fixedPkce(),
+                    callbackPort = 0
+                )
             val error = assertFailsWith<IllegalStateException> {
                 runBlocking { auth.login(RecordingInteraction("the-secret-code")) }
             }
             assertNoSecrets(
                 error.message,
                 listOf("sk-ant-oat-distinctive-access", "the-secret-code"),
-                "body: $body",
+                "body: $body"
             )
         }
     }
@@ -441,7 +519,11 @@ class AnthropicOAuthAuthTest {
         val http = FakeHttpClient()
         runBlocking {
             try {
-                AnthropicOAuthAuth(http, fixedPkce(), callbackPort = 0).login(RecordingInteraction("the-secret-code"))
+                AnthropicOAuthAuth(
+                    http,
+                    fixedPkce(),
+                    callbackPort = 0
+                ).login(RecordingInteraction("the-secret-code"))
             } catch (_: Exception) {
             }
         }
@@ -449,7 +531,7 @@ class AnthropicOAuthAuthTest {
         assertNoSecrets(
             rendered,
             listOf("the-secret-code", "sk-ant-oat", "access\":\"", pkce().verifier),
-            "toString: $rendered",
+            "toString: $rendered"
         )
     }
 
@@ -482,7 +564,11 @@ class AnthropicOAuthAuthTest {
             try {
                 return httpGet("http://127.0.0.1:$port$pathAndQuery")
             } catch (e: Exception) {
-                if (System.currentTimeMillis() > deadline) throw AssertionError("server never came up", e)
+                if (System.currentTimeMillis() >
+                    deadline
+                ) {
+                    throw AssertionError("server never came up", e)
+                }
                 Thread.sleep(20)
             }
         }
@@ -499,9 +585,15 @@ class AnthropicOAuthAuthTest {
         // Yield so the login coroutine binds its server before the callback is sent.
         delay(100)
 
-        val (status, body) = httpGetOnceUp(port, "/callback?code=server-code&state=${pair.verifier}")
+        val (status, body) = httpGetOnceUp(
+            port,
+            "/callback?code=server-code&state=${pair.verifier}"
+        )
         assertEquals(200, status)
-        assertTrue(body.contains("Anthropic authentication completed. You can close this window."), body)
+        assertTrue(
+            body.contains("Anthropic authentication completed. You can close this window."),
+            body
+        )
 
         val credential = loginJob.await()
         assertEquals("access", credential.access)
@@ -513,7 +605,7 @@ class AnthropicOAuthAuthTest {
         assertTrue(interaction.answer.isActive)
         assertEquals(
             "Exchanging authorization code for tokens...",
-            interaction.events.filterIsInstance<AuthEvent.Progress>().single().message,
+            interaction.events.filterIsInstance<AuthEvent.Progress>().single().message
         )
     }
 
@@ -535,7 +627,7 @@ class AnthropicOAuthAuthTest {
 
     private suspend fun CoroutineScope.driveCallback(
         port: Int,
-        pathAndQuery: String,
+        pathAndQuery: String
     ): Pair<Int, String> {
         val (auth, http) = flow(port = port)
         val interaction = PendingInteraction()
@@ -595,5 +687,9 @@ class AnthropicOAuthAuthTest {
     }
 }
 
-private fun anthropicTokenBody(access: String, refresh: String, expiresInSeconds: Int = 3600): String =
+private fun anthropicTokenBody(
+    access: String,
+    refresh: String,
+    expiresInSeconds: Int = 3600
+): String =
     """{"access_token":"$access","refresh_token":"$refresh","expires_in":$expiresInSeconds}"""

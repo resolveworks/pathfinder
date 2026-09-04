@@ -1,15 +1,15 @@
 package works.resolve.pathfinder.ai.utils
 
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class JsonDomTest {
 
@@ -21,7 +21,7 @@ class JsonDomTest {
           "numString": "1.5", "empty": "",
           "obj": {"inner": "v"}, "arr": [1, 2]
         }
-        """,
+        """
     ) as JsonObject
 
     @Test
@@ -101,7 +101,8 @@ class JsonDomTest {
     fun numberOrNullIsFiniteNumericDouble() {
         assertEquals(7.9, obj["f"].numberOrNull())
         assertNull(obj["numString"].numberOrNull()) // string-encoded numbers rejected
-        assertNull(obj["s"].numberOrNull())    }
+        assertNull(obj["s"].numberOrNull())
+    }
 
     @Test
     fun codecReadsThrowTheCallersException() {

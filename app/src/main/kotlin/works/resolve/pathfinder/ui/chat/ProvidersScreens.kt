@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.ui.chat
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,8 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -22,14 +22,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -63,13 +63,13 @@ import works.resolve.pathfinder.ui.openInCustomTab
 internal fun ProvidersContent(
     providerOptions: List<ProviderOption>,
     onRefresh: () -> Unit,
-    onOpenProvider: (providerId: String) -> Unit,
+    onOpenProvider: (providerId: String) -> Unit
 ) {
     LaunchedEffect(Unit) { onRefresh() }
     ProviderListContent(
         providerOptions = providerOptions,
         searchHint = stringResource(R.string.provider_search_hint),
-        onOpenProvider = onOpenProvider,
+        onOpenProvider = onOpenProvider
     )
 }
 
@@ -78,13 +78,13 @@ internal fun ProvidersContent(
 internal fun SearchProvidersContent(
     providerOptions: List<ProviderOption>,
     onRefresh: () -> Unit,
-    onOpenProvider: (providerId: String) -> Unit,
+    onOpenProvider: (providerId: String) -> Unit
 ) {
     LaunchedEffect(Unit) { onRefresh() }
     ProviderListContent(
         providerOptions = providerOptions,
         searchHint = stringResource(R.string.search_provider_search_hint),
-        onOpenProvider = onOpenProvider,
+        onOpenProvider = onOpenProvider
     )
 }
 
@@ -92,7 +92,7 @@ internal fun SearchProvidersContent(
 private fun ProviderListContent(
     providerOptions: List<ProviderOption>,
     searchHint: String,
-    onOpenProvider: (providerId: String) -> Unit,
+    onOpenProvider: (providerId: String) -> Unit
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     val filtered = providerOptions.filter { option ->
@@ -106,20 +106,20 @@ private fun ProviderListContent(
             .fillMaxSize()
             .imePadding()
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
             label = { Text(searchHint) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth()
         )
         if (filtered.isEmpty()) {
             Text(
                 text = stringResource(R.string.no_matching_providers),
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         } else {
             LazyColumn {
@@ -131,23 +131,26 @@ private fun ProviderListContent(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     text = stringResource(
-                                        if (option.configured) R.string.provider_status_configured
-                                        else R.string.provider_status_unconfigured,
+                                        if (option.configured) {
+                                            R.string.provider_status_configured
+                                        } else {
+                                            R.string.provider_status_unconfigured
+                                        }
                                     ),
                                     color = if (option.configured) {
                                         MaterialTheme.colorScheme.secondary
                                     } else {
                                         MaterialTheme.colorScheme.outline
                                     },
-                                    style = MaterialTheme.typography.labelMedium,
+                                    style = MaterialTheme.typography.labelMedium
                                 )
                                 Icon(
                                     Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                    contentDescription = null,
+                                    contentDescription = null
                                 )
                             }
                         },
-                        modifier = Modifier.clickable { onOpenProvider(option.id) },
+                        modifier = Modifier.clickable { onOpenProvider(option.id) }
                     )
                     HorizontalDivider()
                 }
@@ -170,7 +173,7 @@ internal fun ProviderAuthContent(
     prompts: List<ProviderAuthPrompt>,
     onSave: (apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
     onRemove: () -> Unit,
-    onClose: () -> Unit,
+    onClose: () -> Unit
 ) {
     var apiKeyInput by remember { mutableStateOf("") }
     val envInputs = remember(prompts) { mutableStateMapOf<String, String>() }
@@ -182,7 +185,7 @@ internal fun ProviderAuthContent(
             .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         prompts.forEach { prompt ->
             val isSecret = prompt.secret
@@ -192,16 +195,20 @@ internal fun ProviderAuthContent(
                     if (isSecret) apiKeyInput = it else envInputs[prompt.envKey] = it
                 },
                 label = { Text(prompt.message) },
-                visualTransformation = if (isSecret) PasswordVisualTransformation() else VisualTransformation.None,
+                visualTransformation = if (isSecret) {
+                    PasswordVisualTransformation()
+                } else {
+                    VisualTransformation.None
+                },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth()
             )
         }
         // Stacked so narrow widths never put Save, Cancel, and the
         // destructive Forget action in one horizontal row.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = { onSave(apiKeyInput, envInputs.toMap()) },
+                onClick = { onSave(apiKeyInput, envInputs.toMap()) }
             ) {
                 Text(stringResource(R.string.action_save))
             }
@@ -210,7 +217,9 @@ internal fun ProviderAuthContent(
         if (provider.configured) {
             TextButton(
                 onClick = { confirmRemove = true },
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
             ) {
                 Text(stringResource(R.string.action_remove_provider))
             }
@@ -230,7 +239,9 @@ internal fun ProviderAuthContent(
                         onRemove()
                         onClose()
                     },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
                 ) {
                     Text(stringResource(R.string.action_remove_provider))
                 }
@@ -239,7 +250,7 @@ internal fun ProviderAuthContent(
                 TextButton(onClick = { confirmRemove = false }) {
                     Text(stringResource(R.string.action_cancel))
                 }
-            },
+            }
         )
     }
 }
@@ -261,7 +272,7 @@ internal fun ProviderAuthEntry(
     onBeginLogin: (method: AuthMethodInfo) -> Unit,
     onSubmitPrompt: (answer: String) -> Unit,
     onCancelLogin: () -> Unit,
-    onClose: () -> Unit,
+    onClose: () -> Unit
 ) {
     // System back cancels an active login flow first (pi's dialog escape).
     BackHandler(enabled = flow != null) { onCancelLogin() }
@@ -270,7 +281,7 @@ internal fun ProviderAuthEntry(
         AuthFlowContent(
             flow = flow,
             onSubmit = onSubmitPrompt,
-            onCancel = onCancelLogin,
+            onCancel = onCancelLogin
         )
         return
     }
@@ -284,15 +295,16 @@ internal fun ProviderAuthEntry(
             prompts = prompts,
             onSave = onSave,
             onRemove = onRemove,
-            onClose = onClose,
+            onClose = onClose
         )
+
         ProviderAuthScreenMode.METHOD_CHOICE -> if (showApiKeyForm) {
             ProviderAuthContent(
                 provider = provider,
                 prompts = prompts,
                 onSave = onSave,
                 onRemove = onRemove,
-                onClose = onClose,
+                onClose = onClose
             )
         } else {
             AuthMethodSelectorContent(
@@ -304,9 +316,10 @@ internal fun ProviderAuthEntry(
                     } else {
                         onBeginLogin(method)
                     }
-                },
+                }
             )
         }
+
         ProviderAuthScreenMode.START_OAUTH -> {
             val method = methods.first()
             LaunchedEffect(provider.id) { onBeginLogin(method) }
@@ -314,30 +327,31 @@ internal fun ProviderAuthEntry(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 Text(
                     text = stringResource(R.string.auth_waiting),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 TextButton(onClick = onCancelLogin) {
                     Text(stringResource(R.string.action_cancel_sign_in))
                 }
             }
         }
+
         ProviderAuthScreenMode.NO_METHODS -> Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(24.dp),
-            contentAlignment = Alignment.Center,
+            contentAlignment = Alignment.Center
         ) {
             Text(
                 text = stringResource(R.string.auth_no_methods),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
+                textAlign = TextAlign.Center
             )
         }
     }
@@ -348,16 +362,16 @@ internal fun ProviderAuthEntry(
 private fun AuthMethodSelectorContent(
     providerName: String,
     methods: List<AuthMethodInfo>,
-    onSelect: (method: AuthMethodInfo) -> Unit,
+    onSelect: (method: AuthMethodInfo) -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(16.dp)
     ) {
         Text(
             text = stringResource(R.string.auth_method_title, providerName),
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleMedium
         )
         Spacer(Modifier.size(16.dp))
         methods.forEach { method ->
@@ -366,14 +380,18 @@ private fun AuthMethodSelectorContent(
                 supportingContent = {
                     Text(
                         stringResource(
-                            if (method.isSubscription) R.string.auth_method_account else R.string.auth_method_api_key,
-                        ),
+                            if (method.isSubscription) {
+                                R.string.auth_method_account
+                            } else {
+                                R.string.auth_method_api_key
+                            }
+                        )
                     )
                 },
                 trailingContent = {
                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
                 },
-                modifier = Modifier.clickable { onSelect(method) },
+                modifier = Modifier.clickable { onSelect(method) }
             )
             HorizontalDivider()
         }
@@ -391,7 +409,7 @@ private fun AuthMethodSelectorContent(
 private fun AuthFlowContent(
     flow: ProviderAuthFlow,
     onSubmit: (answer: String) -> Unit,
-    onCancel: () -> Unit,
+    onCancel: () -> Unit
 ) {
     val context = LocalContext.current
     val browserEvent = flow.events.lastOrNull {
@@ -406,18 +424,21 @@ private fun AuthFlowContent(
             .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         when {
             browserEvent != null -> {
                 AuthEventItem(event = browserEvent, onOpenUri = context::openInCustomTab)
                 AuthWaitingIndicator()
             }
+
             prompt != null -> AuthPromptItem(prompt = prompt, onSubmit = onSubmit)
+
             infoEvent != null -> {
                 AuthEventItem(event = infoEvent, onOpenUri = context::openInCustomTab)
                 AuthWaitingIndicator()
             }
+
             else -> AuthWaitingIndicator()
         }
         TextButton(onClick = onCancel) {
@@ -430,26 +451,23 @@ private fun AuthFlowContent(
 private fun AuthWaitingIndicator() {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         CircularProgressIndicator(
             strokeWidth = 2.dp,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(18.dp)
         )
         Text(
             text = stringResource(R.string.auth_waiting),
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
 
 /** One actionable login event, without exposing its raw URL. */
 @Composable
-private fun AuthEventItem(
-    event: AuthEvent,
-    onOpenUri: (url: String) -> Unit,
-) {
+private fun AuthEventItem(event: AuthEvent, onOpenUri: (url: String) -> Unit) {
     when (event) {
         is AuthEvent.Info -> {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -461,32 +479,35 @@ private fun AuthEventItem(
                 }
             }
         }
+
         is AuthEvent.AuthUrl -> {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     text = stringResource(R.string.auth_continue_browser),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium
                 )
                 Button(onClick = { onOpenUri(event.url) }) {
                     Text(stringResource(R.string.auth_open_browser))
                 }
             }
         }
+
         is AuthEvent.DeviceCode -> {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     text = stringResource(R.string.auth_continue_browser),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
                     text = stringResource(R.string.auth_user_code, event.userCode),
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleMedium
                 )
                 Button(onClick = { onOpenUri(event.verificationUri) }) {
                     Text(stringResource(R.string.auth_open_browser))
                 }
             }
         }
+
         is AuthEvent.Progress -> Unit
     }
 }
@@ -497,10 +518,7 @@ private fun AuthEventItem(
  * filters it because Pathfinder's browser runs on the same device.
  */
 @Composable
-private fun AuthPromptItem(
-    prompt: PendingAuthPrompt,
-    onSubmit: (answer: String) -> Unit,
-) {
+private fun AuthPromptItem(prompt: PendingAuthPrompt, onSubmit: (answer: String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (prompt.kind == AuthPromptKind.SELECT) {
             Text(prompt.message, style = MaterialTheme.typography.bodyLarge)
@@ -508,7 +526,7 @@ private fun AuthPromptItem(
                 ListItem(
                     headlineContent = { Text(option.label) },
                     supportingContent = option.description?.let { desc -> { Text(desc) } },
-                    modifier = Modifier.clickable { onSubmit(option.id) },
+                    modifier = Modifier.clickable { onSubmit(option.id) }
                 )
                 HorizontalDivider()
             }
@@ -522,11 +540,15 @@ private fun AuthPromptItem(
                 onValueChange = { answer = it },
                 label = { Text(prompt.message) },
                 placeholder = { prompt.placeholder?.let { Text(it) } },
-                visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+                visualTransformation = if (secret) {
+                    PasswordVisualTransformation()
+                } else {
+                    VisualTransformation.None
+                },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { onSubmit(answer) }),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth()
             )
             Button(onClick = { onSubmit(answer) }) {
                 Text(stringResource(R.string.action_submit))

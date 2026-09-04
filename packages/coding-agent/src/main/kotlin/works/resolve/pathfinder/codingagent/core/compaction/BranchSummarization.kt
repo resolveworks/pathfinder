@@ -8,46 +8,43 @@ import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.MessageRole
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.Usage
-import works.resolve.pathfinder.ai.Models
+import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
 import works.resolve.pathfinder.ai.utils.contentText
+import works.resolve.pathfinder.codingagent.core.session.ActiveToolsEntry
 import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.session.Conversation
+import works.resolve.pathfinder.codingagent.core.session.CustomEntry
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.session.SessionEntry
 import works.resolve.pathfinder.codingagent.core.session.SessionError
 import works.resolve.pathfinder.codingagent.core.session.SessionErrorCode
-import works.resolve.pathfinder.codingagent.core.session.SessionEntry
 import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
-import works.resolve.pathfinder.codingagent.core.session.ActiveToolsEntry
-import works.resolve.pathfinder.codingagent.core.session.CustomEntry
 import works.resolve.pathfinder.codingagent.core.session.walkToRoot
 
 data class BranchSummaryResult(
     val summary: String,
     val usage: Usage?,
     val readFiles: List<String>,
-    val modifiedFiles: List<String>,
+    val modifiedFiles: List<String>
 )
 
 data class BranchPreparation(
     val messages: List<Message>,
     val fileOps: FileOperations,
-    val totalTokens: Int,
+    val totalTokens: Int
 )
 
-data class CollectEntriesResult(
-    val entries: List<SessionEntry>,
-    val commonAncestorId: String?,
-)
+data class CollectEntriesResult(val entries: List<SessionEntry>, val commonAncestorId: String?)
 
 /**
  * The old branch's entries from (exclusive) the deepest common ancestor of
@@ -57,7 +54,7 @@ data class CollectEntriesResult(
 fun collectEntriesForBranchSummary(
     conversation: Conversation,
     oldLeafId: String?,
-    targetId: String,
+    targetId: String
 ): CollectEntriesResult {
     if (oldLeafId == null) {
         return CollectEntriesResult(entries = emptyList(), commonAncestorId = null)
@@ -88,10 +85,21 @@ fun collectEntriesForBranchSummary(
 
 private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
     is MessageEntry -> if (entry.message.role == MessageRole.TOOL_RESULT) null else entry.message
+
     // Upstream returns a dedicated branchSummary agent message; pathfinder
     // has no such role, so the entry projects to a wrapped user message.
-    is BranchSummaryEntry -> createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)
-    is CompactionEntry -> createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp)
+    is BranchSummaryEntry -> createBranchSummaryMessage(
+        entry.summary,
+        entry.fromId,
+        entry.timestamp
+    )
+
+    is CompactionEntry -> createCompactionSummaryMessage(
+        entry.summary,
+        entry.tokensBefore,
+        entry.timestamp
+    )
+
     is ModelChangeEntry, is ThinkingLevelEntry, is ActiveToolsEntry, is CustomEntry -> null
 }
 
@@ -105,12 +113,11 @@ private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
  * parallel details type.
  */
 private fun carryBranchSummaryDetails(details: JsonObject?, fileOps: FileOperations) {
-    fun strings(name: String): List<String> =
-        (details?.get(name) as? JsonArray)
-            ?.filterIsInstance<JsonPrimitive>()
-            ?.filter { it.isString }
-            ?.map { it.content }
-            ?: emptyList()
+    fun strings(name: String): List<String> = (details?.get(name) as? JsonArray)
+        ?.filterIsInstance<JsonPrimitive>()
+        ?.filter { it.isString }
+        ?.map { it.content }
+        ?: emptyList()
     for (f in strings("readFiles")) fileOps.read.add(f)
     for (f in strings("modifiedFiles")) fileOps.edited.add(f)
 }
@@ -140,7 +147,9 @@ fun prepareBranchEntries(entries: List<SessionEntry>, tokenBudget: Int = 0): Bra
 
         val tokens = estimateTokens(message)
         if (tokenBudget > 0 && totalTokens + tokens > tokenBudget) {
-            if ((entry is CompactionEntry || entry is BranchSummaryEntry) && totalTokens < tokenBudget * 0.9) {
+            if ((entry is CompactionEntry || entry is BranchSummaryEntry) &&
+                totalTokens < tokenBudget * 0.9
+            ) {
                 messages.add(0, message)
                 totalTokens += tokens
             }
@@ -206,15 +215,12 @@ data class GenerateBranchSummaryOptions(
     val retry: RetryPolicy? = null,
     val callbacks: RetryCallbacks? = null,
     val retryRunner: Retry = Retry(),
-    val clock: Clock = Clock.System,
+    val clock: Clock = Clock.System
 )
 
 enum class BranchSummaryErrorCode { ABORTED, SUMMARIZATION_FAILED }
 
-class BranchSummaryError(
-    val code: BranchSummaryErrorCode,
-    message: String,
-) : Exception(message)
+class BranchSummaryError(val code: BranchSummaryErrorCode, message: String) : Exception(message)
 
 /**
  * Mirrors pi's `Result<BranchSummaryResult, BranchSummaryError>`; named to
@@ -238,7 +244,7 @@ private val BRANCH_SUMMARY_MAX_TOKENS = 2048
  */
 suspend fun generateBranchSummary(
     entries: List<SessionEntry>,
-    options: GenerateBranchSummaryOptions,
+    options: GenerateBranchSummaryOptions
 ): BranchSummaryCallResult {
     val contextWindow = if (options.model.contextWindow > 0) options.model.contextWindow else 128000
     val tokenBudget = contextWindow - options.reserveTokens
@@ -247,13 +253,20 @@ suspend fun generateBranchSummary(
 
     if (preparation.messages.isEmpty()) {
         return BranchSummaryCallResult.Ok(
-            BranchSummaryResult(summary = "No content to summarize", usage = null, readFiles = emptyList(), modifiedFiles = emptyList()),
+            BranchSummaryResult(
+                summary = "No content to summarize",
+                usage = null,
+                readFiles = emptyList(),
+                modifiedFiles = emptyList()
+            )
         )
     }
     // Upstream serializes convertToLlm(messages); pathfinder messages are
     // already LLM-ready, so the conversion is the identity.
     val conversationText = serializeConversation(preparation.messages)
-    val instructions: String = if (options.replaceInstructions && options.customInstructions != null) {
+    val instructions: String = if (options.replaceInstructions &&
+        options.customInstructions != null
+    ) {
         options.customInstructions!!
     } else if (options.customInstructions != null) {
         "$BRANCH_SUMMARY_PROMPT\n\nAdditional focus: ${options.customInstructions}"
@@ -270,26 +283,29 @@ suspend fun generateBranchSummary(
             messages = listOf(
                 UserMessage(
                     content = listOf(TextContent(promptText)),
-                    timestamp = options.clock.now().toEpochMilliseconds(),
-                ),
-            ),
+                    timestamp = options.clock.now().toEpochMilliseconds()
+                )
+            )
         ),
         SimpleStreamOptions(maxTokens = BRANCH_SUMMARY_MAX_TOKENS),
         options.retry,
         options.callbacks,
-        options.retryRunner,
+        options.retryRunner
     )
     if (response.stopReason == StopReason.ABORTED) {
         return BranchSummaryCallResult.Err(
-            BranchSummaryError(BranchSummaryErrorCode.ABORTED, response.errorMessage ?: "Branch summary aborted"),
+            BranchSummaryError(
+                BranchSummaryErrorCode.ABORTED,
+                response.errorMessage ?: "Branch summary aborted"
+            )
         )
     }
     if (response.stopReason == StopReason.ERROR) {
         return BranchSummaryCallResult.Err(
             BranchSummaryError(
                 BranchSummaryErrorCode.SUMMARIZATION_FAILED,
-                "Branch summary failed: ${response.errorMessage ?: "Unknown error"}",
-            ),
+                "Branch summary failed: ${response.errorMessage ?: "Unknown error"}"
+            )
         )
     }
 
@@ -302,7 +318,7 @@ suspend fun generateBranchSummary(
             summary = summary.ifEmpty { "No summary generated" },
             usage = response.usage,
             readFiles = readFiles,
-            modifiedFiles = modifiedFiles,
-        ),
+            modifiedFiles = modifiedFiles
+        )
     )
 }

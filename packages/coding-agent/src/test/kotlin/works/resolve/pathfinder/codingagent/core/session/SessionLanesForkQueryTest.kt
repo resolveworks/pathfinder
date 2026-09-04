@@ -1,8 +1,5 @@
 package works.resolve.pathfinder.codingagent.core.session
 
-import works.resolve.pathfinder.agent.*
-
-import works.resolve.pathfinder.ai.UserMessage
 import java.io.File
 import kotlin.test.assertFailsWith
 import kotlinx.coroutines.test.runTest
@@ -12,22 +9,33 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import works.resolve.pathfinder.ai.UserMessage
 
 class SessionLanesForkQueryTest {
 
     @get:Rule
     val tmpFolder = TemporaryFolder()
 
-    private fun msg(id: String, parentId: String? = null, seq: Long = 0L) =
-        MessageEntry(id = id, seq = seq, parentId = parentId, timestamp = seq, message = UserMessage.ofText(id, seq))
+    private fun msg(id: String, parentId: String? = null, seq: Long = 0L) = MessageEntry(
+        id = id,
+        seq = seq,
+        parentId = parentId,
+        timestamp = seq,
+        message = UserMessage.ofText(id, seq)
+    )
 
-    private fun compaction(id: String, parentId: String?, seq: Long = 0L) =
-        CompactionEntry(
-            id = id, seq = seq, parentId = parentId, timestamp = seq,
-            summary = "s", retainedTail = emptyList(), tokensBefore = 1,
-        )
+    private fun compaction(id: String, parentId: String?, seq: Long = 0L) = CompactionEntry(
+        id = id,
+        seq = seq,
+        parentId = parentId,
+        timestamp = seq,
+        summary = "s",
+        retainedTail = emptyList(),
+        tokensBefore = 1
+    )
 
-    private fun apply(state: SessionState, mutation: SessionMutation) = state.applyMutation(mutation)
+    private fun apply(state: SessionState, mutation: SessionMutation) =
+        state.applyMutation(mutation)
 
     @Test
     fun `non-main lanes chain and replay`() {
@@ -54,23 +62,40 @@ class SessionLanesForkQueryTest {
         apply(state, SessionMutation.Entry(null, msg("b", "k", seq = 3)))
 
         assertEquals(listOf("b", "k", "a"), state.findEntries().map { it.id })
-        assertEquals(listOf("a", "k", "b"), state.findEntries(EntryQuery(order = EntryOrder.OLDEST_FIRST)).map { it.id })
-        assertEquals(listOf("k"), state.findEntries(EntryQuery(type = EntryType.COMPACTION)).map { it.id })
-        assertEquals(listOf("b", "a"), state.findEntries(EntryQuery(type = EntryType.MESSAGE)).map { it.id })
+        assertEquals(
+            listOf("a", "k", "b"),
+            state.findEntries(EntryQuery(order = EntryOrder.OLDEST_FIRST)).map {
+                it.id
+            }
+        )
+        assertEquals(
+            listOf("k"),
+            state.findEntries(EntryQuery(type = EntryType.COMPACTION)).map {
+                it.id
+            }
+        )
+        assertEquals(
+            listOf("b", "a"),
+            state.findEntries(EntryQuery(type = EntryType.MESSAGE)).map {
+                it.id
+            }
+        )
         assertEquals(listOf("b"), state.findEntries(EntryQuery(limit = 1)).map { it.id })
         // Cursor: exclusive seq bound, direction-aware.
         assertEquals(
             listOf("k", "a"),
-            state.findEntries(EntryQuery(cursor = EntryCursor(afterSeq = 3))).map { it.id },
+            state.findEntries(EntryQuery(cursor = EntryCursor(afterSeq = 3))).map { it.id }
         )
         assertEquals(
             listOf("b"),
             state.findEntries(
-                EntryQuery(order = EntryOrder.OLDEST_FIRST, cursor = EntryCursor(afterSeq = 2)),
-            ).map { it.id },
+                EntryQuery(order = EntryOrder.OLDEST_FIRST, cursor = EntryCursor(afterSeq = 2))
+            ).map { it.id }
         )
         assertFailsWith<SessionError> { state.findEntries(EntryQuery(limit = 0)) }
-        assertFailsWith<SessionError> { state.findEntries(EntryQuery(cursor = EntryCursor(afterSeq = -1))) }
+        assertFailsWith<SessionError> {
+            state.findEntries(EntryQuery(cursor = EntryCursor(afterSeq = -1)))
+        }
     }
 
     @Test
@@ -82,35 +107,66 @@ class SessionLanesForkQueryTest {
         apply(state, SessionMutation.Entry(null, msg("c", "k", seq = 4)))
 
         // NewestFirst walks leaf→root; oldestFirst reverses.
-        assertEquals(listOf("c", "k", "b", "a"), state.findEntriesOnBranch(BranchEntryQuery(start = "c")).map { it.id })
+        assertEquals(
+            listOf("c", "k", "b", "a"),
+            state.findEntriesOnBranch(BranchEntryQuery(start = "c")).map {
+                it.id
+            }
+        )
         assertEquals(
             listOf("a", "b", "k", "c"),
-            state.findEntriesOnBranch(BranchEntryQuery(start = "c", order = EntryOrder.OLDEST_FIRST)).map { it.id },
+            state.findEntriesOnBranch(
+                BranchEntryQuery(start = "c", order = EntryOrder.OLDEST_FIRST)
+            ).map {
+                it.id
+            }
         )
         // stopAtId/stopAtType are inclusive.
         assertEquals(
             listOf("c", "k", "b"),
-            state.findEntriesOnBranch(BranchEntryQuery(start = "c", stopAtId = "b")).map { it.id },
+            state.findEntriesOnBranch(BranchEntryQuery(start = "c", stopAtId = "b")).map { it.id }
         )
         assertEquals(
             listOf("a", "b", "k"),
-            state.findEntriesOnBranch(BranchEntryQuery(start = "c", order = EntryOrder.OLDEST_FIRST, stopAtType = EntryType.COMPACTION))
-                .map { it.id },
+            state.findEntriesOnBranch(
+                BranchEntryQuery(
+                    start = "c",
+                    order = EntryOrder.OLDEST_FIRST,
+                    stopAtType = EntryType.COMPACTION
+                )
+            )
+                .map { it.id }
         )
         // Filters apply to the walk's output; they do not bound the walk.
         assertEquals(
             listOf("c", "b", "a"),
-            state.findEntriesOnBranch(BranchEntryQuery(start = "c", type = EntryType.MESSAGE)).map { it.id },
+            state.findEntriesOnBranch(BranchEntryQuery(start = "c", type = EntryType.MESSAGE)).map {
+                it.id
+            }
         )
         assertEquals(
             listOf("a", "b", "c"),
-            state.findEntriesOnBranch(BranchEntryQuery(start = "c", order = EntryOrder.OLDEST_FIRST, type = EntryType.MESSAGE)).map { it.id },
+            state.findEntriesOnBranch(
+                BranchEntryQuery(
+                    start = "c",
+                    order = EntryOrder.OLDEST_FIRST,
+                    type = EntryType.MESSAGE
+                )
+            ).map {
+                it.id
+            }
         )
         assertEquals(
             listOf("k", "b", "a"),
-            state.findEntriesOnBranch(BranchEntryQuery(start = "c", cursor = EntryCursor(afterSeq = 4))).map { it.id },
+            state.findEntriesOnBranch(
+                BranchEntryQuery(start = "c", cursor = EntryCursor(afterSeq = 4))
+            ).map {
+                it.id
+            }
         )
-        assertFailsWith<SessionError> { state.findEntriesOnBranch(BranchEntryQuery(start = "ghost")) }
+        assertFailsWith<SessionError> {
+            state.findEntriesOnBranch(BranchEntryQuery(start = "ghost"))
+        }
     }
 
     @Test
@@ -118,35 +174,55 @@ class SessionLanesForkQueryTest {
         val state = SessionState()
         state.validateNewLane("side")
         apply(state, SessionMutation.Entry("main", msg("a", null, seq = 1)))
-        val started = LaneRecord.OperationStartedRecord(id = "run-1", lane = "main", intent = OperationIntent.run())
+        val started = LaneRecord.OperationStartedRecord(
+            id = "run-1",
+            lane = "main",
+            intent = OperationIntent.run()
+        )
         apply(state, SessionMutation.Record(started.withAssigned(seq = 2, timestamp = 2)))
         val finished = LaneRecord.OperationFinishedRecord(
-            id = "f-1", lane = "main", runId = "run-1", outcome = OperationOutcome.COMPLETED,
+            id = "f-1",
+            lane = "main",
+            runId = "run-1",
+            outcome = OperationOutcome.COMPLETED
         )
         apply(state, SessionMutation.Record(finished.withAssigned(seq = 3, timestamp = 3)))
         val usage = LaneRecord.UsageRecord(
-            id = "u-1", lane = "side",
+            id = "u-1",
+            lane = "side",
             usage = works.resolve.pathfinder.ai.Usage(),
-            fields = kotlinx.serialization.json.buildJsonObject { },
+            fields = kotlinx.serialization.json.buildJsonObject { }
         )
         apply(state, SessionMutation.Lane(4, "side", null))
         apply(state, SessionMutation.Record(usage.withAssigned(seq = 5, timestamp = 5)))
 
         assertEquals(listOf("u-1", "f-1", "run-1"), state.findRecords().map { it.id })
-        assertEquals(listOf("run-1"), state.findRecords(RecordQuery(type = RecordType.OPERATION_STARTED)).map { it.id })
+        assertEquals(
+            listOf("run-1"),
+            state.findRecords(RecordQuery(type = RecordType.OPERATION_STARTED)).map {
+                it.id
+            }
+        )
         // runId matches the started record's id and the finished record's runId.
         assertEquals(
             listOf("f-1", "run-1"),
-            state.findRecords(RecordQuery(runId = "run-1")).map { it.id },
+            state.findRecords(RecordQuery(runId = "run-1")).map { it.id }
         )
         assertEquals(listOf("u-1"), state.findRecords(RecordQuery(lane = "side")).map { it.id })
         assertEquals(
             listOf("run-1"),
-            state.findRecords(RecordQuery(type = RecordType.OPERATION_STARTED, operationKind = OperationIntent.Kind.RUN)).map { it.id },
+            state.findRecords(
+                RecordQuery(
+                    type = RecordType.OPERATION_STARTED,
+                    operationKind = OperationIntent.Kind.RUN
+                )
+            ).map {
+                it.id
+            }
         )
         assertEquals(
             listOf("run-1", "f-1", "u-1"),
-            state.findRecords(RecordQuery(order = EntryOrder.OLDEST_FIRST)).map { it.id },
+            state.findRecords(RecordQuery(order = EntryOrder.OLDEST_FIRST)).map { it.id }
         )
         assertEquals(listOf("u-1"), state.findRecords(RecordQuery(afterSeq = 3)).map { it.id })
         assertEquals(listOf("u-1"), state.findRecords(RecordQuery(limit = 1)).map { it.id })
@@ -162,15 +238,25 @@ class SessionLanesForkQueryTest {
         apply(state, SessionMutation.Fact.Label(5, "a", "start"))
         apply(state, SessionMutation.Fact.Label(6, "c", "end"))
 
-        val mutations = state.createForkMutations(ForkOptions.Branch(entryId = "b", position = ForkOptions.Branch.Position.AT))
+        val mutations = state.createForkMutations(
+            ForkOptions.Branch(entryId = "b", position = ForkOptions.Branch.Position.AT)
+        )
         val entryMutations = mutations.filterIsInstance<SessionMutation.Entry>()
-        assertEquals(listOf("a" to 1L, "b" to 2L), entryMutations.map { it.entry.id to it.entry.seq })
+        assertEquals(
+            listOf("a" to 1L, "b" to 2L),
+            entryMutations.map {
+                it.entry.id to it.entry.seq
+            }
+        )
         assertEquals(null, entryMutations[0].entry.parentId)
         // Fork entry mutations are not lane-addressed (pi emits bare entry mutations).
         assertTrue(entryMutations.all { it.lane == null })
         val lane = mutations.filterIsInstance<SessionMutation.Lane>().single()
         assertEquals(LanePointer("main", "b"), LanePointer(lane.lane, lane.leafId))
-        assertEquals("source", (mutations.filterIsInstance<SessionMutation.Fact.Name>().single()).name)
+        assertEquals(
+            "source",
+            (mutations.filterIsInstance<SessionMutation.Fact.Name>().single()).name
+        )
         val labels = mutations.filterIsInstance<SessionMutation.Fact.Label>()
         assertEquals(listOf("a"), labels.map { it.targetId })
         assertEquals((1L..mutations.size).toList(), mutations.map { seqOf(it) })
@@ -183,9 +269,21 @@ class SessionLanesForkQueryTest {
         apply(state, SessionMutation.Entry("main", msg("b", "a", seq = 2)))
 
         val at = state.createForkMutations(ForkOptions.Branch())
-        assertEquals(listOf("a", "b"), at.filterIsInstance<SessionMutation.Entry>().map { it.entry.id })
-        val before = state.createForkMutations(ForkOptions.Branch(entryId = "b", position = ForkOptions.Branch.Position.BEFORE))
-        assertEquals(listOf("a"), before.filterIsInstance<SessionMutation.Entry>().map { it.entry.id })
+        assertEquals(
+            listOf("a", "b"),
+            at.filterIsInstance<SessionMutation.Entry>().map {
+                it.entry.id
+            }
+        )
+        val before = state.createForkMutations(
+            ForkOptions.Branch(entryId = "b", position = ForkOptions.Branch.Position.BEFORE)
+        )
+        assertEquals(
+            listOf("a"),
+            before.filterIsInstance<SessionMutation.Entry>().map {
+                it.entry.id
+            }
+        )
         assertEquals("a", before.filterIsInstance<SessionMutation.Lane>().single().leafId)
         val empty = SessionState().createForkMutations(ForkOptions.Branch())
         assertTrue(empty.filterIsInstance<SessionMutation.Entry>().isEmpty())
@@ -214,10 +312,17 @@ class SessionLanesForkQueryTest {
         apply(state, SessionMutation.Entry("main", msg("b", "a", seq = 2)))
         apply(state, SessionMutation.Lane(3, "side", "a"))
         val mutations = state.createForkMutations(ForkOptions.Tree)
-        assertEquals(listOf("a", "b"), mutations.filterIsInstance<SessionMutation.Entry>().map { it.entry.id })
+        assertEquals(
+            listOf("a", "b"),
+            mutations.filterIsInstance<SessionMutation.Entry>().map {
+                it.entry.id
+            }
+        )
         assertEquals(
             listOf(LanePointer("main", "b"), LanePointer("side", "a")),
-            mutations.filterIsInstance<SessionMutation.Lane>().map { LanePointer(it.lane, it.leafId) },
+            mutations.filterIsInstance<SessionMutation.Lane>().map {
+                LanePointer(it.lane, it.leafId)
+            }
         )
     }
 
@@ -230,7 +335,8 @@ class SessionLanesForkQueryTest {
 
     private fun newStore(root: File, startId: Int = 0): Pair<SessionStore, () -> String> {
         var next = startId
-        return SessionStore(root = root, idFactory = { "sess-fork-${next++}" }) to { "sess-fork-$next" }
+        return SessionStore(root = root, idFactory = { "sess-fork-${next++}" }) to
+            { "sess-fork-$next" }
     }
 
     @Test
@@ -281,10 +387,16 @@ class SessionLanesForkQueryTest {
         assertEquals(aId, side.leafId())
         val appended = side.appendMessage(UserMessage.ofText("side note", 2L))
         val sideTexts = side
-            .findEntriesOnBranch(EntryQuery(type = EntryType.MESSAGE, order = EntryOrder.OLDEST_FIRST))
+            .findEntriesOnBranch(
+                EntryQuery(type = EntryType.MESSAGE, order = EntryOrder.OLDEST_FIRST)
+            )
             .filterIsInstance<MessageEntry>()
             .map { entry -> (entry.message as works.resolve.pathfinder.ai.UserMessage).content }
-            .map { contents -> contents.filterIsInstance<works.resolve.pathfinder.ai.TextContent>().joinToString { it.text } }
+            .map { contents ->
+                contents.filterIsInstance<works.resolve.pathfinder.ai.TextContent>().joinToString {
+                    it.text
+                }
+            }
         assertEquals(listOf("hello", "side note"), sideTexts)
         // The main lane is untouched by the side append.
         val main = store.load(withMessage.id)!!
@@ -308,12 +420,22 @@ class SessionLanesForkQueryTest {
         val session = store.create("records")
         store.appendRecord(
             session.id,
-            LaneRecord.OperationStartedRecord(id = "run-1", lane = "main", intent = OperationIntent.run()),
+            LaneRecord.OperationStartedRecord(
+                id = "run-1",
+                lane = "main",
+                intent = OperationIntent.run()
+            )
         )
         assertEquals(
             listOf("run-1"),
-            store.findRecords(session.id, RecordQuery(type = RecordType.OPERATION_STARTED, operationKind = OperationIntent.Kind.RUN))
-                .map { it.id },
+            store.findRecords(
+                session.id,
+                RecordQuery(
+                    type = RecordType.OPERATION_STARTED,
+                    operationKind = OperationIntent.Kind.RUN
+                )
+            )
+                .map { it.id }
         )
         val e = assertFailsWith<SessionError> {
             store.findRecords(session.id, RecordQuery(operationKind = OperationIntent.Kind.RUN))

@@ -21,7 +21,7 @@ internal object TreeIcons {
             defaultWidth = 24.dp,
             defaultHeight = 24.dp,
             viewportWidth = 24f,
-            viewportHeight = 24f,
+            viewportHeight = 24f
         ).apply {
             symbolPath {
                 moveTo(11f, 17f)
@@ -72,7 +72,7 @@ internal object TreeIcons {
             defaultWidth = 24.dp,
             defaultHeight = 24.dp,
             viewportWidth = 24f,
-            viewportHeight = 24f,
+            viewportHeight = 24f
         ).apply {
             symbolPath {
                 moveTo(7f, 13f)
@@ -111,7 +111,9 @@ internal object TreeIcons {
 }
 
 /** Path attributes emitted by fonts.gstatic.com's Compose vector generator. */
-private fun ImageVector.Builder.symbolPath(block: androidx.compose.ui.graphics.vector.PathBuilder.() -> Unit) {
+private fun ImageVector.Builder.symbolPath(
+    block: androidx.compose.ui.graphics.vector.PathBuilder.() -> Unit
+) {
     path(
         fill = SolidColor(Color.Black),
         fillAlpha = 1f,
@@ -122,6 +124,6 @@ private fun ImageVector.Builder.symbolPath(block: androidx.compose.ui.graphics.v
         strokeLineJoin = StrokeJoin.Bevel,
         strokeLineMiter = 1f,
         pathFillType = PathFillType.NonZero,
-        pathBuilder = block,
+        pathBuilder = block
     )
 }

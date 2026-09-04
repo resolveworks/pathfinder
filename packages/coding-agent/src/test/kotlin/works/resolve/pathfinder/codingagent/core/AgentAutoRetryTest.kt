@@ -1,7 +1,30 @@
 package works.resolve.pathfinder.codingagent.core
 
-import works.resolve.pathfinder.agent.*
-
+import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import works.resolve.pathfinder.agent.Agent
+import works.resolve.pathfinder.agent.AgentEvent
+import works.resolve.pathfinder.agent.AgentTool
+import works.resolve.pathfinder.agent.AgentToolResult
+import works.resolve.pathfinder.agent.AgentToolUpdateCallback
+import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Model
@@ -10,26 +33,9 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.codingagent.core.RetrySettings
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import java.util.concurrent.CopyOnWriteArrayList
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.yield
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 
 class AgentAutoRetryTest {
 
@@ -38,13 +44,13 @@ class AgentAutoRetryTest {
         name = "GLM",
         api = "openai-completions",
         provider = "zai",
-        baseUrl = "https://example.invalid",
+        baseUrl = "https://example.invalid"
     )
 
     private fun assistant(
         text: String = "hello",
         stopReason: StopReason = StopReason.STOP,
-        errorMessage: String? = null,
+        errorMessage: String? = null
     ) = AssistantMessage(
         content = if (text.isEmpty()) emptyList() else listOf(TextContent(text)),
         api = model.api,
@@ -52,16 +58,17 @@ class AgentAutoRetryTest {
         model = model.id,
         stopReason = stopReason,
         errorMessage = errorMessage,
-        timestamp = 42L,
+        timestamp = 42L
     )
 
     private fun okStream(text: String = "hello"): Flow<AssistantMessageEvent> = flowOf(
         AssistantMessageEvent.Start(assistant(text = "")),
-        AssistantMessageEvent.Done(StopReason.STOP, assistant(text = text)),
+        AssistantMessageEvent.Done(StopReason.STOP, assistant(text = text))
     )
 
-    private fun errorStream(message: String): Flow<AssistantMessageEvent> =
-        flowOf(AssistantMessageEvent.Error(StopReason.ERROR, assistant("", StopReason.ERROR, message)))
+    private fun errorStream(message: String): Flow<AssistantMessageEvent> = flowOf(
+        AssistantMessageEvent.Error(StopReason.ERROR, assistant("", StopReason.ERROR, message))
+    )
 
     private class ScriptedStreams {
         val streams = ArrayDeque<Flow<AssistantMessageEvent>>()
@@ -75,26 +82,27 @@ class AgentAutoRetryTest {
     private fun session(
         streams: ScriptedStreams,
         retrySettings: RetrySettings = RetrySettings(),
-        sleep: suspend (Long) -> Unit = { },
+        sleep: suspend (Long) -> Unit = { }
     ) = AgentSession(
         agent = Agent(
             model = model,
             systemPrompt = "be brief",
             streamOptions = SimpleStreamOptions(),
-            streamFn = streams.streamFn,
+            streamFn = streams.streamFn
         ),
         retrySettings = retrySettings,
-        sleep = sleep,
+        sleep = sleep
     )
 
-    private suspend fun collectEvents(agent: AgentSession): MutableList<AgentEvent> = coroutineScope {
-        val events = mutableListOf<AgentEvent>()
-        val collector = launch { agent.events.toList(events) }
-        yield()
-        agent.prompt("hi")
-        collector.cancelAndJoin()
-        events
-    }
+    private suspend fun collectEvents(agent: AgentSession): MutableList<AgentEvent> =
+        coroutineScope {
+            val events = mutableListOf<AgentEvent>()
+            val collector = launch { agent.events.toList(events) }
+            yield()
+            agent.prompt("hi")
+            collector.cancelAndJoin()
+            events
+        }
 
     @Test
     fun `retryable error is retried as a continue run and success ends the sequence`() = runTest {
@@ -110,10 +118,16 @@ class AgentAutoRetryTest {
         assertEquals(listOf(2000L), delays)
         assertEquals(
             listOf(
-                AgentEvent.AutoRetryStart(attempt = 1, maxAttempts = 3, delayMs = 2000, errorMessage = "terminated"),
-                AgentEvent.AutoRetryEnd(success = true, attempt = 1),
+                AgentEvent.AutoRetryStart(
+                    attempt = 1,
+                    maxAttempts = 3,
+                    delayMs = 2000,
+                    errorMessage = "terminated"
+                ),
+                AgentEvent.AutoRetryEnd(success = true, attempt = 1)
             ),
-            events.filterIsInstance<AgentEvent.AutoRetryStart>() + events.filterIsInstance<AgentEvent.AutoRetryEnd>(),
+            events.filterIsInstance<AgentEvent.AutoRetryStart>() +
+                events.filterIsInstance<AgentEvent.AutoRetryEnd>()
         )
 
         // pi drops the errored assistant message from agent state before the
@@ -139,7 +153,10 @@ class AgentAutoRetryTest {
         assertTrue(events.filterIsInstance<AgentEvent.AutoRetryStart>().isEmpty())
         assertTrue(events.filterIsInstance<AgentEvent.AutoRetryEnd>().isEmpty())
         assertEquals(1, streams.seenContexts.size)
-        assertEquals("insufficient_quota: billing", (agent.state.value.messages.last() as AssistantMessage).errorMessage)
+        assertEquals(
+            "insufficient_quota: billing",
+            (agent.state.value.messages.last() as AssistantMessage).errorMessage
+        )
     }
 
     @Test
@@ -183,75 +200,90 @@ class AgentAutoRetryTest {
         val starts = events.filterIsInstance<AgentEvent.AutoRetryStart>()
         assertEquals(listOf(1, 2, 3), starts.map { it.attempt })
         assertEquals(
-            listOf(AgentEvent.AutoRetryEnd(success = false, attempt = 3, finalError = "terminated")),
-            events.filterIsInstance<AgentEvent.AutoRetryEnd>(),
+            listOf(
+                AgentEvent.AutoRetryEnd(success = false, attempt = 3, finalError = "terminated")
+            ),
+            events.filterIsInstance<AgentEvent.AutoRetryEnd>()
         )
-        assertEquals("terminated", (agent.state.value.messages.last() as AssistantMessage).errorMessage)
+        assertEquals(
+            "terminated",
+            (agent.state.value.messages.last() as AssistantMessage).errorMessage
+        )
     }
 
     @Test
-    fun `retry after tool results continues from the toolResult without replaying the partial tool turn`() = runTest {
-        // pi drops only the trailing assistant error from agent state and
-        // continues from the trailing toolResult: the partial tool turn is
-        // neither replayed nor duplicated, and the session tree keeps
-        // everything (append-only).
-        val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
-            content = listOf(ToolCall("call-1", "get_weather", "{}")),
-        )
-        val fakeTool = object : AgentTool {
-            override val definition = Tool("get_weather", "fake weather", JsonPrimitive("object"))
-            override val label = "get_weather"
-            override fun validateArguments(arguments: JsonObject) = arguments
-            override suspend fun execute(
-                toolCallId: String,
-                arguments: JsonObject,
-                onUpdate: AgentToolUpdateCallback,
-            ) = AgentToolResult(content = listOf(TextContent("sunny")))
+    fun `retry after tool results continues from the toolResult without replaying the partial tool turn`() =
+        runTest {
+            // pi drops only the trailing assistant error from agent state and
+            // continues from the trailing toolResult: the partial tool turn is
+            // neither replayed nor duplicated, and the session tree keeps
+            // everything (append-only).
+            val toolUse = assistant(text = "", stopReason = StopReason.TOOL_USE).copy(
+                content = listOf(ToolCall("call-1", "get_weather", "{}"))
+            )
+            val fakeTool = object : AgentTool {
+                override val definition =
+                    Tool("get_weather", "fake weather", JsonPrimitive("object"))
+                override val label = "get_weather"
+                override fun validateArguments(arguments: JsonObject) = arguments
+                override suspend fun execute(
+                    toolCallId: String,
+                    arguments: JsonObject,
+                    onUpdate: AgentToolUpdateCallback
+                ) = AgentToolResult(content = listOf(TextContent("sunny")))
+            }
+            val streams = ScriptedStreams().apply {
+                streams.add(flowOf(AssistantMessageEvent.Done(StopReason.TOOL_USE, toolUse)))
+                streams.add(errorStream("terminated"))
+                streams.add(okStream("recovered"))
+            }
+            val agent = AgentSession(
+                agent = Agent(
+                    model = model,
+                    systemPrompt = "be brief",
+                    streamOptions = SimpleStreamOptions(),
+                    tools = listOf(fakeTool),
+                    streamFn = streams.streamFn
+                ),
+                retrySettings = RetrySettings(),
+                sleep = { }
+            )
+
+            val events = collectEvents(agent)
+
+            assertEquals(
+                listOf(
+                    AgentEvent.AutoRetryStart(
+                        attempt = 1,
+                        maxAttempts = 3,
+                        delayMs = 2000,
+                        errorMessage = "terminated"
+                    ),
+                    AgentEvent.AutoRetryEnd(success = true, attempt = 1)
+                ),
+                events.filterIsInstance<AgentEvent.AutoRetryStart>() +
+                    events.filterIsInstance<AgentEvent.AutoRetryEnd>()
+            )
+
+            assertEquals(3, streams.seenContexts.size)
+            assertEquals(streams.seenContexts[1], streams.seenContexts[2])
+            assertTrue(
+                streams.seenContexts[1].last() is works.resolve.pathfinder.ai.ToolResultMessage
+            )
+
+            val state = agent.state.value.messages
+            assertEquals(4, state.size)
+            assertTrue(state[1] is AssistantMessage)
+            assertTrue(state[2] is works.resolve.pathfinder.ai.ToolResultMessage)
+            val recovered = state[3] as AssistantMessage
+            assertEquals("recovered", (recovered.content.single() as TextContent).text)
+            assertNull(agent.state.value.errorMessage)
+
+            val tree = agent.conversation.activeMessages()
+            assertEquals(5, tree.size)
+            val errored = tree[3] as AssistantMessage
+            assertEquals(StopReason.ERROR, errored.stopReason)
         }
-        val streams = ScriptedStreams().apply {
-            streams.add(flowOf(AssistantMessageEvent.Done(StopReason.TOOL_USE, toolUse)))
-            streams.add(errorStream("terminated"))
-            streams.add(okStream("recovered"))
-        }
-        val agent = AgentSession(
-            agent = Agent(
-                model = model,
-                systemPrompt = "be brief",
-                streamOptions = SimpleStreamOptions(),
-                tools = listOf(fakeTool),
-                streamFn = streams.streamFn,
-            ),
-            retrySettings = RetrySettings(),
-            sleep = { },
-        )
-
-        val events = collectEvents(agent)
-
-        assertEquals(
-            listOf(
-                AgentEvent.AutoRetryStart(attempt = 1, maxAttempts = 3, delayMs = 2000, errorMessage = "terminated"),
-                AgentEvent.AutoRetryEnd(success = true, attempt = 1),
-            ),
-            events.filterIsInstance<AgentEvent.AutoRetryStart>() + events.filterIsInstance<AgentEvent.AutoRetryEnd>(),
-        )
-
-        assertEquals(3, streams.seenContexts.size)
-        assertEquals(streams.seenContexts[1], streams.seenContexts[2])
-        assertTrue(streams.seenContexts[1].last() is works.resolve.pathfinder.ai.ToolResultMessage)
-
-        val state = agent.state.value.messages
-        assertEquals(4, state.size)
-        assertTrue(state[1] is AssistantMessage)
-        assertTrue(state[2] is works.resolve.pathfinder.ai.ToolResultMessage)
-        val recovered = state[3] as AssistantMessage
-        assertEquals("recovered", (recovered.content.single() as TextContent).text)
-        assertNull(agent.state.value.errorMessage)
-
-        val tree = agent.conversation.activeMessages()
-        assertEquals(5, tree.size)
-        val errored = tree[3] as AssistantMessage
-        assertEquals(StopReason.ERROR, errored.stopReason)
-    }
 
     @Test
     fun `prompt creates the user message and the session tree keeps retried errors`() = runTest {
@@ -266,12 +298,17 @@ class AgentAutoRetryTest {
         // removed from agent state by the retry.
         val entries = agent.conversation.activeEntries()
         assertEquals(3, entries.size)
-        val user = entries[0] as works.resolve.pathfinder.codingagent.core.session.MessageEntry
-        val text = ((user.message as works.resolve.pathfinder.ai.UserMessage).content.single() as TextContent).text
+        val user = entries[0] as MessageEntry
+        val text = ((user.message as UserMessage).content.single() as TextContent).text
         assertEquals("hi", text)
-        val failed = (entries[1] as works.resolve.pathfinder.codingagent.core.session.MessageEntry).message as AssistantMessage
+        val failed = (entries[1] as MessageEntry).message as AssistantMessage
         assertEquals(StopReason.ERROR, failed.stopReason)
-        assertEquals(StopReason.STOP, (entries[2] as works.resolve.pathfinder.codingagent.core.session.MessageEntry).message.let { (it as AssistantMessage).stopReason })
+        assertEquals(
+            StopReason.STOP,
+            (entries[2] as MessageEntry).message.let {
+                (it as AssistantMessage).stopReason
+            }
+        )
         assertEquals(2, agent.state.value.messages.size)
     }
 
@@ -301,10 +338,20 @@ class AgentAutoRetryTest {
 
         assertEquals(
             listOf(
-                AgentEvent.AutoRetryStart(attempt = 1, maxAttempts = 3, delayMs = 2000, errorMessage = "terminated"),
-                AgentEvent.AutoRetryEnd(success = false, attempt = 1, finalError = "Retry cancelled"),
+                AgentEvent.AutoRetryStart(
+                    attempt = 1,
+                    maxAttempts = 3,
+                    delayMs = 2000,
+                    errorMessage = "terminated"
+                ),
+                AgentEvent.AutoRetryEnd(
+                    success = false,
+                    attempt = 1,
+                    finalError = "Retry cancelled"
+                )
             ),
-            events.filterIsInstance<AgentEvent.AutoRetryStart>() + events.filterIsInstance<AgentEvent.AutoRetryEnd>(),
+            events.filterIsInstance<AgentEvent.AutoRetryStart>() +
+                events.filterIsInstance<AgentEvent.AutoRetryEnd>()
         )
         // The error message was removed from agent state before the backoff;
         // it stays in the session layer.

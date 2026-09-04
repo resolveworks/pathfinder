@@ -44,7 +44,7 @@ internal val UNSUPPORTED_STRICT_SCHEMA_KEYS = listOf(
     "not",
     "if",
     "then",
-    "else",
+    "else"
 )
 
 /**
@@ -75,7 +75,11 @@ private fun schemaAllowsNull(schema: Any?): Boolean {
     schema as MutableSchema
     val type = schema["type"]
     if ((type as? JsonElement).stringOrNull() == "null") return true
-    if (type is MutableList<*> && type.any { (it as? JsonElement).stringOrNull() == "null" }) return true
+    if (type is MutableList<*> &&
+        type.any { (it as? JsonElement).stringOrNull() == "null" }
+    ) {
+        return true
+    }
     val const = schema["const"]
     if (const is JsonPrimitive && const === JsonNull) return true
     val enum = schema["enum"]
@@ -88,6 +92,7 @@ private fun toMutableNode(element: JsonElement): Any = when (element) {
     is JsonObject -> MutableSchema(element.size).apply {
         for ((key, value) in element) put(key, toMutableValue(value))
     }
+
     else -> toMutableValue(element)
 }
 
@@ -100,9 +105,13 @@ private fun toMutableValue(element: JsonElement): Any = when (element) {
 private fun freezeNode(node: Any): JsonElement = when (node) {
     is LinkedHashMap<*, *> ->
         JsonObject(node.entries.associate { (key, value) -> key.toString() to freezeNode(value!!) })
+
     is MutableList<*> -> JsonArray(node.map { freezeNode(it!!) })
+
     is JsonElement -> node
+
     is String -> JsonPrimitive(node)
+
     else -> JsonPrimitive(node.toString())
 }
 
@@ -147,7 +156,9 @@ private fun makeJsonSchemaNodeStrict(schema: Any?) {
     if (schema.containsKey("additionalProperties") &&
         !(additionalProperties is JsonPrimitive && additionalProperties.booleanOrNull == false)
     ) {
-        throw UnsupportedStrictJsonSchemaError("schema-valued or true additionalProperties is unsupported")
+        throw UnsupportedStrictJsonSchemaError(
+            "schema-valued or true additionalProperties is unsupported"
+        )
     }
     if (schema.containsKey("properties") && !isJsonSchemaObject(schema["properties"])) {
         throw UnsupportedStrictJsonSchemaError("object properties must be a schema map")
@@ -174,7 +185,9 @@ private fun makeJsonSchemaNodeStrict(schema: Any?) {
         if (key !in required && !schemaAllowsNull(property)) {
             val nullSchema = MutableSchema(1).apply { put("type", JsonPrimitive("null")) }
             properties[key] =
-                MutableSchema(1).apply { put("anyOf", ArrayList<Any>(listOf(property, nullSchema))) }
+                MutableSchema(1).apply {
+                    put("anyOf", ArrayList<Any>(listOf(property, nullSchema)))
+                }
         }
     }
     schema["required"] = ArrayList(propertyNames.map { JsonPrimitive(it) })
@@ -200,7 +213,7 @@ fun getJsonSchemaToolParameters(tool: Tool, strict: Boolean?): JsonElement =
 data class GrammarConstrainedSampling(
     val format: GrammarConstrainedFormat,
     val definition: String,
-    val inputProperty: String,
+    val inputProperty: String
 )
 
 enum class GrammarConstrainedFormat { LARK, REGEX }
@@ -208,17 +221,13 @@ enum class GrammarConstrainedFormat { LARK, REGEX }
 class GrammarToolInputJsonBuffer(
     var input: String = "",
     var started: Boolean = false,
-    var closed: Boolean = false,
+    var closed: Boolean = false
 )
 
-fun getGrammarToolInput(
-    toolName: String,
-    arguments: JsonObject,
-    inputProperty: String,
-): String {
+fun getGrammarToolInput(toolName: String, arguments: JsonObject, inputProperty: String): String {
     val input = arguments[inputProperty].stringOrNull()
         ?: throw ConstrainedSamplingError(
-            "Grammar tool call \"$toolName\" requires argument \"$inputProperty\" to be a string.",
+            "Grammar tool call \"$toolName\" requires argument \"$inputProperty\" to be a string."
         )
     return input
 }
@@ -227,14 +236,18 @@ fun appendGrammarToolInputJsonDelta(
     buffer: GrammarToolInputJsonBuffer,
     inputProperty: String,
     nextInput: String,
-    close: Boolean,
+    close: Boolean
 ): String? {
     if (buffer.closed) {
         if (close && nextInput == buffer.input) return null
-        throw ConstrainedSamplingError("grammar tool input for property \"$inputProperty\" changed after it was closed")
+        throw ConstrainedSamplingError(
+            "grammar tool input for property \"$inputProperty\" changed after it was closed"
+        )
     }
     if (!nextInput.startsWith(buffer.input)) {
-        throw ConstrainedSamplingError("grammar tool input for property \"$inputProperty\" changed non-monotonically")
+        throw ConstrainedSamplingError(
+            "grammar tool input for property \"$inputProperty\" changed non-monotonically"
+        )
     }
 
     val inputDelta = nextInput.substring(buffer.input.length)
@@ -257,22 +270,32 @@ fun appendGrammarToolInputJsonDelta(
 
 private fun inferGrammarInputProperty(tool: Tool): String {
     val schema = tool.parameters as? JsonObject
-        ?: throw ConstrainedSamplingError("grammar constrained sampling requires an object parameter schema")
+        ?: throw ConstrainedSamplingError(
+            "grammar constrained sampling requires an object parameter schema"
+        )
     if ((schema["type"] as? JsonElement).stringOrNull() != "object") {
-        throw ConstrainedSamplingError("grammar constrained sampling requires an object parameter schema")
+        throw ConstrainedSamplingError(
+            "grammar constrained sampling requires an object parameter schema"
+        )
     }
     val required = schema["required"]
     val inputProperty = ((required as? JsonArray)?.singleOrNull() as? JsonElement).stringOrNull()
     if (inputProperty == null) {
-        throw ConstrainedSamplingError("grammar constrained sampling requires exactly one required string property")
+        throw ConstrainedSamplingError(
+            "grammar constrained sampling requires exactly one required string property"
+        )
     }
 
     if (schema["properties"]?.let { (it as? JsonObject)?.get(inputProperty) } == null) {
-        throw ConstrainedSamplingError("grammar constrained sampling requires a properties entry for $inputProperty")
+        throw ConstrainedSamplingError(
+            "grammar constrained sampling requires a properties entry for $inputProperty"
+        )
     }
     val property = (schema["properties"] as JsonObject)[inputProperty] as? JsonObject
     if ((property?.get("type") as? JsonElement).stringOrNull() != "string") {
-        throw ConstrainedSamplingError("grammar constrained sampling property $inputProperty must have type string")
+        throw ConstrainedSamplingError(
+            "grammar constrained sampling property $inputProperty must have type string"
+        )
     }
     return inputProperty
 }
@@ -287,12 +310,14 @@ fun resolveJsonSchemaStrictSampling(tool: Tool, supportsStrictMode: Boolean): Bo
             return true
         } catch (error: UnsupportedStrictJsonSchemaError) {
             if (config.strict != StrictJsonSchemaMode.REQUIRE) return null
-            throw ConstrainedSamplingError("Tool \"${tool.name}\" requires JSON-schema constrained sampling, but ${error.message}.")
+            throw ConstrainedSamplingError(
+                "Tool \"${tool.name}\" requires JSON-schema constrained sampling, but ${error.message}."
+            )
         }
     }
     if (config.strict == StrictJsonSchemaMode.REQUIRE) {
         throw ConstrainedSamplingError(
-            "Tool \"${tool.name}\" requires JSON-schema constrained sampling, but strict tools are unsupported.",
+            "Tool \"${tool.name}\" requires JSON-schema constrained sampling, but strict tools are unsupported."
         )
     }
     return null
@@ -300,7 +325,7 @@ fun resolveJsonSchemaStrictSampling(tool: Tool, supportsStrictMode: Boolean): Bo
 
 fun resolveGrammarConstrainedSampling(
     tool: Tool,
-    supportsOpenAIGrammarTools: Boolean,
+    supportsOpenAIGrammarTools: Boolean
 ): GrammarConstrainedSampling? {
     val config = tool.constrainedSampling
     if (config !is ConstrainedSamplingConfig.Grammar) {
@@ -317,25 +342,31 @@ fun resolveGrammarConstrainedSampling(
     val hasRegexDefinition = regexDefinition?.let { it.trim().isNotEmpty() } == true
     if (!hasLarkDefinition && !hasRegexDefinition) {
         throw ConstrainedSamplingError(
-            "Tool \"${tool.name}\" cannot use grammar constrained sampling: no supported grammar variant was provided.",
+            "Tool \"${tool.name}\" cannot use grammar constrained sampling: no supported grammar variant was provided."
         )
     }
 
     try {
         return GrammarConstrainedSampling(
-            format = if (hasLarkDefinition) GrammarConstrainedFormat.LARK else GrammarConstrainedFormat.REGEX,
+            format = if (hasLarkDefinition) {
+                GrammarConstrainedFormat.LARK
+            } else {
+                GrammarConstrainedFormat.REGEX
+            },
             definition = (if (hasLarkDefinition) larkDefinition else regexDefinition)!!,
-            inputProperty = inferGrammarInputProperty(tool),
+            inputProperty = inferGrammarInputProperty(tool)
         )
     } catch (error: Exception) {
         val message = error.message ?: error.toString()
-        throw ConstrainedSamplingError("Tool \"${tool.name}\" cannot use grammar constrained sampling: $message.")
+        throw ConstrainedSamplingError(
+            "Tool \"${tool.name}\" cannot use grammar constrained sampling: $message."
+        )
     }
 }
 
 fun createGrammarToolInputProperties(
     tools: List<Tool>?,
-    supportsOpenAIGrammarTools: Boolean,
+    supportsOpenAIGrammarTools: Boolean
 ): Map<String, String> {
     val properties = LinkedHashMap<String, String>()
     for (tool in tools.orEmpty()) {

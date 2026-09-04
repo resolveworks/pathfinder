@@ -1,5 +1,10 @@
 package works.resolve.pathfinder.ai.utils
 
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlinx.serialization.json.JsonPrimitive
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ImageContent
@@ -11,11 +16,6 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.TestCatalogs
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
-import kotlin.test.assertNull
-import kotlinx.serialization.json.JsonPrimitive
 
 class TokenEstimateTest {
 
@@ -29,7 +29,7 @@ class TokenEstimateTest {
     @Test
     fun `user and tool result content estimates text and images`() {
         val user = UserMessage(
-            listOf(TextContent("1234"), ImageContent(data = "x", mimeType = "image/png")),
+            listOf(TextContent("1234"), ImageContent(data = "x", mimeType = "image/png"))
         )
         assertEquals(1201, estimateMessageTokens(user))
 
@@ -42,11 +42,11 @@ class TokenEstimateTest {
         val assistant = AssistantMessage(
             content = listOf(
                 TextContent("1234"),
-                ToolCall(id = "1", name = "get_weather", arguments = """{"city":"SF"}"""),
+                ToolCall(id = "1", name = "get_weather", arguments = """{"city":"SF"}""")
             ),
             api = "openai-completions",
             provider = "zai",
-            model = "glm",
+            model = "glm"
         )
         assertEquals(7, estimateMessageTokens(assistant))
     }
@@ -60,12 +60,16 @@ class TokenEstimateTest {
             model = "glm",
             usage = Usage(totalTokens = 100),
             stopReason = StopReason.STOP,
-            timestamp = 2L,
+            timestamp = 2L
         )
         val context = Context(
             systemPrompt = "system", // covered by usage, must not be added
-            messages = listOf(UserMessage.ofText("hi", 1L), assistant, UserMessage.ofText("hello!", 3L)),
-            tools = listOf(Tool("t", "d", JsonPrimitive("x"))),
+            messages = listOf(
+                UserMessage.ofText("hi", 1L),
+                assistant,
+                UserMessage.ofText("hello!", 3L)
+            ),
+            tools = listOf(Tool("t", "d", JsonPrimitive("x")))
         )
         val estimate = estimateContextTokens(context)
         assertEquals(100, estimate.usageTokens)
@@ -82,7 +86,7 @@ class TokenEstimateTest {
             provider = "zai",
             model = "glm",
             usage = Usage(totalTokens = 999),
-            stopReason = StopReason.ABORTED,
+            stopReason = StopReason.ABORTED
         )
         val estimate = estimateContextTokens(Context(messages = listOf(aborted)))
         assertNull(estimate.lastUsageIndex)
@@ -100,7 +104,7 @@ class TokenEstimateTest {
             model = "glm",
             usage = Usage(totalTokens = 500),
             stopReason = StopReason.STOP,
-            timestamp = 1L,
+            timestamp = 1L
         )
         val laterSummary = UserMessage.ofText("summary", 5L) // inserted after the response
         val estimate = estimateContextTokens(Context(messages = listOf(laterSummary, assistant)))
@@ -121,19 +125,24 @@ class TokenEstimateTest {
             model = "test-model",
             usage = Usage(input = 9_500, totalTokens = 9_500),
             stopReason = StopReason.STOP,
-            timestamp = 100L,
+            timestamp = 100L
         )
         val context = Context(
             systemPrompt = "system", // 6 chars → 2 tokens
             messages = listOf(
                 UserMessage.ofText("summary", 200L), // inserted after the response
                 assistant, // stale: timestamp 100 < 200 → usage cannot apply
-                UserMessage.ofText("x".repeat(4_000), 300L), // 1000 tokens
-            ),
+                UserMessage.ofText("x".repeat(4_000), 300L) // 1000 tokens
+            )
         )
         assertEquals(
-            ContextUsageEstimate(tokens = 1_005, usageTokens = 0, trailingTokens = 1_005, lastUsageIndex = null),
-            estimateContextTokens(context),
+            ContextUsageEstimate(
+                tokens = 1_005,
+                usageTokens = 0,
+                trailingTokens = 1_005,
+                lastUsageIndex = null
+            ),
+            estimateContextTokens(context)
         )
     }
 
@@ -146,7 +155,7 @@ class TokenEstimateTest {
             model = "glm",
             usage = Usage(totalTokens = totalTokens),
             stopReason = StopReason.STOP,
-            timestamp = timestamp,
+            timestamp = timestamp
         )
         val context = Context(
             messages = listOf(
@@ -154,8 +163,8 @@ class TokenEstimateTest {
                 assistant(100L, 9_500), // stale: predates the inserted summary
                 UserMessage.ofText("new prompt", 300L),
                 assistant(400L, 2_000),
-                UserMessage.ofText("tail", 500L),
-            ),
+                UserMessage.ofText("tail", 500L)
+            )
         )
         val estimate = estimateContextTokens(context)
         assertEquals(2_000, estimate.usageTokens)
@@ -169,7 +178,7 @@ class TokenEstimateTest {
         val context = Context(
             systemPrompt = "12345678", // 2 tokens
             messages = listOf(UserMessage.ofText("abcd")), // 1 token
-            tools = listOf(Tool("t", "d", JsonPrimitive("x"))),
+            tools = listOf(Tool("t", "d", JsonPrimitive("x")))
         )
         val estimate = estimateContextTokens(context)
         assertNull(estimate.lastUsageIndex)
@@ -185,7 +194,7 @@ class TokenEstimateTest {
             model = "glm",
             usage = Usage(totalTokens = 100),
             stopReason = StopReason.STOP,
-            timestamp = 1L,
+            timestamp = 1L
         )
         val addedTool = Tool("late_tool", "d", JsonPrimitive("x"))
         val context = Context(
@@ -197,10 +206,10 @@ class TokenEstimateTest {
                     toolName = "t",
                     content = listOf(TextContent("ok")),
                     addedToolNames = listOf("late_tool"),
-                    timestamp = 2L,
-                ),
+                    timestamp = 2L
+                )
             ),
-            tools = listOf(Tool("t", "d", JsonPrimitive("x")), addedTool),
+            tools = listOf(Tool("t", "d", JsonPrimitive("x")), addedTool)
         )
         val estimate = estimateContextTokens(context)
         val expectedAdded = estimateTextTokens(listOf(addedTool).toString())

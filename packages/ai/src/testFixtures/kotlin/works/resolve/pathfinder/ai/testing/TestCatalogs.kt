@@ -201,7 +201,7 @@ object TestCatalogs {
             }
           ]
         }
-        """,
+        """
     )
 
     val ZAI: CatalogProvider = CATALOG.getProvider("zai")!!

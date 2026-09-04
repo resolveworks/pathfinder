@@ -6,6 +6,7 @@ import java.util.Base64
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.pow
+import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -28,7 +29,6 @@ import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.strictDouble
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
-import kotlin.time.Clock
 
 /**
  * GitHub Copilot OAuth account flow: device-code login against github.com or
@@ -52,7 +52,7 @@ import kotlin.time.Clock
 class GitHubCopilotOAuthAuth(
     private val http: OAuthHttpClient,
     private val knownModelIds: Set<String>,
-    private val clock: Clock = Clock.System,
+    private val clock: Clock = Clock.System
 ) : OAuthAuth {
 
     override val name: String = "GitHub Copilot"
@@ -63,8 +63,8 @@ class GitHubCopilotOAuthAuth(
         val input = interaction.prompt(
             AuthPrompt.Text(
                 message = "GitHub Enterprise URL/domain (blank for github.com)",
-                placeholder = "company.ghe.com",
-            ),
+                placeholder = "company.ghe.com"
+            )
         )
         try {
             currentCoroutineContext().ensureActive()
@@ -85,8 +85,8 @@ class GitHubCopilotOAuthAuth(
                 userCode = device.userCode,
                 verificationUri = device.verificationUri,
                 intervalSeconds = device.intervalSeconds?.toInt(),
-                expiresInSeconds = device.expiresInSeconds.toInt(),
-            ),
+                expiresInSeconds = device.expiresInSeconds.toInt()
+            )
         )
 
         val githubAccessToken = pollForGitHubAccessToken(domain, device)
@@ -94,7 +94,7 @@ class GitHubCopilotOAuthAuth(
         val models = fetchGitHubCopilotModels(
             copilotToken = credentials.access,
             enterpriseDomain = enterpriseDomain,
-            retryPolicy = RetryPolicy(maxRetries = 2, maxElapsedMs = 5000),
+            retryPolicy = RetryPolicy(maxRetries = 2, maxElapsedMs = 5000)
         )
         var enabledModelIds: List<String> = emptyList()
         if (models.policyModelIds.isNotEmpty()) {
@@ -102,26 +102,30 @@ class GitHubCopilotOAuthAuth(
             enabledModelIds = enableGitHubCopilotModels(
                 token = credentials.access,
                 modelIds = models.policyModelIds,
-                enterpriseDomain = enterpriseDomain,
+                enterpriseDomain = enterpriseDomain
             )
         }
         return credentials.copy(
             extras = credentials.extras + (
                 "availableModelIds" to JsonArray(
-                    (models.availableModelIds + enabledModelIds).distinct().map { JsonPrimitive(it) },
+                    (models.availableModelIds + enabledModelIds).distinct().map {
+                        JsonPrimitive(it)
+                    }
                 )
-                ),
+                )
         )
     }
 
     override suspend fun refresh(credential: OAuthCredential): OAuthCredential =
         refreshGitHubCopilotToken(credential.refresh, copilotEnterpriseDomain(credential))
 
-    override suspend fun toAuth(credential: OAuthCredential): ModelAuth =
-        ModelAuth(
-            apiKey = credential.access,
-            baseUrl = getGitHubCopilotBaseUrl(credential.access, copilotEnterpriseDomain(credential)),
+    override suspend fun toAuth(credential: OAuthCredential): ModelAuth = ModelAuth(
+        apiKey = credential.access,
+        baseUrl = getGitHubCopilotBaseUrl(
+            credential.access,
+            copilotEnterpriseDomain(credential)
         )
+    )
 
     /**
      * WHATWG `new URL` lower-cases the host; [java.net.URI] preserves case,
@@ -141,17 +145,16 @@ class GitHubCopilotOAuthAuth(
         }
     }
 
-    internal fun getUrls(domain: String): CopilotUrls =
-        CopilotUrls(
-            deviceCodeUrl = "https://$domain/login/device/code",
-            accessTokenUrl = "https://$domain/login/oauth/access_token",
-            copilotTokenUrl = "https://api.$domain/copilot_internal/v2/token",
-        )
+    internal fun getUrls(domain: String): CopilotUrls = CopilotUrls(
+        deviceCodeUrl = "https://$domain/login/device/code",
+        accessTokenUrl = "https://$domain/login/oauth/access_token",
+        copilotTokenUrl = "https://api.$domain/copilot_internal/v2/token"
+    )
 
     internal data class CopilotUrls(
         val deviceCodeUrl: String,
         val accessTokenUrl: String,
-        val copilotTokenUrl: String,
+        val copilotTokenUrl: String
     )
 
     /** Copilot tokens embed `proxy-ep=<host>`; the API host swaps the `proxy.` prefix. */
@@ -172,14 +175,21 @@ class GitHubCopilotOAuthAuth(
 
     internal data class CopilotModelCatalog(
         val availableModelIds: List<String>,
-        val policyModelIds: List<String>,
+        val policyModelIds: List<String>
     )
 
-    internal fun parseGitHubCopilotModelCatalog(raw: JsonElement?, allowPolicyFallback: Boolean): CopilotModelCatalog {
+    internal fun parseGitHubCopilotModelCatalog(
+        raw: JsonElement?,
+        allowPolicyFallback: Boolean
+    ): CopilotModelCatalog {
         val data = (raw as? JsonObject)?.get("data")
         if (data !is JsonArray) throw IllegalStateException("Invalid Copilot models response")
 
-        data class AccountModel(val id: String, val pickerEnabled: Boolean, val policyState: String?)
+        data class AccountModel(
+            val id: String,
+            val pickerEnabled: Boolean,
+            val policyState: String?
+        )
 
         val accountModels = data.flatMap { rawItem ->
             val item = rawItem as? JsonObject ?: return@flatMap emptyList()
@@ -193,8 +203,8 @@ class GitHubCopilotOAuthAuth(
                 AccountModel(
                     id = id,
                     pickerEnabled = item["model_picker_enabled"] == JsonPrimitive(true),
-                    policyState = item.obj("policy")?.get("state").stringOrNull(),
-                ),
+                    policyState = item.obj("policy")?.get("state").stringOrNull()
+                )
             )
         }
         val pickerModelIds = accountModels
@@ -229,17 +239,27 @@ class GitHubCopilotOAuthAuth(
         method: String,
         headers: Map<String, String>,
         body: ByteArray = ByteArray(0),
-        retryPolicy: RetryPolicy,
+        retryPolicy: RetryPolicy
     ): OAuthHttpResponse {
         val retryDeadline =
-            if (retryPolicy.maxRetries > 0 && retryPolicy.maxElapsedMs > 0) clock.now().toEpochMilliseconds() + retryPolicy.maxElapsedMs else null
+            if (retryPolicy.maxRetries > 0 &&
+                retryPolicy.maxElapsedMs > 0
+            ) {
+                clock.now().toEpochMilliseconds() +
+                    retryPolicy.maxElapsedMs
+            } else {
+                null
+            }
         var retry = 0
         while (true) {
             val attemptTimeoutMs =
                 if (retryDeadline == null) {
                     PER_ATTEMPT_TIMEOUT_MS.toLong()
                 } else {
-                    (retryDeadline - clock.now().toEpochMilliseconds()).coerceIn(1L, PER_ATTEMPT_TIMEOUT_MS.toLong())
+                    (retryDeadline - clock.now().toEpochMilliseconds()).coerceIn(
+                        1L,
+                        PER_ATTEMPT_TIMEOUT_MS.toLong()
+                    )
                 }
             val response = http.execute(
                 OAuthHttpRequest(
@@ -247,8 +267,8 @@ class GitHubCopilotOAuthAuth(
                     url = url,
                     headers = headers,
                     body = body,
-                    timeoutMs = attemptTimeoutMs.toInt(),
-                ),
+                    timeoutMs = attemptTimeoutMs.toInt()
+                )
             )
             if (response.status != 429 || retry == retryPolicy.maxRetries) return response
 
@@ -260,12 +280,19 @@ class GitHubCopilotOAuthAuth(
                     if (seconds != null && seconds.isFinite()) {
                         seconds * 1000
                     } else {
-                        parseHttpDateMs(retryAfter)?.let { (it - clock.now().toEpochMilliseconds()).toDouble() } ?: Double.NaN
+                        parseHttpDateMs(retryAfter)?.let {
+                            (it - clock.now().toEpochMilliseconds()).toDouble()
+                        }
+                            ?: Double.NaN
                     }
                 if (delayMs.isNaN()) return response
             }
             delayMs = max(0.0, delayMs)
-            if (retryDeadline != null && delayMs >= (retryDeadline - clock.now().toEpochMilliseconds()).toDouble()) return response
+            if (retryDeadline != null &&
+                delayMs >= (retryDeadline - clock.now().toEpochMilliseconds()).toDouble()
+            ) {
+                return response
+            }
             delay(delayMs.toLong())
             retry++
         }
@@ -275,14 +302,14 @@ class GitHubCopilotOAuthAuth(
         DateTimeFormatter.RFC_1123_DATE_TIME
             .parse(value.trim())
             .getLong(ChronoField.INSTANT_SECONDS) * 1000
-        } catch (_: Exception) {
-            null
-        }
+    } catch (_: Exception) {
+        null
+    }
 
     private suspend fun fetchGitHubCopilotModels(
         copilotToken: String,
         enterpriseDomain: String?,
-        retryPolicy: RetryPolicy,
+        retryPolicy: RetryPolicy
     ): CopilotModelCatalog {
         val baseUrl = getGitHubCopilotBaseUrl(copilotToken, enterpriseDomain)
         // Some Individual accounts return false for every picker flag despite explicit enabled policies.
@@ -293,9 +320,9 @@ class GitHubCopilotOAuthAuth(
             method = "GET",
             headers = mapOf(
                 "Accept" to "application/json",
-                "Authorization" to "Bearer $copilotToken",
+                "Authorization" to "Bearer $copilotToken"
             ) + COPILOT_HEADERS + mapOf("X-GitHub-Api-Version" to COPILOT_API_VERSION),
-            retryPolicy = retryPolicy,
+            retryPolicy = retryPolicy
         )
         if (response.status !in 200..299) {
             throw statusError(response.status, response.body)
@@ -309,9 +336,20 @@ class GitHubCopilotOAuthAuth(
         return parseGitHubCopilotModelCatalog(raw, allowPolicyFallback)
     }
 
-    private suspend fun fetchJson(url: String, method: String, headers: Map<String, String>, body: ByteArray): JsonElement {
+    private suspend fun fetchJson(
+        url: String,
+        method: String,
+        headers: Map<String, String>,
+        body: ByteArray
+    ): JsonElement {
         val response = http.execute(
-            OAuthHttpRequest(method = method, url = url, headers = headers, body = body, timeoutMs = REQUEST_TIMEOUT_MS),
+            OAuthHttpRequest(
+                method = method,
+                url = url,
+                headers = headers,
+                body = body,
+                timeoutMs = REQUEST_TIMEOUT_MS
+            )
         )
         if (response.status !in 200..299) {
             throw statusError(response.status, response.body)
@@ -329,7 +367,7 @@ class GitHubCopilotOAuthAuth(
         val userCode: String,
         val verificationUri: String,
         val intervalSeconds: Double?,
-        val expiresInSeconds: Double,
+        val expiresInSeconds: Double
     )
 
     private suspend fun startDeviceFlow(domain: String): DeviceCodeResponse {
@@ -340,14 +378,14 @@ class GitHubCopilotOAuthAuth(
             headers = mapOf(
                 "Accept" to "application/json",
                 "Content-Type" to "application/x-www-form-urlencoded",
-                "User-Agent" to COPILOT_USER_AGENT,
+                "User-Agent" to COPILOT_USER_AGENT
             ),
             body = XaiOAuthAuth.formUrlEncode(
                 mapOf(
                     "client_id" to CLIENT_ID,
-                    "scope" to "read:user",
-                ),
-            ),
+                    "scope" to "read:user"
+                )
+            )
         ).let { recordOr(it, "Invalid device code response") }
 
         val deviceCode = data.string("device_code")
@@ -372,11 +410,14 @@ class GitHubCopilotOAuthAuth(
             userCode = userCode,
             verificationUri = normalizedUri,
             intervalSeconds = interval,
-            expiresInSeconds = expiresIn,
+            expiresInSeconds = expiresIn
         )
     }
 
-    private suspend fun pollForGitHubAccessToken(domain: String, device: DeviceCodeResponse): String {
+    private suspend fun pollForGitHubAccessToken(
+        domain: String,
+        device: DeviceCodeResponse
+    ): String {
         val urls = getUrls(domain)
         return pollOAuthDeviceCodeFlow(
             OAuthDeviceCodePollOptions(
@@ -390,15 +431,15 @@ class GitHubCopilotOAuthAuth(
                         headers = mapOf(
                             "Accept" to "application/json",
                             "Content-Type" to "application/x-www-form-urlencoded",
-                            "User-Agent" to COPILOT_USER_AGENT,
+                            "User-Agent" to COPILOT_USER_AGENT
                         ),
                         body = XaiOAuthAuth.formUrlEncode(
                             mapOf(
                                 "client_id" to CLIENT_ID,
                                 "device_code" to device.deviceCode,
-                                "grant_type" to DEVICE_GRANT_TYPE,
-                            ),
-                        ),
+                                "grant_type" to DEVICE_GRANT_TYPE
+                            )
+                        )
                     ).let { recordOr(it, "Invalid device token response") }
 
                     when {
@@ -406,30 +447,34 @@ class GitHubCopilotOAuthAuth(
                             OAuthDeviceCodePollResult.Complete(raw.string("access_token")!!)
 
                         raw.string("error") != null -> when (raw.string("error")) {
-                                "authorization_pending" -> OAuthDeviceCodePollResult.Pending
-                                "slow_down" -> OAuthDeviceCodePollResult.SlowDown(
-                                    intervalSeconds = raw.strictDouble("interval"),
+                            "authorization_pending" -> OAuthDeviceCodePollResult.Pending
+
+                            "slow_down" -> OAuthDeviceCodePollResult.SlowDown(
+                                intervalSeconds = raw.strictDouble("interval")
+                            )
+
+                            else -> {
+                                val description = raw.string("error_description")
+                                val descriptionSuffix = description?.let { ": $it" } ?: ""
+                                OAuthDeviceCodePollResult.Failed(
+                                    "Device flow failed: ${raw.string(
+                                        "error"
+                                    )}$descriptionSuffix"
                                 )
-                                else -> {
-                                    val description = raw.string("error_description")
-                                    val descriptionSuffix = description?.let { ": $it" } ?: ""
-                                    OAuthDeviceCodePollResult.Failed(
-                                        "Device flow failed: ${raw.string("error")}$descriptionSuffix",
-                                    )
-                                }
                             }
+                        }
 
                         else -> OAuthDeviceCodePollResult.Failed("Invalid device token response")
                     }
-                },
+                }
             ),
-            clock = clock,
+            clock = clock
         )
     }
 
     internal suspend fun refreshGitHubCopilotAccessToken(
         refreshToken: String,
-        enterpriseDomain: String?,
+        enterpriseDomain: String?
     ): OAuthCredential {
         val domain = enterpriseDomain ?: "github.com"
         val urls = getUrls(domain)
@@ -439,9 +484,9 @@ class GitHubCopilotOAuthAuth(
             method = "GET",
             headers = mapOf(
                 "Accept" to "application/json",
-                "Authorization" to "Bearer $refreshToken",
+                "Authorization" to "Bearer $refreshToken"
             ) + COPILOT_HEADERS,
-            body = ByteArray(0),
+            body = ByteArray(0)
         ).let { recordOr(it, "Invalid Copilot token response") }
 
         val token = raw.string("token")
@@ -459,23 +504,26 @@ class GitHubCopilotOAuthAuth(
             access = token,
             refresh = refreshToken,
             expires = (expiresAt * 1000).toLong() - REFRESH_SKEW_MS,
-            extras = extras,
+            extras = extras
         )
     }
 
     internal suspend fun refreshGitHubCopilotToken(
         refreshToken: String,
-        enterpriseDomain: String?,
+        enterpriseDomain: String?
     ): OAuthCredential {
         val credentials = refreshGitHubCopilotAccessToken(refreshToken, enterpriseDomain)
         val models = fetchGitHubCopilotModels(
             copilotToken = credentials.access,
             enterpriseDomain = enterpriseDomain,
-            retryPolicy = RetryPolicy(maxRetries = 0, maxElapsedMs = 0),
+            retryPolicy = RetryPolicy(maxRetries = 0, maxElapsedMs = 0)
         )
         return credentials.copy(
             extras = credentials.extras +
-                ("availableModelIds" to JsonArray(models.availableModelIds.map { JsonPrimitive(it) }))
+                (
+                    "availableModelIds" to
+                        JsonArray(models.availableModelIds.map { JsonPrimitive(it) })
+                    )
         )
     }
 
@@ -486,7 +534,7 @@ class GitHubCopilotOAuthAuth(
     private suspend fun enableGitHubCopilotModel(
         token: String,
         modelId: String,
-        enterpriseDomain: String?,
+        enterpriseDomain: String?
     ): Boolean {
         val baseUrl = getGitHubCopilotBaseUrl(token, enterpriseDomain)
         val url = "$baseUrl/models/$modelId/policy"
@@ -499,10 +547,10 @@ class GitHubCopilotOAuthAuth(
                     "Content-Type" to "application/json",
                     "Authorization" to "Bearer $token",
                     "openai-intent" to "chat-policy",
-                    "x-interaction-type" to "chat-policy",
+                    "x-interaction-type" to "chat-policy"
                 ) + COPILOT_HEADERS,
                 body = jsonPolicyBody(),
-                retryPolicy = RetryPolicy(maxRetries = 2, maxElapsedMs = 5000),
+                retryPolicy = RetryPolicy(maxRetries = 2, maxElapsedMs = 5000)
             )
         } catch (error: CancellationException) {
             throw error
@@ -518,7 +566,7 @@ class GitHubCopilotOAuthAuth(
     private suspend fun enableGitHubCopilotModels(
         token: String,
         modelIds: List<String>,
-        enterpriseDomain: String?,
+        enterpriseDomain: String?
     ): List<String> {
         val enabledModelIds = mutableListOf<String>()
         for (modelId in modelIds) {
@@ -585,8 +633,9 @@ class GitHubCopilotOAuthAuth(
      */
     internal fun parseFloatPrefix(value: String): Double? {
         val trimmed = value.trim()
-        val match = Regex("""^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?""").find(trimmed)
-            ?: return null
+        val match =
+            Regex("""^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?""").find(trimmed)
+                ?: return null
         return match.value.toDoubleOrNull()
     }
 
@@ -610,7 +659,8 @@ class GitHubCopilotOAuthAuth(
             throw IllegalStateException("Untrusted verification_uri in device code response")
         }
         val host = uri.host.lowercase(Locale.ROOT)
-        val defaultPort = (scheme == "https" && uri.port == 443) || (scheme == "http" && uri.port == 80)
+        val defaultPort =
+            (scheme == "https" && uri.port == 443) || (scheme == "http" && uri.port == 80)
         val port = if (uri.port != -1 && !defaultPort) ":${uri.port}" else ""
         val path = uri.rawPath.takeIf { it.isNotEmpty() } ?: "/"
         val query = uri.rawQuery?.let { "?$it" } ?: ""
@@ -631,7 +681,7 @@ class GitHubCopilotOAuthAuth(
             "User-Agent" to COPILOT_USER_AGENT,
             "Editor-Version" to "vscode/1.107.0",
             "Editor-Plugin-Version" to "copilot-chat/0.35.0",
-            "Copilot-Integration-Id" to "vscode-chat",
+            "Copilot-Integration-Id" to "vscode-chat"
         )
 
         const val COPILOT_API_VERSION: String = "2026-06-01"

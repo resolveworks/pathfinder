@@ -1,22 +1,22 @@
 package works.resolve.pathfinder.ai.transport
 
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import java.util.concurrent.TimeUnit
-import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
+import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
 
 class OkHttpTransportTest {
 
@@ -27,7 +27,7 @@ class OkHttpTransportTest {
         bearerToken = "secret-token",
         headers = mapOf("Accept" to "text/event-stream"),
         body = body.toByteArray(),
-        timeoutMs = 10_000,
+        timeoutMs = 10_000
     )
 
     @Test
@@ -37,7 +37,7 @@ class OkHttpTransportTest {
             MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "text/event-stream")
-                .setBody("data: {\"a\":1}\r\n\r\ndata: [DONE]\r\n\r\n"),
+                .setBody("data: {\"a\":1}\r\n\r\ndata: [DONE]\r\n\r\n")
         )
         server.start()
         val events = runBlocking {
@@ -65,7 +65,7 @@ class OkHttpTransportTest {
             MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "text/event-stream")
-                .setChunkedBody(body, 1),
+                .setChunkedBody(body, 1)
         )
         server.start()
         val events = runBlocking { transport().post(request(server)).events.toList() }
@@ -80,7 +80,7 @@ class OkHttpTransportTest {
             MockResponse()
                 .setResponseCode(429)
                 .setHeader("Retry-After-Ms", "1200")
-                .setBody("x".repeat(10_000)),
+                .setBody("x".repeat(10_000))
         )
         server.start()
         val error = assertFailsWith<ProviderHttpException> {
@@ -102,7 +102,12 @@ class OkHttpTransportTest {
         val error = assertFailsWith<NetworkException> {
             runBlocking {
                 transport().post(
-                    TransportRequest(url = url, bearerToken = "k", body = ByteArray(0), timeoutMs = 5_000),
+                    TransportRequest(
+                        url = url,
+                        bearerToken = "k",
+                        body = ByteArray(0),
+                        timeoutMs = 5_000
+                    )
                 )
             }
         }
@@ -117,7 +122,7 @@ class OkHttpTransportTest {
                 .setResponseCode(200)
                 .setHeader("Content-Type", "text/event-stream")
                 .setBody("data: one\n\n")
-                .setSocketPolicy(SocketPolicy.KEEP_OPEN),
+                .setSocketPolicy(SocketPolicy.KEEP_OPEN)
         )
         server.start()
         runBlocking {
@@ -137,7 +142,7 @@ class OkHttpTransportTest {
             MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "text/event-stream")
-                .setSocketPolicy(SocketPolicy.NO_RESPONSE),
+                .setSocketPolicy(SocketPolicy.NO_RESPONSE)
         )
         server.start()
         runBlocking {
@@ -162,7 +167,7 @@ class OkHttpTransportTest {
             MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "text/event-stream")
-                .setBody("data: ok\n\n"),
+                .setBody("data: ok\n\n")
         )
         server.start()
         runBlocking {
@@ -172,10 +177,10 @@ class OkHttpTransportTest {
                     bearerToken = "secret-token",
                     headers = mapOf(
                         "Authorization" to "Basic custom",
-                        "cf-aig-authorization" to "Bearer gateway-token",
+                        "cf-aig-authorization" to "Bearer gateway-token"
                     ),
-                    body = "{}".toByteArray(),
-                ),
+                    body = "{}".toByteArray()
+                )
             ).events.toList()
         }
         val recorded = server.takeRequest()
@@ -191,7 +196,7 @@ class OkHttpTransportTest {
             MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "text/event-stream")
-                .setBody("data: ok\n\n"),
+                .setBody("data: ok\n\n")
         )
         server.start()
         runBlocking {
@@ -199,8 +204,8 @@ class OkHttpTransportTest {
                 TransportRequest(
                     url = server.url("/v1/chat/completions").toString(),
                     bearerToken = null,
-                    body = "{}".toByteArray(),
-                ),
+                    body = "{}".toByteArray()
+                )
             ).events.toList()
         }
         assertNull(server.takeRequest().getHeader("Authorization"))
@@ -235,7 +240,7 @@ class OkHttpTransportTest {
                 .setResponseCode(200)
                 .setHeader("Content-Type", "text/event-stream")
                 .setBody("data: {\"a\":1}\n\ndata: [DONE]")
-                .setSocketPolicy(SocketPolicy.DISCONNECT_AT_END),
+                .setSocketPolicy(SocketPolicy.DISCONNECT_AT_END)
         )
         server.start()
         val events = mutableListOf<SseEvent>()
@@ -253,7 +258,10 @@ class OkHttpTransportTest {
         // does — the flow must fail (okhttp-sse internal error) or stall
         // (timeout) rather than complete as a clean stream end.
         assertEquals(listOf(SseEvent("""{"a":1}""")), events)
-        assertNotNull(failure, "truncated frame was flushed and dispatched — revisit the divergence notes")
+        assertNotNull(
+            failure,
+            "truncated frame was flushed and dispatched — revisit the divergence notes"
+        )
         server.shutdown()
     }
 }

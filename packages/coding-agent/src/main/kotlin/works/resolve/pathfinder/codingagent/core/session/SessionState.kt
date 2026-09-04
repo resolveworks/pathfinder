@@ -18,7 +18,8 @@ class SessionState {
     private val entryList = ArrayList<SessionEntry>()
     private val entriesById = HashMap<String, SessionEntry>()
     private val recordList = ArrayList<LaneRecord>()
-    private val openOperationsByLane = HashMap<String, LinkedHashMap<String, LaneRecord.OperationStartedRecord>>()
+    private val openOperationsByLane =
+        HashMap<String, LinkedHashMap<String, LaneRecord.OperationStartedRecord>>()
     private val lanes = LinkedHashMap<String, String?>().apply { put(LANE_MAIN, null) }
     private val labels = HashMap<String, String>()
     private val log = ArrayList<LogItem>()
@@ -54,27 +55,38 @@ class SessionState {
         cachedTokens = statsCachedTokens,
         uncachedTokens = statsUncachedTokens,
         totalTokens = statsTotalTokens,
-        costTotal = statsCostTotal,
+        costTotal = statsCostTotal
     )
 
     fun messageCount(): Int = statsMessageCount
 
     /** The lane's current leaf; throws when the lane does not exist. */
-    fun requireLane(lane: String): String? =
-        if (lanes.containsKey(lane)) {
-            lanes[lane]
-        } else {
-            throw SessionError(SessionErrorCode.INVALID_LANE, "Lane not found: $lane")
-        }
+    fun requireLane(lane: String): String? = if (lanes.containsKey(lane)) {
+        lanes[lane]
+    } else {
+        throw SessionError(SessionErrorCode.INVALID_LANE, "Lane not found: $lane")
+    }
 
     /** Throws when [id] is already used by an entry or record. */
     fun validateUnusedId(id: String) {
-        if (id in usedIds) throw SessionError(SessionErrorCode.ALREADY_EXISTS, "Session id already exists: $id")
+        if (id in
+            usedIds
+        ) {
+            throw SessionError(
+                SessionErrorCode.ALREADY_EXISTS,
+                "Session id already exists: $id"
+            )
+        }
     }
 
     /** Throws when [lane] already exists. */
     fun validateNewLane(lane: String) {
-        if (lanes.containsKey(lane)) throw SessionError(SessionErrorCode.ALREADY_EXISTS, "Lane already exists: $lane")
+        if (lanes.containsKey(
+                lane
+            )
+        ) {
+            throw SessionError(SessionErrorCode.ALREADY_EXISTS, "Lane already exists: $lane")
+        }
     }
 
     /** Throws when [targetId] is not an existing entry. */
@@ -103,13 +115,30 @@ class SessionState {
 
         when (mutation) {
             is SessionMutation.Entry -> {
-                if (mutation.entry.id in usedIds) invalid("contains duplicate id ${mutation.entry.id}")
+                if (mutation.entry.id in
+                    usedIds
+                ) {
+                    invalid("contains duplicate id ${mutation.entry.id}")
+                }
                 if (mutation.lane != null) {
-                    if (!lanes.containsKey(mutation.lane)) invalid("references missing lane ${mutation.lane}")
-                    if (mutation.entry.parentId != lanes[mutation.lane]) invalid("does not chain to the lane leaf")
+                    if (!lanes.containsKey(
+                            mutation.lane
+                        )
+                    ) {
+                        invalid("references missing lane ${mutation.lane}")
+                    }
+                    if (mutation.entry.parentId !=
+                        lanes[mutation.lane]
+                    ) {
+                        invalid("does not chain to the lane leaf")
+                    }
                 }
                 val parent = mutation.entry.parentId
-                if (parent != null && !entriesById.containsKey(parent)) invalid("references missing parent $parent")
+                if (parent != null &&
+                    !entriesById.containsKey(parent)
+                ) {
+                    invalid("references missing parent $parent")
+                }
                 sequence = seq
                 usedIds.add(mutation.entry.id)
                 entryList.add(mutation.entry)
@@ -118,9 +147,15 @@ class SessionState {
                 if (mutation.entry is MessageEntry) statsMessageCount += 1
                 log.add(LogItem.Entry(seq, mutation.entry))
             }
+
             is SessionMutation.Record -> {
                 val record = mutation.record
-                if (!lanes.containsKey(record.lane)) invalid("references missing lane ${record.lane}")
+                if (!lanes.containsKey(
+                        record.lane
+                    )
+                ) {
+                    invalid("references missing lane ${record.lane}")
+                }
                 if (record.id in usedIds) invalid("contains duplicate id ${record.id}")
                 sequence = seq
                 usedIds.add(record.id)
@@ -128,18 +163,23 @@ class SessionState {
                 log.add(LogItem.Record(seq, record))
                 when (record) {
                     is LaneRecord.OperationStartedRecord ->
-                        openOperationsByLane.getOrPut(record.lane) { LinkedHashMap() }[record.id] = record
+                        openOperationsByLane.getOrPut(record.lane) { LinkedHashMap() }[record.id] =
+                            record
+
                     is LaneRecord.OperationFinishedRecord ->
                         openOperationsByLane[record.lane]?.remove(record.runId)
+
                     is LaneRecord.UsageRecord -> {
                         statsCachedTokens += record.usage.cacheRead
                         statsUncachedTokens += record.usage.input + record.usage.cacheWrite
                         statsTotalTokens += record.usage.totalTokens
                         statsCostTotal += record.usage.cost.total
                     }
+
                     is LaneRecord.AbortRequestedRecord, is LaneRecord.DeferredRecord -> Unit
                 }
             }
+
             is SessionMutation.Lane -> {
                 if (mutation.leafId != null && !entriesById.containsKey(mutation.leafId)) {
                     invalid("references missing lane target ${mutation.leafId}")
@@ -148,18 +188,27 @@ class SessionState {
                 lanes[mutation.lane] = mutation.leafId
                 log.add(LogItem.Lane(seq, mutation.lane, mutation.leafId))
             }
+
             is SessionMutation.Fact -> when (mutation) {
                 is SessionMutation.Fact.Name -> {
                     sequence = seq
                     name = mutation.name
                     log.add(LogItem.FactName(seq, mutation.name))
                 }
+
                 is SessionMutation.Fact.Label -> {
                     if (!entriesById.containsKey(mutation.targetId)) {
                         invalid("references missing label target ${mutation.targetId}")
                     }
                     sequence = seq
-                    if (mutation.label == null) labels.remove(mutation.targetId) else labels[mutation.targetId] = mutation.label
+                    if (mutation.label ==
+                        null
+                    ) {
+                        labels.remove(mutation.targetId)
+                    } else {
+                        labels[mutation.targetId] =
+                            mutation.label
+                    }
                     log.add(LogItem.FactLabel(seq, mutation.targetId, mutation.label))
                 }
             }
@@ -172,7 +221,10 @@ class SessionState {
             throw SessionError(SessionErrorCode.INVALID_QUERY, "limit must be a positive integer")
         }
         if (afterSeq != null && afterSeq < 0) {
-            throw SessionError(SessionErrorCode.INVALID_QUERY, "cursor sequence must be a non-negative integer")
+            throw SessionError(
+                SessionErrorCode.INVALID_QUERY,
+                "cursor sequence must be a non-negative integer"
+            )
         }
         val results = ArrayList<LogItem>()
         for (item in log) {
@@ -189,11 +241,15 @@ class SessionState {
      * suspended, and two mean at least two operations are open, which is
      * corruption; further results provide no additional recovery state.
      */
-    fun findOpenOperations(lane: String, limit: Int? = null): List<LaneRecord.OperationStartedRecord> {
+    fun findOpenOperations(
+        lane: String,
+        limit: Int? = null
+    ): List<LaneRecord.OperationStartedRecord> {
         if (limit != null && limit <= 0) {
             throw SessionError(SessionErrorCode.INVALID_QUERY, "limit must be a positive integer")
         }
-        val openOperations = openOperationsByLane[lane]?.values?.toList()?.asReversed() ?: emptyList()
+        val openOperations =
+            openOperationsByLane[lane]?.values?.toList()?.asReversed() ?: emptyList()
         return if (limit == null) openOperations else openOperations.take(limit)
     }
 
@@ -272,6 +328,7 @@ class SessionState {
                 copiedEntries = findEntries(EntryQuery(order = EntryOrder.OLDEST_FIRST))
                 forkLanes = getLanes()
             }
+
             is ForkOptions.Branch -> {
                 val selectedEntryId = options.entryId ?: requireLane(LANE_MAIN)
                 var targetId: String? = null
@@ -280,17 +337,26 @@ class SessionState {
                     if (entry !is MessageEntry) {
                         throw SessionError(
                             SessionErrorCode.INVALID_FORK_TARGET,
-                            "Fork target is not a message entry: $selectedEntryId",
+                            "Fork target is not a message entry: $selectedEntryId"
                         )
                     }
                     val position = options.position
-                        ?: if (options.entryId == null) ForkOptions.Branch.Position.AT else ForkOptions.Branch.Position.BEFORE
-                    targetId = if (position == ForkOptions.Branch.Position.AT) entry.id else entry.parentId
+                        ?: if (options.entryId ==
+                            null
+                        ) {
+                            ForkOptions.Branch.Position.AT
+                        } else {
+                            ForkOptions.Branch.Position.BEFORE
+                        }
+                    targetId =
+                        if (position == ForkOptions.Branch.Position.AT) entry.id else entry.parentId
                 }
                 copiedEntries = if (targetId == null) {
                     emptyList()
                 } else {
-                    findEntriesOnBranch(BranchEntryQuery(start = targetId, order = EntryOrder.OLDEST_FIRST))
+                    findEntriesOnBranch(
+                        BranchEntryQuery(start = targetId, order = EntryOrder.OLDEST_FIRST)
+                    )
                 }
                 forkLanes = listOf(LanePointer(LANE_MAIN, targetId))
             }
@@ -299,7 +365,9 @@ class SessionState {
         val mutations = ArrayList<SessionMutation>()
         var sequence = 1L
         for (sourceEntry in copiedEntries) {
-            mutations.add(SessionMutation.Entry(lane = null, entry = sourceEntry.withSeq(sequence++)))
+            mutations.add(
+                SessionMutation.Entry(lane = null, entry = sourceEntry.withSeq(sequence++))
+            )
         }
         for (pointer in forkLanes) {
             mutations.add(SessionMutation.Lane(sequence++, pointer.lane, pointer.leafId))
@@ -324,7 +392,16 @@ class SessionState {
         val customTypeMatches = query.customType == null ||
             (entry is CustomEntry && entry.customType == query.customType)
         val cursorMatches = query.cursor == null ||
-            (if (query.order == EntryOrder.OLDEST_FIRST) entry.seq > query.cursor.afterSeq else entry.seq < query.cursor.afterSeq)
+            (
+                if (query.order ==
+                    EntryOrder.OLDEST_FIRST
+                ) {
+                    entry.seq > query.cursor.afterSeq
+                } else {
+                    entry.seq <
+                        query.cursor.afterSeq
+                }
+                )
         return typeMatches && customTypeMatches && cursorMatches
     }
 
@@ -333,13 +410,19 @@ class SessionState {
         val typeMatches = query.type == null || record.recordType == query.type
         val runIdMatches = query.runId == null || when (record) {
             is LaneRecord.OperationStartedRecord -> record.id == query.runId
+
             is LaneRecord.AbortRequestedRecord -> record.runId == query.runId
+
             is LaneRecord.OperationFinishedRecord -> record.runId == query.runId
+
             // Records without a runId do not match.
             else -> false
         }
         val operationKindMatches = query.operationKind == null ||
-            (record is LaneRecord.OperationStartedRecord && record.intent.kind == query.operationKind)
+            (
+                record is LaneRecord.OperationStartedRecord &&
+                    record.intent.kind == query.operationKind
+                )
         val afterSeqMatches = query.afterSeq == null || record.seq > query.afterSeq
         return laneMatches && typeMatches && runIdMatches && operationKindMatches && afterSeqMatches
     }
@@ -349,13 +432,19 @@ class SessionState {
 
         private fun assertValidLimit(limit: Int?) {
             if (limit != null && limit <= 0) {
-                throw SessionError(SessionErrorCode.INVALID_QUERY, "limit must be a positive integer")
+                throw SessionError(
+                    SessionErrorCode.INVALID_QUERY,
+                    "limit must be a positive integer"
+                )
             }
         }
 
         private fun assertValidCursor(afterSeq: Long?) {
             if (afterSeq != null && afterSeq < 0) {
-                throw SessionError(SessionErrorCode.INVALID_QUERY, "cursor sequence must be a non-negative integer")
+                throw SessionError(
+                    SessionErrorCode.INVALID_QUERY,
+                    "cursor sequence must be a non-negative integer"
+                )
             }
         }
     }
@@ -373,17 +462,24 @@ internal fun walkToRoot(
     entryById: (String) -> SessionEntry?,
     start: String,
     stopAtId: String? = null,
-    stopAtType: EntryType? = null,
+    stopAtType: EntryType? = null
 ): Sequence<SessionEntry> = sequence {
     val visited = HashSet<String>()
     var current = entryById(start)
         ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Entry not found: $start")
     while (true) {
         if (!visited.add(current.id)) {
-            throw SessionError(SessionErrorCode.INVALID_ENTRY, "Session branch contains a cycle at ${current.id}")
+            throw SessionError(
+                SessionErrorCode.INVALID_ENTRY,
+                "Session branch contains a cycle at ${current.id}"
+            )
         }
         yield(current)
-        if (current.id == stopAtId || current.entryType == stopAtType || current.parentId == null) break
+        if (current.id == stopAtId || current.entryType == stopAtType ||
+            current.parentId == null
+        ) {
+            break
+        }
         val parentId = current.parentId ?: return@sequence
         current = entryById(parentId)
             ?: throw SessionError(SessionErrorCode.INVALID_ENTRY, "Entry not found: $parentId")
@@ -396,5 +492,5 @@ data class SessionStats(
     val cachedTokens: Long,
     val uncachedTokens: Long,
     val totalTokens: Long,
-    val costTotal: Double,
+    val costTotal: Double
 )

@@ -19,8 +19,11 @@ class OptionsToStringTest {
             "apiKey" to redactedSecret("k"),
             "sessionId" to "abc",
             "env" to mapOf("A" to "1", "B" to "2").keys,
-            "onPayload" to (null != null),
+            "onPayload" to (null != null)
         )
-        assertEquals("StreamOptions(apiKey=<redacted>, sessionId=abc, env=[A, B], onPayload=false)", s)
+        assertEquals(
+            "StreamOptions(apiKey=<redacted>, sessionId=abc, env=[A, B], onPayload=false)",
+            s
+        )
     }
 }

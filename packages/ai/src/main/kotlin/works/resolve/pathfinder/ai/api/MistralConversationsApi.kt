@@ -1,11 +1,23 @@
 package works.resolve.pathfinder.ai.api
 
+import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ChatApi
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ContentType
+import works.resolve.pathfinder.ai.Context
+import works.resolve.pathfinder.ai.DoneSentinel
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.MessageRole
@@ -22,12 +34,11 @@ import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolChoice
 import works.resolve.pathfinder.ai.Usage
+import works.resolve.pathfinder.ai.calculateCost
+import works.resolve.pathfinder.ai.clampThinkingLevel
 import works.resolve.pathfinder.ai.headersToRecord
 import works.resolve.pathfinder.ai.toModelThinkingLevel
 import works.resolve.pathfinder.ai.toToolChoice
-import works.resolve.pathfinder.ai.DoneSentinel
-import works.resolve.pathfinder.ai.calculateCost
-import works.resolve.pathfinder.ai.clampThinkingLevel
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.NetworkException
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
@@ -48,17 +59,6 @@ import works.resolve.pathfinder.ai.utils.shortHash
 import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.truncateErrorText
 import works.resolve.pathfinder.telemetry.TelemetryContext
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import kotlin.time.Clock
 
 typealias MistralReasoningEffort = String // "none" | "high"
 
@@ -73,7 +73,8 @@ data class MistralOptions(
     val maxTokens: Int? = null,
     val timeoutMs: Long? = null,
     val maxRetries: Int = 0,
-    val maxRetryDelayMs: Long = works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
+    val maxRetryDelayMs: Long =
+        works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     val env: Map<String, String> = emptyMap(),
     /** Explicit request headers; a null value removes the header. */
     val headers: Map<String, String?> = emptyMap(),
@@ -99,7 +100,7 @@ data class MistralOptions(
      * Explicit parent telemetry context for this request. Dormant in this
      * port — carried for shape fidelity.
      */
-    val telemetryContext: TelemetryContext? = null,
+    val telemetryContext: TelemetryContext? = null
 ) {
     override fun toString(): String = optionsToString(
         "MistralOptions",
@@ -118,14 +119,14 @@ data class MistralOptions(
         "headers" to headers.keys,
         "onPayload" to (onPayload != null),
         "onResponse" to (onResponse != null),
-        "telemetryContext" to (telemetryContext != null),
+        "telemetryContext" to (telemetryContext != null)
     )
 }
 
 internal fun buildMistralOptions(
     model: Model,
     context: Context,
-    options: SimpleStreamOptions,
+    options: SimpleStreamOptions
 ): MistralOptions {
     val clamped = options.reasoning?.let { clampThinkingLevel(model, it.toModelThinkingLevel()) }
     val reasoning = if (clamped == ModelThinkingLevel.OFF) null else clamped
@@ -146,20 +147,23 @@ internal fun buildMistralOptions(
         cacheRetention = options.cacheRetention,
         onPayload = options.onPayload,
         onResponse = options.onResponse,
-        promptMode = if (useReasoning && usesPromptModeReasoning(model)) MistralPromptMode.REASONING else null,
+        promptMode = if (useReasoning &&
+            usesPromptModeReasoning(model)
+        ) {
+            MistralPromptMode.REASONING
+        } else {
+            null
+        },
         reasoningEffort = if (useReasoning && usesReasoningEffort(model)) {
             mapReasoningEffort(model, reasoning)
         } else {
             null
         },
-        telemetryContext = options.telemetryContext,
+        telemetryContext = options.telemetryContext
     )
 }
 
-internal fun toMistralOptions(
-    model: Model,
-    options: OpenAiCompletionsOptions,
-): MistralOptions {
+internal fun toMistralOptions(model: Model, options: OpenAiCompletionsOptions): MistralOptions {
     val useReasoning = model.reasoning && options.reasoningEffort != null
     return MistralOptions(
         apiKey = options.apiKey,
@@ -181,7 +185,7 @@ internal fun toMistralOptions(
         } else {
             null
         },
-        telemetryContext = options.telemetryContext,
+        telemetryContext = options.telemetryContext
     )
 }
 
@@ -196,19 +200,19 @@ internal fun toMistralOptions(
  */
 class MistralConversationsApi(
     private val transport: HttpStreamingTransport,
-    private val clock: Clock = Clock.System,
+    private val clock: Clock = Clock.System
 ) : ChatApi {
 
     fun stream(
         model: Model,
         context: Context,
-        options: OpenAiCompletionsOptions,
+        options: OpenAiCompletionsOptions
     ): Flow<AssistantMessageEvent> = stream(model, context, toMistralOptions(model, options))
 
     fun stream(
         model: Model,
         context: Context,
-        options: MistralOptions,
+        options: MistralOptions
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = clock.now().toEpochMilliseconds()
         val state = MistralStreamingState(model, startedAtMs)
@@ -217,17 +221,23 @@ class MistralConversationsApi(
                 ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
 
             val normalizer = MistralToolCallIdNormalizer()
-            val transformedMessages = transformMessages(context.messages, model) { id, _ -> normalizer.normalize(id) }
+            val transformedMessages =
+                transformMessages(context.messages, model) { id, _ -> normalizer.normalize(id) }
             var wireMessages = MistralConversationsPayload.toChatMessages(
                 transformedMessages,
-                model.input.contains(InputModality.IMAGE),
+                model.input.contains(InputModality.IMAGE)
             )
             if (!context.systemPrompt.isNullOrEmpty()) {
                 wireMessages = listOf(
-                    works.resolve.pathfinder.ai.api.buildMistralSystemMessage(context.systemPrompt),
+                    works.resolve.pathfinder.ai.api.buildMistralSystemMessage(context.systemPrompt)
                 ) + wireMessages
             }
-            var payload = MistralConversationsPayload.buildRequestBody(model, context, wireMessages, options)
+            var payload = MistralConversationsPayload.buildRequestBody(
+                model,
+                context,
+                wireMessages,
+                options
+            )
             options.onPayload?.let { hook -> hook(payload, model)?.let { payload = it } }
 
             val url = model.baseUrl.trimEnd('/') + "/v1/chat/completions"
@@ -237,16 +247,22 @@ class MistralConversationsApi(
                 bearerToken = bearerToken,
                 headers = headers,
                 body = payload.toString().toByteArray(Charsets.UTF_8),
-                timeoutMs = options.timeoutMs ?: DEFAULT_TIMEOUT_MS,
+                timeoutMs = options.timeoutMs ?: DEFAULT_TIMEOUT_MS
             )
 
             val response = try {
                 transport.post(request)
             } catch (error: ProviderHttpException) {
-                options.onResponse?.invoke(ProviderResponse(error.status, headersToRecord(error.headers)), model)
+                options.onResponse?.invoke(
+                    ProviderResponse(error.status, headersToRecord(error.headers)),
+                    model
+                )
                 throw error
             }
-            options.onResponse?.invoke(ProviderResponse(response.status, headersToRecord(response.headers)), model)
+            options.onResponse?.invoke(
+                ProviderResponse(response.status, headersToRecord(response.headers)),
+                model
+            )
 
             emit(AssistantMessageEvent.Start(state.snapshot()))
 
@@ -274,7 +290,7 @@ class MistralConversationsApi(
             if (error is CancellationException) throw error
             val finalMessage = state.snapshot().copy(
                 stopReason = StopReason.ERROR,
-                errorMessage = formatMistralError(error),
+                errorMessage = formatMistralError(error)
             )
             emit(AssistantMessageEvent.Error(finalMessage.stopReason, finalMessage))
         }
@@ -283,7 +299,7 @@ class MistralConversationsApi(
     override fun streamSimple(
         model: Model,
         context: Context,
-        options: SimpleStreamOptions,
+        options: SimpleStreamOptions
     ): Flow<AssistantMessageEvent> {
         val apiKey = options.apiKey
             ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
@@ -291,14 +307,14 @@ class MistralConversationsApi(
         return stream(
             model,
             context,
-            buildMistralOptions(model, context, options).copy(apiKey = apiKey),
+            buildMistralOptions(model, context, options).copy(apiKey = apiKey)
         )
     }
 
     private fun processSseEvent(
         event: SseEvent,
         model: Model,
-        state: MistralStreamingState,
+        state: MistralStreamingState
     ): List<AssistantMessageEvent> {
         if (event.data.trim() == DONE) {
             state.markDone()
@@ -308,7 +324,7 @@ class MistralConversationsApi(
             lenientJson.parseToJsonElement(event.data)
         } catch (error: Exception) {
             throw ProviderStreamException(
-                "Invalid Mistral streaming event: ${error.message ?: error::class.simpleName}",
+                "Invalid Mistral streaming event: ${error.message ?: error::class.simpleName}"
             )
         }
         if (chunk !is JsonObject || chunk["choices"] !is JsonArray) {
@@ -341,6 +357,7 @@ class MistralConversationsApi(
                 is JsonPrimitive -> if (content != JsonNull) {
                     events += state.appendText(content.content)
                 }
+
                 is JsonArray -> for (item in content) {
                     val obj = item as? JsonObject ?: continue
                     when (obj["type"].strOrNull()) {
@@ -352,9 +369,11 @@ class MistralConversationsApi(
                                 ?: ""
                             if (deltaText.isNotEmpty()) events += state.appendThinking(deltaText)
                         }
+
                         "text" -> events += state.appendText(obj["text"].strOrNull() ?: "")
                     }
                 }
+
                 else -> Unit
             }
 
@@ -379,7 +398,7 @@ class MistralConversationsApi(
             output = output,
             cacheRead = cachedPromptTokens,
             cacheWrite = 0,
-            totalTokens = totalTokens,
+            totalTokens = totalTokens
         )
         return usage.copy(cost = calculateCost(model, usage))
     }
@@ -409,21 +428,26 @@ class MistralConversationsApi(
         is ProviderHttpException -> {
             val bodyText = error.body.trim()
             if (bodyText.isNotEmpty()) {
-                "Mistral API error (${error.status}): ${truncateErrorText(bodyText, MAX_PROVIDER_ERROR_BODY_CHARS)}"
+                "Mistral API error (${error.status}): ${truncateErrorText(
+                    bodyText,
+                    MAX_PROVIDER_ERROR_BODY_CHARS
+                )}"
             } else {
                 "Mistral API error (${error.status}): ${error.message}"
             }
         }
+
         is NetworkException ->
             // The cause carries the platform failure (e.g. "timeout").
             error.cause?.message ?: error.message ?: "Network request failed"
+
         else -> error.message ?: error::class.simpleName ?: "Unknown error"
     }
 
     private fun buildMistralHeaders(
         model: Model,
         apiKey: String,
-        options: MistralOptions,
+        options: MistralOptions
     ): Pair<String?, Map<String, String>> {
         val headers = LinkedHashMap<String, String?>()
         headers["User-Agent"] = getPiUserAgent()
@@ -431,7 +455,10 @@ class MistralConversationsApi(
         applyOverrides(headers, model.headers)
         applyOverrides(headers, options.headers)
 
-        val authOverride = options.headers.entries.firstOrNull { it.key.lowercase() == "authorization" }
+        val authOverride = options.headers.entries.firstOrNull {
+            it.key.lowercase() ==
+                "authorization"
+        }
         // An explicit Authorization header (request or model) replaces the
         // derived Bearer token; a null request override removes it entirely.
         val explicitAuth = authOverride?.value?.let { authOverride.key to it }
@@ -445,7 +472,8 @@ class MistralConversationsApi(
             headers.remove(explicitAuth.first)
         }
 
-        val hasExplicitAffinity = hasOverride(model.headers, "x-affinity") || hasOverride(options.headers, "x-affinity")
+        val hasExplicitAffinity =
+            hasOverride(model.headers, "x-affinity") || hasOverride(options.headers, "x-affinity")
         if (MistralConversationsPayload.shouldUsePromptCaching(options) && !hasExplicitAffinity) {
             headers["x-affinity"] = options.sessionId
         }
@@ -456,12 +484,18 @@ class MistralConversationsApi(
         }
         return when {
             explicitAuth != null -> null
-            authOverride != null -> null // removed entirely; no derived bearer either
+
+            authOverride != null -> null
+
+            // removed entirely; no derived bearer either
             else -> apiKey
         } to headerMap
     }
 
-    private fun applyOverrides(headers: LinkedHashMap<String, String?>, overrides: Map<String, String?>) {
+    private fun applyOverrides(
+        headers: LinkedHashMap<String, String?>,
+        overrides: Map<String, String?>
+    ) {
         if (overrides.isEmpty()) return
         for ((name, value) in overrides) {
             val lowerName = name.lowercase()
@@ -475,6 +509,7 @@ class MistralConversationsApi(
 
     private companion object {
         const val DONE = "[DONE]"
+
         /** pi's AbortSignal.timeout default. */
         const val DEFAULT_TIMEOUT_MS = 60_000L
     }
@@ -491,15 +526,12 @@ internal class MistralStreamingState(private val model: Model, private val times
     private sealed interface Block {
         data class Text(var text: String) : Block
         data class Thinking(var thinking: String) : Block
-        data class Tool(
-            var id: String,
-            var name: String,
-            val arguments: StringBuilder,
-        ) : Block
+        data class Tool(var id: String, var name: String, val arguments: StringBuilder) : Block
     }
 
     private val blocks = mutableListOf<Block>()
     private var currentBlockIndex = -1 // index of the open text/thinking block, or -1
+
     // Pi types this Map<string | number, number>; boxed Int vs String keys
     // keep the same non-colliding number/string distinction.
     private val toolBlocksByKey = LinkedHashMap<Any, Int>()
@@ -523,7 +555,11 @@ internal class MistralStreamingState(private val model: Model, private val times
         currentBlockIndex = -1
         return when (val block = blocks[index]) {
             is Block.Text -> listOf(AssistantMessageEvent.TextEnd(index, block.text, snapshot()))
-            is Block.Thinking -> listOf(AssistantMessageEvent.ThinkingEnd(index, block.thinking, snapshot()))
+
+            is Block.Thinking -> listOf(
+                AssistantMessageEvent.ThinkingEnd(index, block.thinking, snapshot())
+            )
+
             is Block.Tool -> emptyList()
         }
     }
@@ -605,9 +641,13 @@ internal class MistralStreamingState(private val model: Model, private val times
                 events.add(
                     AssistantMessageEvent.ToolCallEnd(
                         index,
-                        ToolCall(id = block.id, name = block.name, arguments = block.arguments.toString()),
-                        snapshot(),
-                    ),
+                        ToolCall(
+                            id = block.id,
+                            name = block.name,
+                            arguments = block.arguments.toString()
+                        ),
+                        snapshot()
+                    )
                 )
             }
         }
@@ -630,11 +670,14 @@ internal class MistralStreamingState(private val model: Model, private val times
         errorMessage = errorMessage,
         rawStopReason = rawStopReason,
         responseId = responseId,
-        timestamp = timestampMs,
+        timestamp = timestampMs
     )
 }
 
-/** Normalizes arbitrary tool call IDs to Mistral's 9-character alphanumeric format, avoiding collisions. */
+/**
+ * Normalizes arbitrary tool call IDs to Mistral's 9-character alphanumeric format, avoiding
+ * collisions.
+ */
 class MistralToolCallIdNormalizer {
     private val idMap = mutableMapOf<String, String>()
     private val reverseMap = mutableMapOf<String, String>()
@@ -658,7 +701,9 @@ class MistralToolCallIdNormalizer {
 
 internal fun deriveMistralToolCallId(id: String, attempt: Int): String {
     val normalized = id.replace(Regex("[^a-zA-Z0-9]"), "")
-    if (attempt == 0 && normalized.length == MistralConversationsPayload.MISTRAL_TOOL_CALL_ID_LENGTH) {
+    if (attempt == 0 &&
+        normalized.length == MistralConversationsPayload.MISTRAL_TOOL_CALL_ID_LENGTH
+    ) {
         return normalized
     }
     val seedBase = normalized.ifEmpty { id }
@@ -687,7 +732,7 @@ object MistralConversationsPayload {
         model: Model,
         context: Context,
         messages: List<JsonObject>,
-        options: MistralOptions,
+        options: MistralOptions
     ): JsonObject = buildJsonObject {
         put("model", model.id)
         put("stream", true)
@@ -709,16 +754,21 @@ object MistralConversationsPayload {
     fun shouldUsePromptCaching(options: MistralOptions): Boolean =
         options.cacheRetention != CacheRetention.NONE && options.sessionId != null
 
-    private fun mapToolChoice(choice: ToolChoice): kotlinx.serialization.json.JsonElement = when (choice) {
-        ToolChoice.Auto -> JsonPrimitive("auto")
-        ToolChoice.None -> JsonPrimitive("none")
-        ToolChoice.Any -> JsonPrimitive("any")
-        ToolChoice.Required -> JsonPrimitive("required")
-        is ToolChoice.Function -> buildJsonObject {
-            put("type", "function")
-            put("function", buildJsonObject { put("name", choice.name) })
+    private fun mapToolChoice(choice: ToolChoice): kotlinx.serialization.json.JsonElement =
+        when (choice) {
+            ToolChoice.Auto -> JsonPrimitive("auto")
+
+            ToolChoice.None -> JsonPrimitive("none")
+
+            ToolChoice.Any -> JsonPrimitive("any")
+
+            ToolChoice.Required -> JsonPrimitive("required")
+
+            is ToolChoice.Function -> buildJsonObject {
+                put("type", "function")
+                put("function", buildJsonObject { put("name", choice.name) })
+            }
         }
-    }
 
     /** Mistral always supports strict mode, so the schema is rewritten when strict applies. */
     private fun toFunctionTool(tool: Tool): JsonObject {
@@ -732,7 +782,7 @@ object MistralConversationsPayload {
                     put("description", tool.description)
                     put("parameters", getJsonSchemaToolParameters(tool, strict))
                     put("strict", strict ?: false)
-                },
+                }
             )
         }
     }
@@ -743,10 +793,7 @@ object MistralConversationsPayload {
      * normalized (with tool results remapped), and orphaned tool calls already
      * have synthetic results.
      */
-    fun toChatMessages(
-        messages: List<Message>,
-        supportsImages: Boolean,
-    ): List<JsonObject> {
+    fun toChatMessages(messages: List<Message>, supportsImages: Boolean): List<JsonObject> {
         val result = mutableListOf<JsonObject>()
 
         for (msg in messages) {
@@ -761,9 +808,9 @@ object MistralConversationsPayload {
                                 put("role", "user")
                                 put(
                                     "content",
-                                    sanitize(content[0] as TextContent),
+                                    sanitize(content[0] as TextContent)
                                 )
-                            },
+                            }
                         )
                         continue
                     }
@@ -775,7 +822,7 @@ object MistralConversationsPayload {
                                     buildJsonObject {
                                         put("type", "text")
                                         put("text", sanitize(item as TextContent))
-                                    },
+                                    }
                                 )
                             } else if (supportsImages && item.type == ContentType.IMAGE) {
                                 add(imageChunk(item as works.resolve.pathfinder.ai.ImageContent))
@@ -783,10 +830,12 @@ object MistralConversationsPayload {
                         }
                     }
                     if (chunks.size > 0) {
-                        result.add(buildJsonObject {
-                            put("role", "user")
-                            put("content", chunks)
-                        })
+                        result.add(
+                            buildJsonObject {
+                                put("role", "user")
+                                put("content", chunks)
+                            }
+                        )
                         continue
                     }
                     if (hadImages && !supportsImages) {
@@ -794,7 +843,7 @@ object MistralConversationsPayload {
                             buildJsonObject {
                                 put("role", "user")
                                 put("content", "(image omitted: model does not support images)")
-                            },
+                            }
                         )
                     }
                 }
@@ -810,12 +859,19 @@ object MistralConversationsPayload {
                                 val text = sanitize(block as TextContent)
                                 if (text.trim().isNotEmpty()) {
                                     contentParts.add(
-                                        buildJsonObject { put("type", "text"); put("text", text) },
+                                        buildJsonObject {
+                                            put("type", "text")
+                                            put("text", text)
+                                        }
                                     )
                                 }
                             }
+
                             ContentType.THINKING -> {
-                                val thinking = sanitizeText((block as works.resolve.pathfinder.ai.ThinkingContent).thinking)
+                                val thinkingContent =
+                                    block as works.resolve.pathfinder.ai.ThinkingContent
+                                val thinking =
+                                    sanitizeText(thinkingContent.thinking)
                                 if (thinking.trim().isNotEmpty()) {
                                     contentParts.add(
                                         buildJsonObject {
@@ -827,14 +883,15 @@ object MistralConversationsPayload {
                                                         buildJsonObject {
                                                             put("type", "text")
                                                             put("text", thinking)
-                                                        },
+                                                        }
                                                     )
-                                                },
+                                                }
                                             )
-                                        },
+                                        }
                                     )
                                 }
                             }
+
                             ContentType.TOOL_CALL -> {
                                 val call = block as works.resolve.pathfinder.ai.ToolCall
                                 toolCalls.add(
@@ -846,12 +903,13 @@ object MistralConversationsPayload {
                                             buildJsonObject {
                                                 put("name", call.name)
                                                 put("arguments", call.arguments.ifEmpty { "{}" })
-                                            },
+                                            }
                                         )
                                         put("index", 0)
-                                    },
+                                    }
                                 )
                             }
+
                             ContentType.IMAGE -> Unit
                         }
                     }
@@ -873,9 +931,15 @@ object MistralConversationsPayload {
                         .filter { it.type == ContentType.TEXT }
                         .joinToString("\n") { sanitize(it as TextContent) }
                     val hasImages = toolMsg.content.any { it.type == ContentType.IMAGE }
-                    val toolText = buildToolResultText(textResult, hasImages, supportsImages, toolMsg.isError)
+                    val toolText =
+                        buildToolResultText(textResult, hasImages, supportsImages, toolMsg.isError)
                     val contentChunks = buildJsonArray {
-                        add(buildJsonObject { put("type", "text"); put("text", toolText) })
+                        add(
+                            buildJsonObject {
+                                put("type", "text")
+                                put("text", toolText)
+                            }
+                        )
                         for (part in toolMsg.content) {
                             if (!supportsImages) continue
                             if (part.type != ContentType.IMAGE) continue
@@ -888,7 +952,7 @@ object MistralConversationsPayload {
                             put("tool_call_id", toolMsg.toolCallId)
                             put("name", toolMsg.toolName)
                             put("content", contentChunks)
-                        },
+                        }
                     )
                 }
             }
@@ -907,14 +971,20 @@ object MistralConversationsPayload {
         text: String,
         hasImages: Boolean,
         supportsImages: Boolean,
-        isError: Boolean,
+        isError: Boolean
     ): String {
         val trimmed = text.trim()
         val errorPrefix = if (isError) "[tool error] " else ""
 
         if (trimmed.isNotEmpty()) {
             val imageSuffix =
-                if (hasImages && !supportsImages) "\n[tool image omitted: model does not support images]" else ""
+                if (hasImages &&
+                    !supportsImages
+                ) {
+                    "\n[tool image omitted: model does not support images]"
+                } else {
+                    ""
+                }
             return "$errorPrefix$trimmed$imageSuffix"
         }
 
@@ -944,9 +1014,11 @@ internal fun buildMistralSystemMessage(systemPrompt: String): JsonObject =
     }
 
 internal fun usesReasoningEffort(model: Model): Boolean =
-    model.id == "mistral-small-2603" || model.id == "mistral-small-latest" || model.id == "mistral-medium-3.5"
+    model.id == "mistral-small-2603" || model.id == "mistral-small-latest" ||
+        model.id == "mistral-medium-3.5"
 
-internal fun usesPromptModeReasoning(model: Model): Boolean = model.reasoning && !usesReasoningEffort(model)
+internal fun usesPromptModeReasoning(model: Model): Boolean =
+    model.reasoning && !usesReasoningEffort(model)
 
 internal fun mapReasoningEffort(model: Model, level: ModelThinkingLevel): MistralReasoningEffort =
     model.thinkingLevelMap?.forLevel(level) ?: "high"

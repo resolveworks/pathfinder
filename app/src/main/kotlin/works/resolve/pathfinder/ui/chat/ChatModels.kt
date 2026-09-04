@@ -2,18 +2,18 @@ package works.resolve.pathfinder.ui.chat
 
 import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
-import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.codingagent.core.session.LaneRecovery
 import works.resolve.pathfinder.codingagent.core.session.SessionSummary
 
 enum class ChatRole {
     User,
     Assistant,
-    Tool,
+    Tool
 }
 
 /** Text or thinking unit of a chat message body. */
@@ -38,7 +38,7 @@ data class ChatMessage(
     /** Marker row for a compaction cut; renders as a divider, not message content. */
     val isCompactionMarker: Boolean = false,
     /** Tool-result payload; set only on [ChatRole.Tool] rows (empty blocks). */
-    val toolResult: ChatToolResult? = null,
+    val toolResult: ChatToolResult? = null
 )
 
 /**
@@ -53,14 +53,14 @@ data class ChatToolResult(
     val isError: Boolean,
     val output: String? = null,
     /** Parsed call argument the row title is built from; null when the tool has none. */
-    val input: String? = null,
+    val input: String? = null
 )
 
 data class PendingToolExecution(
     val toolCallId: String,
     val toolName: String,
     /** Parsed call argument the row title is built from; null when the tool has none. */
-    val input: String? = null,
+    val input: String? = null
 )
 
 @Serializable
@@ -90,18 +90,16 @@ data class SearchProviderAuthNavKey(val providerId: String) : NavKey
 @Serializable
 data class ProviderAuthNavKey(val providerId: String) : NavKey
 
-data class AutoRetryStatus(
-    val attempt: Int,
-    val maxAttempts: Int,
-)
+data class AutoRetryStatus(val attempt: Int, val maxAttempts: Int)
 
 /** Outcome of the initial load of settings, credentials, and sessions. */
 enum class ChatStatus {
     Loading,
+
     /** No valid provider/model/key configuration; the settings form is forced. */
     NeedsConfiguration,
     Ready,
-    Failed,
+    Failed
 }
 
 /** One row per catalog provider on the providers screen. */
@@ -109,7 +107,7 @@ data class ProviderOption(
     val id: String,
     val name: String,
     /** True iff a credential with a non-blank key is stored for this provider. */
-    val configured: Boolean,
+    val configured: Boolean
 )
 
 /** One row per model of a configured provider. */
@@ -117,27 +115,19 @@ data class ModelOption(
     val providerId: String,
     val providerName: String,
     val modelId: String,
-    val name: String,
+    val name: String
 )
 
-data class ProviderAuthPrompt(
-    val envKey: String,
-    val message: String,
-    val secret: Boolean,
-)
+data class ProviderAuthPrompt(val envKey: String, val message: String, val secret: Boolean)
 
 enum class AuthPromptKind {
     TEXT,
     SECRET,
     SELECT,
-    MANUAL_CODE,
+    MANUAL_CODE
 }
 
-data class AuthPromptOption(
-    val id: String,
-    val label: String,
-    val description: String? = null,
-)
+data class AuthPromptOption(val id: String, val label: String, val description: String? = null)
 
 /**
  * A suspended login prompt awaiting a user answer: prompt metadata only —
@@ -147,7 +137,7 @@ data class PendingAuthPrompt(
     val kind: AuthPromptKind,
     val message: String,
     val placeholder: String? = null,
-    val options: List<AuthPromptOption> = emptyList(),
+    val options: List<AuthPromptOption> = emptyList()
 )
 
 /**
@@ -160,31 +150,48 @@ data class ProviderAuthFlow(
     val providerId: String,
     val method: AuthMethodInfo,
     val events: List<AuthEvent> = emptyList(),
-    val pendingPrompt: PendingAuthPrompt? = null,
+    val pendingPrompt: PendingAuthPrompt? = null
 )
 
-internal fun projectAuthPrompt(prompt: AuthPrompt): PendingAuthPrompt =
-    when (prompt) {
-        is AuthPrompt.Text -> PendingAuthPrompt(AuthPromptKind.TEXT, prompt.message, prompt.placeholder)
-        is AuthPrompt.Secret -> PendingAuthPrompt(AuthPromptKind.SECRET, prompt.message, prompt.placeholder)
-        is AuthPrompt.Select -> PendingAuthPrompt(
-            AuthPromptKind.SELECT,
-            prompt.message,
-            options = prompt.options.map { AuthPromptOption(it.id, it.label, it.description) },
-        )
-        is AuthPrompt.ManualCode -> PendingAuthPrompt(AuthPromptKind.MANUAL_CODE, prompt.message, prompt.placeholder)
-    }
+internal fun projectAuthPrompt(prompt: AuthPrompt): PendingAuthPrompt = when (prompt) {
+    is AuthPrompt.Text -> PendingAuthPrompt(
+        AuthPromptKind.TEXT,
+        prompt.message,
+        prompt.placeholder
+    )
+
+    is AuthPrompt.Secret -> PendingAuthPrompt(
+        AuthPromptKind.SECRET,
+        prompt.message,
+        prompt.placeholder
+    )
+
+    is AuthPrompt.Select -> PendingAuthPrompt(
+        AuthPromptKind.SELECT,
+        prompt.message,
+        options = prompt.options.map { AuthPromptOption(it.id, it.label, it.description) }
+    )
+
+    is AuthPrompt.ManualCode -> PendingAuthPrompt(
+        AuthPromptKind.MANUAL_CODE,
+        prompt.message,
+        prompt.placeholder
+    )
+}
 
 /** What the provider-auth screen shows first for a provider's method list. */
 enum class ProviderAuthScreenMode {
     /** More than one method: choose account/subscription vs API key. */
     METHOD_CHOICE,
+
     /** Sole API-key method: show the credential form directly. */
     API_KEY_FORM,
+
     /** Sole OAuth method: start the account login flow immediately. */
     START_OAUTH,
+
     /** No login method available (no catalog prompts, no registered flow). */
-    NO_METHODS,
+    NO_METHODS
 }
 
 internal fun providerAuthScreenMode(methods: List<AuthMethodInfo>): ProviderAuthScreenMode = when {
@@ -199,7 +206,7 @@ data class SelectedModel(
     val providerId: String,
     val providerName: String,
     val modelId: String,
-    val modelName: String,
+    val modelName: String
 )
 
 /**
@@ -286,5 +293,5 @@ data class ChatUiState(
      * persisted — as distinct from a finished one.
      */
     val laneRecovery: LaneRecovery = LaneRecovery.Idle,
-    val error: String? = null,
+    val error: String? = null
 )

@@ -39,7 +39,7 @@ interface CredentialStore {
      */
     suspend fun modify(
         providerId: String,
-        update: suspend (current: Credential?) -> Credential?,
+        update: suspend (current: Credential?) -> Credential?
     ): Credential?
 
     /** Remove a credential (logout). Implementations serialize this against [modify]. */
@@ -57,13 +57,14 @@ class InMemoryCredentialStore : CredentialStore {
         credentials[providerId]
     }
 
-    override suspend fun list(): List<CredentialInfo> = credentials.entries.map { (providerId, credential) ->
-        CredentialInfo(providerId, credential.type)
-    }
+    override suspend fun list(): List<CredentialInfo> =
+        credentials.entries.map { (providerId, credential) ->
+            CredentialInfo(providerId, credential.type)
+        }
 
     override suspend fun modify(
         providerId: String,
-        update: suspend (current: Credential?) -> Credential?,
+        update: suspend (current: Credential?) -> Credential?
     ): Credential? = lockFor(providerId).withLock {
         val current = credentials[providerId]
         val next = update(current)

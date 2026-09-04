@@ -50,12 +50,12 @@ import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.RetryDelayExceededError
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.formatProviderError
-import works.resolve.pathfinder.ai.utils.splitDeferredTools
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.ai.utils.splitDeferredTools
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strictBoolean
 import works.resolve.pathfinder.ai.utils.strictDouble
@@ -123,7 +123,8 @@ data class OpenAICodexResponsesOptions(
     val cacheRetention: CacheRetention? = null,
     val timeoutMs: Long? = null,
     val maxRetries: Int = 0,
-    val maxRetryDelayMs: Long = works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
+    val maxRetryDelayMs: Long =
+        works.resolve.pathfinder.ai.StreamOptions.DEFAULT_MAX_RETRY_DELAY_MS,
     val env: Map<String, String> = emptyMap(),
     val headers: Map<String, String?> = emptyMap(),
     /**
@@ -146,45 +147,51 @@ data class OpenAICodexResponsesOptions(
      * request. Dormant in this port — carried for shape fidelity. Presence
      * boolean only in toString().
      */
-    val telemetryContext: TelemetryContext? = null,
+    val telemetryContext: TelemetryContext? = null
 ) {
-    override fun toString(): String =
-        optionsToString(
-            "OpenAICodexResponsesOptions",
-            "apiKey" to redactedSecret(apiKey),
-            "sessionId" to sessionId,
-            "temperature" to temperature,
-            "maxTokens" to maxTokens,
-            "reasoningEffort" to reasoningEffort,
-            "reasoningSummary" to reasoningSummary,
-            "serviceTier" to serviceTier,
-            "textVerbosity" to textVerbosity,
-            "toolChoice" to toolChoice,
-            "cacheRetention" to cacheRetention,
-            "timeoutMs" to timeoutMs,
-            "maxRetries" to maxRetries,
-            "maxRetryDelayMs" to maxRetryDelayMs,
-            "env" to env.keys,
-            "headers" to headers.keys,
-            "onPayload" to (onPayload != null),
-            "onResponse" to (onResponse != null),
-            "transport" to transport,
-            "websocketConnectTimeoutMs" to websocketConnectTimeoutMs,
-            "telemetryContext" to (telemetryContext != null),
-        )
+    override fun toString(): String = optionsToString(
+        "OpenAICodexResponsesOptions",
+        "apiKey" to redactedSecret(apiKey),
+        "sessionId" to sessionId,
+        "temperature" to temperature,
+        "maxTokens" to maxTokens,
+        "reasoningEffort" to reasoningEffort,
+        "reasoningSummary" to reasoningSummary,
+        "serviceTier" to serviceTier,
+        "textVerbosity" to textVerbosity,
+        "toolChoice" to toolChoice,
+        "cacheRetention" to cacheRetention,
+        "timeoutMs" to timeoutMs,
+        "maxRetries" to maxRetries,
+        "maxRetryDelayMs" to maxRetryDelayMs,
+        "env" to env.keys,
+        "headers" to headers.keys,
+        "onPayload" to (onPayload != null),
+        "onResponse" to (onResponse != null),
+        "transport" to transport,
+        "websocketConnectTimeoutMs" to websocketConnectTimeoutMs,
+        "telemetryContext" to (telemetryContext != null)
+    )
 }
 
-internal fun isTerminalRateLimitError(errorText: String): Boolean =
-    Regex(
-        "GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|" +
-            "out of budget|quota exceeded|billing",
-        RegexOption.IGNORE_CASE,
-    ).containsMatchIn(errorText)
+internal fun isTerminalRateLimitError(errorText: String): Boolean = Regex(
+    "GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|" +
+        "insufficient_quota|" +
+        "out of budget|quota exceeded|billing",
+    RegexOption.IGNORE_CASE
+).containsMatchIn(errorText)
 
 internal fun isRetryableError(status: Int, errorText: String): Boolean {
     if (status == 429 && isTerminalRateLimitError(errorText)) return false
-    if (status == 429 || status == 500 || status == 502 || status == 503 || status == 504) return true
-    return Regex("rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused", RegexOption.IGNORE_CASE)
+    if (status == 429 || status == 500 || status == 502 || status == 503 ||
+        status == 504
+    ) {
+        return true
+    }
+    return Regex(
+        "rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused",
+        RegexOption.IGNORE_CASE
+    )
         .containsMatchIn(errorText)
 }
 
@@ -199,7 +206,7 @@ internal fun isRetryableError(status: Int, errorText: String): Boolean {
 internal fun getRetryAfterDelayMs(
     retryAfterMs: String?,
     retryAfter: String?,
-    nowMs: () -> Long,
+    nowMs: () -> Long
 ): Long? {
     retryAfterMs?.let {
         it.toDoubleOrNull()?.let { millis -> return maxOf(0.0, millis).toLong() }
@@ -241,7 +248,7 @@ internal const val REQUEST_COMPRESSION_ZSTD_LEVEL = 3
  */
 fun compressRequestBodyZstd(
     bodyJson: String,
-    level: Int = REQUEST_COMPRESSION_ZSTD_LEVEL,
+    level: Int = REQUEST_COMPRESSION_ZSTD_LEVEL
 ): ByteArray? = try {
     Zstd.compress(bodyJson.toByteArray(Charsets.UTF_8), level)
 } catch (_: Throwable) {
@@ -264,21 +271,21 @@ class OpenAICodexResponsesApi(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     /** WebSocket transport seam; required on Android. */
     private val webSocketTransport: WebSocketStreamingTransport,
-    private val webSocketSessions: OpenAICodexWebSocketSessions = OpenAICodexWebSocketSessions(clock),
+    private val webSocketSessions: OpenAICodexWebSocketSessions =
+        OpenAICodexWebSocketSessions(clock)
 ) : ChatApi {
 
     private fun nowMs(): Long = clock.now().toEpochMilliseconds()
 
-
     fun stream(
         model: Model,
         context: Context,
-        options: OpenAICodexResponsesOptions = OpenAICodexResponsesOptions(),
+        options: OpenAICodexResponsesOptions = OpenAICodexResponsesOptions()
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = nowMs()
         val grammarToolInputProperties = createGrammarToolInputProperties(
             context.tools,
-            model.responsesCompat?.supportsOpenAIGrammarTools ?: false,
+            model.responsesCompat?.supportsOpenAIGrammarTools ?: false
         )
         val state = OpenAiResponsesShared.ResponsesStreamState(
             model,
@@ -289,8 +296,8 @@ class OpenAICodexResponsesApi(
                 resolveServiceTier = ::resolveCodexServiceTier,
                 applyServiceTierPricing = { usage, tier ->
                     applyServiceTierPricing(usage, tier, model.id)
-                },
-            ),
+                }
+            )
         )
         var endTurn: Boolean? = null
 
@@ -307,8 +314,8 @@ class OpenAICodexResponsesApi(
             emit(
                 AssistantMessageEvent.Done(
                     state.stopReason,
-                    if (endTurn != null) final.copy(endTurn = endTurn) else final,
-                ),
+                    if (endTurn != null) final.copy(endTurn = endTurn) else final
+                )
             )
         }
         try {
@@ -317,24 +324,43 @@ class OpenAICodexResponsesApi(
             val accountId = extractAccountId(apiKey)
             val cacheRetention = OpenAiResponsesApi.resolveCacheRetention(
                 options.cacheRetention,
-                options.env,
+                options.env
             )
-            val cacheSessionId = if (cacheRetention == CacheRetention.NONE) null else options.sessionId
+            val cacheSessionId = if (cacheRetention ==
+                CacheRetention.NONE
+            ) {
+                null
+            } else {
+                options.sessionId
+            }
             val codexSessionId = clampOpenAIPromptCacheKey(cacheSessionId)
-            var bodyObj = buildCodexRequestBody(model, context, options, codexSessionId, grammarToolInputProperties)
+            var bodyObj =
+                buildCodexRequestBody(
+                    model,
+                    context,
+                    options,
+                    codexSessionId,
+                    grammarToolInputProperties
+                )
             options.onPayload?.let { hook -> hook(bodyObj, model)?.let { bodyObj = it } }
             val bodyJson = bodyObj.toString()
             // Both header sets are built up front so an SSE fallback after a
             // WebSocket transport failure reuses them.
             val websocketRequestId = codexSessionId ?: uuidv7()
-            val headers = buildCodexSSEHeaders(model.headers, options.headers, accountId, apiKey, codexSessionId)
+            val headers = buildCodexSSEHeaders(
+                model.headers,
+                options.headers,
+                accountId,
+                apiKey,
+                codexSessionId
+            )
                 .toMutableMap()
             val websocketHeaders = buildCodexWebSocketHeaders(
                 model.headers,
                 options.headers,
                 accountId,
                 apiKey,
-                websocketRequestId,
+                websocketRequestId
             )
             val transportOption = options.transport ?: Transport.AUTO
             val websocketDisabledForSession = transportOption != Transport.SSE &&
@@ -370,7 +396,7 @@ class OpenAICodexResponsesApi(
                             cacheSessionId = cacheSessionId,
                             accountId = accountId,
                             grammarToolInputProperties = grammarToolInputProperties,
-                            options = options,
+                            options = options
                         )
                         finishStream()
                         return@flow
@@ -390,7 +416,11 @@ class OpenAICodexResponsesApi(
                             retriedWebSocketConnectionLimit = true
                             continue
                         }
-                        if (isCodexNonTransportError(error) && !connectionLimitBeforeStart) throw error
+                        if (isCodexNonTransportError(error) &&
+                            !connectionLimitBeforeStart
+                        ) {
+                            throw error
+                        }
                         // pi also appends a provider_transport_failure
                         // diagnostic here; not ported (see class KDoc).
                         webSocketSessions.recordWebSocketFailure(cacheSessionId, error)
@@ -428,15 +458,17 @@ class OpenAICodexResponsesApi(
                         responsesJson.parseToJsonElement(event.data)
                     } catch (error: Exception) {
                         throw ProviderStreamException(
-                            "Invalid Codex SSE JSON: ${error.message ?: error::class.simpleName}",
+                            "Invalid Codex SSE JSON: ${error.message ?: error::class.simpleName}"
                         )
                     }
                     val obj = parsed as? JsonObject
-                        ?: throw ProviderStreamException("Invalid Codex SSE JSON: expected an object")
+                        ?: throw ProviderStreamException(
+                            "Invalid Codex SSE JSON: expected an object"
+                        )
                     val mapped = mapCodexEvent(obj) { endTurn = it } ?: return@collect
                     processSseEvent(
                         works.resolve.pathfinder.ai.transport.SseEvent(mapped.first.toString()),
-                        state,
+                        state
                     )?.forEach { emit(it) }
                     if (mapped.second) {
                         throw TerminalEventReached
@@ -455,9 +487,9 @@ class OpenAICodexResponsesApi(
                     state.partialSnapshot().copy(
                         endTurn = endTurn,
                         stopReason = StopReason.ERROR,
-                        errorMessage = formatCodexError(error),
-                    ),
-                ),
+                        errorMessage = formatCodexError(error)
+                    )
+                )
             )
         }
     }
@@ -465,7 +497,7 @@ class OpenAICodexResponsesApi(
     override fun streamSimple(
         model: Model,
         context: Context,
-        options: works.resolve.pathfinder.ai.SimpleStreamOptions,
+        options: works.resolve.pathfinder.ai.SimpleStreamOptions
     ): Flow<AssistantMessageEvent> {
         val apiKey = options.apiKey
             ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
@@ -476,7 +508,7 @@ class OpenAICodexResponsesApi(
         return stream(
             model,
             context,
-            buildOpenAICodexResponsesOptions(model, context, options, reasoningEffort),
+            buildOpenAICodexResponsesOptions(model, context, options, reasoningEffort)
         )
     }
 
@@ -488,7 +520,7 @@ class OpenAICodexResponsesApi(
      */
     private class WebSocketFrameReader(
         private val connection: WebSocketConnection,
-        private val idleTimeoutMs: Long?,
+        private val idleTimeoutMs: Long?
     ) {
         var sawCompletion = false
             private set
@@ -510,22 +542,35 @@ class OpenAICodexResponsesApi(
                         responsesJson.parseToJsonElement(text)
                     } catch (error: Exception) {
                         throw CodexProtocolException(
-                            "Invalid Codex WebSocket JSON: ${error.message ?: error::class.simpleName}",
+                            "Invalid Codex WebSocket JSON: " +
+                                "${error.message ?: error::class.simpleName}"
                         )
                     }
                     val obj = parsed as? JsonObject
-                        ?: throw CodexProtocolException("Invalid Codex WebSocket JSON: expected an object")
+                        ?: throw CodexProtocolException(
+                            "Invalid Codex WebSocket JSON: expected an object"
+                        )
                     when (obj.string("type")) {
-                        "response.completed", "response.done", "response.incomplete" -> sawCompletion = true
+                        "response.completed", "response.done", "response.incomplete" ->
+                            sawCompletion =
+                                true
                     }
                     obj
                 }
+
                 is WebSocketEvent.Failure -> throw IOException(event.message)
+
                 is WebSocketEvent.Closed -> if (sawCompletion) {
                     null
                 } else {
-                    throw WebSocketCloseException(event.message, event.code, event.reason, event.wasClean)
+                    throw WebSocketCloseException(
+                        event.message,
+                        event.code,
+                        event.reason,
+                        event.wasClean
+                    )
                 }
+
                 null -> throw IOException("WebSocket stream closed before response.completed")
             }
         }
@@ -551,7 +596,7 @@ class OpenAICodexResponsesApi(
         cacheSessionId: String?,
         accountId: String,
         grammarToolInputProperties: Map<String, String>,
-        options: OpenAICodexResponsesOptions,
+        options: OpenAICodexResponsesOptions
     ) {
         val acquired = webSocketSessions.acquire(
             webSocketTransport,
@@ -559,7 +604,7 @@ class OpenAICodexResponsesApi(
             headers,
             cacheSessionId,
             accountId,
-            websocketConnectTimeoutMs,
+            websocketConnectTimeoutMs
         )
         val connection = acquired.connection
         val entry = acquired.entry
@@ -598,7 +643,7 @@ class OpenAICodexResponsesApi(
                 buildJsonObject {
                     put("type", "response.create")
                     requestBody.forEach { (key, value) -> put(key, value) }
-                }.toString(),
+                }.toString()
             )
             // onStart fires exactly once, before the first mapped event is
             // processed.
@@ -624,8 +669,8 @@ class OpenAICodexResponsesApi(
                             OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
                             OpenAiResponsesShared.ConvertResponsesMessagesOptions(
                                 includeSystemPrompt = false,
-                                grammarToolInputProperties = grammarToolInputProperties,
-                            ),
+                                grammarToolInputProperties = grammarToolInputProperties
+                            )
                         ).filter {
                             it.str("type") != "function_call_output" &&
                                 it.str("type") != "custom_tool_call_output"
@@ -633,7 +678,7 @@ class OpenAICodexResponsesApi(
                     entry.continuation = OpenAICodexWebSocketSessions.CachedWebSocketContinuation(
                         lastRequestBody = fullBody,
                         lastResponseId = responseId,
-                        lastResponseItems = responseItems,
+                        lastResponseItems = responseItems
                     )
                 }
             }
@@ -654,7 +699,7 @@ class OpenAICodexResponsesApi(
         model: Model,
         options: OpenAICodexResponsesOptions,
         headers: Map<String, String>,
-        body: ByteArray,
+        body: ByteArray
     ): TransportResponse {
         val maxRetries = options.maxRetries
         var lastError: Exception? = null
@@ -667,12 +712,12 @@ class OpenAICodexResponsesApi(
                         bearerToken = null,
                         headers = headers,
                         body = body,
-                        timeoutMs = options.timeoutMs,
-                    ),
+                        timeoutMs = options.timeoutMs
+                    )
                 )
                 options.onResponse?.invoke(
                     ProviderResponse(response.status, headersToRecord(response.headers)),
-                    model,
+                    model
                 )
                 return response
             } catch (error: Exception) {
@@ -682,14 +727,19 @@ class OpenAICodexResponsesApi(
                     // it here too, from the exception.
                     options.onResponse?.invoke(
                         ProviderResponse(error.status, headersToRecord(error.headers)),
-                        model,
+                        model
                     )
                 }
                 // Terminal usage limits surface their friendly message and
                 // never retry.
                 val terminal: Exception = when (error) {
                     is ProviderHttpException -> {
-                        val (message, friendly) = parseCodexErrorResponse(error.status, error.body, error.statusText, ::nowMs)
+                        val (message, friendly) = parseCodexErrorResponse(
+                            error.status,
+                            error.body,
+                            error.statusText,
+                            ::nowMs
+                        )
                         if (friendly != null) {
                             throw ProviderStreamException(friendly)
                         }
@@ -697,7 +747,7 @@ class OpenAICodexResponsesApi(
                             val retryAfter = getRetryAfterDelayMs(
                                 error.header("retry-after-ms"),
                                 error.header("retry-after"),
-                                ::nowMs,
+                                ::nowMs
                             )
                             val delayMs = if (retryAfter == null) {
                                 (BASE_DELAY_MS * Math.pow(2.0, attempt.toDouble())).toLong()
@@ -709,6 +759,7 @@ class OpenAICodexResponsesApi(
                         }
                         ProviderStreamException(message)
                     }
+
                     else -> error
                 }
                 // Network-style errors retry unless the server-requested delay
@@ -734,7 +785,7 @@ internal fun buildOpenAICodexResponsesOptions(
     model: Model,
     context: Context,
     options: works.resolve.pathfinder.ai.SimpleStreamOptions,
-    reasoningEffort: ModelThinkingLevel?,
+    reasoningEffort: ModelThinkingLevel?
 ): OpenAICodexResponsesOptions = OpenAICodexResponsesOptions(
     apiKey = options.apiKey,
     sessionId = options.sessionId,
@@ -742,7 +793,7 @@ internal fun buildOpenAICodexResponsesOptions(
     maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
         model,
         context,
-        options.maxTokens ?: model.maxTokens,
+        options.maxTokens ?: model.maxTokens
     ),
     reasoningEffort = reasoningEffort,
     // Simple-API choice widened to the Responses wire union.
@@ -757,7 +808,7 @@ internal fun buildOpenAICodexResponsesOptions(
     onResponse = options.onResponse,
     transport = options.transport,
     websocketConnectTimeoutMs = options.websocketConnectTimeoutMs,
-    telemetryContext = options.telemetryContext,
+    telemetryContext = options.telemetryContext
 )
 
 /**
@@ -782,15 +833,18 @@ internal fun buildCodexRequestBody(
     codexSessionId: String?,
     grammarToolInputProperties: Map<String, String> = createGrammarToolInputProperties(
         context.tools,
-        model.responsesCompat?.supportsOpenAIGrammarTools ?: false,
-    ),
+        model.responsesCompat?.supportsOpenAIGrammarTools ?: false
+    )
 ): JsonObject {
     val supportsStrictMode = model.responsesCompat?.supportsStrictMode ?: true
     val supportsOpenAIGrammarTools = model.responsesCompat?.supportsOpenAIGrammarTools ?: false
     val deferredToolsMode = when {
         model.responsesCompat?.supportsAdditionalTools == true ->
             OpenAiResponsesShared.DeferredToolsMode.ADDITIONAL_TOOLS
-        model.responsesCompat?.supportsToolSearch == true -> OpenAiResponsesShared.DeferredToolsMode.TOOL_SEARCH
+
+        model.responsesCompat?.supportsToolSearch == true ->
+            OpenAiResponsesShared.DeferredToolsMode.TOOL_SEARCH
+
         else -> null
     }
     val toolPlacement = splitDeferredTools(context, deferredToolsMode != null)
@@ -806,16 +860,19 @@ internal fun buildCodexRequestBody(
             toolOptions = OpenAiResponsesShared.ConvertResponsesToolsOptions(
                 strict = null,
                 supportsStrictMode = supportsStrictMode,
-                supportsOpenAIGrammarTools = supportsOpenAIGrammarTools,
-            ),
-        ),
+                supportsOpenAIGrammarTools = supportsOpenAIGrammarTools
+            )
+        )
     )
 
     return buildJsonObject {
         put("model", model.id)
         put("store", false)
         put("stream", true)
-        put("instructions", context.systemPrompt?.takeIf { it.isNotEmpty() } ?: "You are a helpful assistant.")
+        put(
+            "instructions",
+            context.systemPrompt?.takeIf { it.isNotEmpty() } ?: "You are a helpful assistant."
+        )
         put("input", JsonArray(messages))
         put("text", buildJsonObject { put("verbosity", options?.textVerbosity ?: "low") })
         put("include", JsonArray(listOf(JsonPrimitive("reasoning.encrypted_content"))))
@@ -834,19 +891,26 @@ internal fun buildCodexRequestBody(
                         OpenAiResponsesShared.ConvertResponsesToolsOptions(
                             strict = null,
                             supportsStrictMode = supportsStrictMode,
-                            supportsOpenAIGrammarTools = supportsOpenAIGrammarTools,
-                        ),
-                    ),
-                ),
+                            supportsOpenAIGrammarTools = supportsOpenAIGrammarTools
+                        )
+                    )
+                )
             )
         }
         if (options?.reasoningEffort != null) {
             val effort = if (options.reasoningEffort == ModelThinkingLevel.OFF) {
                 val map = model.thinkingLevelMap
-                if (map == null || !map.isSpecified(ModelThinkingLevel.OFF)) "none"
-                else map.forLevel(ModelThinkingLevel.OFF)
+                if (map == null || !map.isSpecified(ModelThinkingLevel.OFF)) {
+                    "none"
+                } else {
+                    map.forLevel(ModelThinkingLevel.OFF)
+                }
             } else {
-                OpenAiResponsesShared.resolveReasoningEffort(model, options.reasoningEffort, "medium")
+                OpenAiResponsesShared.resolveReasoningEffort(
+                    model,
+                    options.reasoningEffort,
+                    "medium"
+                )
             }
             if (effort != null) {
                 put(
@@ -854,7 +918,7 @@ internal fun buildCodexRequestBody(
                     buildJsonObject {
                         put("effort", effort)
                         put("summary", options.reasoningSummary ?: "auto")
-                    },
+                    }
                 )
             }
         }
@@ -886,10 +950,7 @@ internal fun resolveCodexWebSocketUrl(baseUrl: String?): String {
 }
 
 /** Provider error with a stable code. */
-internal class CodexApiException(
-    message: String,
-    val code: String? = null,
-) : Exception(message)
+internal class CodexApiException(message: String, val code: String? = null) : Exception(message)
 
 /**
  * Protocol/parse failure (non-transport), e.g. invalid WebSocket JSON.
@@ -908,7 +969,12 @@ internal fun isPreviousResponseNotFoundError(error: Throwable): Boolean =
     error is CodexApiException && error.code == "previous_response_not_found"
 
 private val CODEX_RESPONSE_STATUSES = setOf(
-    "completed", "incomplete", "failed", "cancelled", "queued", "in_progress",
+    "completed",
+    "incomplete",
+    "failed",
+    "cancelled",
+    "queued",
+    "in_progress"
 )
 
 /**
@@ -920,7 +986,7 @@ private val CODEX_RESPONSE_STATUSES = setOf(
  */
 internal fun mapCodexEvent(
     event: JsonObject,
-    onEndTurn: (Boolean) -> Unit,
+    onEndTurn: (Boolean) -> Unit
 ): Pair<JsonObject, Boolean>? {
     val type = event.string("type") ?: return null
 
@@ -930,7 +996,7 @@ internal fun mapCodexEvent(
         val message = event.string("message") ?: nested?.get("message").stringOrNull()
         throw CodexApiException(
             "Codex error: ${message ?: code ?: event.toString()}",
-            code,
+            code
         )
     }
 
@@ -939,7 +1005,7 @@ internal fun mapCodexEvent(
         val error = response?.obj("error")
         throw CodexApiException(
             error?.get("message").stringOrNull() ?: "Codex response failed",
-            error?.get("code").stringOrNull(),
+            error?.get("code").stringOrNull()
         )
     }
 
@@ -984,9 +1050,7 @@ internal fun mapCodexEvent(
  *   own cleanup.
  * - pi's clock reads `Date.now()`; [clock] is constructor-injected for tests.
  */
-class OpenAICodexWebSocketSessions(
-    val clock: Clock = Clock.System,
-) {
+class OpenAICodexWebSocketSessions(val clock: Clock = Clock.System) {
 
     private fun nowMs(): Long = clock.now().toEpochMilliseconds()
 
@@ -1016,7 +1080,7 @@ class OpenAICodexWebSocketSessions(
     internal class CachedWebSocketContinuation(
         val lastRequestBody: JsonObject,
         val lastResponseId: String,
-        val lastResponseItems: List<JsonObject>,
+        val lastResponseItems: List<JsonObject>
     )
 
     /** pi's acquireWebSocket return shape. */
@@ -1024,7 +1088,7 @@ class OpenAICodexWebSocketSessions(
         val connection: WebSocketConnection,
         val entry: CachedWebSocketEntry?,
         val reused: Boolean,
-        val release: suspend (keep: Boolean) -> Unit,
+        val release: suspend (keep: Boolean) -> Unit
     )
 
     fun isSseFallbackActive(sessionId: String?): Boolean =
@@ -1095,10 +1159,14 @@ class OpenAICodexWebSocketSessions(
         headers: Map<String, String>,
         sessionId: String?,
         accountId: String,
-        connectTimeoutMs: Long?,
+        connectTimeoutMs: Long?
     ): Acquired {
         val connect: suspend () -> WebSocketConnection = {
-            transport.connect(url, headers, connectTimeoutMs ?: WebSocketStreamingTransport.DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS)
+            transport.connect(
+                url,
+                headers,
+                connectTimeoutMs ?: WebSocketStreamingTransport.DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS
+            )
         }
 
         if (sessionId == null) {
@@ -1119,16 +1187,23 @@ class OpenAICodexWebSocketSessions(
                         cached.connection.close(1000, "connection_age_limit")
                         removeEntry(sessionId, accountId, cached)
                     }
+
                     !cached.busy && cached.connection.isOpen -> {
                         cached.busy = true
                         return Acquired(cached.connection, cached, reused = true) { keep ->
-                            withContext(NonCancellable) { release(sessionId, accountId, cached, keep) }
+                            withContext(NonCancellable) {
+                                release(sessionId, accountId, cached, keep)
+                            }
                         }
                     }
+
                     cached.busy -> {
                         val connection = connect()
-                        return Acquired(connection, entry = null, reused = false) { connection.close() }
+                        return Acquired(connection, entry = null, reused = false) {
+                            connection.close()
+                        }
                     }
+
                     else -> {
                         cached.connection.close()
                         removeEntry(sessionId, accountId, cached)
@@ -1147,7 +1222,12 @@ class OpenAICodexWebSocketSessions(
         }
     }
 
-    private suspend fun release(sessionId: String, accountId: String, entry: CachedWebSocketEntry, keep: Boolean) {
+    private suspend fun release(
+        sessionId: String,
+        accountId: String,
+        entry: CachedWebSocketEntry,
+        keep: Boolean
+    ) {
         mutex.withLock {
             if (!keep || !entry.connection.isOpen) {
                 entry.idleJob?.cancel()
@@ -1161,7 +1241,11 @@ class OpenAICodexWebSocketSessions(
         }
     }
 
-    private fun scheduleIdleExpiry(sessionId: String, accountId: String, entry: CachedWebSocketEntry) {
+    private fun scheduleIdleExpiry(
+        sessionId: String,
+        accountId: String,
+        entry: CachedWebSocketEntry
+    ) {
         entry.idleJob?.cancel()
         entry.idleJob = timerScope.launch {
             delay(SESSION_WEBSOCKET_CACHE_TTL_MS)
@@ -1210,7 +1294,7 @@ data class OpenAICodexWebSocketDebugStats(
     var websocketFailures: Int = 0,
     var sseFallbacks: Int = 0,
     var websocketFallbackActive: Boolean? = null,
-    var lastWebSocketError: String? = null,
+    var lastWebSocketError: String? = null
 )
 
 internal fun requestBodyWithoutInput(body: JsonObject): JsonObject = buildJsonObject {
@@ -1236,7 +1320,7 @@ internal fun requestBodiesMatchExceptInput(a: JsonObject, b: JsonObject): Boolea
  *  assistant response items with an equal prefix. */
 internal fun getCachedWebSocketInputDelta(
     body: JsonObject,
-    continuation: OpenAICodexWebSocketSessions.CachedWebSocketContinuation,
+    continuation: OpenAICodexWebSocketSessions.CachedWebSocketContinuation
 ): JsonArray? {
     if (!requestBodiesMatchExceptInput(body, continuation.lastRequestBody)) return null
     val currentInput = body.arr("input") ?: JsonArray(emptyList())
@@ -1255,7 +1339,7 @@ internal fun getCachedWebSocketInputDelta(
  */
 internal fun buildCachedWebSocketRequestBody(
     entry: OpenAICodexWebSocketSessions.CachedWebSocketEntry,
-    body: JsonObject,
+    body: JsonObject
 ): JsonObject {
     val continuation = entry.continuation ?: return body
     val delta = getCachedWebSocketInputDelta(body, continuation)
@@ -1279,7 +1363,7 @@ internal fun parseCodexErrorResponse(
     status: Int,
     body: String,
     statusText: String? = null,
-    nowMs: () -> Long,
+    nowMs: () -> Long
 ): Pair<String, String?> {
     var message = body.ifEmpty { statusText?.takeIf { it.isNotEmpty() } ?: "Request failed" }
     var friendly: String? = null
@@ -1312,7 +1396,7 @@ internal fun extractAccountId(token: String): String {
         val parts = token.split(".")
         require(parts.size == 3) { "Invalid token" }
         val payload = Base64.getDecoder().decode(
-            parts[1].replace('-', '+').replace('_', '/').padBase64(),
+            parts[1].replace('-', '+').replace('_', '/').padBase64()
         ).decodeToString()
         val json = responsesJson.parseToJsonElement(payload)
             as? JsonObject ?: error("Invalid token")
@@ -1333,7 +1417,7 @@ internal fun buildBaseCodexHeaders(
     modelHeaders: Map<String, String>,
     optionsHeaders: Map<String, String?>,
     accountId: String,
-    token: String,
+    token: String
 ): MutableMap<String, String?> {
     val headers = LinkedHashMap<String, String?>()
     headers.putAll(modelHeaders)
@@ -1353,7 +1437,7 @@ internal fun buildCodexSSEHeaders(
     optionsHeaders: Map<String, String?>,
     accountId: String,
     token: String,
-    sessionId: String?,
+    sessionId: String?
 ): Map<String, String> {
     val headers = buildBaseCodexHeaders(modelHeaders, optionsHeaders, accountId, token)
     headers["OpenAI-Beta"] = "responses=experimental"
@@ -1383,7 +1467,7 @@ internal fun buildCodexWebSocketHeaders(
     optionsHeaders: Map<String, String?>,
     accountId: String,
     token: String,
-    requestId: String,
+    requestId: String
 ): Map<String, String> {
     val headers = buildBaseCodexHeaders(modelHeaders, optionsHeaders, accountId, token)
     headers.remove("accept")

@@ -37,7 +37,7 @@ data class OAuthHttpRequest(
     val headers: Map<String, String> = emptyMap(),
     val body: ByteArray,
     /** Bounded connect AND read timeout, mirroring pi's single exchange deadline. */
-    val timeoutMs: Int,
+    val timeoutMs: Int
 ) {
     override fun toString(): String =
         "OAuthHttpRequest(method=$method, url=$safeUrlString, headers=${headers.keys}, " +
@@ -59,16 +59,16 @@ data class OAuthHttpRequest(
             "<redacted-url>"
         }
 
-    override fun equals(other: Any?): Boolean =
-        other is OAuthHttpRequest &&
-            other.method == method &&
-            other.url == url &&
-            other.headers == headers &&
-            other.body.contentEquals(body) &&
-            other.timeoutMs == timeoutMs
+    override fun equals(other: Any?): Boolean = other is OAuthHttpRequest &&
+        other.method == method &&
+        other.url == url &&
+        other.headers == headers &&
+        other.body.contentEquals(body) &&
+        other.timeoutMs == timeoutMs
 
     override fun hashCode(): Int =
-        31 * (31 * (31 * method.hashCode() + url.hashCode()) + headers.hashCode()) + body.contentHashCode()
+        31 * (31 * (31 * method.hashCode() + url.hashCode()) + headers.hashCode()) +
+            body.contentHashCode()
 }
 
 /** [body] may carry credential values; it is redacted in [toString]. */
@@ -76,19 +76,17 @@ data class OAuthHttpResponse(
     val status: Int,
     /** Header names lower-cased. */
     val headers: Map<String, List<String>>,
-    val body: ByteArray,
+    val body: ByteArray
 ) {
     override fun toString(): String =
         "OAuthHttpResponse(status=$status, headers=${headers.keys}, body=<${body.size} bytes>)"
 
-    override fun equals(other: Any?): Boolean =
-        other is OAuthHttpResponse &&
-            other.status == status &&
-            other.headers == headers &&
-            other.body.contentEquals(body)
+    override fun equals(other: Any?): Boolean = other is OAuthHttpResponse &&
+        other.status == status &&
+        other.headers == headers &&
+        other.body.contentEquals(body)
 
-    override fun hashCode(): Int =
-        31 * (31 * status + headers.hashCode()) + body.contentHashCode()
+    override fun hashCode(): Int = 31 * (31 * status + headers.hashCode()) + body.contentHashCode()
 }
 
 /**
@@ -136,7 +134,10 @@ class UrlConnectionOAuthHttpClient : OAuthHttpClient {
             }
         }
 
-    private fun perform(connection: HttpURLConnection, request: OAuthHttpRequest): OAuthHttpResponse {
+    private fun perform(
+        connection: HttpURLConnection,
+        request: OAuthHttpRequest
+    ): OAuthHttpResponse {
         if (request.body.isNotEmpty()) {
             connection.outputStream.use { it.write(request.body) }
         }
@@ -146,8 +147,11 @@ class UrlConnectionOAuthHttpClient : OAuthHttpClient {
         } catch (_: IOException) {
             connection.errorStream
         }.use { stream ->
-            if (stream == null) ByteArray(0)
-            else stream.readAtMost(MAX_BODY_BYTES)
+            if (stream == null) {
+                ByteArray(0)
+            } else {
+                stream.readAtMost(MAX_BODY_BYTES)
+            }
         }
         val headers = connection.headerFields.entries
             .filter { (name, _) -> name != null }

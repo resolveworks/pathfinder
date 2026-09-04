@@ -1,5 +1,15 @@
 package works.resolve.pathfinder.ai.api
 
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ImageContent
@@ -11,26 +21,16 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertIs
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 class GoogleSharedConvertMessagesTest {
 
     private fun model(
         id: String = "gemini-3-pro-preview",
-        input: List<InputModality> = listOf(InputModality.TEXT),
+        input: List<InputModality> = listOf(InputModality.TEXT)
     ) = Model(
         id = id, name = id, api = "google-generative-ai", provider = "google",
         baseUrl = "https://example.com", reasoning = true, input = input,
-        contextWindow = 128000, maxTokens = 8192,
+        contextWindow = 128000, maxTokens = 8192
     )
 
     private fun contextFor(model: Model, content: List<works.resolve.pathfinder.ai.Content>) =
@@ -39,10 +39,12 @@ class GoogleSharedConvertMessagesTest {
                 UserMessage.ofText("Hi"),
                 AssistantMessage(
                     content = content,
-                    api = model.api, provider = model.provider, model = model.id,
-                    stopReason = StopReason.TOOL_USE,
-                ),
-            ),
+                    api = model.api,
+                    provider = model.provider,
+                    model = model.id,
+                    stopReason = StopReason.TOOL_USE
+                )
+            )
         )
 
     private fun contents(model: Model, context: Context): List<JsonObject> =
@@ -61,12 +63,15 @@ class GoogleSharedConvertMessagesTest {
                 model,
                 listOf(
                     ThinkingContent("", validSig),
-                    ToolCall("call_1", "bash", """{"command":"ls"}"""),
-                ),
-            ),
+                    ToolCall("call_1", "bash", """{"command":"ls"}""")
+                )
+            )
         )
         val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
-        val signed = partsOf(modelTurn).filter { it["thoughtSignature"]?.jsonPrimitive?.content == validSig }
+        val signed = partsOf(modelTurn).filter {
+            it["thoughtSignature"]?.jsonPrimitive?.content ==
+                validSig
+        }
         assertEquals(1, signed.size)
         assertEquals("true", signed[0]["thought"]!!.jsonPrimitive.content)
     }
@@ -80,12 +85,18 @@ class GoogleSharedConvertMessagesTest {
                 model,
                 listOf(
                     TextContent("", validSig),
-                    ToolCall("call_1", "bash", """{"command":"ls"}"""),
-                ),
-            ),
+                    ToolCall("call_1", "bash", """{"command":"ls"}""")
+                )
+            )
         )
         val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
-        assertEquals(1, partsOf(modelTurn).filter { it["thoughtSignature"]?.jsonPrimitive?.content == validSig }.size)
+        assertEquals(
+            1,
+            partsOf(modelTurn).filter {
+                it["thoughtSignature"]?.jsonPrimitive?.content ==
+                    validSig
+            }.size
+        )
     }
 
     @Test
@@ -98,9 +109,9 @@ class GoogleSharedConvertMessagesTest {
                 listOf(
                     ThinkingContent(""),
                     TextContent("   "),
-                    ToolCall("call_1", "bash", """{"command":"ls"}"""),
-                ),
-            ),
+                    ToolCall("call_1", "bash", """{"command":"ls"}""")
+                )
+            )
         )
         val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
         val parts = partsOf(modelTurn)
@@ -118,9 +129,9 @@ class GoogleSharedConvertMessagesTest {
                 listOf(
                     ThinkingContent("", validSig),
                     TextContent("", validSig),
-                    ToolCall("call_1", "bash", """{"command":"ls"}"""),
-                ),
-            ),
+                    ToolCall("call_1", "bash", """{"command":"ls"}""")
+                )
+            )
         )
         val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
         val parts = partsOf(modelTurn)
@@ -137,8 +148,8 @@ class GoogleSharedConvertMessagesTest {
             model,
             contextFor(
                 model,
-                listOf(TextContent("text", "not!valid!base64!!!")),
-            ),
+                listOf(TextContent("text", "not!valid!base64!!!"))
+            )
         )
         val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
         assertNull(partsOf(modelTurn).single()["thoughtSignature"])
@@ -149,8 +160,10 @@ class GoogleSharedConvertMessagesTest {
         val model = model()
         val foreign = AssistantMessage(
             content = listOf(ThinkingContent("foreign reasoning")),
-            api = "openai-completions", provider = "zai", model = "glm-4.7",
-            stopReason = StopReason.STOP,
+            api = "openai-completions",
+            provider = "zai",
+            model = "glm-4.7",
+            stopReason = StopReason.STOP
         )
         val turns = contents(model, Context(messages = listOf(UserMessage.ofText("Hi"), foreign)))
         val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
@@ -166,20 +179,23 @@ class GoogleSharedConvertMessagesTest {
                 content = listOf(
                     ToolCall("call_a", "read", """{"path":"a.txt"}"""),
                     ToolCall("call_img", "read", """{"path":"image.png"}"""),
-                    ToolCall("call_b", "read", """{"path":"b.txt"}"""),
+                    ToolCall("call_b", "read", """{"path":"b.txt"}""")
                 ),
-                api = "google-generative-ai", provider = "google", model = "x",
-                stopReason = StopReason.TOOL_USE,
+                api = "google-generative-ai",
+                provider = "google",
+                model = "x",
+                stopReason = StopReason.TOOL_USE
             ),
             ToolResultMessage("call_a", "read", listOf(TextContent("alpha text"))),
             ToolResultMessage("call_img", "read", listOf(ImageContent("abc", "image/png"))),
-            ToolResultMessage("call_b", "read", listOf(TextContent("beta text"))),
-        ),
+            ToolResultMessage("call_b", "read", listOf(TextContent("beta text")))
+        )
     )
 
     @Test
     fun `keeps separate synthetic image turn for Gemini 2 dot x models`() {
-        val model = model(id = "gemini-2.5-flash", input = listOf(InputModality.TEXT, InputModality.IMAGE))
+        val model =
+            model(id = "gemini-2.5-flash", input = listOf(InputModality.TEXT, InputModality.IMAGE))
         val turns = contents(model, imageToolContext())
 
         assertEquals(5, turns.size)
@@ -191,7 +207,11 @@ class GoogleSharedConvertMessagesTest {
 
     @Test
     fun `nests image tool results for Gemini 3 models`() {
-        val model = model(id = "gemini-3-pro-preview", input = listOf(InputModality.TEXT, InputModality.IMAGE))
+        val model =
+            model(
+                id = "gemini-3-pro-preview",
+                input = listOf(InputModality.TEXT, InputModality.IMAGE)
+            )
         val turns = contents(model, imageToolContext())
 
         assertEquals(3, turns.size)
@@ -212,17 +232,22 @@ class GoogleSharedConvertMessagesTest {
                     UserMessage.ofText("go"),
                     AssistantMessage(
                         content = listOf(ToolCall("c1", "ok", "{}"), ToolCall("c2", "bad", "{}")),
-                        api = model.api, provider = model.provider, model = model.id,
-                        stopReason = StopReason.TOOL_USE,
+                        api = model.api,
+                        provider = model.provider,
+                        model = model.id,
+                        stopReason = StopReason.TOOL_USE
                     ),
                     ToolResultMessage("c1", "ok", listOf(TextContent("fine"))),
-                    ToolResultMessage("c2", "bad", listOf(TextContent("boom")), isError = true),
-                ),
-            ),
+                    ToolResultMessage("c2", "bad", listOf(TextContent("boom")), isError = true)
+                )
+            )
         )
         val userTurn = turns.last { it["role"]!!.jsonPrimitive.content == "user" }
         val responses = partsOf(userTurn).map { it["functionResponse"]!!.jsonObject }
-        assertEquals("fine", responses[0]["response"]!!.jsonObject["output"]!!.jsonPrimitive.content)
+        assertEquals(
+            "fine",
+            responses[0]["response"]!!.jsonObject["output"]!!.jsonPrimitive.content
+        )
         assertEquals("boom", responses[1]["response"]!!.jsonObject["error"]!!.jsonPrimitive.content)
     }
 
@@ -236,13 +261,15 @@ class GoogleSharedConvertMessagesTest {
                     UserMessage.ofText("go"),
                     AssistantMessage(
                         content = listOf(ToolCall("c1", "t", "{}"), ToolCall("c2", "t", "{}")),
-                        api = model.api, provider = model.provider, model = model.id,
-                        stopReason = StopReason.TOOL_USE,
+                        api = model.api,
+                        provider = model.provider,
+                        model = model.id,
+                        stopReason = StopReason.TOOL_USE
                     ),
                     ToolResultMessage("c1", "t", listOf(TextContent("one"))),
-                    ToolResultMessage("c2", "t", listOf(TextContent("two"))),
-                ),
-            ),
+                    ToolResultMessage("c2", "t", listOf(TextContent("two")))
+                )
+            )
         )
         assertEquals(3, turns.size)
         assertEquals(2, partsOf(turns[2]).size)
@@ -251,7 +278,8 @@ class GoogleSharedConvertMessagesTest {
     @Test
     fun `gemini3 requires explicit tool call ids, sanitized to the wire charset`() {
         val model = model(id = "gemini-3-flash-preview")
-        val weird = "call|with|symbols|and-a-very-long-id-that-exceeds-sixty-four-characters-1234567890"
+        val weird =
+            "call|with|symbols|and-a-very-long-id-that-exceeds-sixty-four-characters-1234567890"
         val turns = contents(
             model,
             Context(
@@ -261,19 +289,23 @@ class GoogleSharedConvertMessagesTest {
                     // models, hence the foreign assistant message.
                     AssistantMessage(
                         content = listOf(ToolCall(weird, "t", "{}")),
-                        api = "openai-completions", provider = "openai", model = "gpt-x",
-                        stopReason = StopReason.TOOL_USE,
+                        api = "openai-completions",
+                        provider = "openai",
+                        model = "gpt-x",
+                        stopReason = StopReason.TOOL_USE
                     ),
-                    ToolResultMessage(weird, "t", listOf(TextContent("ok"))),
-                ),
-            ),
+                    ToolResultMessage(weird, "t", listOf(TextContent("ok")))
+                )
+            )
         )
         val callPart = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
             .let { partsOf(it).single() }["functionCall"]!!.jsonObject
         assertTrue(callPart.containsKey("id"))
         val expected = weird.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(64)
         assertEquals(expected, callPart["id"]!!.jsonPrimitive.content)
-        val responsePart = turns.last().let { partsOf(it).single() }["functionResponse"]!!.jsonObject
+        val responsePart = turns.last().let {
+            partsOf(it).single()
+        }["functionResponse"]!!.jsonObject
         assertEquals(expected, responsePart["id"]!!.jsonPrimitive.content)
     }
 
@@ -287,12 +319,14 @@ class GoogleSharedConvertMessagesTest {
                     UserMessage.ofText("go"),
                     AssistantMessage(
                         content = listOf(ToolCall("call_1", "t", "{}")),
-                        api = model.api, provider = model.provider, model = model.id,
-                        stopReason = StopReason.TOOL_USE,
+                        api = model.api,
+                        provider = model.provider,
+                        model = model.id,
+                        stopReason = StopReason.TOOL_USE
                     ),
-                    ToolResultMessage("call_1", "t", listOf(TextContent("ok"))),
-                ),
-            ),
+                    ToolResultMessage("call_1", "t", listOf(TextContent("ok")))
+                )
+            )
         )
         val callPart = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
             .let { partsOf(it).single() }["functionCall"]!!.jsonObject
@@ -312,20 +346,24 @@ class GoogleSharedConvertMessagesTest {
                         AssistantMessage(
                             content = listOf(
                                 ToolCall("call_1", "bash", """{"command":"echo hi"}"""),
-                                ToolCall("call_2", "bash", """{"command":"ls -la"}"""),
+                                ToolCall("call_2", "bash", """{"command":"ls -la"}""")
                             ),
-                            api = model.api, provider = model.provider, model = model.id,
-                            stopReason = StopReason.TOOL_USE,
+                            api = model.api,
+                            provider = model.provider,
+                            model = model.id,
+                            stopReason = StopReason.TOOL_USE
                         ),
                         ToolResultMessage("call_1", "bash", listOf(TextContent("hi"))),
-                        ToolResultMessage("call_2", "bash", listOf(TextContent("files"))),
-                    ),
-                ),
+                        ToolResultMessage("call_2", "bash", listOf(TextContent("files")))
+                    )
+                )
             )
             val functionCallIds = turns.flatMap { partsOf(it) }
                 .mapNotNull { it["functionCall"]?.jsonObject?.get("id")?.jsonPrimitive?.content }
             val functionResponseIds = turns.flatMap { partsOf(it) }
-                .mapNotNull { it["functionResponse"]?.jsonObject?.get("id")?.jsonPrimitive?.content }
+                .mapNotNull {
+                    it["functionResponse"]?.jsonObject?.get("id")?.jsonPrimitive?.content
+                }
             assertEquals(listOf("call_1", "call_2"), functionCallIds)
             assertEquals(listOf("call_1", "call_2"), functionResponseIds)
         }
@@ -340,9 +378,9 @@ class GoogleSharedConvertMessagesTest {
                 model,
                 listOf(
                     ToolCall("call_1", "bash", """{"command":"echo hi"}"""),
-                    ToolCall("call_2", "bash", """{"command":"ls -la"}"""),
-                ),
-            ),
+                    ToolCall("call_2", "bash", """{"command":"ls -la"}""")
+                )
+            )
         )
         val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
         val functionCallParts = partsOf(modelTurn).filter { it.containsKey("functionCall") }
@@ -362,9 +400,9 @@ class GoogleSharedConvertMessagesTest {
                 model,
                 listOf(
                     ToolCall("call_1", "bash", """{"command":"ls"}""", thoughtSignature = validSig),
-                    ToolCall("call_2", "bash", """{"command":"ls"}"""),
-                ),
-            ),
+                    ToolCall("call_2", "bash", """{"command":"ls"}""")
+                )
+            )
         )
         val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
         val functionCallParts = partsOf(modelTurn).filter { it.containsKey("functionCall") }
@@ -380,16 +418,21 @@ class GoogleSharedConvertMessagesTest {
                 AssistantMessage(
                     content = listOf(
                         ThinkingContent("", thinkingSignature = ""),
-                        ThinkingContent("real", thinkingSignature = "sig"),
+                        ThinkingContent("real", thinkingSignature = "sig")
                     ),
-                    api = model.api, provider = model.provider, model = model.id,
-                    stopReason = StopReason.STOP,
-                ),
+                    api = model.api,
+                    provider = model.provider,
+                    model = model.id,
+                    stopReason = StopReason.STOP
+                )
             ),
-            model,
+            model
         )
         val content = (transformed.single() as AssistantMessage).content
-        assertEquals(listOf<ThinkingContent>(ThinkingContent("real", thinkingSignature = "sig")), content)
+        assertEquals(
+            listOf<ThinkingContent>(ThinkingContent("real", thinkingSignature = "sig")),
+            content
+        )
     }
 
     @Test
@@ -400,12 +443,14 @@ class GoogleSharedConvertMessagesTest {
                 UserMessage.ofText("go"),
                 AssistantMessage(
                     content = listOf(ToolCall("call_x", "t", "{}")),
-                    api = model.api, provider = model.provider, model = model.id,
-                    stopReason = StopReason.TOOL_USE,
+                    api = model.api,
+                    provider = model.provider,
+                    model = model.id,
+                    stopReason = StopReason.TOOL_USE
                 ),
-                UserMessage.ofText("interrupt"),
+                UserMessage.ofText("interrupt")
             ),
-            model,
+            model
         )
         val synthetic = transformed.filterIsInstance<ToolResultMessage>().single()
         assertEquals("call_x", synthetic.toolCallId)
@@ -421,13 +466,15 @@ class GoogleSharedConvertMessagesTest {
                 UserMessage.ofText("go"),
                 AssistantMessage(
                     content = listOf(TextContent("partial")),
-                    api = model.api, provider = model.provider, model = model.id,
+                    api = model.api,
+                    provider = model.provider,
+                    model = model.id,
                     stopReason = StopReason.ERROR,
-                    errorMessage = "boom",
+                    errorMessage = "boom"
                 ),
-                UserMessage.ofText("again"),
+                UserMessage.ofText("again")
             ),
-            model,
+            model
         )
         assertEquals(2, transformed.size)
         assertTrue(transformed.none { it is AssistantMessage })
@@ -439,10 +486,14 @@ class GoogleSharedConvertMessagesTest {
         val transformed = transformMessages(
             listOf(
                 UserMessage(
-                    listOf(TextContent("look"), ImageContent("aa", "image/png"), ImageContent("bb", "image/png")),
-                ),
+                    listOf(
+                        TextContent("look"),
+                        ImageContent("aa", "image/png"),
+                        ImageContent("bb", "image/png")
+                    )
+                )
             ),
-            model,
+            model
         )
         val user = transformed.single() as UserMessage
         val texts = user.content.filterIsInstance<TextContent>().map { it.text }
@@ -456,8 +507,8 @@ class GoogleSharedConvertToolsTest {
         name = "bash",
         description = "run",
         parameters = kotlinx.serialization.json.Json.parseToJsonElement(
-            """{"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]}""",
-        ),
+            """{"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]}"""
+        )
     )
 
     @Test
@@ -474,8 +525,8 @@ class GoogleSharedConvertToolsTest {
     fun `legacy parameters strips json schema meta declarations`() {
         val strictTool = tool.copy(
             parameters = kotlinx.serialization.json.Json.parseToJsonElement(
-                """{"${'$'}schema":"https://example.com/schema","type":"object","properties":{"a":{"${'$'}ref":"#/${'$'}defs/a"}},"${'$'}defs":{"a":{"type":"string"}}}""",
-            ),
+                """{"${'$'}schema":"https://example.com/schema","type":"object","properties":{"a":{"${'$'}ref":"#/${'$'}defs/a"}},"${'$'}defs":{"a":{"type":"string"}}}"""
+            )
         )
         val tools = GoogleShared.convertTools(listOf(strictTool), useParameters = true)!!
         val declaration = tools[0].jsonObject["functionDeclarations"]!!.jsonArray[0].jsonObject
@@ -493,9 +544,18 @@ class GoogleSharedConvertToolsTest {
     @Test
     fun `mode resolution ports resolveGoogleFunctionCallingMode`() {
         assertNull(GoogleShared.resolveGoogleFunctionCallingMode(listOf(tool), null, true))
-        assertEquals("NONE", GoogleShared.resolveGoogleFunctionCallingMode(listOf(tool), "none", true))
-        assertEquals("ANY", GoogleShared.resolveGoogleFunctionCallingMode(listOf(tool), "any", true))
-        assertEquals("AUTO", GoogleShared.resolveGoogleFunctionCallingMode(listOf(tool), "auto", true))
+        assertEquals(
+            "NONE",
+            GoogleShared.resolveGoogleFunctionCallingMode(listOf(tool), "none", true)
+        )
+        assertEquals(
+            "ANY",
+            GoogleShared.resolveGoogleFunctionCallingMode(listOf(tool), "any", true)
+        )
+        assertEquals(
+            "AUTO",
+            GoogleShared.resolveGoogleFunctionCallingMode(listOf(tool), "auto", true)
+        )
         assertEquals("AUTO", GoogleShared.mapToolChoice("unknown"))
     }
 
@@ -520,18 +580,21 @@ class GoogleSharedConvertToolsTest {
     fun `uses validated function calling for strict tools on gemini3`() {
         val strictTool = tool.copy(
             constrainedSampling = works.resolve.pathfinder.ai.ConstrainedSamplingConfig.JsonSchema(
-                works.resolve.pathfinder.ai.StrictJsonSchemaMode.REQUIRE,
-            ),
+                works.resolve.pathfinder.ai.StrictJsonSchemaMode.REQUIRE
+            )
         )
 
         assertTrue(GoogleShared.supportsGoogleStrictToolSampling("gemini-3.1-pro-preview"))
         assertTrue(!GoogleShared.supportsGoogleStrictToolSampling("gemini-2.5-pro"))
-        assertEquals("VALIDATED", GoogleShared.resolveGoogleFunctionCallingMode(listOf(strictTool), null, true))
+        assertEquals(
+            "VALIDATED",
+            GoogleShared.resolveGoogleFunctionCallingMode(listOf(strictTool), null, true)
+        )
         val failure = assertFailsWith<ConstrainedSamplingError> {
             GoogleShared.resolveGoogleFunctionCallingMode(listOf(strictTool), null, false)
         }
         assertTrue(
-            failure.message!!.startsWith("Tool \"bash\" requires JSON-schema constrained sampling"),
+            failure.message!!.startsWith("Tool \"bash\" requires JSON-schema constrained sampling")
         )
     }
 
@@ -539,24 +602,32 @@ class GoogleSharedConvertToolsTest {
     fun `convertTools wraps parametersJsonSchema strict for strict tools`() {
         val strictTool = tool.copy(
             constrainedSampling = works.resolve.pathfinder.ai.ConstrainedSamplingConfig.JsonSchema(
-                works.resolve.pathfinder.ai.StrictJsonSchemaMode.PREFER,
-            ),
+                works.resolve.pathfinder.ai.StrictJsonSchemaMode.PREFER
+            )
         )
 
         val plain = GoogleShared.convertTools(listOf(tool))!!
             .let { it[0].jsonObject["functionDeclarations"]!!.jsonArray[0].jsonObject }
         assertEquals(
             tool.parameters,
-            plain["parametersJsonSchema"],
+            plain["parametersJsonSchema"]
         )
 
-        val strict = GoogleShared.convertTools(listOf(strictTool), useParameters = false, supportsStrictMode = true)!!
+        val strict = GoogleShared.convertTools(
+            listOf(strictTool),
+            useParameters = false,
+            supportsStrictMode = true
+        )!!
             .let { it[0].jsonObject["functionDeclarations"]!!.jsonArray[0].jsonObject }
         val parameters = strict["parametersJsonSchema"]!!.jsonObject
         assertEquals(false, parameters["additionalProperties"]!!.jsonPrimitive.content.toBoolean())
         assertEquals("cmd", parameters["required"]!!.jsonArray[0].jsonPrimitive.content)
 
-        val downgraded = GoogleShared.convertTools(listOf(strictTool), useParameters = false, supportsStrictMode = false)!!
+        val downgraded = GoogleShared.convertTools(
+            listOf(strictTool),
+            useParameters = false,
+            supportsStrictMode = false
+        )!!
             .let { it[0].jsonObject["functionDeclarations"]!!.jsonArray[0].jsonObject }
         assertEquals(tool.parameters, downgraded["parametersJsonSchema"])
     }
@@ -565,15 +636,15 @@ class GoogleSharedConvertToolsTest {
     fun `convertTools propagates require rejection for unsupported strict mode`() {
         val strictTool = tool.copy(
             constrainedSampling = works.resolve.pathfinder.ai.ConstrainedSamplingConfig.JsonSchema(
-                works.resolve.pathfinder.ai.StrictJsonSchemaMode.REQUIRE,
-            ),
+                works.resolve.pathfinder.ai.StrictJsonSchemaMode.REQUIRE
+            )
         )
         val failure = assertFailsWith<ConstrainedSamplingError> {
             GoogleShared.convertTools(listOf(strictTool), supportsStrictMode = false)
         }
         assertEquals(
             "Tool \"bash\" requires JSON-schema constrained sampling, but strict tools are unsupported.",
-            failure.message,
+            failure.message
         )
     }
 
@@ -589,40 +660,62 @@ class GoogleSharedConvertToolsTest {
     @Test
     fun `resolveGoogleThinkingLevel ports mappings and errors`() {
         val base = works.resolve.pathfinder.ai.Model(
-            id = "gemini-3.7-flash", name = "", api = "google-generative-ai", provider = "test-google",
-            baseUrl = "https://example.invalid/v1beta", reasoning = true,
+            id = "gemini-3.7-flash",
+            name = "",
+            api = "google-generative-ai",
+            provider = "test-google",
+            baseUrl = "https://example.invalid/v1beta",
+            reasoning = true
         )
         assertEquals(
             GoogleShared.ResolvedGoogleThinkingLevel.HIGH,
-            GoogleShared.resolveGoogleThinkingLevel(base, works.resolve.pathfinder.ai.ModelThinkingLevel.OFF),
+            GoogleShared.resolveGoogleThinkingLevel(
+                base,
+                works.resolve.pathfinder.ai.ModelThinkingLevel.OFF
+            )
         )
         for ((level, mapped) in listOf(
             "MINIMAL" to GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL,
             "LOW" to GoogleShared.ResolvedGoogleThinkingLevel.LOW,
             "MEDIUM" to GoogleShared.ResolvedGoogleThinkingLevel.MEDIUM,
-            "HIGH" to GoogleShared.ResolvedGoogleThinkingLevel.HIGH,
+            "HIGH" to GoogleShared.ResolvedGoogleThinkingLevel.HIGH
         )) {
             val model = base.copy(
                 thinkingLevelMap = works.resolve.pathfinder.ai.ThinkingLevelMap.of(
                     works.resolve.pathfinder.ai.ModelThinkingLevel.HIGH to mapped.name,
-                    works.resolve.pathfinder.ai.ModelThinkingLevel.XHIGH to mapped.name,
-                ),
+                    works.resolve.pathfinder.ai.ModelThinkingLevel.XHIGH to mapped.name
+                )
             )
-            assertEquals(mapped, GoogleShared.resolveGoogleThinkingLevel(model, works.resolve.pathfinder.ai.ModelThinkingLevel.HIGH))
-            assertEquals(mapped, GoogleShared.resolveGoogleThinkingLevel(model, works.resolve.pathfinder.ai.ModelThinkingLevel.XHIGH))
+            assertEquals(
+                mapped,
+                GoogleShared.resolveGoogleThinkingLevel(
+                    model,
+                    works.resolve.pathfinder.ai.ModelThinkingLevel.HIGH
+                )
+            )
+            assertEquals(
+                mapped,
+                GoogleShared.resolveGoogleThinkingLevel(
+                    model,
+                    works.resolve.pathfinder.ai.ModelThinkingLevel.XHIGH
+                )
+            )
         }
 
         val invalid = base.copy(
             thinkingLevelMap = works.resolve.pathfinder.ai.ThinkingLevelMap.of(
-                works.resolve.pathfinder.ai.ModelThinkingLevel.XHIGH to "extreme",
-            ),
+                works.resolve.pathfinder.ai.ModelThinkingLevel.XHIGH to "extreme"
+            )
         )
         val error = assertFailsWith<IllegalStateException> {
-            GoogleShared.resolveGoogleThinkingLevel(invalid, works.resolve.pathfinder.ai.ModelThinkingLevel.XHIGH)
+            GoogleShared.resolveGoogleThinkingLevel(
+                invalid,
+                works.resolve.pathfinder.ai.ModelThinkingLevel.XHIGH
+            )
         }
         assertEquals(
             "Unsupported Google thinking level mapping for test-google/gemini-3.7-flash: xhigh -> extreme",
-            error.message,
+            error.message
         )
     }
 }

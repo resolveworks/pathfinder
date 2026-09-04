@@ -1,13 +1,28 @@
 package works.resolve.pathfinder.ai.api
 
+import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheControlFormat
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.ChatTemplateKwargValue
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ContentType
+import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.DeferredToolsMode
 import works.resolve.pathfinder.ai.DoneSentinel
 import works.resolve.pathfinder.ai.InputModality
@@ -33,12 +48,13 @@ import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolChoice
 import works.resolve.pathfinder.ai.Usage
+import works.resolve.pathfinder.ai.api.resolveCloudflareBaseUrl
+import works.resolve.pathfinder.ai.calculateCost
 import works.resolve.pathfinder.ai.hasHeader
 import works.resolve.pathfinder.ai.headersToRecord
 import works.resolve.pathfinder.ai.mergeHeaders
 import works.resolve.pathfinder.ai.mergeSamplingParams
 import works.resolve.pathfinder.ai.toModelThinkingLevel
-import works.resolve.pathfinder.ai.calculateCost
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
@@ -54,29 +70,13 @@ import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
-import works.resolve.pathfinder.ai.api.resolveCloudflareBaseUrl
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.ai.utils.stringOrNull
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.longOrNull
-import kotlinx.serialization.json.put
 import works.resolve.pathfinder.telemetry.TelemetryContext
-import kotlin.time.Clock
 
 /**
  * OpenRouter structured `reasoning_details`: one of `reasoning.summary`,
@@ -87,8 +87,7 @@ import kotlin.time.Clock
  * `assistantMsg.reasoning_details` on the next request.
  */
 
-private fun isReasoningDetailObject(detail: JsonElement): Boolean =
-    detail is JsonObject
+private fun isReasoningDetailObject(detail: JsonElement): Boolean = detail is JsonObject
 
 private fun hasValidCommonReasoningDetailFields(detail: JsonObject): Boolean {
     val id = detail["id"]
@@ -106,15 +105,23 @@ private fun hasValidCommonReasoningDetailFields(detail: JsonObject): Boolean {
 }
 
 internal fun isOpenAiReasoningDetail(detail: JsonElement): Boolean {
-    if (!isReasoningDetailObject(detail) || !hasValidCommonReasoningDetailFields(detail as JsonObject)) {
+    if (!isReasoningDetailObject(detail) ||
+        !hasValidCommonReasoningDetailFields(detail as JsonObject)
+    ) {
         return false
     }
     return when (detail.string("type")) {
         "reasoning.summary" -> detail.string("summary") != null
+
         "reasoning.encrypted" -> detail.string("data") != null
+
         "reasoning.text" ->
             detail.string("text") != null &&
-                (detail["signature"] == null || detail["signature"] is JsonNull || detail.string("signature") != null)
+                (
+                    detail["signature"] == null || detail["signature"] is JsonNull ||
+                        detail.string("signature") != null
+                    )
+
         else -> false
     }
 }
@@ -149,7 +156,11 @@ internal fun parseLegacyEncryptedReasoningDetail(signature: String?): JsonObject
 }
 
 /** JS `??=` semantics: a present-but-null value counts as missing. */
-private fun fillMissing(target: MutableMap<String, JsonElement>, key: String, source: Map<String, JsonElement>) {
+private fun fillMissing(
+    target: MutableMap<String, JsonElement>,
+    key: String,
+    source: Map<String, JsonElement>
+) {
     val current = target[key]
     if ((target.containsKey(key) && current !is JsonNull)) return
     val value = source[key]
@@ -158,7 +169,7 @@ private fun fillMissing(target: MutableMap<String, JsonElement>, key: String, so
 
 private fun fillMissingCommonReasoningDetailFields(
     target: MutableMap<String, JsonElement>,
-    source: Map<String, JsonElement>,
+    source: Map<String, JsonElement>
 ) {
     fillMissing(target, "id", source)
     // `||=`: also replaces an empty string.
@@ -172,7 +183,7 @@ private fun fillMissingCommonReasoningDetailFields(
 
 internal fun appendOpenAIReasoningDetail(
     details: MutableList<MutableMap<String, JsonElement>>,
-    detail: Map<String, JsonElement>,
+    detail: Map<String, JsonElement>
 ) {
     val lastDetail = details.lastOrNull()
     // Reads go through JsonObject views of the mutable maps (shared strict surface).
@@ -186,7 +197,9 @@ internal fun appendOpenAIReasoningDetail(
         fillMissingCommonReasoningDetailFields(lastDetail, detail)
         return
     }
-    if (view.string("type") == "reasoning.summary" && lastView?.string("type") == "reasoning.summary") {
+    if (view.string("type") == "reasoning.summary" &&
+        lastView?.string("type") == "reasoning.summary"
+    ) {
         lastDetail!!["summary"] =
             JsonPrimitive(lastView.string("summary")!! + view.string("summary")!!)
         fillMissingCommonReasoningDetailFields(lastDetail, detail)
@@ -238,7 +251,7 @@ data class OpenAiCompletionsOptions(
      * Dormant: carried for shape fidelity, preserved through the streamSimple
      * conversion. Presence boolean only in toString().
      */
-    val telemetryContext: TelemetryContext? = null,
+    val telemetryContext: TelemetryContext? = null
 ) {
     override fun toString(): String = optionsToString(
         "OpenAiCompletionsOptions",
@@ -257,7 +270,7 @@ data class OpenAiCompletionsOptions(
         "onPayload" to (onPayload != null),
         "onResponse" to (onResponse != null),
         "samplingParams" to samplingParams?.keys,
-        "telemetryContext" to (telemetryContext != null),
+        "telemetryContext" to (telemetryContext != null)
     )
 }
 
@@ -272,13 +285,13 @@ data class OpenAiCompletionsOptions(
 class OpenAiCompletionsApi(
     private val transport: works.resolve.pathfinder.ai.transport.HttpStreamingTransport,
     private val retry: ProviderRetry = ProviderRetry(),
-    private val clock: Clock = Clock.System,
+    private val clock: Clock = Clock.System
 ) : ChatApi {
 
     override fun streamSimple(
         model: Model,
         context: Context,
-        options: SimpleStreamOptions,
+        options: SimpleStreamOptions
     ): Flow<AssistantMessageEvent> {
         val clamped = options.reasoning?.let {
             works.resolve.pathfinder.ai.clampThinkingLevel(model, it.toModelThinkingLevel())
@@ -287,20 +300,20 @@ class OpenAiCompletionsApi(
         val maxTokens = works.resolve.pathfinder.ai.utils.clampMaxTokensToContext(
             model,
             context,
-            options.maxTokens ?: model.maxTokens,
+            options.maxTokens ?: model.maxTokens
         )
         return stream(
             model,
             context,
             options.toStreamOptions(effort)
-                .copy(maxTokens = maxTokens, samplingParams = mergeSamplingParams(model, options)),
+                .copy(maxTokens = maxTokens, samplingParams = mergeSamplingParams(model, options))
         )
     }
 
     fun stream(
         model: Model,
         context: Context,
-        options: OpenAiCompletionsOptions,
+        options: OpenAiCompletionsOptions
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = clock.now().toEpochMilliseconds()
         val state = StreamingState(model, startedAtMs)
@@ -310,9 +323,13 @@ class OpenAiCompletionsApi(
             val hasAuthHeader = hasHeader(options.headers, "authorization") ||
                 hasHeader(options.headers, "cf-aig-authorization")
             val apiKey = options.apiKey
-                ?: if (hasAuthHeader) null else throw ProviderAuthException(
-                    "No API key for provider: ${model.provider}",
-                )
+                ?: if (hasAuthHeader) {
+                    null
+                } else {
+                    throw ProviderAuthException(
+                        "No API key for provider: ${model.provider}"
+                    )
+                }
 
             var params = OpenAiCompletionsPayload.buildRequestBody(model, context, options)
             options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
@@ -324,7 +341,7 @@ class OpenAiCompletionsApi(
             // overridden by request headers.
             val cacheRetention = OpenAiResponsesApi.resolveCacheRetention(
                 options.cacheRetention,
-                options.env,
+                options.env
             )
             val cacheSessionId =
                 if (cacheRetention == CacheRetention.NONE) null else options.sessionId
@@ -333,13 +350,13 @@ class OpenAiCompletionsApi(
                     mergeHeaders(
                         mergeHeaders(
                             mergeHeaders(mapOf("User-Agent" to getPiUserAgent()), model.headers),
-                            copilotDynamicHeadersFor(model, context),
+                            copilotDynamicHeadersFor(model, context)
                         ),
-                        sessionAffinityHeaders(model, cacheSessionId),
+                        sessionAffinityHeaders(model, cacheSessionId)
                     ),
-                    options.headers,
+                    options.headers
                 ),
-                mapOf("Accept" to "text/event-stream"),
+                mapOf("Accept" to "text/event-stream")
             ).filterValues { it != null }.mapValues { it.value!! }
             val url = resolveCloudflareBaseUrl(model.baseUrl, options.env)
                 .trimEnd('/') + "/chat/completions"
@@ -348,18 +365,24 @@ class OpenAiCompletionsApi(
                 bearerToken = apiKey,
                 headers = mergedHeaders,
                 body = body,
-                timeoutMs = options.timeoutMs,
+                timeoutMs = options.timeoutMs
             )
 
             // Retries only cover failures before SSE content begins; once the
             // response starts the request is never retried.
-            val response = retry.retryProviderRequest<TransportResponse>(options.maxRetries, options.maxRetryDelayMs) {
+            val response = retry.retryProviderRequest<TransportResponse>(
+                options.maxRetries,
+                options.maxRetryDelayMs
+            ) {
                 transport.post(request)
             }
 
             // Only runs for 2xx: the transport throws ProviderHttpException
             // on non-2xx before reaching this point.
-            options.onResponse?.invoke(ProviderResponse(response.status, headersToRecord(response.headers)), model)
+            options.onResponse?.invoke(
+                ProviderResponse(response.status, headersToRecord(response.headers)),
+                model
+            )
 
             emitAll(state.start())
 
@@ -380,7 +403,7 @@ class OpenAiCompletionsApi(
             }
             if (state.stopReason == StopReason.ERROR) {
                 throw ProviderStreamException(
-                    state.errorMessage ?: "Provider returned an error stop reason",
+                    state.errorMessage ?: "Provider returned an error stop reason"
                 )
             }
             if ((model.compat.supportsFinishReason && !state.hasFinishReason) ||
@@ -397,7 +420,7 @@ class OpenAiCompletionsApi(
             state.applyStreamedReasoningDetails()
             val finalMessage = state.snapshot().copy(
                 stopReason = StopReason.ERROR,
-                errorMessage = formatProviderError(error),
+                errorMessage = formatProviderError(error)
             )
             emit(AssistantMessageEvent.Error(finalMessage.stopReason, finalMessage))
         }
@@ -407,7 +430,7 @@ class OpenAiCompletionsApi(
     private fun processSseEvent(
         event: SseEvent,
         model: Model,
-        state: StreamingState,
+        state: StreamingState
     ): List<AssistantMessageEvent>? {
         if (event.data.trim() == DONE) {
             state.markDone()
@@ -417,7 +440,7 @@ class OpenAiCompletionsApi(
             lenientJson.parseToJsonElement(event.data)
         } catch (error: Exception) {
             throw ProviderStreamException(
-                "Malformed SSE JSON payload: ${error.message ?: error::class.simpleName}",
+                "Malformed SSE JSON payload: ${error.message ?: error::class.simpleName}"
             )
         }
         if (chunk !is JsonObject) {
@@ -453,17 +476,20 @@ class OpenAiCompletionsApi(
             .str("finish_reason")
             ?.takeIf { it.isNotEmpty() }
             ?.let { raw ->
-            state.rawStopReason = raw
-            val (stopReason, errorMessage) = mapStopReason(raw)
-            state.stopReason = stopReason
-            if (errorMessage != null) state.errorMessage = errorMessage
-            state.hasFinishReason = true
-        }
+                state.rawStopReason = raw
+                val (stopReason, errorMessage) = mapStopReason(raw)
+                state.stopReason = stopReason
+                if (errorMessage != null) state.errorMessage = errorMessage
+                state.hasFinishReason = true
+            }
 
         val delta = choice.obj("delta") ?: return emptyList()
 
         val events = mutableListOf<AssistantMessageEvent>()
-        delta["content"].strOrNull()?.takeIf { it.isNotEmpty() }?.let { events += state.appendText(it) }
+        delta["content"].strOrNull()?.takeIf { it.isNotEmpty() }?.let {
+            events +=
+                state.appendText(it)
+        }
 
         // Reasoning arrives in reasoning_content (llama.cpp-style), reasoning,
         // or reasoning_text; the first non-empty field wins so duplicated
@@ -474,7 +500,13 @@ class OpenAiCompletionsApi(
             val value = delta[field].strOrNull()
             if (!value.isNullOrEmpty()) {
                 val thinkingSignature =
-                    if (model.provider == "opencode-go" && field == "reasoning") "reasoning_content" else field
+                    if (model.provider == "opencode-go" &&
+                        field == "reasoning"
+                    ) {
+                        "reasoning_content"
+                    } else {
+                        field
+                    }
                 events += state.appendThinking(value, thinkingSignature)
                 break
             }
@@ -515,7 +547,7 @@ class OpenAiCompletionsApi(
             cacheRead = cacheReadTokens,
             cacheWrite = cacheWriteTokens,
             reasoning = reasoningTokens,
-            totalTokens = input + outputTokens + cacheReadTokens + cacheWriteTokens,
+            totalTokens = input + outputTokens + cacheReadTokens + cacheWriteTokens
         )
         return usage.copy(cost = calculateCost(model, usage))
     }
@@ -539,8 +571,10 @@ class OpenAiCompletionsApi(
                 if (!contains(raw)) append("\n").append(raw)
             }
         }
+
         // pi's safeJsonStringify fallback for non-Error throws is moot in Kotlin.
         is ProviderStreamException -> error.message ?: "Provider stream error"
+
         else -> error.message ?: error::class.simpleName ?: "Unknown error"
     }
 
@@ -551,7 +585,7 @@ class OpenAiCompletionsApi(
         return listOfNotNull(
             type,
             message ?: error.toString().take(500).ifEmpty { null },
-            code?.let { "code: $it" },
+            code?.let { "code: $it" }
         ).joinToString(" — ")
     }
 
@@ -575,6 +609,7 @@ private fun sessionAffinityHeaders(model: Model, cacheSessionId: String?): Map<S
         ?: detectSessionAffinityFormat(model)
     return when (format) {
         SessionAffinityFormat.OPENROUTER -> mapOf("x-session-id" to cacheSessionId)
+
         SessionAffinityFormat.OPENAI, SessionAffinityFormat.OPENAI_NOSESSION -> buildMap {
             if (format == SessionAffinityFormat.OPENAI) put("session_id", cacheSessionId)
             put("x-client-request-id", cacheSessionId)
@@ -584,7 +619,7 @@ private fun sessionAffinityHeaders(model: Model, cacheSessionId: String?): Map<S
 }
 
 private suspend fun kotlinx.coroutines.flow.FlowCollector<AssistantMessageEvent>.emitAll(
-    events: List<AssistantMessageEvent>,
+    events: List<AssistantMessageEvent>
 ) {
     for (event in events) emit(event)
 }
@@ -680,7 +715,9 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     fun appendReasoningDetail(detail: MutableMap<String, JsonElement>) {
         ensureThinkingBlock("")
         val details = streamedReasoningDetails
-            ?: mutableListOf<MutableMap<String, JsonElement>>().also { streamedReasoningDetails = it }
+            ?: mutableListOf<MutableMap<String, JsonElement>>().also {
+                streamedReasoningDetails = it
+            }
         appendOpenAIReasoningDetail(details, detail)
     }
 
@@ -726,18 +763,23 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         return blocks.mapIndexed { index, block ->
             when (block) {
                 Block.Text -> AssistantMessageEvent.TextEnd(index, text, snapshot())
+
                 Block.Thinking -> AssistantMessageEvent.ThinkingEnd(index, thinking, snapshot())
-                is Block.Tool -> AssistantMessageEvent.ToolCallEnd(index, toolCallOf(block.accumulator), snapshot())
+
+                is Block.Tool -> AssistantMessageEvent.ToolCallEnd(
+                    index,
+                    toolCallOf(block.accumulator),
+                    snapshot()
+                )
             }
         }
     }
 
-    private fun toolCallOf(accumulator: ToolCallAccumulator): ToolCall =
-        ToolCall(
-            id = accumulator.id,
-            name = accumulator.name,
-            arguments = accumulator.arguments.toString(),
-        )
+    private fun toolCallOf(accumulator: ToolCallAccumulator): ToolCall = ToolCall(
+        id = accumulator.id,
+        name = accumulator.name,
+        arguments = accumulator.arguments.toString()
+    )
 
     fun snapshot(): AssistantMessage = AssistantMessage(
         content = blocks.map { block ->
@@ -756,7 +798,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         rawStopReason = rawStopReason,
         responseId = responseId,
         responseModel = responseModel,
-        timestamp = timestampMs,
+        timestamp = timestampMs
     )
 }
 
@@ -772,8 +814,8 @@ object OpenAiCompletionsPayload {
         compat: OpenAiCompletionsCompat = model.compat,
         cacheRetention: CacheRetention = OpenAiResponsesApi.resolveCacheRetention(
             options.cacheRetention,
-            options.env,
-        ),
+            options.env
+        )
     ): JsonObject {
         val body = mutableMapOf<String, JsonElement>()
         body["model"] = JsonPrimitive(model.id)
@@ -813,7 +855,13 @@ object OpenAiCompletionsPayload {
             // deferredToolsMode "kimi": tools already loaded via the bare-tools
             // system message are excluded from the standard tools param.
             val deferredToolNames =
-                if (compat.deferredToolsMode == DeferredToolsMode.KIMI) getDeferredToolNames(context.messages) else emptySet()
+                if (compat.deferredToolsMode ==
+                    DeferredToolsMode.KIMI
+                ) {
+                    getDeferredToolNames(context.messages)
+                } else {
+                    emptySet()
+                }
             val activeTools = context.tools.filter { it.name !in deferredToolNames }
             if (activeTools.isNotEmpty()) {
                 activeTools.map { convertTool(it, compat) }.toMutableList().also {
@@ -852,9 +900,13 @@ object OpenAiCompletionsPayload {
 
     private fun mapToolChoice(choice: ToolChoice?): JsonElement? = when (choice) {
         null -> null
+
         ToolChoice.Auto -> JsonPrimitive("auto")
+
         ToolChoice.None -> JsonPrimitive("none")
+
         ToolChoice.Any, ToolChoice.Required -> JsonPrimitive("required")
+
         is ToolChoice.Function -> buildJsonObject {
             put("type", "function")
             put("function", buildJsonObject { put("name", choice.name) })
@@ -864,7 +916,7 @@ object OpenAiCompletionsPayload {
     private fun applyThinking(
         model: Model,
         options: OpenAiCompletionsOptions,
-        compat: OpenAiCompletionsCompat,
+        compat: OpenAiCompletionsCompat
     ): Map<String, JsonElement>? {
         if (!model.reasoning) return null
         // Direct OFF never enables reasoning; it is equivalent to no effort.
@@ -915,7 +967,10 @@ object OpenAiCompletionsPayload {
             }
 
             ThinkingFormat.QWEN -> {
-                val params = mutableListOf<Pair<String, JsonElement>>("enable_thinking" to JsonPrimitive(effort != null))
+                val params =
+                    mutableListOf<Pair<String, JsonElement>>(
+                        "enable_thinking" to JsonPrimitive(effort != null)
+                    )
                 if (effort != null && compat.supportsReasoningEffort) {
                     effortParam()?.let { params.add(it) }
                 }
@@ -953,7 +1008,7 @@ object OpenAiCompletionsPayload {
 
             ThinkingFormat.TOGETHER -> {
                 val params = mutableListOf<Pair<String, JsonElement>>(
-                    "reasoning" to buildJsonObject { put("enabled", effort != null) },
+                    "reasoning" to buildJsonObject { put("enabled", effort != null) }
                 )
                 if (effort != null && compat.supportsReasoningEffort) {
                     effortParam()?.let { params.add(it) }
@@ -1005,15 +1060,19 @@ object OpenAiCompletionsPayload {
     private fun buildChatTemplateValues(
         compat: OpenAiCompletionsCompat,
         effort: ModelThinkingLevel?,
-        map: ThinkingLevelMap?,
+        map: ThinkingLevelMap?
     ): JsonObject? {
         fun resolve(value: ChatTemplateKwargValue): JsonElement? = when (value) {
             is ChatTemplateKwargValue.Scalar -> value.value
+
             is ChatTemplateKwargValue.Ref -> {
                 if (effort == null && value.omitWhenOff) return@resolve null
                 when (value.varName) {
                     "thinking.enabled" -> JsonPrimitive(effort != null)
-                    "thinking.budget" -> null // thinking budgets unsupported here
+
+                    "thinking.budget" -> null
+
+                    // thinking budgets unsupported here
                     "thinking.effort" -> {
                         if (effort != null) {
                             // Explicit null mapping omits; unspecified falls back to the level name.
@@ -1030,6 +1089,7 @@ object OpenAiCompletionsPayload {
                                 ?.let { JsonPrimitive(it) as JsonElement }
                         }
                     }
+
                     else -> null
                 }
             }
@@ -1050,12 +1110,20 @@ object OpenAiCompletionsPayload {
 
     internal fun getCompatCacheControl(
         compat: OpenAiCompletionsCompat,
-        cacheRetention: CacheRetention,
+        cacheRetention: CacheRetention
     ): OpenAiCompatCacheControl? {
-        if (compat.cacheControlFormat != CacheControlFormat.ANTHROPIC || cacheRetention == CacheRetention.NONE) {
+        if (compat.cacheControlFormat != CacheControlFormat.ANTHROPIC ||
+            cacheRetention == CacheRetention.NONE
+        ) {
             return null
         }
-        val ttl = if (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention) "1h" else null
+        val ttl = if (cacheRetention == CacheRetention.LONG &&
+            compat.supportsLongCacheRetention
+        ) {
+            "1h"
+        } else {
+            null
+        }
         return OpenAiCompatCacheControl(type = "ephemeral", ttl = ttl)
     }
 
@@ -1066,7 +1134,7 @@ object OpenAiCompletionsPayload {
     internal fun applyAnthropicCacheControl(
         messages: MutableList<JsonObject>,
         tools: MutableList<JsonObject>?,
-        cacheControl: OpenAiCompatCacheControl,
+        cacheControl: OpenAiCompatCacheControl
     ) {
         addCacheControlToSystemPrompt(messages, cacheControl)
         addCacheControlToLastTool(tools, cacheControl)
@@ -1076,7 +1144,7 @@ object OpenAiCompletionsPayload {
     /** Only the first system/developer message is considered; no fallback when it has no markable text. */
     private fun addCacheControlToSystemPrompt(
         messages: MutableList<JsonObject>,
-        cacheControl: OpenAiCompatCacheControl,
+        cacheControl: OpenAiCompatCacheControl
     ) {
         val index = messages.indexOfFirst { message ->
             message.str("role") == "system" || message.str("role") == "developer"
@@ -1088,7 +1156,7 @@ object OpenAiCompletionsPayload {
 
     private fun addCacheControlToLastConversationMessage(
         messages: MutableList<JsonObject>,
-        cacheControl: OpenAiCompatCacheControl,
+        cacheControl: OpenAiCompatCacheControl
     ) {
         for (i in messages.indices.reversed()) {
             val role = messages[i].str("role")
@@ -1100,9 +1168,13 @@ object OpenAiCompletionsPayload {
         }
     }
 
-    private fun addCacheControlToLastTool(tools: MutableList<JsonObject>?, cacheControl: OpenAiCompatCacheControl) {
+    private fun addCacheControlToLastTool(
+        tools: MutableList<JsonObject>?,
+        cacheControl: OpenAiCompatCacheControl
+    ) {
         if (tools.isNullOrEmpty()) return
-        tools[tools.size - 1] = JsonObject(tools.last() + ("cache_control" to cacheControl.toJson()))
+        tools[tools.size - 1] =
+            JsonObject(tools.last() + ("cache_control" to cacheControl.toJson()))
     }
 
     /**
@@ -1113,7 +1185,7 @@ object OpenAiCompletionsPayload {
     private fun addCacheControlToTextContent(
         messages: MutableList<JsonObject>,
         index: Int,
-        cacheControl: OpenAiCompatCacheControl,
+        cacheControl: OpenAiCompatCacheControl
     ): Boolean {
         val message = messages[index]
         return when (val content = message["content"] ?: return false) {
@@ -1128,10 +1200,10 @@ object OpenAiCompletionsPayload {
                                     put("type", "text")
                                     put("text", text)
                                     put("cache_control", cacheControl.toJson())
-                                },
-                            ),
+                                }
+                            )
                         )
-                        ),
+                        )
                 )
                 true
             }
@@ -1157,21 +1229,30 @@ object OpenAiCompletionsPayload {
     fun convertMessages(
         model: Model,
         context: Context,
-        compat: OpenAiCompletionsCompat = model.compat,
+        compat: OpenAiCompletionsCompat = model.compat
     ): List<JsonObject> {
         val params = mutableListOf<JsonObject>()
 
         if (!context.systemPrompt.isNullOrEmpty()) {
-            val role = if (model.reasoning && compat.supportsDeveloperRole) "developer" else "system"
+            val role = if (model.reasoning &&
+                compat.supportsDeveloperRole
+            ) {
+                "developer"
+            } else {
+                "system"
+            }
             params.add(
                 buildJsonObject {
                     put("role", role)
                     put("content", sanitizeSurrogates(context.systemPrompt))
-                },
+                }
             )
         }
 
-        val messages = transformMessages(context.messages, model) { id, _ -> normalizeToolCallId(id, model.provider) }
+        val messages =
+            transformMessages(context.messages, model) { id, _ ->
+                normalizeToolCallId(id, model.provider)
+            }
         val deferredToolNames = mutableSetOf<String>()
         var i = 0
         while (i < messages.size) {
@@ -1182,7 +1263,11 @@ object OpenAiCompletionsPayload {
                         ?.let { params.add(it) }
 
                 MessageRole.ASSISTANT ->
-                    convertAssistantMessage(model, msg as works.resolve.pathfinder.ai.AssistantMessage, compat)
+                    convertAssistantMessage(
+                        model,
+                        msg as works.resolve.pathfinder.ai.AssistantMessage,
+                        compat
+                    )
                         ?.let { params.add(it) }
 
                 MessageRole.TOOL_RESULT -> {
@@ -1193,7 +1278,9 @@ object OpenAiCompletionsPayload {
                         val toolMsg = messages[j] as works.resolve.pathfinder.ai.ToolResultMessage
                         val textResult = toolMsg.content
                             .filter { it.type == ContentType.TEXT }
-                            .joinToString("\n") { (it as works.resolve.pathfinder.ai.TextContent).text }
+                            .joinToString("\n") {
+                                (it as works.resolve.pathfinder.ai.TextContent).text
+                            }
                         val hasImages = toolMsg.content.any { it.type == ContentType.IMAGE }
                         val toolResultText = when {
                             textResult.isNotEmpty() -> textResult
@@ -1203,7 +1290,7 @@ object OpenAiCompletionsPayload {
                         val toolMessage = mutableMapOf<String, JsonElement>(
                             "role" to JsonPrimitive("tool"),
                             "content" to JsonPrimitive(sanitizeSurrogates(toolResultText)),
-                            "tool_call_id" to JsonPrimitive(toolMsg.toolCallId),
+                            "tool_call_id" to JsonPrimitive(toolMsg.toolCallId)
                         )
                         if (compat.requiresToolResultName && toolMsg.toolName.isNotEmpty()) {
                             toolMessage["name"] = JsonPrimitive(toolMsg.toolName)
@@ -1231,11 +1318,16 @@ object OpenAiCompletionsPayload {
                                 put(
                                     "content",
                                     buildJsonArray {
-                                        add(buildJsonObject { put("type", "text"); put("text", "Attached image(s) from tool result:") })
+                                        add(
+                                            buildJsonObject {
+                                                put("type", "text")
+                                                put("text", "Attached image(s) from tool result:")
+                                            }
+                                        )
                                         imageParts.forEach { add(it) }
-                                    },
+                                    }
                                 )
-                            },
+                            }
                         )
                     }
                     if (deferredToolNames.isNotEmpty()) {
@@ -1246,8 +1338,15 @@ object OpenAiCompletionsPayload {
                             params.add(
                                 buildJsonObject {
                                     put("role", "system")
-                                    put("tools", JsonArray(deferredTools.map { convertTool(it, compat) }))
-                                },
+                                    put(
+                                        "tools",
+                                        JsonArray(
+                                            deferredTools.map {
+                                                convertTool(it, compat)
+                                            }
+                                        )
+                                    )
+                                }
                             )
                         }
                     }
@@ -1266,29 +1365,29 @@ object OpenAiCompletionsPayload {
      * OpenAI limit) are truncated with a hash suffix. Plain ids are truncated
      * to 40 chars only for provider "openai".
      */
-private fun normalizeToolCallId(id: String, provider: String): String {
-    if ("|" in id) {
-        val separatorIndex = id.indexOf("|")
-        val callId = id.substring(0, separatorIndex).replace(Regex("[^a-zA-Z0-9_-]"), "_")
-        val itemId = id.substring(separatorIndex + 1).replace(Regex("[^a-zA-Z0-9_-]"), "_")
-        val combinedId = if (itemId.isNotEmpty()) "${callId}_${itemId}" else callId
-        if (combinedId.length <= 40) return combinedId
-        val hash = shortHash(id).take(8)
-        val prefix = callId.take(maxOf(1, 40 - hash.length - 1))
-        return "${prefix}_${hash}"
+    private fun normalizeToolCallId(id: String, provider: String): String {
+        if ("|" in id) {
+            val separatorIndex = id.indexOf("|")
+            val callId = id.substring(0, separatorIndex).replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            val itemId = id.substring(separatorIndex + 1).replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            val combinedId = if (itemId.isNotEmpty()) "${callId}_$itemId" else callId
+            if (combinedId.length <= 40) return combinedId
+            val hash = shortHash(id).take(8)
+            val prefix = callId.take(maxOf(1, 40 - hash.length - 1))
+            return "${prefix}_$hash"
+        }
+
+        if (provider == "openai") return if (id.length > 40) id.take(40) else id
+        return id
     }
 
-    if (provider == "openai") return if (id.length > 40) id.take(40) else id
-    return id
-}
-
-private fun convertUserMessage(msg: works.resolve.pathfinder.ai.UserMessage): JsonObject? {
+    private fun convertUserMessage(msg: works.resolve.pathfinder.ai.UserMessage): JsonObject? {
         if (msg.content.isEmpty()) return null
         return buildJsonObject {
             put("role", "user")
             val text = sanitizeSurrogates(
                 msg.content.filter { it.type == ContentType.TEXT }
-                    .joinToString("") { (it as works.resolve.pathfinder.ai.TextContent).text },
+                    .joinToString("") { (it as works.resolve.pathfinder.ai.TextContent).text }
             )
             val images = msg.content.filter { it.type == ContentType.IMAGE }
             if (images.isEmpty()) {
@@ -1298,10 +1397,17 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.UserMessage): Js
                     "content",
                     buildJsonArray {
                         if (text.isNotEmpty()) {
-                            add(buildJsonObject { put("type", "text"); put("text", text) })
+                            add(
+                                buildJsonObject {
+                                    put("type", "text")
+                                    put("text", text)
+                                }
+                            )
                         }
-                        images.forEach { add(imagePart(it as works.resolve.pathfinder.ai.ImageContent)) }
-                    },
+                        images.forEach {
+                            add(imagePart(it as works.resolve.pathfinder.ai.ImageContent))
+                        }
+                    }
                 )
             }
         }
@@ -1310,14 +1416,19 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.UserMessage): Js
     private fun imagePart(image: works.resolve.pathfinder.ai.ImageContent): JsonObject =
         buildJsonObject {
             put("type", "image_url")
-            put("image_url", buildJsonObject { put("url", "data:${image.mimeType};base64,${image.data}") })
+            put(
+                "image_url",
+                buildJsonObject {
+                    put("url", "data:${image.mimeType};base64,${image.data}")
+                }
+            )
         }
 
     /** Returns null for assistant messages with no content and no tool calls. */
     private fun convertAssistantMessage(
         model: Model,
         msg: works.resolve.pathfinder.ai.AssistantMessage,
-        compat: OpenAiCompletionsCompat,
+        compat: OpenAiCompletionsCompat
     ): JsonObject? {
         val assistant = mutableMapOf<String, JsonElement>()
 
@@ -1325,7 +1436,7 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.UserMessage): Js
             msg.content.filter { it.type == ContentType.TEXT }
                 .map { (it as works.resolve.pathfinder.ai.TextContent).text }
                 .filter { it.isNotBlank() }
-                .joinToString(""),
+                .joinToString("")
         )
 
         val thinkingBlocks = msg.content.filter { it.type == ContentType.THINKING }
@@ -1345,10 +1456,23 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.UserMessage): Js
                 ?: legacyReasoningDetails.takeIf { it.isNotEmpty() }?.let { JsonArray(it) }
 
         if (compat.requiresThinkingAsText && nonEmptyThinking.isNotEmpty()) {
-            val thinkingText = sanitizeSurrogates(nonEmptyThinking.joinToString("\n\n") { it.thinking })
+            val thinkingText =
+                sanitizeSurrogates(nonEmptyThinking.joinToString("\n\n") { it.thinking })
             val parts = buildJsonArray {
-                add(buildJsonObject { put("type", "text"); put("text", thinkingText) })
-                if (text.isNotEmpty()) add(buildJsonObject { put("type", "text"); put("text", text) })
+                add(
+                    buildJsonObject {
+                        put("type", "text")
+                        put("text", thinkingText)
+                    }
+                )
+                if (text.isNotEmpty()) {
+                    add(
+                        buildJsonObject {
+                            put("type", "text")
+                            put("text", text)
+                        }
+                    )
+                }
             }
             assistant["content"] = parts
         } else if (text.isNotEmpty()) {
@@ -1374,7 +1498,8 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.UserMessage): Js
             if (signature != null && signature in REASONING_FIELDS) {
                 // Replayed unsanitized, for exact parity with pi; only
                 // requiresThinkingAsText output is sanitized.
-                assistant[signature] = JsonPrimitive(nonEmptyThinking.joinToString("\n") { it.thinking })
+                assistant[signature] =
+                    JsonPrimitive(nonEmptyThinking.joinToString("\n") { it.thinking })
             }
         }
 
@@ -1389,10 +1514,10 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.UserMessage): Js
                             buildJsonObject {
                                 put("name", call.name)
                                 put("arguments", call.arguments)
-                            },
+                            }
                         )
                     }
-                },
+                }
             )
         }
 
@@ -1434,14 +1559,15 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.UserMessage): Js
                     put("parameters", getJsonSchemaToolParameters(tool, strict))
                     // Some providers reject unknown fields.
                     if (compat.supportsStrictMode) put("strict", strict ?: false)
-                },
+                }
             )
         }
     }
 
-    private fun getDeferredToolNames(messages: List<Message>): Set<String> =
-        messages.flatMap { (it as? works.resolve.pathfinder.ai.ToolResultMessage)?.addedToolNames.orEmpty() }
-            .toSet()
+    private fun getDeferredToolNames(messages: List<Message>): Set<String> = messages.flatMap {
+        (it as? works.resolve.pathfinder.ai.ToolResultMessage)?.addedToolNames.orEmpty()
+    }
+        .toSet()
 
     private fun getToolsByName(tools: List<Tool>, names: Collection<String>): List<Tool> {
         val byName = tools.associateBy { it.name }
@@ -1450,6 +1576,10 @@ private fun convertUserMessage(msg: works.resolve.pathfinder.ai.UserMessage): Js
 
     private fun hasToolHistory(messages: List<Message>): Boolean = messages.any { msg ->
         msg.role == MessageRole.TOOL_RESULT ||
-            (msg as? works.resolve.pathfinder.ai.AssistantMessage)?.content?.any { it.type == ContentType.TOOL_CALL } == true
+            (msg as? works.resolve.pathfinder.ai.AssistantMessage)?.content?.any {
+                it.type ==
+                    ContentType.TOOL_CALL
+            } ==
+            true
     }
 }

@@ -1,26 +1,23 @@
 package works.resolve.pathfinder.codingagent.core.session
 
-import works.resolve.pathfinder.agent.*
-
-import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.testing.FakeClock
 import kotlin.test.assertFailsWith
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.testing.FakeClock
 
 class ConversationTest {
 
     private var nextId = 0
 
-    private fun newConversation(): Conversation =
-        Conversation(
-            entries = emptyList(),
-            leafId = null,
-            idGenerator = { "e${nextId++}" },
-            clock = FakeClock(),
-        )
+    private fun newConversation(): Conversation = Conversation(
+        entries = emptyList(),
+        leafId = null,
+        idGenerator = { "e${nextId++}" },
+        clock = FakeClock()
+    )
 
     private fun msg(text: String) = UserMessage.ofText(text)
 
@@ -98,7 +95,12 @@ class ConversationTest {
         val middle = MessageEntry("middle", 0L, "root", 20L, msg("m"))
         val c = Conversation(listOf(young, middle, root, old), "young")
 
-        assertEquals(listOf("old", "middle", "young"), c.tree().single().children.map { it.entry.id })
+        assertEquals(
+            listOf("old", "middle", "young"),
+            c.tree().single().children.map {
+                it.entry.id
+            }
+        )
     }
 
     @Test
@@ -132,9 +134,10 @@ class ConversationTest {
     fun deepLinearConversationDoesNotOverflowStack() {
         var next = 0
         var conversation = Conversation(
-            emptyList(), null,
+            emptyList(),
+            null,
             idGenerator = { "d${next++}" },
-            clock = FakeClock(),
+            clock = FakeClock()
         )
         repeat(20_000) { conversation = conversation.append(msg("m$it")) }
 
@@ -174,9 +177,18 @@ class ConversationTest {
             api = "openai-completions",
             provider = "zai",
             model = "glm-4.6",
-            usage = works.resolve.pathfinder.ai.Usage(0, 0, 0, 0, 0, 0, 0, works.resolve.pathfinder.ai.Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
+            usage = works.resolve.pathfinder.ai.Usage(
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                works.resolve.pathfinder.ai.Cost(0.0, 0.0, 0.0, 0.0, 0.0)
+            ),
             stopReason = works.resolve.pathfinder.ai.StopReason.STOP,
-            timestamp = 0L,
+            timestamp = 0L
         )
 
         var conversation = c
@@ -184,8 +196,9 @@ class ConversationTest {
             .append(msg("hello"))
             .appendModelChange("zai", "glm-5.3")
             .appendThinkingLevelChange("high")
-        conversation = Conversation(conversation.entries, conversation.leafId, { "assistant" }, FakeClock())
-            .append(assistant)
+        conversation =
+            Conversation(conversation.entries, conversation.leafId, { "assistant" }, FakeClock())
+                .append(assistant)
 
         val folded = conversation.effectiveConfiguration()
         assertEquals("zai" to "glm-4.6", folded.model!!.provider to folded.model!!.modelId)
@@ -209,11 +222,14 @@ class ConversationTest {
             id = "tools-${entries.size}",
             parentId = leafId,
             timestamp = entries.size.toLong(),
-            activeToolNames = listOf("read"),
+            activeToolNames = listOf("read")
         )
         return Conversation(entries + entry, entry.id)
     }
 
-    private fun List<works.resolve.pathfinder.ai.Message>.texts(): List<String> =
-        map { (it as UserMessage).content.single().let { (it as works.resolve.pathfinder.ai.TextContent).text } }
+    private fun List<works.resolve.pathfinder.ai.Message>.texts(): List<String> = map {
+        (it as UserMessage).content.single().let {
+            (it as works.resolve.pathfinder.ai.TextContent).text
+        }
+    }
 }

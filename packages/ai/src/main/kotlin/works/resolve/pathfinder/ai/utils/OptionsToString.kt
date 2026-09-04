@@ -10,6 +10,7 @@ package works.resolve.pathfinder.ai.utils
 internal fun redactedSecret(secret: String?): String = if (secret == null) "null" else "<redacted>"
 
 internal fun optionsToString(className: String, vararg fields: Pair<String, Any?>): String =
-    className + fields.joinToString(prefix = "(", separator = ", ", postfix = ")") { (name, value) ->
-        "$name=$value"
-    }
+    className +
+        fields.joinToString(prefix = "(", separator = ", ", postfix = ")") { (name, value) ->
+            "$name=$value"
+        }

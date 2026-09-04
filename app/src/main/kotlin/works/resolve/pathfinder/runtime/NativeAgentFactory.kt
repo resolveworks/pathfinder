@@ -1,27 +1,27 @@
 package works.resolve.pathfinder.runtime
 
-import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.StreamFn
-import works.resolve.pathfinder.codingagent.core.AgentSession
 import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.ResolvedAuth
+import works.resolve.pathfinder.ai.SimpleStreamOptions
+import works.resolve.pathfinder.ai.api.ChatApiRegistry
+import works.resolve.pathfinder.ai.auth.AuthContext
+import works.resolve.pathfinder.ai.auth.AuthResolutionOverrides
+import works.resolve.pathfinder.ai.auth.CatalogAuthProviderRef
+import works.resolve.pathfinder.ai.auth.CatalogAuthRegistry
+import works.resolve.pathfinder.ai.auth.CredentialStore
+import works.resolve.pathfinder.ai.auth.NoopAuthContext
+import works.resolve.pathfinder.ai.auth.resolveProviderAuth
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.providers.normalizeBaseUrl
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
-import works.resolve.pathfinder.ai.auth.AuthContext
-import works.resolve.pathfinder.ai.auth.AuthResolutionOverrides
-import works.resolve.pathfinder.ai.auth.CatalogAuthRegistry
-import works.resolve.pathfinder.ai.auth.CatalogAuthProviderRef
-import works.resolve.pathfinder.ai.auth.CredentialStore
-import works.resolve.pathfinder.ai.auth.NoopAuthContext
-import works.resolve.pathfinder.ai.auth.resolveProviderAuth
+import works.resolve.pathfinder.codingagent.core.AgentSession
 import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.data.settings.ModelSettings
 
@@ -63,19 +63,19 @@ class NativeAgentFactory(
     private val authContext: AuthContext = NoopAuthContext,
     private val authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
     /** Tools available to every created agent; copied per agent. */
-    private val tools: List<AgentTool> = emptyList(),
+    private val tools: List<AgentTool> = emptyList()
 ) : AgentFactory {
 
     override fun create(
         settings: ModelSettings,
         sessionId: String,
-        conversation: Conversation,
+        conversation: Conversation
     ): AgentSession {
         val entry = catalog.getProvider(settings.providerId)
             ?: throw IllegalArgumentException("Unsupported provider: ${settings.providerId}")
         val model = entry.model(settings.modelId)
             ?: throw IllegalArgumentException(
-                "Unknown model '${settings.modelId}' for provider '${settings.providerId}'",
+                "Unknown model '${settings.modelId}' for provider '${settings.providerId}'"
             )
         // Fail fast on APIs without a Kotlin implementation; streaming
         // would reject them too.
@@ -93,10 +93,15 @@ class NativeAgentFactory(
                 entry.toRuntimeProvider(
                     transport = transport,
                     retry = retry,
-                    authResolver = catalogAuthResolver(entry, credentials, authContext, authRegistry),
-                    webSocketTransport = webSocketTransport,
+                    authResolver = catalogAuthResolver(
+                        entry,
+                        credentials,
+                        authContext,
+                        authRegistry
+                    ),
+                    webSocketTransport = webSocketTransport
                 )
-            },
+            }
         )
 
         return AgentSession(
@@ -106,17 +111,17 @@ class NativeAgentFactory(
                 streamOptions = SimpleStreamOptions(
                     sessionId = sessionId,
                     timeoutMs = REQUEST_TIMEOUT_MS,
-                    maxRetries = MAX_RETRIES,
+                    maxRetries = MAX_RETRIES
                 ),
                 streamFn = StreamFn { requestedModel, context, options ->
                     models.stream(requestedModel, context, options)
-                },
+                }
             ),
             conversation = conversation,
             retrySettings = settings.retry,
             compactionSettings = settings.compaction,
             models = models,
-            tools = tools.toList(),
+            tools = tools.toList()
         )
     }
 
@@ -150,7 +155,7 @@ internal fun catalogAuthResolver(
     entry: CatalogProvider,
     credentials: CredentialStore,
     authContext: AuthContext = NoopAuthContext,
-    authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
+    authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY
 ): suspend (apiKey: String?, env: Map<String, String>) -> ResolvedAuth? =
     { explicitKey, explicitEnv ->
         val overrides =
@@ -163,13 +168,13 @@ internal fun catalogAuthResolver(
             provider = CatalogAuthProviderRef(entry, authRegistry),
             credentials = credentials,
             authContext = authContext,
-            overrides = overrides,
+            overrides = overrides
         )?.let { result ->
             ResolvedAuth(
                 apiKey = result.auth.apiKey,
                 env = result.env,
                 headers = result.auth.headers,
-                baseUrl = result.auth.baseUrl,
+                baseUrl = result.auth.baseUrl
             )
         }
     }

@@ -1,12 +1,11 @@
 package works.resolve.pathfinder.ai.utils
 
-
-import works.resolve.pathfinder.ai.transport.NetworkException
-import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.random.Random
 import kotlin.time.Clock
+import works.resolve.pathfinder.ai.transport.NetworkException
+import works.resolve.pathfinder.ai.transport.ProviderHttpException
 
 /**
  * Mirrors the pinned OpenAI/Anthropic SDK retry policy: `x-should-retry`
@@ -19,12 +18,12 @@ import kotlin.time.Clock
 class ProviderRetry(
     private val sleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
     private val clock: Clock = Clock.System,
-    private val random: () -> Double = Random.Default::nextDouble,
+    private val random: () -> Double = Random.Default::nextDouble
 ) {
     suspend fun <T> retryProviderRequest(
         maxRetries: Int,
         maxRetryDelayMs: Long,
-        request: suspend () -> T,
+        request: suspend () -> T
     ): T {
         var retriesRemaining = maxRetries
         while (true) {
@@ -53,7 +52,8 @@ class ProviderRetry(
             "true" -> return true
             "false" -> return false
         }
-        return error.status == 408 || error.status == 409 || error.status == 429 || error.status >= 500
+        return error.status == 408 || error.status == 409 || error.status == 429 ||
+            error.status >= 500
     }
 
     fun retryDelayMs(error: Exception, retryIndex: Int, maxRetryDelayMs: Long): Long {
@@ -73,8 +73,11 @@ class ProviderRetry(
         return (exponential * (1 - random() * 0.25)).toLong()
     }
 
-    private fun validateServerDelayMs(delayMs: Long, maxRetryDelayMs: Long, error: Exception): Long =
-        validateRetryDelayMs(delayMs, maxRetryDelayMs, messageSuffix = error.message)
+    private fun validateServerDelayMs(
+        delayMs: Long,
+        maxRetryDelayMs: Long,
+        error: Exception
+    ): Long = validateRetryDelayMs(delayMs, maxRetryDelayMs, messageSuffix = error.message)
 
     /** Longest numeric prefix (so "1200ms" parses as 1200), or null when none.
      * NaN parses in Kotlin but is not a valid delay, so it falls through. */
@@ -114,14 +117,14 @@ internal class RetryDelayExceededError(message: String) : Exception(message)
 internal fun validateRetryDelayMs(
     delayMs: Long,
     maxRetryDelayMs: Long,
-    messageSuffix: String? = null,
+    messageSuffix: String? = null
 ): Long {
     if (maxRetryDelayMs > 0 && delayMs > maxRetryDelayMs) {
         val seconds = (delayMs + 999) / 1000
         val maxSeconds = (maxRetryDelayMs + 999) / 1000
         val suffix = if (messageSuffix != null) ". $messageSuffix" else ""
         throw RetryDelayExceededError(
-            "Server requested ${seconds}s retry delay (max: ${maxSeconds}s)$suffix",
+            "Server requested ${seconds}s retry delay (max: ${maxSeconds}s)$suffix"
         )
     }
     return delayMs

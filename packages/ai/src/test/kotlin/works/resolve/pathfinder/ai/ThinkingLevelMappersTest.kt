@@ -41,7 +41,7 @@ class ThinkingLevelMappersTest {
             ModelThinkingLevel.MEDIUM to "medium",
             ModelThinkingLevel.HIGH to "high",
             ModelThinkingLevel.XHIGH to "xhigh",
-            ModelThinkingLevel.MAX to "max",
+            ModelThinkingLevel.MAX to "max"
         )
         for ((level, wire) in piWireNames) {
             assertEquals(wire, level.wire)

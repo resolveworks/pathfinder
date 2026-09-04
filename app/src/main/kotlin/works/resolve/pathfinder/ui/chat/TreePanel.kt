@@ -62,12 +62,14 @@ fun TreePanel(
     filter: TreeFilter,
     onFilterChange: (TreeFilter) -> Unit,
     onNavigate: (String) -> Unit,
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     // Folded row ids; cleared on query or filter change, as in pi.
     var foldedIds by rememberSaveable(
-        stateSaver = listSaver<Set<String>, String>(save = { it.toList() }, restore = { it.toSet() })
+        stateSaver = listSaver<Set<String>, String>(save = {
+            it.toList()
+        }, restore = { it.toSet() })
     ) { mutableStateOf(emptySet()) }
 
     TreePanelContent(
@@ -82,7 +84,7 @@ fun TreePanel(
         filter = filter,
         onFilterChange = onFilterChange,
         onNavigate = onNavigate,
-        modifier = modifier,
+        modifier = modifier
     )
 }
 
@@ -98,7 +100,7 @@ private fun TreePanelContent(
     filter: TreeFilter,
     onFilterChange: (TreeFilter) -> Unit,
     onNavigate: (String) -> Unit,
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier) {
         TreePanelHeader(
@@ -109,13 +111,15 @@ private fun TreePanelContent(
                 // Stale folds would hide entries the new filter makes visible.
                 onFoldedIdsChange(emptySet())
                 onFilterChange(newFilter)
-            },
+            }
         )
 
         val visibleRows = filterTreeRows(rows = rows, query = query, foldedIds = foldedIds)
         when {
             rows.isEmpty() -> EmptyTreeText(stringResource(R.string.tree_empty))
+
             visibleRows.isEmpty() -> EmptyTreeText(stringResource(R.string.tree_no_matches))
+
             else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(visibleRows, key = { it.id }) { row ->
                     TreeRowItem(
@@ -126,7 +130,7 @@ private fun TreePanelContent(
                                 if (row.id in foldedIds) foldedIds - row.id else foldedIds + row.id
                             )
                         },
-                        onNavigate = { onNavigate(row.id) },
+                        onNavigate = { onNavigate(row.id) }
                     )
                 }
             }
@@ -137,7 +141,7 @@ private fun TreePanelContent(
 internal fun filterTreeRows(
     rows: List<TreeRow>,
     query: String,
-    foldedIds: Set<String>,
+    foldedIds: Set<String>
 ): List<TreeRow> {
     val tokens = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
     val matched = if (tokens.isEmpty()) {
@@ -154,16 +158,15 @@ internal fun filterTreeRows(
 internal enum class TreeGuideCell { EMPTY, GUTTER, TEE, ELBOW }
 
 /** Pure guide layout: pi's TreeList.render() reduced to drawable cells. */
-internal fun treeGuideCells(row: TreeRow): List<TreeGuideCell> =
-    List(row.indent) { level ->
-        when {
-            level in row.gutters -> TreeGuideCell.GUTTER
-            level != row.indent - 1 -> TreeGuideCell.EMPTY
-            row.connector == TreeConnector.TEE -> TreeGuideCell.TEE
-            row.connector == TreeConnector.ELBOW -> TreeGuideCell.ELBOW
-            else -> TreeGuideCell.EMPTY
-        }
+internal fun treeGuideCells(row: TreeRow): List<TreeGuideCell> = List(row.indent) { level ->
+    when {
+        level in row.gutters -> TreeGuideCell.GUTTER
+        level != row.indent - 1 -> TreeGuideCell.EMPTY
+        row.connector == TreeConnector.TEE -> TreeGuideCell.TEE
+        row.connector == TreeConnector.ELBOW -> TreeGuideCell.ELBOW
+        else -> TreeGuideCell.EMPTY
     }
+}
 
 @Composable
 private fun TreePanelHeader(
@@ -171,7 +174,7 @@ private fun TreePanelHeader(
     onQueryChange: (String) -> Unit,
     filter: TreeFilter,
     onFilterChange: (TreeFilter) -> Unit,
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         OutlinedTextField(
@@ -186,11 +189,11 @@ private fun TreePanelHeader(
                     IconButton(onClick = { onQueryChange("") }) {
                         Icon(
                             Icons.Filled.Close,
-                            contentDescription = stringResource(R.string.tree_clear_search),
+                            contentDescription = stringResource(R.string.tree_clear_search)
                         )
                     }
                 }
-            },
+            }
         )
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
             TreeFilter.entries.forEachIndexed { index, mode ->
@@ -207,7 +210,7 @@ private fun TreePanelHeader(
                                 }
                             )
                         )
-                    },
+                    }
                 )
             }
         }
@@ -224,7 +227,7 @@ private fun TreeRowItem(
     folded: Boolean,
     onToggleFold: () -> Unit,
     onNavigate: () -> Unit,
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier
 ) {
     val foldLabel = stringResource(
         if (folded) R.string.tree_unfold_branch else R.string.tree_fold_branch
@@ -237,7 +240,7 @@ private fun TreeRowItem(
             .height(TreeRowHeight)
             .clickable(onClick = onNavigate)
             .padding(horizontal = TreeRowHorizontalPadding),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         if (row.indent > 0) {
             TreeGuide(
@@ -247,7 +250,7 @@ private fun TreeRowItem(
                 foldLabel = foldLabel,
                 modifier = Modifier
                     .width(TreeGuideLevelWidth * row.indent)
-                    .fillMaxHeight(),
+                    .fillMaxHeight()
             )
         }
 
@@ -259,15 +262,15 @@ private fun TreeRowItem(
                     .clickable(
                         onClickLabel = foldLabel,
                         role = Role.Button,
-                        onClick = onToggleFold,
+                        onClick = onToggleFold
                     ),
-                contentAlignment = Alignment.CenterStart,
+                contentAlignment = Alignment.CenterStart
             ) {
                 Icon(
                     imageVector = TreeIcons.AddBox,
                     contentDescription = null,
                     tint = accent,
-                    modifier = Modifier.size(TreeFoldIconSize),
+                    modifier = Modifier.size(TreeFoldIconSize)
                 )
             }
         }
@@ -277,7 +280,7 @@ private fun TreeRowItem(
                 drawCircle(
                     color = accent,
                     radius = ActivePathDotRadius.toPx(),
-                    center = center.copy(x = ActivePathDotRadius.toPx()),
+                    center = center.copy(x = ActivePathDotRadius.toPx())
                 )
             }
         }
@@ -286,7 +289,7 @@ private fun TreeRowItem(
             text = row.preview,
             style = MaterialTheme.typography.bodyMedium,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -298,7 +301,7 @@ private fun TreeGuide(
     folded: Boolean,
     onToggleFold: () -> Unit,
     foldLabel: String,
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier
 ) {
     val guideColor = MaterialTheme.colorScheme.onSurfaceVariant
     val cells = treeGuideCells(row)
@@ -307,7 +310,7 @@ private fun TreeGuide(
         Modifier.clickable(
             onClickLabel = foldLabel,
             role = Role.Button,
-            onClick = onToggleFold,
+            onClick = onToggleFold
         )
     } else {
         Modifier
@@ -326,33 +329,36 @@ private fun TreeGuide(
                 val branchX = level * levelWidth + branchXOffset
                 when (cell) {
                     TreeGuideCell.EMPTY -> Unit
+
                     TreeGuideCell.GUTTER -> drawLine(
                         color = guideColor,
                         start = androidx.compose.ui.geometry.Offset(branchX, 0f),
                         end = androidx.compose.ui.geometry.Offset(branchX, size.height),
                         strokeWidth = strokeWidth,
-                        cap = StrokeCap.Butt,
+                        cap = StrokeCap.Butt
                     )
+
                     TreeGuideCell.TEE, TreeGuideCell.ELBOW -> {
                         drawLine(
                             color = guideColor,
                             start = androidx.compose.ui.geometry.Offset(branchX, 0f),
                             end = androidx.compose.ui.geometry.Offset(
                                 branchX,
-                                if (cell == TreeGuideCell.TEE) size.height else centerY,
+                                if (cell == TreeGuideCell.TEE) size.height else centerY
                             ),
                             strokeWidth = strokeWidth,
-                            cap = StrokeCap.Butt,
+                            cap = StrokeCap.Butt
                         )
                         drawLine(
                             color = guideColor,
                             start = androidx.compose.ui.geometry.Offset(branchX, centerY),
                             end = androidx.compose.ui.geometry.Offset(
-                                level * levelWidth + if (hasFoldIcon) iconStart else plainConnectorEnd,
-                                centerY,
+                                level * levelWidth +
+                                    if (hasFoldIcon) iconStart else plainConnectorEnd,
+                                centerY
                             ),
                             strokeWidth = strokeWidth,
-                            cap = StrokeCap.Butt,
+                            cap = StrokeCap.Butt
                         )
                     }
                 }
@@ -367,7 +373,7 @@ private fun TreeGuide(
                 modifier = Modifier
                     .offset(x = TreeGuideLevelWidth * (row.indent - 1) + TreeGuideFoldIconX)
                     .align(Alignment.CenterStart)
-                    .size(TreeFoldIconSize),
+                    .size(TreeFoldIconSize)
             )
         }
     }
@@ -387,12 +393,15 @@ private val ActivePathDotRadius = 2.dp
 
 @Composable
 private fun EmptyTreeText(text: String, modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize().padding(24.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
+    Box(
+        modifier = modifier.fillMaxSize().padding(24.dp),
+        contentAlignment = androidx.compose.ui.Alignment.Center
+    ) {
         Text(
             text = text,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
+            textAlign = TextAlign.Center
         )
     }
 }
@@ -406,7 +415,7 @@ private fun row(
     onActivePath: Boolean = false,
     currentLeaf: Boolean = false,
     foldable: Boolean = false,
-    preview: String,
+    preview: String
 ): TreeRow = TreeRow(
     id = id,
     path = parentPath + id,
@@ -416,15 +425,29 @@ private fun row(
     isOnActivePath = onActivePath,
     isCurrentLeaf = currentLeaf,
     isFoldable = foldable,
-    preview = preview,
+    preview = preview
 )
 
 @Preview(showBackground = true)
 @Composable
 private fun TreePanelLinearPreview() {
     val rows = listOf(
-        row("u1", emptyList(), 0, onActivePath = true, foldable = true, preview = "You: explain MVVM"),
-        row("a1", listOf("u1"), 0, onActivePath = true, currentLeaf = true, preview = "Assistant: MVVM separates…"),
+        row(
+            "u1",
+            emptyList(),
+            0,
+            onActivePath = true,
+            foldable = true,
+            preview = "You: explain MVVM"
+        ),
+        row(
+            "a1",
+            listOf("u1"),
+            0,
+            onActivePath = true,
+            currentLeaf = true,
+            preview = "Assistant: MVVM separates…"
+        )
     )
     MaterialTheme {
         TreePanel(
@@ -432,7 +455,7 @@ private fun TreePanelLinearPreview() {
             filter = TreeFilter.DEFAULT,
             onFilterChange = {},
             onNavigate = {},
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize()
         )
     }
 }
@@ -443,13 +466,50 @@ private fun TreePanelForkedPreview() {
     // Three-way fork as pi orders it: active branch first, abandoned
     // branches after, the last abandoned sibling on └─.
     val rows = listOf(
-        row("u1", emptyList(), 0, onActivePath = true, foldable = true, preview = "You: write a haiku"),
-        row("u2b", listOf("u1"), 1, TreeConnector.TEE, foldable = true, onActivePath = true, preview = "You: make it longer"),
-        row("a2b", listOf("u1", "u2b"), 2, gutters = listOf(0), onActivePath = true, currentLeaf = true, preview = "Assistant: silent snow drifts…"),
-        row("u2a", listOf("u1"), 1, TreeConnector.TEE, foldable = true, preview = "You: make it shorter"),
+        row(
+            "u1",
+            emptyList(),
+            0,
+            onActivePath = true,
+            foldable = true,
+            preview = "You: write a haiku"
+        ),
+        row(
+            "u2b",
+            listOf("u1"),
+            1,
+            TreeConnector.TEE,
+            foldable = true,
+            onActivePath = true,
+            preview = "You: make it longer"
+        ),
+        row(
+            "a2b",
+            listOf("u1", "u2b"),
+            2,
+            gutters = listOf(0),
+            onActivePath = true,
+            currentLeaf = true,
+            preview = "Assistant: silent snow drifts…"
+        ),
+        row(
+            "u2a",
+            listOf("u1"),
+            1,
+            TreeConnector.TEE,
+            foldable = true,
+            preview = "You: make it shorter"
+        ),
         row("a2a", listOf("u1", "u2a"), 2, gutters = listOf(0), preview = "Assistant: snow falls"),
-        row("a1", listOf("u1"), 1, TreeConnector.ELBOW, foldable = true, preview = "Assistant: silent snow…"),
-        row("a1x", listOf("u1", "a1"), 2, preview = "Assistant: snow drifts"),
+        row(
+            "a1",
+            listOf("u1"),
+            1,
+            TreeConnector.ELBOW,
+            foldable = true,
+            preview = "Assistant: silent snow…"
+        ),
+        row("a1x", listOf("u1", "a1"), 2, preview = "Assistant: snow drifts")
     )
     // The first answer (a1) starts folded, hiding its child.
     val folded = remember { mutableStateOf(setOf("a1")) }
@@ -463,7 +523,7 @@ private fun TreePanelForkedPreview() {
             filter = TreeFilter.DEFAULT,
             onFilterChange = {},
             onNavigate = {},
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize()
         )
     }
 }

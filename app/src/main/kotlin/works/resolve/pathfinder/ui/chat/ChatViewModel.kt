@@ -2,8 +2,16 @@ package works.resolve.pathfinder.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import works.resolve.pathfinder.agent.AgentEvent
-import works.resolve.pathfinder.codingagent.core.AgentSession
 import works.resolve.pathfinder.agent.AgentState
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Content
@@ -15,17 +23,6 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.clampThinkingLevel
-import works.resolve.pathfinder.ai.getSupportedThinkingLevels
-import works.resolve.pathfinder.ai.providers.AuthPrompt
-import works.resolve.pathfinder.ai.providers.ProviderCatalog
-import works.resolve.pathfinder.runtime.AgentFactory
-import works.resolve.pathfinder.codingagent.core.session.LaneReductionInput
-import works.resolve.pathfinder.codingagent.core.session.LaneRecovery
-import works.resolve.pathfinder.codingagent.core.OperationLifecycleRecorder
-import works.resolve.pathfinder.codingagent.core.session.RecordLogCorruption
-import works.resolve.pathfinder.codingagent.core.session.RecordLogCorruptionReason
-import works.resolve.pathfinder.codingagent.core.session.reduceLaneState
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
@@ -35,32 +32,35 @@ import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.ai.auth.ModelsError
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
 import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
-import works.resolve.pathfinder.data.settings.ModelSettings
-import works.resolve.pathfinder.data.settings.SettingsStore
-import works.resolve.pathfinder.data.settings.SettingsRepository
+import works.resolve.pathfinder.ai.clampThinkingLevel
+import works.resolve.pathfinder.ai.getSupportedThinkingLevels
+import works.resolve.pathfinder.ai.providers.AuthPrompt
+import works.resolve.pathfinder.ai.providers.ProviderCatalog
+import works.resolve.pathfinder.codingagent.core.AgentSession
+import works.resolve.pathfinder.codingagent.core.OperationLifecycleRecorder
 import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.codingagent.core.session.LaneRecord
-import works.resolve.pathfinder.codingagent.core.session.RecordQuery
+import works.resolve.pathfinder.codingagent.core.session.LaneRecovery
+import works.resolve.pathfinder.codingagent.core.session.LaneReductionInput
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
+import works.resolve.pathfinder.codingagent.core.session.RecordLogCorruption
+import works.resolve.pathfinder.codingagent.core.session.RecordLogCorruptionReason
+import works.resolve.pathfinder.codingagent.core.session.RecordQuery
 import works.resolve.pathfinder.codingagent.core.session.Session
 import works.resolve.pathfinder.codingagent.core.session.SessionEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionState
 import works.resolve.pathfinder.codingagent.core.session.SessionRepository
-import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.session.SessionState
 import works.resolve.pathfinder.codingagent.core.session.SessionSummary
+import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.session.reduceLaneState
+import works.resolve.pathfinder.data.settings.ModelSettings
+import works.resolve.pathfinder.data.settings.SettingsRepository
+import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.logging.PathfinderDiagnostics
+import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * Chat screen controller. Owns configuration, sessions, and the active
@@ -100,7 +100,7 @@ class ChatViewModel(
      */
     private val appForegroundGate: AppForegroundGate = AppForegroundGate(),
     /** Web-search credential management (Brave only, Scry parity). */
-    private val searchProviderService: SearchProviderService,
+    private val searchProviderService: SearchProviderService
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -112,7 +112,7 @@ class ChatViewModel(
         authService = authService,
         diagnostics = diagnostics,
         onLoginSucceeded = { onCredentialStored() },
-        onLoginFailed = { cause -> setError(ERROR_AUTH_LOGIN, cause) },
+        onLoginFailed = { cause -> setError(ERROR_AUTH_LOGIN, cause) }
     )
 
     /** Current committed configuration; updated on init and successful save. */
@@ -255,7 +255,9 @@ class ChatViewModel(
             currentSettings = currentSettings.copy(defaultThinkingLevel = level)
             updateState { it.copy(defaultThinkingLevel = level) }
             if (session != null) {
-                updateState { it.copy(treeRows = buildTreeRows(session.conversation, it.treeFilter)) }
+                updateState {
+                    it.copy(treeRows = buildTreeRows(session.conversation, it.treeFilter))
+                }
                 enqueuePersist()
             }
         }
@@ -270,7 +272,11 @@ class ChatViewModel(
      * Not busy-rejected: the agent resolves the credential once per request,
      * so changing it mid-stream only affects the next request.
      */
-    fun saveProviderCredential(providerId: String, apiKeyInput: String, envInputs: Map<String, String>) {
+    fun saveProviderCredential(
+        providerId: String,
+        apiKeyInput: String,
+        envInputs: Map<String, String>
+    ) {
         viewModelScope.launch { saveProviderCredentialInternal(providerId, apiKeyInput, envInputs) }
     }
 
@@ -321,7 +327,13 @@ class ChatViewModel(
     /** UI-safe auth prompts for a search provider's credential form (only Brave is supported). */
     fun searchProviderAuthPrompts(providerId: String): List<ProviderAuthPrompt> =
         if (providerId == SearchProviderService.BRAVE_PROVIDER_ID) {
-            listOf(ProviderAuthPrompt(BRAVE_API_KEY_PROMPT, SEARCH_BRAVE_KEY_PROMPT_MESSAGE, secret = true))
+            listOf(
+                ProviderAuthPrompt(
+                    BRAVE_API_KEY_PROMPT,
+                    SEARCH_BRAVE_KEY_PROMPT_MESSAGE,
+                    secret = true
+                )
+            )
         } else {
             emptyList()
         }
@@ -352,7 +364,9 @@ class ChatViewModel(
                 setError(ERROR_SEARCH_CREDENTIAL_SAVE, e)
                 return@launch
             }
-            updateState { it.copy(searchCredentialSuccessEpoch = it.searchCredentialSuccessEpoch + 1) }
+            updateState {
+                it.copy(searchCredentialSuccessEpoch = it.searchCredentialSuccessEpoch + 1)
+            }
             refreshSearchStatus()
         }
     }
@@ -467,7 +481,7 @@ class ChatViewModel(
                     // re-edit text lands only in an empty draft.
                     draft = if (it.draft.isBlank()) result.editorText ?: it.draft else it.draft,
                     messages = projectCommitted(active.agent.state.value.messages, updated),
-                    treeRows = buildTreeRows(updated, it.treeFilter),
+                    treeRows = buildTreeRows(updated, it.treeFilter)
                 )
             }
             enqueuePersist()
@@ -520,7 +534,7 @@ class ChatViewModel(
                     val newAgent = tryCreateAgent(
                         settingsSeededFromFold(currentSettings, conversation),
                         session.id,
-                        conversation,
+                        conversation
                     ) ?: return@launch
                     if (!activateSession(session, newAgent)) return@launch
                 }
@@ -551,7 +565,7 @@ class ChatViewModel(
                         status = ChatStatus.NeedsConfiguration,
                         startKey = ProvidersNavKey,
                         showThinking = settings.showThinking,
-                        sessionSummaries = summaries,
+                        sessionSummaries = summaries
                     )
                 }
                 return
@@ -580,14 +594,14 @@ class ChatViewModel(
             val newAgent = tryCreateAgent(
                 seeded,
                 session.id,
-                conversation,
+                conversation
             )
             if (newAgent == null) {
                 updateState {
                     it.copy(
                         status = ChatStatus.Failed,
                         sessionSummaries = summaries,
-                        error = ERROR_CONFIG_INVALID,
+                        error = ERROR_CONFIG_INVALID
                     )
                 }
                 return
@@ -605,7 +619,7 @@ class ChatViewModel(
             updateState {
                 it.copy(
                     status = ChatStatus.Ready,
-                    showThinking = settings.showThinking,
+                    showThinking = settings.showThinking
                 )
             }
         } catch (e: CancellationException) {
@@ -617,7 +631,10 @@ class ChatViewModel(
     }
 
     /** Requested active session, else the newest existing, else a new one. */
-    private suspend fun resolveSession(settings: ModelSettings, summaries: List<SessionSummary>): Session {
+    private suspend fun resolveSession(
+        settings: ModelSettings,
+        summaries: List<SessionSummary>
+    ): Session {
         settings.activeSessionId?.let { id ->
             sessionStore.load(id)?.let { return it }
         }
@@ -662,7 +679,7 @@ class ChatViewModel(
                 streamingMessage = null,
                 treeRows = buildTreeRows(conversation, it.treeFilter),
                 sessionSummaries = summaries,
-                laneRecovery = laneRecovery,
+                laneRecovery = laneRecovery
             )
         }
         // Initial seeding may have appended entries to an entry-less
@@ -681,7 +698,11 @@ class ChatViewModel(
      * classification is advisory UI state, never a load blocker.
      */
     private suspend fun laneRecoveryFor(session: Session): LaneRecovery = try {
-        val openOperations = sessionStore.openOperations(session.id, SessionState.LANE_MAIN, limit = 2)
+        val openOperations = sessionStore.openOperations(
+            session.id,
+            SessionState.LANE_MAIN,
+            limit = 2
+        )
         if (openOperations.size > 1) {
             LaneRecovery.Corrupt(RecordLogCorruptionReason.MULTIPLE_OPEN_OPERATIONS)
         } else {
@@ -690,14 +711,19 @@ class ChatViewModel(
                 LaneReductionInput(
                     lane = SessionState.LANE_MAIN,
                     openOperations = openOperations,
-                    records = sessionStore.findRecords(session.id, RecordQuery(lane = SessionState.LANE_MAIN)),
+                    records = sessionStore.findRecords(
+                        session.id,
+                        RecordQuery(lane = SessionState.LANE_MAIN)
+                    ),
                     // Operation-owned entries: everything appended after the
                     // open operation's start (single writer, single lane).
-                    ownEntries = started?.let { op -> session.entries.filter { it.seq > op.seq } } ?: emptyList(),
+                    ownEntries =
+                        started?.let { op -> session.entries.filter { it.seq > op.seq } }
+                            ?: emptyList(),
                     entries = session.entries,
                     configurationEntries = configurationEntriesFor(session, started?.sourceLeafId),
-                    leafId = session.leafId,
-                ),
+                    leafId = session.leafId
+                )
             )
             val operation = result.laneState.operation
             if (operation == null) LaneRecovery.Idle else LaneRecovery.Suspended(operation.kind)
@@ -717,7 +743,9 @@ class ChatViewModel(
      * the entries they name).
      */
     private fun configurationEntriesFor(session: Session, anchorId: String?): List<SessionEntry> {
-        var cursor: String? = anchorId?.takeIf { id -> session.entries.any { it.id == id } } ?: session.leafId ?: return emptyList()
+        var cursor: String? =
+            anchorId?.takeIf { id -> session.entries.any { it.id == id } } ?: session.leafId
+                ?: return emptyList()
         val byId = session.entries.associateBy { it.id }
         val path = ArrayList<SessionEntry>()
         while (cursor != null && byId.containsKey(cursor)) {
@@ -745,7 +773,7 @@ class ChatViewModel(
         val newAgent = tryCreateAgent(
             seeded,
             session.id,
-            conversation,
+            conversation
         ) ?: return null
         return session to newAgent
     }
@@ -758,9 +786,14 @@ class ChatViewModel(
      * with no thinking_level_change entry is seeded with the stored default
      * thinking level, else "medium", clamped to the effective model.
      */
-    private fun seededSettingsFor(session: Session, settings: ModelSettings): Pair<ModelSettings, Conversation> {
+    private fun seededSettingsFor(
+        session: Session,
+        settings: ModelSettings
+    ): Pair<ModelSettings, Conversation> {
         var conversation = Conversation(session.entries, session.leafId)
-        if (conversation.entries.isEmpty() && settings.providerId.isNotBlank() && settings.modelId.isNotBlank()) {
+        if (conversation.entries.isEmpty() && settings.providerId.isNotBlank() &&
+            settings.modelId.isNotBlank()
+        ) {
             conversation = conversation.appendModelChange(settings.providerId, settings.modelId)
         }
         val seeded = settingsSeededFromFold(settings, conversation)
@@ -789,9 +822,16 @@ class ChatViewModel(
      * the global defaults. Divergence from pi: only pairs the generated
      * catalog supports are applied; anything else falls back to [settings].
      */
-    private fun settingsSeededFromFold(settings: ModelSettings, conversation: Conversation): ModelSettings {
+    private fun settingsSeededFromFold(
+        settings: ModelSettings,
+        conversation: Conversation
+    ): ModelSettings {
         val model = conversation.effectiveConfiguration().model ?: return settings
-        if (model.provider == settings.providerId && model.modelId == settings.modelId) return settings
+        if (model.provider == settings.providerId &&
+            model.modelId == settings.modelId
+        ) {
+            return settings
+        }
         val catalogModel = catalog.getProvider(model.provider)?.model(model.modelId)
             ?: return settings
         return if (ChatApiRegistry.isSupported(catalogModel.api)) {
@@ -805,19 +845,18 @@ class ChatViewModel(
     private fun tryCreateAgent(
         settings: ModelSettings,
         sessionId: String,
-        conversation: Conversation,
-    ): AgentSession? =
-        try {
-            agentFactory.create(settings, sessionId, conversation)
-                // Synchronize web_search against the current Brave credential
-                // before anything binds to the session.
-                .also(::synchronizeWebSearch)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            setError(ERROR_CONFIG_INVALID, e)
-            null
-        }
+        conversation: Conversation
+    ): AgentSession? = try {
+        agentFactory.create(settings, sessionId, conversation)
+            // Synchronize web_search against the current Brave credential
+            // before anything binds to the session.
+            .also(::synchronizeWebSearch)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        setError(ERROR_CONFIG_INVALID, e)
+        null
+    }
 
     private fun bindAgent(newAgent: AgentSession) {
         agentStateJob?.cancel()
@@ -827,10 +866,12 @@ class ChatViewModel(
         // The recorder resolves the session at call time (mid-run session
         // switches are blocked).
         newAgent.operationRecorder = operationRecorder
-        agentStateJob = viewModelScope.launch { newAgent.state.collect { state -> onAgentState(state) } }
+        agentStateJob =
+            viewModelScope.launch { newAgent.state.collect { state -> onAgentState(state) } }
         // Events are zero-replay flow: the subscriber must be bound before
         // any prompt starts.
-        agentEventsJob = viewModelScope.launch { newAgent.events.collect { event -> onAgentEvent(event) } }
+        agentEventsJob =
+            viewModelScope.launch { newAgent.events.collect { event -> onAgentEvent(event) } }
     }
 
     /** Projects session lifecycle events into transient UI surfaces and persistence. */
@@ -839,20 +880,30 @@ class ChatViewModel(
             is AgentEvent.AutoRetryStart -> updateState {
                 it.copy(retryStatus = AutoRetryStatus(event.attempt, event.maxAttempts))
             }
+
             is AgentEvent.AutoRetryEnd -> updateState { it.copy(retryStatus = null) }
+
             is AgentEvent.CompactionStart -> updateState { it.copy(isCompacting = true) }
+
             is AgentEvent.CompactionEnd -> {
-                updateState { it.copy(isCompacting = false, treeRows = buildTreeRows(activeConversation, it.treeFilter)) }
+                updateState {
+                    it.copy(
+                        isCompacting = false,
+                        treeRows = buildTreeRows(activeConversation, it.treeFilter)
+                    )
+                }
                 // The compaction entry landed on the tree before this event.
                 if (activeConversation.entries.size > persistedEntryCount) {
                     enqueuePersist()
                 }
             }
+
             // Summarization-retry telemetry is deliberately unsurfaced.
             is AgentEvent.SummarizationRetryScheduled,
             is AgentEvent.SummarizationRetryAttemptStart,
-            is AgentEvent.SummarizationRetryFinished,
+            is AgentEvent.SummarizationRetryFinished
             -> Unit
+
             // Re-project and persist on tree growth, not agent-transcript
             // growth: an auto-retry or overflow recovery removes the error
             // message from agent state while the append-only tree keeps it.
@@ -860,13 +911,14 @@ class ChatViewModel(
                 updateState {
                     it.copy(
                         messages = projectCommittedAfterSessionMessageEnd(),
-                        treeRows = buildTreeRows(activeConversation, it.treeFilter),
+                        treeRows = buildTreeRows(activeConversation, it.treeFilter)
                     )
                 }
                 if (activeConversation.entries.size > persistedEntryCount) {
                     enqueuePersist()
                 }
             }
+
             else -> Unit
         }
     }
@@ -888,11 +940,13 @@ class ChatViewModel(
             it.copy(
                 messages = projectCommitted(state.messages, activeConversation),
                 pendingTools = pendingToolExecutions(state),
-                streamingMessage = (state.streamingMessage as? AssistantMessage)?.let(::projectStreaming),
+                streamingMessage = (state.streamingMessage as? AssistantMessage)?.let(
+                    ::projectStreaming
+                ),
                 isStreaming = state.isStreaming,
                 thinkingLevel = state.thinkingLevel,
                 availableThinkingLevels = getSupportedThinkingLevels(state.model),
-                error = agentError ?: it.error?.takeIf { e -> e != lastAgentError },
+                error = agentError ?: it.error?.takeIf { e -> e != lastAgentError }
             )
         }
         lastAgentError = agentError
@@ -974,14 +1028,20 @@ class ChatViewModel(
                 // Persist the tree itself (entries + leaf): branch structure
                 // survives saves.
                 val saved = sessionStore.save(
-                    session.copy(entries = conversation.entries, leafId = conversation.leafId, title = title),
+                    session.copy(
+                        entries = conversation.entries,
+                        leafId = conversation.leafId,
+                        title = title
+                    )
                 )
                 if (activeSession?.id == session.id) {
                     activeSession = saved
                     persistedEntryCount = saved.entries.size
                 }
                 val summaries = sessionStore.summaries()
-                if (activeSession?.id == session.id || _uiState.value.activeSessionId == session.id) {
+                if (activeSession?.id == session.id ||
+                    _uiState.value.activeSessionId == session.id
+                ) {
                     updateState { it.copy(sessionSummaries = summaries) }
                 }
             } catch (e: CancellationException) {
@@ -1060,7 +1120,7 @@ class ChatViewModel(
         updateState {
             it.copy(
                 selectedModel = selectedModelProjection(model),
-                treeRows = buildTreeRows(session.conversation, it.treeFilter),
+                treeRows = buildTreeRows(session.conversation, it.treeFilter)
             )
         }
         // The model_change grew the conversation: persist it.
@@ -1072,7 +1132,7 @@ class ChatViewModel(
         val candidate = currentSettings.copy(
             providerId = providerId,
             modelId = trimmed,
-            activeSessionId = activeSession?.id,
+            activeSessionId = activeSession?.id
         )
         if (!persistSettings(candidate)) return
         currentSettings = candidate
@@ -1099,7 +1159,11 @@ class ChatViewModel(
         refreshOptions()
     }
 
-    private suspend fun toggleModelScopeInternal(providerId: String, modelId: String, checked: Boolean) {
+    private suspend fun toggleModelScopeInternal(
+        providerId: String,
+        modelId: String,
+        checked: Boolean
+    ) {
         val state = _uiState.value
         val reference = "$providerId/$modelId"
         // The curated list is written in display order; an absent scope
@@ -1110,7 +1174,8 @@ class ChatViewModel(
         val stored = state.enabledModels.orEmpty()
         // Preserve stored references not currently displayed (e.g. of a
         // provider whose credential was removed) in their stored order.
-        val ordered = displayOrder.filter { it in next } + stored.filter { it !in displayOrder && it in next }
+        val ordered =
+            displayOrder.filter { it in next } + stored.filter { it !in displayOrder && it in next }
         try {
             settingsRepository.setEnabledModels(ordered)
         } catch (e: CancellationException) {
@@ -1126,7 +1191,7 @@ class ChatViewModel(
     private suspend fun saveProviderCredentialInternal(
         providerId: String,
         apiKeyInput: String,
-        envInputs: Map<String, String>,
+        envInputs: Map<String, String>
     ) {
         val provider = catalog.getProvider(providerId) ?: run {
             setError(ERROR_UNKNOWN_PROVIDER)
@@ -1205,7 +1270,7 @@ class ChatViewModel(
                 it.copy(
                     status = ChatStatus.Ready,
                     startKey = ChatNavKey,
-                    navigationEpoch = it.navigationEpoch + 1,
+                    navigationEpoch = it.navigationEpoch + 1
                 )
             }
         }
@@ -1258,9 +1323,7 @@ class ChatViewModel(
     private fun isAuthProviderBusy(): Boolean = loginController.busy
 
     /** In-memory [AuthInteraction] answering fixed form values in order. */
-    private class FormAuthInteraction(
-        answers: List<String>,
-    ) : AuthInteraction {
+    private class FormAuthInteraction(answers: List<String>) : AuthInteraction {
         private val remaining = ArrayDeque(answers)
 
         override suspend fun prompt(prompt: AuthInteractionPrompt): String = remaining.removeFirst()
@@ -1272,12 +1335,11 @@ class ChatViewModel(
      * The provider's selectable auth methods, or an empty list for an
      * unknown provider. Never touches credentials.
      */
-    fun providerAuthMethods(providerId: String): List<AuthMethodInfo> =
-        try {
-            authService.authMethods(providerId)
-        } catch (e: ModelsError) {
-            emptyList()
-        }
+    fun providerAuthMethods(providerId: String): List<AuthMethodInfo> = try {
+        authService.authMethods(providerId)
+    } catch (e: ModelsError) {
+        emptyList()
+    }
 
     /**
      * True iff settings name a catalog provider+model the stored credential
@@ -1323,7 +1385,7 @@ class ChatViewModel(
                     ProviderOption(
                         id = provider.id,
                         name = provider.name,
-                        configured = authService.isConfigured(provider.id),
+                        configured = authService.isConfigured(provider.id)
                     )
                 }
                 .sortedBy { it.name }
@@ -1354,7 +1416,7 @@ class ChatViewModel(
                         providerId = provider.id,
                         providerName = provider.name,
                         modelId = model.id,
-                        name = model.name,
+                        name = model.name
                     )
                 }
             }
@@ -1370,7 +1432,7 @@ class ChatViewModel(
                 modelOptions = modelOptions,
                 selectedModel = selectedModel,
                 defaultModel = defaultModel,
-                defaultThinkingLevel = currentSettings.defaultThinkingLevel,
+                defaultThinkingLevel = currentSettings.defaultThinkingLevel
             )
         }
         projectScope(modelOptions)
@@ -1390,7 +1452,7 @@ class ChatViewModel(
                     ProviderOption(
                         id = provider.id,
                         name = provider.name,
-                        configured = searchProviderService.isConfigured(provider.id),
+                        configured = searchProviderService.isConfigured(provider.id)
                     )
                 }
                 .sortedBy { it.name }
@@ -1403,15 +1465,18 @@ class ChatViewModel(
             updateState {
                 it.copy(
                     searchProviderOptions = searchProviderService.providers
-                        .map { provider -> ProviderOption(provider.id, provider.name, configured = false) }
-                        .sortedBy { option -> option.name },
+                        .map { provider ->
+                            ProviderOption(provider.id, provider.name, configured = false)
+                        }
+                        .sortedBy { option -> option.name }
                 )
             }
             agent?.let(::synchronizeWebSearch)
             return
         }
         searchBraveConfigured =
-            options.firstOrNull { it.id == SearchProviderService.BRAVE_PROVIDER_ID }?.configured == true
+            options.firstOrNull { it.id == SearchProviderService.BRAVE_PROVIDER_ID }?.configured ==
+            true
         updateState { it.copy(searchProviderOptions = options) }
         agent?.let(::synchronizeWebSearch)
     }
@@ -1456,7 +1521,7 @@ class ChatViewModel(
             providerId = provider.id,
             providerName = provider.name,
             modelId = model.id,
-            modelName = model.name,
+            modelName = model.name
         )
     }
 
@@ -1536,7 +1601,10 @@ class ChatViewModel(
     private fun updateState(transform: (ChatUiState) -> ChatUiState) {
         _uiState.update { current ->
             val next = transform(current)
-            next.copy(canSend = next.status == ChatStatus.Ready && !next.isStreaming && next.draft.isNotBlank())
+            next.copy(
+                canSend =
+                    next.status == ChatStatus.Ready && !next.isStreaming && next.draft.isNotBlank()
+            )
         }
     }
 
