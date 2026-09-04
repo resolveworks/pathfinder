@@ -9,6 +9,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.logging.PathfinderDiagnostics
 
@@ -95,6 +98,71 @@ class SessionStore(
                     }
                 }
                 .sortedByDescending { it.updatedAt }
+        }
+    }
+
+    /**
+     * pi's session-selector scan, read-only: unlike [summaries] it never
+     * repairs a torn tail or caches open storages, and malformed lines are
+     * skipped rather than failing the file.
+     */
+    override suspend fun searchCorpus(): Map<String, String> = mutex.withLock {
+        withContext(ioDispatcher) {
+            sessionFiles().mapNotNull(::scanCorpus).toMap()
+        }
+    }
+
+    private fun scanCorpus(file: File): Pair<String, String>? {
+        if (file.length() > maxFileBytes) return null
+        return try {
+            file.useLines { lines ->
+                val iterator = lines.iterator()
+                if (!iterator.hasNext()) return null
+                val header = try {
+                    JsonlCodec.decodeHeader(iterator.next())
+                } catch (_: JsonlCodec.JsonlDecodeError) {
+                    return null
+                }
+                val id = sessionIdOf(file)
+                if (header.id != id) return null
+                var name: String? = null
+                val texts = StringBuilder()
+                for (line in iterator) {
+                    val mutation = try {
+                        JsonlCodec.decodeMutation(line)
+                    } catch (_: JsonlCodec.JsonlDecodeError) {
+                        continue
+                    } catch (_: SessionError) {
+                        continue
+                    }
+                    when (mutation) {
+                        is SessionMutation.Fact.Name -> name = mutation.name
+
+                        is SessionMutation.Entry -> {
+                            val entry = mutation.entry
+                            if (entry is MessageEntry) {
+                                val content = when (val message = entry.message) {
+                                    is UserMessage -> message.content
+                                    is AssistantMessage -> message.content
+                                    else -> continue
+                                }
+                                val text = content
+                                    .filterIsInstance<TextContent>()
+                                    .joinToString(" ") { it.text }
+                                if (text.isNotEmpty()) {
+                                    if (texts.isNotEmpty()) texts.append(' ')
+                                    texts.append(text)
+                                }
+                            }
+                        }
+
+                        else -> {}
+                    }
+                }
+                id to "$id ${name ?: ""} $texts"
+            }
+        } catch (_: IOException) {
+            null
         }
     }
 

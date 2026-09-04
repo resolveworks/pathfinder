@@ -40,4 +40,10 @@ interface SessionRepository {
 
     /** A new session whose log is the source's fork mutation batch, with the source id as its parent (pi's SessionRepo.fork). */
     suspend fun fork(sourceId: String, options: ForkOptions): Session
+
+    /**
+     * pi's session-selector corpus: per-session searchable text
+     * ("id name allUserAndAssistantText"), keyed by session id.
+     */
+    suspend fun searchCorpus(): Map<String, String>
 }
