@@ -2195,6 +2195,7 @@ class ChatViewModelTest {
             assertTrue(state.modelOptions.isNotEmpty())
             assertTrue(state.modelOptions.all { it.providerId == "zai" })
             assertTrue(state.providerOptions.first { it.id == "zai" }.configured)
+            assertEquals(AuthType.API_KEY, state.providerOptions.first { it.id == "zai" }.authType)
             assertFalse(state.toString().contains("stored-key"))
             assertNotNull(state.activeSessionId)
             assertEquals("glm-4.7", state.selectedModel?.modelId)
@@ -2349,7 +2350,9 @@ class ChatViewModelTest {
             val vm = h.newViewModel()
             val state = vm.uiState.first { it.status == ChatStatus.Ready }
             assertTrue(state.providerOptions.first { it.id == "zai" }.configured)
+            assertEquals(AuthType.OAUTH, state.providerOptions.first { it.id == "zai" }.authType)
             assertFalse(state.providerOptions.first { it.id == "cloudflare-ai-gateway" }.configured)
+            assertNull(state.providerOptions.first { it.id == "cloudflare-ai-gateway" }.authType)
             assertTrue(state.modelOptions.all { it.providerId == "zai" })
             assertTrue(state.modelOptions.isNotEmpty())
             assertFalse(state.toString().contains("access-token-9"))
@@ -2426,6 +2429,7 @@ class ChatViewModelTest {
             // the state.
             val done = vm.uiState.first { it.authFlow == null && it.credentialSuccessEpoch == 1L }
             assertTrue(done.providerOptions.first { it.id == "zai" }.configured)
+            assertEquals(AuthType.OAUTH, done.providerOptions.first { it.id == "zai" }.authType)
             assertTrue(done.modelOptions.any { it.providerId == "zai" })
             assertFalse(done.toString().contains("access-token-1"))
             assertNull(done.error)

@@ -34,8 +34,11 @@
     <string name="no_matching_providers">No matching providers</string>
     <string name="provider_status_configured">configured</string>
     <string name="provider_status_unconfigured">unconfigured</string>
+    <string name="provider_signed_in_body">You\'re signed in on this device.</string>
+    <string name="provider_api_key_body">An API key is stored on this device.</string>
     <string name="action_remove_provider">Forget provider</string>
     <string name="remove_provider_confirm">Forget the stored credential for %1$s?</string>
+    <string name="sign_out_confirm">Sign out of %1$s?</string>
     <string name="model_search_hint">Search models</string>
     <string name="model_selected">Selected</string>
     <string name="model_picker_empty">Pick a model</string>
@@ -70,6 +73,8 @@
 
     <string name="action_submit">Submit</string>
     <string name="action_cancel_sign_in">Cancel sign-in</string>
+    <string name="action_sign_out">Log out</string>
+    <string name="auth_sign_in">Sign in</string>
     <string name="auth_method_title">Sign in to %1$s</string>
     <string name="auth_method_account">Account / subscription</string>
     <string name="auth_method_api_key">API key</string>

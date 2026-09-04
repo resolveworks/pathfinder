@@ -193,14 +193,34 @@ fun ChatScreen(
         backStack.add(uiState.startKey)
     }
 
-    // Successful credential save: pop exactly one credential form
+    // Successful credential save: pop exactly one credential screen
     // (state-driven — no ViewModel navigation callback). On first-run saves
     // both epochs bump, so the reset above runs first and leaves a
     // single-entry root the guard never pops. A failed save never bumps
     // this epoch, so the form and its typed inputs stay intact.
     LaunchedEffect(uiState.credentialSuccessEpoch) {
-        if (backStack.size > 1 && backStack.lastOrNull() is ProviderAuthNavKey) {
+        val top = backStack.lastOrNull()
+        if (backStack.size > 1 &&
+            (top is ProviderAuthNavKey || top is ProviderApiKeyNavKey)
+        ) {
             backStack.removeAt(backStack.lastIndex)
+        }
+    }
+
+    // A login in flight is its own destination on top of the provider's
+    // screen; when the flow ends (success, failure, or cancel) the entry
+    // pops back to where the login was started. A restored stack whose
+    // flow died with the process pops the dead entry here too.
+    LaunchedEffect(uiState.authFlow?.providerId) {
+        val flowProviderId = uiState.authFlow?.providerId
+        val top = backStack.lastOrNull()
+        when {
+            flowProviderId != null && top is ProviderAuthNavKey &&
+                top.providerId == flowProviderId ->
+                backStack.add(ProviderLoginNavKey(flowProviderId))
+
+            flowProviderId == null && top is ProviderLoginNavKey ->
+                backStack.removeAt(backStack.lastIndex)
         }
     }
 
@@ -262,9 +282,15 @@ fun ChatScreen(
     val pushDefaultThinking: () -> Unit = { backStack.add(DefaultThinkingNavKey) }
     val pushProviders: () -> Unit = { backStack.add(ProvidersNavKey) }
     val pushProviderAuth: (String) -> Unit = { backStack.add(ProviderAuthNavKey(it)) }
+    val pushProviderApiKeyForm: (String) -> Unit = { backStack.add(ProviderApiKeyNavKey(it)) }
     val pushSearchProviders: () -> Unit = { backStack.add(SearchProvidersNavKey) }
     val pushSearchProviderAuth: (String) -> Unit = { backStack.add(SearchProviderAuthNavKey(it)) }
     val popBackStack: () -> Unit = {
+        // Popping the login destination cancels its flow: a login must
+        // never outlive the screen it belongs to.
+        if (backStack.lastOrNull() is ProviderLoginNavKey) {
+            onCancelProviderAuthLogin()
+        }
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
     val topKey = backStack.lastOrNull() ?: ChatNavKey
@@ -331,12 +357,12 @@ fun ChatScreen(
                                     .firstOrNull { it.id == topKey.providerId }?.name
                                     ?: stringResource(R.string.search_providers_title)
 
-                            is ProviderAuthNavKey ->
-                                uiState.providerOptions
-                                    .firstOrNull { it.id == topKey.providerId }?.name
-                                    ?: stringResource(R.string.providers_title)
-
-                            else -> stringResource(R.string.session_title)
+                            else -> providerNavKeyId(topKey)
+                                ?.let { providerId ->
+                                    uiState.providerOptions
+                                        .firstOrNull { it.id == providerId }?.name
+                                }
+                                ?: stringResource(R.string.session_title)
                         },
                         // The drawer belongs to the Chat root (on both its
                         // views); nested destinations navigate up instead. A
@@ -377,7 +403,7 @@ fun ChatScreen(
 
                     else -> NavDisplay(
                         backStack = backStack,
-                        onBack = { backStack.removeLastOrNull() },
+                        onBack = popBackStack,
                         entryProvider = entryProvider {
                             entry<ChatNavKey> {
                                 if (chatRoot) {
@@ -500,12 +526,8 @@ fun ChatScreen(
                                 val option = uiState.providerOptions
                                     .firstOrNull { it.id == key.providerId }
                                 if (option != null) {
-                                    ProviderAuthEntry(
+                                    ProviderAuthScreen(
                                         provider = option,
-                                        flow = uiState.authFlow?.takeIf {
-                                            it.providerId ==
-                                                key.providerId
-                                        },
                                         prompts = authPrompts(key.providerId),
                                         methods = authMethods(key.providerId),
                                         onSave = { apiKeyInput, envInputs ->
@@ -516,14 +538,45 @@ fun ChatScreen(
                                             )
                                         },
                                         onRemove = { onRemoveProviderCredential(key.providerId) },
+                                        onOpenApiKeyForm = {
+                                            pushProviderApiKeyForm(key.providerId)
+                                        },
                                         onBeginLogin = { method ->
                                             onBeginProviderAuthLogin(key.providerId, method)
                                         },
-                                        onSubmitPrompt = onSubmitAuthPrompt,
-                                        onCancelLogin = onCancelProviderAuthLogin,
                                         onClose = popBackStack
                                     )
                                 }
+                            }
+                            entry<ProviderApiKeyNavKey> { key ->
+                                val option = uiState.providerOptions
+                                    .firstOrNull { it.id == key.providerId }
+                                if (option != null) {
+                                    ProviderAuthContent(
+                                        provider = option,
+                                        prompts = authPrompts(key.providerId),
+                                        onSave = { apiKeyInput, envInputs ->
+                                            onSaveProviderCredential(
+                                                key.providerId,
+                                                apiKeyInput,
+                                                envInputs
+                                            )
+                                        },
+                                        onRemove = { onRemoveProviderCredential(key.providerId) },
+                                        onClose = popBackStack
+                                    )
+                                }
+                            }
+                            entry<ProviderLoginNavKey> { key ->
+                                uiState.authFlow
+                                    ?.takeIf { it.providerId == key.providerId }
+                                    ?.let { flow ->
+                                        ProviderLoginScreen(
+                                            flow = flow,
+                                            onSubmit = onSubmitAuthPrompt,
+                                            onCancel = popBackStack
+                                        )
+                                    }
                             }
                         }
                     )
@@ -657,6 +710,14 @@ private fun ConversationViewToggle(
             )
         }
     }
+}
+
+/** The provider id of a provider-family destination key, or null for other roots. */
+private fun providerNavKeyId(key: NavKey): String? = when (key) {
+    is ProviderAuthNavKey -> key.providerId
+    is ProviderApiKeyNavKey -> key.providerId
+    is ProviderLoginNavKey -> key.providerId
+    else -> null
 }
 
 @Composable
@@ -979,7 +1040,12 @@ private fun ChatScreenAuthFlowPreview() {
                 )
             )
         ),
-        extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("zai")),
+        extraKeys = listOf(
+            SettingsNavKey,
+            ProvidersNavKey,
+            ProviderAuthNavKey("zai"),
+            ProviderLoginNavKey("zai")
+        ),
         authMethods = { providerId ->
             if (providerId ==
                 "zai"

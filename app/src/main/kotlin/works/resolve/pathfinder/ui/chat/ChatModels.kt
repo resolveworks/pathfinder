@@ -115,6 +115,14 @@ data class SearchProviderAuthNavKey(val providerId: String) : NavKey
 @Serializable
 data class ProviderAuthNavKey(val providerId: String) : NavKey
 
+/** The API-key credential form, pushed on top of a provider's method choice. */
+@Serializable
+data class ProviderApiKeyNavKey(val providerId: String) : NavKey
+
+/** A provider's in-flight login; on the back stack only while its flow runs. */
+@Serializable
+data class ProviderLoginNavKey(val providerId: String) : NavKey
+
 data class AutoRetryStatus(val attempt: Int, val maxAttempts: Int)
 
 /** Outcome of the initial load of settings, credentials, and sessions. */
@@ -132,7 +140,9 @@ data class ProviderOption(
     val id: String,
     val name: String,
     /** True iff a credential with a non-blank key is stored for this provider. */
-    val configured: Boolean
+    val configured: Boolean,
+    /** Kind of the stored credential; null iff [configured] is false. */
+    val authType: AuthType? = null
 )
 
 /** One row per model of a configured provider. */
@@ -212,7 +222,7 @@ enum class ProviderAuthScreenMode {
     /** Sole API-key method: show the credential form directly. */
     API_KEY_FORM,
 
-    /** Sole OAuth method: start the account login flow immediately. */
+    /** Sole OAuth method: offer an explicit account sign-in action. */
     START_OAUTH,
 
     /** No login method available (no catalog prompts, no registered flow). */

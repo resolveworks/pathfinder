@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.ui.chat
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,7 +28,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -256,39 +254,29 @@ internal fun ProviderAuthContent(
 }
 
 /**
- * The provider-auth screen (pi's /login method selection and login dialog).
- * Per-method routing follows [providerAuthScreenMode]; while a login flow
- * for this provider is in flight it replaces whatever surface was showing
- * (pi's login dialog replaces the editor).
+ * The provider-auth screen (pi's /login method selection and login
+ * dialog): a stored credential replaces every login surface with sign-out
+ * (pi's /logout); methods, the key form, and the sign-in action appear
+ * only while unconfigured. The in-flight login itself is a separate
+ * destination ([ProviderLoginNavKey]); per-method routing here follows
+ * [providerAuthScreenMode].
  */
 @Composable
-internal fun ProviderAuthEntry(
+internal fun ProviderAuthScreen(
     provider: ProviderOption,
-    flow: ProviderAuthFlow?,
     prompts: List<ProviderAuthPrompt>,
     methods: List<AuthMethodInfo>,
     onSave: (apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
     onRemove: () -> Unit,
+    onOpenApiKeyForm: () -> Unit,
     onBeginLogin: (method: AuthMethodInfo) -> Unit,
-    onSubmitPrompt: (answer: String) -> Unit,
-    onCancelLogin: () -> Unit,
     onClose: () -> Unit
 ) {
-    // System back cancels an active login flow first (pi's dialog escape).
-    BackHandler(enabled = flow != null) { onCancelLogin() }
-
-    if (flow != null) {
-        AuthFlowContent(
-            flow = flow,
-            onSubmit = onSubmitPrompt,
-            onCancel = onCancelLogin
-        )
+    if (provider.configured) {
+        StoredProviderContent(provider = provider, onRemove = onRemove)
         return
     }
 
-    var showApiKeyForm by remember(provider.id) {
-        mutableStateOf(providerAuthScreenMode(methods) == ProviderAuthScreenMode.API_KEY_FORM)
-    }
     when (providerAuthScreenMode(methods)) {
         ProviderAuthScreenMode.API_KEY_FORM -> ProviderAuthContent(
             provider = provider,
@@ -298,45 +286,37 @@ internal fun ProviderAuthEntry(
             onClose = onClose
         )
 
-        ProviderAuthScreenMode.METHOD_CHOICE -> if (showApiKeyForm) {
-            ProviderAuthContent(
-                provider = provider,
-                prompts = prompts,
-                onSave = onSave,
-                onRemove = onRemove,
-                onClose = onClose
-            )
-        } else {
-            AuthMethodSelectorContent(
-                providerName = provider.name,
-                methods = methods,
-                onSelect = { method ->
-                    if (method.type == AuthType.API_KEY) {
-                        showApiKeyForm = true
-                    } else {
-                        onBeginLogin(method)
-                    }
+        ProviderAuthScreenMode.METHOD_CHOICE -> AuthMethodSelectorContent(
+            providerName = provider.name,
+            methods = methods,
+            onSelect = { method ->
+                if (method.type == AuthType.API_KEY) {
+                    onOpenApiKeyForm()
+                } else {
+                    onBeginLogin(method)
                 }
-            )
-        }
+            }
+        )
 
         ProviderAuthScreenMode.START_OAUTH -> {
             val method = methods.first()
-            LaunchedEffect(provider.id) { onBeginLogin(method) }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 Text(
-                    text = stringResource(R.string.auth_waiting),
+                    text = stringResource(R.string.auth_method_title, provider.name),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = method.label,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                TextButton(onClick = onCancelLogin) {
-                    Text(stringResource(R.string.action_cancel_sign_in))
+                Button(onClick = { onBeginLogin(method) }) {
+                    Text(stringResource(R.string.auth_sign_in))
                 }
             }
         }
@@ -354,6 +334,77 @@ internal fun ProviderAuthEntry(
                 textAlign = TextAlign.Center
             )
         }
+    }
+}
+
+/**
+ * The signed-in state: no login options, only leaving. Sign-out labels the
+ * stored credential kind ("Log out" for accounts, "Forget provider" for
+ * API keys); once the credential is gone the surrounding screen flips back
+ * to the method surfaces.
+ */
+@Composable
+private fun StoredProviderContent(provider: ProviderOption, onRemove: () -> Unit) {
+    var confirmRemove by remember { mutableStateOf(false) }
+    val isAccount = provider.authType == AuthType.OAUTH
+    val removeLabel =
+        if (isAccount) R.string.action_sign_out else R.string.action_remove_provider
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            text = stringResource(
+                if (isAccount) R.string.provider_signed_in_body else R.string.provider_api_key_body
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        TextButton(
+            onClick = { confirmRemove = true },
+            colors = ButtonDefaults.textButtonColors(
+                contentColor = MaterialTheme.colorScheme.error
+            )
+        ) {
+            Text(stringResource(removeLabel))
+        }
+    }
+
+    if (confirmRemove) {
+        val name = provider.name
+        AlertDialog(
+            onDismissRequest = { confirmRemove = false },
+            title = { Text(stringResource(removeLabel)) },
+            text = {
+                val messageRes = if (isAccount) {
+                    R.string.sign_out_confirm
+                } else {
+                    R.string.remove_provider_confirm
+                }
+                Text(stringResource(messageRes, name))
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmRemove = false
+                        onRemove()
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text(stringResource(removeLabel))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRemove = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
     }
 }
 
@@ -399,14 +450,17 @@ private fun AuthMethodSelectorContent(
 }
 
 /**
- * Android projection of pi's login dialog: events and prompts keep their
- * upstream shapes and ordering, but the phone UI presents only the current
- * action (browser button, device code, or live prompt). Terminal-oriented
- * raw URLs, progress transcripts, and the raced manual-code fallback are
- * intentionally not rendered.
+ * The in-flight login's own destination (pi's login dialog): events and
+ * prompts keep their upstream shapes and ordering, but the phone UI
+ * presents only the current action (browser button, device code, or live
+ * prompt). Terminal-oriented raw URLs, progress transcripts, and the raced
+ * manual-code fallback are intentionally not rendered. Leaving this
+ * destination — system back, the cancel action, or the flow ending — goes
+ * through one pop that also cancels the login (see ChatScreen), so a flow
+ * never outlives its screen.
  */
 @Composable
-private fun AuthFlowContent(
+internal fun ProviderLoginScreen(
     flow: ProviderAuthFlow,
     onSubmit: (answer: String) -> Unit,
     onCancel: () -> Unit
@@ -514,7 +568,7 @@ private fun AuthEventItem(event: AuthEvent, onOpenUri: (url: String) -> Unit) {
 
 /**
  * [AuthPromptKind.MANUAL_CODE] is pi's fallback for completing the flow in
- * a remote browser (raced against the callback server); [AuthFlowContent]
+ * a remote browser (raced against the callback server); the login screen
  * filters it because Pathfinder's browser runs on the same device.
  */
 @Composable

@@ -29,6 +29,7 @@ import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt as AuthInteractionPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
+import works.resolve.pathfinder.ai.auth.CredentialType
 import works.resolve.pathfinder.ai.auth.ModelsError
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
 import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
@@ -1382,10 +1383,23 @@ class ChatViewModel(
         val providerOptions = try {
             catalog.providers
                 .map { provider ->
+                    val configured = authService.isConfigured(provider.id)
+                    // The stored kind labels the sign-out action ("Log out"
+                    // vs "Forget provider"); read only when configured.
+                    val authType = if (configured) {
+                        authService.authStatus(provider.id).storedType
+                    } else {
+                        null
+                    }
                     ProviderOption(
                         id = provider.id,
                         name = provider.name,
-                        configured = authService.isConfigured(provider.id)
+                        configured = configured,
+                        authType = when (authType) {
+                            CredentialType.API_KEY -> AuthType.API_KEY
+                            CredentialType.OAUTH -> AuthType.OAUTH
+                            null -> null
+                        }
                     )
                 }
                 .sortedBy { it.name }
