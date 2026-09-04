@@ -28,17 +28,19 @@ Port only:
   errors, auth, and shared provider behavior. A provider using an existing API
   may be added cheaply; a new wire protocol or complex auth flow requires an
   explicit decision.
-- The classic `packages/agent` Agent and agent loop, plus the retry, compaction,
-  conversation-tree, persistence, and recovery behavior used by the app.
-- Selected `packages/coding-agent` interaction semantics, implemented as native
-  Android UX rather than ported application code.
+- The classic `packages/agent` Agent and agent loop.
+- The classic `packages/coding-agent` `AgentSession` behavior used by the app:
+  retry, compaction, conversation trees, JSONL persistence, and recovery, plus
+  selected interaction semantics adapted into native Android UX.
 - The minimum telemetry contract required by those runtime pieces.
 
 Do not port:
 
-- The experimental AgentHarness, lane runtime, durable session substrate, or
-  worker architecture. The existing partial port under `agent/harness` and
-  `data/sessions/substrate` is slated for removal; do not extend or depend on it.
+- The newer experimental stack rooted at upstream
+  `packages/agent/src/harness/`: AgentHarness, its durable execution and effect
+  machinery, multi-lane worker runtime, generic session backends, and related
+  infrastructure. It is not a synchronization target; do not extend the
+  existing classic session port toward it without an explicit scope decision.
 - Extensions, hooks for third-party customization, Chord plugins/facets, pi
   packages, skills, prompt templates, themes, or resource discovery.
 - The TUI, CLI, print/JSON/RPC/SDK modes, terminal keybindings, project trust,
@@ -57,6 +59,11 @@ APIs. Keep upstream module and exported-symbol names where behavior is ported.
 Use idiomatic Kotlin only where pi does not dictate the shape. Keep required
 Android or Kotlin adaptations narrow, documented, and tested.
 
+Comments and KDoc should contain only information the source cannot reasonably
+convey. Preserve non-obvious rationale, invariants, cross-layer contracts, and
+necessary divergences; do not narrate adjacent code or add routine upstream
+provenance, file paths, or line citations.
+
 Keep provider-opaque data as `JsonElement`; reuse the shared JSON codecs and
 accessors rather than introducing serializable mirror DTOs or private helper
 families. Streaming uses `Flow`: preserve pi's event contract and always
@@ -65,13 +72,14 @@ propagate coroutine cancellation unchanged.
 The generated model catalog includes only providers supported end to end and
 must not be hand-edited.
 
-## Android architecture
+## Architecture
 
-- The platform-neutral runtime owns models, providers, streaming, agent state,
-  and conversation semantics.
-- The Android layer owns presentation, lifecycle, navigation, input, settings,
-  credentials, and platform adapters. It projects runtime state rather than
-  duplicating it.
+- Ported runtime code lives under `packages/`, in Gradle modules mirroring pi's
+  `packages/ai`, `packages/agent`, `packages/coding-agent`, and
+  `packages/telemetry`. Keep those modules platform-neutral.
+- The Android application lives under `app/` and owns presentation, lifecycle,
+  navigation, input, settings, credentials, platform adapters, and app-specific
+  tools. It projects runtime state rather than duplicating it.
 - Use single-activity Compose with MVVM/UDF, immutable `StateFlow` UI state, and
   state-hoisted composables.
 - `PathfinderApplication` is the manual composition root. Add a DI framework
@@ -81,10 +89,10 @@ must not be hand-edited.
 
 ## Security
 
-Never log API keys, credentials, message text, or model responses. Secret form
-values remain ephemeral, secret-bearing types must redact their string
-representations, and persisted credentials stay behind the Android
-Keystore-backed boundary.
+Never log API keys, credentials, message text, model responses, or tool
+arguments and results. Secret form values remain ephemeral, secret-bearing
+types must redact their string representations, and persisted credentials stay
+behind the Android Keystore-backed boundary.
 
 ## Check
 
