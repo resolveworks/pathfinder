@@ -20,7 +20,12 @@
     <string name="settings_providers_hint">Manage sign-ins and API keys</string>
     <string name="settings_show_thinking">Show thinking</string>
     <string name="settings_show_thinking_hint">Show the model\'s reasoning as it thinks</string>
-    <string name="thinking_label">thinking</string>
+    <string name="thinking_label">thinking…</string>
+    <string name="thought_label">thought</string>
+    <plurals name="thought_tokens">
+        <item quantity="one">thought · %d token</item>
+        <item quantity="other">thought · %d tokens</item>
+    </plurals>
     <string name="providers_title">Providers</string>
     <string name="search_providers_title">Search providers</string>
     <string name="search_providers_hint">Manage web search API keys</string>

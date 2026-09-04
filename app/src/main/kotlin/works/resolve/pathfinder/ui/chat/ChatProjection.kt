@@ -72,7 +72,8 @@ internal fun projectCommitted(
                         id = "msg-$index-${message.timestamp}",
                         role = ChatRole.Assistant,
                         blocks = message.content.toChatBlocks(),
-                        error = message.errorMessage
+                        error = message.errorMessage,
+                        reasoningTokens = message.usage.reasoning
                     )
 
                     // Distinct id namespace so a tool row can never collide
@@ -107,7 +108,8 @@ internal fun projectStreaming(message: AssistantMessage): ChatMessage = ChatMess
     id = "streaming-${message.timestamp}",
     role = ChatRole.Assistant,
     blocks = message.content.toChatBlocks(),
-    error = message.errorMessage
+    error = message.errorMessage,
+    reasoningTokens = message.usage.reasoning
 )
 
 /** Ordered blocks: consecutive thinking parts merge into one, blank parts drop. */

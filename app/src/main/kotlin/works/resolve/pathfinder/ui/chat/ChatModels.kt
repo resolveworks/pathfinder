@@ -41,6 +41,8 @@ data class ChatMessage(
     val blocks: List<ChatBlock>,
     /** User-facing failure text for error/aborted assistant messages. */
     val error: String? = null,
+    /** usage.reasoning (thinking tokens) for assistant rows; 0 when the provider doesn't report them. */
+    val reasoningTokens: Int = 0,
     /** Marker row for a compaction cut; renders as a divider, not message content. */
     val isCompactionMarker: Boolean = false,
     /** Tool-result payload; set only on [ChatRole.Tool] rows (empty blocks). */

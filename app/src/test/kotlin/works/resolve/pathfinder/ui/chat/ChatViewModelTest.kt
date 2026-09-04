@@ -61,6 +61,7 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.AuthEvent
@@ -1060,6 +1061,7 @@ class ChatViewModelTest {
             api = testModel.api,
             provider = "zai",
             model = "glm-4.7",
+            usage = Usage(reasoning = 412),
             timestamp = System.nanoTime()
         )
         session.agent.processEvent(AgentEvent.MessageStart(call))
@@ -1069,6 +1071,7 @@ class ChatViewModelTest {
         val blocks = vm.uiState.value.messages[0].blocks
         assertEquals(4, blocks.size)
         assertEquals(ChatBlock.Thinking("reasoning first"), blocks[0])
+        assertEquals(412, vm.uiState.value.messages[0].reasoningTokens)
         assertEquals(ChatBlock.Text("Before"), blocks[1])
         assertEquals(ChatBlock.ToolCall("call-1", "get_weather"), blocks[2])
         assertEquals(ChatBlock.Text("After"), blocks[3])

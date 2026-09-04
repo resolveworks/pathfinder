@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -19,13 +18,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -33,10 +28,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -63,51 +56,19 @@ private const val STREAMING_PLACEHOLDER = "…"
 private fun ChatMessage.displayText(): String =
     blocks.filterIsInstance<ChatBlock.Text>().joinToString("\n\n") { it.text }
 
-/**
- * [listSaver] needs flat Bundle-saveable values, so the map is saved as an
- * alternating key, value, … list.
- */
-private fun thinkingOverridesSaver() = listSaver<MutableMap<String, Boolean>, Any>(
-    save = { map ->
-        buildList {
-            map.forEach { (key, expanded) ->
-                add(key)
-                add(expanded)
-            }
-        }
-    },
-    restore = { list ->
-        mutableStateMapOf<String, Boolean>().apply {
-            var i = 0
-            while (i + 1 < list.size) {
-                put(list[i] as String, list[i + 1] as Boolean)
-                i += 2
-            }
-        }
-    }
-)
-
 @Composable
 internal fun ConversationContent(
     uiState: ChatUiState,
     listState: LazyListState,
-    modifier: Modifier = Modifier,
-    initialThinkingOverrides: Map<String, Boolean> = emptyMap()
+    modifier: Modifier = Modifier
 ) {
     val messageCount = uiState.messages.size
     val streamingId = uiState.streamingMessage?.id
 
-    // Per-block expanded overrides (ephemeral view state keyed by stable
-    // "messageId:blockIndex"): a block the user never tapped keeps following
-    // the persisted showThinking default; a tapped block locks in the user's
-    // choice and outlives later changes to the setting.
-    val thinkingOverrides = rememberSaveable(saver = thinkingOverridesSaver()) {
-        mutableStateMapOf<String, Boolean>().apply { putAll(initialThinkingOverrides) }
-    }
-
-    // Tool result opened in the viewer sheet, by tool call id. Ephemeral view
-    // state resolved against the live message list, so a stale id (session
-    // switch, branch navigation) just closes the sheet.
+    // Opened-viewer view state, by stable id (tool call id, or
+    // "messageId:blockIndex" for a thinking block). Ephemeral state resolved
+    // against the live message list, so a stale key (session switch, branch
+    // navigation) just closes the sheet.
     var openToolResultId by rememberSaveable { mutableStateOf<String?>(null) }
     val openToolResult = openToolResultId?.let { id ->
         uiState.messages.firstNotNullOfOrNull { message ->
@@ -150,8 +111,7 @@ internal fun ConversationContent(
                             streaming.copy(blocks = listOf(ChatBlock.Text(STREAMING_PLACEHOLDER)))
                         },
                         isStreaming = true,
-                        showThinking = uiState.showThinking,
-                        thinkingOverrides = thinkingOverrides
+                        showThinking = uiState.showThinking
                     )
                 }
             }
@@ -187,8 +147,7 @@ internal fun ConversationContent(
 
                     else -> AssistantMessageItem(
                         message = message,
-                        showThinking = uiState.showThinking,
-                        thinkingOverrides = thinkingOverrides
+                        showThinking = uiState.showThinking
                     )
                 }
             }
@@ -262,14 +221,16 @@ private fun UserMessageItem(message: ChatMessage, modifier: Modifier = Modifier)
 
 /**
  * Assistant message: plain full-width markdown with no container, so it
- * reads like a reply rather than a bubble. Thinking blocks stay
- * collapsible; an error renders below the body in error color.
+ * reads like a reply rather than a bubble. With showThinking on, thinking
+ * blocks render inline and stream as they arrive (pi's shown state); with
+ * it off they collapse to [ThinkingLabel] (pi's hidden state, plus a
+ * duration once the run completes). An error renders below the body in
+ * error color.
  */
 @Composable
 private fun AssistantMessageItem(
     message: ChatMessage,
     showThinking: Boolean,
-    thinkingOverrides: MutableMap<String, Boolean>,
     modifier: Modifier = Modifier,
     isStreaming: Boolean = false
 ) {
@@ -285,17 +246,23 @@ private fun AssistantMessageItem(
 
                 is ChatBlock.ToolCall -> Unit
 
-                is ChatBlock.Thinking -> {
-                    val key = "${message.id}:$index"
-                    val expanded = thinkingOverrides[key] ?: showThinking
-                    ThinkingBlock(
-                        text = block.text,
-                        expanded = expanded,
-                        // Loader only while thinking is actively being
-                        // produced: the streaming message's LAST block
-                        // and a Thinking block (earlier runs are done).
-                        showLoader = isStreaming && index == message.blocks.lastIndex,
-                        onToggle = { thinkingOverrides[key] = !expanded }
+                is ChatBlock.Thinking -> if (showThinking) {
+                    ThinkingText(markdown = block.text)
+                } else {
+                    ThinkingLabel(
+                        // Active only while this run is still growing: the
+                        // streaming message's LAST block and a Thinking block
+                        // (earlier runs are done).
+                        active = isStreaming && index == message.blocks.lastIndex,
+                        // usage.reasoning is message-level: only the first
+                        // collapsed run shows it, later runs stay uncounted.
+                        tokens = if (
+                            message.blocks.subList(0, index).none { it is ChatBlock.Thinking }
+                        ) {
+                            message.reasoningTokens
+                        } else {
+                            0
+                        }
                     )
                 }
             }
@@ -455,18 +422,15 @@ private fun ToolCallItem(
 }
 
 /**
- * Viewer for one tool result: pi's clipped preview with the show-all button
- * in a scrollable modal sheet. A fresh scroll state per open anchors the
- * viewport at the top of the content; dismissing restores the transcript's
- * scroll position because it never moved.
+ * Tool-result viewer: pi's clipped preview with the show-all button in a
+ * scrollable modal sheet; web_search results with structured details render
+ * as expandable result cards instead. A fresh scroll state per open anchors
+ * the viewport at the top of the content; dismissing restores the
+ * transcript's scroll position because it never moved.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ToolOutputSheet(
-    result: ChatToolResult,
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
-) {
+private fun ToolOutputSheet(result: ChatToolResult, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         var showAll by remember(result.toolCallId) { mutableStateOf(false) }
         val format = ToolResultRenderers.formatFor(result.toolName)
@@ -483,7 +447,7 @@ private fun ToolOutputSheet(
             MaterialTheme.colorScheme.onSurfaceVariant
         }
         Column(
-            modifier = modifier
+            modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
                 .navigationBarsPadding()
@@ -544,6 +508,39 @@ private fun ToolOutputSheet(
                 }
             }
         }
+    }
+}
+
+/**
+ * pi's hidden thinking state as a non-interactive label line: spinner on
+ * the left while the run streams, the message's reported thinking-token
+ * count once committed (plain "thought" when the provider reports none).
+ * Same tone as the thinking text itself; showing thinking is the setting's
+ * job, never a per-block interaction.
+ */
+@Composable
+private fun ThinkingLabel(active: Boolean, tokens: Int) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(vertical = 2.dp)
+    ) {
+        if (active) {
+            CircularProgressIndicator(
+                strokeWidth = 1.5.dp,
+                modifier = Modifier.size(14.dp),
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+        Text(
+            text = when {
+                active -> stringResource(R.string.thinking_label)
+                tokens > 0 -> pluralStringResource(R.plurals.thought_tokens, tokens, tokens)
+                else -> stringResource(R.string.thought_label)
+            },
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.outline
+        )
     }
 }
 
@@ -634,54 +631,18 @@ private fun WebSearchResultItem(result: ChatSearchResult, modifier: Modifier = M
     }
 }
 
+/**
+ * pi's shown thinking state's look: markdown dimmer than the onSurface
+ * answer text in both theme variants, italic.
+ */
 @Composable
-private fun ThinkingBlock(
-    text: String,
-    expanded: Boolean,
-    showLoader: Boolean,
-    onToggle: () -> Unit
-) {
-    Column {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onToggle)
-                .padding(vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = stringResource(R.string.thinking_label),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (showLoader) {
-                CircularProgressIndicator(
-                    strokeWidth = 1.5.dp,
-                    modifier = Modifier.size(14.dp)
-                )
-            }
-            Spacer(modifier = Modifier.weight(1f))
-            Icon(
-                imageVector = if (expanded) {
-                    Icons.Default.KeyboardArrowUp
-                } else {
-                    Icons.Default.KeyboardArrowDown
-                },
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        if (expanded) {
-            // outline (not onSurfaceVariant): keeps expanded thinking clearly
-            // dimmer than the onSurface answer text in both theme variants.
-            MarkdownText(
-                markdown = text,
-                color = MaterialTheme.colorScheme.outline,
-                italic = true
-            )
-        }
-    }
+private fun ThinkingText(markdown: String, modifier: Modifier = Modifier) {
+    MarkdownText(
+        markdown = markdown,
+        modifier = modifier,
+        color = MaterialTheme.colorScheme.outline,
+        italic = true
+    )
 }
 
 @Preview(showBackground = true)
@@ -691,9 +652,9 @@ private fun ConversationContentThinkingPreview() {
         ConversationContent(
             uiState = ChatUiState(
                 status = ChatStatus.Ready,
-                // Default collapsed; the explicit per-block overrides below
-                // expand the first run only, exercising both states at once.
-                showThinking = false,
+                // The setting's on-mode renders reasoning inline (pi's shown
+                // state), streaming as it arrives.
+                showThinking = true,
                 messages = listOf(
                     ChatMessage(
                         id = "m1",
@@ -728,8 +689,7 @@ private fun ConversationContentThinkingPreview() {
                     )
                 )
             ),
-            listState = rememberLazyListState(),
-            initialThinkingOverrides = mapOf("m2:0" to true)
+            listState = rememberLazyListState()
         )
     }
 }
