@@ -100,6 +100,11 @@
     <string name="error_generic">Something went wrong</string>
 
     <string name="tree_search_hint">Search</string>
+    <string name="session_search_hint">Search chats</string>
+    <string name="session_search_clear">Clear search</string>
+    <string name="session_search_sort_recent">Recent</string>
+    <string name="session_search_sort_relevance">Relevance</string>
+    <string name="session_search_no_results">No matching chats</string>
     <string name="tree_clear_search">Clear search</string>
     <string name="tree_filter_all">All</string>
     <string name="tree_filter_user_only">User only</string>

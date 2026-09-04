@@ -71,7 +71,7 @@ internal fun fuzzyMatch(query: String, text: String): FuzzyMatch {
     return FuzzyMatch(matches = true, score = swappedMatch.score + 5.0)
 }
 
-internal enum class SessionSearchSort { RECENT, RELEVANCE }
+enum class SessionSearchSort { RECENT, RELEVANCE }
 
 internal data class SearchToken(val kind: Kind, val value: String) {
     enum class Kind { FUZZY, PHRASE }

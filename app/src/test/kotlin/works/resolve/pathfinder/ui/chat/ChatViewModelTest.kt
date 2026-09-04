@@ -218,6 +218,9 @@ class ChatViewModelTest {
             private set
         var totalSaves = 0
             private set
+        var failSearchCorpus = false
+        var searchCorpusCalls = 0
+            private set
         val appendedRecords =
             ConcurrentLinkedQueue<works.resolve.pathfinder.codingagent.core.session.LaneRecord>()
         var saveEntered: CompletableDeferred<Unit>? = null
@@ -244,6 +247,17 @@ class ChatViewModelTest {
             saveEntered?.complete(Unit)
             saveGate?.await()
             return delegate.save(session)
+        }
+
+        override suspend fun searchCorpus(): Map<String, String> {
+            searchCorpusCalls += 1
+            if (failSearchCorpus) {
+                throw works.resolve.pathfinder.codingagent.core.session.SessionError(
+                    SessionErrorCode.STORAGE,
+                    "corpus scan failed"
+                )
+            }
+            return delegate.searchCorpus()
         }
     }
 
@@ -2669,6 +2683,117 @@ class ChatViewModelTest {
         vm.saveProviderCredential("zai", "k", emptyMap())
         vm.uiState.first { it.credentialSuccessEpoch == 1L }
         assertEquals("k", (h.credentials.creds["zai"] as ApiKeyCredential).key)
+
+        vm.closeForTest()
+    }
+
+    // ---- session search ----
+
+    @Test
+    fun sessionSearch_scansOnce_perQueryStretch_andFiltersResults() =
+        runTest(mainDispatcherRule.scheduler) {
+            val h = Harness()
+            val vm = h.newViewModel()
+            vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+            vm.configure(apiKey = "k")
+            vm.uiState.first { it.status == ChatStatus.Ready }
+
+            vm.exchange(h, "Hello", "world")
+            val firstId = vm.uiState.value.activeSessionId!!
+            vm.newSession()
+            val secondId = vm.uiState.first { it.activeSessionId != firstId }.activeSessionId!!
+            vm.exchange(h, "zebra facts", "reply")
+            vm.uiState.first {
+                it.sessionSummaries.sumOf { s -> s.messageCount } == 4
+            }
+
+            vm.onSessionSearchQueryChange("zebra")
+            waitUntil {
+                !vm.uiState.value.isSessionSearching &&
+                    vm.uiState.value.sessionSearchResults.isNotEmpty()
+            }
+            assertEquals(listOf(secondId), vm.uiState.value.sessionSearchResults.map { it.id })
+            assertEquals(1, h.sessions.searchCorpusCalls)
+
+            // Further keystrokes filter in memory: no rescan.
+            vm.onSessionSearchQueryChange("zebrax")
+            assertEquals(0, vm.uiState.value.sessionSearchResults.size)
+            vm.onSessionSearchQueryChange("zebra")
+            assertEquals(listOf(secondId), vm.uiState.value.sessionSearchResults.map { it.id })
+            assertEquals(1, h.sessions.searchCorpusCalls)
+
+            // Clearing the query clears results and drops the corpus: a new
+            // query rescans.
+            vm.onSessionSearchQueryChange("")
+            assertEquals(0, vm.uiState.value.sessionSearchResults.size)
+            assertFalse(vm.uiState.value.isSessionSearching)
+            vm.onSessionSearchQueryChange("Hello")
+            waitUntil {
+                !vm.uiState.value.isSessionSearching &&
+                    vm.uiState.value.sessionSearchResults.isNotEmpty()
+            }
+            assertEquals(listOf(firstId), vm.uiState.value.sessionSearchResults.map { it.id })
+            assertEquals(2, h.sessions.searchCorpusCalls)
+
+            vm.closeForTest()
+        }
+
+    @Test
+    fun sessionSearch_sortChangeReorders_recentVsRelevance() =
+        runTest(mainDispatcherRule.scheduler) {
+            val h = Harness()
+            val vm = h.newViewModel()
+            vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+            vm.configure(apiKey = "k")
+            vm.uiState.first { it.status == ChatStatus.Ready }
+
+            vm.exchange(h, "zebra", "ok")
+            val tightId = vm.uiState.value.activeSessionId!!
+            vm.newSession()
+            val looseId = vm.uiState.first { it.activeSessionId != tightId }.activeSessionId!!
+            vm.exchange(h, "a long unrelated preamble before mentioning zebra", "ok")
+            vm.uiState.first { it.sessionSummaries.sumOf { s -> s.messageCount } == 4 }
+
+            vm.onSessionSearchQueryChange("zebra")
+            waitUntil {
+                !vm.uiState.value.isSessionSearching &&
+                    vm.uiState.value.sessionSearchResults.size == 2
+            }
+            // Default RELEVANCE: the exact-match session ranks first.
+            assertEquals(
+                listOf(tightId, looseId),
+                vm.uiState.value.sessionSearchResults.map { it.id }
+            )
+
+            vm.setSessionSearchSort(SessionSearchSort.RECENT)
+            assertEquals(
+                listOf(looseId, tightId),
+                vm.uiState.value.sessionSearchResults.map { it.id }
+            )
+            vm.setSessionSearchSort(SessionSearchSort.RELEVANCE)
+            assertEquals(
+                listOf(tightId, looseId),
+                vm.uiState.value.sessionSearchResults.map { it.id }
+            )
+
+            vm.closeForTest()
+        }
+
+    @Test
+    fun sessionSearch_scanFailure_degradesToEmptyResults() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        vm.exchange(h, "Hello", "world")
+        vm.uiState.first { it.sessionSummaries.first().messageCount == 2 }
+
+        h.sessions.failSearchCorpus = true
+        vm.onSessionSearchQueryChange("Hello")
+        waitUntil { !vm.uiState.value.isSessionSearching }
+        assertEquals(0, vm.uiState.value.sessionSearchResults.size)
+        assertNull(vm.uiState.value.error)
 
         vm.closeForTest()
     }

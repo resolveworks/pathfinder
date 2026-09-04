@@ -305,6 +305,13 @@ data class ChatUiState(
     val defaultThinkingLevel: ModelThinkingLevel? = null,
     val activeSessionId: String? = null,
     val sessionSummaries: List<SessionSummary> = emptyList(),
+    /** Drawer session-search state; the corpus itself stays in the ViewModel (never in UI state). */
+    val sessionSearchQuery: String = "",
+    /** RELEVANCE matches pi's effective default under a query (its "threaded" mode degrades to relevance). */
+    val sessionSearchSort: SessionSearchSort = SessionSearchSort.RELEVANCE,
+    val sessionSearchResults: List<SessionSummary> = emptyList(),
+    /** True while the one-time corpus scan runs after the query activates. */
+    val isSessionSearching: Boolean = false,
     val messages: List<ChatMessage> = emptyList(),
     val pendingTools: List<PendingToolExecution> = emptyList(),
     val streamingMessage: ChatMessage? = null,
