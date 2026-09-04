@@ -59,17 +59,19 @@ val downloadDefuddle =
         }
     }
 
-// Extract only the UMD core bundle from the tarball, re-rooted so the asset
-// path is exactly defuddle/index.js.
+// Extract only the UMD bundle from the tarball, re-rooted so the asset path
+// is exactly defuddle/index.js. We ship dist/index.full.js, not the core
+// dist/index.js: the core bundle has no markdown conversion, and only the
+// full bundle runs turndown, so {markdown: true} in parse() requires it.
 val extractDefuddle =
     tasks.register<Copy>("extractDefuddle") {
         description =
-            "Extracts defuddle's dist/index.js into the generated assets directory."
+            "Extracts defuddle's dist/index.full.js into the generated assets directory."
         dependsOn(downloadDefuddle)
         from(tarTree(resources.gzip(defuddleTarball)))
-        include("package/dist/index.js")
+        include("package/dist/index.full.js")
         into(defuddleAssetsDir)
-        filesMatching("package/dist/index.js") { path = "defuddle/index.js" }
+        filesMatching("package/dist/index.full.js") { path = "defuddle/index.js" }
     }
 
 plugins {
