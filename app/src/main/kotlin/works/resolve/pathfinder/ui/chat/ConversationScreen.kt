@@ -1,7 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,17 +18,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,7 +46,8 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 /**
  * The conversation transcript surface: messages plus the composer column.
  * The composer column is content, not scaffold chrome — it belongs to the
- * transcript view — and owns its own navigation-bar and IME padding.
+ * transcript view; the scaffold owns navigation-bar padding, the column only
+ * lifts itself above the IME.
  */
 @Composable
 internal fun ChatSurface(
@@ -65,23 +65,7 @@ internal fun ChatSurface(
             listState = listState,
             modifier = Modifier.weight(1f)
         )
-        Column(
-            modifier = Modifier
-                .navigationBarsPadding()
-                .imePadding()
-        ) {
-            SelectionBar(
-                selectedModel = uiState.selectedModel,
-                defaultModel = uiState.defaultModel,
-                allOptions = uiState.modelOptions,
-                scopedOptions = uiState.scopedModelOptions,
-                scopeConfigured = !uiState.enabledModels.isNullOrEmpty(),
-                onSelectModel = onSelectModel,
-                thinkingLevel = uiState.thinkingLevel,
-                availableThinkingLevels = uiState.availableThinkingLevels,
-                defaultThinkingLevel = uiState.defaultThinkingLevel,
-                onSelectThinkingLevel = onSelectThinkingLevel
-            )
+        Column(modifier = Modifier.imePadding()) {
             uiState.retryStatus?.let { retry ->
                 RetryStatusRow(
                     attempt = retry.attempt,
@@ -99,18 +83,26 @@ internal fun ChatSurface(
                 canSend = uiState.canSend,
                 isStreaming = uiState.isStreaming
             )
+            SelectionBar(
+                selectedModel = uiState.selectedModel,
+                defaultModel = uiState.defaultModel,
+                options = uiState.scopedModelOptions,
+                onSelectModel = onSelectModel,
+                thinkingLevel = uiState.thinkingLevel,
+                availableThinkingLevels = uiState.availableThinkingLevels,
+                defaultThinkingLevel = uiState.defaultThinkingLevel,
+                onSelectThinkingLevel = onSelectThinkingLevel
+            )
         }
     }
 }
 
-/** pi's /model and /thinking bars as a chip row. */
+/** pi's /model and /thinking bars as a compact chip row under the composer. */
 @Composable
 private fun SelectionBar(
     selectedModel: SelectedModel?,
     defaultModel: SelectedModel?,
-    allOptions: List<ModelOption>,
-    scopedOptions: List<ModelOption>,
-    scopeConfigured: Boolean,
+    options: List<ModelOption>,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     thinkingLevel: ModelThinkingLevel?,
     availableThinkingLevels: List<ModelThinkingLevel>,
@@ -126,7 +118,7 @@ private fun SelectionBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp),
+            .padding(start = 12.dp, end = 12.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         AssistChip(
@@ -136,6 +128,13 @@ private fun SelectionBar(
                     text = selectedModel?.modelName ?: stringResource(R.string.model_picker_empty),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+            },
+            trailingIcon = {
+                Icon(
+                    Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
                 )
             }
         )
@@ -153,15 +152,20 @@ private fun SelectionBar(
                         },
                         maxLines = 1
                     )
+                },
+                trailingIcon = {
+                    Icon(
+                        Icons.Default.ArrowDropDown,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             )
         }
     }
     if (sheetOpen) {
         ModelPickerSheet(
-            allOptions = allOptions,
-            scopedOptions = scopedOptions,
-            scopeConfigured = scopeConfigured,
+            options = options,
             selectedModel = selectedModel,
             defaultModel = defaultModel,
             onSelect = { option ->
@@ -278,9 +282,9 @@ private fun ThinkingLevelPickerSheet(
 }
 
 /**
- * The model picker sheet (pi's /model selector). Shows the Scoped view when
- * a scope is configured (All otherwise), with an All/Scoped toggle — pi's
- * scope toggle; the All view keeps the scope a soft constraint.
+ * The model picker sheet (pi's /model selector). Lists only the scoped
+ * models — curating the scope is Settings' job (Settings ▸ Scoped models);
+ * [options] already falls back to all catalog models when no scope is set.
  *
  * Divergence from pi (deliberate, narrow): pi's Ctrl+S applies the row and
  * persists the default in one gesture; this sheet is purely ephemeral —
@@ -291,16 +295,12 @@ private fun ThinkingLevelPickerSheet(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ModelPickerSheet(
-    allOptions: List<ModelOption>,
-    scopedOptions: List<ModelOption>,
-    scopeConfigured: Boolean,
+    options: List<ModelOption>,
     selectedModel: SelectedModel?,
     defaultModel: SelectedModel?,
     onSelect: (ModelOption) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var allView by rememberSaveable { mutableStateOf(!scopeConfigured) }
-    val options = if (allView) allOptions else scopedOptions
     // pi's sortModels: current model first, then default; the stable sort
     // keeps the option list's display order otherwise (pi breaks ties by
     // provider name).
@@ -322,23 +322,6 @@ private fun ModelPickerSheet(
                 .padding(horizontal = 16.dp)
                 .navigationBarsPadding()
         ) {
-            if (scopeConfigured) {
-                Row(
-                    modifier = Modifier.padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = !allView,
-                        onClick = { allView = false },
-                        label = { Text(stringResource(R.string.model_picker_scoped)) }
-                    )
-                    FilterChip(
-                        selected = allView,
-                        onClick = { allView = true },
-                        label = { Text(stringResource(R.string.model_picker_all)) }
-                    )
-                }
-            }
             if (sortedOptions.isEmpty()) {
                 Text(
                     text = stringResource(R.string.models_scope_empty),
@@ -424,28 +407,33 @@ private fun Composer(
     isStreaming: Boolean,
     modifier: Modifier = Modifier
 ) {
-    Row(
+    OutlinedTextField(
+        value = draft,
+        onValueChange = onDraftChange,
+        enabled = !isStreaming,
+        placeholder = { Text(stringResource(R.string.composer_hint)) },
+        trailingIcon = {
+            if (isStreaming) {
+                IconButton(onClick = onStop) {
+                    Icon(
+                        ComposerIcons.Stop,
+                        contentDescription = stringResource(R.string.action_stop)
+                    )
+                }
+            } else {
+                IconButton(onClick = onSend, enabled = canSend) {
+                    Icon(
+                        ComposerIcons.Send,
+                        contentDescription = stringResource(R.string.action_send)
+                    )
+                }
+            }
+        },
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+        keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
+        maxLines = 6,
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        OutlinedTextField(
-            value = draft,
-            onValueChange = onDraftChange,
-            enabled = !isStreaming,
-            label = { Text(stringResource(R.string.composer_hint)) },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
-            modifier = Modifier.weight(1f)
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        if (isStreaming) {
-            TextButton(onClick = onStop) { Text(stringResource(R.string.action_stop)) }
-        } else {
-            TextButton(onClick = onSend, enabled = canSend) {
-                Text(stringResource(R.string.action_send))
-            }
-        }
-    }
+            .padding(horizontal = 8.dp)
+    )
 }

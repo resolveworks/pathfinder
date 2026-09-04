@@ -9,7 +9,7 @@
     <string name="chat_retrying">Retrying… attempt %1$d of %2$d</string>
     <string name="chat_compacting">Compacting…</string>
     <string name="chat_compacted">Compacted</string>
-    <string name="composer_hint">Message</string>
+    <string name="composer_hint">Ask anything</string>
 
     <string name="action_new_chat">New chat</string>
     <string name="settings_title">Settings</string>
@@ -35,9 +35,7 @@
     <string name="model_search_hint">Search models</string>
     <string name="model_selected">Selected</string>
     <string name="model_picker_empty">Pick a model</string>
-    <string name="model_picker_scoped">Scoped</string>
-    <string name="model_picker_all">All</string>
-    <string name="models_scope_empty">No models are in scope — switch to All to see every available model</string>
+    <string name="models_scope_empty">No models in scope — pick them in Settings ▸ Scoped models</string>
     <string name="model_default_marker">%1$s · default</string>
     <string name="models_empty_configured_hint">Only showing models from configured providers</string>
     <string name="thinking_chip_off">thinking off</string>
