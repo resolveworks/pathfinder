@@ -14,14 +14,14 @@ import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.utils.str
 
 /** Failure of a page fetch; thrown through [AgentTool.execute] so the loop turns it into an error tool result. */
-class WebFetchException(message: String) : Exception(message)
+class WebFetchException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
-/** Content extracted from one loaded page. */
+/** Markdown content extracted from one loaded page. */
 data class PageContent(
     /** Final URL after redirects. */
     val url: String,
     val title: String?,
-    val text: String
+    val markdown: String
 )
 
 /** Loads a URL and returns its rendered, readable content. */
@@ -31,18 +31,17 @@ fun interface PageFetcher {
 
 /**
  * web_fetch agent tool: loads a URL and returns the page's main readable
- * content as text. Like [works.resolve.pathfinder.tools.websearch.BraveWebSearchTool],
+ * content as markdown. Like [works.resolve.pathfinder.tools.websearch.BraveWebSearchTool],
  * this is a pathfinder-native adaptation — pi has no upstream web_fetch to
  * port — so the contract follows the common harness-style web_fetch shape.
- * Extraction is the rendered `document.body.innerText` plus title and source
- * URL; a dedicated readability pass can be added later without changing the
- * contract.
+ * Extraction is defuddle markdown computed in the rendered page (see
+ * [WebViewPageFetcher]); treat the returned content as untrusted data.
  */
 class WebFetchTool(private val fetcher: PageFetcher) : AgentTool {
 
     override val definition: Tool = Tool(
         name = NAME,
-        description = "Fetch a webpage and return its main readable content as text.",
+        description = "Fetch a webpage and return its main readable content as markdown.",
         parameters = buildJsonObject {
             put("type", "object")
             put(
@@ -98,7 +97,7 @@ class WebFetchTool(private val fetcher: PageFetcher) : AgentTool {
         val url = arguments.str("url")
             ?: throw IllegalArgumentException("web_fetch: missing required argument 'url'")
         val page = fetcher.fetch(url)
-        if (page.text.isBlank()) {
+        if (page.markdown.isBlank()) {
             return AgentToolResult(
                 content = listOf(TextContent("No readable content found at $url.")),
                 details = EMPTY_DETAILS
@@ -117,7 +116,7 @@ class WebFetchTool(private val fetcher: PageFetcher) : AgentTool {
         }
         appendLine("Source: ${page.url}")
         appendLine()
-        append(truncate(page.text))
+        append(truncate(page.markdown))
     }
 
     companion object {
