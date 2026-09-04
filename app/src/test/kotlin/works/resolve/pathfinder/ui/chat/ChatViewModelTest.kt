@@ -962,6 +962,63 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun draftsArePerSession_andBlankDraftsDoNotLinger() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val firstId = vm.uiState.value.activeSessionId!!
+
+        vm.onDraftChange("typed in first")
+        vm.newSession()
+        val secondId = vm.uiState.first { it.activeSessionId != firstId }.activeSessionId!!
+        assertEquals("", vm.uiState.value.draft)
+
+        vm.onDraftChange("typed in second")
+        vm.switchSession(firstId)
+        assertEquals("typed in first", vm.uiState.first { it.activeSessionId == firstId }.draft)
+
+        vm.switchSession(secondId)
+        val secondAgain = vm.uiState.first { it.activeSessionId == secondId }
+        assertEquals("typed in second", secondAgain.draft)
+
+        // Clearing the input leaves no draft to restore later.
+        vm.onDraftChange("")
+        vm.switchSession(firstId)
+        vm.uiState.first { it.activeSessionId == firstId }
+        vm.switchSession(secondId)
+        assertEquals("", vm.uiState.first { it.activeSessionId == secondId }.draft)
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun treeReEditDraft_staysWithItsSession_acrossSwitch() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val sessionId = vm.uiState.value.activeSessionId!!
+
+        vm.exchange(h, "Hello", "world")
+        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
+        val userEntryId = vm.uiState.value.treeRows.first { it.isOnActivePath }.id
+        vm.navigateToTreeEntry(userEntryId)
+        vm.uiState.first { it.draft == "Hello" }
+
+        vm.newSession()
+        vm.uiState.first { it.activeSessionId != sessionId }
+        assertEquals("", vm.uiState.value.draft)
+
+        vm.switchSession(sessionId)
+        assertEquals("Hello", vm.uiState.first { it.activeSessionId == sessionId }.draft)
+
+        vm.closeForTest()
+    }
+
+    @Test
     fun toolResultMessages_renderAsToolRows_withFullOutput() =
         runTest(mainDispatcherRule.scheduler) {
             val h = Harness()
@@ -3809,4 +3866,57 @@ class ChatViewModelTest {
         )
         vm2.closeForTest()
     }
+
+    /**
+     * A user message that is the current leaf (a run that died before any
+     * assistant entry committed leaves exactly that persisted state) re-edits
+     * on navigation like any other user message: the text returns to the
+     * draft, the message leaves the chat, and the next send forks as a
+     * sibling — one code path for first and later user messages alike.
+     */
+    @Test
+    fun navigateToUserMessageLeaf_re_editsLikeAnyUserMessage() =
+        runTest(mainDispatcherRule.scheduler) {
+            val h = Harness()
+            val vm = h.newViewModel()
+            vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+            vm.configure(apiKey = "k")
+            vm.uiState.first { it.status == ChatStatus.Ready }
+            val sessionId = vm.uiState.value.activeSessionId!!
+
+            vm.exchange(h, "Hello", "world")
+            vm.exchange(h, "Again", "fine")
+            vm.uiState.first {
+                it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 4
+            }
+
+            // Simulate the persisted dangling-leaf state: the leaf points at
+            // the first user message, as after a process death mid-run.
+            val stored = h.sessionStore.load(sessionId)!!
+            val firstUserEntry = stored.entries.first {
+                it is MessageEntry && it.message is UserMessage
+            }
+            h.sessionStore.save(stored.copy(leafId = firstUserEntry.id))
+            vm.closeForTest()
+
+            val vm2 = h.newViewModel()
+            val dangling = vm2.uiState.first {
+                it.status == ChatStatus.Ready && it.activeSessionId == sessionId
+            }
+            assertEquals(
+                listOf("Hello"),
+                dangling.messages.map {
+                    it.blocks.single().let { b -> (b as ChatBlock.Text).text }
+                }
+            )
+
+            vm2.navigateToTreeEntry(dangling.treeRows.first { it.isCurrentLeaf }.id)
+            val reedit = vm2.uiState.first { it.draft == "Hello" }
+            assertNull(reedit.error)
+            assertEquals(0, reedit.messages.size)
+            assertEquals(4, reedit.treeRows.size)
+            assertTrue(reedit.canSend)
+
+            vm2.closeForTest()
+        }
 }

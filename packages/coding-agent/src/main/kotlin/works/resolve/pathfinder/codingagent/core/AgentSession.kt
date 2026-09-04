@@ -435,12 +435,15 @@ class AgentSession(
      * is idle-only, honoring the single-open-operation-per-lane invariant;
      * abort is coroutine cancellation.
      *
-     * A user-message target re-edits instead of moving the leaf onto it: the
-     * leaf moves to the target's parent (or root) and the text is returned
-     * as [NavigationResult.editorText]. When summarizing, the
-     * [BranchSummaryEntry] is appended at the navigation target position
-     * with fromId set to the abandoned leaf, and the rebuilt context
-     * projects branch summaries via [buildSessionContext].
+     * A user-message target re-edits instead of moving the leaf onto it:
+     * the leaf moves to the target's parent (or root) and the text is
+     * returned as [NavigationResult.editorText] — including when the
+     * target is the current leaf (an interrupted run can leave a user
+     * message as the leaf). Only non-user targets treat leaf == target as
+     * a recordless no-op. When summarizing, the [BranchSummaryEntry] is
+     * appended at the navigation target position with fromId set to the
+     * abandoned leaf, and the rebuilt context projects branch summaries
+     * via [buildSessionContext].
      *
      * @throws IllegalStateException when a prompt/compaction is running or
      *   summarization was requested without a provider stack.
@@ -459,7 +462,10 @@ class AgentSession(
         }
 
         val oldLeafId = conversation.leafId
-        if (targetId == oldLeafId) {
+        val targetEntry = conversation.entry(targetId)
+            ?: throw IllegalArgumentException("Entry $targetId not found")
+        val userMessage = (targetEntry as? MessageEntry)?.message as? UserMessage
+        if (targetId == oldLeafId && userMessage == null) {
             return NavigationResult(cancelled = false)
         }
 
@@ -467,9 +473,6 @@ class AgentSession(
         if (options.summarize && summarizationModels == null) {
             throw IllegalStateException("No model available for summarization")
         }
-
-        val targetEntry = conversation.entry(targetId)
-            ?: throw IllegalArgumentException("Entry $targetId not found")
 
         // Entries to summarize: from the old leaf to the common ancestor.
         val collected = collectEntriesForBranchSummary(conversation, oldLeafId, targetId)
@@ -519,7 +522,6 @@ class AgentSession(
                 }
             }
 
-            val userMessage = (targetEntry as? MessageEntry)?.message as? UserMessage
             val newLeafId: String? = if (userMessage != null) targetEntry.parentId else targetId
             val editorText = userMessage
                 ?.content

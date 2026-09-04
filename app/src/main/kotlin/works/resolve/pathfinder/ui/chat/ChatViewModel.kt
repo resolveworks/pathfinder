@@ -151,6 +151,15 @@ class ChatViewModel(
     private var lastAgentError: String? = null
 
     /**
+     * Unsent input per session, synced only at [activateSession] boundaries:
+     * the outgoing draft is stashed under its session, the incoming session's
+     * draft is loaded. Divergence from pi, whose single process-global editor
+     * survives session switches: drafts must stay with their conversation —
+     * especially tree re-edit text, which belongs to the node it came from.
+     */
+    private val sessionDrafts = mutableMapOf<String, String>()
+
+    /**
      * Whether a usable Brave Search key is currently stored; every agent
      * created or bound here synchronizes web_search against it. Maintained
      * from live credential reads, never persisted.
@@ -425,10 +434,10 @@ class ChatViewModel(
     /**
      * Navigates the conversation tree to [id]. Busy-rejected while
      * streaming; selecting the current leaf or an unknown id surfaces a
-     * safe error. A user message target re-edits: the leaf moves to its
-     * parent (or resets to root) and its text is restored into the draft,
-     * so the next send forks as a sibling. Any other target moves the leaf
-     * to that entry.
+     * safe error. A user message target re-edits — including when it is
+     * the current leaf: the leaf moves to its parent (or resets to root)
+     * and its text is restored into the draft, so the next send forks as a
+     * sibling. Any other target moves the leaf to that entry.
      */
     fun navigateToTreeEntry(id: String) {
         navigateToTreeEntry(id, summarize = false)
@@ -443,7 +452,12 @@ class ChatViewModel(
     fun navigateToTreeEntry(id: String, summarize: Boolean) {
         viewModelScope.launch {
             if (rejectWhileBusy()) return@launch
-            if (id == activeConversation.leafId) {
+            // A user-message target is a re-edit even when it is the current
+            // leaf (a run that never committed an assistant entry can leave
+            // one); only non-user targets are a true no-op at their leaf.
+            val reEditTarget =
+                (activeConversation.entry(id) as? MessageEntry)?.message is UserMessage
+            if (id == activeConversation.leafId && !reEditTarget) {
                 setError(ERROR_ALREADY_AT_POINT)
                 return@launch
             }
@@ -671,6 +685,16 @@ class ChatViewModel(
         val conversation = agent.conversation
         val summaries = sessionStore.summaries()
         val laneRecovery = laneRecoveryFor(session)
+        val outgoing = _uiState.value
+        outgoing.activeSessionId?.let { id ->
+            if (outgoing.draft.isBlank()) {
+                sessionDrafts.remove(id)
+            } else {
+                sessionDrafts[id] =
+                    outgoing.draft
+            }
+        }
+        val draft = sessionDrafts[session.id].orEmpty()
         updateState {
             it.copy(
                 activeSessionId = session.id,
@@ -680,7 +704,8 @@ class ChatViewModel(
                 streamingMessage = null,
                 treeRows = buildTreeRows(conversation, it.treeFilter),
                 sessionSummaries = summaries,
-                laneRecovery = laneRecovery
+                laneRecovery = laneRecovery,
+                draft = draft
             )
         }
         // Initial seeding may have appended entries to an entry-less

@@ -222,6 +222,30 @@ class AgentNavigationTest {
     }
 
     @Test
+    fun `user-message leaf target re-edits instead of the no-op`() = runTest {
+        // A run that never committed an assistant entry leaves its user
+        // message as the leaf; navigating to it must re-edit uniformly.
+        var conversation = Conversation(emptyList(), null)
+        conversation = conversation.append(UserMessage.ofText("hello"))
+        val userEntryId = conversation.leafId!!
+        val sink = RecordingSink()
+        val session = AgentSession(
+            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
+            conversation = conversation
+        )
+        session.operationRecorder = sink
+
+        val result = session.navigateTree(userEntryId)
+
+        assertEquals("hello", result.editorText)
+        assertNull(session.conversation.leafId)
+        assertEquals(
+            OperationOutcome.COMPLETED,
+            sink.records.filterIsInstance<LaneRecord.OperationFinishedRecord>().single().outcome
+        )
+    }
+
+    @Test
     fun `user-message target re-edits and returns the editor text`() = runTest {
         val (forked, _) = forkedConversation()
         val sink = RecordingSink()
