@@ -97,6 +97,16 @@ android {
         versionName = "0.1.0"
     }
 
+    signingConfigs {
+        create("release") {
+            // Provided by the release workflow from repository secrets.
+            storeFile = System.getenv("PATHFINDER_KEYSTORE")?.let(::file)
+            storePassword = System.getenv("PATHFINDER_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("PATHFINDER_KEY_ALIAS")
+            keyPassword = System.getenv("PATHFINDER_KEY_PASSWORD")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -104,6 +114,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
