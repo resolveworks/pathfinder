@@ -3,6 +3,7 @@ package works.resolve.pathfinder.tools.webfetch
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
@@ -34,7 +35,7 @@ class WebFetchToolTest {
         assertEquals("web_fetch", WebFetchTool.NAME)
         assertEquals("web_fetch", tool.definition.name)
         assertEquals(
-            "Fetch a webpage and return its main readable content as text.",
+            "Fetch a webpage and return its main readable content as markdown.",
             tool.definition.description
         )
         val params = tool.definition.parameters as JsonObject
@@ -84,7 +85,7 @@ class WebFetchToolTest {
     }
 
     @Test
-    fun `execute returns title source and text`() = runBlocking {
+    fun `execute returns title source and markdown`() = runBlocking {
         val result = tool.execute("call-1", args("https://example.com/")) {}
         val text = resultText(result)
         assertTrue(text.startsWith("# Example\n\n"))
@@ -121,6 +122,85 @@ class WebFetchToolTest {
                 "\n\n[Content truncated]",
             text
         )
+    }
+
+    @Test
+    fun `parseExtraction decodes markdown title and unicode`() {
+        val encoded = "{\"title\":\"Título — “quoted”\\nline\"," +
+            "\"markdown\":\"# Heading\\n\\nSome *markdown* with \\u00e9 and \\\"quotes\\\"\"}"
+        val page = WebViewPageFetcher.parseExtraction(
+            "https://example.com/",
+            "https://example.com/final",
+            encoded
+        )
+        assertEquals("https://example.com/final", page.url)
+        assertEquals("Título — “quoted”\nline", page.title)
+        assertEquals("# Heading\n\nSome *markdown* with é and \"quotes\"", page.markdown)
+    }
+
+    @Test
+    fun `parseExtraction maps absent title to null`() {
+        val page = WebViewPageFetcher.parseExtraction(
+            "https://example.com/",
+            "https://example.com/",
+            "{\"markdown\":\"Body\"}"
+        )
+        assertNull(page.title)
+        assertEquals("Body", page.markdown)
+    }
+
+    @Test
+    fun `parseExtraction surfaces wrapper errors with the requested url`() {
+        val e = assertFailsWith<WebFetchException> {
+            WebViewPageFetcher.parseExtraction(
+                "https://example.com/",
+                "https://example.com/",
+                "{\"error\":\"boom\"}"
+            )
+        }
+        assertEquals("https://example.com/: boom", e.message)
+    }
+
+    @Test
+    fun `parseExtraction rejects null and null-literal results`() {
+        for (encoded in listOf<String?>(null, "null")) {
+            assertFailsWith<WebFetchException> {
+                WebViewPageFetcher.parseExtraction(
+                    "https://example.com/",
+                    "https://example.com/",
+                    encoded
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `parseExtraction rejects non-object payloads`() {
+        assertFailsWith<WebFetchException> {
+            WebViewPageFetcher.parseExtraction(
+                "https://example.com/",
+                "https://example.com/",
+                "\"just a string\""
+            )
+        }
+    }
+
+    @Test
+    fun `parseExtraction rejects missing and non-string markdown`() {
+        for (encoded in listOf(
+            "{\"title\":\"T\"}",
+            "{\"markdown\":42}",
+            "{\"markdown\":null}",
+            "[1,2]"
+        )) {
+            assertFailsWith<WebFetchException>("expected rejection of $encoded") {
+                WebViewPageFetcher.parseExtraction(
+                    "https://example.com/",
+                    "https://example.com/",
+                    encoded
+                )
+            }
+        }
     }
 
     @Test

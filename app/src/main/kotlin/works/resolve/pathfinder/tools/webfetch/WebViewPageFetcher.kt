@@ -17,20 +17,38 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import works.resolve.pathfinder.ai.utils.lenientJson
-import works.resolve.pathfinder.ai.utils.str
 
 /**
- * [PageFetcher] that renders each page in a throwaway hidden WebView.
- * "Anonymous" means only that fetching runs in the app-owned `web_fetch`
- * WebView profile — kept separate from the default profile a user-facing
- * WebView would share — not network anonymity. Fetches run concurrently,
- * and a fetched page's URL and content are never logged.
+ * [PageFetcher] that renders each page in a throwaway hidden WebView and
+ * extracts its main readable content as markdown by injecting the defuddle
+ * core bundle into the page context. "Anonymous" means only that fetching runs
+ * in the app-owned `web_fetch` WebView profile — kept separate from the
+ * default profile a user-facing WebView would share — not network anonymity.
+ * Fetches run concurrently, and a fetched page's URL and content are never
+ * logged.
+ *
+ * Defuddle's synchronous `parse()` runs in the page's main world alongside
+ * untrusted page JavaScript; that is acceptable here because the page is
+ * destroyed immediately after extraction and its output is treated as
+ * untrusted data. Async extractors (network-backed) are not used: they would
+ * be CORS-blocked in-page anyway. The bundle itself is CSP-exempt because
+ * `evaluateJavascript` executes directly in the renderer rather than as
+ * page-loaded script. No `url` option is passed — `document.URL` is
+ * authoritative in-page.
  */
 class WebViewPageFetcher(private val context: Context) : PageFetcher {
+
+    private val defuddleBundle: String by lazy { readDefuddleBundle() }
 
     override suspend fun fetch(url: String): PageContent =
         withTimeoutOrNull(LOAD_TIMEOUT_MS) { loadInHiddenWebView(url) }
             ?: throw WebFetchException("Timed out loading $url")
+
+    private fun readDefuddleBundle(): String = try {
+        context.assets.open(DEFUDDLE_ASSET_PATH).bufferedReader().use { it.readText() }
+    } catch (e: Exception) {
+        throw WebFetchException("Missing defuddle bundle asset '$DEFUDDLE_ASSET_PATH'", e)
+    }
 
     private suspend fun loadInHiddenWebView(url: String): PageContent =
         withContext(Dispatchers.Main) {
@@ -69,8 +87,8 @@ class WebViewPageFetcher(private val context: Context) : PageFetcher {
                 // Let late-running page scripts render before reading the DOM.
                 delay(PAGE_SETTLE_DELAY_MS)
 
-                val encoded = webView.evaluateSuspending(EXTRACTION_SCRIPT)
-                parseExtracted(url, webView.url ?: url, encoded)
+                val encoded = webView.evaluateSuspending(defuddleBundle + "\n" + EXTRACTION_WRAPPER)
+                parseExtraction(url, webView.url ?: url, encoded)
             } finally {
                 withContext(NonCancellable) {
                     runCatching { webView.stopLoading() }
@@ -79,38 +97,58 @@ class WebViewPageFetcher(private val context: Context) : PageFetcher {
             }
         }
 
-    /** Unwraps the JSON-encoded script result into a [PageContent]. */
-    private fun parseExtracted(
-        requestedUrl: String,
-        finalUrl: String,
-        encoded: String?
-    ): PageContent {
-        if (encoded == null || encoded == "null") {
-            throw WebFetchException("No content extracted from $requestedUrl")
-        }
-        val payload = (lenientJson.parseToJsonElement(encoded) as? JsonPrimitive)?.content
-            ?: throw WebFetchException("Unexpected extraction result from $requestedUrl")
-        val page = lenientJson.parseToJsonElement(payload) as? JsonObject
-            ?: throw WebFetchException("Unexpected extraction result from $requestedUrl")
-        return PageContent(
-            url = finalUrl,
-            title = page.str("title")?.takeIf { it.isNotBlank() },
-            text = page.str("text")
-                ?: throw WebFetchException("Unexpected extraction result from $requestedUrl")
-        )
-    }
-
     private suspend fun WebView.evaluateSuspending(script: String): String? =
         suspendCancellableCoroutine { continuation ->
             evaluateJavascript(script) { value -> continuation.resume(value) }
         }
 
-    private companion object {
-        const val PROFILE_NAME = "web_fetch"
-        const val LOAD_TIMEOUT_MS = 30_000L
-        const val PAGE_SETTLE_DELAY_MS = 500L
-        const val EXTRACTION_SCRIPT =
-            "(function(){return JSON.stringify({title:document.title," +
-                "text:document.body?document.body.innerText:''});})()"
+    companion object {
+
+        /**
+         * Strictly decodes the single JSON-encoded result of the extraction
+         * wrapper into a [PageContent]. Any deviation — null result,
+         * non-object payload, error report, missing or non-string `markdown` —
+         * throws [WebFetchException]; there are no fallbacks.
+         */
+        internal fun parseExtraction(
+            requestedUrl: String,
+            finalUrl: String,
+            encoded: String?
+        ): PageContent {
+            if (encoded == null || encoded == "null") {
+                throw WebFetchException("No content extracted from $requestedUrl")
+            }
+            val page = lenientJson.parseToJsonElement(encoded) as? JsonObject
+                ?: throw WebFetchException("Unexpected extraction result from $requestedUrl")
+            (page["error"] as? JsonPrimitive)?.let {
+                throw WebFetchException("$requestedUrl: ${it.content}")
+            }
+            if (page["error"] != null) {
+                throw WebFetchException("Unexpected extraction result from $requestedUrl")
+            }
+            val markdown = (page["markdown"] as? JsonPrimitive)
+                ?.takeIf { it.isString }
+                ?: throw WebFetchException("Unexpected extraction result from $requestedUrl")
+            val title = (page["title"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            return PageContent(url = finalUrl, title = title, markdown = markdown.content)
+        }
+
+        private const val PROFILE_NAME = "web_fetch"
+        private const val LOAD_TIMEOUT_MS = 30_000L
+        private const val PAGE_SETTLE_DELAY_MS = 500L
+        private const val DEFUDDLE_ASSET_PATH = "defuddle/index.js"
+
+        /**
+         * Runs defuddle's synchronous parse against the live page DOM and
+         * returns the result object; `evaluateJavascript` hands the callback
+         * its JSON encoding exactly once. The wrapper's only job is the
+         * try/catch: `evaluateJavascript` has no JS-exception channel, so an
+         * uncaught throw would surface as `null`, indistinguishable from an
+         * empty page.
+         */
+        const val EXTRACTION_WRAPPER =
+            ";(function(){try{const r=new Defuddle(document,{markdown:true}).parse();" +
+                "return{title:r.title,markdown:r.content}}" +
+                "catch(e){return{error:String(e&&e.message||e)}}})()"
     }
 }
