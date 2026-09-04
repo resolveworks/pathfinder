@@ -78,10 +78,10 @@
     <string name="auth_more_info">Learn more</string>
     <string name="auth_user_code">Code: %1$s</string>
 
-    <string name="tool_status_done">Done</string>
     <string name="tool_status_failed">Failed</string>
     <string name="tool_output_toggle">Expand or collapse tool output</string>
-    <string name="tool_output_more_lines">… (%1$d more lines, tap to expand)</string>
+    <string name="tool_title_searched_for">Searched for %1$s</string>
+    <string name="tool_title_fetched">Fetched %1$s</string>
 
     <string name="error_generic">Something went wrong</string>
 

@@ -399,14 +399,6 @@ class ChatViewModel(
         }
     }
 
-    /**
-     * Flips the global tool-output expansion flag. Display-only: the flag
-     * lives in memory only (never persisted) and applies to every tool row.
-     */
-    fun toggleToolOutputExpansion() {
-        updateState { it.copy(toolOutputExpanded = !it.toolOutputExpanded) }
-    }
-
     fun send() {
         viewModelScope.launch { sendInternal() }
     }

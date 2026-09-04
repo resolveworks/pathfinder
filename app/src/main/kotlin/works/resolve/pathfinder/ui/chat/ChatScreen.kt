@@ -88,7 +88,6 @@ fun ChatRoute(
         onSetStartupDefault = viewModel::saveStartupDefault,
         onToggleModelScope = viewModel::toggleModelScope,
         onSelectThinkingLevel = viewModel::selectThinkingLevel,
-        onToggleToolOutputExpansion = viewModel::toggleToolOutputExpansion,
         onSetDefaultThinkingLevel = viewModel::setThinkingLevelDefault,
         onSaveProviderCredential = viewModel::saveProviderCredential,
         onRemoveProviderCredential = viewModel::removeProviderCredential,
@@ -129,7 +128,6 @@ fun ChatScreen(
     onSetStartupDefault: (providerId: String, modelId: String) -> Unit,
     onToggleModelScope: (providerId: String, modelId: String, checked: Boolean) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
-    onToggleToolOutputExpansion: () -> Unit,
     onSetDefaultThinkingLevel: (ModelThinkingLevel) -> Unit,
     onSaveProviderCredential: (providerId: String, apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
     onRemoveProviderCredential: (providerId: String) -> Unit,
@@ -328,7 +326,6 @@ fun ChatScreen(
                                         onStop = onStop,
                                         onSelectModel = onSelectModel,
                                         onSelectThinkingLevel = onSelectThinkingLevel,
-                                        onToggleToolOutputExpansion = onToggleToolOutputExpansion,
                                         onNavigateTreeEntry = onNavigateTreeEntry,
                                         onTreeFilterChange = onTreeFilterChange,
                                     )
@@ -340,7 +337,6 @@ fun ChatScreen(
                                         onStop = onStop,
                                         onSelectModel = onSelectModel,
                                         onSelectThinkingLevel = onSelectThinkingLevel,
-                                        onToggleToolOutputExpansion = onToggleToolOutputExpansion,
                                     )
                                 }
                             }
@@ -632,7 +628,6 @@ private fun PreviewChatScreen(
             onSetStartupDefault = { _, _ -> },
             onToggleModelScope = { _, _, _ -> },
             onSelectThinkingLevel = { },
-            onToggleToolOutputExpansion = { },
             onSetDefaultThinkingLevel = { },
             onSaveProviderCredential = { _, _, _ -> },
             onRemoveProviderCredential = { },

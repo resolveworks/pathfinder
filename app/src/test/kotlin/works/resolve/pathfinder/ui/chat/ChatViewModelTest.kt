@@ -31,6 +31,7 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.ai.Tool
+import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
@@ -553,30 +554,6 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun toggleToolOutputExpansion_flipsInMemoryFlag_withoutPersisting() = runTest(mainDispatcherRule.scheduler) {
-        val h = Harness()
-        val vm = h.newViewModel()
-        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        assertFalse(vm.uiState.value.toolOutputExpanded)
-
-        vm.toggleToolOutputExpansion()
-        vm.uiState.first { it.toolOutputExpanded }
-        assertNull(vm.uiState.value.error)
-
-        vm.toggleToolOutputExpansion()
-        vm.uiState.first { !it.toolOutputExpanded }
-
-        vm.configure(apiKey = "k")
-        vm.uiState.first { it.status == ChatStatus.Ready }
-        val vm2 = h.newViewModel()
-        vm2.uiState.first { it.status == ChatStatus.Ready }
-        assertFalse(vm2.uiState.value.toolOutputExpanded)
-
-        vm.closeForTest()
-        vm2.closeForTest()
-    }
-
-    @Test
     fun resetSignal_followsSuccessfulIntents_andNeverGetsStale() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()
@@ -1059,6 +1036,67 @@ class ChatViewModelTest {
             ),
         )
         waitUntil { vm.uiState.value.pendingTools.isEmpty() }
+
+        vm.closeForTest()
+    }
+
+    @Test
+    fun titledToolRows_carryParsedInput_inPendingAndResultRows() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        vm.uiState.first { !it.isStreaming && it.activeSessionId != null }
+
+        val session = h.createdAgents.single()
+        val call = AssistantMessage(
+            content = listOf(
+                ToolCall(id = "call-1", name = BraveWebSearchTool.NAME, arguments = """{"query":"kotlin flow"}"""),
+                ToolCall(id = "call-2", name = WebFetchTool.NAME, arguments = """{"url":"https://example.com"}"""),
+                // Spec'd tool with malformed arguments: title falls back to the bare name.
+                ToolCall(id = "call-3", name = WebFetchTool.NAME, arguments = "not json"),
+            ),
+            api = testModel.api,
+            provider = "zai",
+            model = "glm-4.7",
+            timestamp = System.nanoTime(),
+        )
+        session.agent.processEvent(AgentEvent.MessageStart(call))
+        session.agent.processEvent(AgentEvent.MessageEnd(call))
+        waitUntil { vm.uiState.value.messages.size == 1 }
+
+        session.agent.processEvent(
+            AgentEvent.ToolExecutionStart("call-1", BraveWebSearchTool.NAME, JsonObject(emptyMap())),
+        )
+        session.agent.processEvent(
+            AgentEvent.ToolExecutionStart("call-2", WebFetchTool.NAME, JsonObject(emptyMap())),
+        )
+        session.agent.processEvent(
+            AgentEvent.ToolExecutionStart("call-3", WebFetchTool.NAME, JsonObject(emptyMap())),
+        )
+        waitUntil { vm.uiState.value.pendingTools.size == 3 }
+        assertEquals(
+            listOf(
+                PendingToolExecution("call-1", BraveWebSearchTool.NAME, input = "kotlin flow"),
+                PendingToolExecution("call-2", WebFetchTool.NAME, input = "https://example.com"),
+                PendingToolExecution("call-3", WebFetchTool.NAME, input = null),
+            ),
+            vm.uiState.value.pendingTools,
+        )
+
+        val searchResult = ToolResultMessage(
+            toolCallId = "call-1",
+            toolName = BraveWebSearchTool.NAME,
+            content = listOf(TextContent("1. Kotlin flows")),
+            timestamp = System.nanoTime(),
+        )
+        session.agent.processEvent(AgentEvent.MessageStart(searchResult))
+        session.agent.processEvent(AgentEvent.MessageEnd(searchResult))
+        waitUntil { vm.uiState.value.messages.any { it.role == ChatRole.Tool } }
+
+        val row = vm.uiState.value.messages.last { it.role == ChatRole.Tool }
+        assertEquals("kotlin flow", row.toolResult?.input)
 
         vm.closeForTest()
     }

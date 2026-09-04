@@ -9,9 +9,12 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
+import kotlinx.serialization.json.JsonObject
 
 /**
  * UI projection of the committed transcript: the active conversation path is
@@ -24,6 +27,15 @@ import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 internal fun projectCommitted(liveMessages: List<Message>, conversation: Conversation): List<ChatMessage> {
     val live = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Message, Boolean>())
     live.addAll(liveMessages)
+    // Committed calls by id: a tool-result row titles itself from its
+    // originating call's arguments (the result message carries none).
+    val liveCalls = mutableMapOf<String, ToolCall>()
+    for (message in liveMessages) {
+        val content = (message as? AssistantMessage)?.content ?: continue
+        for (part in content) {
+            if (part is ToolCall) liveCalls[part.id] = part
+        }
+    }
     val projected = mutableListOf<ChatMessage>()
     conversation.activeEntries().forEachIndexed { index, entry ->
         when {
@@ -58,6 +70,8 @@ internal fun projectCommitted(liveMessages: List<Message>, conversation: Convers
                             toolName = message.toolName,
                             isError = message.isError,
                             output = toolResultOutput(message),
+                            input = liveCalls[message.toolCallId]
+                                ?.let { toolCallInput(it.name, it.arguments) },
                         ),
                     )
                 }
@@ -122,6 +136,19 @@ internal fun toolResultOutput(message: ToolResultMessage): String? {
 }
 
 /**
+ * The one call argument a tool's row title is built from, parsed from the
+ * raw JSON arguments string; the argument key comes from the shared
+ * [ToolCallTitles] spec table. Null for tools without a spec and for
+ * malformed arguments or a missing/empty value. Raw JSON never enters UI
+ * state beyond this parsed field.
+ */
+internal fun toolCallInput(toolName: String, arguments: String): String? {
+    val argument = ToolCallTitles.specFor(toolName)?.argument ?: return null
+    val parsed = runCatching { lenientJson.parseToJsonElement(arguments) }.getOrNull() as? JsonObject ?: return null
+    return parsed.string(argument)?.takeIf { it.isNotEmpty() }
+}
+
+/**
  * Resolves the agent's pending tool-execution ids into UI rows: names come
  * from committed assistant [ToolCall] blocks in transcript order (calls
  * commit before execution starts); an unknown id falls back to a generic
@@ -135,7 +162,7 @@ internal fun pendingToolExecutions(state: AgentState): List<PendingToolExecution
         val content = (message as? AssistantMessage)?.content ?: continue
         for (part in content) {
             if (part is ToolCall && part.id in state.pendingToolCalls && resolved.add(part.id)) {
-                rows.add(PendingToolExecution(part.id, part.name))
+                rows.add(PendingToolExecution(part.id, part.name, toolCallInput(part.name, part.arguments)))
             }
         }
     }

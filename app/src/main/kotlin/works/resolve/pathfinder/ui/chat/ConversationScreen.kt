@@ -65,7 +65,6 @@ internal fun ConversationPager(
     onStop: () -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
-    onToggleToolOutputExpansion: () -> Unit,
     onNavigateTreeEntry: (entryId: String) -> Unit,
     onTreeFilterChange: (TreeFilter) -> Unit,
 ) {
@@ -85,7 +84,6 @@ internal fun ConversationPager(
                 onStop = onStop,
                 onSelectModel = onSelectModel,
                 onSelectThinkingLevel = onSelectThinkingLevel,
-                onToggleToolOutputExpansion = onToggleToolOutputExpansion,
             )
         }
     }
@@ -104,13 +102,11 @@ internal fun ChatSurface(
     onStop: () -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
-    onToggleToolOutputExpansion: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ConversationContent(
             uiState = uiState,
             modifier = Modifier.weight(1f),
-            onToggleToolOutputExpansion = onToggleToolOutputExpansion,
         )
         Column(
             modifier = Modifier

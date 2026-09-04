@@ -43,19 +43,24 @@ data class ChatMessage(
 
 /**
  * UI-safe projection of a committed tool result: tool name, error flag,
- * and the full text output. The structured `details` JSON is never
- * projected.
+ * and the full text output. The structured `details` JSON and the raw
+ * JSON arguments never enter UI state; [input] is the one parsed argument
+ * the row title is built from (see `toolCallInput`).
  */
 data class ChatToolResult(
     val toolCallId: String,
     val toolName: String,
     val isError: Boolean,
     val output: String? = null,
+    /** Parsed call argument the row title is built from; null when the tool has none. */
+    val input: String? = null,
 )
 
 data class PendingToolExecution(
     val toolCallId: String,
     val toolName: String,
+    /** Parsed call argument the row title is built from; null when the tool has none. */
+    val input: String? = null,
 )
 
 @Serializable
@@ -269,12 +274,6 @@ data class ChatUiState(
     val canSend: Boolean = false,
     /** Display-only; never affects the agent. */
     val showThinking: Boolean = false,
-    /**
-     * Display-only: tool rows render their full output instead of the
-     * bounded preview. Applies to every tool row, past and future; never
-     * persisted.
-     */
-    val toolOutputExpanded: Boolean = false,
     /** Flattened tree rows of the active session's conversation (see TreeProjection.kt). */
     val treeRows: List<TreeRow> = emptyList(),
     /** In-memory tree-panel filter (never persisted). */

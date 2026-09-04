@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.CircularProgressIndicator
@@ -26,9 +25,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -36,6 +38,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import works.resolve.pathfinder.R
+import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.ui.chat.markdown.MarkdownText
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
@@ -74,7 +77,6 @@ internal fun ConversationContent(
     uiState: ChatUiState,
     modifier: Modifier = Modifier,
     initialThinkingOverrides: Map<String, Boolean> = emptyMap(),
-    onToggleToolOutputExpansion: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val messageCount = uiState.messages.size
@@ -145,12 +147,12 @@ internal fun ConversationContent(
             }
             items(uiState.pendingTools, key = { "pending-${it.toolCallId}" }) { pending ->
                 ToolCallItem(
+                    toolCallId = pending.toolCallId,
                     toolName = pending.toolName,
+                    input = pending.input,
                     output = null,
                     isError = false,
                     running = true,
-                    expanded = uiState.toolOutputExpanded,
-                    onToggleExpansion = onToggleToolOutputExpansion,
                 )
             }
             items(
@@ -161,12 +163,12 @@ internal fun ConversationContent(
                     message.isCompactionMarker -> CompactedDivider()
                     message.role == ChatRole.Tool -> message.toolResult?.let { result ->
                         ToolCallItem(
+                            toolCallId = result.toolCallId,
                             toolName = result.toolName,
+                            input = result.input,
                             output = result.output,
                             isError = result.isError,
                             running = false,
-                            expanded = uiState.toolOutputExpanded,
-                            onToggleExpansion = onToggleToolOutputExpansion,
                         )
                     }
                     message.role == ChatRole.User -> UserMessageItem(message)
@@ -287,9 +289,6 @@ private fun AssistantMessageItem(
     }
 }
 
-/** Collapsed preview cap, matching pi's tool output. */
-private const val FALLBACK_PREVIEW_LINES = 10
-
 internal enum class ToolResultFormat {
     RAW,
 
@@ -312,22 +311,55 @@ internal object ToolResultRenderers {
 }
 
 /**
- * One tool execution in a tonal container, distinct from conversation
- * text: wrench icon, tool name, and a status (or spinner while running).
- * Tapping a row with output flips the global expand flag (pi's Ctrl+O,
- * exposed as a tap on the tool output). Error coloring is a native
- * adaptation (pi signals errors through the shell, not text color).
+ * Shared row-title spec, keyed by tool name like [ToolResultRenderers]:
+ * which call argument titles a tool's row ("Searched for …", "Fetched …")
+ * and the string format rendering it. Tools without a spec keep the bare
+ * tool name as their title; adding a tool is one table entry.
+ */
+internal object ToolCallTitles {
+    data class Spec(
+        /** JSON-argument key holding the row-title input. */
+        val argument: String,
+        /** Title format filled with the parsed argument (strings.xml). */
+        val format: Int,
+    )
+
+    private val specs: Map<String, Spec> = mapOf(
+        BraveWebSearchTool.NAME to Spec("query", R.string.tool_title_searched_for),
+        WebFetchTool.NAME to Spec("url", R.string.tool_title_fetched),
+    )
+
+    fun specFor(toolName: String): Spec? = specs[toolName]
+}
+
+/** Row title: the spec's format filled with the parsed input, else the tool name. */
+@Composable
+private fun toolCallTitle(toolName: String, input: String?): String {
+    val spec = ToolCallTitles.specFor(toolName)
+    return if (spec != null && input != null) stringResource(spec.format, input) else toolName
+}
+
+/**
+ * One tool execution as a single line in a tonal container, distinct from
+ * conversation text: the row title (a tool-specific phrase like
+ * "Searched for …", else the tool name) and a spinner while running.
+ * Rows with output expand in place — per row, never globally (pi's Ctrl+O,
+ * exposed as a tap). Error coloring is a native adaptation (pi signals
+ * errors through the shell, not text color).
  */
 @Composable
 private fun ToolCallItem(
+    toolCallId: String,
     toolName: String,
+    input: String?,
     output: String?,
     isError: Boolean,
     running: Boolean,
-    expanded: Boolean,
-    onToggleExpansion: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Expansion is local to this row; the lazy list's stable keys keep it
+    // across recycling and process death.
+    var expanded by rememberSaveable(toolCallId) { mutableStateOf(false) }
     Surface(
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -336,7 +368,7 @@ private fun ToolCallItem(
         Column(
             // The whole row is the toggle's touch target.
             modifier = if (output != null) {
-                Modifier.clickable(onClickLabel = stringResource(R.string.tool_output_toggle)) { onToggleExpansion() }
+                Modifier.clickable(onClickLabel = stringResource(R.string.tool_output_toggle)) { expanded = !expanded }
             } else {
                 Modifier
             },
@@ -346,18 +378,8 @@ private fun ToolCallItem(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             ) {
-                Icon(
-                    imageVector = Icons.Default.Build,
-                    contentDescription = null,
-                    tint = if (isError) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier.size(16.dp),
-                )
                 Text(
-                    text = toolName,
+                    text = toolCallTitle(toolName, input),
                     style = MaterialTheme.typography.labelLarge,
                     color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified,
                     modifier = Modifier.weight(1f),
@@ -367,54 +389,35 @@ private fun ToolCallItem(
                         modifier = Modifier.size(18.dp),
                         strokeWidth = 2.dp,
                     )
-                } else {
+                } else if (isError) {
                     Text(
-                        text = stringResource(
-                            if (isError) R.string.tool_status_failed else R.string.tool_status_done,
-                        ),
+                        text = stringResource(R.string.tool_status_failed),
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (isError) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (output != null) {
+                    Icon(
+                        imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            if (output != null) {
+            if (output != null && expanded) {
                 val format = ToolResultRenderers.formatFor(toolName)
-                val lines = output.lines()
-                // pi's fallback caps every collapsed result; Scry's markdown
-                // renderer caps only non-error results.
-                val capped = !expanded && !(isError && format == ToolResultFormat.MARKDOWN)
-                val display = if (capped) lines.take(FALLBACK_PREVIEW_LINES) else lines
-                val remaining = lines.size - display.size
                 val color = if (isError) {
                     MaterialTheme.colorScheme.error
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 }
                 Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp)) {
-                    // Scry's renderMarkdownResult caps the raw markdown
-                    // lines first, then renders the kept lines as Markdown.
                     when (format) {
-                        ToolResultFormat.MARKDOWN -> MarkdownText(
-                            markdown = display.joinToString("\n"),
-                            color = color,
-                        )
+                        ToolResultFormat.MARKDOWN -> MarkdownText(markdown = output, color = color)
                         ToolResultFormat.RAW -> Text(
-                            text = display.joinToString("\n"),
+                            text = output,
                             style = MaterialTheme.typography.bodySmall,
                             color = color,
-                        )
-                    }
-                    if (remaining > 0) {
-                        // pi's hint names a keybinding to expand; the row tap
-                        // replaces it.
-                        Text(
-                            text = stringResource(R.string.tool_output_more_lines, remaining),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -501,6 +504,7 @@ private fun ConversationContentThinkingPreview() {
                             toolName = "web_search",
                             isError = false,
                             output = "1. Arithmetic — Wikipedia\n2. Addition — Wikipedia",
+                            input = "arithmetic",
                         ),
                     ),
                 ),
