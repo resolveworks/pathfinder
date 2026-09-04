@@ -21,7 +21,7 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 /**
  * [PageFetcher] that renders each page in a throwaway hidden WebView and
  * extracts its main readable content as markdown by injecting the defuddle
- * core bundle into the page context. "Anonymous" means only that fetching runs
+ * full bundle into the page context. "Anonymous" means only that fetching runs
  * in the app-owned `web_fetch` WebView profile — kept separate from the
  * default profile a user-facing WebView would share — not network anonymity.
  * Fetches run concurrently, and a fetched page's URL and content are never
