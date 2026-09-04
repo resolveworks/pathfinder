@@ -8,8 +8,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
 @Composable
-fun PathfinderTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    val colorScheme = if (darkTheme) {
+fun PathfinderTheme(content: @Composable () -> Unit) {
+    val colorScheme = if (isSystemInDarkTheme()) {
         dynamicDarkColorScheme(LocalContext.current)
     } else {
         dynamicLightColorScheme(LocalContext.current)
