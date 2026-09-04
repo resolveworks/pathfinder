@@ -91,7 +91,7 @@ android {
 
     defaultConfig {
         applicationId = "works.resolve.pathfinder"
-        minSdk = 37
+        minSdk = 34
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
