@@ -78,11 +78,7 @@ internal fun ConversationContent(
 
     Box(modifier = modifier.fillMaxSize()) {
         if (messageCount == 0 && uiState.pendingTools.isEmpty() && streamingId == null) {
-            Text(
-                text = stringResource(R.string.chat_empty),
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.align(Alignment.Center)
-            )
+            EmptyStateText(text = stringResource(R.string.chat_empty))
         }
         LazyColumn(
             state = listState,
