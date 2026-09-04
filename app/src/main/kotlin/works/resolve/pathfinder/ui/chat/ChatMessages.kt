@@ -3,6 +3,7 @@ package works.resolve.pathfinder.ui.chat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,13 +15,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -115,6 +117,8 @@ internal fun ConversationContent(
         LazyColumn(
             state = listState,
             reverseLayout = true,
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
             // Emitted newest-first; reverseLayout puts it at the bottom,
@@ -123,7 +127,7 @@ internal fun ConversationContent(
                 item(key = streaming.id) {
                     val hasVisibleText = streaming.blocks.any { it is ChatBlock.Text && it.text.isNotBlank() }
                     val hasThinking = streaming.blocks.any { it is ChatBlock.Thinking }
-                    MessageItem(
+                    AssistantMessageItem(
                         message = if (hasVisibleText || hasThinking || streaming.error != null) {
                             streaming
                         } else {
@@ -140,7 +144,7 @@ internal fun ConversationContent(
                 }
             }
             items(uiState.pendingTools, key = { "pending-${it.toolCallId}" }) { pending ->
-                ToolResultRow(
+                ToolCallItem(
                     toolName = pending.toolName,
                     output = null,
                     isError = false,
@@ -148,17 +152,15 @@ internal fun ConversationContent(
                     expanded = uiState.toolOutputExpanded,
                     onToggleExpansion = onToggleToolOutputExpansion,
                 )
-                HorizontalDivider()
             }
             items(
                 uiState.messages.asReversed().filter(ChatMessage::hasRenderableContent),
                 key = ChatMessage::id,
             ) { message ->
-                if (message.isCompactionMarker) {
-                    CompactedDivider()
-                } else if (message.role == ChatRole.Tool) {
-                    message.toolResult?.let { result ->
-                        ToolResultRow(
+                when {
+                    message.isCompactionMarker -> CompactedDivider()
+                    message.role == ChatRole.Tool -> message.toolResult?.let { result ->
+                        ToolCallItem(
                             toolName = result.toolName,
                             output = result.output,
                             isError = result.isError,
@@ -167,14 +169,13 @@ internal fun ConversationContent(
                             onToggleExpansion = onToggleToolOutputExpansion,
                         )
                     }
-                } else {
-                    MessageItem(
+                    message.role == ChatRole.User -> UserMessageItem(message)
+                    else -> AssistantMessageItem(
                         message = message,
                         showThinking = uiState.showThinking,
                         thinkingOverrides = thinkingOverrides,
                     )
                 }
-                HorizontalDivider()
             }
         }
     }
@@ -209,62 +210,81 @@ private fun ChatMessage.hasRenderableContent(): Boolean =
         error != null ||
         blocks.any { it is ChatBlock.Text || it is ChatBlock.Thinking }
 
+/**
+ * User message: a right-aligned bubble, as in modern chat apps. The start
+ * padding caps the bubble width so short messages stay compact and long
+ * ones never span the full row.
+ */
 @Composable
-private fun MessageItem(
+private fun UserMessageItem(message: ChatMessage, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 48.dp),
+        horizontalArrangement = Arrangement.End,
+    ) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.secondaryContainer,
+        ) {
+            // pi renders user markdown literally (markers preserved, not
+            // parsed), so the bubble stays plain text.
+            Text(
+                text = message.displayText(),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Assistant message: plain full-width markdown with no container, so it
+ * reads like a reply rather than a bubble. Thinking blocks stay
+ * collapsible; an error renders below the body in error color.
+ */
+@Composable
+private fun AssistantMessageItem(
     message: ChatMessage,
     showThinking: Boolean,
     thinkingOverrides: MutableMap<String, Boolean>,
+    modifier: Modifier = Modifier,
     isStreaming: Boolean = false,
 ) {
-    ListItem(
-        // pi renders user markdown literally (markers preserved, not parsed);
-        // user messages stay plain text here, so only the assistant path goes
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // pi renders assistant text as markdown; only this path goes
         // through MarkdownText.
-        headlineContent = {
-            if (message.role == ChatRole.Assistant) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    message.blocks.forEachIndexed { index, block ->
-                        when (block) {
-                            is ChatBlock.Text -> MarkdownText(markdown = block.text)
-                            is ChatBlock.ToolCall -> Unit
-                            is ChatBlock.Thinking -> {
-                                val key = "${message.id}:$index"
-                                val expanded = thinkingOverrides[key] ?: showThinking
-                                ThinkingBlock(
-                                    text = block.text,
-                                    expanded = expanded,
-                                    // Loader only while thinking is actively being
-                                    // produced: the streaming message's LAST block
-                                    // and a Thinking block (earlier runs are done).
-                                    showLoader = isStreaming && index == message.blocks.lastIndex,
-                                    onToggle = { thinkingOverrides[key] = !expanded },
-                                )
-                            }
-                        }
-                    }
+        message.blocks.forEachIndexed { index, block ->
+            when (block) {
+                is ChatBlock.Text -> MarkdownText(markdown = block.text)
+                is ChatBlock.ToolCall -> Unit
+                is ChatBlock.Thinking -> {
+                    val key = "${message.id}:$index"
+                    val expanded = thinkingOverrides[key] ?: showThinking
+                    ThinkingBlock(
+                        text = block.text,
+                        expanded = expanded,
+                        // Loader only while thinking is actively being
+                        // produced: the streaming message's LAST block
+                        // and a Thinking block (earlier runs are done).
+                        showLoader = isStreaming && index == message.blocks.lastIndex,
+                        onToggle = { thinkingOverrides[key] = !expanded },
+                    )
                 }
-            } else {
-                Text(message.displayText())
             }
-        },
-        overlineContent = {
+        }
+        message.error?.let { error ->
             Text(
-                when {
-                    message.role == ChatRole.User -> stringResource(R.string.role_user)
-                    message.error != null -> stringResource(R.string.role_assistant_failed)
-                    else -> stringResource(R.string.role_assistant)
-                },
+                text = error,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
             )
-        },
-        supportingContent = message.error?.let { error ->
-            {
-                Text(
-                    text = error,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        },
-    )
+        }
+    }
 }
 
 /** Collapsed preview cap, matching pi's tool output. */
@@ -292,37 +312,78 @@ internal object ToolResultRenderers {
 }
 
 /**
- * One tool row: tapping a row with output flips the global expand flag
- * (pi's Ctrl+O, exposed as a tap on the tool output). Error coloring is a
- * native adaptation (pi signals errors through the shell, not text color).
+ * One tool execution in a tonal container, distinct from conversation
+ * text: wrench icon, tool name, and a status (or spinner while running).
+ * Tapping a row with output flips the global expand flag (pi's Ctrl+O,
+ * exposed as a tap on the tool output). Error coloring is a native
+ * adaptation (pi signals errors through the shell, not text color).
  */
 @Composable
-private fun ToolResultRow(
+private fun ToolCallItem(
     toolName: String,
     output: String?,
     isError: Boolean,
     running: Boolean,
     expanded: Boolean,
     onToggleExpansion: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    ListItem(
-        // The whole row is the toggle's touch target (48dp convention).
-        modifier =
-            if (output != null) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Column(
+            // The whole row is the toggle's touch target.
+            modifier = if (output != null) {
                 Modifier.clickable(onClickLabel = stringResource(R.string.tool_output_toggle)) { onToggleExpansion() }
             } else {
                 Modifier
             },
-        headlineContent = {
-            Text(
-                text = toolName,
-                color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified,
-            )
-        },
-        supportingContent = output?.let { text ->
-            {
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Build,
+                    contentDescription = null,
+                    tint = if (isError) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = toolName,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified,
+                    modifier = Modifier.weight(1f),
+                )
+                if (running) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Text(
+                        text = stringResource(
+                            if (isError) R.string.tool_status_failed else R.string.tool_status_done,
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isError) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            }
+            if (output != null) {
                 val format = ToolResultRenderers.formatFor(toolName)
-                val lines = text.lines()
+                val lines = output.lines()
                 // pi's fallback caps every collapsed result; Scry's markdown
                 // renderer caps only non-error results.
                 val capped = !expanded && !(isError && format == ToolResultFormat.MARKDOWN)
@@ -333,7 +394,7 @@ private fun ToolResultRow(
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 }
-                Column {
+                Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp)) {
                     // Scry's renderMarkdownResult caps the raw markdown
                     // lines first, then renders the kept lines as Markdown.
                     when (format) {
@@ -343,6 +404,7 @@ private fun ToolResultRow(
                         )
                         ToolResultFormat.RAW -> Text(
                             text = display.joinToString("\n"),
+                            style = MaterialTheme.typography.bodySmall,
                             color = color,
                         )
                     }
@@ -357,24 +419,8 @@ private fun ToolResultRow(
                     }
                 }
             }
-        },
-        trailingContent = {
-            if (running) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    strokeWidth = 2.dp,
-                )
-            } else {
-                Text(
-                    text = stringResource(
-                        if (isError) R.string.tool_status_failed else R.string.tool_status_done,
-                    ),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        },
-    )
+        }
+    }
 }
 
 @Composable
@@ -444,6 +490,17 @@ private fun ConversationContentThinkingPreview() {
                             ChatBlock.Thinking("The user asks a simple arithmetic question. *2 + 2* equals **4** — no tools needed."),
                             ChatBlock.Text("2 + 2 = **4**."),
                             ChatBlock.Thinking("Answered directly; offering the derivation seems unnecessary."),
+                        ),
+                    ),
+                    ChatMessage(
+                        id = "m3",
+                        role = ChatRole.Tool,
+                        blocks = emptyList(),
+                        toolResult = ChatToolResult(
+                            toolCallId = "t1",
+                            toolName = "web_search",
+                            isError = false,
+                            output = "1. Arithmetic — Wikipedia\n2. Addition — Wikipedia",
                         ),
                     ),
                 ),

@@ -78,10 +78,6 @@
     <string name="auth_more_info">Learn more</string>
     <string name="auth_user_code">Code: %1$s</string>
 
-    <string name="role_user">You</string>
-    <string name="role_assistant">Assistant</string>
-    <string name="role_assistant_failed">Assistant — failed</string>
-
     <string name="tool_status_done">Done</string>
     <string name="tool_status_failed">Failed</string>
     <string name="tool_output_toggle">Expand or collapse tool output</string>
