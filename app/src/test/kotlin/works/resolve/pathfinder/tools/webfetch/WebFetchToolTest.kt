@@ -1,17 +1,16 @@
 package works.resolve.pathfinder.tools.webfetch
 
-import works.resolve.pathfinder.agent.AgentToolResult
-import works.resolve.pathfinder.agent.ToolExecutionMode
-import works.resolve.pathfinder.ai.TextContent
-import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import works.resolve.pathfinder.agent.AgentToolResult
+import works.resolve.pathfinder.ai.TextContent
 
 class WebFetchToolTest {
 
@@ -23,7 +22,8 @@ class WebFetchToolTest {
         page
     }
 
-    private fun resultText(result: AgentToolResult): String = (result.content.single() as TextContent).text
+    private fun resultText(result: AgentToolResult): String =
+        (result.content.single() as TextContent).text
 
     private fun args(url: String? = null): JsonObject = buildJsonObject {
         url?.let { put("url", it) }
@@ -33,12 +33,18 @@ class WebFetchToolTest {
     fun `definition carries name description and schema`() {
         assertEquals("web_fetch", WebFetchTool.NAME)
         assertEquals("web_fetch", tool.definition.name)
-        assertEquals("Fetch a webpage and return its main readable content as text.", tool.definition.description)
+        assertEquals(
+            "Fetch a webpage and return its main readable content as text.",
+            tool.definition.description
+        )
         val params = tool.definition.parameters as JsonObject
         assertTrue(params["required"].toString().contains("url"))
-        assertTrue(((params["properties"] as JsonObject)["url"] as JsonObject)["type"].toString().contains("string"))
+        assertTrue(
+            ((params["properties"] as JsonObject)["url"] as JsonObject)["type"].toString().contains(
+                "string"
+            )
+        )
         assertEquals("Web Fetch", tool.label)
-        assertEquals(ToolExecutionMode.SEQUENTIAL, tool.executionMode)
         assertTrue(tool.promptSnippet.contains("specific URL"))
         assertEquals(2, tool.promptGuidelines.size)
     }
@@ -67,7 +73,11 @@ class WebFetchToolTest {
 
     @Test
     fun `validation accepts absolute http and https urls`() {
-        for (url in listOf("https://example.com/", "http://example.com/path?q=1", "HTTPS://EXAMPLE.COM/")) {
+        for (url in listOf(
+            "https://example.com/",
+            "http://example.com/path?q=1",
+            "HTTPS://EXAMPLE.COM/"
+        )) {
             val validated = tool.validateArguments(args(url))
             assertSame(validated["url"], validated["url"])
         }
@@ -99,11 +109,17 @@ class WebFetchToolTest {
 
     @Test
     fun `execute truncates oversized text`() = runBlocking {
-        page = PageContent("https://example.com/", null, "x".repeat(WebFetchTool.MAX_CONTENT_CHARS + 5000))
+        page =
+            PageContent(
+                "https://example.com/",
+                null,
+                "x".repeat(WebFetchTool.MAX_CONTENT_CHARS + 5000)
+            )
         val text = resultText(tool.execute("call-1", args("https://example.com/")) {})
         assertEquals(
-            "Source: https://example.com/\n\n" + "x".repeat(WebFetchTool.MAX_CONTENT_CHARS) + "\n\n[Content truncated]",
-            text,
+            "Source: https://example.com/\n\n" + "x".repeat(WebFetchTool.MAX_CONTENT_CHARS) +
+                "\n\n[Content truncated]",
+            text
         )
     }
 
