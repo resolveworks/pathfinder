@@ -10,6 +10,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.receiveAsFlow
 import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -24,13 +25,18 @@ import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
  * [HttpStreamingTransport] over OkHttp and okhttp-sse. Never logs the bearer
  * token, headers, or message content.
  *
- * SSE framing (UTF-8, CR/LF, comments, BOM, multiline data) is delegated to
- * okhttp-sse; only complete `data:` payloads cross this boundary. [post]
- * suspends until response headers arrive so non-2xx bodies are captured
- * (capped at [MAX_PROVIDER_ERROR_BODY_CHARS]) and status/headers are
- * available for retry classification before any content is consumed. The
- * underlying [EventSource] is cancelled promptly when the event collection
- * is cancelled or ends; there is no auto-reconnect.
+ * Two-phase design mirroring pi's fetch-then-parse adapters: the HTTP phase is
+ * owned here via a plain [Callback]; non-2xx bodies are captured (capped
+ * at [MAX_PROVIDER_ERROR_BODY_CHARS]) with status/headers available for retry
+ * classification before any SSE machinery runs. Only a 2xx response is handed
+ * to [EventSources.processResponse], which frames the stream (UTF-8, CR/LF,
+ * comments, BOM, multiline data) so only complete `data:` payloads cross this
+ * boundary. This split is required, not stylistic: once okhttp-sse starts
+ * streaming a response it owns the body, and OkHttp 5 replaces it with a
+ * stripped one that throws on read ([okhttp3.internal.UnreadableResponseBody],
+ * square/okhttp#9038) — so the [EventSourceListener] must never touch a
+ * response body, and cancelling mid-stream must surface as a plain failure,
+ * not an attempted body read. There is no auto-reconnect.
  *
  * Divergence (accepted, differences.md §7): okhttp-sse 5.5.0 does not flush
  * an unterminated SSE frame at EOF — a stream whose final `data:` line lacks
@@ -67,40 +73,53 @@ class OkHttpTransport(private val client: OkHttpClient = OkHttpClient()) : HttpS
         val events = Channel<SseEvent>(Channel.UNLIMITED)
         val headers = HeadersResult()
 
-        val eventSource = EventSources.createFactory(callFactory).newEventSource(
-            okRequest,
-            object : EventSourceListener() {
-                override fun onOpen(eventSource: EventSource, response: Response) {
-                    headers.complete(response.code, response.headers.toMultimap())
-                }
+        // SSE phase: framing only. Runs on the OkHttp dispatcher thread for the
+        // whole stream; the response body belongs to okhttp-sse and is never
+        // read here.
+        val sseListener = object : EventSourceListener() {
+            override fun onOpen(eventSource: EventSource, response: Response) {
+                headers.complete(response.code, response.headers.toMultimap())
+            }
 
-                override fun onEvent(
-                    eventSource: EventSource,
-                    id: String?,
-                    type: String?,
-                    data: String
-                ) {
-                    events.trySend(SseEvent(data, type))
-                }
+            override fun onEvent(
+                eventSource: EventSource,
+                id: String?,
+                type: String?,
+                data: String
+            ) {
+                events.trySend(SseEvent(data, type))
+            }
 
-                override fun onClosed(eventSource: EventSource) {
-                    headers.completeWithoutResponse()
+            override fun onClosed(eventSource: EventSource) {
+                headers.completeWithoutResponse()
+                events.close()
+            }
+
+            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                val networkError = NetworkException(t ?: IOException("SSE stream failed"))
+                if (headers.failBeforeOpen(networkError)) {
                     events.close()
+                } else {
+                    // Headers already delivered: the failure is a mid-stream
+                    // error surfaced to the event collector, not a retryable one.
+                    events.close(networkError)
                 }
+            }
+        }
 
-                override fun onFailure(
-                    eventSource: EventSource,
-                    t: Throwable?,
-                    response: Response?
-                ) {
-                    if (response != null) {
+        // HTTP phase: non-2xx bodies are read here, where the body is owned
+        // and readable; 2xx responses are delegated to the SSE phase above.
+        val call = callFactory.newCall(okRequest)
+        call.enqueue(
+            object : Callback {
+                override fun onResponse(call: Call, response: Response) {
+                    if (!response.isSuccessful) {
                         // Read at most ~4x the char cap (worst-case UTF-8) so a
                         // huge error body is never fully buffered just to be
                         // truncated.
                         val readLimit = MAX_PROVIDER_ERROR_BODY_CHARS.toLong() * 4
-                        // Trim before truncating so the captured body
-                        // matches the shared error-body normalizer's
-                        // convention.
+                        // Trim before truncating so the captured body matches
+                        // the shared error-body normalizer's convention.
                         val errorBody = try {
                             val source = response.body.source()
                             source.request(readLimit)
@@ -111,26 +130,28 @@ class OkHttpTransport(private val client: OkHttpClient = OkHttpClient()) : HttpS
                         } catch (_: IOException) {
                             ""
                         }
-                        val headers2 = response.headers.toMultimap()
+                        val responseHeaders = response.headers.toMultimap()
                         response.close()
                         events.close()
                         headers.fail(
                             ProviderHttpException(
                                 status = response.code,
-                                headers = headers2,
+                                headers = responseHeaders,
                                 body = errorBody,
                                 statusText = response.message
                             )
                         )
+                        return
+                    }
+                    EventSources.processResponse(response, sseListener)
+                }
+
+                override fun onFailure(call: Call, e: IOException) {
+                    val networkError = NetworkException(e)
+                    if (headers.failBeforeOpen(networkError)) {
+                        events.close()
                     } else {
-                        val networkError = NetworkException(t ?: IOException("SSE stream failed"))
-                        if (headers.failBeforeOpen(networkError)) {
-                            events.close()
-                        } else {
-                            // Headers already delivered: the failure is a mid-stream
-                            // error surfaced to the event collector, not a retryable one.
-                            events.close(networkError)
-                        }
+                        events.close(networkError)
                     }
                 }
             }
@@ -138,12 +159,12 @@ class OkHttpTransport(private val client: OkHttpClient = OkHttpClient()) : HttpS
 
         // Cancellation while waiting for headers must cancel the call too.
         val cancellationHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
-            if (cause is CancellationException) eventSource.cancel()
+            if (cause is CancellationException) call.cancel()
         }
         try {
             headers.await()
         } catch (error: Throwable) {
-            eventSource.cancel()
+            call.cancel()
             throw error
         } finally {
             cancellationHandle?.dispose()
@@ -152,9 +173,9 @@ class OkHttpTransport(private val client: OkHttpClient = OkHttpClient()) : HttpS
         return TransportResponse(
             status = headers.status,
             headers = headers.headerMap,
-            // Cancelling a finished source is a no-op; this also guarantees the
+            // Cancelling a finished call is a no-op; this also guarantees the
             // call closes when the collector stops early (e.g. on [DONE]).
-            events = events.receiveAsFlow().onCompletion { eventSource.cancel() }
+            events = events.receiveAsFlow().onCompletion { call.cancel() }
         )
     }
 

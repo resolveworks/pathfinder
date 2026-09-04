@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.transport
 
+import java.util.Collections
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -263,5 +264,45 @@ class OkHttpTransportTest {
             "truncated frame was flushed and dispatched — revisit the divergence notes"
         )
         server.shutdown()
+    }
+
+    /**
+     * Regression (square/okhttp#9038 crash class): once okhttp-sse starts
+     * streaming, OkHttp 5 replaces the response body handed to
+     * [okhttp3.sse.EventSourceListener] callbacks with a stripped one that
+     * throws IllegalStateException on read. Cancelling a live stream used to
+     * hit that path in onFailure, crashing the OkHttp dispatcher thread. The
+     * throttled long body guarantees the reader is blocked mid-stream when
+     * the collector cancels, so the failure is delivered with the stripped
+     * response; the transport must fail without touching it.
+     */
+    @Test
+    fun `cancelling mid-stream never reads okhttp-sse's stripped response body`() {
+        val uncaught = Collections.synchronizedList(mutableListOf<Throwable>())
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { _, e -> uncaught.add(e) }
+        val server = MockWebServer()
+        try {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "text/event-stream")
+                    .setBody("data: x\n\n".repeat(512))
+                    .throttleBody(16, 100, TimeUnit.MILLISECONDS)
+            )
+            server.start()
+            runBlocking {
+                val response = transport().post(request(server))
+                val first = withTimeout(5_000) { response.events.first() }
+                assertEquals(SseEvent("x"), first)
+                // first() cancelled the collection; give the dispatcher thread
+                // time to observe the cancel and run the failure callback.
+                Thread.sleep(1_000)
+            }
+            assertTrue(uncaught.isEmpty(), "listener threw on the OkHttp thread: $uncaught")
+        } finally {
+            Thread.setDefaultUncaughtExceptionHandler(previousHandler)
+            server.shutdown()
+        }
     }
 }
