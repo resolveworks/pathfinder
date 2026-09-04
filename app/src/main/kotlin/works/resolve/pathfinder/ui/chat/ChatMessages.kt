@@ -24,6 +24,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -34,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -291,12 +293,45 @@ internal enum class ToolResultFormat {
  * pi's raw fallback.
  */
 internal object ToolResultRenderers {
-    /** Scry renders web_search results as Markdown. */
+    /** Scry renders web_search results as Markdown; web_fetch output is Markdown (defuddle). */
     private val formats: Map<String, ToolResultFormat> = mapOf(
-        BraveWebSearchTool.NAME to ToolResultFormat.MARKDOWN
+        BraveWebSearchTool.NAME to ToolResultFormat.MARKDOWN,
+        WebFetchTool.NAME to ToolResultFormat.MARKDOWN
     )
 
     fun formatFor(toolName: String): ToolResultFormat = formats[toolName] ?: ToolResultFormat.RAW
+}
+
+/** pi's preview budget: Scry's markdown renderer and the generic fallback both clip at ten source lines. */
+private const val TOOL_PREVIEW_LINES = 10
+
+/** An opened tool row's display text plus what the show-all button still hides. */
+internal data class ToolPreview(val text: String, val hiddenLines: Int)
+
+/**
+ * pi clips an un-expanded tool result at ten source lines and hints at the
+ * rest; the port keeps the clip on the opened row and turns the hint into
+ * the show-all button ([showAll] reveals everything). Scry leaves error
+ * output whole; the generic fallback clips errors too.
+ */
+internal fun toolOutputPreview(
+    output: String,
+    format: ToolResultFormat,
+    isError: Boolean,
+    showAll: Boolean
+): ToolPreview {
+    if (showAll || (format == ToolResultFormat.MARKDOWN && isError)) {
+        return ToolPreview(output, 0)
+    }
+    val lines = output.lines()
+    return if (lines.size <= TOOL_PREVIEW_LINES) {
+        ToolPreview(output, 0)
+    } else {
+        ToolPreview(
+            lines.take(TOOL_PREVIEW_LINES).joinToString("\n"),
+            lines.size - TOOL_PREVIEW_LINES
+        )
+    }
 }
 
 /**
@@ -333,8 +368,9 @@ internal fun toolCallTitle(toolName: String, input: String?): String {
  * conversation text: the row title (a tool-specific phrase like
  * "Searched for …", else the tool name) and a spinner while running.
  * Rows with output expand in place — per row, never globally (pi's Ctrl+O,
- * exposed as a tap). Error coloring is a native adaptation (pi signals
- * errors through the shell, not text color).
+ * exposed as a tap) — and the opened row keeps pi's clipped preview with a
+ * button for the rest; see [toolOutputPreview]. Error coloring is a native
+ * adaptation (pi signals errors through the shell, not text color).
  */
 @Composable
 private fun ToolCallItem(
@@ -347,8 +383,11 @@ private fun ToolCallItem(
     modifier: Modifier = Modifier
 ) {
     // Expansion is local to this row; the lazy list's stable keys keep it
-    // across recycling and process death.
+    // across recycling and process death. Opening shows the clipped preview;
+    // collapsing resets the show-all override, as pi's ctrl+o collapse
+    // returns to the preview.
     var expanded by rememberSaveable(toolCallId) { mutableStateOf(false) }
+    var showAll by rememberSaveable(toolCallId) { mutableStateOf(false) }
     Surface(
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -358,8 +397,8 @@ private fun ToolCallItem(
             // The whole row is the toggle's touch target.
             modifier = if (output != null) {
                 Modifier.clickable(onClickLabel = stringResource(R.string.tool_output_toggle)) {
-                    expanded =
-                        !expanded
+                    expanded = !expanded
+                    if (!expanded) showAll = false
                 }
             } else {
                 Modifier
@@ -407,15 +446,35 @@ private fun ToolCallItem(
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 }
+                val preview = toolOutputPreview(
+                    output = output,
+                    format = format,
+                    isError = isError,
+                    showAll = showAll
+                )
                 Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp)) {
                     when (format) {
-                        ToolResultFormat.MARKDOWN -> MarkdownText(markdown = output, color = color)
+                        ToolResultFormat.MARKDOWN -> MarkdownText(
+                            markdown = preview.text,
+                            color = color
+                        )
 
                         ToolResultFormat.RAW -> Text(
-                            text = output,
+                            text = preview.text,
                             style = MaterialTheme.typography.bodySmall,
                             color = color
                         )
+                    }
+                    if (preview.hiddenLines > 0) {
+                        TextButton(onClick = { showAll = true }) {
+                            Text(
+                                pluralStringResource(
+                                    R.plurals.tool_output_show_all,
+                                    preview.hiddenLines,
+                                    preview.hiddenLines
+                                )
+                            )
+                        }
                     }
                 }
             }

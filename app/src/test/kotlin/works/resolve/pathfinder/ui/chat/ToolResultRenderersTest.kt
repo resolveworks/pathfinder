@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ui.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 
 /**
@@ -14,6 +15,14 @@ class ToolResultRenderersTest {
         assertEquals(
             ToolResultFormat.MARKDOWN,
             ToolResultRenderers.formatFor(BraveWebSearchTool.NAME)
+        )
+    }
+
+    @Test
+    fun `web_fetch renders as markdown (page content is defuddle markdown)`() {
+        assertEquals(
+            ToolResultFormat.MARKDOWN,
+            ToolResultRenderers.formatFor(WebFetchTool.NAME)
         )
     }
 
