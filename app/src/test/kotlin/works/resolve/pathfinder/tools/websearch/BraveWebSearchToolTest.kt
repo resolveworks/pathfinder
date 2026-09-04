@@ -137,7 +137,16 @@ class BraveWebSearchToolTest {
                 "3. **[Third](https://c.example)**",
             resultText(result)
         )
-        assertEquals("{}", result.details.toString())
+        // Structured mirror of the markdown for the app's result renderer.
+        assertEquals(
+            "{" +
+                "\"results\":[" +
+                "{\"title\":\"First\",\"url\":\"https://a.example\"," +
+                "\"description\":\"Desc one\",\"extra_snippets\":[\"s1\",\"s2\"]}," +
+                "{\"title\":\"Second\",\"url\":\"https://b.example\"}," +
+                "{\"title\":\"Third\",\"url\":\"https://c.example\"}]}",
+            result.details.toString()
+        )
     }
 
     @Test

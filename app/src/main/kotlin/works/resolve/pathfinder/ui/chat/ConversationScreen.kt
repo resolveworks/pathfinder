@@ -411,7 +411,6 @@ private fun Composer(
         value = draft,
         onValueChange = onDraftChange,
         enabled = !isStreaming,
-        placeholder = { Text(stringResource(R.string.composer_hint)) },
         trailingIcon = {
             if (isStreaming) {
                 IconButton(onClick = onStop) {

@@ -38,6 +38,9 @@ import works.resolve.pathfinder.codingagent.core.AgentSession
  * - The application layer activates the tool only while a key is stored, so
  *   the system prompt never advertises an unusable tool; upstream registers
  *   unconditionally and errors at execute time.
+ * - `details` carries the structured result entries (title, url,
+ *   description, extra_snippets) for the app's result renderer; upstream
+ *   Scry exposes only the markdown content.
  *
  * Never logs the API key or request/response content.
  */
@@ -195,13 +198,27 @@ class BraveWebSearchTool(
                 )
             }
 
+            // Content keeps Scry's numbered markdown for the model; the
+            // same fields go into `details` for the app's result renderer.
+            val entries = mutableListOf<JsonObject>()
             val lines = results.mapIndexed { i, element ->
                 val r = element as? JsonObject ?: JsonObject(emptyMap())
-                val parts =
-                    mutableListOf("${i + 1}. **[${r.str("title") ?: ""}](${r.str("url") ?: ""})**")
+                val title = r.str("title") ?: ""
+                val url = r.str("url") ?: ""
                 // Mirrors Scry's JS truthiness: skip empty descriptions.
-                r.str("description")?.takeIf { it.isNotEmpty() }?.let { parts.add("   $it") }
-                r.arr("extra_snippets")?.forEach { snippet ->
+                val description = r.str("description")?.takeIf { it.isNotEmpty() }
+                val snippets = r.arr("extra_snippets")
+                entries.add(
+                    buildJsonObject {
+                        put("title", title)
+                        put("url", url)
+                        description?.let { put("description", it) }
+                        snippets?.let { put("extra_snippets", it) }
+                    }
+                )
+                val parts = mutableListOf("${i + 1}. **[$title]($url)**")
+                description?.let { parts.add("   $it") }
+                snippets?.forEach { snippet ->
                     snippet.strOrNull()?.let { parts.add("   > $it") }
                 }
                 parts.joinToString("\n")
@@ -209,7 +226,7 @@ class BraveWebSearchTool(
 
             return AgentToolResult(
                 content = listOf(TextContent(lines.joinToString("\n\n"))),
-                details = EMPTY_DETAILS
+                details = buildJsonObject { put("results", JsonArray(entries)) }
             )
         }
     }

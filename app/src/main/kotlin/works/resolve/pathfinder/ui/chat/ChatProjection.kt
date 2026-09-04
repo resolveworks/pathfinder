@@ -10,11 +10,15 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.str
+import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
+import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 
 /**
  * UI projection of the committed transcript: the active conversation path is
@@ -83,7 +87,8 @@ internal fun projectCommitted(
                             isError = message.isError,
                             output = toolResultOutput(message),
                             input = liveCalls[message.toolCallId]
-                                ?.let { toolCallInput(it.name, it.arguments) }
+                                ?.let { toolCallInput(it.name, it.arguments) },
+                            searchResults = toolResultSearchResults(message)
                         )
                     )
                 }
@@ -151,6 +156,28 @@ internal fun toolResultOutput(message: ToolResultMessage): String? {
     val parts = message.content.filterIsInstance<TextContent>()
     if (parts.isEmpty()) return null
     return parts.joinToString("\n") { it.text }.takeIf { it.isNotEmpty() }
+}
+
+/**
+ * web_search result entries parsed from the tool result's `details`
+ * (mirrors the fields BraveWebSearchTool emits; reads are lenient so a
+ * future shape change degrades to the text renderer, never a crash).
+ * Null for other tools, error results, and malformed or empty shapes.
+ */
+internal fun toolResultSearchResults(message: ToolResultMessage): List<ChatSearchResult>? {
+    if (message.isError || message.toolName != BraveWebSearchTool.NAME) return null
+    val results = (message.details as? JsonObject)?.arr("results") ?: return null
+    val entries = results.mapNotNull { it as? JsonObject }.map { r ->
+        ChatSearchResult(
+            title = r.str("title").orEmpty(),
+            url = r.str("url").orEmpty(),
+            description = r.str("description")?.takeIf { it.isNotEmpty() },
+            snippets = r.arr("extra_snippets")
+                ?.mapNotNull { it.strOrNull()?.takeIf(String::isNotEmpty) }
+                .orEmpty()
+        )
+    }
+    return entries.takeIf { it.isNotEmpty() }
 }
 
 /**

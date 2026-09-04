@@ -9,19 +9,25 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -29,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -37,6 +44,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import works.resolve.pathfinder.R
@@ -92,6 +105,16 @@ internal fun ConversationContent(
         mutableStateMapOf<String, Boolean>().apply { putAll(initialThinkingOverrides) }
     }
 
+    // Tool result opened in the viewer sheet, by tool call id. Ephemeral view
+    // state resolved against the live message list, so a stale id (session
+    // switch, branch navigation) just closes the sheet.
+    var openToolResultId by rememberSaveable { mutableStateOf<String?>(null) }
+    val openToolResult = openToolResultId?.let { id ->
+        uiState.messages.firstNotNullOfOrNull { message ->
+            message.toolResult?.takeIf { it.toolCallId == id }
+        }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         if (messageCount == 0 && uiState.pendingTools.isEmpty() && streamingId == null) {
             Text(
@@ -134,12 +157,12 @@ internal fun ConversationContent(
             }
             items(uiState.pendingTools, key = { "pending-${it.toolCallId}" }) { pending ->
                 ToolCallItem(
-                    toolCallId = pending.toolCallId,
                     toolName = pending.toolName,
                     input = pending.input,
                     output = null,
                     isError = false,
-                    running = true
+                    running = true,
+                    onOpenOutput = {}
                 )
             }
             items(
@@ -151,12 +174,12 @@ internal fun ConversationContent(
 
                     message.role == ChatRole.Tool -> message.toolResult?.let { result ->
                         ToolCallItem(
-                            toolCallId = result.toolCallId,
                             toolName = result.toolName,
                             input = result.input,
                             output = result.output,
                             isError = result.isError,
-                            running = false
+                            running = false,
+                            onOpenOutput = { openToolResultId = result.toolCallId }
                         )
                     }
 
@@ -169,6 +192,13 @@ internal fun ConversationContent(
                     )
                 }
             }
+        }
+
+        openToolResult?.let { result ->
+            ToolOutputSheet(
+                result = result,
+                onDismiss = { openToolResultId = null }
+            )
         }
     }
 }
@@ -310,7 +340,7 @@ internal data class ToolPreview(val text: String, val hiddenLines: Int)
 
 /**
  * pi clips an un-expanded tool result at ten source lines and hints at the
- * rest; the port keeps the clip on the opened row and turns the hint into
+ * rest; the port keeps the clip in the viewer sheet and turns the hint into
  * the show-all button ([showAll] reveals everything). Scry leaves error
  * output whole; the generic fallback clips errors too.
  */
@@ -364,119 +394,241 @@ internal fun toolCallTitle(toolName: String, input: String?): String {
 }
 
 /**
- * One tool execution as a single line in a tonal container, distinct from
- * conversation text: the row title (a tool-specific phrase like
- * "Searched for …", else the tool name) and a spinner while running.
- * Rows with output expand in place — per row, never globally (pi's Ctrl+O,
- * exposed as a tap) — and the opened row keeps pi's clipped preview with a
- * button for the rest; see [toolOutputPreview]. Error coloring is a native
+ * One tool execution as a single fixed-height line in a tonal container,
+ * distinct from conversation text: the row title (a tool-specific phrase
+ * like "Searched for …", else the tool name) and a spinner while running.
+ * Rows with output open [ToolOutputSheet] instead of expanding in place:
+ * the transcript list is reversed (so streaming pins to its bottom), which
+ * pins each row's bottom edge and would grow an in-place expansion upward
+ * past the tapped title — the sheet owns its scroll, starts at the top of
+ * the content, and leaves the transcript untouched behind it. Per-row, never
+ * global (pi's Ctrl+O, exposed as a tap). Error coloring is a native
  * adaptation (pi signals errors through the shell, not text color).
  */
 @Composable
 private fun ToolCallItem(
-    toolCallId: String,
     toolName: String,
     input: String?,
     output: String?,
     isError: Boolean,
     running: Boolean,
+    onOpenOutput: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Expansion is local to this row; the lazy list's stable keys keep it
-    // across recycling and process death. Opening shows the clipped preview;
-    // collapsing resets the show-all override, as pi's ctrl+o collapse
-    // returns to the preview.
-    var expanded by rememberSaveable(toolCallId) { mutableStateOf(false) }
-    var showAll by rememberSaveable(toolCallId) { mutableStateOf(false) }
     Surface(
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         modifier = modifier.fillMaxWidth()
     ) {
-        Column(
-            // The whole row is the toggle's touch target.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            // The whole row is the open action's touch target.
             modifier = if (output != null) {
-                Modifier.clickable(onClickLabel = stringResource(R.string.tool_output_toggle)) {
-                    expanded = !expanded
-                    if (!expanded) showAll = false
+                Modifier.clickable(onClickLabel = stringResource(R.string.tool_output_view)) {
+                    onOpenOutput()
                 }
             } else {
                 Modifier
+            }.padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            Text(
+                text = toolCallTitle(toolName, input),
+                style = MaterialTheme.typography.labelLarge,
+                color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified,
+                modifier = Modifier.weight(1f)
+            )
+            if (running) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp
+                )
+            } else if (isError) {
+                Text(
+                    text = stringResource(R.string.tool_status_failed),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
+        }
+    }
+}
+
+/**
+ * Viewer for one tool result: pi's clipped preview with the show-all button
+ * in a scrollable modal sheet. A fresh scroll state per open anchors the
+ * viewport at the top of the content; dismissing restores the transcript's
+ * scroll position because it never moved.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ToolOutputSheet(
+    result: ChatToolResult,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        var showAll by remember(result.toolCallId) { mutableStateOf(false) }
+        val format = ToolResultRenderers.formatFor(result.toolName)
+        val searchResults = result.searchResults?.takeIf { !result.isError }
+        val preview = toolOutputPreview(
+            output = result.output.orEmpty(),
+            format = format,
+            isError = result.isError,
+            showAll = showAll
+        )
+        val contentColor = if (result.isError) {
+            MaterialTheme.colorScheme.error
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        }
+        Column(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .navigationBarsPadding()
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                modifier = Modifier.padding(bottom = 8.dp)
             ) {
                 Text(
-                    text = toolCallTitle(toolName, input),
+                    text = toolCallTitle(result.toolName, result.input),
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified,
+                    color = if (result.isError) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
                     modifier = Modifier.weight(1f)
                 )
-                if (running) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp
-                    )
-                } else if (isError) {
+                if (result.isError) {
                     Text(
                         text = stringResource(R.string.tool_status_failed),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.error
                     )
                 }
-                if (output != null) {
-                    Icon(
-                        imageVector = if (expanded) {
-                            Icons.Default.KeyboardArrowUp
-                        } else {
-                            Icons.Default.KeyboardArrowDown
-                        },
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            Column(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .heightIn(max = 640.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                when {
+                    searchResults != null -> WebSearchResults(results = searchResults)
+
+                    format == ToolResultFormat.MARKDOWN -> MarkdownText(
+                        markdown = preview.text,
+                        color = contentColor
+                    )
+
+                    else -> Text(
+                        text = preview.text,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = contentColor
                     )
                 }
-            }
-            if (output != null && expanded) {
-                val format = ToolResultRenderers.formatFor(toolName)
-                val color = if (isError) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
-                val preview = toolOutputPreview(
-                    output = output,
-                    format = format,
-                    isError = isError,
-                    showAll = showAll
-                )
-                Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp)) {
-                    when (format) {
-                        ToolResultFormat.MARKDOWN -> MarkdownText(
-                            markdown = preview.text,
-                            color = color
-                        )
-
-                        ToolResultFormat.RAW -> Text(
-                            text = preview.text,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = color
+                if (searchResults == null && preview.hiddenLines > 0) {
+                    TextButton(onClick = { showAll = true }) {
+                        Text(
+                            pluralStringResource(
+                                R.plurals.tool_output_show_all,
+                                preview.hiddenLines,
+                                preview.hiddenLines
+                            )
                         )
                     }
-                    if (preview.hiddenLines > 0) {
-                        TextButton(onClick = { showAll = true }) {
-                            Text(
-                                pluralStringResource(
-                                    R.plurals.tool_output_show_all,
-                                    preview.hiddenLines,
-                                    preview.hiddenLines
+                }
+            }
+        }
+    }
+}
+
+/**
+ * web_search results rendered from the structured details: per result, the
+ * title link and description stay visible while the extra excerpts wait
+ * behind a read-more toggle, so one long result cannot dominate the sheet.
+ * Results without structured details render through the markdown/text
+ * fallback above instead.
+ */
+@Composable
+private fun WebSearchResults(results: List<ChatSearchResult>, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        results.forEachIndexed { index, result ->
+            if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            WebSearchResultItem(result)
+        }
+    }
+}
+
+@Composable
+private fun WebSearchResultItem(result: ChatSearchResult, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        val label = result.title.ifEmpty { result.url }.takeIf { it.isNotBlank() }
+        when {
+            label != null && result.url.isNotEmpty() -> Text(
+                text = buildAnnotatedString {
+                    withLink(
+                        LinkAnnotation.Url(
+                            result.url,
+                            TextLinkStyles(
+                                SpanStyle(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
                                 )
                             )
+                        )
+                    ) { append(label) }
+                },
+                style = MaterialTheme.typography.bodyLarge
+            )
+
+            label != null -> Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        result.description?.let { description ->
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (expanded) {
+            result.snippets.forEach { snippet ->
+                Text(
+                    text = snippet,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        if (result.snippets.isNotEmpty()) {
+            TextButton(
+                onClick = { expanded = !expanded },
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Text(
+                    stringResource(
+                        if (expanded) {
+                            R.string.search_result_show_less
+                        } else {
+                            R.string.search_result_read_more
                         }
-                    }
-                }
+                    )
+                )
             }
         }
     }

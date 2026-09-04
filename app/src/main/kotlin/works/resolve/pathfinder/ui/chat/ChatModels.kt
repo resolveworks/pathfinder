@@ -48,10 +48,25 @@ data class ChatMessage(
 )
 
 /**
+ * One web_search result, parsed from the tool result's structured details
+ * (see `toolResultSearchResults`); `snippets` are the extra excerpts the
+ * viewer keeps behind its read-more toggle.
+ */
+data class ChatSearchResult(
+    val title: String,
+    val url: String,
+    /** Null for results without a description (empty ones are skipped, as in the markdown content). */
+    val description: String? = null,
+    val snippets: List<String> = emptyList()
+)
+
+/**
  * UI-safe projection of a committed tool result: tool name, error flag,
- * and the full text output. The structured `details` JSON and the raw
- * JSON arguments never enter UI state; [input] is the one parsed argument
- * the row title is built from (see `toolCallInput`).
+ * and the full text output. The raw JSON arguments never enter UI state
+ * ([input] is the one parsed argument the row title is built from, see
+ * `toolCallInput`), and the structured `details` JSON enters only as the
+ * parsed [searchResults] entries — null for tools without structured
+ * output, in which case the viewer renders [output].
  */
 data class ChatToolResult(
     val toolCallId: String,
@@ -59,7 +74,9 @@ data class ChatToolResult(
     val isError: Boolean,
     val output: String? = null,
     /** Parsed call argument the row title is built from; null when the tool has none. */
-    val input: String? = null
+    val input: String? = null,
+    /** Parsed web_search result entries; null unless the tool emitted structured details. */
+    val searchResults: List<ChatSearchResult>? = null
 )
 
 data class PendingToolExecution(
