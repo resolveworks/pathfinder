@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
@@ -62,7 +64,8 @@ fun TreePanel(
     filter: TreeFilter,
     onFilterChange: (TreeFilter) -> Unit,
     onNavigate: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    listState: LazyListState = rememberLazyListState()
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     // Folded row ids; cleared on query or filter change, as in pi.
@@ -84,7 +87,8 @@ fun TreePanel(
         filter = filter,
         onFilterChange = onFilterChange,
         onNavigate = onNavigate,
-        modifier = modifier
+        modifier = modifier,
+        listState = listState
     )
 }
 
@@ -100,7 +104,8 @@ private fun TreePanelContent(
     filter: TreeFilter,
     onFilterChange: (TreeFilter) -> Unit,
     onNavigate: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    listState: LazyListState = rememberLazyListState()
 ) {
     Column(modifier = modifier) {
         TreePanelHeader(
@@ -120,7 +125,7 @@ private fun TreePanelContent(
 
             visibleRows.isEmpty() -> EmptyTreeText(stringResource(R.string.tree_no_matches))
 
-            else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
+            else -> LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
                 items(visibleRows, key = { it.id }) { row ->
                     TreeRowItem(
                         row = row,
@@ -147,7 +152,12 @@ internal fun filterTreeRows(
     val matched = if (tokens.isEmpty()) {
         rows
     } else {
-        rows.filter { row -> tokens.all { row.preview.lowercase().contains(it) } }
+        rows.filter { row ->
+            // Tool rows search over the rendered title's pieces: the tool
+            // name (in preview) and the parsed input argument.
+            val text = (row.preview + " " + (row.toolCall?.input ?: "")).lowercase()
+            tokens.all { text.contains(it) }
+        }
     }
     return matched.filter { row ->
         row.path.dropLast(1).none { it in foldedIds }
@@ -286,7 +296,9 @@ private fun TreeRowItem(
         }
 
         Text(
-            text = row.preview,
+            // Tool-result rows title themselves from the originating call,
+            // exactly like the chat's tool rows.
+            text = row.toolCall?.let { toolCallTitle(it.name, it.input) } ?: row.preview,
             style = MaterialTheme.typography.bodyMedium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

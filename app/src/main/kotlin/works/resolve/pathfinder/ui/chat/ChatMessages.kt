@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -24,7 +25,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -76,35 +76,11 @@ private fun thinkingOverridesSaver() = listSaver<MutableMap<String, Boolean>, An
 internal fun ConversationContent(
     uiState: ChatUiState,
     modifier: Modifier = Modifier,
+    listState: LazyListState = rememberLazyListState(),
     initialThinkingOverrides: Map<String, Boolean> = emptyMap()
 ) {
-    val listState = rememberLazyListState()
     val messageCount = uiState.messages.size
     val streamingId = uiState.streamingMessage?.id
-    // Covers text AND thinking so a later chunk keeps auto-scrolling during
-    // thinking-only streaming; thinking changes alone also advance it.
-    val streamingLength = uiState.streamingMessage?.blocks?.sumOf { block ->
-        when (block) {
-            is ChatBlock.Text -> block.text.length
-            is ChatBlock.Thinking -> block.text.length
-            is ChatBlock.ToolCall -> 0
-        }
-    }
-
-    // A reversed lazy list makes index 0 the bottom of the viewport;
-    // including activeSessionId matters when switching between transcripts
-    // that happen to contain the same number of messages.
-    LaunchedEffect(
-        uiState.activeSessionId,
-        messageCount,
-        uiState.pendingTools.size,
-        streamingId,
-        streamingLength
-    ) {
-        if (messageCount > 0 || uiState.pendingTools.isNotEmpty() || streamingId != null) {
-            listState.requestScrollToItem(0)
-        }
-    }
 
     // Per-block expanded overrides (ephemeral view state keyed by stable
     // "messageId:blockIndex"): a block the user never tapped keeps following
@@ -347,7 +323,7 @@ internal object ToolCallTitles {
 
 /** Row title: the spec's format filled with the parsed input, else the tool name. */
 @Composable
-private fun toolCallTitle(toolName: String, input: String?): String {
+internal fun toolCallTitle(toolName: String, input: String?): String {
     val spec = ToolCallTitles.specFor(toolName)
     return if (spec != null && input != null) stringResource(spec.format, input) else toolName
 }
@@ -486,9 +462,11 @@ private fun ThinkingBlock(
             )
         }
         if (expanded) {
+            // outline (not onSurfaceVariant): keeps expanded thinking clearly
+            // dimmer than the onSurface answer text in both theme variants.
             MarkdownText(
                 markdown = text,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.outline,
                 italic = true
             )
         }

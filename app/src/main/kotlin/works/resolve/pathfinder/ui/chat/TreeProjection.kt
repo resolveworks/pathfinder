@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ui.chat
 
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.codingagent.core.session.Conversation
@@ -33,6 +34,17 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
     if (conversation.entries.isEmpty()) return emptyList()
 
     val byId = conversation.entries.associateBy { it.id }
+
+    // pi's toolCallMap: calls collected from all assistant entries so a
+    // tool-result row can title itself from its originating call's
+    // arguments — including rows that only history keeps.
+    val toolCalls = HashMap<String, ToolCall>()
+    for (entry in conversation.entries) {
+        val message = (entry as? MessageEntry)?.message as? AssistantMessage ?: continue
+        for (part in message.content) {
+            if (part is ToolCall) toolCalls[part.id] = part
+        }
+    }
     val activePathIds = conversation.activeEntries().mapTo(mutableSetOf()) { it.id }
     val leafId = conversation.leafId
 
@@ -142,7 +154,8 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
             // Pi's isFoldable: a segment start (root or child of a branch
             // point) with visible children; folding hides its descendants.
             isFoldable = children.isNotEmpty() && (frame.isRoot || frame.justBranched),
-            preview = frame.entry.previewOf()
+            preview = frame.entry.previewOf(),
+            toolCall = (frame.entry as? MessageEntry)?.toolCallOf(toolCalls)
         )
         val childIndent = when {
             multipleChildren -> frame.internalIndent + 1
@@ -183,8 +196,12 @@ private fun SessionEntry.previewOf(): String {
     val entryMessage = message
     val prefix = when (entryMessage) {
         is UserMessage -> "You"
+
         is AssistantMessage -> "Assistant"
-        is ToolResultMessage -> "Tool"
+
+        // Tool rows title themselves from the originating call (see
+        // toolCallOf); pi's fallback is the bracketed tool name.
+        is ToolResultMessage -> return "[${entryMessage.toolName}]"
     }
     val body = when {
         entryMessage is AssistantMessage && entryMessage.errorMessage != null ->
@@ -205,6 +222,16 @@ private fun SessionEntry.previewOf(): String {
         .joinToString(" ")
         .take(PREVIEW_MAX_LENGTH)
     return "$prefix: ${normalized.ifEmpty { "(no content)" }}"
+}
+
+private fun MessageEntry.toolCallOf(toolCalls: Map<String, ToolCall>): TreeToolCall? {
+    val entryMessage = message
+    if (entryMessage !is ToolResultMessage) return null
+    return TreeToolCall(
+        name = entryMessage.toolName,
+        input = toolCalls[entryMessage.toolCallId]
+            ?.let { toolCallInput(it.name, it.arguments) }
+    )
 }
 
 private const val PREVIEW_MAX_LENGTH = 120

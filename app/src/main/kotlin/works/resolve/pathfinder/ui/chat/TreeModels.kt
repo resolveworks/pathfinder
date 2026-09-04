@@ -16,6 +16,17 @@ enum class TreeConnector {
     ELBOW
 }
 
+/**
+ * The originating call of a tool-result row, resolved by call id: the
+ * panel titles the row from it exactly like the chat's tool rows
+ * ("Searched for …"/"Fetched …", else the bare tool name).
+ */
+data class TreeToolCall(
+    val name: String,
+    /** Parsed title argument; null when the tool has no title spec. */
+    val input: String? = null
+)
+
 data class TreeRow(
     /** Entry id; stable key for the row and for fold state. */
     val id: String,
@@ -41,5 +52,7 @@ data class TreeRow(
      */
     val isFoldable: Boolean,
     /** Single-line preview: role-prefixed, whitespace-normalized, bounded. */
-    val preview: String
+    val preview: String,
+    /** Non-null only on tool-result rows; drives the rendered row title. */
+    val toolCall: TreeToolCall? = null
 )

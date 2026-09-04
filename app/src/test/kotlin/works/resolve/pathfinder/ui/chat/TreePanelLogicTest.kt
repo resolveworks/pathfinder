@@ -45,6 +45,30 @@ class TreePanelLogicTest {
     }
 
     @Test
+    fun `tool rows match on the tool name and the parsed input`() {
+        val tree = listOf(
+            row("u1", listOf("u1"), "You: find compose docs"),
+            row("t1", listOf("u1", "t1"), "[web_search]").copy(
+                toolCall = TreeToolCall("web_search", "kotlin compose")
+            ),
+            row("a1", listOf("u1", "t1", "a1"), "Assistant: here is what I found")
+        )
+        assertEquals(
+            listOf("t1"),
+            filterTreeRows(tree, "web_search", emptySet()).map { it.id }
+        )
+        assertEquals(
+            listOf("t1"),
+            filterTreeRows(tree, "COMPOSE kotlin", emptySet()).map { it.id }
+        )
+        // The input does not leak into other rows' matching.
+        assertEquals(
+            emptyList<TreeRow>(),
+            filterTreeRows(tree, "found web_search", emptySet())
+        )
+    }
+
+    @Test
     fun `token matching no row yields empty result`() {
         assertEquals(emptyList<TreeRow>(), filterTreeRows(tree, "nonexistent token", emptySet()))
     }

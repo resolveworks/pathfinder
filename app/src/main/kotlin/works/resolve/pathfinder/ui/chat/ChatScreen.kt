@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ui.chat
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,7 +13,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -165,6 +168,14 @@ fun ChatScreen(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
+    // Panel scroll state lives above the Chat/Tree switch so each view keeps
+    // its own position across switches instead of re-entering at the newest
+    // content.
+    val chatListState = rememberLazyListState()
+    val treeListState = rememberLazyListState()
+    // Session whose tree has been positioned on its current leaf at open.
+    var positionedTreeSessionId by rememberSaveable { mutableStateOf<String?>(null) }
+
     LaunchedEffect(uiState.error) {
         uiState.error?.let { error ->
             snackbarHostState.showSnackbar(error)
@@ -196,6 +207,52 @@ fun ChatScreen(
         if (backStack.size > 1 && backStack.lastOrNull() is SearchProviderAuthNavKey) {
             backStack.removeAt(backStack.lastIndex)
         }
+    }
+
+    // Newest-content following for the transcript, hoisted above the view
+    // switch: a LaunchedEffect inside the panel would re-run on every
+    // re-entry and yank a preserved scroll position back to the bottom.
+    // Covers text AND thinking so thinking-only chunks keep following; a
+    // reversed lazy list makes index 0 the bottom, and activeSessionId
+    // matters when switching between transcripts with equal message counts.
+    val streamingLength = uiState.streamingMessage?.blocks?.sumOf { block ->
+        when (block) {
+            is ChatBlock.Text -> block.text.length
+            is ChatBlock.Thinking -> block.text.length
+            is ChatBlock.ToolCall -> 0
+        }
+    } ?: 0
+    LaunchedEffect(
+        uiState.activeSessionId,
+        uiState.messages.size,
+        uiState.pendingTools.size,
+        uiState.streamingMessage?.id,
+        streamingLength
+    ) {
+        if (uiState.messages.isNotEmpty() || uiState.pendingTools.isNotEmpty() ||
+            uiState.streamingMessage != null
+        ) {
+            chatListState.requestScrollToItem(0)
+        }
+    }
+
+    // The tree opens positioned on the current leaf (pi's tree opens with
+    // the cursor on it) once per session; later opens restore the panel's
+    // own scroll position.
+    LaunchedEffect(conversationView, uiState.activeSessionId, uiState.treeRows) {
+        if (conversationView != ConversationView.Tree) return@LaunchedEffect
+        if (positionedTreeSessionId == uiState.activeSessionId) return@LaunchedEffect
+        val leafIndex = uiState.treeRows.indexOfFirst { it.isCurrentLeaf }
+        if (leafIndex < 0) return@LaunchedEffect
+        treeListState.scrollToItem(leafIndex)
+        // scrollToItem parks the leaf at the viewport top, stranding blank
+        // space when little follows it; scrolling back by the trailing gap
+        // (clamped) lands the true bottom.
+        val info = treeListState.layoutInfo
+        val lastVisible = info.visibleItemsInfo.lastOrNull() ?: return@LaunchedEffect
+        val endGap = info.viewportEndOffset - (lastVisible.offset + lastVisible.size)
+        if (endGap > 0) treeListState.scrollBy(-endGap.toFloat())
+        positionedTreeSessionId = uiState.activeSessionId
     }
 
     val pushSettings: () -> Unit = { backStack.add(SettingsNavKey) }
@@ -329,7 +386,8 @@ fun ChatScreen(
                                             onSend = onSend,
                                             onStop = onStop,
                                             onSelectModel = onSelectModel,
-                                            onSelectThinkingLevel = onSelectThinkingLevel
+                                            onSelectThinkingLevel = onSelectThinkingLevel,
+                                            listState = chatListState
                                         )
 
                                         ConversationView.Tree -> TreePanel(
@@ -344,7 +402,8 @@ fun ChatScreen(
                                                 // transcript.
                                                 onConversationViewChange(ConversationView.Chat)
                                             },
-                                            modifier = Modifier.fillMaxSize()
+                                            modifier = Modifier.fillMaxSize(),
+                                            listState = treeListState
                                         )
                                     }
                                 } else {
@@ -354,7 +413,8 @@ fun ChatScreen(
                                         onSend = onSend,
                                         onStop = onStop,
                                         onSelectModel = onSelectModel,
-                                        onSelectThinkingLevel = onSelectThinkingLevel
+                                        onSelectThinkingLevel = onSelectThinkingLevel,
+                                        listState = chatListState
                                     )
                                 }
                             }

@@ -2,11 +2,14 @@ package works.resolve.pathfinder.ui.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
@@ -23,6 +26,22 @@ class TreeProjectionTest {
         model = "glm-4.7",
         stopReason = StopReason.STOP,
         errorMessage = error,
+        timestamp = clock++
+    )
+
+    private fun assistantCalling(vararg calls: ToolCall) = AssistantMessage(
+        content = calls.toList(),
+        api = "openai-completions",
+        provider = "zai",
+        model = "glm-4.7",
+        stopReason = StopReason.TOOL_USE,
+        timestamp = clock++
+    )
+
+    private fun toolResult(id: String, toolName: String) = ToolResultMessage(
+        toolCallId = id,
+        toolName = toolName,
+        content = listOf(TextContent("result text")),
         timestamp = clock++
     )
 
@@ -184,6 +203,63 @@ class TreeProjectionTest {
         assertEquals("You: " + "x".repeat(120), result[1].preview)
         assertEquals("Assistant: (no content)", result[2].preview)
         assertEquals("Assistant: boom happened", result[3].preview)
+    }
+
+    @Test
+    fun `tool result rows title from the originating call`() {
+        val call = ToolCall(
+            id = "t1",
+            name = "web_search",
+            arguments = """{"query":"kotlin compose"}"""
+        )
+        val u1 = entry("u1", null, user("look it up"))
+        val a1 = entry("a1", "u1", assistantCalling(call))
+        val t1 = entry("t1", "a1", toolResult("t1", "web_search"))
+        val a2 = entry("a2", "t1", assistant("done"))
+        val conversation = Conversation(listOf(u1, a1, t1, a2), "a2")
+
+        val result = rows(conversation)
+        val toolRow = result.first { it.id == "t1" }
+        assertEquals(TreeToolCall("web_search", "kotlin compose"), toolRow.toolCall)
+        // pi's tree fallback: the bracketed tool name.
+        assertEquals("[web_search]", toolRow.preview)
+        result.filter { it.id != "t1" }.forEach { assertNull(it.toolCall) }
+    }
+
+    @Test
+    fun `tool rows without a usable call keep the bare tool name`() {
+        // Known tool, but malformed arguments: no parsed input.
+        val badJson = entry(
+            "t1",
+            "a1",
+            toolResult("t1", "web_search").copy(content = emptyList())
+        )
+        // Unknown tool: no title spec regardless of arguments.
+        val unknown = entry("t2", "t1", toolResult("t2", "mystery_tool"))
+        // Orphaned result: the originating call never committed.
+        val orphan = entry("t3", "t2", toolResult("t9", "web_fetch"))
+        val conversation = Conversation(
+            listOf(
+                entry("u1", null, user("q")),
+                entry(
+                    "a1",
+                    "u1",
+                    assistantCalling(
+                        ToolCall("t1", "web_search", "not json"),
+                        ToolCall("t2", "mystery_tool", """{"x":1}""")
+                    )
+                ),
+                badJson,
+                unknown,
+                orphan
+            ),
+            "t3"
+        )
+
+        val result = rows(conversation)
+        assertEquals(TreeToolCall("web_search", null), result.first { it.id == "t1" }.toolCall)
+        assertEquals(TreeToolCall("mystery_tool", null), result.first { it.id == "t2" }.toolCall)
+        assertEquals(TreeToolCall("web_fetch", null), result.first { it.id == "t3" }.toolCall)
     }
 
     @Test

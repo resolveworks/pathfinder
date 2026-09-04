@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -55,12 +57,14 @@ internal fun ChatSurface(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
-    onSelectThinkingLevel: (ModelThinkingLevel) -> Unit
+    onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
+    listState: LazyListState = rememberLazyListState()
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ConversationContent(
             uiState = uiState,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            listState = listState
         )
         Column(
             modifier = Modifier
