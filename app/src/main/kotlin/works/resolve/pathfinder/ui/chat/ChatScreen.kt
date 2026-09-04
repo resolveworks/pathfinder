@@ -13,12 +13,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Settings
@@ -37,6 +35,9 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -45,8 +46,11 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -71,6 +75,9 @@ import works.resolve.pathfinder.ui.theme.PathfinderTheme
 @Composable
 fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    // The chat/tree view selection is presentation state: saveable, owned
+    // here, and hoisted into the stateless ChatScreen.
+    var conversationView by rememberSaveable { mutableStateOf(ConversationView.Chat) }
     // The initial stack comes from the first collected state (Loading with
     // startKey = Chat); initialize() soon swaps it via the reset effect in
     // ChatScreen, so Loading never flashes Chat.
@@ -78,6 +85,8 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
     ChatScreen(
         uiState = uiState,
         backStack = backStack,
+        conversationView = conversationView,
+        onConversationViewChange = { conversationView = it },
         onDraftChange = viewModel::onDraftChange,
         onSend = viewModel::send,
         onStop = viewModel::stop,
@@ -118,6 +127,8 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
 fun ChatScreen(
     uiState: ChatUiState,
     backStack: MutableList<NavKey>,
+    conversationView: ConversationView,
+    onConversationViewChange: (ConversationView) -> Unit,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -153,21 +164,6 @@ fun ChatScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    val pagerState = rememberPagerState { CHAT_PAGER_PAGE_COUNT }
-    // Reading currentPage keeps the top bar in sync with swipes.
-    val onTreePage = pagerState.currentPage == TREE_PAGE_INDEX
-
-    // On the tree page, system back returns to the chat page instead of
-    // leaving the Chat root (BackHandler wins over Nav3's onBack while
-    // enabled).
-    BackHandler(enabled = onTreePage) {
-        scope.launch { pagerState.animateScrollToPage(CHAT_PAGE_INDEX) }
-    }
-
-    // A session switch (or init's null -> real id) lands on the chat page.
-    LaunchedEffect(uiState.activeSessionId) {
-        pagerState.scrollToPage(CHAT_PAGE_INDEX)
-    }
 
     LaunchedEffect(uiState.error) {
         uiState.error?.let { error ->
@@ -214,14 +210,20 @@ fun ChatScreen(
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
     val topKey = backStack.lastOrNull() ?: ChatNavKey
-    // Explicit () -> Unit: launch returns a Job.
-    val openTreePage: () -> Unit = {
-        scope.launch { pagerState.animateScrollToPage(TREE_PAGE_INDEX) }
-    }
-    val backToChatPage: () -> Unit = {
-        scope.launch { pagerState.animateScrollToPage(CHAT_PAGE_INDEX) }
-    }
+    val chatRoot = topKey == ChatNavKey && uiState.status == ChatStatus.Ready
     val openDrawer: () -> Unit = { scope.launch { drawerState.open() } }
+
+    // System back on the tree view returns to the transcript instead of
+    // leaving the Chat root (BackHandler wins over Nav3's onBack while
+    // enabled).
+    BackHandler(enabled = chatRoot && conversationView == ConversationView.Tree) {
+        onConversationViewChange(ConversationView.Chat)
+    }
+
+    // A session switch (or init's null -> real id) shows the transcript.
+    LaunchedEffect(uiState.activeSessionId) {
+        onConversationViewChange(ConversationView.Chat)
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -246,13 +248,10 @@ fun ChatScreen(
         },
         modifier = modifier
     ) {
-        val showPager = topKey == ChatNavKey && uiState.status == ChatStatus.Ready
-
         Scaffold(
             topBar = {
                 if (uiState.status != ChatStatus.Loading) {
                     val canPop = backStack.size > 1
-                    val chatRoot = topKey == ChatNavKey && uiState.status == ChatStatus.Ready
                     ChatTopBar(
                         title = when (topKey) {
                             SettingsNavKey -> stringResource(R.string.settings_title)
@@ -279,34 +278,20 @@ fun ChatScreen(
                                     .firstOrNull { it.id == topKey.providerId }?.name
                                     ?: stringResource(R.string.providers_title)
 
-                            else -> stringResource(
-                                if (onTreePage) R.string.tree_title else R.string.chat_title
-                            )
+                            else -> stringResource(R.string.session_title)
                         },
-                        // The drawer belongs to the Chat root; nested
-                        // destinations navigate up instead. A forced root
-                        // (unconfigured app) is a dead end: no Up arrow.
-                        onOpenDrawer = if (topKey == ChatNavKey &&
-                            uiState.status == ChatStatus.Ready &&
-                            !onTreePage
-                        ) {
-                            openDrawer
-                        } else {
-                            null
-                        },
-                        onBack = when {
-                            chatRoot && onTreePage -> backToChatPage
-                            canPop -> popBackStack
-                            else -> null
-                        },
-                        actions = if (chatRoot && !onTreePage) {
+                        // The drawer belongs to the Chat root (on both its
+                        // views); nested destinations navigate up instead. A
+                        // forced root (unconfigured app) is a dead end: no Up
+                        // arrow.
+                        onOpenDrawer = if (chatRoot) openDrawer else null,
+                        onBack = if (canPop) popBackStack else null,
+                        actions = if (chatRoot) {
                             {
-                                IconButton(onClick = openTreePage) {
-                                    Icon(
-                                        Icons.AutoMirrored.Outlined.List,
-                                        contentDescription = stringResource(R.string.tree_open)
-                                    )
-                                }
+                                ConversationViewToggle(
+                                    view = conversationView,
+                                    onViewChange = onConversationViewChange
+                                )
                             }
                         } else {
                             {}
@@ -336,18 +321,32 @@ fun ChatScreen(
                         onBack = { backStack.removeLastOrNull() },
                         entryProvider = entryProvider {
                             entry<ChatNavKey> {
-                                if (showPager) {
-                                    ConversationPager(
-                                        uiState = uiState,
-                                        pagerState = pagerState,
-                                        onDraftChange = onDraftChange,
-                                        onSend = onSend,
-                                        onStop = onStop,
-                                        onSelectModel = onSelectModel,
-                                        onSelectThinkingLevel = onSelectThinkingLevel,
-                                        onNavigateTreeEntry = onNavigateTreeEntry,
-                                        onTreeFilterChange = onTreeFilterChange
-                                    )
+                                if (chatRoot) {
+                                    when (conversationView) {
+                                        ConversationView.Chat -> ChatSurface(
+                                            uiState = uiState,
+                                            onDraftChange = onDraftChange,
+                                            onSend = onSend,
+                                            onStop = onStop,
+                                            onSelectModel = onSelectModel,
+                                            onSelectThinkingLevel = onSelectThinkingLevel
+                                        )
+
+                                        ConversationView.Tree -> TreePanel(
+                                            rows = uiState.treeRows,
+                                            filter = uiState.treeFilter,
+                                            onFilterChange = onTreeFilterChange,
+                                            onNavigate = { entryId ->
+                                                onNavigateTreeEntry(entryId)
+                                                // pi's tree selector closes on
+                                                // selection (even when navigation
+                                                // is rejected): return to the
+                                                // transcript.
+                                                onConversationViewChange(ConversationView.Chat)
+                                            },
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    }
                                 } else {
                                     ChatSurface(
                                         uiState = uiState,
@@ -566,6 +565,38 @@ private fun ChatTopBar(
     )
 }
 
+/**
+ * Stock single-choice segmented toggle switching the chat root between its
+ * transcript and session-tree views; the tree panel's All/User-only filter
+ * row is the same component at full width.
+ */
+@Composable
+private fun ConversationViewToggle(
+    view: ConversationView,
+    onViewChange: (ConversationView) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    SingleChoiceSegmentedButtonRow(modifier = modifier) {
+        ConversationView.entries.forEachIndexed { index, entry ->
+            SegmentedButton(
+                selected = view == entry,
+                onClick = { onViewChange(entry) },
+                shape = SegmentedButtonDefaults.itemShape(index, ConversationView.entries.size),
+                label = {
+                    Text(
+                        stringResource(
+                            when (entry) {
+                                ConversationView.Chat -> R.string.view_chat
+                                ConversationView.Tree -> R.string.view_tree
+                            }
+                        )
+                    )
+                }
+            )
+        }
+    }
+}
+
 @Composable
 private fun LoadingContent() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -651,6 +682,7 @@ private fun PreviewChatScreen(
     uiState: ChatUiState,
     startKey: NavKey = ChatNavKey,
     extraKeys: List<NavKey> = emptyList(),
+    conversationView: ConversationView = ConversationView.Chat,
     authPrompts: (String) -> List<ProviderAuthPrompt> = { emptyList() },
     authMethods: (String) -> List<AuthMethodInfo> = { emptyList() },
     searchAuthPrompts: (String) -> List<ProviderAuthPrompt> = { emptyList() }
@@ -659,6 +691,8 @@ private fun PreviewChatScreen(
         ChatScreen(
             uiState = uiState,
             backStack = rememberNavBackStack(startKey).apply { addAll(extraKeys) },
+            conversationView = conversationView,
+            onConversationViewChange = {},
             onDraftChange = {},
             onSend = {},
             onStop = {},
@@ -896,9 +930,34 @@ private fun ChatScreenAuthFlowPreview() {
     )
 }
 
+private val PREVIEW_TREE_ROWS = listOf(
+    TreeRow(
+        id = "u1",
+        path = listOf("u1"),
+        indent = 0,
+        connector = TreeConnector.NONE,
+        gutters = emptyList(),
+        isOnActivePath = true,
+        isCurrentLeaf = false,
+        isFoldable = false,
+        preview = "You: Hello there"
+    ),
+    TreeRow(
+        id = "a1",
+        path = listOf("u1", "a1"),
+        indent = 0,
+        connector = TreeConnector.NONE,
+        gutters = emptyList(),
+        isOnActivePath = true,
+        isCurrentLeaf = true,
+        isFoldable = false,
+        preview = "Assistant: Hi! How can I help?"
+    )
+)
+
 @Preview(showBackground = true)
 @Composable
-private fun ChatScreenPagerPreview() {
+private fun ChatScreenChatViewPreview() {
     PreviewChatScreen(
         ChatUiState(
             status = ChatStatus.Ready,
@@ -922,6 +981,21 @@ private fun ChatScreenPagerPreview() {
                 )
             )
         )
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenTreeViewPreview() {
+    PreviewChatScreen(
+        ChatUiState(
+            status = ChatStatus.Ready,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            selectedModel = PREVIEW_SELECTED_MODEL,
+            activeSessionId = "s1",
+            treeRows = PREVIEW_TREE_ROWS
+        ),
+        conversationView = ConversationView.Tree
     )
 }
 

@@ -2,14 +2,14 @@
 <resources>
     <string name="app_name">Pathfinder</string>
 
-    <string name="chat_title">Chat</string>
+    <string name="session_title">Session</string>
+    <string name="view_chat">Chat</string>
+    <string name="view_tree">Tree</string>
     <string name="chat_empty">Start the conversation below</string>
     <string name="chat_retrying">Retrying… attempt %1$d of %2$d</string>
     <string name="chat_compacting">Compacting…</string>
     <string name="chat_compacted">Compacted</string>
     <string name="composer_hint">Message</string>
-    <string name="tree_title">Session tree</string>
-    <string name="tree_open">Show session tree</string>
 
     <string name="action_new_chat">New chat</string>
     <string name="settings_title">Settings</string>

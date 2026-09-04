@@ -15,14 +15,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -47,53 +43,10 @@ import androidx.compose.ui.unit.dp
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 
-internal const val CHAT_PAGE_INDEX = 0
-internal const val TREE_PAGE_INDEX = 1
-internal const val CHAT_PAGER_PAGE_COUNT = 2
-
 /**
- * Two-page swipeable chat surface: chat page and session-tree page. Only
- * the pager's own gestures handle page swiping — the drawer keeps its
- * stock edge-swipe-to-open.
- */
-@Composable
-internal fun ConversationPager(
-    uiState: ChatUiState,
-    pagerState: PagerState,
-    onDraftChange: (String) -> Unit,
-    onSend: () -> Unit,
-    onStop: () -> Unit,
-    onSelectModel: (providerId: String, modelId: String) -> Unit,
-    onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
-    onNavigateTreeEntry: (entryId: String) -> Unit,
-    onTreeFilterChange: (TreeFilter) -> Unit
-) {
-    HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
-        when (page) {
-            TREE_PAGE_INDEX -> TreePanel(
-                rows = uiState.treeRows,
-                filter = uiState.treeFilter,
-                onFilterChange = onTreeFilterChange,
-                onNavigate = onNavigateTreeEntry,
-                modifier = Modifier.fillMaxSize()
-            )
-
-            else -> ChatSurface(
-                uiState = uiState,
-                onDraftChange = onDraftChange,
-                onSend = onSend,
-                onStop = onStop,
-                onSelectModel = onSelectModel,
-                onSelectThinkingLevel = onSelectThinkingLevel
-            )
-        }
-    }
-}
-
-/**
- * The conversation page. The composer column is page content, not scaffold
- * chrome — it moves with the chat page when swiping to the tree — and owns
- * its own navigation-bar and IME padding.
+ * The conversation transcript surface: messages plus the composer column.
+ * The composer column is content, not scaffold chrome — it belongs to the
+ * transcript view — and owns its own navigation-bar and IME padding.
  */
 @Composable
 internal fun ChatSurface(

@@ -10,6 +10,12 @@ import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.codingagent.core.session.LaneRecovery
 import works.resolve.pathfinder.codingagent.core.session.SessionSummary
 
+/** Which conversation surface the chat root shows: the transcript or the session tree. */
+enum class ConversationView {
+    Chat,
+    Tree
+}
+
 enum class ChatRole {
     User,
     Assistant,
