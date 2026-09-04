@@ -69,7 +69,10 @@ fun MarkdownText(
     val inlineStyles = InlineMarkdownStyles(
         linkColor = MaterialTheme.colorScheme.primary,
         codeBackgroundColor = MaterialTheme.colorScheme.surfaceVariant,
-        codeTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+        // Inline code follows the surrounding prose color when one is given,
+        // so dimmed contexts (thinking) do not brighten their code spans.
+        codeTextColor = color.takeIf { it != Color.Unspecified }
+            ?: MaterialTheme.colorScheme.onSurfaceVariant
     )
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         RenderBlocks(document, inlineStyles, ProseStyle(color, italic))

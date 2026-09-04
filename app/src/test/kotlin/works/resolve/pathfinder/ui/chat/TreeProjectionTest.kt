@@ -2,7 +2,6 @@ package works.resolve.pathfinder.ui.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import works.resolve.pathfinder.ai.AssistantMessage
@@ -81,7 +80,7 @@ class TreeProjectionTest {
         assertEquals(
             listOf("You", "Assistant", "You", "Assistant"),
             result.map {
-                it.preview.substringBefore(":")
+                (it.body as TreeRowBody.Text).preview.substringBefore(":")
             }
         )
     }
@@ -156,7 +155,7 @@ class TreeProjectionTest {
         assertEquals(
             listOf("You: first", "You: first-edited", "You: second"),
             filtered.map {
-                it.preview
+                (it.body as TreeRowBody.Text).preview
             }
         )
         assertEquals(0, filtered[0].indent)
@@ -199,10 +198,11 @@ class TreeProjectionTest {
         val conversation = Conversation(listOf(multiline, long, empty, failed), "f")
 
         val result = rows(conversation)
-        assertEquals("You: line one line two line three", result[0].preview)
-        assertEquals("You: " + "x".repeat(120), result[1].preview)
-        assertEquals("Assistant: (no content)", result[2].preview)
-        assertEquals("Assistant: boom happened", result[3].preview)
+        fun previewAt(i: Int) = (result[i].body as TreeRowBody.Text).preview
+        assertEquals("You: line one line two line three", previewAt(0))
+        assertEquals("You: " + "x".repeat(120), previewAt(1))
+        assertEquals("Assistant: (no content)", previewAt(2))
+        assertEquals("Assistant: boom happened", previewAt(3))
     }
 
     @Test
@@ -219,11 +219,11 @@ class TreeProjectionTest {
         val conversation = Conversation(listOf(u1, a1, t1, a2), "a2")
 
         val result = rows(conversation)
-        val toolRow = result.first { it.id == "t1" }
-        assertEquals(TreeToolCall("web_search", "kotlin compose"), toolRow.toolCall)
-        // pi's tree fallback: the bracketed tool name.
-        assertEquals("[web_search]", toolRow.preview)
-        result.filter { it.id != "t1" }.forEach { assertNull(it.toolCall) }
+        assertEquals(
+            TreeRowBody.Tool("web_search", "kotlin compose"),
+            result.first { it.id == "t1" }.body
+        )
+        result.filter { it.id != "t1" }.forEach { assertTrue(it.body is TreeRowBody.Text) }
     }
 
     @Test
@@ -257,9 +257,9 @@ class TreeProjectionTest {
         )
 
         val result = rows(conversation)
-        assertEquals(TreeToolCall("web_search", null), result.first { it.id == "t1" }.toolCall)
-        assertEquals(TreeToolCall("mystery_tool", null), result.first { it.id == "t2" }.toolCall)
-        assertEquals(TreeToolCall("web_fetch", null), result.first { it.id == "t3" }.toolCall)
+        assertEquals(TreeRowBody.Tool("web_search", null), result.first { it.id == "t1" }.body)
+        assertEquals(TreeRowBody.Tool("mystery_tool", null), result.first { it.id == "t2" }.body)
+        assertEquals(TreeRowBody.Tool("web_fetch", null), result.first { it.id == "t3" }.body)
     }
 
     @Test

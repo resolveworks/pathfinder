@@ -402,8 +402,8 @@ fun ChatScreen(
                                                 // transcript.
                                                 onConversationViewChange(ConversationView.Chat)
                                             },
-                                            modifier = Modifier.fillMaxSize(),
-                                            listState = treeListState
+                                            listState = treeListState,
+                                            modifier = Modifier.fillMaxSize()
                                         )
                                     }
                                 } else {
@@ -1000,7 +1000,7 @@ private val PREVIEW_TREE_ROWS = listOf(
         isOnActivePath = true,
         isCurrentLeaf = false,
         isFoldable = false,
-        preview = "You: Hello there"
+        body = TreeRowBody.Text("You: Hello there")
     ),
     TreeRow(
         id = "a1",
@@ -1011,7 +1011,7 @@ private val PREVIEW_TREE_ROWS = listOf(
         isOnActivePath = true,
         isCurrentLeaf = true,
         isFoldable = false,
-        preview = "Assistant: Hi! How can I help?"
+        body = TreeRowBody.Text("Assistant: Hi! How can I help?")
     )
 )
 

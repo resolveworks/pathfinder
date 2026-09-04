@@ -14,7 +14,7 @@ class TreePanelLogicTest {
         isOnActivePath = false,
         isCurrentLeaf = false,
         isFoldable = false,
-        preview = preview
+        body = TreeRowBody.Text(preview)
     )
 
     private val tree = listOf(
@@ -48,8 +48,8 @@ class TreePanelLogicTest {
     fun `tool rows match on the tool name and the parsed input`() {
         val tree = listOf(
             row("u1", listOf("u1"), "You: find compose docs"),
-            row("t1", listOf("u1", "t1"), "[web_search]").copy(
-                toolCall = TreeToolCall("web_search", "kotlin compose")
+            row("t1", listOf("u1", "t1"), "").copy(
+                body = TreeRowBody.Tool("web_search", "kotlin compose")
             ),
             row("a1", listOf("u1", "t1", "a1"), "Assistant: here is what I found")
         )
@@ -123,7 +123,7 @@ class TreePanelLogicTest {
         isOnActivePath = false,
         isCurrentLeaf = false,
         isFoldable = foldable,
-        preview = "p"
+        body = TreeRowBody.Text("p")
     )
 
     @Test

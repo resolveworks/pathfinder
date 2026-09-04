@@ -17,15 +17,20 @@ enum class TreeConnector {
 }
 
 /**
- * The originating call of a tool-result row, resolved by call id: the
- * panel titles the row from it exactly like the chat's tool rows
- * ("Searched for …"/"Fetched …", else the bare tool name).
+ * What a row shows as its body: a text preview, or — for tool-result rows —
+ * the originating call, titled by the panel exactly like the chat's tool
+ * rows ("Searched for …"/"Fetched …", else the bare tool name).
  */
-data class TreeToolCall(
-    val name: String,
-    /** Parsed title argument; null when the tool has no title spec. */
-    val input: String? = null
-)
+sealed class TreeRowBody {
+    /** Whitespace-normalized, bounded, role-prefixed single-line preview. */
+    data class Text(val preview: String) : TreeRowBody()
+
+    data class Tool(
+        val name: String,
+        /** Parsed title argument; null when the tool has no title spec. */
+        val input: String? = null
+    ) : TreeRowBody()
+}
 
 data class TreeRow(
     /** Entry id; stable key for the row and for fold state. */
@@ -51,8 +56,5 @@ data class TreeRow(
      * segment (a root, or a child of a branch point).
      */
     val isFoldable: Boolean,
-    /** Single-line preview: role-prefixed, whitespace-normalized, bounded. */
-    val preview: String,
-    /** Non-null only on tool-result rows; drives the rendered row title. */
-    val toolCall: TreeToolCall? = null
+    val body: TreeRowBody
 )

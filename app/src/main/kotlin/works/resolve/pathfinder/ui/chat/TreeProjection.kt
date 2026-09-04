@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.ui.chat
 
 import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
@@ -154,8 +155,7 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
             // Pi's isFoldable: a segment start (root or child of a branch
             // point) with visible children; folding hides its descendants.
             isFoldable = children.isNotEmpty() && (frame.isRoot || frame.justBranched),
-            preview = frame.entry.previewOf(),
-            toolCall = (frame.entry as? MessageEntry)?.toolCallOf(toolCalls)
+            body = frame.entry.rowBody(toolCalls)
         )
         val childIndent = when {
             multipleChildren -> frame.internalIndent + 1
@@ -191,30 +191,28 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
     return rows
 }
 
-private fun SessionEntry.previewOf(): String {
-    if (this !is MessageEntry) return "(no content)"
-    val entryMessage = message
-    val prefix = when (entryMessage) {
-        is UserMessage -> "You"
+private fun SessionEntry.rowBody(toolCalls: Map<String, ToolCall>): TreeRowBody {
+    if (this !is MessageEntry) return TreeRowBody.Text("(no content)")
+    return when (val entryMessage = message) {
+        is ToolResultMessage -> TreeRowBody.Tool(
+            name = entryMessage.toolName,
+            input = toolCalls[entryMessage.toolCallId]
+                ?.let { toolCallInput(it.name, it.arguments) }
+        )
 
-        is AssistantMessage -> "Assistant"
+        is UserMessage -> TreeRowBody.Text(preview("You", entryMessage.content.text()))
 
-        // Tool rows title themselves from the originating call (see
-        // toolCallOf); pi's fallback is the bracketed tool name.
-        is ToolResultMessage -> return "[${entryMessage.toolName}]"
+        is AssistantMessage -> TreeRowBody.Text(
+            preview("Assistant", entryMessage.errorMessage ?: entryMessage.content.text())
+        )
     }
-    val body = when {
-        entryMessage is AssistantMessage && entryMessage.errorMessage != null ->
-            entryMessage.errorMessage.orEmpty()
+}
 
-        else -> when (entryMessage) {
-            is UserMessage -> entryMessage.content
-            is AssistantMessage -> entryMessage.content
-            is ToolResultMessage -> emptyList()
-        }.asSequence()
-            .filterIsInstance<TextContent>()
-            .joinToString("") { it.text }
-    }
+private fun List<Content>.text(): String = asSequence()
+    .filterIsInstance<TextContent>()
+    .joinToString("") { it.text }
+
+private fun preview(prefix: String, body: String): String {
     val normalized = body
         .lineSequence()
         .map { it.trim() }
@@ -222,16 +220,6 @@ private fun SessionEntry.previewOf(): String {
         .joinToString(" ")
         .take(PREVIEW_MAX_LENGTH)
     return "$prefix: ${normalized.ifEmpty { "(no content)" }}"
-}
-
-private fun MessageEntry.toolCallOf(toolCalls: Map<String, ToolCall>): TreeToolCall? {
-    val entryMessage = message
-    if (entryMessage !is ToolResultMessage) return null
-    return TreeToolCall(
-        name = entryMessage.toolName,
-        input = toolCalls[entryMessage.toolCallId]
-            ?.let { toolCallInput(it.name, it.arguments) }
-    )
 }
 
 private const val PREVIEW_MAX_LENGTH = 120

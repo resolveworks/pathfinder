@@ -75,8 +75,8 @@ private fun thinkingOverridesSaver() = listSaver<MutableMap<String, Boolean>, An
 @Composable
 internal fun ConversationContent(
     uiState: ChatUiState,
+    listState: LazyListState,
     modifier: Modifier = Modifier,
-    listState: LazyListState = rememberLazyListState(),
     initialThinkingOverrides: Map<String, Boolean> = emptyMap()
 ) {
     val messageCount = uiState.messages.size
@@ -517,6 +517,7 @@ private fun ConversationContentThinkingPreview() {
                     )
                 )
             ),
+            listState = rememberLazyListState(),
             initialThinkingOverrides = mapOf("m2:0" to true)
         )
     }

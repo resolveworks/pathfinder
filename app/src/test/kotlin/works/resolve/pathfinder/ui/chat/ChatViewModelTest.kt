@@ -3330,7 +3330,7 @@ class ChatViewModelTest {
         vm.setTreeFilter(TreeFilter.USER_ONLY)
         val filtered = vm.uiState.first { it.treeFilter == TreeFilter.USER_ONLY }.treeRows
         assertEquals(1, filtered.size)
-        assertEquals("You: Hello", filtered[0].preview)
+        assertEquals("You: Hello", (filtered[0].body as TreeRowBody.Text).preview)
         vm.setTreeFilter(TreeFilter.DEFAULT)
         assertEquals(2, vm.uiState.value.treeRows.size)
 

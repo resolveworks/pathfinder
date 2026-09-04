@@ -64,8 +64,8 @@ fun TreePanel(
     filter: TreeFilter,
     onFilterChange: (TreeFilter) -> Unit,
     onNavigate: (String) -> Unit,
-    modifier: Modifier = Modifier,
-    listState: LazyListState = rememberLazyListState()
+    listState: LazyListState,
+    modifier: Modifier = Modifier
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     // Folded row ids; cleared on query or filter change, as in pi.
@@ -87,8 +87,8 @@ fun TreePanel(
         filter = filter,
         onFilterChange = onFilterChange,
         onNavigate = onNavigate,
-        modifier = modifier,
-        listState = listState
+        listState = listState,
+        modifier = modifier
     )
 }
 
@@ -104,8 +104,8 @@ private fun TreePanelContent(
     filter: TreeFilter,
     onFilterChange: (TreeFilter) -> Unit,
     onNavigate: (String) -> Unit,
-    modifier: Modifier = Modifier,
-    listState: LazyListState = rememberLazyListState()
+    listState: LazyListState,
+    modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier) {
         TreePanelHeader(
@@ -152,17 +152,18 @@ internal fun filterTreeRows(
     val matched = if (tokens.isEmpty()) {
         rows
     } else {
-        rows.filter { row ->
-            // Tool rows search over the rendered title's pieces: the tool
-            // name (in preview) and the parsed input argument.
-            val text = (row.preview + " " + (row.toolCall?.input ?: "")).lowercase()
-            tokens.all { text.contains(it) }
-        }
+        rows.filter { row -> tokens.all { row.searchText().contains(it) } }
     }
     return matched.filter { row ->
         row.path.dropLast(1).none { it in foldedIds }
     }
 }
+
+/** Text the search filter matches: the preview, or a tool row's title pieces. */
+private fun TreeRow.searchText(): String = when (val rowBody = body) {
+    is TreeRowBody.Text -> rowBody.preview
+    is TreeRowBody.Tool -> rowBody.name + " " + (rowBody.input ?: "")
+}.lowercase()
 
 /** One guide cell per indent level. */
 internal enum class TreeGuideCell { EMPTY, GUTTER, TEE, ELBOW }
@@ -296,9 +297,10 @@ private fun TreeRowItem(
         }
 
         Text(
-            // Tool-result rows title themselves from the originating call,
-            // exactly like the chat's tool rows.
-            text = row.toolCall?.let { toolCallTitle(it.name, it.input) } ?: row.preview,
+            text = when (val rowBody = row.body) {
+                is TreeRowBody.Text -> rowBody.preview
+                is TreeRowBody.Tool -> toolCallTitle(rowBody.name, rowBody.input)
+            },
             style = MaterialTheme.typography.bodyMedium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -437,7 +439,7 @@ private fun row(
     isOnActivePath = onActivePath,
     isCurrentLeaf = currentLeaf,
     isFoldable = foldable,
-    preview = preview
+    body = TreeRowBody.Text(preview)
 )
 
 @Preview(showBackground = true)
@@ -467,6 +469,7 @@ private fun TreePanelLinearPreview() {
             filter = TreeFilter.DEFAULT,
             onFilterChange = {},
             onNavigate = {},
+            listState = rememberLazyListState(),
             modifier = Modifier.fillMaxSize()
         )
     }
@@ -535,6 +538,7 @@ private fun TreePanelForkedPreview() {
             filter = TreeFilter.DEFAULT,
             onFilterChange = {},
             onNavigate = {},
+            listState = rememberLazyListState(),
             modifier = Modifier.fillMaxSize()
         )
     }
