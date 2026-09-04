@@ -69,6 +69,9 @@ val extractDefuddle =
             "Extracts defuddle's dist/index.full.js into the generated assets directory."
         dependsOn(downloadDefuddle)
         from(tarTree(resources.gzip(defuddleTarball)))
+        // Copy-spec include patterns are not part of Gradle's up-to-date
+        // fingerprint; pin the entry so changing it re-extracts.
+        inputs.property("entry", "package/dist/index.full.js")
         include("package/dist/index.full.js")
         into(defuddleAssetsDir)
         filesMatching("package/dist/index.full.js") { path = "defuddle/index.js" }
