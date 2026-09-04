@@ -6,6 +6,7 @@ plugins {
 android {
     namespace = "works.resolve.pathfinder.agent"
     compileSdk = 37
+    buildToolsVersion = "37.0.0"
 
     defaultConfig {
         minSdk = 26

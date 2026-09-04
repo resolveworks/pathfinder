@@ -5,6 +5,7 @@ plugins {
 android {
     namespace = "works.resolve.pathfinder.telemetry"
     compileSdk = 37
+    buildToolsVersion = "37.0.0"
 
     defaultConfig {
         minSdk = 26
