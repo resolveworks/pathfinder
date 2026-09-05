@@ -54,7 +54,7 @@ internal fun rememberTranscriptScrollState(uiState: ChatUiState): TranscriptScro
     // Start at the sentinel on the first measure, not at the top followed by
     // an effect-driven jump. Restored reader positions still take precedence.
     val initialBottomIndex = remember {
-        uiState.messages.count(ChatMessage::hasRenderableContent) +
+        uiState.messages.count(TranscriptRow::hasRenderableContent) +
             uiState.pendingTools.size + if (uiState.streamingMessage != null) 1 else 0
     }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialBottomIndex)

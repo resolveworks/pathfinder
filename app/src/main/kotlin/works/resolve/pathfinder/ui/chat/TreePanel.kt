@@ -160,7 +160,10 @@ internal fun filterTreeRows(
 /** Text the search filter matches: the preview, or a tool row's title pieces. */
 private fun TreeRow.searchText(): String = when (val rowBody = body) {
     is TreeRowBody.Text -> rowBody.preview
-    is TreeRowBody.Tool -> rowBody.name + " " + (rowBody.input ?: "")
+
+    is TreeRowBody.Tool ->
+        rowBody.name + " " +
+            (rowBody.call?.let { toolCallInput(it.name, it.arguments) } ?: "")
 }.lowercase()
 
 /** One guide cell per indent level. */
@@ -296,7 +299,7 @@ private fun TreeRowItem(
         Text(
             text = when (val rowBody = row.body) {
                 is TreeRowBody.Text -> rowBody.preview
-                is TreeRowBody.Tool -> toolCallTitle(rowBody.name, rowBody.input)
+                is TreeRowBody.Tool -> toolCallTitle(rowBody.call, rowBody.name)
             },
             style = MaterialTheme.typography.bodyMedium,
             maxLines = 1,

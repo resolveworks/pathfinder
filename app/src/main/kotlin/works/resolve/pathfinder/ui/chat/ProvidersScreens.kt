@@ -53,7 +53,9 @@ import androidx.compose.ui.unit.dp
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
+import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
+import works.resolve.pathfinder.ai.providers.AuthPrompt as CatalogAuthPrompt
 import works.resolve.pathfinder.ui.openInCustomTab
 
 /** Providers screen (pi's /login list). */
@@ -168,7 +170,7 @@ private fun ProviderListContent(
 @Composable
 internal fun ProviderAuthContent(
     provider: ProviderOption,
-    prompts: List<ProviderAuthPrompt>,
+    prompts: List<CatalogAuthPrompt>,
     onSave: (apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
     onRemove: () -> Unit,
     onClose: () -> Unit
@@ -264,7 +266,7 @@ internal fun ProviderAuthContent(
 @Composable
 internal fun ProviderAuthScreen(
     provider: ProviderOption,
-    prompts: List<ProviderAuthPrompt>,
+    prompts: List<CatalogAuthPrompt>,
     methods: List<AuthMethodInfo>,
     onSave: (apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
     onRemove: () -> Unit,
@@ -470,7 +472,7 @@ internal fun ProviderLoginScreen(
         it is AuthEvent.AuthUrl || it is AuthEvent.DeviceCode
     }
     val infoEvent = flow.events.filterIsInstance<AuthEvent.Info>().lastOrNull()
-    val prompt = flow.pendingPrompt?.takeUnless { it.kind == AuthPromptKind.MANUAL_CODE }
+    val prompt = flow.pendingPrompt?.takeUnless { it is AuthPrompt.ManualCode }
 
     Column(
         modifier = Modifier
@@ -567,46 +569,79 @@ private fun AuthEventItem(event: AuthEvent, onOpenUri: (url: String) -> Unit) {
 }
 
 /**
- * [AuthPromptKind.MANUAL_CODE] is pi's fallback for completing the flow in
- * a remote browser (raced against the callback server); the login screen
+ * [AuthPrompt.ManualCode] is pi's fallback for completing the flow in a
+ * remote browser (raced against the callback server); the login screen
  * filters it because Pathfinder's browser runs on the same device.
  */
 @Composable
-private fun AuthPromptItem(prompt: PendingAuthPrompt, onSubmit: (answer: String) -> Unit) {
+private fun AuthPromptItem(prompt: AuthPrompt, onSubmit: (answer: String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (prompt.kind == AuthPromptKind.SELECT) {
-            Text(prompt.message, style = MaterialTheme.typography.bodyLarge)
-            prompt.options.forEach { option ->
-                ListItem(
-                    headlineContent = { Text(option.label) },
-                    supportingContent = option.description?.let { desc -> { Text(desc) } },
-                    modifier = Modifier.clickable { onSubmit(option.id) }
-                )
-                HorizontalDivider()
+        when (prompt) {
+            is AuthPrompt.Select -> {
+                Text(prompt.message, style = MaterialTheme.typography.bodyLarge)
+                prompt.options.forEach { option ->
+                    ListItem(
+                        headlineContent = { Text(option.label) },
+                        supportingContent = option.description?.let { desc -> { Text(desc) } },
+                        modifier = Modifier.clickable { onSubmit(option.id) }
+                    )
+                    HorizontalDivider()
+                }
             }
-        } else {
-            // Ephemeral, keyed by the prompt itself so a new prompt resets
-            // the field; never rememberSaveable (no process-death retention).
-            var answer by remember(prompt.message) { mutableStateOf("") }
-            val secret = prompt.kind == AuthPromptKind.SECRET
-            OutlinedTextField(
-                value = answer,
-                onValueChange = { answer = it },
-                label = { Text(prompt.message) },
-                placeholder = { prompt.placeholder?.let { Text(it) } },
-                visualTransformation = if (secret) {
-                    PasswordVisualTransformation()
-                } else {
-                    VisualTransformation.None
-                },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { onSubmit(answer) }),
-                modifier = Modifier.fillMaxWidth()
+
+            // MANUAL_CODE is filtered upstream; a total when keeps a new
+            // prompt kind from crashing — it renders as plain text input.
+            is AuthPrompt.Text -> AuthPromptField(
+                message = prompt.message,
+                placeholder = prompt.placeholder,
+                secret = false,
+                onSubmit = onSubmit
             )
-            Button(onClick = { onSubmit(answer) }) {
-                Text(stringResource(R.string.action_submit))
-            }
+
+            is AuthPrompt.Secret -> AuthPromptField(
+                message = prompt.message,
+                placeholder = prompt.placeholder,
+                secret = true,
+                onSubmit = onSubmit
+            )
+
+            is AuthPrompt.ManualCode -> AuthPromptField(
+                message = prompt.message,
+                placeholder = prompt.placeholder,
+                secret = false,
+                onSubmit = onSubmit
+            )
+        }
+    }
+}
+
+/** Ephemeral answer field, keyed by the prompt so a new prompt resets it; never rememberSaveable. */
+@Composable
+private fun AuthPromptField(
+    message: String,
+    placeholder: String?,
+    secret: Boolean,
+    onSubmit: (answer: String) -> Unit
+) {
+    var answer by remember(message) { mutableStateOf("") }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = answer,
+            onValueChange = { answer = it },
+            label = { Text(message) },
+            placeholder = { placeholder?.let { Text(it) } },
+            visualTransformation = if (secret) {
+                PasswordVisualTransformation()
+            } else {
+                VisualTransformation.None
+            },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { onSubmit(answer) }),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Button(onClick = { onSubmit(answer) }) {
+            Text(stringResource(R.string.action_submit))
         }
     }
 }

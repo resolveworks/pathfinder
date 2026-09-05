@@ -247,8 +247,8 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         vm.awaitState { it.isStreaming && it.streamingMessage != null }
         val mid = vm.uiState.value
         assertEquals(1, mid.messages.size)
-        assertEquals(ChatRole.User, mid.messages[0].role)
         assertEquals("Hello", mid.messages[0].singleText())
+        assertTrue(mid.messages[0].message() is UserMessage)
         assertFalse(mid.canSend)
         assertEquals("", mid.draft)
 
@@ -257,8 +257,8 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         vm.awaitState { !it.isStreaming && it.messages.size == 2 }
         val done = vm.uiState.value
         assertNull(done.streamingMessage)
-        assertEquals(ChatRole.Assistant, done.messages[1].role)
         assertEquals("world", done.messages[1].singleText())
+        assertTrue(done.messages[1].message() is AssistantMessage)
         assertNull(done.error)
 
         vm.awaitState {
@@ -328,8 +328,9 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
         vm.awaitState { !it.isStreaming && it.messages.size == 2 }
         val state = vm.uiState.value
-        assertEquals(ChatRole.Assistant, state.messages[1].role)
-        assertNotNull(state.messages[1].error)
+        assertEquals(ChatStatus.Ready, state.status)
+        assertTrue(state.messages[1].message() is AssistantMessage)
+        assertNotNull(state.messages[1].errorMessage())
         val sessionId = state.activeSessionId!!
         vm.awaitState {
             it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount ==
@@ -383,7 +384,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         val followUp = h.assistant("after")
         session.agent.processEvent(AgentEvent.MessageStart(followUp))
         session.agent.processEvent(AgentEvent.MessageEnd(followUp))
-        vm.awaitState { it.messages.any { m -> m.isCompactionMarker } }
+        vm.awaitState { it.messages.any { m -> m is TranscriptRow.Compacted } }
 
         vm.closeForTest()
     }
@@ -412,8 +413,8 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.awaitState { !it.isStreaming && it.messages.size == 2 }
             val state = vm.uiState.value
             assertNull(state.retryStatus)
-            assertEquals(ChatRole.Assistant, state.messages[1].role)
-            assertNull(state.messages[1].error)
+            assertTrue(state.messages[1].message() is AssistantMessage)
+            assertNull(state.messages[1].errorMessage())
 
             val sessionId = state.activeSessionId!!
             vm.awaitState {
@@ -441,7 +442,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         // Agent-run errors render as transcript rows only (pi's contract);
         // the snackbar error stays reserved for ViewModel-sourced failures.
         assertNull(state.error)
-        assertNotNull(state.messages[1].error)
+        assertNotNull(state.messages[1].errorMessage())
         val sessionId = state.activeSessionId!!
         vm.awaitState {
             it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount ==
@@ -461,7 +462,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         vm.send()
         vm.awaitState { !it.isStreaming && it.messages.size == 4 }
         assertNull(vm.uiState.value.error)
-        assertNull(vm.uiState.value.messages[3].error)
+        assertNull(vm.uiState.value.messages[3].errorMessage())
 
         vm.closeForTest()
     }
@@ -646,17 +647,11 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             }
 
             val okRow = vm.uiState.value.messages[3]
-            assertEquals(ChatRole.Tool, okRow.role)
-            assertTrue(okRow.blocks.isEmpty())
-            assertEquals(
-                ChatToolResult(
-                    "call-1",
-                    "get_weather",
-                    isError = false,
-                    output = "  21°C, sunny\n  wind 3 m/s"
-                ),
-                okRow.toolResult
-            )
+            val okResult = okRow.message() as ToolResultMessage
+            assertEquals("call-1", okResult.toolCallId)
+            assertEquals("get_weather", okResult.toolName)
+            assertFalse(okResult.isError)
+            assertEquals("  21°C, sunny\n  wind 3 m/s", okRow.singleText())
             assertTrue(vm.uiState.value.pendingTools.isEmpty())
 
             // Error result: output projected verbatim (line structure kept —
@@ -674,10 +669,9 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             waitUntil { vm.uiState.value.messages.size == 5 }
 
             val errorRow = vm.uiState.value.messages[4]
-            assertEquals(ChatRole.Tool, errorRow.role)
-            val result = errorRow.toolResult!!
+            val result = errorRow.message() as ToolResultMessage
             assertTrue(result.isError)
-            assertEquals("boom\nexit 1", result.output)
+            assertEquals("boom\nexit 1", errorRow.singleText())
 
             vm.closeForTest()
         }
@@ -709,13 +703,20 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         session.agent.processEvent(AgentEvent.MessageEnd(call))
         waitUntil { vm.uiState.value.messages.size == 1 }
 
-        val blocks = vm.uiState.value.messages[0].blocks
-        assertEquals(4, blocks.size)
-        assertEquals(ChatBlock.Thinking("reasoning first"), blocks[0])
-        assertEquals(412, vm.uiState.value.messages[0].reasoningTokens)
-        assertEquals(ChatBlock.Text("Before"), blocks[1])
-        assertEquals(ChatBlock.ToolCall("call-1", "get_weather"), blocks[2])
-        assertEquals(ChatBlock.Text("After"), blocks[3])
+        val content = vm.uiState.value.messages[0].assistant().content
+        assertEquals(
+            listOf(
+                ThinkingContent("reasoning first"),
+                TextContent("Before"),
+                ToolCall(id = "call-1", name = "get_weather", arguments = "{\"city\":\"secret\"}"),
+                TextContent("After")
+            ),
+            content
+        )
+        assertEquals(
+            412,
+            vm.uiState.value.messages[0].assistant().usage.reasoning
+        )
 
         vm.closeForTest()
     }
@@ -745,9 +746,9 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             session.agent.processEvent(
                 AgentEvent.ToolExecutionStart("call-1", "get_weather", JsonObject(emptyMap()))
             )
+            val toolCall = call.content.single() as ToolCall
             waitUntil {
-                vm.uiState.value.pendingTools ==
-                    listOf(PendingToolExecution("call-1", "get_weather"))
+                vm.uiState.value.pendingTools == listOf(PendingToolExecution("call-1", toolCall))
             }
 
             // Unknown id (no committed call): generic fallback label, still listed.
@@ -755,7 +756,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
                 AgentEvent.ToolExecutionStart("call-x", "get_weather", JsonObject(emptyMap()))
             )
             waitUntil { vm.uiState.value.pendingTools.size == 2 }
-            assertEquals(PendingToolExecution("call-x", "tool"), vm.uiState.value.pendingTools[1])
+            assertEquals(PendingToolExecution("call-x"), vm.uiState.value.pendingTools[1])
 
             session.agent.processEvent(
                 AgentEvent.ToolExecutionEnd(
@@ -765,7 +766,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
                     isError = false
                 )
             )
-            waitUntil { vm.uiState.value.pendingTools.map { it.toolCallId } == listOf("call-x") }
+            waitUntil { vm.uiState.value.pendingTools.map { it.id } == listOf("call-x") }
             session.agent.processEvent(
                 AgentEvent.ToolExecutionEnd(
                     "call-x",
@@ -829,16 +830,16 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             )
             waitUntil { vm.uiState.value.pendingTools.size == 3 }
             assertEquals(
-                listOf(
-                    PendingToolExecution("call-1", BraveWebSearchTool.NAME, input = "kotlin flow"),
-                    PendingToolExecution(
-                        "call-2",
-                        WebFetchTool.NAME,
-                        input = "https://example.com"
-                    ),
-                    PendingToolExecution("call-3", WebFetchTool.NAME, input = null)
-                ),
-                vm.uiState.value.pendingTools
+                listOf("call-1", "call-2", "call-3"),
+                vm.uiState.value.pendingTools.map { it.id }
+            )
+            assertEquals(
+                // Title inputs parse from each call's arguments; malformed
+                // arguments (call-3) fall back to the bare name at render.
+                listOf("kotlin flow", "https://example.com", null),
+                vm.uiState.value.pendingTools.map { p ->
+                    p.call?.let { toolCallInput(it.name, it.arguments) }
+                }
             )
 
             val searchResult = ToolResultMessage(
@@ -849,10 +850,15 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             )
             session.agent.processEvent(AgentEvent.MessageStart(searchResult))
             session.agent.processEvent(AgentEvent.MessageEnd(searchResult))
-            waitUntil { vm.uiState.value.messages.any { it.role == ChatRole.Tool } }
+            waitUntil {
+                vm.uiState.value.messages.any { it.message() is ToolResultMessage }
+            }
 
-            val row = vm.uiState.value.messages.last { it.role == ChatRole.Tool }
-            assertEquals("kotlin flow", row.toolResult?.input)
+            val row = vm.uiState.value.messages.last { it.message() is ToolResultMessage }
+            assertEquals(
+                "kotlin flow",
+                (row as TranscriptRow.Chat).call?.let { toolCallInput(it.name, it.arguments) }
+            )
 
             vm.closeForTest()
         }
@@ -1308,53 +1314,61 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
     // ---- thinking block projection ----
 
-    private fun ChatMessage.singleText(): String = blocks.single().let { it as ChatBlock.Text }.text
+    private fun TranscriptRow.message(): Message = (this as TranscriptRow.Chat).message
+
+    private fun TranscriptRow.assistant(): AssistantMessage = message() as AssistantMessage
+
+    private fun TranscriptRow.singleText(): String = when (val m = message()) {
+        is UserMessage -> m.content.textContent()
+        is AssistantMessage -> m.content.textContent()
+        is ToolResultMessage -> m.content.textContent()
+    }
+
+    private fun TranscriptRow.errorMessage(): String? = assistant().errorMessage
+
+    private fun AssistantMessage.singleText(): String = content.textContent()
 
     @Test
-    fun projection_mergesThinkingRuns_dropsBlanks_preservesOrder() =
-        runTest(mainDispatcherRule.scheduler) {
-            val h = harness()
-            val vm = h.newViewModel()
-            vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
-            vm.configure(apiKey = "k")
-            vm.awaitState { it.status == ChatStatus.Ready }
+    fun projection_carriesRuntimeContent_verbatim() = runTest(mainDispatcherRule.scheduler) {
+        val h = harness()
+        val vm = h.newViewModel()
+        vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.awaitState { it.status == ChatStatus.Ready }
 
-            val assistant = h.assistant("").copy(
-                content = listOf(
-                    ThinkingContent("alpha"),
-                    ThinkingContent("beta"),
-                    TextContent("first"),
-                    ThinkingContent("   "),
-                    TextContent("  "),
-                    TextContent("second"),
-                    ThinkingContent(" lone ")
-                )
+        val assistant = h.assistant("").copy(
+            content = listOf(
+                ThinkingContent("alpha"),
+                ThinkingContent("beta"),
+                TextContent("first"),
+                ThinkingContent("   "),
+                TextContent("  "),
+                TextContent("second"),
+                ThinkingContent(" lone ")
             )
-            val session = h.createdAgents.last()
-            val user = works.resolve.pathfinder.ai.UserMessage.ofText("hi")
-            // Committed through the agent event sink: AgentSession appends
-            // every MessageEnd to the tree in order.
-            session.agent.processEvent(AgentEvent.MessageEnd(user))
-            session.agent.processEvent(AgentEvent.MessageStart(assistant))
-            session.agent.processEvent(AgentEvent.MessageEnd(assistant))
+        )
+        val session = h.createdAgents.last()
+        val user = works.resolve.pathfinder.ai.UserMessage.ofText("hi")
+        // Committed through the agent event sink: AgentSession appends
+        // every MessageEnd to the tree in order.
+        session.agent.processEvent(AgentEvent.MessageEnd(user))
+        session.agent.processEvent(AgentEvent.MessageStart(assistant))
+        session.agent.processEvent(AgentEvent.MessageEnd(assistant))
 
-            val state = vm.awaitState { it.messages.size == 2 }
-            val blocks = state.messages[1].blocks
-            assertEquals(
-                listOf(
-                    ChatBlock.Thinking("alpha\n\nbeta"),
-                    ChatBlock.Text("first"),
-                    ChatBlock.Text("second"),
-                    ChatBlock.Thinking("lone")
-                ),
-                blocks
-            )
-            assertEquals(listOf(ChatBlock.Text("hi")), state.messages[0].blocks)
-            // The display preference is untouched by projection.
-            assertEquals(state.showThinking, h.settings.currentSettings().showThinking)
+        val state = vm.awaitState { it.messages.size == 2 }
+        // The projection passes the runtime message through untouched;
+        // thinking-run merging and blank-part dropping are render-time
+        // (pi's component does them there too).
+        assertEquals(
+            assistant,
+            (state.messages[1] as TranscriptRow.Chat).message
+        )
+        assertEquals(user, (state.messages[0] as TranscriptRow.Chat).message)
+        // The display preference is untouched by projection.
+        assertEquals(state.showThinking, h.settings.currentSettings().showThinking)
 
-            vm.closeForTest()
-        }
+        vm.closeForTest()
+    }
 
     @Test
     fun projection_thinkingOnlyStreaming_yieldsThinkingBlock() =
@@ -1380,9 +1394,9 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.onDraftChange("hi")
             vm.send()
 
-            vm.awaitState { it.streamingMessage?.blocks?.isNotEmpty() == true }
+            vm.awaitState { it.streamingMessage?.content?.isNotEmpty() == true }
             val streaming = vm.uiState.value.streamingMessage!!
-            assertEquals(listOf(ChatBlock.Thinking("reasoning so far")), streaming.blocks)
+            assertEquals(listOf(ThinkingContent("reasoning so far")), streaming.content)
 
             // Let the stream finish so teardown never abandons it.
             gate.complete(Unit)

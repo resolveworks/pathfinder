@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ui.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import works.resolve.pathfinder.ai.AssistantMessage
@@ -220,7 +221,7 @@ class TreeProjectionTest {
 
         val result = rows(conversation)
         assertEquals(
-            TreeRowBody.Tool("web_search", "kotlin compose"),
+            TreeRowBody.Tool("web_search", call),
             result.first { it.id == "t1" }.body
         )
         result.filter { it.id != "t1" }.forEach { assertTrue(it.body is TreeRowBody.Text) }
@@ -257,8 +258,17 @@ class TreeProjectionTest {
         )
 
         val result = rows(conversation)
-        assertEquals(TreeRowBody.Tool("web_search", null), result.first { it.id == "t1" }.body)
-        assertEquals(TreeRowBody.Tool("mystery_tool", null), result.first { it.id == "t2" }.body)
+        // Rows carry the originating call as-is (pi's toolCallMap); unusable
+        // titles — malformed arguments, spec-less tools — fall back to the
+        // bare name at render.
+        val t1Body = result.first { it.id == "t1" }.body as TreeRowBody.Tool
+        assertEquals("web_search", t1Body.name)
+        assertEquals("t1", t1Body.call?.id)
+        assertNull(t1Body.call?.let { toolCallInput(it.name, it.arguments) })
+        val t2Body = result.first { it.id == "t2" }.body as TreeRowBody.Tool
+        assertEquals("mystery_tool", t2Body.name)
+        assertNull(t2Body.call?.let { toolCallInput(it.name, it.arguments) })
+        // Orphaned result: the originating call never committed.
         assertEquals(TreeRowBody.Tool("web_fetch", null), result.first { it.id == "t3" }.body)
     }
 

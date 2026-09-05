@@ -46,16 +46,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.R
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.Content
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingContent
+import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.arr
+import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.str
+import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.ui.chat.markdown.MarkdownText
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 private const val STREAMING_PLACEHOLDER = "…"
-
-private fun ChatMessage.displayText(): String =
-    blocks.filterIsInstance<ChatBlock.Text>().joinToString("\n\n") { it.text }
 
 @Composable
 internal fun ConversationContent(
@@ -66,24 +75,25 @@ internal fun ConversationContent(
     val listState = scrollState.listState
     FollowTranscriptBottom(scrollState)
     val messageCount = uiState.messages.size
-    val streamingId = uiState.streamingMessage?.id
     val renderableMessages = remember(uiState.messages) {
-        uiState.messages.filter(ChatMessage::hasRenderableContent)
+        uiState.messages.filter(TranscriptRow::hasRenderableContent)
     }
 
-    // Opened-viewer view state, by stable id (tool call id, or
-    // "messageId:blockIndex" for a thinking block). Ephemeral state resolved
-    // against the live message list, so a stale key (session switch, branch
+    // Opened-viewer view state, by tool call id. Ephemeral state resolved
+    // against the live rows, so a stale key (session switch, branch
     // navigation) just closes the sheet.
     var openToolResultId by rememberSaveable { mutableStateOf<String?>(null) }
     val openToolResult = openToolResultId?.let { id ->
-        uiState.messages.firstNotNullOfOrNull { message ->
-            message.toolResult?.takeIf { it.toolCallId == id }
+        uiState.messages.firstNotNullOfOrNull { row ->
+            (row as? TranscriptRow.Chat)
+                ?.takeIf { (it.message as? ToolResultMessage)?.toolCallId == id }
         }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        if (messageCount == 0 && uiState.pendingTools.isEmpty() && streamingId == null) {
+        if (messageCount == 0 && uiState.pendingTools.isEmpty() &&
+            uiState.streamingMessage == null
+        ) {
             EmptyStateText(text = stringResource(R.string.chat_empty))
         }
         // Forward layout anchors the TOP of a visible message, so appending
@@ -94,33 +104,33 @@ internal fun ConversationContent(
             verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
             modifier = Modifier.fillMaxSize().nestedScroll(scrollState.nestedScrollConnection)
         ) {
-            items(renderableMessages, key = ChatMessage::id) { message ->
-                when {
-                    message.isCompactionMarker -> CompactedDivider()
+            items(renderableMessages, key = TranscriptRow::id) { row ->
+                when (row) {
+                    is TranscriptRow.Compacted -> CompactedDivider()
 
-                    message.role == ChatRole.Tool -> message.toolResult?.let { result ->
-                        ToolCallItem(
-                            toolName = result.toolName,
-                            input = result.input,
-                            output = result.output,
-                            isError = result.isError,
+                    is TranscriptRow.Chat -> when (val message = row.message) {
+                        is ToolResultMessage -> ToolCallItem(
+                            call = row.call,
+                            toolName = message.toolName,
+                            output = message.content.textContent().takeIf { it.isNotEmpty() },
+                            isError = message.isError,
                             running = false,
-                            onOpenOutput = { openToolResultId = result.toolCallId }
+                            onOpenOutput = { openToolResultId = message.toolCallId }
+                        )
+
+                        is UserMessage -> UserMessageItem(message)
+
+                        is AssistantMessage -> AssistantMessageItem(
+                            message = message,
+                            showThinking = uiState.showThinking
                         )
                     }
-
-                    message.role == ChatRole.User -> UserMessageItem(message)
-
-                    else -> AssistantMessageItem(
-                        message = message,
-                        showThinking = uiState.showThinking
-                    )
                 }
             }
-            items(uiState.pendingTools, key = { "pending-${it.toolCallId}" }) { pending ->
+            items(uiState.pendingTools, key = { "pending-${it.id}" }) { pending ->
                 ToolCallItem(
-                    toolName = pending.toolName,
-                    input = pending.input,
+                    call = pending.call,
+                    toolName = pending.call?.name,
                     output = null,
                     isError = false,
                     running = true,
@@ -128,20 +138,24 @@ internal fun ConversationContent(
                 )
             }
             uiState.streamingMessage?.let { streaming ->
-                item(key = streaming.id) {
-                    val hasVisibleText = streaming.blocks.any {
-                        it is ChatBlock.Text && it.text.isNotBlank()
+                item(key = "streaming") {
+                    val hasVisibleText = streaming.content.any {
+                        it is TextContent && it.text.isNotBlank()
                     }
-                    val hasThinking = streaming.blocks.any { it is ChatBlock.Thinking }
+                    val hasThinking = streaming.content.any { it is ThinkingContent }
                     AssistantMessageItem(
-                        message = if (hasVisibleText || hasThinking || streaming.error != null) {
+                        message = if (hasVisibleText || hasThinking ||
+                            streaming.errorMessage != null
+                        ) {
                             streaming
                         } else {
                             // pi renders tool-call-only assistant messages as
                             // zero lines (the execution shows as its own row);
                             // the placeholder bridges until the call commits
                             // and the pending tool row appears.
-                            streaming.copy(blocks = listOf(ChatBlock.Text(STREAMING_PLACEHOLDER)))
+                            streaming.copy(
+                                content = listOf(TextContent(STREAMING_PLACEHOLDER))
+                            )
                         },
                         isStreaming = true,
                         showThinking = uiState.showThinking
@@ -153,9 +167,11 @@ internal fun ConversationContent(
             }
         }
 
-        openToolResult?.let { result ->
+        openToolResult?.let { row ->
+            val message = row.message as ToolResultMessage
             ToolOutputSheet(
-                result = result,
+                call = row.call,
+                message = message,
                 onDismiss = { openToolResultId = null }
             )
         }
@@ -181,14 +197,23 @@ private fun CompactedDivider() {
 }
 
 /**
- * Whether the message renders a row at all: pi renders tool-call-only
- * assistant messages as zero lines (the executions show as their own tool
- * rows), so they are filtered out here; an error keeps its row.
+ * Whether the row renders at all: pi renders tool-call-only assistant
+ * messages as zero lines (the executions show as their own tool rows), so
+ * they are filtered out here; an error keeps its row.
  */
-internal fun ChatMessage.hasRenderableContent(): Boolean = isCompactionMarker ||
-    role != ChatRole.Assistant ||
-    error != null ||
-    blocks.any { it is ChatBlock.Text || it is ChatBlock.Thinking }
+internal fun TranscriptRow.hasRenderableContent(): Boolean = when (this) {
+    is TranscriptRow.Compacted -> true
+
+    is TranscriptRow.Chat -> when (val message = this.message) {
+        is AssistantMessage ->
+            message.errorMessage != null ||
+                message.content.any {
+                    (it is TextContent && it.text.isNotBlank()) || it is ThinkingContent
+                }
+
+        else -> true
+    }
+}
 
 /**
  * User message: a right-aligned bubble, as in modern chat apps. The start
@@ -196,7 +221,7 @@ internal fun ChatMessage.hasRenderableContent(): Boolean = isCompactionMarker ||
  * ones never span the full row.
  */
 @Composable
-private fun UserMessageItem(message: ChatMessage, modifier: Modifier = Modifier) {
+private fun UserMessageItem(message: UserMessage, modifier: Modifier = Modifier) {
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -210,7 +235,7 @@ private fun UserMessageItem(message: ChatMessage, modifier: Modifier = Modifier)
             // pi renders user markdown literally (markers preserved, not
             // parsed), so the bubble stays plain text.
             Text(
-                text = message.displayText(),
+                text = message.content.textContent(),
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
@@ -225,11 +250,13 @@ private fun UserMessageItem(message: ChatMessage, modifier: Modifier = Modifier)
  * blocks render inline and stream as they arrive (pi's shown state); with
  * it off they collapse to [ThinkingLabel] (pi's hidden state, plus a
  * duration once the run completes). An error renders below the body in
- * error color.
+ * error color. Content renders in order straight from the runtime message
+ * (pi's AssistantMessageComponent does the same single pass): consecutive
+ * thinking parts merge into one block, blank parts drop.
  */
 @Composable
 private fun AssistantMessageItem(
-    message: ChatMessage,
+    message: AssistantMessage,
     showThinking: Boolean,
     modifier: Modifier = Modifier,
     isStreaming: Boolean = false
@@ -238,36 +265,52 @@ private fun AssistantMessageItem(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // pi renders assistant text as markdown; only this path goes
-        // through MarkdownText.
-        message.blocks.forEachIndexed { index, block ->
-            when (block) {
-                is ChatBlock.Text -> MarkdownText(markdown = block.text)
-
-                is ChatBlock.ToolCall -> Unit
-
-                is ChatBlock.Thinking -> if (showThinking) {
-                    ThinkingText(markdown = block.text)
-                } else {
-                    ThinkingLabel(
-                        // Active only while this run is still growing: the
-                        // streaming message's LAST block and a Thinking block
-                        // (earlier runs are done).
-                        active = isStreaming && index == message.blocks.lastIndex,
-                        // usage.reasoning is message-level: only the first
-                        // collapsed run shows it, later runs stay uncounted.
-                        tokens = if (
-                            message.blocks.subList(0, index).none { it is ChatBlock.Thinking }
-                        ) {
-                            message.reasoningTokens
-                        } else {
-                            0
-                        }
-                    )
+        var index = 0
+        var seenThinking = false
+        while (index < message.content.size) {
+            val part = message.content[index]
+            when (part) {
+                is TextContent -> {
+                    part.text.takeIf { it.isNotBlank() }?.let { MarkdownText(markdown = it) }
+                    index++
                 }
+
+                is ThinkingContent -> {
+                    val runStart = index
+                    while (index < message.content.size &&
+                        message.content[index] is ThinkingContent
+                    ) {
+                        index++
+                    }
+                    val merged = message.content.subList(runStart, index)
+                        .filterIsInstance<ThinkingContent>()
+                        .joinToString("\n\n") { it.thinking }
+                        .trim()
+                    if (merged.isNotEmpty()) {
+                        if (showThinking) {
+                            ThinkingText(markdown = merged)
+                        } else {
+                            ThinkingLabel(
+                                // Active only while this run is the message's
+                                // growing tail: nothing renderable follows it.
+                                active = isStreaming && message.content.drop(index).none {
+                                    it is ToolCall ||
+                                        (it is TextContent && it.text.isNotBlank())
+                                },
+                                // usage.reasoning is message-level: only the
+                                // first collapsed run shows it, later runs
+                                // stay uncounted.
+                                tokens = if (seenThinking) 0 else message.usage.reasoning
+                            )
+                        }
+                    }
+                    seenThinking = true
+                }
+
+                else -> index++
             }
         }
-        message.error?.let { error ->
+        message.errorMessage?.let { error ->
             Text(
                 text = error,
                 style = MaterialTheme.typography.bodyMedium,
@@ -321,11 +364,27 @@ internal object ToolCallTitles {
     fun specFor(toolName: String): Spec? = specs[toolName]
 }
 
-/** Row title: the spec's format filled with the parsed input, else the tool name. */
+/**
+ * The one call argument a tool's row title is built from, parsed from the
+ * raw JSON arguments string; the argument key comes from the shared
+ * [ToolCallTitles] spec table. Null for tools without a spec and for
+ * malformed arguments or a missing/empty value.
+ */
+internal fun toolCallInput(toolName: String, arguments: String): String? {
+    val argument = ToolCallTitles.specFor(toolName)?.argument ?: return null
+    val parsed =
+        runCatching { lenientJson.parseToJsonElement(arguments) }.getOrNull() as? JsonObject
+            ?: return null
+    return parsed.string(argument)?.takeIf { it.isNotEmpty() }
+}
+
+/** Row title: the spec's format filled with the parsed input, else the tool name or fallback. */
 @Composable
-internal fun toolCallTitle(toolName: String, input: String?): String {
-    val spec = ToolCallTitles.specFor(toolName)
-    return if (spec != null && input != null) stringResource(spec.format, input) else toolName
+internal fun toolCallTitle(call: ToolCall?, fallbackName: String? = null): String {
+    if (call == null) return fallbackName ?: "tool"
+    val input = toolCallInput(call.name, call.arguments)
+    val spec = ToolCallTitles.specFor(call.name)
+    return if (spec != null && input != null) stringResource(spec.format, input) else call.name
 }
 
 /**
@@ -340,8 +399,8 @@ internal fun toolCallTitle(toolName: String, input: String?): String {
  */
 @Composable
 private fun ToolCallItem(
-    toolName: String,
-    input: String?,
+    call: ToolCall?,
+    toolName: String?,
     output: String?,
     isError: Boolean,
     running: Boolean,
@@ -366,7 +425,7 @@ private fun ToolCallItem(
             }.padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             Text(
-                text = toolCallTitle(toolName, input),
+                text = toolCallTitle(call, toolName),
                 style = MaterialTheme.typography.labelLarge,
                 color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified,
                 modifier = Modifier.weight(1f)
@@ -395,12 +454,12 @@ private fun ToolCallItem(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ToolOutputSheet(result: ChatToolResult, onDismiss: () -> Unit) {
+private fun ToolOutputSheet(call: ToolCall?, message: ToolResultMessage, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        val format = ToolResultRenderers.formatFor(result.toolName)
-        val searchResults = result.searchResults?.takeIf { !result.isError }
-        val output = result.output.orEmpty()
-        val contentColor = if (result.isError) {
+        val format = ToolResultRenderers.formatFor(message.toolName)
+        val searchResults = remember(message) { toolResultSearchResults(message) }
+        val output = remember(message) { message.content.textContent().orEmpty() }
+        val contentColor = if (message.isError) {
             MaterialTheme.colorScheme.error
         } else {
             MaterialTheme.colorScheme.onSurfaceVariant
@@ -417,16 +476,16 @@ private fun ToolOutputSheet(result: ChatToolResult, onDismiss: () -> Unit) {
                 modifier = Modifier.padding(bottom = 8.dp)
             ) {
                 Text(
-                    text = toolCallTitle(result.toolName, result.input),
+                    text = toolCallTitle(call),
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (result.isError) {
+                    color = if (message.isError) {
                         MaterialTheme.colorScheme.error
                     } else {
                         MaterialTheme.colorScheme.onSurface
                     },
                     modifier = Modifier.weight(1f)
                 )
-                if (result.isError) {
+                if (message.isError) {
                     Text(
                         text = stringResource(R.string.tool_status_failed),
                         style = MaterialTheme.typography.labelSmall,
@@ -566,6 +625,33 @@ private fun ThinkingText(markdown: String, modifier: Modifier = Modifier) {
     )
 }
 
+/**
+ * Full text output of a message: text parts joined with newlines. No
+ * truncation at the projection boundary — the viewer scrolls the whole
+ * text. (Tree previews normalize whitespace, so their join is equivalent.)
+ */
+internal fun List<Content>.textContent(): String =
+    filterIsInstance<TextContent>().joinToString("\n") { it.text }
+
+/**
+ * web_search result entries parsed from the tool result's `details`
+ * (mirrors the fields BraveWebSearchTool emits; reads are lenient so a
+ * future shape change degrades to the text renderer, never a crash).
+ * Null for other tools, error results, and malformed or empty shapes.
+ */
+internal fun toolResultSearchResults(message: ToolResultMessage): List<ChatSearchResult>? {
+    if (message.isError || message.toolName != BraveWebSearchTool.NAME) return null
+    val results = (message.details as? JsonObject)?.arr("results") ?: return null
+    val entries = results.mapNotNull { it as? JsonObject }.map { r ->
+        ChatSearchResult(
+            title = r.str("title").orEmpty(),
+            url = r.str("url").orEmpty(),
+            description = r.str("description")?.takeIf { it.isNotEmpty() }
+        )
+    }
+    return entries.takeIf { it.isNotEmpty() }
+}
+
 @Preview(showBackground = true)
 @Composable
 private fun ConversationContentThinkingPreview() {
@@ -576,35 +662,39 @@ private fun ConversationContentThinkingPreview() {
             // state), streaming as it arrives.
             showThinking = true,
             messages = listOf(
-                ChatMessage(
-                    id = "m1",
-                    role = ChatRole.User,
-                    blocks = listOf(ChatBlock.Text("What is 2 + 2?"))
-                ),
-                ChatMessage(
-                    id = "m2",
-                    role = ChatRole.Assistant,
-                    blocks = listOf(
-                        ChatBlock.Thinking(
-                            "The user asks a simple arithmetic question. *2 + 2* equals " +
-                                "**4** — no tools needed."
+                TranscriptRow.Chat("m1", UserMessage.ofText("What is 2 + 2?")),
+                TranscriptRow.Chat(
+                    "m2",
+                    AssistantMessage(
+                        content = listOf(
+                            ThinkingContent(
+                                "The user asks a simple arithmetic question. *2 + 2* equals " +
+                                    "**4** — no tools needed."
+                            ),
+                            TextContent("2 + 2 = **4**."),
+                            ThinkingContent(
+                                "Answered directly; offering the derivation seems unnecessary."
+                            )
                         ),
-                        ChatBlock.Text("2 + 2 = **4**."),
-                        ChatBlock.Thinking(
-                            "Answered directly; offering the derivation seems unnecessary."
-                        )
+                        api = "preview",
+                        provider = "preview",
+                        model = "preview",
+                        usage = works.resolve.pathfinder.ai.Usage()
                     )
                 ),
-                ChatMessage(
-                    id = "m3",
-                    role = ChatRole.Tool,
-                    blocks = emptyList(),
-                    toolResult = ChatToolResult(
+                TranscriptRow.Chat(
+                    "m3",
+                    ToolResultMessage(
                         toolCallId = "t1",
                         toolName = "web_search",
-                        isError = false,
-                        output = "1. Arithmetic — Wikipedia\n2. Addition — Wikipedia",
-                        input = "arithmetic"
+                        content = listOf(
+                            TextContent("1. Arithmetic — Wikipedia\n2. Addition — Wikipedia")
+                        )
+                    ),
+                    call = ToolCall(
+                        id = "t1",
+                        name = "web_search",
+                        arguments = """{"query":"arithmetic"}"""
                     )
                 )
             )

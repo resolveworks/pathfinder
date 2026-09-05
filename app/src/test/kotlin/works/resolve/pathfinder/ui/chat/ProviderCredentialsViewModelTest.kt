@@ -539,31 +539,6 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
         }
 
     @Test
-    fun projectAuthPrompt_mapsKinds_metadataOnly() {
-        // Prompt metadata crosses the boundary; answers never do.
-        assertEquals(
-            PendingAuthPrompt(AuthPromptKind.TEXT, "message", "placeholder"),
-            projectAuthPrompt(AuthInteractionPrompt.Text("message", "placeholder"))
-        )
-        assertEquals(
-            PendingAuthPrompt(AuthPromptKind.SECRET, "paste token"),
-            projectAuthPrompt(AuthInteractionPrompt.Secret("paste token"))
-        )
-        assertEquals(
-            PendingAuthPrompt(AuthPromptKind.MANUAL_CODE, "enter code"),
-            projectAuthPrompt(AuthInteractionPrompt.ManualCode("enter code"))
-        )
-        val select = projectAuthPrompt(
-            AuthInteractionPrompt.Select(
-                "choose",
-                listOf(AuthInteractionPrompt.Select.Option("a", "A", "first"))
-            )
-        )
-        assertEquals(AuthPromptKind.SELECT, select.kind)
-        assertEquals(listOf(AuthPromptOption("a", "A", "first")), select.options)
-    }
-
-    @Test
     fun storedOAuthCredential_configuresProvider_onlyWithRegisteredFlow() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
@@ -633,10 +608,10 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
 
             vm.beginProviderAuthLogin("zai", oauthMethod)
 
-            // The Select prompt projects ids/labels/descriptions — never values.
+            // The Select prompt carries ids/labels/descriptions — never values.
             val selectPending = vm.uiState
-                .first { it.authFlow?.pendingPrompt?.kind == AuthPromptKind.SELECT }
-                .authFlow!!.pendingPrompt!!
+                .first { it.authFlow?.pendingPrompt is AuthInteractionPrompt.Select }
+                .authFlow!!.pendingPrompt as AuthInteractionPrompt.Select
             assertEquals(listOf("personal", "work"), selectPending.options.map { it.id })
             assertEquals(listOf("Personal", "Work"), selectPending.options.map { it.label })
             assertEquals("Company account", selectPending.options[1].description)
@@ -644,7 +619,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             vm.submitAuthPrompt("work")
             assertEquals("work", chosen)
 
-            vm.awaitState { it.authFlow?.pendingPrompt?.kind == AuthPromptKind.MANUAL_CODE }
+            vm.awaitState { it.authFlow?.pendingPrompt is AuthInteractionPrompt.ManualCode }
             val events = vm.uiState.value.authFlow!!.events
             assertTrue(events[0] is AuthEvent.Info)
             assertEquals("https://auth.test/authorize", (events[1] as AuthEvent.AuthUrl).url)
@@ -726,7 +701,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
                 OAuthCredential("never-stored", "never-stored", Long.MAX_VALUE)
             }
             vm.beginProviderAuthLogin("zai", oauthMethod)
-            vm.awaitState { it.authFlow?.pendingPrompt?.kind == AuthPromptKind.SECRET }
+            vm.awaitState { it.authFlow?.pendingPrompt is AuthInteractionPrompt.Secret }
             vm.cancelProviderAuthLogin()
             vm.awaitState { it.authFlow == null }
             assertEquals(0, vm.uiState.value.credentialSuccessEpoch)

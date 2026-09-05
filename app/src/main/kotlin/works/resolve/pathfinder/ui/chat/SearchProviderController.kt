@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.codingagent.core.AgentSession
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
@@ -42,10 +43,10 @@ internal class SearchProviderController(
     /** The source of truth [ChatUiState.searchProviderOptions] and [ChatUiState.searchCredentialSuccessEpoch] mirror. */
     val state: StateFlow<State> = _state.asStateFlow()
 
-    /** UI-safe auth prompts for a search provider's credential form (only Brave is supported). */
-    fun authPrompts(providerId: String): List<ProviderAuthPrompt> =
+    /** Auth prompts for a search provider's credential form (only Brave is supported). */
+    fun authPrompts(providerId: String): List<AuthPrompt> =
         if (providerId == SearchProviderService.BRAVE_PROVIDER_ID) {
-            listOf(ProviderAuthPrompt(BRAVE_API_KEY_PROMPT, KEY_PROMPT_MESSAGE, secret = true))
+            listOf(AuthPrompt(BRAVE_API_KEY_PROMPT, KEY_PROMPT_MESSAGE, secret = true))
         } else {
             emptyList()
         }

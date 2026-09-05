@@ -2,7 +2,10 @@ package works.resolve.pathfinder.ui.chat
 
 import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
@@ -15,75 +18,32 @@ enum class ConversationView {
     Tree
 }
 
-enum class ChatRole {
-    User,
-    Assistant,
-    Tool
+/**
+ * One renderable transcript row: a compaction-cut marker, or a runtime
+ * message with its stable entry id as the list key. Bodies render directly
+ * from the runtime message (pi's components consume runtime messages the
+ * same way); [call] pairs a tool-result row with its originating call for
+ * the row title.
+ */
+sealed interface TranscriptRow {
+    val id: String
+
+    data class Compacted(override val id: String) : TranscriptRow
+
+    data class Chat(override val id: String, val message: Message, val call: ToolCall? = null) :
+        TranscriptRow
 }
-
-/** Text or thinking unit of a chat message body. */
-sealed class ChatBlock {
-    /** Plain text part; assistant text renders as markdown. */
-    data class Text(val text: String) : ChatBlock()
-
-    data class Thinking(val text: String) : ChatBlock()
-
-    /** Name-only; raw JSON arguments never enter UI state. */
-    data class ToolCall(val toolCallId: String, val name: String) : ChatBlock()
-}
-
-data class ChatMessage(
-    /** Stable UI key; unique even when timestamps collide. */
-    val id: String,
-    val role: ChatRole,
-    /** Body blocks in content order; consecutive thinking parts are pre-merged. */
-    val blocks: List<ChatBlock>,
-    /** User-facing failure text for error/aborted assistant messages. */
-    val error: String? = null,
-    /** usage.reasoning (thinking tokens) for assistant rows; 0 when the provider doesn't report them. */
-    val reasoningTokens: Int = 0,
-    /** Marker row for a compaction cut; renders as a divider, not message content. */
-    val isCompactionMarker: Boolean = false,
-    /** Tool-result payload; set only on [ChatRole.Tool] rows (empty blocks). */
-    val toolResult: ChatToolResult? = null
-)
 
 /**
- * One web_search result, parsed from the tool result's structured details
- * (see `toolResultSearchResults`): only the link-worthy summary — title,
- * url, description — not the extra excerpts the model's markdown keeps.
+ * One web_search result, parsed from a tool result's structured details at
+ * render time: only the link-worthy summary — title, url, description —
+ * not the extra excerpts the model's markdown keeps.
  */
 data class ChatSearchResult(
     val title: String,
     val url: String,
     /** Null for results without a description (empty ones are skipped, as in the markdown content). */
     val description: String? = null
-)
-
-/**
- * UI-safe projection of a committed tool result: tool name, error flag,
- * and the full text output. The raw JSON arguments never enter UI state
- * ([input] is the one parsed argument the row title is built from, see
- * `toolCallInput`), and the structured `details` JSON enters only as the
- * parsed [searchResults] entries — null for tools without structured
- * output, in which case the viewer renders [output].
- */
-data class ChatToolResult(
-    val toolCallId: String,
-    val toolName: String,
-    val isError: Boolean,
-    val output: String? = null,
-    /** Parsed call argument the row title is built from; null when the tool has none. */
-    val input: String? = null,
-    /** Parsed web_search result entries; null unless the tool emitted structured details. */
-    val searchResults: List<ChatSearchResult>? = null
-)
-
-data class PendingToolExecution(
-    val toolCallId: String,
-    val toolName: String,
-    /** Parsed call argument the row title is built from; null when the tool has none. */
-    val input: String? = null
 )
 
 @Serializable
@@ -123,6 +83,13 @@ data class ProviderLoginNavKey(val providerId: String) : NavKey
 
 data class AutoRetryStatus(val attempt: Int, val maxAttempts: Int)
 
+/**
+ * An in-flight tool execution resolved to its committed assistant call; a
+ * null [call] (malformed or out-of-order event) still renders a generic
+ * in-flight row so it can never disappear from the UI.
+ */
+data class PendingToolExecution(val id: String, val call: ToolCall? = null)
+
 /** Outcome of the initial load of settings, credentials, and sessions. */
 enum class ChatStatus {
     Loading,
@@ -151,28 +118,6 @@ data class ModelOption(
     val name: String
 )
 
-data class ProviderAuthPrompt(val envKey: String, val message: String, val secret: Boolean)
-
-enum class AuthPromptKind {
-    TEXT,
-    SECRET,
-    SELECT,
-    MANUAL_CODE
-}
-
-data class AuthPromptOption(val id: String, val label: String, val description: String? = null)
-
-/**
- * A suspended login prompt awaiting a user answer: prompt metadata only —
- * the answer lives solely in the prompt reply.
- */
-data class PendingAuthPrompt(
-    val kind: AuthPromptKind,
-    val message: String,
-    val placeholder: String? = null,
-    val options: List<AuthPromptOption> = emptyList()
-)
-
 /**
  * An in-flight provider login: the chosen method, the ordered [AuthEvent]s
  * shown so far, and the pending prompt, if any. Contains only non-secret
@@ -183,34 +128,8 @@ data class ProviderAuthFlow(
     val providerId: String,
     val method: AuthMethodInfo,
     val events: List<AuthEvent> = emptyList(),
-    val pendingPrompt: PendingAuthPrompt? = null
+    val pendingPrompt: AuthPrompt? = null
 )
-
-internal fun projectAuthPrompt(prompt: AuthPrompt): PendingAuthPrompt = when (prompt) {
-    is AuthPrompt.Text -> PendingAuthPrompt(
-        AuthPromptKind.TEXT,
-        prompt.message,
-        prompt.placeholder
-    )
-
-    is AuthPrompt.Secret -> PendingAuthPrompt(
-        AuthPromptKind.SECRET,
-        prompt.message,
-        prompt.placeholder
-    )
-
-    is AuthPrompt.Select -> PendingAuthPrompt(
-        AuthPromptKind.SELECT,
-        prompt.message,
-        options = prompt.options.map { AuthPromptOption(it.id, it.label, it.description) }
-    )
-
-    is AuthPrompt.ManualCode -> PendingAuthPrompt(
-        AuthPromptKind.MANUAL_CODE,
-        prompt.message,
-        prompt.placeholder
-    )
-}
 
 /** What the provider-auth screen shows first for a provider's method list. */
 enum class ProviderAuthScreenMode {
@@ -247,9 +166,10 @@ data class SelectedModel(
 )
 
 /**
- * Immutable projection of the chat screen state. Contains only UI-safe data:
- * no API keys (only per-provider [ProviderOption.configured] flags), no
- * provider-request options, and no AI-core message objects.
+ * Immutable projection of the chat screen state. Contains no credentials or
+ * secrets (only per-provider [ProviderOption.configured] flags and no
+ * provider-request options); transcript rows carry the runtime messages
+ * themselves, projected as-is.
  *
  * Navigation is signaled from this state rather than commanded: the UI owns
  * the Nav3 back stack and resets it to [startKey] whenever [startKey] or
@@ -314,9 +234,10 @@ data class ChatUiState(
     val sessionSearchResults: List<SessionInfo> = emptyList(),
     /** True while the one-time corpus scan runs after the query activates. */
     val isSessionSearching: Boolean = false,
-    val messages: List<ChatMessage> = emptyList(),
+    val messages: List<TranscriptRow> = emptyList(),
     val pendingTools: List<PendingToolExecution> = emptyList(),
-    val streamingMessage: ChatMessage? = null,
+    /** In-flight partial; role-generic in pi, assistant-only here (non-assistant partials render nothing). */
+    val streamingMessage: AssistantMessage? = null,
     val draft: String = "",
     val isStreaming: Boolean = false,
     /** Transient auto-retry backoff status; null when not retrying. */

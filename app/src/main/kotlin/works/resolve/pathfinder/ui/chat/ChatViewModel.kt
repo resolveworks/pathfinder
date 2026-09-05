@@ -330,19 +330,15 @@ class ChatViewModel(
     }
 
     /**
-     * UI-safe auth prompts for a provider's credential form, in catalog order:
-     * the first prompt is the API key (secret); later prompts fill env slots.
-     * Only envKey/message/secret cross the boundary — never stored values.
+     * Auth prompts for a provider's credential form, in catalog order: the
+     * first prompt is the API key (secret); later prompts fill env slots.
+     * Catalog data as-is — only envKey/message/secret exist on it.
      */
-    fun providerAuthPrompts(providerId: String): List<ProviderAuthPrompt> =
-        catalog.getProvider(providerId)
-            ?.auth
-            ?.prompts
-            ?.map { ProviderAuthPrompt(it.envKey, it.message, it.secret) }
-            .orEmpty()
+    fun providerAuthPrompts(providerId: String): List<AuthPrompt> =
+        catalog.getProvider(providerId)?.auth?.prompts.orEmpty()
 
-    /** UI-safe auth prompts for a search provider's credential form (only Brave is supported). */
-    fun searchProviderAuthPrompts(providerId: String): List<ProviderAuthPrompt> =
+    /** Auth prompts for a search provider's credential form (only Brave is supported). */
+    fun searchProviderAuthPrompts(providerId: String): List<AuthPrompt> =
         searchProviders.authPrompts(providerId)
 
     /**
@@ -769,7 +765,7 @@ class ChatViewModel(
      * so the first projection sees the old tree — with no follow-up state
      * emission it would otherwise never see the committed message.
      */
-    private fun projectCommittedAfterSessionMessageEnd(): List<ChatMessage> =
+    private fun projectCommittedAfterSessionMessageEnd(): List<TranscriptRow> =
         projectCommitted(agent?.state?.value?.messages.orEmpty(), activeConversation)
 
     private fun onAgentState(state: AgentState) {
@@ -803,8 +799,7 @@ class ChatViewModel(
                 // until the MessageEnd handler lands the committed row, keeping
                 // the streaming→committed handoff inside a single uiState
                 // update instead of blinking out across the persistence write.
-                streamingMessage = (state.streamingMessage as? AssistantMessage)
-                    ?.let(::projectStreaming)
+                streamingMessage = state.streamingMessage as? AssistantMessage
                     ?: it.streamingMessage,
                 isStreaming = state.isStreaming,
                 thinkingLevel = state.thinkingLevel,

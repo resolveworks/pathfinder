@@ -72,10 +72,15 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import kotlinx.coroutines.launch
 import works.resolve.pathfinder.R
+import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
+import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
+import works.resolve.pathfinder.ai.providers.AuthPrompt as CatalogAuthPrompt
 import works.resolve.pathfinder.codingagent.core.session.SessionInfo
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
@@ -152,7 +157,7 @@ fun ChatScreen(
         envInputs: Map<String, String>
     ) -> Unit,
     onRemoveProviderCredential: (providerId: String) -> Unit,
-    authPrompts: (providerId: String) -> List<ProviderAuthPrompt>,
+    authPrompts: (providerId: String) -> List<CatalogAuthPrompt>,
     authMethods: (providerId: String) -> List<AuthMethodInfo>,
     onBeginProviderAuthLogin: (providerId: String, method: AuthMethodInfo) -> Unit,
     onSubmitAuthPrompt: (answer: String) -> Unit,
@@ -161,7 +166,7 @@ fun ChatScreen(
     onSaveSearchProviderCredential: (providerId: String, apiKeyInput: String) -> Unit,
     onRemoveSearchProviderCredential: (providerId: String) -> Unit,
     onRefreshSearchProviderStatus: () -> Unit,
-    searchAuthPrompts: (providerId: String) -> List<ProviderAuthPrompt>,
+    searchAuthPrompts: (providerId: String) -> List<CatalogAuthPrompt>,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
     onSessionSearchQueryChange: (query: String) -> Unit,
@@ -828,8 +833,8 @@ private val PREVIEW_SEARCH_PROVIDER_OPTIONS = listOf(
 )
 
 private val PREVIEW_CLOUDFLARE_PROMPTS = listOf(
-    ProviderAuthPrompt("CLOUDFLARE_API_KEY", "Enter the Cloudflare API key", secret = true),
-    ProviderAuthPrompt("CLOUDFLARE_ACCOUNT_ID", "Enter the Cloudflare account ID", secret = false)
+    CatalogAuthPrompt("CLOUDFLARE_API_KEY", "Enter the Cloudflare API key", secret = true),
+    CatalogAuthPrompt("CLOUDFLARE_ACCOUNT_ID", "Enter the Cloudflare account ID", secret = false)
 )
 
 private val PREVIEW_AUTH_METHODS = listOf(
@@ -858,9 +863,9 @@ private fun PreviewChatScreen(
     startKey: NavKey = ChatNavKey,
     extraKeys: List<NavKey> = emptyList(),
     conversationView: ConversationView = ConversationView.Chat,
-    authPrompts: (String) -> List<ProviderAuthPrompt> = { emptyList() },
+    authPrompts: (String) -> List<CatalogAuthPrompt> = { emptyList() },
     authMethods: (String) -> List<AuthMethodInfo> = { emptyList() },
-    searchAuthPrompts: (String) -> List<ProviderAuthPrompt> = { emptyList() }
+    searchAuthPrompts: (String) -> List<CatalogAuthPrompt> = { emptyList() }
 ) {
     PathfinderTheme {
         ChatScreen(
@@ -994,7 +999,7 @@ private fun ChatScreenSearchProviderAuthPreview() {
         searchAuthPrompts = { providerId ->
             if (providerId == "brave") {
                 listOf(
-                    ProviderAuthPrompt("BRAVE_API_KEY", "Enter Brave Search API key", secret = true)
+                    CatalogAuthPrompt("BRAVE_API_KEY", "Enter Brave Search API key", secret = true)
                 )
             } else {
                 emptyList()
@@ -1050,7 +1055,7 @@ private fun ChatScreenAuthMethodChoicePreview() {
         extraKeys = listOf(SettingsNavKey, ProvidersNavKey, ProviderAuthNavKey("zai")),
         authPrompts = { providerId ->
             if (providerId == "zai") {
-                listOf(ProviderAuthPrompt("ZAI_API_KEY", "Enter Z.AI API key", secret = true))
+                listOf(CatalogAuthPrompt("ZAI_API_KEY", "Enter Z.AI API key", secret = true))
             } else {
                 emptyList()
             }
@@ -1088,8 +1093,7 @@ private fun ChatScreenAuthFlowPreview() {
                     AuthEvent.DeviceCode("ABCD-1234", "https://verify.example.invalid/device"),
                     AuthEvent.Progress("Waiting for approval")
                 ),
-                pendingPrompt = PendingAuthPrompt(
-                    kind = AuthPromptKind.MANUAL_CODE,
+                pendingPrompt = AuthPrompt.ManualCode(
                     message = "Enter the code shown in the browser"
                 )
             )
@@ -1157,11 +1161,7 @@ private fun ChatScreenChatViewPreview() {
                 )
             ),
             messages = listOf(
-                ChatMessage(
-                    id = "m1",
-                    role = ChatRole.User,
-                    blocks = listOf(ChatBlock.Text("Hello there"))
-                )
+                TranscriptRow.Chat("m1", UserMessage.ofText("Hello there"))
             )
         )
     )
@@ -1202,21 +1202,22 @@ private fun ChatScreenReadyStreamingPreview() {
                 )
             ),
             messages = listOf(
-                ChatMessage(
-                    id = "m1",
-                    role = ChatRole.User,
-                    blocks = listOf(ChatBlock.Text("Hello there"))
-                ),
-                ChatMessage(
-                    id = "m2",
-                    role = ChatRole.Assistant,
-                    blocks = listOf(ChatBlock.Text("Hi! How can I help?"))
+                TranscriptRow.Chat("m1", UserMessage.ofText("Hello there")),
+                TranscriptRow.Chat(
+                    "m2",
+                    AssistantMessage(
+                        content = listOf(TextContent("Hi! How can I help?")),
+                        api = "preview",
+                        provider = "preview",
+                        model = "preview"
+                    )
                 )
             ),
-            streamingMessage = ChatMessage(
-                id = "streaming-1",
-                role = ChatRole.Assistant,
-                blocks = listOf(ChatBlock.Text("Sure, "))
+            streamingMessage = AssistantMessage(
+                content = listOf(TextContent("Sure, ")),
+                api = "preview",
+                provider = "preview",
+                model = "preview"
             ),
             isStreaming = true
         )

@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ui.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import works.resolve.pathfinder.ai.ToolCall
 
 class TreePanelLogicTest {
 
@@ -49,7 +50,14 @@ class TreePanelLogicTest {
         val tree = listOf(
             row("u1", listOf("u1"), "You: find compose docs"),
             row("t1", listOf("u1", "t1"), "").copy(
-                body = TreeRowBody.Tool("web_search", "kotlin compose")
+                body = TreeRowBody.Tool(
+                    "web_search",
+                    ToolCall(
+                        id = "t1",
+                        name = "web_search",
+                        arguments = """{"query":"kotlin compose"}"""
+                    )
+                )
             ),
             row("a1", listOf("u1", "t1", "a1"), "Assistant: here is what I found")
         )

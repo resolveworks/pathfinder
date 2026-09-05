@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.ui.chat
 
+import works.resolve.pathfinder.ai.ToolCall
+
 enum class TreeFilter {
     DEFAULT,
     USER_ONLY
@@ -27,8 +29,8 @@ sealed class TreeRowBody {
 
     data class Tool(
         val name: String,
-        /** Parsed title argument; null when the tool has no title spec. */
-        val input: String? = null
+        /** Originating call, titled at render like chat tool rows; null when only history keeps the result. */
+        val call: ToolCall? = null
     ) : TreeRowBody()
 }
 

@@ -1,7 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
 import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
@@ -196,21 +195,19 @@ private fun SessionEntry.rowBody(toolCalls: Map<String, ToolCall>): TreeRowBody 
     return when (val entryMessage = message) {
         is ToolResultMessage -> TreeRowBody.Tool(
             name = entryMessage.toolName,
-            input = toolCalls[entryMessage.toolCallId]
-                ?.let { toolCallInput(it.name, it.arguments) }
+            // pi's tree holds the originating call and formats the title at
+            // render; a result whose call is not in history falls back to
+            // the bare name.
+            call = toolCalls[entryMessage.toolCallId]
         )
 
-        is UserMessage -> TreeRowBody.Text(preview("You", entryMessage.content.text()))
+        is UserMessage -> TreeRowBody.Text(preview("You", entryMessage.content.textContent()))
 
         is AssistantMessage -> TreeRowBody.Text(
-            preview("Assistant", entryMessage.errorMessage ?: entryMessage.content.text())
+            preview("Assistant", entryMessage.errorMessage ?: entryMessage.content.textContent())
         )
     }
 }
-
-private fun List<Content>.text(): String = asSequence()
-    .filterIsInstance<TextContent>()
-    .joinToString("") { it.text }
 
 private fun preview(prefix: String, body: String): String {
     val normalized = body

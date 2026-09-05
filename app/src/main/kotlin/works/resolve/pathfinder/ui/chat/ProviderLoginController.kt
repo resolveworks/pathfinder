@@ -98,7 +98,7 @@ internal class ProviderLoginController(
         override suspend fun prompt(prompt: AuthInteractionPrompt): String {
             val reply = CompletableDeferred<String>()
             pendingPromptReply = reply
-            _flow.value = _flow.value?.copy(pendingPrompt = projectAuthPrompt(prompt))
+            _flow.value = _flow.value?.copy(pendingPrompt = prompt)
             try {
                 return reply.await()
             } finally {
