@@ -179,16 +179,14 @@ fun ChatScreen(
     // Panel scroll state lives above the Chat/Tree switch so each view keeps
     // its own position across view toggles. A different transcript starts
     // with fresh list state and lets ConversationContent place it at the end.
-    val chatListState = key(uiState.activeSessionId) { rememberLazyListState() }
+    val chatScrollState = key(uiState.activeSessionId) { rememberTranscriptScrollState() }
     val treeListState = rememberLazyListState()
     // Session whose tree has been positioned on its current leaf at open.
     var positionedTreeSessionId by rememberSaveable { mutableStateOf<String?>(null) }
 
-    // Chats follow the user's own send: one deliberate jump to the newest
-    // content (index 0 in the reversed transcript), never a follow effect.
     val sendAndFollow: () -> Unit = {
+        chatScrollState.followBottom()
         onSend()
-        scope.launch { chatListState.scrollToItem(0) }
     }
 
     LaunchedEffect(uiState.error) {
@@ -404,7 +402,7 @@ fun ChatScreen(
                                             onStop = onStop,
                                             onSelectModel = onSelectModel,
                                             onSelectThinkingLevel = onSelectThinkingLevel,
-                                            listState = chatListState
+                                            scrollState = chatScrollState
                                         )
 
                                         ConversationView.Tree -> TreePanel(
@@ -431,7 +429,7 @@ fun ChatScreen(
                                         onStop = onStop,
                                         onSelectModel = onSelectModel,
                                         onSelectThinkingLevel = onSelectThinkingLevel,
-                                        listState = chatListState
+                                        scrollState = chatScrollState
                                     )
                                 }
                             }

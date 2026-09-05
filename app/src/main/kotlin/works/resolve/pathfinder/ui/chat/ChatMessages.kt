@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.ui.chat
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,11 +14,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -38,13 +33,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -56,7 +50,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
@@ -71,9 +64,11 @@ private fun ChatMessage.displayText(): String =
 @Composable
 internal fun ConversationContent(
     uiState: ChatUiState,
-    listState: LazyListState,
+    scrollState: TranscriptScrollState,
     modifier: Modifier = Modifier
 ) {
+    val listState = scrollState.listState
+    FollowTranscriptBottom(scrollState)
     val messageCount = uiState.messages.size
     val streamingId = uiState.streamingMessage?.id
     val renderableMessages = remember(uiState.messages) {
@@ -95,29 +90,15 @@ internal fun ConversationContent(
         if (messageCount == 0 && uiState.pendingTools.isEmpty() && streamingId == null) {
             EmptyStateText(text = stringResource(R.string.chat_empty))
         }
-        // reverseLayout makes the newest committed message index 0 and the
-        // visual bottom the scroll origin: insertions at the bottom keep a
-        // pinned reader pinned and never move a detached reader's anchor.
-        // Streaming growth is not in the list at all — it lives in the
-        // overlay below, because a growing item in a reversed list is the
-        // scroll anchor while partially visible, and its growth cascades
-        // through everything stacked above it.
+        // Forward layout anchors the TOP of a visible message, so appending
+        // text below the reader does not move their position within that row.
         LazyColumn(
             state = listState,
-            reverseLayout = true,
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize()
+            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
+            modifier = Modifier.fillMaxSize().nestedScroll(scrollState.nestedScrollConnection)
         ) {
-            // Stable index-0 key: the scroll-position bookkeeping's constant
-            // reference across commit insertions of its neighbors.
-            item(key = "transcript-bottom-anchor") {
-                Spacer(Modifier.height(with(LocalDensity.current) { 1f.toDp() }))
-            }
-
-            // Emitted newest-first; reverseLayout puts it at the bottom,
-            // preserving chronological visual order.
-            items(renderableMessages.asReversed(), key = ChatMessage::id) { message ->
+            items(renderableMessages, key = ChatMessage::id) { message ->
                 when {
                     message.isCompactionMarker -> CompactedDivider()
 
@@ -140,38 +121,18 @@ internal fun ConversationContent(
                     )
                 }
             }
-        }
-
-        // The active run — pending tool rows, then the streaming message —
-        // renders OUTSIDE the list as a bottom-anchored overlay, so its
-        // growth can never move list content: a detached reader's viewport
-        // stays frozen and a pinned reader's newest line stays at the
-        // bottom edge. Capped so it cannot swallow the transcript; overflow
-        // is top-clipped (the tail is what matters mid-run). The full text
-        // becomes scrollable history when the run commits into the list.
-        if (streamingId != null || uiState.pendingTools.isNotEmpty()) {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.6f)
-                    .wrapContentHeight(Alignment.Bottom)
-                    .clipToBounds()
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
-            ) {
-                uiState.pendingTools.forEach { pending ->
-                    ToolCallItem(
-                        toolName = pending.toolName,
-                        input = pending.input,
-                        output = null,
-                        isError = false,
-                        running = true,
-                        onOpenOutput = {}
-                    )
-                }
-                uiState.streamingMessage?.let { streaming ->
+            items(uiState.pendingTools, key = { "pending-${it.toolCallId}" }) { pending ->
+                ToolCallItem(
+                    toolName = pending.toolName,
+                    input = pending.input,
+                    output = null,
+                    isError = false,
+                    running = true,
+                    onOpenOutput = {}
+                )
+            }
+            uiState.streamingMessage?.let { streaming ->
+                item(key = streaming.id) {
                     val hasVisibleText = streaming.blocks.any {
                         it is ChatBlock.Text && it.text.isNotBlank()
                     }
@@ -191,15 +152,14 @@ internal fun ConversationContent(
                     )
                 }
             }
+            item(key = "transcript-bottom-anchor") {
+                Spacer(Modifier.height(with(LocalDensity.current) { 1f.toDp() }))
+            }
         }
 
-        // In a reversed list canScrollBackward IS the detached signal. A
-        // detached reader re-attaches by scrolling back to the bottom; this
-        // is the shortcut for it.
-        if (listState.canScrollBackward) {
-            val scope = rememberCoroutineScope()
+        if (!scrollState.following && listState.canScrollForward) {
             SmallFloatingActionButton(
-                onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                onClick = scrollState::followBottom,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(16.dp)
@@ -668,7 +628,7 @@ private fun ConversationContentThinkingPreview() {
                     )
                 )
             ),
-            listState = rememberLazyListState()
+            scrollState = rememberTranscriptScrollState()
         )
     }
 }
