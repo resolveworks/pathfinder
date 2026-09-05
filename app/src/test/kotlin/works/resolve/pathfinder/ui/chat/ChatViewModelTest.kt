@@ -292,9 +292,6 @@ class ChatViewModelTest {
             ) = AgentToolResult(content = listOf(TextContent("no results")))
         }
 
-        val telemetry = works.resolve.pathfinder.telemetry.InMemoryTelemetryContext()
-        val diagnostics = works.resolve.pathfinder.logging.PathfinderDiagnostics(telemetry)
-
         val oauthZai = FakeOAuthAuth()
         val oauthOnly = FakeOAuthAuth(
             name = "OAuth Only Account",
@@ -464,7 +461,6 @@ class ChatViewModelTest {
             sessionStore = sessions,
             agentFactory = factory,
             modelResolver = modelResolver,
-            diagnostics = diagnostics,
             searchProviderService = searchProviders
         ).also { viewModels += it }
 
@@ -2562,7 +2558,7 @@ class ChatViewModelTest {
         }
 
     @Test
-    fun accountLogin_failure_recordsTelemetryAtBothBoundaries() =
+    fun accountLogin_failure_surfacesSafeError_andClearsFlow() =
         runTest(mainDispatcherRule.scheduler) {
             val h = Harness()
             val vm = h.newViewModel()
@@ -2571,95 +2567,36 @@ class ChatViewModelTest {
 
             h.oauthZai.loginFn = { throw IllegalStateException("token exchange failed (400)") }
             vm.beginProviderAuthLogin("zai", oauthMethod)
-            vm.uiState.first { it.authFlow == null && it.error != null }
-
-            // The login operation itself records one error span.
-            val loginSpan = h.telemetry.getSpans().single { it.name == "pf.auth.login" }
-            assertEquals(
-                works.resolve.pathfinder.telemetry.attr("zai"),
-                loginSpan.attributes["pf.auth.provider"]
-            )
-            assertTrue(loginSpan.status is works.resolve.pathfinder.telemetry.SpanStatus.Error)
-
-            // The UI error boundary records the swallowed exception with the
-            // generic UI message — the only trace of what actually failed.
-            vm.uiState.first { _ ->
-                h.telemetry.getSpans().any { it.name == "pf.chat.error" }
-            }
-            val errorSpan = h.telemetry.getSpans().single { it.name == "pf.chat.error" }
-            assertEquals(
-                works.resolve.pathfinder.telemetry.attr("Could not complete sign-in"),
-                errorSpan.attributes["pf.error.ui_message"]
-            )
-            val status = errorSpan.status as works.resolve.pathfinder.telemetry.SpanStatus.Error
-            // The UI boundary records the wrapped ModelsError type-only: short
-            // class name, never the free-form message.
-            assertEquals("ModelsError", status.error?.name)
-            assertEquals("", status.error?.message)
+            val failed = vm.uiState.first { it.authFlow == null && it.error != null }
+            assertEquals("Could not complete sign-in", failed.error)
 
             vm.closeForTest()
         }
 
     @Test
-    fun apiKeyLogin_recordsPersistedLoginSpanAtAppBoundary() =
-        runTest(mainDispatcherRule.scheduler) {
-            val h = Harness()
-            val vm = h.newViewModel()
-            vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+    fun apiKeyLogin_persistsCredential_andBumpsEpoch() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
 
-            vm.saveProviderCredential("zai", "k", emptyMap())
-            vm.uiState.first { it.credentialSuccessEpoch > 0 }
+        vm.saveProviderCredential("zai", "k", emptyMap())
+        vm.uiState.first { it.credentialSuccessEpoch > 0 }
+        assertEquals("k", h.storedApiKey("zai"))
 
-            val span = h.telemetry.getSpans().single { it.name == "pf.auth.login" }
-            assertEquals(
-                works.resolve.pathfinder.telemetry.attr("zai"),
-                span.attributes["pf.auth.provider"]
-            )
-            assertEquals(
-                works.resolve.pathfinder.telemetry.attr("api_key"),
-                span.attributes["pf.auth.type"]
-            )
-            assertEquals(
-                works.resolve.pathfinder.telemetry.attr("persisted"),
-                span.attributes["pf.auth.outcome"]
-            )
-            assertTrue(span.status is works.resolve.pathfinder.telemetry.SpanStatus.Ok)
-
-            vm.closeForTest()
-        }
+        vm.closeForTest()
+    }
 
     @Test
-    fun credentialReadFailure_degradesWithTelemetryNotSilence() =
+    fun credentialReadFailure_degradesToNeedsConfiguration() =
         runTest(mainDispatcherRule.scheduler) {
             val h = Harness()
-            // The restoration path must degrade to NeedsConfiguration while
-            // recording why — the failure must be distinguishable on-device from
-            // an actually-missing credential.
+            // The restoration path must degrade to NeedsConfiguration rather
+            // than crash: a failing credential read never blocks startup.
             h.settings.setProviderId("zai")
             h.settings.setModelId(testModel.id)
             h.credentials.failWrites = true
             val vm = h.newViewModel()
             vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-
-            val degraded = h.telemetry.getSpans().filter { it.name == "pf.chat.degraded" }
-            assertTrue(degraded.isNotEmpty())
-            assertTrue(
-                degraded.all {
-                    it.status is works.resolve.pathfinder.telemetry.SpanStatus.Error
-                }
-            )
-            // The credential-read failure is named, not silently absorbed into
-            // "unconfigured".
-            assertTrue(
-                degraded.any {
-                    it.attributes["pf.degraded.operation"] ==
-                        works.resolve.pathfinder.telemetry.attr("available_models")
-                } ||
-                    degraded.any {
-                        it.attributes["pf.degraded.operation"] ==
-                            works.resolve.pathfinder.telemetry.attr("provider_status")
-                    }
-            )
 
             vm.closeForTest()
         }

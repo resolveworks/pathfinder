@@ -128,6 +128,10 @@ android {
     }
 
     sourceSets["main"].assets.srcDirs(defuddleAssetsDir.get())
+
+    // android.util.Log calls at the ViewModel error boundary must not throw
+    // in JVM unit tests.
+    testOptions { unitTests.isReturnDefaultValues = true }
 }
 
 dependencies {

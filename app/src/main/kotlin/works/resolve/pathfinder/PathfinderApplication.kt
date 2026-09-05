@@ -20,8 +20,6 @@ import works.resolve.pathfinder.codingagent.core.session.SessionStore
 import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
 import works.resolve.pathfinder.data.settings.SettingsRepository
-import works.resolve.pathfinder.logging.LogcatTelemetryContext
-import works.resolve.pathfinder.logging.PathfinderDiagnostics
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.webfetch.WebViewPageFetcher
@@ -35,10 +33,6 @@ import works.resolve.pathfinder.ui.chat.ChatViewModel
  * coroutine scope — the Preferences DataStore delegate owns its own scope.
  */
 class PathfinderApplication : Application() {
-
-    val diagnostics: PathfinderDiagnostics by lazy {
-        PathfinderDiagnostics(LogcatTelemetryContext())
-    }
 
     private val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -60,7 +54,7 @@ class PathfinderApplication : Application() {
     }
 
     val credentials: CredentialStore by lazy {
-        EncryptedCredentialStore(this, KeystoreAeadCipher(), diagnostics = diagnostics)
+        EncryptedCredentialStore(this, KeystoreAeadCipher())
     }
 
     /**
@@ -107,7 +101,7 @@ class PathfinderApplication : Application() {
     }
 
     val sessionStore: SessionStore by lazy {
-        SessionStore(File(filesDir, SESSIONS_DIRECTORY), diagnostics = diagnostics)
+        SessionStore(File(filesDir, SESSIONS_DIRECTORY))
     }
 
     /** Generated from pi; never hand-edit the bundled asset. */
@@ -137,7 +131,6 @@ class PathfinderApplication : Application() {
                 agentFactory = agentFactory,
                 searchProviderService = searchProviderService,
                 modelResolver = agentFactory::resolveModel,
-                diagnostics = diagnostics,
                 appForegroundGate = appForegroundGate
             )
         }
