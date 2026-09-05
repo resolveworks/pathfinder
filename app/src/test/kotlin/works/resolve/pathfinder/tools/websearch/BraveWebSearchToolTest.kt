@@ -68,8 +68,6 @@ class BraveWebSearchToolTest {
         assertFailsWith<IllegalArgumentException> {
             tool.validateArguments(buildJsonObject { put("query", 5) })
         }
-        // Scry's `Type.String` has no minLength: a blank query is valid, and
-        // the port must not strengthen the upstream schema.
         tool.validateArguments(args(query = "  "))
     }
 
@@ -112,7 +110,7 @@ class BraveWebSearchToolTest {
     }
 
     @Test
-    fun `formats results as numbered markdown with extra snippets`() = runBlocking<Unit> {
+    fun `formats results as markdown with extra snippets`() = runBlocking<Unit> {
         server.enqueue(
             MockResponse().setBody(
                 """
@@ -126,28 +124,17 @@ class BraveWebSearchToolTest {
         )
         val result = tool().execute("t1", tool().validateArguments(args(query = "q")), {})
         assertEquals(
-            "1. **[First](https://a.example)**\n" +
-                "   Desc one\n" +
-                "   > s1\n" +
-                "   > s2\n" +
+            "**[First](https://a.example)**\n" +
+                "Desc one\n" +
+                "> s1\n" +
+                "> s2\n" +
                 "\n" +
-                "2. **[Second](https://b.example)**\n" +
+                "**[Second](https://b.example)**\n" +
                 "\n" +
-                // Scry's `if (r.description)`: empty descriptions are skipped.
-                "3. **[Third](https://c.example)**",
+                "**[Third](https://c.example)**",
             resultText(result)
         )
-        // Structured mirror of the markdown's summary fields for the app's
-        // result renderer; the extra snippets stay model-only content.
-        assertEquals(
-            "{" +
-                "\"results\":[" +
-                "{\"title\":\"First\",\"url\":\"https://a.example\"," +
-                "\"description\":\"Desc one\"}," +
-                "{\"title\":\"Second\",\"url\":\"https://b.example\"}," +
-                "{\"title\":\"Third\",\"url\":\"https://c.example\"}]}",
-            result.details.toString()
-        )
+        assertEquals("{}", result.details.toString())
     }
 
     @Test
@@ -227,7 +214,5 @@ class BraveWebSearchToolTest {
                 kotlin.test.fail("expected CancellationException")
             } catch (_: CancellationException) {
             }
-            // Scry's "Search aborted." content path is deliberately not ported:
-            // cancellation must propagate (see BraveWebSearchTool KDoc).
         }
 }

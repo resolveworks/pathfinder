@@ -14,8 +14,8 @@ import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
 /**
- * The app's web-search feature: search-provider credentials (Brave only,
- * Scry parity) and the web_search tool's presence on sessions. Owns the
+ * The app's web-search feature: search-provider credentials (Brave only)
+ * and the web_search tool's presence on sessions. Owns the
  * [ProviderOption] rows of the search-providers screen, the success epoch
  * its credential form pops on, and the Brave-configured fact every
  * session's tool set follows. Runs in [scope]; user-facing failures

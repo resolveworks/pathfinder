@@ -83,7 +83,6 @@ class ChatViewModel(
      * flows gate loopback waits and network work on it.
      */
     private val appForegroundGate: AppForegroundGate = AppForegroundGate(),
-    /** Web-search credential management (Brave only, Scry parity). */
     private val searchProviderService: SearchProviderService
 ) : ViewModel() {
 

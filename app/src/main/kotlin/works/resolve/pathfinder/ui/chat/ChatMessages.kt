@@ -313,7 +313,6 @@ internal enum class ToolResultFormat {
  * pi's raw fallback.
  */
 internal object ToolResultRenderers {
-    /** Scry renders web_search results as Markdown; web_fetch output is Markdown (defuddle). */
     private val formats: Map<String, ToolResultFormat> = mapOf(
         BraveWebSearchTool.NAME to ToolResultFormat.MARKDOWN,
         WebFetchTool.NAME to ToolResultFormat.MARKDOWN

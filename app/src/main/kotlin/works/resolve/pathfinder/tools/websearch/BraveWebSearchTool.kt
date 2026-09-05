@@ -27,23 +27,6 @@ import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.truncateErrorText
 import works.resolve.pathfinder.codingagent.core.AgentSession
 
-/**
- * Brave web search agent tool, ported from the Scry pi extension. Divergences
- * from upstream:
- * - Authentication: Android has no ambient environment, so the key comes
- *   from [apiKeyResolver] backed by [SearchProviderService]
- *   (Keystore-encrypted); the missing-key message is adapted accordingly.
- * - Coroutine cancellation always rethrows (never becomes a result value)
- *   instead of returning upstream's "Search aborted." content.
- * - The application layer activates the tool only while a key is stored, so
- *   the system prompt never advertises an unusable tool; upstream registers
- *   unconditionally and errors at execute time.
- * - `details` carries the structured result entries (title, url,
- *   description) for the app's result renderer; upstream Scry exposes only
- *   the markdown content.
- *
- * Never logs the API key or request/response content.
- */
 class BraveWebSearchTool(
     private val client: OkHttpClient,
     private val apiKeyResolver: suspend () -> String?,
@@ -198,35 +181,23 @@ class BraveWebSearchTool(
                 )
             }
 
-            // Content keeps Scry's numbered markdown — snippets included —
-            // for the model; `details` mirrors the summary fields for the
-            // app's result renderer.
-            val entries = mutableListOf<JsonObject>()
-            val lines = results.mapIndexed { i, element ->
+            val lines = results.map { element ->
                 val r = element as? JsonObject ?: JsonObject(emptyMap())
                 val title = r.str("title") ?: ""
                 val url = r.str("url") ?: ""
-                // Mirrors Scry's JS truthiness: skip empty descriptions.
                 val description = r.str("description")?.takeIf { it.isNotEmpty() }
                 val snippets = r.arr("extra_snippets")
-                entries.add(
-                    buildJsonObject {
-                        put("title", title)
-                        put("url", url)
-                        description?.let { put("description", it) }
-                    }
-                )
-                val parts = mutableListOf("${i + 1}. **[$title]($url)**")
-                description?.let { parts.add("   $it") }
+                val parts = mutableListOf("**[$title]($url)**")
+                description?.let { parts.add(it) }
                 snippets?.forEach { snippet ->
-                    snippet.strOrNull()?.let { parts.add("   > $it") }
+                    snippet.strOrNull()?.let { parts.add("> $it") }
                 }
                 parts.joinToString("\n")
             }
 
             return AgentToolResult(
                 content = listOf(TextContent(lines.joinToString("\n\n"))),
-                details = buildJsonObject { put("results", JsonArray(entries)) }
+                details = EMPTY_DETAILS
             )
         }
     }

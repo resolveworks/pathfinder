@@ -5,14 +5,6 @@ import works.resolve.pathfinder.ai.auth.CredentialStore
 
 data class SearchProvider(val id: String, val name: String)
 
-/**
- * Upstream Scry reads the key from the `BRAVE_API_KEY` environment variable;
- * Android has no ambient environment, so API keys are persisted through the
- * app's [ApiKeyCredential]/[CredentialStore] boundary under `search_`-prefixed
- * credential ids instead.
- *
- * Never logs or exposes secret material.
- */
 class SearchProviderService(private val credentials: CredentialStore) {
 
     val providers: List<SearchProvider> = listOf(
