@@ -25,7 +25,7 @@ import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.codingagent.core.AgentSession
-import works.resolve.pathfinder.codingagent.core.session.Conversation
+import works.resolve.pathfinder.codingagent.core.session.SessionManager
 import works.resolve.pathfinder.data.settings.ModelSettings
 
 /**
@@ -69,11 +69,7 @@ class NativeAgentFactory(
     private val tools: List<AgentTool> = emptyList()
 ) : AgentFactory {
 
-    override fun create(
-        settings: ModelSettings,
-        sessionId: String,
-        conversation: Conversation
-    ): AgentSession {
+    override fun create(settings: ModelSettings, sessionManager: SessionManager): AgentSession {
         val entry = catalog.getProvider(settings.providerId)
             ?: throw IllegalArgumentException("Unsupported provider: ${settings.providerId}")
         val model = entry.model(settings.modelId)
@@ -112,7 +108,7 @@ class NativeAgentFactory(
                 model = effectiveModel,
                 tools = tools.toList(),
                 streamOptions = SimpleStreamOptions(
-                    sessionId = sessionId,
+                    sessionId = sessionManager.sessionId,
                     timeoutMs = REQUEST_TIMEOUT_MS,
                     maxRetries = MAX_RETRIES
                 ),
@@ -125,7 +121,7 @@ class NativeAgentFactory(
                         .flowOn(Dispatchers.Default)
                 }
             ),
-            conversation = conversation,
+            sessionManager = sessionManager,
             retrySettings = settings.retry,
             compactionSettings = settings.compaction,
             models = models,

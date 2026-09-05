@@ -6,13 +6,11 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.AgentState
 import works.resolve.pathfinder.ai.AssistantMessage
@@ -20,10 +18,6 @@ import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
-import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.ThinkingContent
-import works.resolve.pathfinder.ai.ToolCall
-import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.auth.AuthEvent
@@ -40,23 +34,13 @@ import works.resolve.pathfinder.ai.getSupportedThinkingLevels
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.codingagent.core.AgentSession
-import works.resolve.pathfinder.codingagent.core.OperationLifecycleRecorder
-import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.LaneRecord
-import works.resolve.pathfinder.codingagent.core.session.LaneRecovery
-import works.resolve.pathfinder.codingagent.core.session.LaneReductionInput
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.RecordLogCorruption
-import works.resolve.pathfinder.codingagent.core.session.RecordLogCorruptionReason
-import works.resolve.pathfinder.codingagent.core.session.RecordQuery
-import works.resolve.pathfinder.codingagent.core.session.Session
-import works.resolve.pathfinder.codingagent.core.session.SessionEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionRepository
-import works.resolve.pathfinder.codingagent.core.session.SessionState
-import works.resolve.pathfinder.codingagent.core.session.SessionSummary
+import works.resolve.pathfinder.codingagent.core.session.SessionError
+import works.resolve.pathfinder.codingagent.core.session.SessionInfo
+import works.resolve.pathfinder.codingagent.core.session.SessionManager
 import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
-import works.resolve.pathfinder.codingagent.core.session.reduceLaneState
+import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
@@ -73,12 +57,14 @@ import works.resolve.pathfinder.tools.websearch.SearchProviderService
  * the pickers ephemeral and moves default persistence to the Settings
  * screens, so "use it now AND default it" takes two steps.
  *
- * Transcript persistence keeps every transcript with its session: at most
- * one save per session is in flight and newer snapshots coalesce into it,
- * session switches wait for pending saves, snapshot writes are
- * non-cancellable, and a failed save blocks session/config switches until
- * it is retried successfully — neither a failed save nor ViewModel teardown
- * can silently abandon a transcript.
+ * Transcript persistence lives inside the runtime: every append (message,
+ * model/thinking change, compaction, navigation) reaches the session file
+ * inline at event time through the session manager, and a session file is
+ * created lazily — a new chat is absent from the drawer until its first
+ * assistant message commits (pi's selector behavior; an aborted first run
+ * still commits an empty assistant message, so send+abort is durable).
+ * Storage failures fail the run and surface as a save error while the
+ * in-memory tree keeps its entries.
  *
  * Navigation is state, not effects: intents that complete configuration set
  * [ChatUiState.startKey] (and bump [ChatUiState.navigationEpoch]) atomically
@@ -89,7 +75,7 @@ class ChatViewModel(
     private val settingsRepository: SettingsStore,
     private val catalog: ProviderCatalog,
     private val authService: ProviderAuthService,
-    private val sessionStore: SessionRepository,
+    private val sessionSource: SessionSource,
     private val agentFactory: AgentFactory,
     /** Resolves a provider/model pair to the effective request model; throwing input is surfaced as a safe unknown-model error. */
     private val modelResolver: (providerId: String, modelId: String) -> Model,
@@ -125,22 +111,10 @@ class ChatViewModel(
     private var agent: AgentSession? = null
     private var agentStateJob: Job? = null
     private var agentEventsJob: Job? = null
-    private var activeSession: Session? = null
 
-    /** The conversation tree of [activeSession], owned by the bound [AgentSession]; read here for projection and persistence. */
+    /** The conversation tree of the bound session's manager; read here for projection. */
     private val activeConversation: Conversation
         get() = agent?.conversation ?: Conversation(emptyList(), null)
-
-    /**
-     * Watermark of active-session entries already appended to the session's
-     * mutation log. Tree growth beyond it schedules a persist; leaf-only
-     * moves (navigation) persist without moving it.
-     */
-    private var persistedEntryCount: Int = 0
-
-    /** Latest unsaved conversation snapshot for its owning session. */
-    private var pendingPersist: Pair<Session, Conversation>? = null
-    private var persistJob: Job? = null
 
     /** Agent transcript instance used for the latest committed-message projection. */
     private var observedAgentMessages: List<Message>? = null
@@ -222,13 +196,14 @@ class ChatViewModel(
                 session.setThinkingLevel(level)
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: SessionError) {
+                setError(ERROR_SESSION_SAVE, e)
+                return@launch
             } catch (e: Exception) {
                 setError(ERROR_THINKING_SWITCH, e)
                 return@launch
             }
             updateState { it.copy(treeRows = buildTreeRows(session.conversation, it.treeFilter)) }
-            // The thinking_level_change may have grown the tree: persist it.
-            enqueuePersist()
         }
     }
 
@@ -236,7 +211,7 @@ class ChatViewModel(
      * Persists the default thinking level. Applies to the live session
      * first and persists after (pi's order), so a failed settings write
      * leaves the session switched. The stored default seeds sessions
-     * without a recorded branch level ([seededSettingsFor]) and is
+     * without a recorded branch level ([seedSession]) and is
      * re-applied on model switches ([selectModelInternal]).
      */
     fun setThinkingLevelDefault(level: ModelThinkingLevel) {
@@ -247,6 +222,9 @@ class ChatViewModel(
                     session.setThinkingLevel(level)
                 } catch (e: CancellationException) {
                     throw e
+                } catch (e: SessionError) {
+                    setError(ERROR_SESSION_SAVE, e)
+                    return@launch
                 } catch (e: Exception) {
                     setError(ERROR_THINKING_SWITCH, e)
                     return@launch
@@ -266,7 +244,6 @@ class ChatViewModel(
                 updateState {
                     it.copy(treeRows = buildTreeRows(session.conversation, it.treeFilter))
                 }
-                enqueuePersist()
             }
         }
     }
@@ -444,8 +421,7 @@ class ChatViewModel(
     /**
      * Navigation with branch summarization: when [summarize] is set, the
      * abandoned branch segment is summarized and a branch-summary entry is
-     * appended at the target position, both wrapped in a durable navigation
-     * operation record (see [AgentSession.navigateTree]).
+     * appended at the target position (see [AgentSession.navigateTree]).
      */
     fun navigateToTreeEntry(id: String, summarize: Boolean) {
         viewModelScope.launch {
@@ -470,6 +446,9 @@ class ChatViewModel(
             } catch (e: IllegalArgumentException) {
                 setError(ERROR_ENTRY_MISSING)
                 return@launch
+            } catch (e: SessionError) {
+                setError(ERROR_SESSION_SAVE, e)
+                return@launch
             }
             if (result.cancelled) return@launch
             val updated = session.conversation
@@ -485,7 +464,6 @@ class ChatViewModel(
                     treeRows = buildTreeRows(updated, it.treeFilter)
                 )
             }
-            enqueuePersist()
         }
     }
 
@@ -530,7 +508,9 @@ class ChatViewModel(
         updateState { it.copy(isSessionSearching = true) }
         sessionSearchScanJob = viewModelScope.launch {
             val corpus = try {
-                sessionStore.searchCorpus()
+                sessionSource.list().associate { info ->
+                    info.id to "${info.id} ${info.allMessagesText}"
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -561,7 +541,7 @@ class ChatViewModel(
         val state = _uiState.value
         if (state.sessionSearchQuery.isBlank()) return
         val entries = state.sessionSummaries.map { summary ->
-            SessionSearchEntry(summary.id, summary.updatedAt, corpus[summary.id].orEmpty())
+            SessionSearchEntry(summary.id, summary.modified, corpus[summary.id].orEmpty())
         }
         val matched = filterAndSortSessions(
             entries,
@@ -585,17 +565,14 @@ class ChatViewModel(
         viewModelScope.launch {
             if (rejectWhileBusy()) return@launch
             try {
-                if (!awaitPersistence()) {
-                    setError(ERROR_SESSION_SAVE)
-                    return@launch
-                }
-                val session = sessionStore.create(DEFAULT_SESSION_TITLE)
-                // The startup resolution inside seededSettingsFor (pi's
-                // findInitialModel) picks the initial model; the seeds let
-                // the branch's configuration fold restore it on resume.
-                val (seeded, conversation) = seededSettingsFor(session)
-                val newAgent = tryCreateAgent(seeded, session.id, conversation) ?: return@launch
-                if (!activateSession(session, newAgent)) return@launch
+                // Memory-only: nothing touches disk, and the new session is
+                // absent from the drawer until its first assistant commit.
+                val manager = sessionSource.create()
+                // pi's findInitialModel picks the initial model; the seeds
+                // let the branch's configuration fold restore it on resume.
+                val seeded = seedSession(manager)
+                val newAgent = tryCreateAgent(seeded, manager) ?: return@launch
+                if (!activateSession(manager, newAgent)) return@launch
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -608,18 +585,14 @@ class ChatViewModel(
         viewModelScope.launch {
             if (rejectWhileBusy()) return@launch
             try {
-                val session = sessionStore.load(sessionId)
-                if (session == null) {
+                val manager = sessionSource.open(sessionId)
+                if (manager == null) {
                     setError(ERROR_SESSION_MISSING)
-                } else {
-                    if (!awaitPersistence()) {
-                        setError(ERROR_SESSION_SAVE)
-                        return@launch
-                    }
-                    val (seeded, conversation) = seededSettingsFor(session)
-                    val newAgent = tryCreateAgent(seeded, session.id, conversation) ?: return@launch
-                    if (!activateSession(session, newAgent)) return@launch
+                    return@launch
                 }
+                val seeded = seedSession(manager)
+                val newAgent = tryCreateAgent(seeded, manager) ?: return@launch
+                if (!activateSession(manager, newAgent)) return@launch
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -633,7 +606,14 @@ class ChatViewModel(
     private suspend fun initialize() {
         try {
             val settings = settingsRepository.currentSettings()
-            val summaries = sessionStore.summaries()
+            val summaries = try {
+                sessionSource.list()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                recordDegradation("session_summaries", e)
+                emptyList()
+            }
             currentSettings = settings
             refreshOptions()
 
@@ -665,15 +645,11 @@ class ChatViewModel(
                 setError(ERROR_MODEL_UNAVAILABLE)
             }
 
-            val session = resolveSession(settings, summaries)
+            val manager = resolveSession(settings, summaries)
             // Build the agent before committing any state: a factory failure
             // must never leave a Ready UI or persisted active-session id.
-            val (seeded, conversation) = seededSettingsFor(session)
-            val newAgent = tryCreateAgent(
-                seeded,
-                session.id,
-                conversation
-            )
+            val seeded = seedSession(manager)
+            val newAgent = tryCreateAgent(seeded, manager)
             if (newAgent == null) {
                 updateState {
                     it.copy(
@@ -684,7 +660,7 @@ class ChatViewModel(
                 }
                 return
             }
-            if (!activateSession(session, newAgent)) {
+            if (!activateSession(manager, newAgent)) {
                 // The active-id write failed: a safe settings error is already
                 // surfaced; never report Ready with nothing bound.
                 updateState { it.copy(status = ChatStatus.Failed) }
@@ -704,18 +680,24 @@ class ChatViewModel(
         }
     }
 
-    /** Requested active session, else the newest existing, else a new one. */
+    /**
+     * pi's continueRecent: the requested active session, else the most
+     * recently modified listed one, else a new one. The stored id can point
+     * at a never-flushed session (process death before any assistant
+     * committed) — open returns null and the flow falls through exactly as
+     * for any other missing session.
+     */
     private suspend fun resolveSession(
         settings: ModelSettings,
-        summaries: List<SessionSummary>
-    ): Session {
+        summaries: List<SessionInfo>
+    ): SessionManager {
         settings.activeSessionId?.let { id ->
-            sessionStore.load(id)?.let { return it }
+            sessionSource.open(id)?.let { return it }
         }
-        summaries.firstOrNull()?.let { summary ->
-            sessionStore.load(summary.id)?.let { return it }
+        summaries.firstOrNull()?.let { info ->
+            sessionSource.open(info.id)?.let { return it }
         }
-        return sessionStore.create(DEFAULT_SESSION_TITLE)
+        return sessionSource.create()
     }
 
     // ---- session / agent lifecycle ----
@@ -726,9 +708,9 @@ class ChatViewModel(
      * Only called after the factory accepted the settings. Returns false when
      * persisting the active id fails; in that case nothing is committed.
      */
-    private suspend fun activateSession(session: Session, agent: AgentSession): Boolean {
+    private suspend fun activateSession(manager: SessionManager, agent: AgentSession): Boolean {
         try {
-            settingsRepository.setActiveSessionId(session.id)
+            settingsRepository.setActiveSessionId(manager.sessionId)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -736,8 +718,7 @@ class ChatViewModel(
             return false
         }
         val conversation = agent.conversation
-        val summaries = sessionStore.summaries()
-        val laneRecovery = laneRecoveryFor(session)
+        val summaries = refreshSessionSummaries()
         val outgoing = _uiState.value
         outgoing.activeSessionId?.let { id ->
             if (outgoing.draft.isBlank()) {
@@ -747,142 +728,66 @@ class ChatViewModel(
                     outgoing.draft
             }
         }
-        val draft = sessionDrafts[session.id].orEmpty()
+        val draft = sessionDrafts[manager.sessionId].orEmpty()
         // Do not suspend between binding and publishing the session id:
         // collection can start immediately, and a frame must never render
         // incoming messages with the outgoing session's scroll state.
-        activeSession = session
-        persistedEntryCount = session.entries.size
         bindAgent(agent)
         updateState {
             it.copy(
-                activeSessionId = session.id,
+                activeSessionId = manager.sessionId,
                 startKey = ChatNavKey,
                 navigationEpoch = it.navigationEpoch + 1,
                 messages = projectCommitted(agent.state.value.messages, conversation),
                 streamingMessage = null,
                 treeRows = buildTreeRows(conversation, it.treeFilter),
                 sessionSummaries = summaries,
-                laneRecovery = laneRecovery,
                 draft = draft
             )
         }
-        refreshSessionSearchResults()
-        // Initial seeding may have appended entries to an entry-less
-        // session; flush them like any other append. Loaded sessions carry
-        // no new entries, so a plain load or switch never saves here.
-        if (activeConversation.entries.size > persistedEntryCount) enqueuePersist()
         return true
-    }
-
-    /**
-     * Restores the main lane's recovery classification by running the full
-     * reducer over the session's durable record log. Pathfinder is
-     * single-lane and sessions are small, so the recovery slice is the
-     * entire lane. Validation failures map to [LaneRecovery.Corrupt]; a
-     * failing read degrades to [LaneRecovery.Idle] (logged) —
-     * classification is advisory UI state, never a load blocker.
-     */
-    private suspend fun laneRecoveryFor(session: Session): LaneRecovery = try {
-        val openOperations = sessionStore.openOperations(
-            session.id,
-            SessionState.LANE_MAIN,
-            limit = 2
-        )
-        if (openOperations.size > 1) {
-            LaneRecovery.Corrupt(RecordLogCorruptionReason.MULTIPLE_OPEN_OPERATIONS)
-        } else {
-            val started = openOperations.singleOrNull()
-            val result = reduceLaneState(
-                LaneReductionInput(
-                    lane = SessionState.LANE_MAIN,
-                    openOperations = openOperations,
-                    records = sessionStore.findRecords(
-                        session.id,
-                        RecordQuery(lane = SessionState.LANE_MAIN)
-                    ),
-                    // Operation-owned entries: everything appended after the
-                    // open operation's start (single writer, single lane).
-                    ownEntries =
-                        started?.let { op -> session.entries.filter { it.seq > op.seq } }
-                            ?: emptyList(),
-                    entries = session.entries,
-                    configurationEntries = configurationEntriesFor(session, started?.sourceLeafId),
-                    leafId = session.leafId
-                )
-            )
-            val operation = result.laneState.operation
-            if (operation == null) LaneRecovery.Idle else LaneRecovery.Suspended(operation.kind)
-        }
-    } catch (e: RecordLogCorruption) {
-        LaneRecovery.Corrupt(e.reason)
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        recordDegradation("lane_recovery", e)
-        LaneRecovery.Idle
-    }
-
-    /**
-     * The anchor's root path, oldest first; falls back to the persisted leaf
-     * when the anchor is an unpersisted buffered entry (records may precede
-     * the entries they name).
-     */
-    private fun configurationEntriesFor(session: Session, anchorId: String?): List<SessionEntry> {
-        var cursor: String? =
-            anchorId?.takeIf { id -> session.entries.any { it.id == id } } ?: session.leafId
-                ?: return emptyList()
-        val byId = session.entries.associateBy { it.id }
-        val path = ArrayList<SessionEntry>()
-        while (cursor != null && byId.containsKey(cursor)) {
-            val entry = byId.getValue(cursor)
-            path.add(entry)
-            cursor = entry.parentId
-        }
-        return path.asReversed()
     }
 
     /**
      * Resolves the session and builds an agent for it: validation happens
      * before anything is committed. Returns null on failure (safe error set).
      */
-    private suspend fun prepareAdoption(): Pair<Session, AgentSession>? {
-        val session = try {
-            resolveSession(currentSettings, sessionStore.summaries())
+    private suspend fun prepareAdoption(): Pair<SessionManager, AgentSession>? {
+        val manager = try {
+            resolveSession(currentSettings, sessionSource.list())
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             setError(ERROR_SESSION_CREATE, e)
             return null
         }
-        val (seeded, conversation) = seededSettingsFor(session)
-        val newAgent = tryCreateAgent(
-            seeded,
-            session.id,
-            conversation
-        ) ?: return null
-        return session to newAgent
+        val seeded = seedSession(manager)
+        val newAgent = tryCreateAgent(seeded, manager) ?: return null
+        return manager to newAgent
     }
 
     /**
-     * Resolves the startup model for [session] and seeds the branch's
-     * configuration entries, in pi's sdk.ts session-init shape:
-     * [initialModelSettings] resolves the model (the active branch's folded
-     * model_change when it carries messages, else findInitialModel's
-     * scope/default/first-available order), a transcript-less branch is
-     * seeded with a model_change entry recording the resolved model, and a
-     * branch without a thinking_level_change entry is seeded with the stored
-     * default level, else "medium", clamped to the effective model — so
-     * both restore on resume.
+     * pi's sdk.ts session-init: resolves the startup model and seeds the
+     * session's configuration entries through the manager. [initialModelSettings]
+     * resolves the model (the active branch's folded model_change when it
+     * carries messages, else findInitialModel's
+     * scope/default/first-available order); a fresh session additionally
+     * gets a model_change entry recording the resolved model; a session
+     * without a thinking_level_change entry on its active path gets the
+     * stored default level, else "medium", clamped to the effective model —
+     * so both restore on resume. Because any opened session contains an
+     * assistant message, the fresh-session branch can only run for created
+     * sessions; the seeds buffer harmlessly there until the first assistant
+     * commit writes the file.
      */
-    private fun seededSettingsFor(session: Session): Pair<ModelSettings, Conversation> {
-        var conversation = Conversation(session.entries, session.leafId)
-        val hasTranscript = conversation.activeMessages().isNotEmpty()
-        val base = initialModelSettings(isContinuing = hasTranscript)
-        if (!hasTranscript && base.providerId.isNotBlank() && base.modelId.isNotBlank()) {
-            conversation = conversation.appendModelChange(base.providerId, base.modelId)
-        }
+    private suspend fun seedSession(manager: SessionManager): ModelSettings {
+        val conversation = manager.conversation
+        val hasExistingSession = conversation.activeMessages().isNotEmpty()
+        val base = initialModelSettings(isContinuing = hasExistingSession)
         val seeded = settingsSeededFromFold(base, conversation)
+        if (!hasExistingSession && seeded.providerId.isNotBlank() && seeded.modelId.isNotBlank()) {
+            manager.appendModelChange(seeded.providerId, seeded.modelId)
+        }
         if (conversation.activeEntries().none { it is ThinkingLevelEntry } &&
             seeded.providerId.isNotBlank() && seeded.modelId.isNotBlank()
         ) {
@@ -896,10 +801,10 @@ class ChatViewModel(
                 null
             }
             if (seededLevel != null) {
-                conversation = conversation.appendThinkingLevelChange(seededLevel.wire)
+                manager.appendThinkingLevelChange(seededLevel.wire)
             }
         }
-        return seeded to conversation
+        return seeded
     }
 
     /**
@@ -962,10 +867,9 @@ class ChatViewModel(
     /** Builds an agent or null (with a safe error surfaced) when the factory rejects the settings. */
     private fun tryCreateAgent(
         settings: ModelSettings,
-        sessionId: String,
-        conversation: Conversation
+        sessionManager: SessionManager
     ): AgentSession? = try {
-        agentFactory.create(settings, sessionId, conversation)
+        agentFactory.create(settings, sessionManager)
             // Synchronize web_search against the current Brave credential
             // before anything binds to the session.
             .also(::synchronizeWebSearch)
@@ -982,9 +886,6 @@ class ChatViewModel(
         agent = newAgent
         observedAgentMessages = null
         observedAgentModel = null
-        // The recorder resolves the session at call time (mid-run session
-        // switches are blocked).
-        newAgent.operationRecorder = operationRecorder
         agentStateJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
             newAgent.state.collect { state -> onAgentState(state) }
         }
@@ -994,7 +895,7 @@ class ChatViewModel(
             viewModelScope.launch { newAgent.events.collect { event -> onAgentEvent(event) } }
     }
 
-    /** Projects session lifecycle events into transient UI surfaces and persistence. */
+    /** Projects session lifecycle events into transient UI surfaces. */
     private fun onAgentEvent(event: AgentEvent) {
         when (event) {
             is AgentEvent.AutoRetryStart -> updateState {
@@ -1012,10 +913,6 @@ class ChatViewModel(
                         treeRows = buildTreeRows(activeConversation, it.treeFilter)
                     )
                 }
-                // The compaction entry landed on the tree before this event.
-                if (activeConversation.entries.size > persistedEntryCount) {
-                    enqueuePersist()
-                }
             }
 
             // Summarization-retry events are deliberately unsurfaced.
@@ -1024,9 +921,12 @@ class ChatViewModel(
             is AgentEvent.SummarizationRetryFinished
             -> Unit
 
-            // Re-project and persist on tree growth, not agent-transcript
-            // growth: an auto-retry or overflow recovery removes the error
-            // message from agent state while the append-only tree keeps it.
+            // Re-project on tree growth, not agent-transcript growth: an
+            // auto-retry or overflow recovery removes the error message from
+            // agent state while the append-only tree keeps it. A message may
+            // also create the session file (or land in an existing one), so
+            // the drawer summaries refresh here — model/thinking appends do
+            // not change any observable summary field.
             is AgentEvent.MessageEnd -> {
                 updateState {
                     it.copy(
@@ -1034,9 +934,7 @@ class ChatViewModel(
                         treeRows = buildTreeRows(activeConversation, it.treeFilter)
                     )
                 }
-                if (activeConversation.entries.size > persistedEntryCount) {
-                    enqueuePersist()
-                }
+                viewModelScope.launch { refreshSessionSummaries() }
             }
 
             else -> Unit
@@ -1089,127 +987,6 @@ class ChatViewModel(
         }
     }
 
-    // ---- persistence pipeline ----
-
-    /**
-     * Bridge from [AgentSession]'s operation lifecycle to the session's
-     * mutation log. Appends dispatch asynchronously onto [viewModelScope]
-     * in call order and serialize through the store's mutex: the run loop
-     * never blocks on record durability, and abort_requested still lands
-     * before the cancellation handler's operation_finished. Record appends
-     * never flush buffered conversation entries — the log permits records
-     * to precede the entries they reference (see [LaneRecord]). A failed
-     * append degrades durability only: the error surfaces, the run continues.
-     */
-    private val operationRecorder = object : OperationLifecycleRecorder {
-        override suspend fun append(record: LaneRecord) {
-            dispatchAppend(record)
-        }
-
-        override fun appendBestEffort(record: LaneRecord) {
-            dispatchAppend(record)
-        }
-
-        private fun dispatchAppend(record: LaneRecord) {
-            val sessionId = activeSession?.id ?: return
-            viewModelScope.launch {
-                try {
-                    sessionStore.appendRecord(sessionId, record)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    setError(ERROR_SESSION_SAVE, e)
-                }
-            }
-        }
-    }
-
-    /**
-     * Schedules the current conversation snapshot for persistence against
-     * the active session. At most one save runs at a time; while a save is
-     * in flight, newer snapshots coalesce (only the latest is written).
-     */
-    private fun enqueuePersist() {
-        val session = activeSession ?: return
-        pendingPersist = session to activeConversation
-        if (persistJob?.isActive == true) return
-        persistJob = viewModelScope.launch {
-            // persistSnapshot is non-cancellable, so a dequeued snapshot
-            // always completes; on scope teardown the loop drains accepted
-            // snapshots and then exits (new enqueues stop with the
-            // cancelled collectors).
-            while (true) {
-                val next = pendingPersist ?: break
-                pendingPersist = null
-                persistSnapshot(next.first, next.second)
-            }
-        }
-    }
-
-    /**
-     * Writes one snapshot. The append-only sync always reaches the file even
-     * if the user switched sessions meanwhile; UI/active state is only
-     * updated when that session is still active.
-     */
-    private suspend fun persistSnapshot(session: Session, conversation: Conversation) {
-        // Non-cancellable: an accepted snapshot must reach the file even
-        // when the ViewModel scope is torn down mid-write.
-        withContext(NonCancellable) {
-            try {
-                val activeMessages = conversation.activeMessages()
-                val title = if (session.title == DEFAULT_SESSION_TITLE) {
-                    deriveTitle(activeMessages) ?: DEFAULT_SESSION_TITLE
-                } else {
-                    session.title
-                }
-                // Persist the tree itself (entries + leaf): branch structure
-                // survives saves.
-                val saved = sessionStore.save(
-                    session.copy(
-                        entries = conversation.entries,
-                        leafId = conversation.leafId,
-                        title = title
-                    )
-                )
-                if (activeSession?.id == session.id) {
-                    activeSession = saved
-                    persistedEntryCount = saved.entries.size
-                }
-                val summaries = sessionStore.summaries()
-                if (activeSession?.id == session.id ||
-                    _uiState.value.activeSessionId == session.id
-                ) {
-                    updateState { it.copy(sessionSummaries = summaries) }
-                    refreshSessionSearchResults()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                setError(ERROR_SESSION_SAVE, e)
-            }
-        }
-    }
-
-    /**
-     * Ensures the latest conversation of the active session is fully saved,
-     * re-enqueueing it first if a previous save failed. Returns false when
-     * the latest snapshot remains unsaved: callers must keep the current
-     * session so an unsaved transcript is never abandoned.
-     */
-    private suspend fun awaitPersistence(): Boolean {
-        retryUnsavedSnapshot()
-        persistJob?.join()
-        return pendingPersist == null &&
-            activeConversation.entries.size <= persistedEntryCount
-    }
-
-    /** Explicitly re-enqueues the latest conversation tree when it is unsaved. */
-    private fun retryUnsavedSnapshot() {
-        if (activeSession != null && activeConversation.entries.size > persistedEntryCount) {
-            enqueuePersist()
-        }
-    }
-
     // ---- intent internals ----
 
     private suspend fun selectModelInternal(providerId: String, modelId: String) {
@@ -1244,6 +1021,11 @@ class ChatViewModel(
             session.setModel(model)
         } catch (e: CancellationException) {
             throw e
+        } catch (e: SessionError) {
+            // A failed model_change append is a save failure, not a switch
+            // failure — the agent already switched in memory.
+            setError(ERROR_SESSION_SAVE, e)
+            return
         } catch (e: Exception) {
             setError(ERROR_MODEL_SWITCH, e)
             return
@@ -1254,14 +1036,22 @@ class ChatViewModel(
         // model_change because the default is app-owned settings the
         // session facade holds none of; setThinkingLevel clamps to the new
         // model and appends only on change, so this usually records nothing.
-        session.setThinkingLevel(currentSettings.defaultThinkingLevel ?: session.thinkingLevel)
+        try {
+            session.setThinkingLevel(currentSettings.defaultThinkingLevel ?: session.thinkingLevel)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: SessionError) {
+            setError(ERROR_SESSION_SAVE, e)
+            return
+        } catch (e: Exception) {
+            setError(ERROR_THINKING_SWITCH, e)
+            return
+        }
         // The chip follows the agent's state emission from setModel above;
         // only the tree needs re-projecting here.
         updateState {
             it.copy(treeRows = buildTreeRows(session.conversation, it.treeFilter))
         }
-        // The model_change grew the conversation: persist it.
-        enqueuePersist()
     }
 
     private suspend fun saveStartupDefaultInternal(providerId: String, modelId: String) {
@@ -1269,7 +1059,7 @@ class ChatViewModel(
         val candidate = currentSettings.copy(
             providerId = providerId,
             modelId = trimmed,
-            activeSessionId = activeSession?.id
+            activeSessionId = _uiState.value.activeSessionId
         )
         if (!persistSettings(candidate)) return
         currentSettings = candidate
@@ -1663,11 +1453,33 @@ class ChatViewModel(
             currentAgent.prompt(text)
         } catch (e: CancellationException) {
             // Abort or teardown: the agent committed its terminal state,
-            // which the state observer persists.
+            // which the manager appended inline.
             throw e
         } catch (e: IllegalStateException) {
             setError(ERROR_ALREADY_STREAMING)
+        } catch (e: Exception) {
+            // The run already failed and committed its terminal state; a
+            // storage failure here is a save failure (the in-memory tree
+            // keeps its entries).
+            setError(ERROR_SESSION_SAVE, e)
         }
+    }
+
+    /**
+     * Re-reads the session list into [ChatUiState.sessionSummaries]. A read
+     * failure degrades to the previous list (the drawer is advisory state);
+     * search results refresh when a query is active.
+     */
+    private suspend fun refreshSessionSummaries(): List<SessionInfo> = try {
+        val summaries = sessionSource.list()
+        updateState { it.copy(sessionSummaries = summaries) }
+        refreshSessionSearchResults()
+        summaries
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        recordDegradation("session_summaries", e)
+        _uiState.value.sessionSummaries
     }
 
     /** True (and sets an error) when a session/config-changing intent arrives mid-stream. */
@@ -1714,8 +1526,6 @@ class ChatViewModel(
     private companion object {
         private const val TAG = "Pathfinder"
 
-        const val DEFAULT_SESSION_TITLE = "New chat"
-
         const val TITLE_MAX_LENGTH = 48
 
         const val ERROR_INIT = "Could not load chat data"
@@ -1755,23 +1565,5 @@ class ChatViewModel(
         fun missingCredentialError(missing: List<AuthPrompt>): String =
             "Sign-in values are still needed: " +
                 missing.joinToString(", ") { prompt -> prompt.message.ifEmpty { prompt.envKey } }
-
-        /** Single-line, bounded title from the first user prompt. */
-        fun deriveTitle(messages: List<Message>): String? {
-            val firstText = messages.asSequence()
-                .filterIsInstance<UserMessage>()
-                .firstOrNull()
-                ?.content
-                ?.asSequence()
-                ?.filterIsInstance<TextContent>()
-                ?.firstOrNull()
-                ?.text
-                ?: return null
-            return firstText.lineSequence()
-                .firstOrNull()
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?.take(TITLE_MAX_LENGTH)
-        }
     }
 }

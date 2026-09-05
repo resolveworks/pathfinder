@@ -6,12 +6,12 @@ import org.junit.Test
 class SessionSearchTest {
     private fun makeSession(
         id: String,
-        updatedAt: Long,
+        modified: Long,
         allMessagesText: String,
         name: String? = null
     ): SessionSearchEntry {
         val searchText = "$id ${name ?: ""} $allMessagesText"
-        return SessionSearchEntry(id = id, updatedAt = updatedAt, searchText = searchText)
+        return SessionSearchEntry(id = id, modified = modified, searchText = searchText)
     }
 
     @Test

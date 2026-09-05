@@ -85,16 +85,15 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.codingagent.core.AgentSession
 import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
-import works.resolve.pathfinder.codingagent.core.session.LaneRecord
-import works.resolve.pathfinder.codingagent.core.session.LaneRecovery
+import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
-import works.resolve.pathfinder.codingagent.core.session.OperationIntent
-import works.resolve.pathfinder.codingagent.core.session.RecordLogCorruptionReason
+import works.resolve.pathfinder.codingagent.core.session.SessionError
 import works.resolve.pathfinder.codingagent.core.session.SessionErrorCode
-import works.resolve.pathfinder.codingagent.core.session.SessionRepository
-import works.resolve.pathfinder.codingagent.core.session.SessionStore
+import works.resolve.pathfinder.codingagent.core.session.SessionInfo
+import works.resolve.pathfinder.codingagent.core.session.SessionManager
 import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
+import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
@@ -212,54 +211,44 @@ class ChatViewModelTest {
         }
     }
 
-    class FailingSessionRepository(private val delegate: SessionRepository) :
-        SessionRepository by delegate {
-        var failSave = false
-        var failedSaves = 0
+    /**
+     * Real managers over a temp dir (the source is a thin seam). `denyWrites`
+     * flips the directory read-only so the next assistant commit fails with
+     * SessionError(STORAGE), like a full disk; `managers` keeps the live
+     * instance per id so buffered (never-flushed) entries stay inspectable.
+     */
+    private inner class TestSessionSource : SessionSource {
+        val dir = File(tmpFolder.root, "sessions_${'$'}{System.nanoTime()}")
+        val managers = java.util.concurrent.ConcurrentHashMap<String, SessionManager>()
+        var nextId = 0
+        var failList = false
+        var listCalls = 0
             private set
-        var totalSaves = 0
-            private set
-        var failSearchCorpus = false
-        var searchCorpusCalls = 0
-            private set
-        val appendedRecords =
-            ConcurrentLinkedQueue<works.resolve.pathfinder.codingagent.core.session.LaneRecord>()
-        var saveEntered: CompletableDeferred<Unit>? = null
-        var saveGate: CompletableDeferred<Unit>? = null
-        override suspend fun appendRecord(
-            sessionId: String,
-            record: works.resolve.pathfinder.codingagent.core.session.LaneRecord
-        ): works.resolve.pathfinder.codingagent.core.session.LaneRecord {
-            appendedRecords.add(record)
-            return delegate.appendRecord(sessionId, record)
+        var denyWrites = false
+            set(value) {
+                field = value
+                dir.setWritable(!value)
+            }
+
+        override suspend fun create(): SessionManager {
+            val manager = SessionManager.create(dir, idFactory = { "sess-" + nextId++ })
+            managers[manager.sessionId] = manager
+            return manager
         }
 
-        override suspend fun save(
-            session: works.resolve.pathfinder.codingagent.core.session.Session
-        ): works.resolve.pathfinder.codingagent.core.session.Session {
-            totalSaves += 1
-            if (failSave) {
-                failedSaves += 1
-                throw works.resolve.pathfinder.codingagent.core.session.SessionError(
-                    SessionErrorCode.STORAGE,
-                    "save failed"
-                )
-            }
-            saveEntered?.complete(Unit)
-            saveGate?.await()
-            return delegate.save(session)
+        override suspend fun open(id: String): SessionManager? =
+            SessionManager.openById(dir, id, idFactory = { "sess-" + nextId++ })
+                ?.also { managers[it.sessionId] = it }
+
+        override suspend fun list(): List<SessionInfo> {
+            listCalls += 1
+            if (failList) throw SessionError(SessionErrorCode.STORAGE, "list failed")
+            return SessionManager.list(dir)
         }
 
-        override suspend fun searchCorpus(): Map<String, String> {
-            searchCorpusCalls += 1
-            if (failSearchCorpus) {
-                throw works.resolve.pathfinder.codingagent.core.session.SessionError(
-                    SessionErrorCode.STORAGE,
-                    "corpus scan failed"
-                )
-            }
-            return delegate.searchCorpus()
-        }
+        /** Re-reads a session from disk; null while it has never been flushed. */
+        suspend fun stored(id: String): Conversation? =
+            SessionManager.openById(dir, id)?.conversation
     }
 
     /**
@@ -320,12 +309,7 @@ class ChatViewModelTest {
             )
         )
         val settingsStore = FailingSettingsStore(settings)
-        var nextSessionId = 0
-        val sessionStore = SessionStore(
-            root = File(tmpFolder.root, "sessions_${System.nanoTime()}"),
-            idFactory = { "sess-${nextSessionId++}" }
-        )
-        val sessions = FailingSessionRepository(sessionStore)
+        val sessions = TestSessionSource()
 
         val scriptedStreams = ConcurrentLinkedQueue<Flow<AssistantMessageEvent>>()
 
@@ -424,7 +408,7 @@ class ChatViewModelTest {
             nativeFactory.resolveModel(providerId, modelId)
         }
 
-        val factory = AgentFactory { settings, _, conversation ->
+        val factory = AgentFactory { settings, sessionManager ->
             check(!rejectAll) { "factory unavailable" }
             require(settings.modelId !in rejectedModelIds) { "model rejected" }
             createdSettings += settings
@@ -440,7 +424,7 @@ class ChatViewModelTest {
                         scriptedStreams.poll() ?: flow { kotlinx.coroutines.awaitCancellation() }
                     }
                 ),
-                conversation = conversation,
+                sessionManager = sessionManager,
                 tools = listOf(fakeWebSearchTool),
                 retrySettings = settings.retry,
                 compactionSettings = if (disableCompaction) {
@@ -458,7 +442,7 @@ class ChatViewModelTest {
             settingsRepository = settingsStore,
             catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
             authService = authService,
-            sessionStore = sessions,
+            sessionSource = sessions,
             agentFactory = factory,
             modelResolver = modelResolver,
             searchProviderService = searchProviders
@@ -492,7 +476,10 @@ class ChatViewModelTest {
         fun errorStream(message: AssistantMessage) =
             flowOf(AssistantMessageEvent.Error(StopReason.ERROR, message))
 
-        suspend fun countSessions(): Int = sessionStore.summaries().size
+        suspend fun countSessions(): Int = sessions.list().size
+
+        /** The live manager the ViewModel holds for [id] (includes buffered entries). */
+        fun liveManager(id: String): SessionManager = sessions.managers.getValue(id)
 
         fun storedApiKey(providerId: String): String? =
             (credentials.creds[providerId] as? ApiKeyCredential)?.key
@@ -674,7 +661,8 @@ class ChatViewModelTest {
         assertTrue(state.providerOptions.first { o -> o.id == "zai" }.configured)
         assertEquals("glm-4.7", state.selectedModel?.modelId)
         assertFalse(state.toString().contains("SECRET-KEY-123"))
-        assertEquals(1, h.countSessions())
+        // Lazy creation: the fresh session has no file and no drawer row yet.
+        assertEquals(0, h.countSessions())
 
         // The derived initial model is NOT persisted as the startup default —
         // but the active session id is.
@@ -719,13 +707,12 @@ class ChatViewModelTest {
         assertNull(done.error)
 
         vm.uiState.first {
-            it.sessionSummaries.firstOrNull()?.title == "Hello" &&
+            it.sessionSummaries.firstOrNull()?.firstMessage == "Hello" &&
                 it.sessionSummaries.firstOrNull()?.messageCount == 2
         }
         val sessionId = done.activeSessionId!!
-        val session = h.sessionStore.load(sessionId)!!
-        assertEquals(2, session.messages.size)
-        assertEquals("Hello", session.title)
+        val stored = h.sessions.stored(sessionId)!!
+        assertEquals(2, stored.activeMessages().size)
         vm.onDraftChange("next")
         assertTrue(vm.uiState.value.canSend)
 
@@ -794,9 +781,9 @@ class ChatViewModelTest {
         val sessionId = state.activeSessionId!!
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
 
-        val session = h.sessionStore.load(sessionId)!!
-        assertEquals(2, session.messages.size)
-        val assistant = session.messages[1] as works.resolve.pathfinder.ai.AssistantMessage
+        val stored = h.sessions.stored(sessionId)!!
+        assertEquals(2, stored.activeMessages().size)
+        val assistant = stored.activeMessages()[1] as works.resolve.pathfinder.ai.AssistantMessage
         assertEquals(StopReason.ABORTED, assistant.stopReason)
 
         vm.closeForTest()
@@ -853,7 +840,7 @@ class ChatViewModelTest {
             val vm2 = h.newViewModel()
             val restored = vm2.uiState.first { it.status == ChatStatus.Ready }
             assertTrue(restored.messages.any { it.isCompactionMarker })
-            val loaded = h.sessionStore.load(sessionId)!!
+            val loaded = h.sessions.stored(sessionId)!!
             assertTrue(
                 loaded.entries.any {
                     it is works.resolve.pathfinder.codingagent.core.session.CompactionEntry
@@ -895,12 +882,13 @@ class ChatViewModelTest {
                     3
             }
 
-            val session = h.sessionStore.load(sessionId)!!
-            assertEquals(3, session.messages.size)
-            val failed = session.messages[1] as works.resolve.pathfinder.ai.AssistantMessage
+            val stored = h.sessions.stored(sessionId)!!
+            val storedMessages = stored.activeMessages()
+            assertEquals(3, storedMessages.size)
+            val failed = storedMessages[1] as works.resolve.pathfinder.ai.AssistantMessage
             assertEquals(StopReason.ERROR, failed.stopReason)
             assertEquals("terminated", failed.errorMessage)
-            val recovered = session.messages[2] as works.resolve.pathfinder.ai.AssistantMessage
+            val recovered = storedMessages[2] as works.resolve.pathfinder.ai.AssistantMessage
             assertEquals(StopReason.STOP, recovered.stopReason)
 
             vm.closeForTest()
@@ -926,7 +914,7 @@ class ChatViewModelTest {
         assertNotNull(state.messages[1].error)
         val sessionId = state.activeSessionId!!
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
-        assertEquals(2, h.sessionStore.load(sessionId)!!.messages.size)
+        assertEquals(2, h.sessions.stored(sessionId)!!.activeMessages().size)
 
         vm.onDraftChange("Again")
         vm.uiState.first { it.canSend }
@@ -967,9 +955,9 @@ class ChatViewModelTest {
         val state = vm2.uiState.first { it.status == ChatStatus.Ready }
         assertEquals(originalId, state.activeSessionId)
         assertEquals(2, state.messages.size)
-        assertEquals("Hello", state.sessionSummaries.first { it.id == originalId!! }.title)
-        // No save loop: restart alone must not rewrite the file.
-        assertEquals(2, h.sessionStore.load(originalId!!)!!.messages.size)
+        assertEquals("Hello", state.sessionSummaries.first { it.id == originalId!! }.firstMessage)
+        // Opening a session never reorders or rewrites it.
+        assertEquals(2, h.sessions.stored(originalId!!)!!.activeMessages().size)
 
         vm2.closeForTest()
     }
@@ -994,13 +982,11 @@ class ChatViewModelTest {
         val fresh = vm.uiState.first { it.activeSessionId != firstId }
         assertTrue(fresh.messages.isEmpty())
         assertNull(fresh.streamingMessage)
-        assertEquals(2, fresh.sessionSummaries.size)
-        assertTrue(
-            fresh.sessionSummaries.none {
-                it.id == fresh.activeSessionId &&
-                    it.messageCount > 0
-            }
-        )
+        // Only the flushed session is listed: the new one is absent until its
+        // first assistant message commits.
+        assertEquals(1, fresh.sessionSummaries.size)
+        assertEquals(firstId, fresh.sessionSummaries.single().id)
+        assertTrue(fresh.sessionSummaries.none { it.id == fresh.activeSessionId })
 
         vm.switchSession(firstId)
         val restored = vm.uiState.first { it.activeSessionId == firstId && it.messages.size == 2 }
@@ -1652,55 +1638,53 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun switchAfterCompletion_awaitsPersistence_andCannotCrossSessions() =
-        runTest(mainDispatcherRule.scheduler) {
-            val h = Harness()
-            val vm = h.newViewModel()
-            vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-            vm.configure(apiKey = "k")
-            vm.uiState.first { it.status == ChatStatus.Ready }
-            val firstId = vm.uiState.value.activeSessionId!!
+    fun switchAfterCompletion_keepsTranscriptsSeparated() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val firstId = vm.uiState.value.activeSessionId!!
 
-            // Stream completes; the persistence job for the final assistant
-            // message may still be pending when a new session is requested.
-            val gate = CompletableDeferred<Unit>().apply { complete(Unit) }
-            h.scriptedStreams.add(h.gatedStream("world", gate))
-            vm.onDraftChange("Hello")
-            vm.send()
-            vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+        // Stream completes; the persistence job for the final assistant
+        // message may still be pending when a new session is requested.
+        val gate = CompletableDeferred<Unit>().apply { complete(Unit) }
+        h.scriptedStreams.add(h.gatedStream("world", gate))
+        vm.onDraftChange("Hello")
+        vm.send()
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
 
-            vm.newSession()
-            val state = vm.uiState.first { it.activeSessionId != firstId }
-            val secondId = state.activeSessionId!!
+        vm.newSession()
+        val state = vm.uiState.first { it.activeSessionId != firstId }
+        val secondId = state.activeSessionId!!
 
-            // The finished transcript stayed with the old session...
-            val oldSession = h.sessionStore.load(firstId)!!
-            assertEquals(2, oldSession.messages.size)
-            assertEquals("Hello", oldSession.title)
-            // ...and cannot overwrite the freshly adopted one.
-            assertTrue(state.messages.isEmpty())
-            assertEquals(0, h.sessionStore.load(secondId)!!.messages.size)
-            assertEquals(2, state.sessionSummaries.first { s -> s.id == firstId }.messageCount)
+        // The finished transcript is fully on disk (appends are inline)...
+        val oldSession = h.sessions.stored(firstId)!!
+        assertEquals(2, oldSession.activeMessages().size)
+        // ...and the freshly adopted session is still absent (never flushed).
+        assertTrue(state.messages.isEmpty())
+        assertNull(h.sessions.stored(secondId))
+        assertEquals(2, state.sessionSummaries.first { s -> s.id == firstId }.messageCount)
 
-            h.scriptedStreams.add(
-                h.gatedStream(
-                    "second",
-                    CompletableDeferred<Unit>().apply {
-                        complete(Unit)
-                    }
-                )
+        h.scriptedStreams.add(
+            h.gatedStream(
+                "second",
+                CompletableDeferred<Unit>().apply {
+                    complete(Unit)
+                }
             )
-            vm.onDraftChange("Second")
-            vm.send()
-            vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
-            vm.uiState.first {
-                it.sessionSummaries.first { s -> s.id == secondId }.messageCount == 2
-            }
-            assertEquals(2, h.sessionStore.load(firstId)!!.messages.size)
-            assertEquals(2, h.sessionStore.load(secondId)!!.messages.size)
-
-            vm.closeForTest()
+        )
+        vm.onDraftChange("Second")
+        vm.send()
+        vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
+        vm.uiState.first {
+            it.sessionSummaries.first { s -> s.id == secondId }.messageCount == 2
         }
+        assertEquals(2, h.sessions.stored(firstId)!!.activeMessages().size)
+        assertEquals(2, h.sessions.stored(secondId)!!.activeMessages().size)
+
+        vm.closeForTest()
+    }
 
     @Test
     fun initFactoryFailure_isFailed_neverReady_andRejectedConfigNotPersisted() =
@@ -1780,24 +1764,25 @@ class ChatViewModelTest {
     @Test
     fun sameTimestampMessages_getDistinctKeys() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
-        val session = h.sessionStore.create("Collide")
-        val saved = h.sessionStore.save(
-            session.withMessages(
-                listOf(
-                    works.resolve.pathfinder.ai.UserMessage.ofText("Hello", 123L),
-                    h.assistant("World").copy(timestamp = 123L)
-                )
-            )
-        )
+        val manager = kotlinx.coroutines.runBlocking { h.sessions.create() }
+        kotlinx.coroutines.runBlocking {
+            manager.appendMessage(works.resolve.pathfinder.ai.UserMessage.ofText("Hello", 123L))
+            manager.appendMessage(h.assistant("World").copy(timestamp = 123L))
+        }
         h.settings.setProviderId("zai")
         h.settings.setModelId("glm-4.7")
-        h.settings.setActiveSessionId(saved.id)
+        h.settings.setActiveSessionId(manager.sessionId)
         h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
 
         val vm = h.newViewModel()
         val state = vm.uiState.first { it.status == ChatStatus.Ready }
         assertEquals(2, state.messages.size)
-        assertEquals(123L, h.sessionStore.load(saved.id)!!.messages[0].timestamp)
+        assertEquals(
+            123L,
+            kotlinx.coroutines.runBlocking {
+                h.sessions.stored(manager.sessionId)!!.activeMessages()[0].timestamp
+            }
+        )
         val keys = state.messages.map { it.id }
         assertEquals(2, keys.toSet().size)
 
@@ -1843,7 +1828,7 @@ class ChatViewModelTest {
                 it.sessionSummaries.first { s -> s.id == sessionId }.messageCount ==
                     2
             }
-            assertEquals(2, h.sessionStore.load(sessionId)!!.messages.size)
+            assertEquals(2, h.sessions.stored(sessionId)!!.activeMessages().size)
 
             vm.saveStartupDefault("zai", "glm-5.3")
             vm.uiState.first { h.settings.currentSettings().modelId == "glm-5.3" }
@@ -1873,7 +1858,7 @@ class ChatViewModelTest {
         }
 
     @Test
-    fun switchBinding_alone_doesNotEnqueueOrCrossWriteSaves() =
+    fun switchingToAFlushedSession_appendsTheMissingThinkingSeed_inPlace() =
         runTest(mainDispatcherRule.scheduler) {
             val h = Harness()
             val vm = h.newViewModel()
@@ -1881,36 +1866,28 @@ class ChatViewModelTest {
             vm.configure(apiKey = "k")
             vm.uiState.first { it.status == ChatStatus.Ready }
             val firstId = vm.uiState.value.activeSessionId!!
-            vm.uiState.first {
-                it.sessionSummaries.first { s -> s.id == firstId }.messageCount == 0
+
+            // A pre-existing session without a thinking entry (as written by
+            // an older process, hand-built here): switching to it appends the
+            // clamped-default thinking_level_change in place through the
+            // manager — no rewrite, no cross-session leakage.
+            val other = kotlinx.coroutines.runBlocking { h.sessions.create() }
+            kotlinx.coroutines.runBlocking {
+                other.appendModelChange("zai", "glm-4.7")
+                other.appendMessage(works.resolve.pathfinder.ai.UserMessage.ofText("Old", 1L))
+                other.appendMessage(h.assistant("Stock").copy(timestamp = 2L))
             }
 
-            val other = h.sessionStore.create("Other")
-            h.sessionStore.save(
-                other.withMessages(
-                    listOf(
-                        works.resolve.pathfinder.ai.UserMessage.ofText("Old", 1L),
-                        h.assistant("Stock").copy(timestamp = 2L)
-                    )
-                )
-            )
-            val savesBefore = h.sessions.totalSaves
-
-            // Binding alone must not observe the transcript against the previous
-            // (empty) session. The one save is the missing-thinking-entry
-            // seed pi appends at session load: the branch has no
-            // thinking_level_change, so the clamped default is recorded.
-            vm.switchSession(other.id)
-            val state = vm.uiState.first { it.activeSessionId == other.id }
+            vm.switchSession(other.sessionId)
+            val state = vm.uiState.first { it.activeSessionId == other.sessionId }
             assertEquals(2, state.messages.size)
             waitUntil {
-                h.sessionStore.load(other.id)!!
+                h.sessions.stored(other.sessionId)!!
                     .entries.filterIsInstance<ThinkingLevelEntry>().isNotEmpty()
             }
-            assertEquals(savesBefore + 1, h.sessions.totalSaves)
-            assertEquals(0, h.sessionStore.load(firstId)!!.messages.size)
-            val reloaded = h.sessionStore.load(other.id)!!
-            assertEquals(2, reloaded.messages.size)
+            assertNull(h.sessions.stored(firstId))
+            val reloaded = h.sessions.stored(other.sessionId)!!
+            assertEquals(2, reloaded.activeMessages().size)
             assertEquals(
                 listOf("medium"),
                 reloaded.entries.filterIsInstance<ThinkingLevelEntry>()
@@ -1921,23 +1898,48 @@ class ChatViewModelTest {
         }
 
     @Test
-    fun firstConfiguredInitialization_exposesCreatedSessionSummary() =
+    fun newSession_isAbsentFromSummaries_untilTheFirstAssistantCommits() =
         runTest(mainDispatcherRule.scheduler) {
             val h = Harness()
-            h.settings.setProviderId("zai")
-            h.settings.setModelId("glm-4.7")
-            h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
-
             val vm = h.newViewModel()
-            val state = vm.uiState.first { it.status == ChatStatus.Ready }
-            assertEquals(1, state.sessionSummaries.size)
-            assertEquals(state.activeSessionId, state.sessionSummaries.single().id)
+            vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+            vm.configure(apiKey = "k")
+            vm.uiState.first { it.status == ChatStatus.Ready }
+            val firstId = vm.uiState.value.activeSessionId!!
+            assertEquals(0, vm.uiState.value.sessionSummaries.size)
+
+            vm.exchange(h, "Hello", "world")
+            vm.uiState.first { it.sessionSummaries.size == 1 }
+            val listed = vm.uiState.value.sessionSummaries.single()
+            assertEquals(firstId, listed.id)
+            assertEquals(2, listed.messageCount)
+            assertEquals("Hello", listed.firstMessage)
+
+            // A new chat has no drawer row until its first assistant commit.
+            vm.newSession()
+            val fresh = vm.uiState.first { it.activeSessionId != firstId }
+            assertEquals(1, fresh.sessionSummaries.size)
+            assertTrue(fresh.sessionSummaries.none { it.id == fresh.activeSessionId })
+
+            // The first assistant commit (here via abort, which commits an
+            // aborted assistant message) creates the file and the row.
+            val gate = CompletableDeferred<Unit>()
+            h.scriptedStreams.add(h.gatedStream("never", gate))
+            vm.onDraftChange("Second")
+            vm.send()
+            vm.uiState.first { it.isStreaming }
+            vm.stop()
+            vm.uiState.first {
+                it.sessionSummaries.any { s ->
+                    s.id == fresh.activeSessionId && s.messageCount == 2
+                }
+            }
 
             vm.closeForTest()
         }
 
     @Test
-    fun scopeTeardownMidSave_stillPersistsAcceptedSnapshots() =
+    fun storageFailure_fromPrompt_surfacesSaveError_andTheNextPromptStillWorks() =
         runTest(mainDispatcherRule.scheduler) {
             val h = Harness()
             val vm = h.newViewModel()
@@ -1945,16 +1947,10 @@ class ChatViewModelTest {
             vm.configure(apiKey = "k")
             vm.uiState.first { it.status == ChatStatus.Ready }
             val sessionId = vm.uiState.value.activeSessionId!!
-            // Let the initial seed model_change save settle before gating, so the
-            // gated save is deterministically the user-message snapshot.
-            vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.isNotEmpty() }
 
-            // The first save (user message) suspends inside the gate; the final
-            // snapshot (user + assistant) is accepted while that save is in flight.
-            val entered = CompletableDeferred<Unit>()
-            val release = CompletableDeferred<Unit>()
-            h.sessions.saveEntered = entered
-            h.sessions.saveGate = release
+            // The directory becomes read-only: the first assistant commit's
+            // file creation fails inside prompt() and the run fails.
+            h.sessions.denyWrites = true
             h.scriptedStreams.add(
                 h.gatedStream(
                     "world",
@@ -1965,108 +1961,33 @@ class ChatViewModelTest {
             )
             vm.onDraftChange("Hello")
             vm.send()
-            vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
-            entered.await()
-
-            // Teardown mid-save: neither the in-flight nor the accepted pending
-            // snapshot may be silently dropped.
-            val job = vm.viewModelScope.coroutineContext[Job]!!
-            job.cancel()
-            release.complete(Unit)
-            job.join()
-
-            val session = h.sessionStore.load(sessionId)!!
-            assertEquals(2, session.messages.size)
-            assertEquals("Hello", session.title)
-            // Three saves happened: the seed model_change snapshot settled at
-            // configuration, the gated user-message snapshot drained, and the
-            // coalesced final snapshot was then dequeued and written — proving the
-            // loop drains accepted pendings rather than skipping to the last one.
-            assertEquals(3, h.sessions.totalSaves)
-        }
-
-    @Test
-    fun persistenceFailure_blocksSessionSwitch_untilRetrySucceeds() =
-        runTest(mainDispatcherRule.scheduler) {
-            val h = Harness()
-            val vm = h.newViewModel()
-            vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-            vm.configure(apiKey = "k")
-            vm.uiState.first { it.status == ChatStatus.Ready }
-            val firstId = vm.uiState.value.activeSessionId!!
-
-            // First exchange succeeds; then saves start failing.
-            h.scriptedStreams.add(
-                h.gatedStream(
-                    "one",
-                    CompletableDeferred<Unit>().apply {
-                        complete(Unit)
-                    }
-                )
-            )
-            vm.onDraftChange("First")
-            vm.send()
-            vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
-            vm.uiState.first {
-                it.sessionSummaries.first { s -> s.id == firstId }.messageCount == 2
-            }
-
-            h.sessions.failSave = true
-            h.scriptedStreams.add(
-                h.gatedStream(
-                    "two",
-                    CompletableDeferred<Unit>().apply {
-                        complete(Unit)
-                    }
-                )
-            )
-            vm.onDraftChange("Second")
-            vm.send()
             vm.uiState.first { it.error != null && !it.isStreaming }
-            assertTrue(h.sessions.failedSaves > 0)
+            assertEquals("Could not save the chat", vm.uiState.value.error)
+            assertNull(h.sessions.stored(sessionId))
 
-            // The failed save must block abandoning the session: the switch is
-            // rejected with the session error and the active session is kept.
+            // The in-memory tree kept the run's entries; the next prompt
+            // works and the recovery flush writes everything.
+            h.sessions.denyWrites = false
             vm.dismissError()
-            vm.newSession()
-            vm.uiState.first { it.error != null }
-            assertEquals(firstId, vm.uiState.value.activeSessionId)
-            assertEquals(4, vm.uiState.value.messages.size)
-            // The blocked intent explicitly retried the unsaved snapshot once.
-            val savesAfterFailedExchange = h.sessions.failedSaves
-            vm.dismissError()
-            vm.newSession()
-            vm.uiState.first { it.error != null }
-            assertTrue(h.sessions.failedSaves > savesAfterFailedExchange)
-            assertEquals(firstId, vm.uiState.value.activeSessionId)
-            vm.dismissError()
-
-            // A later agent transition retries the snapshot: after another
-            // exchange with saves working again, the full transcript persists.
-            h.sessions.failSave = false
             h.scriptedStreams.add(
                 h.gatedStream(
-                    "three",
+                    "fine",
                     CompletableDeferred<Unit>().apply {
                         complete(Unit)
                     }
                 )
             )
-            vm.onDraftChange("Third")
+            vm.onDraftChange("Again")
             vm.send()
-            vm.uiState.first { !it.isStreaming && it.messages.size == 6 }
-            vm.uiState.first {
-                it.sessionSummaries.first { s -> s.id == firstId }.messageCount == 6
-            }
-            assertEquals(6, h.sessionStore.load(firstId)!!.messages.size)
-
-            // Now switching is allowed again.
-            vm.newSession()
-            val state = vm.uiState.first { it.activeSessionId != firstId }
-            assertTrue(state.messages.isEmpty())
-            assertEquals(6, h.sessionStore.load(firstId)!!.messages.size)
-
-            vm.closeForTest()
+            vm.uiState.first { !it.isStreaming && it.messages.size >= 4 }
+            assertNull(vm.uiState.value.error)
+            val stored = h.sessions.stored(sessionId)!!
+            val userTexts = stored.activeMessages()
+                .filterIsInstance<works.resolve.pathfinder.ai.UserMessage>()
+                .mapNotNull { message ->
+                    (message.content.filterIsInstance<TextContent>().firstOrNull()?.text)
+                }
+            assertEquals(listOf("Hello", "Again"), userTexts)
         }
 
     @Test
@@ -2316,12 +2237,16 @@ class ChatViewModelTest {
             assertFalse(state.toString().contains("stored-key"))
             assertNotNull(state.activeSessionId)
             assertEquals("glm-4.7", state.selectedModel?.modelId)
-            // The derivation seeds the new session with a model_change.
-            vm.uiState.first { h.sessionStore.load(state.activeSessionId!!)!!.entries.isNotEmpty() }
-            val seeded = h.sessionStore.load(state.activeSessionId!!)!!
+            // The derivation seeds the session with a buffered model_change;
+            // the file appears only at the first assistant commit.
+            waitUntil {
+                h.sessions.managers[state.activeSessionId!!]!!.conversation.entries.isNotEmpty()
+            }
+            val seeded = h.sessions.managers[state.activeSessionId!!]!!.conversation
             val change = seeded.entries.filterIsInstance<ModelChangeEntry>().single()
             assertEquals("zai", change.provider)
             assertEquals("glm-4.7", change.modelId)
+            assertNull(h.sessions.stored(state.activeSessionId!!))
 
             vm.closeForTest()
         }
@@ -2700,14 +2625,12 @@ class ChatViewModelTest {
                     vm.uiState.value.sessionSearchResults.isNotEmpty()
             }
             assertEquals(listOf(secondId), vm.uiState.value.sessionSearchResults.map { it.id })
-            assertEquals(1, h.sessions.searchCorpusCalls)
 
-            // Further keystrokes filter in memory: no rescan.
+            // Further keystrokes filter in memory: no rescan, no flicker.
             vm.onSessionSearchQueryChange("zebrax")
             assertEquals(0, vm.uiState.value.sessionSearchResults.size)
             vm.onSessionSearchQueryChange("zebra")
             assertEquals(listOf(secondId), vm.uiState.value.sessionSearchResults.map { it.id })
-            assertEquals(1, h.sessions.searchCorpusCalls)
 
             // Clearing the query clears results and drops the corpus: a new
             // query rescans.
@@ -2720,7 +2643,6 @@ class ChatViewModelTest {
                     vm.uiState.value.sessionSearchResults.isNotEmpty()
             }
             assertEquals(listOf(firstId), vm.uiState.value.sessionSearchResults.map { it.id })
-            assertEquals(2, h.sessions.searchCorpusCalls)
 
             vm.closeForTest()
         }
@@ -2776,7 +2698,7 @@ class ChatViewModelTest {
         vm.exchange(h, "Hello", "world")
         vm.uiState.first { it.sessionSummaries.first().messageCount == 2 }
 
-        h.sessions.failSearchCorpus = true
+        h.sessions.failList = true
         vm.onSessionSearchQueryChange("Hello")
         waitUntil { !vm.uiState.value.isSessionSearching }
         assertEquals(0, vm.uiState.value.sessionSearchResults.size)
@@ -2831,15 +2753,14 @@ class ChatViewModelTest {
             assertFalse(truncated.treeRows[3].isOnActivePath)
             assertEquals("world", truncated.messages[1].singleText())
 
-            // Entries + leafId persist; the seed model_change and
-            // thinking_level_change entries ride along.
+            // The whole tree (including the seed configuration entries) is
+            // on disk; navigation's leaf move is in-memory only.
             vm.uiState.first {
                 it.sessionSummaries.first { s -> s.id == sessionId }.messageCount ==
                     2
             }
-            val saved = h.sessionStore.load(sessionId)!!
+            val saved = h.sessions.stored(sessionId)!!
             assertEquals(6, saved.entries.size)
-            assertEquals(assistantEntryId, saved.leafId)
 
             // A new exchange from here forks: the new user message becomes a
             // sibling of the old one under the same assistant entry.
@@ -2848,9 +2769,9 @@ class ChatViewModelTest {
                 it.messages.size == 4 &&
                     it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 4
             }
-            val forked = h.sessionStore.load(sessionId)!!
+            val forked = h.sessions.stored(sessionId)!!
             assertEquals(8, forked.entries.size)
-            assertEquals(4, forked.messages.size)
+            assertEquals(4, forked.activeMessages().size)
             val childrenOfTarget = forked.entries.filter { it.parentId == assistantEntryId }
             assertEquals(2, childrenOfTarget.map { it.id }.toSet().size)
 
@@ -2915,9 +2836,9 @@ class ChatViewModelTest {
                 it.messages.size == 2 &&
                     it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2
             }
-            val saved = h.sessionStore.load(sessionId)!!
-            // Six entries: the two seed roots, the original pair, and the re-sent
-            // sibling pair.
+            val saved = h.sessions.stored(sessionId)!!
+            // Six entries: the seed model_change, the seeded thinking level,
+            // the original pair, and the re-sent sibling pair.
             assertEquals(6, saved.entries.size)
             // Re-edit branches to the target's parent: the re-edited user message
             // forks as a sibling of the original under the thinking seed entry.
@@ -2926,7 +2847,7 @@ class ChatViewModelTest {
             assertEquals(listOf(seedChange.id), roots.map { it.id })
             assertEquals(
                 "Hello edited",
-                (saved.messages[0] as UserMessage).content
+                (saved.activeMessages()[0] as UserMessage).content
                     .filterIsInstance<TextContent>().first().text
             )
 
@@ -2977,8 +2898,10 @@ class ChatViewModelTest {
             vm.uiState.first { it.status == ChatStatus.Ready }
             val sessionId = vm.uiState.value.activeSessionId!!
 
-            vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.isNotEmpty() }
-            val seeded = h.sessionStore.load(sessionId)!!
+            waitUntil {
+                h.sessions.managers[sessionId]!!.conversation.entries.isNotEmpty()
+            }
+            val seeded = h.sessions.managers[sessionId]!!.conversation
             val seedChange = seeded.entries.filterIsInstance<ModelChangeEntry>().single()
             assertEquals("zai", seedChange.provider)
             assertEquals("glm-4.7", seedChange.modelId)
@@ -2996,8 +2919,8 @@ class ChatViewModelTest {
             vm.selectModel("zai", "glm-5.3")
             vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
             assertEquals(agentsBefore, h.createdAgents.size)
-            vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 6 }
-            val saved = h.sessionStore.load(sessionId)!!
+            vm.uiState.first { h.sessions.managers[sessionId]!!.conversation.entries.size == 6 }
+            val saved = h.sessions.managers[sessionId]!!.conversation
             val switch = saved.entries[4] as ModelChangeEntry
             assertEquals("zai", switch.provider)
             assertEquals("glm-5.3", switch.modelId)
@@ -3048,8 +2971,8 @@ class ChatViewModelTest {
             )
             assertNull(ready.defaultThinkingLevel)
 
-            vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 2 }
-            val seeded = h.sessionStore.load(sessionId)!!
+            waitUntil { h.sessions.managers[sessionId]!!.conversation.entries.size == 2 }
+            val seeded = h.sessions.managers[sessionId]!!.conversation
             assertEquals(
                 listOf("medium"),
                 seeded.entries.filterIsInstance<ThinkingLevelEntry>()
@@ -3081,15 +3004,15 @@ class ChatViewModelTest {
                 switched.defaultThinkingLevel
             )
             assertNull(h.settings.currentSettings().defaultThinkingLevel)
-            vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 3 }
+            waitUntil { h.sessions.managers[sessionId]!!.conversation.entries.size == 3 }
 
             // Re-picking the current level appends nothing.
             vm.selectThinkingLevel(ModelThinkingLevel.HIGH)
             vm.uiState.first { it.thinkingLevel == ModelThinkingLevel.HIGH }
-            assertTrue(h.sessionStore.load(sessionId)!!.entries.size == 3)
+            assertTrue(h.sessions.managers[sessionId]!!.conversation.entries.size == 3)
             assertEquals(
                 listOf("medium", "high"),
-                h.sessionStore.load(sessionId)!!.entries
+                h.sessions.managers[sessionId]!!.conversation.entries
                     .filterIsInstance<ThinkingLevelEntry>()
                     .map { it.thinkingLevel }
             )
@@ -3179,14 +3102,14 @@ class ChatViewModelTest {
             vm.uiState.first { it.thinkingLevel == ModelThinkingLevel.LOW }
             vm.selectThinkingLevel(ModelThinkingLevel.HIGH)
             vm.uiState.first { it.thinkingLevel == ModelThinkingLevel.HIGH }
-            vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 4 }
+            waitUntil { h.sessions.managers[sessionId]!!.conversation.entries.size == 4 }
 
             vm.selectModel("zai", "glm-5.3")
             vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
             val reapply = vm.uiState.first { it.thinkingLevel == ModelThinkingLevel.LOW }
             assertEquals(ModelThinkingLevel.LOW, reapply.thinkingLevel)
-            vm.uiState.first { h.sessionStore.load(sessionId)!!.entries.size == 6 }
-            val saved = h.sessionStore.load(sessionId)!!
+            waitUntil { h.sessions.managers[sessionId]!!.conversation.entries.size == 6 }
+            val saved = h.sessions.managers[sessionId]!!.conversation
             val reapplyEntry = saved.entries.last() as ThinkingLevelEntry
             assertEquals("low", reapplyEntry.thinkingLevel)
             assertEquals((saved.entries[4] as ModelChangeEntry).id, reapplyEntry.parentId)
@@ -3207,11 +3130,11 @@ class ChatViewModelTest {
         vm.uiState.first { it.status == ChatStatus.Ready }
         val sessionId = vm.uiState.value.activeSessionId!!
 
+        // Flush the session first: without an assistant message there is no
+        // file, and a reload could not restore anything.
+        vm.exchange(h, "Hello", "world")
         vm.selectThinkingLevel(ModelThinkingLevel.HIGH)
-        // Real-time wait: store IO appends run on Dispatchers.IO, invisible
-        // to runTest's virtual clock — a uiState-gated first{} can miss the
-        // final store write.
-        waitUntil { h.sessionStore.load(sessionId)!!.entries.size == 3 }
+        waitUntil { h.sessions.stored(sessionId)!!.entries.size == 5 }
         vm.closeForTest()
 
         val vm2 = h.newViewModel()
@@ -3223,7 +3146,7 @@ class ChatViewModelTest {
         assertEquals(
             "the branch entry survives reload; no re-seed over it",
             listOf("medium", "high"),
-            h.sessionStore.load(sessionId)!!.entries
+            h.sessions.stored(sessionId)!!.entries
                 .filterIsInstance<ThinkingLevelEntry>()
                 .map { it.thinkingLevel }
         )
@@ -3429,7 +3352,9 @@ class ChatViewModelTest {
             val agentsBefore = h.createdAgents.size
             val assistantEntryId = vm.uiState.value.treeRows[1].id
             vm.navigateToTreeEntry(assistantEntryId)
-            vm.uiState.first { h.sessionStore.load(sessionId)!!.leafId == assistantEntryId }
+            vm.uiState.first {
+                h.sessions.managers[sessionId]!!.conversation.leafId == assistantEntryId
+            }
             assertEquals(agentsBefore, h.createdAgents.size)
             assertEquals("glm-5.3", vm.uiState.value.selectedModel?.modelId)
 
@@ -3486,10 +3411,10 @@ class ChatViewModelTest {
             val fresh = vm2.uiState.first { it.activeSessionId != firstId }
             assertEquals("glm-4.7", fresh.selectedModel?.modelId)
             assertEquals("glm-4.7", h.createdSettings.last().modelId)
-            vm2.uiState.first {
-                h.sessionStore.load(fresh.activeSessionId!!)!!.entries.isNotEmpty()
+            waitUntil {
+                h.sessions.managers[fresh.activeSessionId!!]!!.conversation.entries.isNotEmpty()
             }
-            val seed = h.sessionStore.load(fresh.activeSessionId!!)!!
+            val seed = h.sessions.managers[fresh.activeSessionId!!]!!.conversation
                 .entries.filterIsInstance<ModelChangeEntry>().single()
             assertEquals("zai", seed.provider)
             assertEquals("glm-4.7", seed.modelId)
@@ -3666,11 +3591,13 @@ class ChatViewModelTest {
                     ThinkingContent(" lone ")
                 )
             )
-            h.createdAgents.last().replaceConversation(
-                works.resolve.pathfinder.codingagent.core.session.Conversation.fromMessages(
-                    listOf(works.resolve.pathfinder.ai.UserMessage.ofText("hi"), assistant)
-                )
+            val session = h.createdAgents.last()
+            session.sessionManager.appendMessage(
+                works.resolve.pathfinder.ai.UserMessage.ofText("hi")
             )
+            session.sessionManager.appendMessage(assistant)
+            // The tree owns the structure; the agent transcript owns liveness.
+            session.agent.processEvent(AgentEvent.MessageEnd(assistant))
 
             val state = vm.uiState.first { it.messages.size == 2 }
             val blocks = state.messages[1].blocks
@@ -3872,8 +3799,10 @@ class ChatViewModelTest {
     }
     // ---- append-only persistence ----
 
-    private fun sessionLogFile(sessionId: String): File =
-        tmpFolder.root.walkTopDown().filter { it.isFile && it.name == "$sessionId.jsonl" }.first()
+    private fun sessionLogFile(sessionId: String): File = tmpFolder.root
+        .walkTopDown()
+        .filter { it.isFile && it.name.endsWith("_$sessionId.jsonl") }
+        .first()
 
     @Test
     fun persistFlow_isAppendOnly_snapshotsNeverRewriteTheFile() =
@@ -3891,7 +3820,7 @@ class ChatViewModelTest {
                     2
             }
             val afterFirst = sessionLogFile(sessionId).readText()
-            assertTrue(afterFirst.startsWith("{\"kind\":\"header\",\"version\":4"))
+            assertTrue(afterFirst.startsWith("{\"type\":\"session\",\"version\":3"))
 
             vm.exchange(h, "Again", "fine")
             vm.uiState.first {
@@ -3907,7 +3836,7 @@ class ChatViewModelTest {
         }
 
     @Test
-    fun navigationOnly_persistsLaneMoveWithoutNewEntries() = runTest(mainDispatcherRule.scheduler) {
+    fun navigationOnly_appendsNothingToTheFile() = runTest(mainDispatcherRule.scheduler) {
         val h = Harness()
         val vm = h.newViewModel()
         vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
@@ -3919,33 +3848,20 @@ class ChatViewModelTest {
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         val before = sessionLogFile(sessionId).readText()
 
-        // Re-edit: a lane move to the root that appends no entry.
+        // Re-edit: a leaf move to the target's parent that appends no entry.
+        // pi's classic session format has no persisted leaf pointer, so the
+        // move is in-memory only; a reload resumes at the last entry.
         val userEntryId = vm.uiState.value.treeRows.first { it.isOnActivePath }.id
         vm.navigateToTreeEntry(userEntryId)
         vm.uiState.first { it.messages.isEmpty() && it.draft == "Hello" }
         vm.closeForTest()
 
-        val after = sessionLogFile(sessionId).readText()
-        assertTrue(after.length > before.length)
-        assertTrue(after.startsWith(before))
-        // Three appended lines: the navigation operation's durable record
-        // pair (operation_started navigation + operation_finished) plus the
-        // lane mutation back to the seed thinking_level_change entry (the
-        // re-edit target's parent).
-        assertEquals(before.count { it == '\n' } + 3, after.count { it == '\n' })
-        val appended = after.substring(before.length)
-        assertTrue(appended.contains("\"kind\":\"lane\""))
-        assertTrue(appended.contains("\"type\":\"operation_started\""))
-        assertTrue(appended.contains("\"kind\":\"navigation\""))
-        assertTrue(appended.contains("\"type\":\"operation_finished\""))
-
-        // A fresh store replays the lane move: same entries, empty active
-        // transcript, leaf on the seed thinking entry.
-        val reloaded = h.sessionStore.load(sessionId)!!
+        assertEquals(before, sessionLogFile(sessionId).readText())
+        val reloaded = h.sessions.stored(sessionId)!!
         // seed model_change + thinking_level_change + user + assistant
         assertEquals(4, reloaded.entries.size)
-        assertEquals(reloaded.entries[1].id, reloaded.leafId)
-        assertTrue(reloaded.messages.isEmpty())
+        assertEquals(reloaded.entries.last().id, reloaded.leafId)
+        assertEquals(2, reloaded.activeMessages().size)
     }
 
     // ---- navigation-trigger branch summarization ----
@@ -3977,143 +3893,22 @@ class ChatViewModelTest {
             vm.navigateToTreeEntry(assistantEntryId, summarize = true)
 
             waitUntil {
-                h.sessionStore.load(sessionId)!!.entries.any {
-                    it is works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
-                }
+                h.sessions.stored(sessionId)!!.entries.any { it is BranchSummaryEntry }
             }
-            val saved = h.sessionStore.load(sessionId)!!
+            val saved = h.sessions.stored(sessionId)!!
             val summary = saved.entries.filterIsInstance<BranchSummaryEntry>().single()
             assertEquals(assistantEntryId, summary.parentId)
             assertTrue(summary.summary.contains("explored the branch"))
             assertEquals(summary.id, saved.leafId)
 
-            // The durable navigation operation records the summarize flag and the
-            // pre-minted summaryEntryId.
-            waitUntil {
-                h.sessions.appendedRecords.count {
-                    it is LaneRecord.OperationFinishedRecord
-                } >=
-                    3
-            }
-            val records = h.sessions.appendedRecords.toList()
-            val navStart = records.filterIsInstance<LaneRecord.OperationStartedRecord>()
-                .last {
-                    it.intent.kind ==
-                        OperationIntent.Kind.NAVIGATION
-                }
-            assertEquals(
-                assistantEntryId,
-                navStart.intent.payload["targetId"]!!.jsonPrimitiveContent
-            )
-            assertEquals("true", navStart.intent.payload["summarize"]!!.jsonPrimitiveContent)
-            assertEquals(
-                summary.id,
-                navStart.intent.payload["summaryEntryId"]!!.jsonPrimitiveContent
-            )
-            val navFinish = records.filterIsInstance<LaneRecord.OperationFinishedRecord>().last()
-            assertEquals(navStart.id, navFinish.runId)
-            assertEquals(
-                works.resolve.pathfinder.codingagent.core.session.OperationOutcome.COMPLETED,
-                navFinish.outcome
-            )
-
             vm.closeForTest()
         }
 
-    @Test
-    fun load_classifiesSuspendedVsFinishedOperations() = runTest(mainDispatcherRule.scheduler) {
-        val h = Harness()
-        val vm = h.newViewModel()
-        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.configure(apiKey = "k")
-        vm.uiState.first { it.status == ChatStatus.Ready }
-        val sessionId = vm.uiState.value.activeSessionId!!
-
-        // Drain the async record appends before reloading.
-        vm.exchange(h, "Hello", "world")
-        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
-        waitUntil { h.sessionStore.openOperations(sessionId, "main", null).isEmpty() }
-        vm.closeForTest()
-
-        val vm2 = h.newViewModel()
-        val finished = vm2.uiState.first {
-            it.status == ChatStatus.Ready &&
-                it.activeSessionId == sessionId
-        }
-        assertEquals(
-            works.resolve.pathfinder.codingagent.core.session.LaneRecovery.Idle,
-            finished.laneRecovery
-        )
-        vm2.closeForTest()
-
-        // An unfinished operation record suspends the session.
-        h.sessionStore.appendRecord(
-            sessionId,
-            works.resolve.pathfinder.codingagent.core.session.LaneRecord.OperationStartedRecord(
-                id = "suspended-op",
-                lane = "main",
-                sourceLeafId = null,
-                intent = works.resolve.pathfinder.codingagent.core.session.OperationIntent.run()
-            )
-        )
-        val vm3 = h.newViewModel()
-        val suspended = vm3.uiState.first {
-            it.status == ChatStatus.Ready &&
-                it.activeSessionId == sessionId
-        }
-        assertEquals(
-            works.resolve.pathfinder.codingagent.core.session.LaneRecovery.Suspended(
-                works.resolve.pathfinder.codingagent.core.session.OperationIntent.Kind.RUN
-            ),
-            suspended.laneRecovery
-        )
-        vm3.closeForTest()
-    }
-
-    @Test
-    fun load_classifiesCorruptRecordLogsViaReducer() = runTest(mainDispatcherRule.scheduler) {
-        val h = Harness()
-        val vm = h.newViewModel()
-        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
-        vm.configure(apiKey = "k")
-        vm.uiState.first { it.status == ChatStatus.Ready }
-        val sessionId = vm.uiState.value.activeSessionId!!
-
-        vm.exchange(h, "Hello", "world")
-        vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
-        waitUntil { h.sessionStore.openOperations(sessionId, "main", null).isEmpty() }
-        vm.closeForTest()
-
-        // A record referencing an operation the log never opened: only the
-        // reducer's full validation classifies this as corruption.
-        h.sessionStore.appendRecord(
-            sessionId,
-            works.resolve.pathfinder.codingagent.core.session.LaneRecord.AbortRequestedRecord(
-                id = "ghost-abort",
-                lane = "main",
-                runId = "no-such-operation"
-            )
-        )
-        val vm2 = h.newViewModel()
-        val corrupt = vm2.uiState.first {
-            it.status == ChatStatus.Ready &&
-                it.activeSessionId == sessionId
-        }
-        assertEquals(
-            works.resolve.pathfinder.codingagent.core.session.LaneRecovery.Corrupt(
-                RecordLogCorruptionReason.UNKNOWN_OPERATION
-            ),
-            corrupt.laneRecovery
-        )
-        vm2.closeForTest()
-    }
-
     /**
-     * A user message that is the current leaf (a run that died before any
-     * assistant entry committed leaves exactly that persisted state) re-edits
-     * on navigation like any other user message: the text returns to the
-     * draft, the message leaves the chat, and the next send forks as a
-     * sibling — one code path for first and later user messages alike.
+     * A user message that is the current leaf re-edits on navigation like any
+     * other user message: the text returns to the draft, the message leaves
+     * the chat, and the next send forks as a sibling — one code path for
+     * first and later user messages alike.
      */
     @Test
     fun navigateToUserMessageLeaf_re_editsLikeAnyUserMessage() =
@@ -4131,33 +3926,22 @@ class ChatViewModelTest {
                 it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 4
             }
 
-            // Simulate the persisted dangling-leaf state: the leaf points at
-            // the first user message, as after a process death mid-run.
-            val stored = h.sessionStore.load(sessionId)!!
-            val firstUserEntry = stored.entries.first {
+            // Move the leaf onto the first user message through the manager
+            // (the state a mid-run snapshot would leave behind); the VM reads
+            // the conversation lazily, so navigation observes it.
+            val manager = h.sessions.managers[sessionId]!!
+            val firstUserEntry = manager.conversation.entries.first {
                 it is MessageEntry && it.message is UserMessage
             }
-            h.sessionStore.save(stored.copy(leafId = firstUserEntry.id))
-            vm.closeForTest()
+            manager.branch(firstUserEntry.id)
 
-            val vm2 = h.newViewModel()
-            val dangling = vm2.uiState.first {
-                it.status == ChatStatus.Ready && it.activeSessionId == sessionId
-            }
-            assertEquals(
-                listOf("Hello"),
-                dangling.messages.map {
-                    it.blocks.single().let { b -> (b as ChatBlock.Text).text }
-                }
-            )
-
-            vm2.navigateToTreeEntry(dangling.treeRows.first { it.isCurrentLeaf }.id)
-            val reedit = vm2.uiState.first { it.draft == "Hello" }
+            vm.navigateToTreeEntry(firstUserEntry.id)
+            val reedit = vm.uiState.first { it.draft == "Hello" }
             assertNull(reedit.error)
             assertEquals(0, reedit.messages.size)
             assertEquals(4, reedit.treeRows.size)
             assertTrue(reedit.canSend)
 
-            vm2.closeForTest()
+            vm.closeForTest()
         }
 }

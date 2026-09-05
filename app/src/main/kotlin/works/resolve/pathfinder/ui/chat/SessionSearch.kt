@@ -170,7 +170,7 @@ internal fun parseSearchQuery(query: String): ParsedSearchQuery {
 
 internal data class MatchResult(val matches: Boolean, val score: Double)
 
-internal data class SessionSearchEntry(val id: String, val updatedAt: Long, val searchText: String)
+internal data class SessionSearchEntry(val id: String, val modified: Long, val searchText: String)
 
 private fun normalizeWhitespaceLower(text: String): String =
     text.lowercase().replace(Regex("\\s+"), " ").trim()
@@ -229,7 +229,7 @@ internal fun filterAndSortSessions(
         .sortedWith(
             compareBy<Pair<SessionSearchEntry, Double>> {
                 it.second
-            }.thenByDescending { it.first.updatedAt }
+            }.thenByDescending { it.first.modified }
         )
         .map { it.first }
 }
