@@ -926,11 +926,14 @@ class ChatViewModel(
             // agent state while the append-only tree keeps it. A message may
             // also create the session file (or land in an existing one), so
             // the drawer summaries refresh here — model/thinking appends do
-            // not change any observable summary field.
+            // not change any observable summary field. This is also where a
+            // retained streaming row hands off to its committed row (see
+            // [onAgentState]), in the same update.
             is AgentEvent.MessageEnd -> {
                 updateState {
                     it.copy(
                         messages = projectCommittedAfterSessionMessageEnd(),
+                        streamingMessage = null,
                         treeRows = buildTreeRows(activeConversation, it.treeFilter)
                     )
                 }
@@ -977,9 +980,15 @@ class ChatViewModel(
                 messages = committedProjection ?: it.messages,
                 selectedModel = modelProjection ?: it.selectedModel,
                 pendingTools = pendingToolExecutions(state),
-                streamingMessage = (state.streamingMessage as? AssistantMessage)?.let(
-                    ::projectStreaming
-                ),
+                // message_end commits to agent state (clearing streamingMessage)
+                // before the session persists the message and grows the tree, so
+                // null here does not mean the row left: retain the projection
+                // until the MessageEnd handler lands the committed row, keeping
+                // the streaming→committed handoff inside a single uiState
+                // update instead of blinking out across the persistence write.
+                streamingMessage = (state.streamingMessage as? AssistantMessage)
+                    ?.let(::projectStreaming)
+                    ?: it.streamingMessage,
                 isStreaming = state.isStreaming,
                 thinkingLevel = state.thinkingLevel,
                 availableThinkingLevels = getSupportedThinkingLevels(state.model)
