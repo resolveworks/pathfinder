@@ -6,6 +6,7 @@ import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
@@ -22,16 +23,26 @@ enum class ConversationView {
  * One renderable transcript row: a compaction-cut marker, or a runtime
  * message with its stable entry id as the list key. Bodies render directly
  * from the runtime message (pi's components consume runtime messages the
- * same way); [call] pairs a tool-result row with its originating call for
- * the row title.
+ * same way).
  */
 sealed interface TranscriptRow {
     val id: String
 
     data class Compacted(override val id: String) : TranscriptRow
 
-    data class Chat(override val id: String, val message: Message, val call: ToolCall? = null) :
-        TranscriptRow
+    data class Chat(override val id: String, val message: Message) : TranscriptRow
+
+    /**
+     * One tool execution, like pi's per-call execution component: the row
+     * lives on the call and [result] joins by call id once it commits —
+     * null while the call runs, so the row never leaves the transcript in
+     * between.
+     */
+    data class Tool(
+        override val id: String,
+        val call: ToolCall,
+        val result: ToolResultMessage? = null
+    ) : TranscriptRow
 }
 
 /**
@@ -82,13 +93,6 @@ data class ProviderApiKeyNavKey(val providerId: String) : NavKey
 data class ProviderLoginNavKey(val providerId: String) : NavKey
 
 data class AutoRetryStatus(val attempt: Int, val maxAttempts: Int)
-
-/**
- * An in-flight tool execution resolved to its committed assistant call; a
- * null [call] (malformed or out-of-order event) still renders a generic
- * in-flight row so it can never disappear from the UI.
- */
-data class PendingToolExecution(val id: String, val call: ToolCall? = null)
 
 /** Outcome of the initial load of settings, credentials, and sessions. */
 enum class ChatStatus {
@@ -235,7 +239,6 @@ data class ChatUiState(
     /** True while the one-time corpus scan runs after the query activates. */
     val isSessionSearching: Boolean = false,
     val messages: List<TranscriptRow> = emptyList(),
-    val pendingTools: List<PendingToolExecution> = emptyList(),
     /** In-flight partial; role-generic in pi, assistant-only here (non-assistant partials render nothing). */
     val streamingMessage: AssistantMessage? = null,
     val draft: String = "",

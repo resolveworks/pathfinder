@@ -792,7 +792,6 @@ class ChatViewModel(
             it.copy(
                 messages = committedProjection ?: it.messages,
                 selectedModel = modelProjection ?: it.selectedModel,
-                pendingTools = pendingToolExecutions(state),
                 // message_end commits to agent state (clearing streamingMessage)
                 // before the session persists the message and grows the tree, so
                 // null here does not mean the row left: retain the projection

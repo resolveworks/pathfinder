@@ -604,7 +604,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
     }
 
     @Test
-    fun toolResultMessages_renderAsToolRows_withFullOutput() =
+    fun toolRows_liveOnTheirCall_andSettleWhenTheResultCommits() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
             val vm = h.newViewModel()
@@ -632,7 +632,31 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             )
             session.agent.processEvent(AgentEvent.MessageStart(call))
             session.agent.processEvent(AgentEvent.MessageEnd(call))
-            waitUntil { vm.uiState.value.messages.size == 3 }
+            waitUntil { vm.uiState.value.messages.size == 4 }
+
+            // The row exists as soon as the call commits — resultless while
+            // the execution runs, never absent in between.
+            val runningRow = vm.uiState.value.messages[3] as TranscriptRow.Tool
+            assertEquals("call-1", runningRow.call.id)
+            assertEquals("get_weather", runningRow.call.name)
+            assertNull(runningRow.result)
+
+            // Execution lifecycle events never touch the projection: the row
+            // stays as-is across the execution's end.
+            session.agent.processEvent(
+                AgentEvent.ToolExecutionStart("call-1", "get_weather", JsonObject(emptyMap()))
+            )
+            session.agent.processEvent(
+                AgentEvent.ToolExecutionEnd(
+                    "call-1",
+                    "get_weather",
+                    AgentToolResult(content = listOf(TextContent("sunny"))),
+                    isError = false
+                )
+            )
+            val settledRow = vm.uiState.value.messages[3] as TranscriptRow.Tool
+            assertEquals(runningRow.id, settledRow.id)
+            assertNull(settledRow.result)
 
             val ok = ToolResultMessage(
                 toolCallId = "call-1",
@@ -646,17 +670,19 @@ internal class ChatViewModelTest : ChatHarnessTest() {
                 vm.uiState.value.messages.size == 4 && vm.uiState.value.streamingMessage == null
             }
 
-            val okRow = vm.uiState.value.messages[3]
-            val okResult = okRow.message() as ToolResultMessage
+            // The result joins the SAME row (no remove-and-re-add across the
+            // persistence write); output keeps line structure verbatim.
+            val okRow = vm.uiState.value.messages[3] as TranscriptRow.Tool
+            assertEquals(runningRow.id, okRow.id)
+            val okResult = okRow.result!!
             assertEquals("call-1", okResult.toolCallId)
             assertEquals("get_weather", okResult.toolName)
             assertFalse(okResult.isError)
-            assertEquals("  21°C, sunny\n  wind 3 m/s", okRow.singleText())
-            assertTrue(vm.uiState.value.pendingTools.isEmpty())
+            assertEquals("  21°C, sunny\n  wind 3 m/s", okResult.content.textContent())
 
-            // Error result: output projected verbatim (line structure kept —
-            // renderers, not the projection, bound the preview), error flag
-            // projected.
+            // Error result for the same call: the row updates in place, the
+            // error flag and output projected verbatim (renderers, not the
+            // projection, bound the preview).
             val failed = ToolResultMessage(
                 toolCallId = "call-1",
                 toolName = "get_weather",
@@ -666,18 +692,19 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             )
             session.agent.processEvent(AgentEvent.MessageStart(failed))
             session.agent.processEvent(AgentEvent.MessageEnd(failed))
-            waitUntil { vm.uiState.value.messages.size == 5 }
+            waitUntil {
+                (vm.uiState.value.messages[3] as TranscriptRow.Tool).result?.isError == true
+            }
 
-            val errorRow = vm.uiState.value.messages[4]
-            val result = errorRow.message() as ToolResultMessage
-            assertTrue(result.isError)
-            assertEquals("boom\nexit 1", errorRow.singleText())
+            val errorRow = vm.uiState.value.messages[3] as TranscriptRow.Tool
+            assertEquals(runningRow.id, errorRow.id)
+            assertEquals("boom\nexit 1", errorRow.result!!.content.textContent())
 
             vm.closeForTest()
         }
 
     @Test
-    fun assistantToolCalls_projectInlineInContentOrder() = runTest(mainDispatcherRule.scheduler) {
+    fun titledToolRows_carryParsedInput() = runTest(mainDispatcherRule.scheduler) {
         val h = harness()
         val vm = h.newViewModel()
         vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
@@ -688,180 +715,58 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         val session = h.createdAgents.single()
         val call = AssistantMessage(
             content = listOf(
-                ThinkingContent("reasoning first"),
-                TextContent("Before"),
-                ToolCall(id = "call-1", name = "get_weather", arguments = "{\"city\":\"secret\"}"),
-                TextContent("After")
+                ToolCall(
+                    id = "call-1",
+                    name = BraveWebSearchTool.NAME,
+                    arguments = """{"query":"kotlin flow"}"""
+                ),
+                ToolCall(
+                    id = "call-2",
+                    name = WebFetchTool.NAME,
+                    arguments = """{"url":"https://example.com"}"""
+                ),
+                // Spec'd tool with malformed arguments: title falls back to the bare name.
+                ToolCall(id = "call-3", name = WebFetchTool.NAME, arguments = "not json")
             ),
             api = testModel.api,
             provider = "zai",
             model = "glm-4.7",
-            usage = Usage(reasoning = 412),
             timestamp = System.nanoTime()
         )
         session.agent.processEvent(AgentEvent.MessageStart(call))
         session.agent.processEvent(AgentEvent.MessageEnd(call))
-        waitUntil { vm.uiState.value.messages.size == 1 }
+        waitUntil { vm.uiState.value.messages.size == 4 }
 
-        val content = vm.uiState.value.messages[0].assistant().content
+        val rows = vm.uiState.value.messages.filterIsInstance<TranscriptRow.Tool>()
+        assertEquals(listOf("call-1", "call-2", "call-3"), rows.map { it.call.id })
         assertEquals(
-            listOf(
-                ThinkingContent("reasoning first"),
-                TextContent("Before"),
-                ToolCall(id = "call-1", name = "get_weather", arguments = "{\"city\":\"secret\"}"),
-                TextContent("After")
-            ),
-            content
+            // Title inputs parse from each call's arguments; malformed
+            // arguments (call-3) fall back to the bare name at render.
+            listOf("kotlin flow", "https://example.com", null),
+            rows.map { toolCallInput(it.call.name, it.call.arguments) }
         )
-        assertEquals(
-            412,
-            vm.uiState.value.messages[0].assistant().usage.reasoning
+
+        val searchResult = ToolResultMessage(
+            toolCallId = "call-1",
+            toolName = BraveWebSearchTool.NAME,
+            content = listOf(TextContent("1. Kotlin flows")),
+            timestamp = System.nanoTime()
         )
+        session.agent.processEvent(AgentEvent.MessageStart(searchResult))
+        session.agent.processEvent(AgentEvent.MessageEnd(searchResult))
+        waitUntil {
+            vm.uiState.value.messages.filterIsInstance<TranscriptRow.Tool>()
+                .first { it.call.id == "call-1" }.result != null
+        }
+
+        // The title side stays on the call after the result joins.
+        val settled = vm.uiState.value.messages
+            .filterIsInstance<TranscriptRow.Tool>()
+            .single { it.call.id == "call-1" }
+        assertEquals("kotlin flow", toolCallInput(settled.call.name, settled.call.arguments))
 
         vm.closeForTest()
     }
-
-    @Test
-    fun pendingToolExecution_appearsRunning_andResolvesOnEnd() =
-        runTest(mainDispatcherRule.scheduler) {
-            val h = harness()
-            val vm = h.newViewModel()
-            vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
-            vm.configure(apiKey = "k")
-            vm.awaitState { it.status == ChatStatus.Ready }
-            vm.awaitState { !it.isStreaming && it.activeSessionId != null }
-
-            val session = h.createdAgents.single()
-            val call = AssistantMessage(
-                content = listOf(ToolCall(id = "call-1", name = "get_weather", arguments = "{}")),
-                api = testModel.api,
-                provider = "zai",
-                model = "glm-4.7",
-                timestamp = System.nanoTime()
-            )
-            session.agent.processEvent(AgentEvent.MessageStart(call))
-            session.agent.processEvent(AgentEvent.MessageEnd(call))
-            waitUntil { vm.uiState.value.messages.size == 1 }
-
-            session.agent.processEvent(
-                AgentEvent.ToolExecutionStart("call-1", "get_weather", JsonObject(emptyMap()))
-            )
-            val toolCall = call.content.single() as ToolCall
-            waitUntil {
-                vm.uiState.value.pendingTools == listOf(PendingToolExecution("call-1", toolCall))
-            }
-
-            // Unknown id (no committed call): generic fallback label, still listed.
-            session.agent.processEvent(
-                AgentEvent.ToolExecutionStart("call-x", "get_weather", JsonObject(emptyMap()))
-            )
-            waitUntil { vm.uiState.value.pendingTools.size == 2 }
-            assertEquals(PendingToolExecution("call-x"), vm.uiState.value.pendingTools[1])
-
-            session.agent.processEvent(
-                AgentEvent.ToolExecutionEnd(
-                    "call-1",
-                    "get_weather",
-                    AgentToolResult(content = listOf(TextContent("sunny"))),
-                    isError = false
-                )
-            )
-            waitUntil { vm.uiState.value.pendingTools.map { it.id } == listOf("call-x") }
-            session.agent.processEvent(
-                AgentEvent.ToolExecutionEnd(
-                    "call-x",
-                    "get_weather",
-                    AgentToolResult(content = listOf(TextContent("sunny"))),
-                    isError = false
-                )
-            )
-            waitUntil { vm.uiState.value.pendingTools.isEmpty() }
-
-            vm.closeForTest()
-        }
-
-    @Test
-    fun titledToolRows_carryParsedInput_inPendingAndResultRows() =
-        runTest(mainDispatcherRule.scheduler) {
-            val h = harness()
-            val vm = h.newViewModel()
-            vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
-            vm.configure(apiKey = "k")
-            vm.awaitState { it.status == ChatStatus.Ready }
-            vm.awaitState { !it.isStreaming && it.activeSessionId != null }
-
-            val session = h.createdAgents.single()
-            val call = AssistantMessage(
-                content = listOf(
-                    ToolCall(
-                        id = "call-1",
-                        name = BraveWebSearchTool.NAME,
-                        arguments = """{"query":"kotlin flow"}"""
-                    ),
-                    ToolCall(
-                        id = "call-2",
-                        name = WebFetchTool.NAME,
-                        arguments = """{"url":"https://example.com"}"""
-                    ),
-                    // Spec'd tool with malformed arguments: title falls back to the bare name.
-                    ToolCall(id = "call-3", name = WebFetchTool.NAME, arguments = "not json")
-                ),
-                api = testModel.api,
-                provider = "zai",
-                model = "glm-4.7",
-                timestamp = System.nanoTime()
-            )
-            session.agent.processEvent(AgentEvent.MessageStart(call))
-            session.agent.processEvent(AgentEvent.MessageEnd(call))
-            waitUntil { vm.uiState.value.messages.size == 1 }
-
-            session.agent.processEvent(
-                AgentEvent.ToolExecutionStart(
-                    "call-1",
-                    BraveWebSearchTool.NAME,
-                    JsonObject(emptyMap())
-                )
-            )
-            session.agent.processEvent(
-                AgentEvent.ToolExecutionStart("call-2", WebFetchTool.NAME, JsonObject(emptyMap()))
-            )
-            session.agent.processEvent(
-                AgentEvent.ToolExecutionStart("call-3", WebFetchTool.NAME, JsonObject(emptyMap()))
-            )
-            waitUntil { vm.uiState.value.pendingTools.size == 3 }
-            assertEquals(
-                listOf("call-1", "call-2", "call-3"),
-                vm.uiState.value.pendingTools.map { it.id }
-            )
-            assertEquals(
-                // Title inputs parse from each call's arguments; malformed
-                // arguments (call-3) fall back to the bare name at render.
-                listOf("kotlin flow", "https://example.com", null),
-                vm.uiState.value.pendingTools.map { p ->
-                    p.call?.let { toolCallInput(it.name, it.arguments) }
-                }
-            )
-
-            val searchResult = ToolResultMessage(
-                toolCallId = "call-1",
-                toolName = BraveWebSearchTool.NAME,
-                content = listOf(TextContent("1. Kotlin flows")),
-                timestamp = System.nanoTime()
-            )
-            session.agent.processEvent(AgentEvent.MessageStart(searchResult))
-            session.agent.processEvent(AgentEvent.MessageEnd(searchResult))
-            waitUntil {
-                vm.uiState.value.messages.any { it.message() is ToolResultMessage }
-            }
-
-            val row = vm.uiState.value.messages.last { it.message() is ToolResultMessage }
-            assertEquals(
-                "kotlin flow",
-                (row as TranscriptRow.Chat).call?.let { toolCallInput(it.name, it.arguments) }
-            )
-
-            vm.closeForTest()
-        }
 
     @Test
     fun busyIntents_areRejectedWhileStreaming() = runTest(mainDispatcherRule.scheduler) {

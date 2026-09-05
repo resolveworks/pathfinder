@@ -83,17 +83,12 @@ internal fun ConversationContent(
     // against the live rows, so a stale key (session switch, branch
     // navigation) just closes the sheet.
     var openToolResultId by rememberSaveable { mutableStateOf<String?>(null) }
-    val openToolResult = openToolResultId?.let { id ->
-        uiState.messages.firstNotNullOfOrNull { row ->
-            (row as? TranscriptRow.Chat)
-                ?.takeIf { (it.message as? ToolResultMessage)?.toolCallId == id }
-        }
+    val openToolRow = openToolResultId?.let { id ->
+        uiState.messages.filterIsInstance<TranscriptRow.Tool>().firstOrNull { it.call.id == id }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        if (messageCount == 0 && uiState.pendingTools.isEmpty() &&
-            uiState.streamingMessage == null
-        ) {
+        if (messageCount == 0 && uiState.streamingMessage == null) {
             EmptyStateText(text = stringResource(R.string.chat_empty))
         }
         // Forward layout anchors the TOP of a visible message, so appending
@@ -108,34 +103,26 @@ internal fun ConversationContent(
                 when (row) {
                     is TranscriptRow.Compacted -> CompactedDivider()
 
-                    is TranscriptRow.Chat -> when (val message = row.message) {
-                        is ToolResultMessage -> ToolCallItem(
-                            call = row.call,
-                            toolName = message.toolName,
-                            output = message.content.textContent().takeIf { it.isNotEmpty() },
-                            isError = message.isError,
-                            running = false,
-                            onOpenOutput = { openToolResultId = message.toolCallId }
-                        )
+                    is TranscriptRow.Tool -> ToolCallItem(
+                        call = row.call,
+                        result = row.result,
+                        running = row.result == null && uiState.isStreaming,
+                        onOpenOutput = { openToolResultId = row.call.id }
+                    )
 
+                    is TranscriptRow.Chat -> when (val message = row.message) {
                         is UserMessage -> UserMessageItem(message)
 
                         is AssistantMessage -> AssistantMessageItem(
                             message = message,
                             showThinking = uiState.showThinking
                         )
+
+                        // The projection never emits result messages as rows:
+                        // they render through their call's Tool row.
+                        is ToolResultMessage -> Unit
                     }
                 }
-            }
-            items(uiState.pendingTools, key = { "pending-${it.id}" }) { pending ->
-                ToolCallItem(
-                    call = pending.call,
-                    toolName = pending.call?.name,
-                    output = null,
-                    isError = false,
-                    running = true,
-                    onOpenOutput = {}
-                )
             }
             uiState.streamingMessage?.let { streaming ->
                 item(key = "streaming") {
@@ -150,9 +137,9 @@ internal fun ConversationContent(
                             streaming
                         } else {
                             // pi renders tool-call-only assistant messages as
-                            // zero lines (the execution shows as its own row);
-                            // the placeholder bridges until the call commits
-                            // and the pending tool row appears.
+                            // zero lines (the executions show as their own
+                            // rows); the placeholder bridges until the call
+                            // commits and its tool row appears.
                             streaming.copy(
                                 content = listOf(TextContent(STREAMING_PLACEHOLDER))
                             )
@@ -167,11 +154,10 @@ internal fun ConversationContent(
             }
         }
 
-        openToolResult?.let { row ->
-            val message = row.message as ToolResultMessage
+        openToolRow?.result?.let { result ->
             ToolOutputSheet(
-                call = row.call,
-                message = message,
+                call = openToolRow.call,
+                result = result,
                 onDismiss = { openToolResultId = null }
             )
         }
@@ -203,6 +189,8 @@ private fun CompactedDivider() {
  */
 internal fun TranscriptRow.hasRenderableContent(): Boolean = when (this) {
     is TranscriptRow.Compacted -> true
+
+    is TranscriptRow.Tool -> true
 
     is TranscriptRow.Chat -> when (val message = this.message) {
         is AssistantMessage ->
@@ -378,35 +366,44 @@ internal fun toolCallInput(toolName: String, arguments: String): String? {
     return parsed.string(argument)?.takeIf { it.isNotEmpty() }
 }
 
-/** Row title: the spec's format filled with the parsed input, else the tool name or fallback. */
+/** Row title: the spec's format filled with the parsed input, else the tool name. */
 @Composable
-internal fun toolCallTitle(call: ToolCall?, fallbackName: String? = null): String {
-    if (call == null) return fallbackName ?: "tool"
+internal fun toolCallTitle(call: ToolCall): String {
     val input = toolCallInput(call.name, call.arguments)
     val spec = ToolCallTitles.specFor(call.name)
     return if (spec != null && input != null) stringResource(spec.format, input) else call.name
 }
 
 /**
+ * The tree's history-shaped variant, like pi's tree fallback: a result whose
+ * call is not in history titles by its result's bare name.
+ */
+@Composable
+internal fun toolCallTitle(call: ToolCall?, fallbackName: String?): String =
+    if (call == null) fallbackName ?: "tool" else toolCallTitle(call)
+
+/**
  * One tool execution as a single fixed-height line in a tonal container,
  * distinct from conversation text: the row title (a tool-specific phrase
- * like "Searched for …", else the tool name) and a spinner while running.
- * Rows with output open [ToolOutputSheet] instead of expanding in place:
- * the sheet owns its scroll, starts at the top of the content, and leaves
- * the transcript's layout and scroll position untouched behind it. Per-row, never
- * global (pi's Ctrl+O, exposed as a tap). Error coloring is a native
- * adaptation (pi signals errors through the shell, not text color).
+ * like "Searched for …", else the tool name) and a spinner while running
+ * (the call committed but its result has not, and the run is still live —
+ * pi's component spins between its start and end events). Rows with output
+ * open [ToolOutputSheet] instead of expanding in place: the sheet owns its
+ * scroll, starts at the top of the content, and leaves the transcript's
+ * layout and scroll position untouched behind it. Per-row, never global
+ * (pi's Ctrl+O, exposed as a tap). Error coloring is a native adaptation
+ * (pi signals errors through the shell, not text color).
  */
 @Composable
 private fun ToolCallItem(
-    call: ToolCall?,
-    toolName: String?,
-    output: String?,
-    isError: Boolean,
+    call: ToolCall,
+    result: ToolResultMessage?,
     running: Boolean,
     onOpenOutput: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val output = result?.content?.textContent()?.takeIf { it.isNotEmpty() }
+    val isError = result?.isError == true
     Surface(
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -425,7 +422,7 @@ private fun ToolCallItem(
             }.padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             Text(
-                text = toolCallTitle(call, toolName),
+                text = toolCallTitle(call),
                 style = MaterialTheme.typography.labelLarge,
                 color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified,
                 modifier = Modifier.weight(1f)
@@ -454,12 +451,12 @@ private fun ToolCallItem(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ToolOutputSheet(call: ToolCall?, message: ToolResultMessage, onDismiss: () -> Unit) {
+private fun ToolOutputSheet(call: ToolCall, result: ToolResultMessage, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        val format = ToolResultRenderers.formatFor(message.toolName)
-        val searchResults = remember(message) { toolResultSearchResults(message) }
-        val output = remember(message) { message.content.textContent().orEmpty() }
-        val contentColor = if (message.isError) {
+        val format = ToolResultRenderers.formatFor(call.name)
+        val searchResults = remember(result) { toolResultSearchResults(result) }
+        val output = remember(result) { result.content.textContent().orEmpty() }
+        val contentColor = if (result.isError) {
             MaterialTheme.colorScheme.error
         } else {
             MaterialTheme.colorScheme.onSurfaceVariant
@@ -478,14 +475,14 @@ private fun ToolOutputSheet(call: ToolCall?, message: ToolResultMessage, onDismi
                 Text(
                     text = toolCallTitle(call),
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (message.isError) {
+                    color = if (result.isError) {
                         MaterialTheme.colorScheme.error
                     } else {
                         MaterialTheme.colorScheme.onSurface
                     },
                     modifier = Modifier.weight(1f)
                 )
-                if (message.isError) {
+                if (result.isError) {
                     Text(
                         text = stringResource(R.string.tool_status_failed),
                         style = MaterialTheme.typography.labelSmall,
@@ -682,19 +679,19 @@ private fun ConversationContentThinkingPreview() {
                         usage = works.resolve.pathfinder.ai.Usage()
                     )
                 ),
-                TranscriptRow.Chat(
-                    "m3",
+                TranscriptRow.Tool(
+                    "m3:t1",
+                    ToolCall(
+                        id = "t1",
+                        name = "web_search",
+                        arguments = """{"query":"arithmetic"}"""
+                    ),
                     ToolResultMessage(
                         toolCallId = "t1",
                         toolName = "web_search",
                         content = listOf(
                             TextContent("1. Arithmetic — Wikipedia\n2. Addition — Wikipedia")
                         )
-                    ),
-                    call = ToolCall(
-                        id = "t1",
-                        name = "web_search",
-                        arguments = """{"query":"arithmetic"}"""
                     )
                 )
             )
