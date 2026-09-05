@@ -23,10 +23,6 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
-import works.resolve.pathfinder.logging.PathfinderDiagnostics
-import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
-import works.resolve.pathfinder.telemetry.SpanStatus
-import works.resolve.pathfinder.telemetry.attr
 
 class SessionStoreTest {
 
@@ -542,95 +538,5 @@ class SessionStoreTest {
         File(root, "corrupt.jsonl").writeText("garbage")
         val summaries = store.summaries()
         assertEquals(listOf(good.id), summaries.map { it.id })
-    }
-
-    @Test
-    fun `telemetry records save and load spans on success`() = runTest {
-        val telemetry = InMemoryTelemetryContext()
-        val store = SessionStore(
-            root = tmpFolder.newFolder("telemetry-ok"),
-            clock = clock,
-            idFactory = { "sess-t" },
-            diagnostics = PathfinderDiagnostics(telemetry)
-        )
-        val created = store.create("t")
-        assertNotNull(store.load(created.id))
-
-        val saves = telemetry.getSpans().filter { it.name == "pf.session.save" }
-        val loads = telemetry.getSpans().filter { it.name == "pf.session.load" }
-        assertTrue(saves.isNotEmpty() && loads.isNotEmpty())
-        assertEquals(SpanStatus.Ok, saves.single().status)
-        assertEquals(SpanStatus.Ok, loads.single().status)
-        assertEquals(attr("sess-t"), saves.single().attributes["pf.session.id"])
-        assertEquals(attr("persisted"), saves.single().attributes["pf.session.outcome"])
-        assertEquals(attr("loaded"), loads.single().attributes["pf.session.outcome"])
-    }
-
-    @Test
-    fun `telemetry records load failure and summary skip with type only`() = runTest {
-        val telemetry = InMemoryTelemetryContext()
-        val rootFail = tmpFolder.newFolder("telemetry-fail")
-        val store = SessionStore(
-            root = rootFail,
-            clock = clock,
-            idFactory = { "sess-f" },
-            diagnostics = PathfinderDiagnostics(telemetry)
-        )
-        val id = store.create("t").id
-        File(rootFail, "$id.jsonl").writeText("{corrupt")
-
-        assertFailsWithSessionError { store.load(id) }
-        val loadFailed = telemetry.getSpans().last { it.name == "pf.session.load" }
-        assertEquals(
-            SpanStatus.Ok,
-            telemetry.getSpans().first {
-                it.name == "pf.session.save"
-            }.status
-        )
-        val error = loadFailed.status as SpanStatus.Error
-        assertEquals("SessionError", error.error?.name) // short type name only
-        assertEquals("", error.error?.message) // never exception text, paths, or content
-
-        assertTrue(store.summaries().isEmpty())
-        val skipped = telemetry.getSpans().single { it.name == "pf.session.summary" }
-        assertEquals(attr("skipped"), skipped.attributes["pf.session.outcome"])
-        assertTrue(skipped.status is SpanStatus.Error)
-    }
-
-    @Test
-    fun `telemetry records fork under its own span name`() = runTest {
-        val telemetry = InMemoryTelemetryContext()
-        val store = SessionStore(
-            root = tmpFolder.newFolder("telemetry-fork"),
-            clock = clock,
-            idFactory = { "sess-fork" },
-            diagnostics = PathfinderDiagnostics(telemetry)
-        )
-        val created = store.create("t")
-        store.fork(created.id, ForkOptions.Tree, id = "sess-forked")
-
-        val forkSpan = telemetry.getSpans().single { it.name == "pf.session.fork" }
-        assertEquals(attr("persisted"), forkSpan.attributes["pf.session.outcome"])
-        assertEquals(SpanStatus.Ok, forkSpan.status)
-    }
-
-    @Test
-    fun `telemetry records save failure with type only`() = runTest {
-        val telemetry = InMemoryTelemetryContext()
-        // A regular file as root: the directory is unavailable, so writes fail.
-        val rootAsFile = tmpFolder.newFile("telemetry-not-a-dir")
-        val store = SessionStore(
-            root = rootAsFile,
-            clock = clock,
-            idFactory = { "sess-w" },
-            diagnostics = PathfinderDiagnostics(telemetry)
-        )
-        assertFailsWithSessionError { store.create("t") }
-        val saveFailed = telemetry.getSpans().single()
-        assertEquals("pf.session.save", saveFailed.name)
-        val error = saveFailed.status as SpanStatus.Error
-        // The write failure is wrapped before the span records its type.
-        assertEquals("SessionError", error.error?.name) // short type name only
-        assertEquals("", error.error?.message)
     }
 }

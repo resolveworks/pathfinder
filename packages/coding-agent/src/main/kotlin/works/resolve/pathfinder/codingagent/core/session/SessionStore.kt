@@ -13,7 +13,6 @@ import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.uuidv7
-import works.resolve.pathfinder.logging.PathfinderDiagnostics
 
 /**
  * File-backed append-only session store over the JSONL v4 mutation-log
@@ -30,19 +29,13 @@ import works.resolve.pathfinder.logging.PathfinderDiagnostics
  * ignored, never migrated. A torn final append (JSON syntax error on the
  * last line) is repaired on load by atomically publishing the valid
  * prefix; an unterminated tail gets its newline appended.
- *
- * Telemetry errors are type-only through [PathfinderDiagnostics]:
- * `pf.session.*` spans record the session id, outcome, and exception type
- * — never paths or transcript content; the vocabulary and policy live in
- * the facade.
  */
 class SessionStore(
     private val root: File,
     private val clock: Clock = Clock.System,
     private val idFactory: () -> String = ::uuidv7,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    maxFileBytes: Long = MAX_FILE_BYTES,
-    private val diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP
+    maxFileBytes: Long = MAX_FILE_BYTES
 ) : SessionRepository {
 
     /** Upper bound on a single session file to avoid reading unbounded/corrupt files. */
@@ -61,7 +54,7 @@ class SessionStore(
     override suspend fun create(title: String): Session = mutex.withLock {
         withContext(ioDispatcher) {
             val id = requireId(idFactory())
-            writeSpanned(id) {
+            writeSpanned {
                 ensureRoot()
                 val createdAt = clock.now().toEpochMilliseconds()
                 val storage = JsonlSessionStorage.create(
@@ -185,7 +178,7 @@ class SessionStore(
      */
     override suspend fun save(session: Session): Session = mutex.withLock {
         withContext(ioDispatcher) {
-            writeSpanned(session.id) {
+            writeSpanned {
                 syncSession(
                     id = session.id,
                     entries = session.entries.toList(),
@@ -267,7 +260,7 @@ class SessionStore(
     ): Session = mutex.withLock {
         withContext(ioDispatcher) {
             val source = requireId(sourceId)
-            writeSpanned(source, PathfinderDiagnostics.SessionWrite.FORK) {
+            writeSpanned {
                 ensureRoot()
                 val sourceStorage = storageFor(source, fileFor(source))
                     ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
@@ -410,14 +403,8 @@ class SessionStore(
         return storage.toSession(file.lastModified())
     }
 
-    private suspend fun writeSpanned(
-        id: String,
-        kind: PathfinderDiagnostics.SessionWrite = PathfinderDiagnostics.SessionWrite.SAVE,
-        operation: () -> Session
-    ): Session = try {
-        // The span records the original failure type; the rewrap below is
-        // business behavior and stays outside the recorded boundary.
-        diagnostics.sessionWrite(kind, id) { operation() }
+    private suspend fun writeSpanned(operation: () -> Session): Session = try {
+        operation()
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -433,12 +420,16 @@ class SessionStore(
 
     private fun sessionIdOf(file: File): String = file.name.removeSuffix(".jsonl")
 
-    private suspend fun loadSpanned(file: File): Session? =
-        diagnostics.sessionLoad(sessionIdOf(file)) { replay(file, sessionIdOf(file)) }
+    private fun loadSpanned(file: File): Session? = replay(file, sessionIdOf(file))
 
-    /** Summary read under a `pf.session.summary` span; failures are recorded and the entry skipped. */
-    private suspend fun summarySpanned(file: File): Session? =
-        diagnostics.sessionSummary(sessionIdOf(file)) { replay(file, sessionIdOf(file)) }
+    /** Summary read; failures other than cancellation skip the entry. */
+    private suspend fun summarySpanned(file: File): Session? = try {
+        replay(file, sessionIdOf(file))
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }
 
     companion object {
         const val MAX_FILE_BYTES: Long = 16L * 1024 * 1024

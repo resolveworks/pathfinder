@@ -107,7 +107,7 @@ class PathfinderApplication : Application() {
     }
 
     val sessionStore: SessionStore by lazy {
-        SessionStore(File(filesDir, SESSIONS_DIRECTORY), diagnostics = diagnostics)
+        SessionStore(File(filesDir, SESSIONS_DIRECTORY))
     }
 
     /** Generated from pi; never hand-edit the bundled asset. */
