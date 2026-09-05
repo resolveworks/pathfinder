@@ -178,8 +178,8 @@ fun ChatScreen(
 
     // Panel scroll state lives above the Chat/Tree switch so each view keeps
     // its own position across view toggles. A different transcript starts
-    // with fresh list state and lets ConversationContent place it at the end.
-    val chatScrollState = key(uiState.activeSessionId) { rememberTranscriptScrollState() }
+    // with fresh list state positioned at its bottom anchor.
+    val chatScrollState = key(uiState.activeSessionId) { rememberTranscriptScrollState(uiState) }
     val treeListState = rememberLazyListState()
     // Session whose tree has been positioned on its current leaf at open.
     var positionedTreeSessionId by rememberSaveable { mutableStateOf<String?>(null) }

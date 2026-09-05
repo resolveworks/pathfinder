@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -49,8 +50,14 @@ internal class TranscriptScrollState(
 }
 
 @Composable
-internal fun rememberTranscriptScrollState(): TranscriptScrollState {
-    val listState = rememberLazyListState()
+internal fun rememberTranscriptScrollState(uiState: ChatUiState): TranscriptScrollState {
+    // Start at the sentinel on the first measure, not at the top followed by
+    // an effect-driven jump. Restored reader positions still take precedence.
+    val initialBottomIndex = remember {
+        uiState.messages.count(ChatMessage::hasRenderableContent) +
+            uiState.pendingTools.size + if (uiState.streamingMessage != null) 1 else 0
+    }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialBottomIndex)
     return rememberSaveable(
         listState,
         saver = Saver(

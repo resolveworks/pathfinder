@@ -185,7 +185,7 @@ private fun CompactedDivider() {
  * assistant messages as zero lines (the executions show as their own tool
  * rows), so they are filtered out here; an error keeps its row.
  */
-private fun ChatMessage.hasRenderableContent(): Boolean = isCompactionMarker ||
+internal fun ChatMessage.hasRenderableContent(): Boolean = isCompactionMarker ||
     role != ChatRole.Assistant ||
     error != null ||
     blocks.any { it is ChatBlock.Text || it is ChatBlock.Thinking }
@@ -570,47 +570,48 @@ private fun ThinkingText(markdown: String, modifier: Modifier = Modifier) {
 @Composable
 private fun ConversationContentThinkingPreview() {
     PathfinderTheme {
-        ConversationContent(
-            uiState = ChatUiState(
-                status = ChatStatus.Ready,
-                // The setting's on-mode renders reasoning inline (pi's shown
-                // state), streaming as it arrives.
-                showThinking = true,
-                messages = listOf(
-                    ChatMessage(
-                        id = "m1",
-                        role = ChatRole.User,
-                        blocks = listOf(ChatBlock.Text("What is 2 + 2?"))
-                    ),
-                    ChatMessage(
-                        id = "m2",
-                        role = ChatRole.Assistant,
-                        blocks = listOf(
-                            ChatBlock.Thinking(
-                                "The user asks a simple arithmetic question. *2 + 2* equals " +
-                                    "**4** — no tools needed."
-                            ),
-                            ChatBlock.Text("2 + 2 = **4**."),
-                            ChatBlock.Thinking(
-                                "Answered directly; offering the derivation seems unnecessary."
-                            )
-                        )
-                    ),
-                    ChatMessage(
-                        id = "m3",
-                        role = ChatRole.Tool,
-                        blocks = emptyList(),
-                        toolResult = ChatToolResult(
-                            toolCallId = "t1",
-                            toolName = "web_search",
-                            isError = false,
-                            output = "1. Arithmetic — Wikipedia\n2. Addition — Wikipedia",
-                            input = "arithmetic"
+        val uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            // The setting's on-mode renders reasoning inline (pi's shown
+            // state), streaming as it arrives.
+            showThinking = true,
+            messages = listOf(
+                ChatMessage(
+                    id = "m1",
+                    role = ChatRole.User,
+                    blocks = listOf(ChatBlock.Text("What is 2 + 2?"))
+                ),
+                ChatMessage(
+                    id = "m2",
+                    role = ChatRole.Assistant,
+                    blocks = listOf(
+                        ChatBlock.Thinking(
+                            "The user asks a simple arithmetic question. *2 + 2* equals " +
+                                "**4** — no tools needed."
+                        ),
+                        ChatBlock.Text("2 + 2 = **4**."),
+                        ChatBlock.Thinking(
+                            "Answered directly; offering the derivation seems unnecessary."
                         )
                     )
+                ),
+                ChatMessage(
+                    id = "m3",
+                    role = ChatRole.Tool,
+                    blocks = emptyList(),
+                    toolResult = ChatToolResult(
+                        toolCallId = "t1",
+                        toolName = "web_search",
+                        isError = false,
+                        output = "1. Arithmetic — Wikipedia\n2. Addition — Wikipedia",
+                        input = "arithmetic"
+                    )
                 )
-            ),
-            scrollState = rememberTranscriptScrollState()
+            )
+        )
+        ConversationContent(
+            uiState = uiState,
+            scrollState = rememberTranscriptScrollState(uiState)
         )
     }
 }

@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -734,12 +735,6 @@ class ChatViewModel(
             setError(ERROR_SETTINGS_SAVE, e)
             return false
         }
-        // Commit the session before binding: state collection starts
-        // immediately, and the new agent's transcript must never be observed
-        // against the previous session (which could cross-write saves).
-        activeSession = session
-        persistedEntryCount = session.entries.size
-        bindAgent(agent)
         val conversation = agent.conversation
         val summaries = sessionStore.summaries()
         val laneRecovery = laneRecoveryFor(session)
@@ -753,6 +748,12 @@ class ChatViewModel(
             }
         }
         val draft = sessionDrafts[session.id].orEmpty()
+        // Do not suspend between binding and publishing the session id:
+        // collection can start immediately, and a frame must never render
+        // incoming messages with the outgoing session's scroll state.
+        activeSession = session
+        persistedEntryCount = session.entries.size
+        bindAgent(agent)
         updateState {
             it.copy(
                 activeSessionId = session.id,
@@ -984,8 +985,9 @@ class ChatViewModel(
         // The recorder resolves the session at call time (mid-run session
         // switches are blocked).
         newAgent.operationRecorder = operationRecorder
-        agentStateJob =
-            viewModelScope.launch { newAgent.state.collect { state -> onAgentState(state) } }
+        agentStateJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            newAgent.state.collect { state -> onAgentState(state) }
+        }
         // Events are zero-replay flow: the subscriber must be bound before
         // any prompt starts.
         agentEventsJob =
