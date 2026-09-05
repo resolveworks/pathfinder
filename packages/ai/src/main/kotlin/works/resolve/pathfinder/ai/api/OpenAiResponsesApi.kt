@@ -3,8 +3,8 @@ package works.resolve.pathfinder.ai.api
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -329,7 +329,7 @@ class OpenAiResponsesApi(
             )
 
             emit(AssistantMessageEvent.Start(state.partialSnapshot()))
-            for (event in response.events.toList()) {
+            response.events.collect { event ->
                 processSseEvent(event, state)?.forEach { emit(it) }
             }
             finish(state)

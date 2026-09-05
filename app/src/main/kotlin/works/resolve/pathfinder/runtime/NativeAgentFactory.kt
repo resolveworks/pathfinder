@@ -1,5 +1,8 @@
 package works.resolve.pathfinder.runtime
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.flowOn
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.StreamFn
@@ -114,7 +117,12 @@ class NativeAgentFactory(
                     maxRetries = MAX_RETRIES
                 ),
                 streamFn = StreamFn { requestedModel, context, options ->
+                    // Request encoding and stream decoding run off Main; agent/session
+                    // state and tool execution stay on the collector's dispatcher.
+                    // Rendezvous delivery avoids a queue of growing partial snapshots.
                     models.stream(requestedModel, context, options)
+                        .buffer(0)
+                        .flowOn(Dispatchers.Default)
                 }
             ),
             conversation = conversation,

@@ -133,7 +133,6 @@ android {
     // in JVM unit tests.
     testOptions {
         unitTests {
-            isIncludeAndroidResources = true
             isReturnDefaultValues = true
         }
     }
