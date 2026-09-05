@@ -19,7 +19,6 @@ import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
@@ -29,7 +28,6 @@ import works.resolve.pathfinder.ai.auth.CredentialType
 import works.resolve.pathfinder.ai.auth.ModelsError
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
 import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
-import works.resolve.pathfinder.ai.clampThinkingLevel
 import works.resolve.pathfinder.ai.getSupportedThinkingLevels
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
@@ -39,13 +37,11 @@ import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 import works.resolve.pathfinder.codingagent.core.session.SessionError
 import works.resolve.pathfinder.codingagent.core.session.SessionInfo
 import works.resolve.pathfinder.codingagent.core.session.SessionManager
-import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
-import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
 /**
@@ -101,6 +97,26 @@ class ChatViewModel(
     )
 
     /**
+     * Web-search feature controller: search-provider credentials and the
+     * web_search tool's presence on sessions. The search surfaces of
+     * [ChatUiState] mirror [SearchProviderController.state].
+     */
+    private val searchProviders = SearchProviderController(
+        scope = viewModelScope,
+        service = searchProviderService,
+        onError = { message, cause -> setError(message, cause) }
+    )
+
+    /**
+     * Drawer session-search controller; the sessionSearch fields of
+     * [ChatUiState] mirror [SessionSearchController.state].
+     */
+    private val sessionSearch = SessionSearchController(
+        scope = viewModelScope,
+        sessionSource = sessionSource
+    )
+
+    /**
      * The persisted settings as last read or written; its provider/model
      * fields are the startup default only. The running model lives on the
      * bound [AgentSession] — its branch fold at load, [selectModelInternal]
@@ -131,17 +147,33 @@ class ChatViewModel(
      */
     private val sessionDrafts = mutableMapOf<String, String>()
 
-    /**
-     * Whether a usable Brave Search key is currently stored; every agent
-     * created or bound here synchronizes web_search against it. Maintained
-     * from live credential reads, never persisted.
-     */
-    private var searchBraveConfigured: Boolean = false
-
     init {
         viewModelScope.launch { initialize() }
         viewModelScope.launch {
             loginController.flow.collect { flow -> updateState { it.copy(authFlow = flow) } }
+        }
+        viewModelScope.launch {
+            searchProviders.state.collect { search ->
+                updateState {
+                    it.copy(
+                        searchProviderOptions = search.options,
+                        searchCredentialSuccessEpoch = search.successEpoch
+                    )
+                }
+                agent?.let(searchProviders::applyTo)
+            }
+        }
+        viewModelScope.launch {
+            sessionSearch.state.collect { search ->
+                updateState {
+                    it.copy(
+                        sessionSearchQuery = search.query,
+                        sessionSearchSort = search.sort,
+                        sessionSearchResults = search.results,
+                        isSessionSearching = search.isScanning
+                    )
+                }
+            }
         }
     }
 
@@ -311,68 +343,19 @@ class ChatViewModel(
 
     /** UI-safe auth prompts for a search provider's credential form (only Brave is supported). */
     fun searchProviderAuthPrompts(providerId: String): List<ProviderAuthPrompt> =
-        if (providerId == SearchProviderService.BRAVE_PROVIDER_ID) {
-            listOf(
-                ProviderAuthPrompt(
-                    BRAVE_API_KEY_PROMPT,
-                    SEARCH_BRAVE_KEY_PROMPT_MESSAGE,
-                    secret = true
-                )
-            )
-        } else {
-            emptyList()
-        }
+        searchProviders.authPrompts(providerId)
 
     /**
-     * Stores a web-search provider's API key. Blank input, an unknown
-     * provider, or a storage failure surfaces a static, secret-free error
-     * and changes nothing. Only a confirmed non-blank save bumps
-     * [ChatUiState.searchCredentialSuccessEpoch] and enables web_search on
-     * the bound session for the next run.
+     * Stores a web-search provider's API key; only a confirmed non-blank
+     * save bumps [ChatUiState.searchCredentialSuccessEpoch] and enables
+     * web_search on the bound session for the next run.
      */
-    fun saveSearchProviderCredential(providerId: String, apiKeyInput: String) {
-        viewModelScope.launch {
-            if (providerId != SearchProviderService.BRAVE_PROVIDER_ID) {
-                setError(ERROR_SEARCH_CREDENTIAL_SAVE)
-                return@launch
-            }
-            val key = apiKeyInput.trim()
-            if (key.isEmpty()) {
-                setError(ERROR_SEARCH_CREDENTIAL_SAVE)
-                return@launch
-            }
-            try {
-                searchProviderService.saveApiKey(providerId, key)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                setError(ERROR_SEARCH_CREDENTIAL_SAVE, e)
-                return@launch
-            }
-            updateState {
-                it.copy(searchCredentialSuccessEpoch = it.searchCredentialSuccessEpoch + 1)
-            }
-            refreshSearchStatus()
-        }
-    }
+    fun saveSearchProviderCredential(providerId: String, apiKeyInput: String) =
+        searchProviders.saveCredential(providerId, apiKeyInput)
 
-    /**
-     * Deletes a search provider's stored key; a failure surfaces a safe
-     * error and changes nothing.
-     */
-    fun removeSearchProviderCredential(providerId: String) {
-        viewModelScope.launch {
-            try {
-                searchProviderService.remove(providerId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                setError(ERROR_SEARCH_CREDENTIAL_SAVE, e)
-                return@launch
-            }
-            refreshSearchStatus()
-        }
-    }
+    /** Deletes a search provider's stored key. */
+    fun removeSearchProviderCredential(providerId: String) =
+        searchProviders.removeCredential(providerId)
 
     /**
      * Re-reads search credentials and recomputes the derived surfaces, like
@@ -380,7 +363,7 @@ class ChatViewModel(
      * search to unconfigured/disabled with a safe error.
      */
     fun refreshSearchProviderStatus() {
-        viewModelScope.launch { refreshSearchStatus() }
+        viewModelScope.launch { searchProviders.refresh() }
     }
 
     /** Persists the show-thinking display preference; safe mid-stream (display-only). */
@@ -475,91 +458,13 @@ class ChatViewModel(
     }
 
     /**
-     * Searchable-text corpus snapshot, held only while a query is active
-     * (memory bound; pi holds it only while the selector is open).
-     * Snapshot-at-activation: list churn reuses it, never rescans.
+     * Updates the drawer session-search query: blank drops it; non-blank
+     * loads the corpus once and filters (see [SessionSearchController]).
      */
-    private var sessionSearchCorpus: Map<String, String>? = null
-
-    private var sessionSearchScanJob: Job? = null
-
-    /**
-     * Updates the drawer session-search query: blank drops the corpus and
-     * results; non-blank filters synchronously against the loaded corpus or
-     * triggers the single scan that loads it. A scan failure degrades to
-     * an empty corpus (results stay empty, no error surfaced).
-     */
-    fun onSessionSearchQueryChange(query: String) {
-        updateState { it.copy(sessionSearchQuery = query) }
-        if (query.isBlank()) {
-            sessionSearchScanJob?.cancel()
-            sessionSearchScanJob = null
-            sessionSearchCorpus = null
-            updateState {
-                it.copy(sessionSearchResults = emptyList(), isSessionSearching = false)
-            }
-            return
-        }
-        if (sessionSearchCorpus != null) {
-            applySessionSearchFilter()
-            return
-        }
-        if (sessionSearchScanJob?.isActive == true) return
-        updateState { it.copy(isSessionSearching = true) }
-        sessionSearchScanJob = viewModelScope.launch {
-            val corpus = try {
-                sessionSource.list().associate { info ->
-                    info.id to "${info.id} ${info.allMessagesText}"
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                recordDegradation("session_search", e)
-                emptyMap()
-            }
-            sessionSearchCorpus =
-                if (_uiState.value.sessionSearchQuery.isBlank()) null else corpus
-            updateState { it.copy(isSessionSearching = false) }
-            applySessionSearchFilter()
-        }
-    }
+    fun onSessionSearchQueryChange(query: String) = sessionSearch.onQueryChange(query)
 
     /** Switches the drawer search sort and re-filters when a query is active. */
-    fun setSessionSearchSort(sort: SessionSearchSort) {
-        updateState { it.copy(sessionSearchSort = sort) }
-        if (_uiState.value.sessionSearchQuery.isNotBlank() && sessionSearchCorpus != null) {
-            applySessionSearchFilter()
-        }
-    }
-
-    /**
-     * Sessions absent from the corpus drop out under a query (pi: unscanned
-     * sessions don't appear in selector results).
-     */
-    private fun applySessionSearchFilter() {
-        val corpus = sessionSearchCorpus ?: return
-        val state = _uiState.value
-        if (state.sessionSearchQuery.isBlank()) return
-        val entries = state.sessionSummaries.map { summary ->
-            SessionSearchEntry(summary.id, summary.modified, corpus[summary.id].orEmpty())
-        }
-        val matched = filterAndSortSessions(
-            entries,
-            state.sessionSearchQuery,
-            state.sessionSearchSort
-        )
-        val byId = state.sessionSummaries.associateBy { it.id }
-        updateState {
-            it.copy(sessionSearchResults = matched.mapNotNull { entry -> byId[entry.id] })
-        }
-    }
-
-    /** Reapplies the search filter after a summaries refresh, if a query is active against a loaded corpus. */
-    private fun refreshSessionSearchResults() {
-        if (sessionSearchCorpus != null && _uiState.value.sessionSearchQuery.isNotBlank()) {
-            applySessionSearchFilter()
-        }
-    }
+    fun setSessionSearchSort(sort: SessionSearchSort) = sessionSearch.setSort(sort)
 
     fun newSession() {
         viewModelScope.launch {
@@ -766,103 +671,15 @@ class ChatViewModel(
         return manager to newAgent
     }
 
-    /**
-     * pi's sdk.ts session-init: resolves the startup model and seeds the
-     * session's configuration entries through the manager. [initialModelSettings]
-     * resolves the model (the active branch's folded model_change when it
-     * carries messages, else findInitialModel's
-     * scope/default/first-available order); a fresh session additionally
-     * gets a model_change entry recording the resolved model; a session
-     * without a thinking_level_change entry on its active path gets the
-     * stored default level, else "medium", clamped to the effective model —
-     * so both restore on resume. Because any opened session contains an
-     * assistant message, the fresh-session branch can only run for created
-     * sessions; the seeds buffer harmlessly there until the first assistant
-     * commit writes the file.
-     */
-    private suspend fun seedSession(manager: SessionManager): ModelSettings {
-        val conversation = manager.conversation
-        val hasExistingSession = conversation.activeMessages().isNotEmpty()
-        val base = initialModelSettings(isContinuing = hasExistingSession)
-        val seeded = settingsSeededFromFold(base, conversation)
-        if (!hasExistingSession && seeded.providerId.isNotBlank() && seeded.modelId.isNotBlank()) {
-            manager.appendModelChange(seeded.providerId, seeded.modelId)
-        }
-        if (conversation.activeEntries().none { it is ThinkingLevelEntry } &&
-            seeded.providerId.isNotBlank() && seeded.modelId.isNotBlank()
-        ) {
-            // Clamped before storing. An unresolvable model fails agent
-            // creation anyway, so the tree stays unseeded rather than
-            // gaining a second error path.
-            val seededLevel = try {
-                val model = modelResolver(seeded.providerId, seeded.modelId)
-                clampThinkingLevel(model, seeded.defaultThinkingLevel ?: DEFAULT_THINKING_LEVEL)
-            } catch (e: Exception) {
-                null
-            }
-            if (seededLevel != null) {
-                manager.appendThinkingLevelChange(seededLevel.wire)
-            }
-        }
-        return seeded
-    }
-
-    /**
-     * pi's findInitialModel order (model-resolver.ts), minus the CLI step:
-     * a fresh session takes the first available scoped model, else the saved
-     * default while the credential-filtered options still admit it, else the
-     * first available model; a continuing session skips the scope step (its
-     * branch fold, when present, wins in [settingsSeededFromFold]).
-     * Availability is [ChatUiState.modelOptions].
-     */
-    private fun initialModelSettings(isContinuing: Boolean): ModelSettings {
-        val options = _uiState.value.modelOptions
-        if (options.isEmpty()) return currentSettings
-        if (!isContinuing) {
-            val scoped = currentSettings.enabledModels.orEmpty().firstNotNullOfOrNull { ref ->
-                options.firstOrNull { option ->
-                    "${option.providerId}/${option.modelId}".equals(ref, ignoreCase = true)
-                }
-            }
-            if (scoped != null) {
-                return currentSettings.copy(
-                    providerId = scoped.providerId,
-                    modelId = scoped.modelId
-                )
-            }
-        }
-        val defaultAvailable = options.any {
-            it.providerId == currentSettings.providerId && it.modelId == currentSettings.modelId
-        }
-        if (defaultAvailable) return currentSettings
-        val first = options.first()
-        return currentSettings.copy(providerId = first.providerId, modelId = first.modelId)
-    }
-
-    /**
-     * Seeds the provider/model from the conversation's configuration fold: a
-     * branch that recorded a different model runs on that model, overriding
-     * the global defaults. Divergence from pi: only pairs the generated
-     * catalog supports are applied; anything else falls back to [settings].
-     */
-    private fun settingsSeededFromFold(
-        settings: ModelSettings,
-        conversation: Conversation
-    ): ModelSettings {
-        val model = conversation.effectiveConfiguration().model ?: return settings
-        if (model.provider == settings.providerId &&
-            model.modelId == settings.modelId
-        ) {
-            return settings
-        }
-        val catalogModel = catalog.getProvider(model.provider)?.model(model.modelId)
-            ?: return settings
-        return if (ChatApiRegistry.isSupported(catalogModel.api)) {
-            settings.copy(providerId = model.provider, modelId = model.modelId)
-        } else {
-            settings
-        }
-    }
+    /** Binds this ViewModel's resolved settings into [manager] (see [seedSessionConfiguration]). */
+    private suspend fun seedSession(manager: SessionManager): ModelSettings =
+        seedSessionConfiguration(
+            manager = manager,
+            settings = currentSettings,
+            modelOptions = _uiState.value.modelOptions,
+            modelResolver = modelResolver,
+            catalog = catalog
+        )
 
     /** Builds an agent or null (with a safe error surfaced) when the factory rejects the settings. */
     private fun tryCreateAgent(
@@ -872,7 +689,7 @@ class ChatViewModel(
         agentFactory.create(settings, sessionManager)
             // Synchronize web_search against the current Brave credential
             // before anything binds to the session.
-            .also(::synchronizeWebSearch)
+            .also(searchProviders::applyTo)
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -1276,7 +1093,7 @@ class ChatViewModel(
         // Search credentials never contribute to the LLM first-run
         // configuration below — `search_`-namespaced keys are not catalog
         // provider credentials.
-        refreshSearchStatus()
+        searchProviders.refresh()
         val providerOptions = try {
             catalog.providers
                 .map { provider ->
@@ -1344,64 +1161,6 @@ class ChatViewModel(
             )
         }
         projectScope(modelOptions)
-    }
-
-    /**
-     * Recomputes the search-provider surface from live credential reads and
-     * updates [searchBraveConfigured]; every bound session's web_search
-     * activation follows ([synchronizeWebSearch]). A read failure degrades
-     * search to unconfigured/disabled and surfaces a safe error — it never
-     * fails an otherwise-valid chat initialization.
-     */
-    private suspend fun refreshSearchStatus() {
-        val options = try {
-            searchProviderService.providers
-                .map { provider ->
-                    ProviderOption(
-                        id = provider.id,
-                        name = provider.name,
-                        configured = searchProviderService.isConfigured(provider.id)
-                    )
-                }
-                .sortedBy { it.name }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            recordDegradation("search_provider_status", e)
-            setError(ERROR_SEARCH_STATUS, e)
-            searchBraveConfigured = false
-            updateState {
-                it.copy(
-                    searchProviderOptions = searchProviderService.providers
-                        .map { provider ->
-                            ProviderOption(provider.id, provider.name, configured = false)
-                        }
-                        .sortedBy { option -> option.name }
-                )
-            }
-            agent?.let(::synchronizeWebSearch)
-            return
-        }
-        searchBraveConfigured =
-            options.firstOrNull { it.id == SearchProviderService.BRAVE_PROVIDER_ID }?.configured ==
-            true
-        updateState { it.copy(searchProviderOptions = options) }
-        agent?.let(::synchronizeWebSearch)
-    }
-
-    /**
-     * Aligns one session's tool set with the current search credential:
-     * web_search is appended (last) only while Brave is configured; the
-     * order and activation of every other tool is preserved exactly. Safe
-     * mid-stream: the agent snapshots its tool list per run, so an
-     * in-flight run keeps its own snapshot and the change lands on the
-     * next run. No `active_tools_change` session entry is appended — this
-     * runtime-only toggle is never persisted.
-     */
-    private fun synchronizeWebSearch(session: AgentSession) {
-        val names = session.getActiveToolNames().filter { it != BraveWebSearchTool.NAME } +
-            listOfNotNull(BraveWebSearchTool.NAME.takeIf { searchBraveConfigured })
-        session.setActiveToolsByName(names)
     }
 
     /**
@@ -1482,7 +1241,7 @@ class ChatViewModel(
     private suspend fun refreshSessionSummaries(): List<SessionInfo> = try {
         val summaries = sessionSource.list()
         updateState { it.copy(sessionSummaries = summaries) }
-        refreshSessionSearchResults()
+        sessionSearch.onSummariesChanged(summaries)
         summaries
     } catch (e: CancellationException) {
         throw e
@@ -1558,17 +1317,6 @@ class ChatViewModel(
         const val ERROR_ALREADY_STREAMING = "A response is already streaming"
         const val ERROR_ALREADY_AT_POINT = "Already at this point"
         const val ERROR_ENTRY_MISSING = "Message not found"
-        const val ERROR_SEARCH_CREDENTIAL_SAVE = "Could not store the search API key"
-        const val ERROR_SEARCH_STATUS = "Could not read the search provider status"
-
-        /** Kept as the prompt's stable id. */
-        const val BRAVE_API_KEY_PROMPT = "BRAVE_API_KEY"
-
-        /** Clear, secret-free message for the Brave key prompt. */
-        const val SEARCH_BRAVE_KEY_PROMPT_MESSAGE = "Enter your Brave Search API key"
-
-        /** pi's default thinking level: "medium". */
-        val DEFAULT_THINKING_LEVEL = ModelThinkingLevel.MEDIUM
 
         /** Actionable, secret-free message naming the still-missing auth prompts. */
         fun missingCredentialError(missing: List<AuthPrompt>): String =
