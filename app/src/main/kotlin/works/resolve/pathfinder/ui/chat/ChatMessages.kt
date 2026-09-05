@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -18,26 +20,22 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.LinkAnnotation
@@ -48,7 +46,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
@@ -87,10 +84,16 @@ internal fun ConversationContent(
         LazyColumn(
             state = listState,
             reverseLayout = true,
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxSize()
         ) {
+            item(key = "transcript-bottom-anchor") {
+                // Stable first item: key anchoring keeps it at the bottom across
+                // updates, but only while the reader has not scrolled past it.
+                Spacer(Modifier.height(with(LocalDensity.current) { 1f.toDp() }))
+            }
+
             // Emitted newest-first; reverseLayout puts it at the bottom,
             // preserving chronological visual order.
             uiState.streamingMessage?.let { streaming ->
@@ -150,26 +153,6 @@ internal fun ConversationContent(
                         showThinking = uiState.showThinking
                     )
                 }
-            }
-        }
-
-        // Stick-to-bottom companion (see the gated follow in ChatScreen):
-        // a detached reader re-attaches by scrolling back to the bottom,
-        // and this is the shortcut for it. canScrollBackward flips only on
-        // the detach/attach transition, so visibility recomposes just twice
-        // per excursion.
-        if (listState.canScrollBackward) {
-            val scope = rememberCoroutineScope()
-            SmallFloatingActionButton(
-                onClick = { scope.launch { listState.animateScrollToItem(0) } },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(16.dp)
-            ) {
-                Icon(
-                    Icons.Default.KeyboardArrowDown,
-                    contentDescription = stringResource(R.string.action_scroll_to_bottom)
-                )
             }
         }
 

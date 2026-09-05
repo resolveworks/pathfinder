@@ -34,6 +34,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -734,6 +735,45 @@ class ChatViewModelTest {
 
         vm.closeForTest()
     }
+
+    @Test
+    fun streamingUpdates_reuseUnchangedCommittedProjection() =
+        runTest(mainDispatcherRule.scheduler) {
+            val h = Harness()
+            val vm = h.newViewModel()
+            vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+            vm.configure(apiKey = "k")
+            vm.uiState.first { it.status == ChatStatus.Ready }
+
+            val releaseSecondChunk = CompletableDeferred<Unit>()
+            val releaseDone = CompletableDeferred<Unit>()
+            h.scriptedStreams.add(
+                flow {
+                    val started = h.assistant("")
+                    emit(AssistantMessageEvent.Start(started))
+                    val first = started.copy(content = listOf(TextContent("first")))
+                    emit(AssistantMessageEvent.TextDelta(0, "first", first))
+                    releaseSecondChunk.await()
+                    val second = started.copy(content = listOf(TextContent("first second")))
+                    emit(AssistantMessageEvent.TextDelta(0, " second", second))
+                    releaseDone.await()
+                    emit(AssistantMessageEvent.Done(StopReason.STOP, second))
+                }
+            )
+
+            vm.onDraftChange("Hello")
+            vm.send()
+            val first = vm.uiState.first { it.streamingMessage?.singleText() == "first" }
+            val committed = first.messages
+
+            releaseSecondChunk.complete(Unit)
+            val second = vm.uiState.first { it.streamingMessage?.singleText() == "first second" }
+            assertSame(committed, second.messages)
+
+            releaseDone.complete(Unit)
+            vm.uiState.first { !it.isStreaming }
+            vm.closeForTest()
+        }
 
     @Test
     fun abort_persistsUserAndAbortedAssistant() = runTest(mainDispatcherRule.scheduler) {

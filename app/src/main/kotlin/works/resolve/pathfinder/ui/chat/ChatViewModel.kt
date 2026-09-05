@@ -150,6 +150,9 @@ class ChatViewModel(
     /** Agent-sourced error last projected into the UI, to detect agent-side clearing. */
     private var lastAgentError: String? = null
 
+    /** Agent transcript instance used for the latest committed-message projection. */
+    private var observedAgentMessages: List<Message>? = null
+
     /**
      * Unsent input per session, synced only at [activateSession] boundaries:
      * the outgoing draft is stashed under its session, the incoming session's
@@ -975,6 +978,7 @@ class ChatViewModel(
         agentEventsJob?.cancel()
         agent = newAgent
         lastAgentError = null
+        observedAgentMessages = null
         // The recorder resolves the session at call time (mid-run session
         // switches are blocked).
         newAgent.operationRecorder = operationRecorder
@@ -1048,9 +1052,19 @@ class ChatViewModel(
 
     private fun onAgentState(state: AgentState) {
         val agentError = state.errorMessage
+        // AgentState uses copy-on-write transcript lists. Streaming chunks
+        // change only streamingMessage, so retain the existing projection
+        // instead of rebuilding and structurally comparing every committed
+        // message (including potentially large tool outputs) for every token.
+        val committedProjection = if (state.messages === observedAgentMessages) {
+            null
+        } else {
+            projectCommitted(state.messages, activeConversation)
+        }
+        observedAgentMessages = state.messages
         updateState {
             it.copy(
-                messages = projectCommitted(state.messages, activeConversation),
+                messages = committedProjection ?: it.messages,
                 pendingTools = pendingToolExecutions(state),
                 streamingMessage = (state.streamingMessage as? AssistantMessage)?.let(
                     ::projectStreaming
