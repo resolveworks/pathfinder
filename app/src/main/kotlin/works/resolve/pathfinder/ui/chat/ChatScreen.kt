@@ -602,21 +602,6 @@ private fun ChatDrawerContent(
             }
         }
         HorizontalDivider()
-        FilledTonalButton(
-            onClick = onNewSession,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(NavigationDrawerItemDefaults.ItemPadding)
-                .padding(vertical = 8.dp)
-        ) {
-            Icon(
-                Icons.Default.Add,
-                contentDescription = null,
-                modifier = Modifier.size(ButtonDefaults.IconSize)
-            )
-            Spacer(Modifier.size(ButtonDefaults.IconSpacing))
-            Text(stringResource(R.string.action_new_chat))
-        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -697,6 +682,21 @@ private fun ChatDrawerContent(
                     )
                 }
             }
+        }
+        FilledTonalButton(
+            onClick = onNewSession,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(NavigationDrawerItemDefaults.ItemPadding)
+                .padding(vertical = 8.dp)
+        ) {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = null,
+                modifier = Modifier.size(ButtonDefaults.IconSize)
+            )
+            Spacer(Modifier.size(ButtonDefaults.IconSpacing))
+            Text(stringResource(R.string.action_new_chat))
         }
     }
 }
