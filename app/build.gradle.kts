@@ -129,7 +129,14 @@ android {
 
     sourceSets["main"].assets.srcDirs(defuddleAssetsDir.get())
 
-    testOptions { unitTests { isIncludeAndroidResources = true } }
+    // android.util.Log calls at the ViewModel error boundary must not throw
+    // in JVM unit tests.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 dependencies {

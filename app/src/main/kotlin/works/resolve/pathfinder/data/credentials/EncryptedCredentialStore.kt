@@ -10,7 +10,6 @@ import kotlinx.coroutines.withContext
 import works.resolve.pathfinder.ai.auth.Credential
 import works.resolve.pathfinder.ai.auth.CredentialInfo
 import works.resolve.pathfinder.ai.auth.CredentialStore
-import works.resolve.pathfinder.logging.PathfinderDiagnostics
 
 /**
  * Persistent [CredentialStore]: one credential per provider, stored as
@@ -22,30 +21,20 @@ import works.resolve.pathfinder.logging.PathfinderDiagnostics
  * locking, but the single-process app needs only this in-process mutex. Key
  * material never leaves the credential boundary in plaintext and is never
  * logged.
- *
- * Failures to read (decrypt), decode, or persist are recorded as sanitized
- * `pf.credentials.*` spans through [PathfinderDiagnostics] before the
- * original exception is rethrown. The sanitization policy lives there: only
- * the provider id, operation outcome, and exception *type* are recorded —
- * never exception messages, which can embed platform detail, and never file
- * content.
  */
 class EncryptedCredentialStore(
     private val dir: File,
     private val encrypt: (ByteArray) -> ByteArray,
-    private val decrypt: (ByteArray) -> ByteArray,
-    private val diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP
+    private val decrypt: (ByteArray) -> ByteArray
 ) : CredentialStore {
 
     constructor(
         context: Context,
-        cipher: KeystoreAeadCipher,
-        diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP
+        cipher: KeystoreAeadCipher
     ) : this(
         dir = File(context.filesDir, DIRECTORY),
         encrypt = cipher::encrypt,
-        decrypt = cipher::decrypt,
-        diagnostics = diagnostics
+        decrypt = cipher::decrypt
     )
 
     private val locks = ConcurrentHashMap<String, Mutex>()
@@ -57,19 +46,13 @@ class EncryptedCredentialStore(
         return File(dir, "$providerId.bin")
     }
 
-    private suspend fun readRaw(providerId: String): String? =
-        diagnostics.credentialRead(providerId) { readRawSpanned(providerId) }
-
-    private suspend fun readRawSpanned(providerId: String): String? = withContext(Dispatchers.IO) {
+    private suspend fun readRaw(providerId: String): String? = withContext(Dispatchers.IO) {
         val file = fileFor(providerId)
         if (!file.exists()) return@withContext null
         String(decrypt(file.readBytes()), Charsets.UTF_8)
     }
 
     private suspend fun writeRaw(providerId: String, encoded: String) =
-        diagnostics.credentialWrite(providerId) { writeRawSpanned(providerId, encoded) }
-
-    private suspend fun writeRawSpanned(providerId: String, encoded: String) =
         withContext(Dispatchers.IO) {
             val file = fileFor(providerId)
             file.parentFile?.mkdirs()
@@ -83,14 +66,12 @@ class EncryptedCredentialStore(
 
     private suspend fun decodeRaw(providerId: String): Credential? =
         readRaw(providerId)?.let { raw ->
-            diagnostics.credentialDecode(providerId) {
-                try {
-                    CredentialCodec.decode(raw)
-                } catch (error: CredentialFormatException) {
-                    throw CredentialFormatException(
-                        "Stored credential for $providerId is malformed: ${error.message}"
-                    )
-                }
+            try {
+                CredentialCodec.decode(raw)
+            } catch (error: CredentialFormatException) {
+                throw CredentialFormatException(
+                    "Stored credential for $providerId is malformed: ${error.message}"
+                )
             }
         }
 
@@ -127,9 +108,7 @@ class EncryptedCredentialStore(
     }
 
     override suspend fun delete(providerId: String): Unit = lockFor(providerId).withLock {
-        diagnostics.credentialDelete(providerId) {
-            withContext(Dispatchers.IO) { fileFor(providerId).delete() }
-        }
+        withContext(Dispatchers.IO) { fileFor(providerId).delete() }
     }
 
     private companion object {

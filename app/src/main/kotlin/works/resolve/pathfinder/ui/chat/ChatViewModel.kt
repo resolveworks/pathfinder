@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -58,7 +59,6 @@ import works.resolve.pathfinder.codingagent.core.session.reduceLaneState
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
-import works.resolve.pathfinder.logging.PathfinderDiagnostics
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
@@ -92,8 +92,6 @@ class ChatViewModel(
     private val agentFactory: AgentFactory,
     /** Resolves a provider/model pair to the effective request model; throwing input is surfaced as a safe unknown-model error. */
     private val modelResolver: (providerId: String, modelId: String) -> Model,
-    /** App-owned diagnostics boundary for the UI error/degradation spans. */
-    private val diagnostics: PathfinderDiagnostics = PathfinderDiagnostics.NOOP,
     /**
      * Process-wide foreground state (Android platform glue; pi has no
      * foreground concept), driven from MainActivity lifecycle; the OAuth
@@ -111,7 +109,6 @@ class ChatViewModel(
     private val loginController = ProviderLoginController(
         scope = viewModelScope,
         authService = authService,
-        diagnostics = diagnostics,
         onLoginSucceeded = { onCredentialStored() },
         onLoginFailed = { cause -> setError(ERROR_AUTH_LOGIN, cause) }
     )
@@ -782,7 +779,7 @@ class ChatViewModel(
      * reducer over the session's durable record log. Pathfinder is
      * single-lane and sessions are small, so the recovery slice is the
      * entire lane. Validation failures map to [LaneRecovery.Corrupt]; a
-     * failing read degrades to [LaneRecovery.Idle] with telemetry —
+     * failing read degrades to [LaneRecovery.Idle] (logged) —
      * classification is advisory UI state, never a load blocker.
      */
     private suspend fun laneRecoveryFor(session: Session): LaneRecovery = try {
@@ -1019,7 +1016,7 @@ class ChatViewModel(
                 }
             }
 
-            // Summarization-retry telemetry is deliberately unsurfaced.
+            // Summarization-retry events are deliberately unsurfaced.
             is AgentEvent.SummarizationRetryScheduled,
             is AgentEvent.SummarizationRetryAttemptStart,
             is AgentEvent.SummarizationRetryFinished
@@ -1363,9 +1360,7 @@ class ChatViewModel(
             }
         }
         try {
-            diagnostics.authLogin(providerId, AuthType.API_KEY.wire) {
-                authService.login(providerId, AuthType.API_KEY, FormAuthInteraction(answers))
-            }
+            authService.login(providerId, AuthType.API_KEY, FormAuthInteraction(answers))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1685,29 +1680,23 @@ class ChatViewModel(
     // ---- helpers ----
 
     /**
-     * Records a `pf.chat.degraded` telemetry span for a failure the
-     * ViewModel deliberately absorbs into degraded UI state instead of an
-     * error — the credential store failing to read must be distinguishable
-     * from an actually-missing credential.
+     * Records a degradation the ViewModel deliberately absorbs into degraded
+     * UI state instead of an error — the credential store failing to read
+     * must be distinguishable from an actually-missing credential.
      */
-    private suspend fun recordDegradation(operation: String, cause: Throwable) {
-        diagnostics.chatDegraded(operation, cause)
+    private fun recordDegradation(operation: String, cause: Throwable) {
+        Log.w(TAG, operation, cause)
     }
 
     /**
-     * Surfaces [message] as the UI error and records a `pf.chat.error`
-     * telemetry span for the [cause] — the only place otherwise-invisible
-     * failures become diagnosable on-device. Only the cause's exception
-     * type is recorded (app diagnostics policy: exception messages are not
-     * a guaranteed-safe free-form surface); [message] is a static UI string
-     * carrying no secrets.
+     * Surfaces [message] as the UI error and logs message plus [cause] at
+     * the single error boundary — the only place otherwise-invisible
+     * failures become diagnosable on-device. [message] is a static UI
+     * string carrying no secrets.
      */
     private fun setError(message: String, cause: Throwable? = null) {
         updateState { it.copy(error = message) }
-        if (cause == null) return
-        viewModelScope.launch {
-            diagnostics.chatError(message, cause)
-        }
+        Log.e(TAG, message, cause)
     }
 
     private fun updateState(transform: (ChatUiState) -> ChatUiState) {
@@ -1721,6 +1710,8 @@ class ChatViewModel(
     }
 
     private companion object {
+        private const val TAG = "Pathfinder"
+
         const val DEFAULT_SESSION_TITLE = "New chat"
 
         const val TITLE_MAX_LENGTH = 48

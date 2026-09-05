@@ -13,10 +13,6 @@ import kotlinx.coroutines.test.runTest
 import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.CredentialType
 import works.resolve.pathfinder.ai.auth.OAuthCredential
-import works.resolve.pathfinder.logging.PathfinderDiagnostics
-import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
-import works.resolve.pathfinder.telemetry.SpanStatus
-import works.resolve.pathfinder.telemetry.attr
 
 /**
  * The Android Keystore path is a thin production wiring of the same pure
@@ -155,138 +151,18 @@ class EncryptedCredentialStoreTest {
     }
 
     @Test
-    fun `telemetry records write read and decode spans on success`() = runTest {
-        val telemetry = InMemoryTelemetryContext()
-        val store = EncryptedCredentialStore(
-            dir = createTempDirectory(),
-            encrypt = { bytes -> bytes.map { (it + 1).toByte() }.toByteArray() },
-            decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() },
-            diagnostics = PathfinderDiagnostics(telemetry)
-        )
-        store.modify("openai") { ApiKeyCredential("sk") }
-        assertEquals(ApiKeyCredential("sk"), store.read("openai"))
-
-        val byName = telemetry.getSpans().associateBy { it.name }
-        assertEquals(
-            setOf("pf.credentials.write", "pf.credentials.read", "pf.credentials.decode"),
-            byName.keys
-        )
-        assertEquals(
-            attr("openai"),
-            byName.getValue("pf.credentials.write").attributes["pf.credentials.provider"]
-        )
-        assertEquals(
-            attr("persisted"),
-            byName.getValue("pf.credentials.write").attributes["pf.credentials.outcome"]
-        )
-        assertEquals(
-            attr("decrypted"),
-            byName.getValue("pf.credentials.read").attributes["pf.credentials.outcome"]
-        )
-        assertEquals(SpanStatus.Ok, byName.getValue("pf.credentials.write").status)
-        assertEquals(SpanStatus.Ok, byName.getValue("pf.credentials.read").status)
-        assertEquals(SpanStatus.Ok, byName.getValue("pf.credentials.decode").status)
-    }
-
-    @Test
-    fun `telemetry records absent read and type-only failures`() = runTest {
-        val telemetry = InMemoryTelemetryContext()
-        val dir = createTempDirectory()
-        val failing = EncryptedCredentialStore(
-            dir = dir,
-            encrypt = { error("keystore failure") },
-            decrypt = { error("keystore failure") },
-            diagnostics = PathfinderDiagnostics(telemetry)
-        )
-
-        assertNull(failing.read("openai"))
-        val absent = telemetry.getSpans().single()
-        assertEquals("pf.credentials.read", absent.name)
-        assertEquals(attr("absent"), absent.attributes["pf.credentials.outcome"])
-
-        writeRaw(dir, "zai", "{}")
-        assertFailsWith<IllegalStateException> { failing.read("zai") }
-        val readFailed = telemetry.getSpans().last()
-        assertEquals("pf.credentials.read", readFailed.name)
-        val readError = readFailed.status as SpanStatus.Error
-        assertEquals("IllegalStateException", readError.error?.name)
-        assertEquals("", readError.error?.message)
-    }
-
-    @Test
-    fun `telemetry records decode rejection and write failure with type only`() = runTest {
-        val telemetry = InMemoryTelemetryContext()
-        val dir = createTempDirectory()
-        val store = EncryptedCredentialStore(
-            dir = dir,
-            encrypt = { bytes -> bytes.map { (it + 1).toByte() }.toByteArray() },
-            decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() },
-            diagnostics = PathfinderDiagnostics(telemetry)
-        )
-
-        writeRaw(dir, "openai", "sk-legacy")
-        assertFailsWith<CredentialFormatException> { store.read("openai") }
-        val decodeFailed = telemetry.getSpans().last()
-        assertEquals("pf.credentials.decode", decodeFailed.name)
-        val decodeError = decodeFailed.status as SpanStatus.Error
-        assertEquals("CredentialFormatException", decodeError.error?.name)
-        assertEquals("", decodeError.error?.message)
-
-        val failingWrite = EncryptedCredentialStore(
-            dir = dir,
-            encrypt = { error("keystore failure") },
-            decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() },
-            diagnostics = PathfinderDiagnostics(telemetry)
-        )
-        assertFailsWith<IllegalStateException> {
-            failingWrite.modify("zai") { ApiKeyCredential("k") }
-        }
-        val writeFailed = telemetry.getSpans().last()
-        assertEquals("pf.credentials.write", writeFailed.name)
-        assertEquals("IllegalStateException", (writeFailed.status as SpanStatus.Error).error?.name)
-    }
-
-    @Test
-    fun `telemetry records delete outcome`() = runTest {
-        val telemetry = InMemoryTelemetryContext()
-        val store = EncryptedCredentialStore(
-            dir = createTempDirectory(),
-            encrypt = { bytes -> bytes.map { (it + 1).toByte() }.toByteArray() },
-            decrypt = { bytes -> bytes.map { (it - 1).toByte() }.toByteArray() },
-            diagnostics = PathfinderDiagnostics(telemetry)
-        )
-        store.delete("openai")
-        store.modify("openai") { ApiKeyCredential("sk") }
-        store.delete("openai")
-
-        val deletes = telemetry.getSpans().filter { it.name == "pf.credentials.delete" }
-        assertEquals(2, deletes.size)
-        assertEquals(attr("absent"), deletes[0].attributes["pf.credentials.outcome"])
-        assertEquals(attr("deleted"), deletes[1].attributes["pf.credentials.outcome"])
-        assertEquals(SpanStatus.Ok, deletes[0].status)
-    }
-
-    @Test
-    fun `cancelled read and write settle ok, never as error spans`() = runTest {
-        val telemetry = InMemoryTelemetryContext()
+    fun `cancellation propagates unchanged from read and write`() = runTest {
         val cancelled = CancellationException("scope cancelled")
         val dir = createTempDirectory()
         val store = EncryptedCredentialStore(
             dir = dir,
             encrypt = { throw cancelled },
-            decrypt = { throw cancelled },
-            diagnostics = PathfinderDiagnostics(telemetry)
+            decrypt = { throw cancelled }
         )
         writeRaw(dir, "openai", "{}")
 
         assertFailsWith<CancellationException> { store.read("openai") }
         assertFailsWith<CancellationException> { store.modify("zai") { ApiKeyCredential("k") } }
-
-        val reads = telemetry.getSpans().filter { it.name == "pf.credentials.read" }
-        val write = telemetry.getSpans().single { it.name == "pf.credentials.write" }
-        assertTrue(reads.isNotEmpty())
-        reads.forEach { assertEquals(SpanStatus.Ok, it.status) } // cancellation is not a failure
-        assertEquals(SpanStatus.Ok, write.status)
     }
 
     private fun createTempDirectory(): File =

@@ -13,7 +13,6 @@ import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt as AuthInteractionPrompt
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
-import works.resolve.pathfinder.logging.PathfinderDiagnostics
 
 /**
  * Interactive provider-login state machine. The login coroutine runs in
@@ -28,7 +27,6 @@ import works.resolve.pathfinder.logging.PathfinderDiagnostics
 internal class ProviderLoginController(
     private val scope: CoroutineScope,
     private val authService: ProviderAuthService,
-    private val diagnostics: PathfinderDiagnostics,
     /** Runs in [scope] with the flow state already cleared. */
     private val onLoginSucceeded: suspend () -> Unit,
     /**
@@ -54,9 +52,7 @@ internal class ProviderLoginController(
         authJob = scope.launch {
             _flow.value = ProviderAuthFlow(providerId, method)
             try {
-                diagnostics.authLogin(providerId, method.type.wire) {
-                    authService.login(providerId, method.type, UiAuthInteraction())
-                }
+                authService.login(providerId, method.type, UiAuthInteraction())
             } catch (e: CancellationException) {
                 // User cancel or scope teardown aborts the login — not a
                 // failure: clear and stop without the failure path.
