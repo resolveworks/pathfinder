@@ -39,13 +39,8 @@ import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.ChatApi
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
-import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
@@ -272,46 +267,6 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
 
     val scriptedStreams = ConcurrentLinkedQueue<Flow<AssistantMessageEvent>>()
 
-    /** Fake summarization stack for compaction tests: serves [summaryResponses] through [Models.completeSimple], optionally gated mid-summary. */
-    var compactionModels: Models? = null
-    val summaryResponses = ConcurrentLinkedQueue<AssistantMessage>()
-    var summaryGate: CompletableDeferred<Unit>? = null
-
-    fun installCompactionModels() {
-        val api = object : ChatApi {
-            override fun streamSimple(
-                model: Model,
-                context: Context,
-                options: SimpleStreamOptions
-            ) = flow {
-                summaryGate?.await()
-                val response = summaryResponses.poll() ?: error("No summary response queued")
-                if (response.stopReason == StopReason.ERROR ||
-                    response.stopReason == StopReason.ABORTED
-                ) {
-                    emit(AssistantMessageEvent.Error(response.stopReason, response))
-                } else {
-                    emit(AssistantMessageEvent.Done(response.stopReason, response))
-                }
-            }
-        }
-        compactionModels = Models(
-            listOf(
-                Provider(
-                    testModel.provider,
-                    testModel.provider,
-                    "https://faux.test",
-                    authResolver = { _, _ -> ResolvedAuth(apiKey = "faux-key") },
-                    models = listOf(testModel),
-                    apis = mapOf(testModel.api to api)
-                )
-            )
-        )
-    }
-
-    /** When set, agents are built with auto-compaction disabled (isolates branch summarization). */
-    var disableCompaction = false
-
     val rejectedModelIds = mutableSetOf<String>()
 
     var rejectAll = false
@@ -386,14 +341,8 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
             sessionManager = sessionManager,
             tools = listOf(fakeWebSearchTool),
             retrySettings = settings.retry,
-            compactionSettings = if (disableCompaction) {
-                settings.compaction.copy(
-                    enabled = false
-                )
-            } else {
-                settings.compaction
-            },
-            models = compactionModels ?: switchModels
+            compactionSettings = settings.compaction,
+            models = switchModels
         ).also { session -> createdAgents += session }
     }
 

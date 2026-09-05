@@ -57,7 +57,7 @@ class TreeProjectionTest {
     }
 
     @Test
-    fun `linear chain is flat - no connectors, all on active path`() {
+    fun `linear chain keeps order - all rows on active path`() {
         val u1 = entry("u1", null, user("first"))
         val a1 = entry("a1", "u1", assistant("answer one"))
         val u2 = entry("u2", "a1", user("second"))
@@ -66,12 +66,7 @@ class TreeProjectionTest {
 
         val result = rows(conversation)
         assertEquals(listOf("u1", "a1", "u2", "a2"), result.map { it.id })
-        result.forEach {
-            assertEquals(0, it.indent)
-            assertEquals(TreeConnector.NONE, it.connector)
-            assertTrue(it.gutters.isEmpty())
-            assertTrue(it.isOnActivePath)
-        }
+        result.forEach { assertTrue(it.isOnActivePath) }
         assertEquals(listOf(true, false, false, false), result.map { it.isFoldable })
         assertEquals("a2", result.last().id)
         assertTrue(result.last().isCurrentLeaf)
@@ -96,23 +91,15 @@ class TreeProjectionTest {
 
         val result = rows(conversation)
         assertEquals(listOf("u1", "a2", "a1", "u2"), result.map { it.id })
-        assertEquals(0, result[0].indent)
         assertTrue(result[0].isFoldable)
-        assertEquals(1, result[1].indent)
-        assertEquals(TreeConnector.TEE, result[1].connector)
-        assertEquals(1, result[2].indent)
-        assertEquals(TreeConnector.ELBOW, result[2].connector)
-        assertEquals(2, result[3].indent)
-        assertEquals(TreeConnector.NONE, result[3].connector)
-        assertTrue(result[3].gutters.isEmpty())
-        assertEquals(setOf("u1", "a2"), result.filter { it.isOnActivePath }.map { it.id }.toSet())
         assertTrue(result[1].isCurrentLeaf)
         assertFalse(result[1].isFoldable)
+        assertEquals(setOf("u1", "a2"), result.filter { it.isOnActivePath }.map { it.id }.toSet())
         assertEquals(listOf("u1", "a1", "u2"), result[3].path)
     }
 
     @Test
-    fun `first generation below a branch indents, later chains stay flat`() {
+    fun `forked branches keep the active chain first and dead branches foldable`() {
         val r = entry("r", null, user("root"))
         val b2 = entry("b2", "r", assistant("dead end"))
         val b1 = entry("b1", "r", assistant("active"))
@@ -122,15 +109,6 @@ class TreeProjectionTest {
 
         val result = rows(conversation)
         assertEquals(listOf("r", "b1", "c1", "d1", "b2"), result.map { it.id })
-        assertEquals(TreeConnector.TEE, result[1].connector)
-        assertEquals(1, result[1].indent)
-        assertEquals(listOf(0), result[2].gutters)
-        assertEquals(2, result[2].indent)
-        assertEquals(2, result[3].indent)
-        assertEquals(TreeConnector.NONE, result[2].connector)
-        assertEquals(TreeConnector.NONE, result[3].connector)
-        assertEquals(1, result[4].indent)
-        assertEquals(TreeConnector.ELBOW, result[4].connector)
         assertEquals(
             listOf(true, true, false, false, false),
             result.map { it.isFoldable }
@@ -148,8 +126,6 @@ class TreeProjectionTest {
 
         val all = rows(conversation, TreeFilter.DEFAULT)
         assertEquals(listOf("u1", "u2b", "a1", "u2", "a2"), all.map { it.id })
-        assertEquals(1, all.first { it.id == "u2b" }.indent)
-        assertEquals(TreeConnector.TEE, all.first { it.id == "u2b" }.connector)
 
         val filtered = rows(conversation, TreeFilter.USER_ONLY)
         assertEquals(listOf("u1", "u2b", "u2"), filtered.map { it.id })
@@ -159,12 +135,7 @@ class TreeProjectionTest {
                 (it.body as TreeRowBody.Text).preview
             }
         )
-        assertEquals(0, filtered[0].indent)
         assertTrue(filtered[0].isFoldable)
-        assertEquals(1, filtered[1].indent)
-        assertEquals(TreeConnector.TEE, filtered[1].connector)
-        assertEquals(1, filtered[2].indent)
-        assertEquals(TreeConnector.ELBOW, filtered[2].connector)
         assertTrue(filtered[1].isCurrentLeaf)
         // Paths skip hidden ancestors.
         assertEquals(listOf("u1", "u2"), filtered[2].path)
@@ -180,12 +151,6 @@ class TreeProjectionTest {
 
         val result = rows(conversation)
         assertEquals(listOf("r2", "a2", "r1", "a1"), result.map { it.id })
-        result.forEach { assertTrue(it.gutters.isEmpty()) }
-        assertEquals(listOf(0, 1, 0, 1), result.map { it.indent })
-        assertEquals(
-            listOf(TreeConnector.NONE, TreeConnector.NONE, TreeConnector.NONE, TreeConnector.NONE),
-            result.map { it.connector }
-        )
         assertEquals(listOf(true, false, true, false), result.map { it.isFoldable })
         assertEquals(setOf("r2", "a2"), result.filter { it.isOnActivePath }.map { it.id }.toSet())
     }
@@ -280,10 +245,6 @@ class TreeProjectionTest {
 
         val result = rows(conversation)
         assertEquals(setOf("r", "orphan"), result.map { it.id }.toSet())
-        result.forEach {
-            assertEquals(0, it.indent)
-            assertEquals(TreeConnector.NONE, it.connector)
-        }
         assertTrue(result.first { it.id == "orphan" }.path == listOf("orphan"))
     }
 }

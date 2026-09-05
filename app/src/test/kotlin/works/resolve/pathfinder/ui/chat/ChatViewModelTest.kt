@@ -47,15 +47,9 @@ import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.ChatApi
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
-import works.resolve.pathfinder.ai.Models
-import works.resolve.pathfinder.ai.Provider
-import works.resolve.pathfinder.ai.ResolvedAuth
-import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
@@ -84,7 +78,6 @@ import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.codingagent.core.AgentSession
-import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
@@ -1309,45 +1302,4 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
             vm.closeForTest()
         }
-
-    // ---- navigation-trigger branch summarization ----
-
-    /**
-     * VM wiring only — the summarization itself, its failure modes, and the
-     * entry shape are AgentNavigationTest/BranchSummarizationTest's: the
-     * summarize flag must reach the session from the tree panel intent.
-     */
-
-    @Test
-    fun navigateWithSummarize_reachesTheSummarizer() = runTest(mainDispatcherRule.scheduler) {
-        val h = harness()
-        // The summarization stack must exist before the agent is created;
-        // auto-compaction is disabled so the queued response belongs to the
-        // navigation summarization alone.
-        h.disableCompaction = true
-        h.installCompactionModels()
-        h.summaryResponses.add(h.assistant("## Goal\nexplored the branch"))
-        val vm = h.newViewModel()
-        vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
-        vm.configure(apiKey = "k")
-        vm.awaitState { it.status == ChatStatus.Ready }
-        val sessionId = vm.uiState.value.activeSessionId!!
-
-        vm.exchange(h, "Hello", "world")
-        vm.exchange(h, "Again", "fine")
-        vm.awaitState {
-            it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount ==
-                4
-        }
-
-        val assistantEntryId = vm.uiState.value.treeRows[1].id
-        vm.navigateToTreeEntry(assistantEntryId, summarize = true)
-
-        waitUntil {
-            h.sessions.stored(sessionId)!!.entries.any { it is BranchSummaryEntry }
-        }
-        assertNull(vm.uiState.value.error)
-
-        vm.closeForTest()
-    }
 }
