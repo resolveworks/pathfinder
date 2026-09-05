@@ -10,6 +10,11 @@ data class SessionTreeNode(val entry: SessionEntry, val children: List<SessionTr
  * Immutable snapshot of a session's entry tree plus its current leaf —
  * what the app layer reads. All mutations (id minting, leaf moves,
  * persistence) live in [SessionManager]; this type only projects.
+ *
+ * Divergence from pi's buildSessionPath: pi falls back to the last entry
+ * when a given leafId is absent from the tree; here an unknown leaf yields
+ * an empty path. Unreachable in practice — the leaf always comes from
+ * [SessionManager] and names an entry it owns.
  */
 class Conversation(val entries: List<SessionEntry>, val leafId: String?) {
     /** The active branch's root→leaf path. */
