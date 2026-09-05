@@ -1,87 +1,54 @@
 package works.resolve.pathfinder.codingagent.core.session
 
-import kotlin.test.assertFailsWith
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.Cost
+import works.resolve.pathfinder.ai.Message
+import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.testing.FakeClock
 
 class ConversationTest {
 
-    private var nextId = 0
-
-    private fun newConversation(): Conversation = Conversation(
-        entries = emptyList(),
-        leafId = null,
-        idGenerator = { "e${nextId++}" },
-        clock = FakeClock()
-    )
-
     private fun msg(text: String) = UserMessage.ofText(text)
 
-    @Test
-    fun appendChainsFromEmpty() {
-        val c = newConversation()
-            .append(msg("a"))
-            .append(msg("b"))
+    private fun assistant(model: String = "glm-4.6") = AssistantMessage(
+        content = emptyList(),
+        api = "openai-completions",
+        provider = "zai",
+        model = model,
+        usage = Usage(0, 0, 0, 0, 0, 0, 0, Cost(0.0, 0.0, 0.0, 0.0, 0.0)),
+        stopReason = StopReason.STOP,
+        timestamp = 0L
+    )
 
-        assertEquals(listOf("e0", "e1"), c.entries.map { it.id })
-        assertNull(c.entries.first().parentId)
-        assertEquals("e0", c.entries[1].parentId)
-        assertEquals("e1", c.leafId)
+    private fun List<Message>.texts(): List<String> = map {
+        (it as UserMessage).content.single().let {
+            (it as TextContent).text
+        }
+    }
+
+    @Test
+    fun activeEntriesWalksLeafToRoot() {
+        val e0 = MessageEntry("e0", null, 0L, msg("a"))
+        val e1 = MessageEntry("e1", "e0", 1L, msg("b"))
+        val e2 = MessageEntry("e2", "e1", 2L, msg("c"))
+        val c = Conversation(listOf(e0, e1, e2), "e1")
+
         assertEquals(listOf("a", "b"), c.activeMessages().texts())
-    }
-
-    @Test
-    fun appendAfterBranchCreatesSiblingFork() {
-        val base = newConversation().append(msg("a"))
-        val branchA = base.append(msg("b1"))
-        val branchB = branchA.branch(base.leafId!!).append(msg("b2"))
-
-        val root = branchB.tree().single()
-        assertEquals(base.leafId, root.entry.id)
-        assertEquals(2, root.children.size)
-
-        assertEquals(listOf("a", "b2"), branchB.activeMessages().texts())
-        assertEquals(listOf("a", "b1"), branchA.activeMessages().texts())
-    }
-
-    @Test
-    fun branchToEarlierPointThenAppend() {
-        val c = newConversation()
-            .append(msg("a"))
-            .append(msg("b"))
-            .append(msg("c"))
-        val first = c.entries.first()
-
-        val rewound = c.branch(first.id).append(msg("a2"))
-
-        assertEquals(first.id, rewound.entries.last().parentId)
-        assertEquals(listOf("a", "a2"), rewound.activeMessages().texts())
-        // Original branch still exists in the tree.
-        assertEquals(2, rewound.tree().single().children.size)
-    }
-
-    @Test
-    fun resetLeafMakesNextAppendARoot() {
-        val c = newConversation().append(msg("a")).append(msg("b"))
-        val reset = c.resetLeaf()
-
-        assertNull(reset.leafId)
-        assertTrue(reset.activeEntries().isEmpty())
-
-        val after = reset.append(msg("c"))
-        assertNull(after.entries.last().parentId)
-        assertEquals(listOf("c"), after.activeMessages().texts())
-        assertEquals(2, after.tree().size)
+        assertEquals(listOf("e0", "e1"), c.activeEntries().map { it.id })
+        assertEquals(listOf("a", "b", "c"), Conversation(c.entries, "e2").activeMessages().texts())
+        assertTrue(Conversation(c.entries, null).activeEntries().isEmpty())
     }
 
     @Test
     fun orphanBecomesRoot() {
-        val orphan = MessageEntry("orphan", 0L, "missing", 3L, msg("x"))
-        val root = MessageEntry("root", 0L, null, 1L, msg("y"))
+        val orphan = MessageEntry("orphan", "missing", 3L, msg("x"))
+        val root = MessageEntry("root", null, 1L, msg("y"))
         val c = Conversation(listOf(orphan, root), "orphan")
 
         assertEquals(listOf(root, orphan), c.tree().map { it.entry })
@@ -89,10 +56,10 @@ class ConversationTest {
 
     @Test
     fun treeChildrenSortedOldestFirst() {
-        val root = MessageEntry("root", 0L, null, 0L, msg("r"))
-        val young = MessageEntry("young", 0L, "root", 30L, msg("y"))
-        val old = MessageEntry("old", 0L, "root", 10L, msg("o"))
-        val middle = MessageEntry("middle", 0L, "root", 20L, msg("m"))
+        val root = MessageEntry("root", null, 0L, msg("r"))
+        val young = MessageEntry("young", "root", 30L, msg("y"))
+        val old = MessageEntry("old", "root", 10L, msg("o"))
+        val middle = MessageEntry("middle", "root", 20L, msg("m"))
         val c = Conversation(listOf(young, middle, root, old), "young")
 
         assertEquals(
@@ -105,41 +72,29 @@ class ConversationTest {
 
     @Test
     fun selfParentTreatedAsRoot() {
-        val weird = MessageEntry("weird", 0L, "weird", 1L, msg("w"))
+        val weird = MessageEntry("weird", "weird", 1L, msg("w"))
         val c = Conversation(listOf(weird), "weird")
         assertEquals(listOf(weird), c.tree().map { it.entry })
     }
 
     @Test
-    fun entryLookupAndUnknownBranchRejected() {
-        val c = newConversation().append(msg("a"))
+    fun entryLookup() {
+        val e0 = MessageEntry("e0", null, 0L, msg("a"))
+        val c = Conversation(listOf(e0), "e0")
         assertEquals("e0", c.entry("e0")!!.id)
         assertNull(c.entry("nope"))
-        assertFailsWith<IllegalArgumentException> { c.branch("nope") }
-    }
-
-    @Test
-    fun fromMessagesChainsEntries() {
-        val c = Conversation.fromMessages(listOf(msg("a"), msg("b")))
-        assertNull(c.entries.first().parentId)
-        assertEquals(c.entries[0].id, c.entries[1].parentId)
-        assertEquals(c.entries.last().id, c.leafId)
-        assertEquals(listOf("a", "b"), c.activeMessages().texts())
-
-        assertEquals(0, Conversation.fromMessages(emptyList()).entries.size)
-        assertNull(Conversation.fromMessages(emptyList()).leafId)
     }
 
     @Test
     fun deepLinearConversationDoesNotOverflowStack() {
-        var next = 0
-        var conversation = Conversation(
-            emptyList(),
-            null,
-            idGenerator = { "d${next++}" },
-            clock = FakeClock()
-        )
-        repeat(20_000) { conversation = conversation.append(msg("m$it")) }
+        val entries = ArrayList<SessionEntry>(20_000)
+        var parent: String? = null
+        repeat(20_000) { i ->
+            val entry = MessageEntry("d$i", parent, i.toLong(), msg("m$i"))
+            entries.add(entry)
+            parent = entry.id
+        }
+        val conversation = Conversation(entries, parent)
 
         var node = conversation.tree().single()
         var height = 1
@@ -152,84 +107,34 @@ class ConversationTest {
     }
 
     @Test
-    fun appendModelAndThinkingLevelChangesAdvanceTheLeaf() {
-        val c = newConversation()
-            .append(msg("a"))
-            .appendModelChange(provider = "zai", modelId = "glm-4.7")
-            .appendThinkingLevelChange("high")
-
-        assertEquals(listOf("e0", "e1", "e2"), c.entries.map { it.id })
-        val modelChange = c.entries[1] as ModelChangeEntry
-        assertEquals("zai" to "glm-4.7", modelChange.provider to modelChange.modelId)
-        assertEquals("e0", modelChange.parentId)
-        val thinking = c.entries[2] as ThinkingLevelEntry
-        assertEquals("high", thinking.thinkingLevel)
-        assertEquals("e2", c.leafId)
-    }
-
-    @Test
     fun effectiveConfigurationFoldsRootToLeaf() {
-        val c = newConversation()
-        assertEquals(Conversation.EffectiveConfiguration(), c.effectiveConfiguration())
-
-        val assistant = works.resolve.pathfinder.ai.AssistantMessage(
-            content = emptyList(),
-            api = "openai-completions",
-            provider = "zai",
-            model = "glm-4.6",
-            usage = works.resolve.pathfinder.ai.Usage(
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                works.resolve.pathfinder.ai.Cost(0.0, 0.0, 0.0, 0.0, 0.0)
-            ),
-            stopReason = works.resolve.pathfinder.ai.StopReason.STOP,
-            timestamp = 0L
+        assertEquals(
+            Conversation.EffectiveConfiguration(),
+            Conversation(emptyList(), null).effectiveConfiguration()
         )
 
-        var conversation = c
-            .appendModelChange("zai", "glm-4.7")
-            .append(msg("hello"))
-            .appendModelChange("zai", "glm-5.3")
-            .appendThinkingLevelChange("high")
-        conversation =
-            Conversation(conversation.entries, conversation.leafId, { "assistant" }, FakeClock())
-                .append(assistant)
+        val user = MessageEntry("u", "t", 4L, msg("hello"))
+        val conversation = Conversation(
+            listOf(
+                ModelChangeEntry("m1", null, 1L, provider = "zai", modelId = "glm-4.7"),
+                user,
+                ModelChangeEntry("m2", user.id, 3L, provider = "zai", modelId = "glm-5.3"),
+                ThinkingLevelEntry("t", "m2", 4L, thinkingLevel = "high"),
+                MessageEntry("a", "t", 5L, assistant())
+            ),
+            "a"
+        )
 
         val folded = conversation.effectiveConfiguration()
-        assertEquals("zai" to "glm-4.6", folded.model!!.provider to folded.model!!.modelId)
-        assertEquals("high", folded.thinkingLevel)
-        assertNull(folded.activeToolNames)
-
         // Assistant messages carry the model that actually ran, so they win
         // over an earlier model_change; a later model_change wins back.
-        val afterSwitch = conversation.appendModelChange("zai", "glm-4.7")
-        assertEquals("glm-4.7", afterSwitch.effectiveConfiguration().model!!.modelId)
+        assertEquals("zai" to "glm-4.6", folded.model!!.provider to folded.model!!.modelId)
+        assertEquals("high", folded.thinkingLevel)
 
-        val withTools = afterSwitch.appendActiveTools()
-        assertEquals(listOf("read"), withTools.effectiveConfiguration().activeToolNames)
-        val rewound = withTools.branch(afterSwitch.leafId!!)
-        assertNull(rewound.effectiveConfiguration().activeToolNames)
-        assertEquals("glm-4.7", rewound.effectiveConfiguration().model!!.modelId)
-    }
-
-    private fun Conversation.appendActiveTools(): Conversation {
-        val entry = ActiveToolsEntry(
-            id = "tools-${entries.size}",
-            parentId = leafId,
-            timestamp = entries.size.toLong(),
-            activeToolNames = listOf("read")
+        val afterSwitch = Conversation(
+            conversation.entries + ModelChangeEntry("m3", "a", 6L, "zai", "glm-4.7"),
+            "m3"
         )
-        return Conversation(entries + entry, entry.id)
-    }
-
-    private fun List<works.resolve.pathfinder.ai.Message>.texts(): List<String> = map {
-        (it as UserMessage).content.single().let {
-            (it as works.resolve.pathfinder.ai.TextContent).text
-        }
+        assertEquals("glm-4.7", afterSwitch.effectiveConfiguration().model!!.modelId)
     }
 }

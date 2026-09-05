@@ -25,10 +25,8 @@ import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.ai.utils.contentText
 import works.resolve.pathfinder.ai.utils.estimateMessageTokens
 import works.resolve.pathfinder.ai.utils.uuidv7
-import works.resolve.pathfinder.codingagent.core.session.ActiveToolsEntry
 import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
-import works.resolve.pathfinder.codingagent.core.session.CustomEntry
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
 import works.resolve.pathfinder.codingagent.core.session.SessionEntry
@@ -267,7 +265,7 @@ private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
         entry.timestamp
     )
 
-    is ModelChangeEntry, is ThinkingLevelEntry, is ActiveToolsEntry, is CustomEntry -> null
+    is ModelChangeEntry, is ThinkingLevelEntry -> null
 }
 
 /**
@@ -298,7 +296,8 @@ data class CompactResult(
     val summary: String,
     val tokensBefore: Int,
     val usage: Usage?,
-    val retainedTail: List<Message>,
+    /** Id of the first entry kept after the compaction boundary. */
+    val firstKeptEntryId: String,
     val details: CompactionDetails?
 )
 
@@ -544,9 +543,9 @@ suspend fun generateSummaryWithUsage(
 }
 
 data class CompactionPreparation(
+    val firstKeptEntryId: String,
     val messagesToSummarize: List<Message>,
     val turnPrefixMessages: List<Message>,
-    val retainedTail: List<Message>,
     val isSplitTurn: Boolean,
     val tokensBefore: Int,
     val previousSummary: String?,
@@ -571,55 +570,40 @@ fun prepareCompaction(
     }
 
     var previousSummary: String? = null
-    var compactableEntries = pathEntries
+    var boundaryStart = 0
     if (prevCompactionIndex >= 0) {
         val prevCompaction = pathEntries[prevCompactionIndex] as CompactionEntry
         previousSummary = prevCompaction.summary
-        val virtualRetainedEntries: List<SessionEntry> = prevCompaction.retainedTail.mapIndexed {
-                index,
-                message
-            ->
-            MessageEntry(
-                id = "${prevCompaction.id}:retained:$index",
-                parentId = if (index ==
-                    0
-                ) {
-                    prevCompaction.id
-                } else {
-                    "${prevCompaction.id}:retained:${index - 1}"
-                },
-                timestamp = message.timestamp,
-                message = message
-            )
-        }
-        compactableEntries =
-            virtualRetainedEntries + pathEntries.subList(prevCompactionIndex + 1, pathEntries.size)
+        val firstKeptEntryIndex =
+            pathEntries.indexOfFirst { it.id == prevCompaction.firstKeptEntryId }
+        boundaryStart =
+            if (firstKeptEntryIndex >= 0) firstKeptEntryIndex else prevCompactionIndex + 1
     }
-    val boundaryEnd = compactableEntries.size
+    val boundaryEnd = pathEntries.size
 
     val tokensBefore = estimateContextTokens(buildSessionContext(pathEntries)).tokens
 
-    val cutPoint = findCutPoint(compactableEntries, 0, boundaryEnd, settings.keepRecentTokens)
+    val cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens)
+    val firstKeptEntryId = pathEntries[cutPoint.firstKeptEntryIndex].id
     val historyEnd = if (cutPoint.isSplitTurn) {
         cutPoint.turnStartIndex
     } else {
         cutPoint.firstKeptEntryIndex
     }
     val messagesToSummarize = mutableListOf<Message>()
-    for (i in 0 until historyEnd) {
-        getMessageFromEntryForCompaction(compactableEntries[i])?.let { messagesToSummarize.add(it) }
+    for (i in boundaryStart until historyEnd) {
+        getMessageFromEntryForCompaction(pathEntries[i])?.let { messagesToSummarize.add(it) }
     }
     val turnPrefixMessages = mutableListOf<Message>()
     if (cutPoint.isSplitTurn) {
         for (i in cutPoint.turnStartIndex until cutPoint.firstKeptEntryIndex) {
-            getMessageFromEntryForCompaction(compactableEntries[i])?.let {
+            getMessageFromEntryForCompaction(pathEntries[i])?.let {
                 turnPrefixMessages.add(it)
             }
         }
     }
-    val retainedTail = mutableListOf<Message>()
-    for (i in cutPoint.firstKeptEntryIndex until boundaryEnd) {
-        getMessageFromEntryForCompaction(compactableEntries[i])?.let { retainedTail.add(it) }
+    if (messagesToSummarize.isEmpty() && turnPrefixMessages.isEmpty()) {
+        return ok(null)
     }
     val prevDetails = if (prevCompactionIndex >= 0) {
         (pathEntries[prevCompactionIndex] as CompactionEntry).details
@@ -635,9 +619,9 @@ fun prepareCompaction(
 
     return ok(
         CompactionPreparation(
+            firstKeptEntryId = firstKeptEntryId,
             messagesToSummarize = messagesToSummarize,
             turnPrefixMessages = turnPrefixMessages,
-            retainedTail = retainedTail,
             isSplitTurn = cutPoint.isSplitTurn,
             tokensBefore = tokensBefore,
             previousSummary = previousSummary,
@@ -665,7 +649,7 @@ suspend fun compact(
     clock: Clock
 ): CompactionResult<CompactResult> {
     val (
-        messagesToSummarize, turnPrefixMessages, retainedTail, isSplitTurn, tokensBefore,
+        firstKeptEntryId, messagesToSummarize, turnPrefixMessages, isSplitTurn, tokensBefore,
         previousSummary, fileOps, settings
     ) = preparation
 
@@ -715,7 +699,7 @@ suspend fun compact(
             summary = summaryWithFiles,
             tokensBefore = tokensBefore,
             usage = summaryUsage,
-            retainedTail = retainedTail,
+            firstKeptEntryId = firstKeptEntryId,
             details = CompactionDetails(readFiles = readFiles, modifiedFiles = modifiedFiles)
         )
     )

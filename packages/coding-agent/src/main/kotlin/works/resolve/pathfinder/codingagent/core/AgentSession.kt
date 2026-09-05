@@ -12,8 +12,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -24,7 +22,6 @@ import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.AgentState
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
@@ -41,7 +38,6 @@ import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.ai.utils.estimateMessageTokens
 import works.resolve.pathfinder.ai.utils.isContextOverflow
 import works.resolve.pathfinder.ai.utils.isRecoverableLength
-import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.codingagent.core.RetrySettings
 import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryCallResult
 import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryErrorCode
@@ -61,47 +57,29 @@ import works.resolve.pathfinder.codingagent.core.compaction.prepareCompaction
 import works.resolve.pathfinder.codingagent.core.compaction.shouldCompact
 import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.LaneRecord
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.OperationIntent
-import works.resolve.pathfinder.codingagent.core.session.OperationOutcome
-import works.resolve.pathfinder.codingagent.core.session.RecordError
-import works.resolve.pathfinder.codingagent.core.session.SessionState
+import works.resolve.pathfinder.codingagent.core.session.SessionManager
 
 /**
- * Durable sink for operation-lifecycle lane records. [AgentSession]
- * produces the lifecycle trio — operation_started, abort_requested,
- * operation_finished — and the owning app layer persists them.
- *
- * Ordering contract: implementations serialize appends in call order —
- * abort_requested precedes the cancellation handler's operation_finished —
- * but may dispatch them asynchronously (durability must not block the run
- * loop), and must not throw: a failed record append degrades durability,
- * never the run.
- */
-interface OperationLifecycleRecorder {
-    /** Enqueues the record, suspending only to await durability. */
-    suspend fun append(record: LaneRecord)
-
-    /** Enqueues the record without suspending (abort path). */
-    fun appendBestEffort(record: LaneRecord)
-}
-
-/**
- * Prompt-orchestration facade over [Agent]: owns the session tree
- * ([Conversation]), creates user messages from prompt text, and runs the
- * agent plus the post-run continuation loop, including turn auto-retry and
- * automatic compaction.
+ * Prompt-orchestration facade over [Agent]: owns the session tree via
+ * [sessionManager] (the single tree + persistence owner), creates user
+ * messages from prompt text, and runs the agent plus the post-run
+ * continuation loop, including turn auto-retry and automatic compaction.
  *
  * Layering mirrors pi: [Agent] keeps only the single-run
  * prompt/continue/abort primitives, and everything session-scoped — retry
  * counter lifetime across continues, event emission, tree persistence
- * points — lives here.
+ * points — lives here. Like pi, a storage failure propagates out of the
+ * event sink and fails the run: the [Agent] awaits the sink inline, so a
+ * failed append surfaces from [prompt].
+ *
+ * Tree mutation is serialized by the manager's internal mutex (pi relies on
+ * JS single-threadedness); no additional conversation lock exists here.
  */
 class AgentSession(
     val agent: Agent,
-    /** Initial session tree; adopted as-is. */
-    conversation: Conversation = Conversation(emptyList(), null),
+    /** Session tree and persistence owner. */
+    val sessionManager: SessionManager,
     /** Auto-retry budget for failed runs. */
     val retrySettings: RetrySettings = RetrySettings(),
     /** Compaction thresholds. */
@@ -115,25 +93,8 @@ class AgentSession(
     /** Wall clock for minting message timestamps. */
     private val clock: Clock = Clock.System
 ) {
-    /**
-     * Durable operation-lifecycle recorder. Set before the first prompt;
-     * null disables recording (tests, previews).
-     *
-     * One open operation per lane drives the
-     * sequencing: the prompt's run operation spans its whole loop; an
-     * embedded auto-compaction finishes the run operation first, opens a
-     * compaction operation naming its pre-minted resultEntryId, and a
-     * compact-and-retry continuation opens a fresh run operation.
-     */
-    var operationRecorder: OperationLifecycleRecorder? = null
-
-    /** Id of the lane's open operation; null while idle. */
-    @Volatile
-    private var currentOperationId: String? = null
-
-    /** The session tree; only this class appends to it during prompts. */
-    var conversation: Conversation = conversation
-        private set
+    /** The session tree snapshot; only [sessionManager] mutates it. */
+    val conversation: Conversation get() = sessionManager.conversation
 
     val model: Model get() = agent.model
 
@@ -178,15 +139,6 @@ class AgentSession(
     @Volatile
     private var compactionInProgress = false
 
-    /**
-     * Serializes session-tree mutations: unlike pi's single-threaded JS,
-     * [setModel] may append a model_change from any coroutine while a
-     * prompt's message_end handler (or an embedded compaction/navigation)
-     * appends concurrently — a lost update would silently drop a tree entry.
-     * Appends remain order-of-acquisition.
-     */
-    private val conversationMutex = Mutex()
-
     /** Name→tool registry over the constructor list. */
     private val toolRegistry: Map<String, AgentTool> = tools.associateBy { it.definition.name }
 
@@ -221,13 +173,11 @@ class AgentSession(
                     ?: ModelThinkingLevel.OFF
             )
         )
-        // Seed the active tool set from the branch's configuration fold, else
-        // all registered tools. The fold is applied without persisting:
-        // active_tools_change entries are only ever consumed here, never
-        // produced. An empty registry leaves the agent untouched.
+        // There is no persisted active-tools fold (pi has no such entry
+        // either): tools resolve to the full registry, and the app layer
+        // narrows the set per session via setActiveToolsByName.
         if (tools.isNotEmpty()) {
-            val foldedToolNames = conversation.effectiveConfiguration().activeToolNames
-            val activeTools = resolveTools(foldedToolNames ?: tools.map { it.definition.name })
+            val activeTools = resolveTools(tools.map { it.definition.name })
             agent.setTools(activeTools)
             agent.setSystemPrompt(buildSystemPrompt(activeTools))
         }
@@ -241,8 +191,8 @@ class AgentSession(
      * entries (no dedupe). Takes effect on the next run — the agent
      * snapshots tools and system prompt per run (see [Agent.setTools]).
      *
-     * Like adoption, this is not persisted: no session entry is appended, so
-     * the set is re-derived from the tree's fold on reload.
+     * Not persisted: no session entry is appended, so the set is re-derived
+     * from the full registry on reload.
      */
     fun setActiveToolsByName(toolNames: List<String>) {
         val validTools = toolNames.mapNotNull(toolRegistry::get)
@@ -278,7 +228,6 @@ class AgentSession(
 
         try {
             val promptMessage = UserMessage.ofText(text, clock.now().toEpochMilliseconds())
-            beginOperation(OperationIntent.run())
             coroutineScope {
                 // Lazily started so promptJob is published before the job
                 // can run anything (abort guarantee).
@@ -296,19 +245,6 @@ class AgentSession(
                     throw CancellationException("Prompt aborted")
                 }
             }
-            finishOperation(OperationOutcome.COMPLETED)
-        } catch (e: CancellationException) {
-            finishOperation(OperationOutcome.ABORTED)
-            throw e
-        } catch (e: Exception) {
-            finishOperation(
-                OperationOutcome.FAILED,
-                RecordError(
-                    code = e::class.simpleName ?: "error",
-                    message = e.message ?: "operation failed"
-                )
-            )
-            throw e
         } finally {
             promptJob = null
             synchronized(lock) { active = false }
@@ -317,19 +253,6 @@ class AgentSession(
 
     /** Abort the active prompt, if any. May be called from any coroutine. */
     fun abort() {
-        // abort_requested first, in call order, so the serialized recorder
-        // persists it before the cancellation handler's operation_finished
-        // (recovery distinguishes a requested abort from a crash that way).
-        val operationId = currentOperationId
-        if (operationId != null) {
-            operationRecorder?.appendBestEffort(
-                LaneRecord.AbortRequestedRecord(
-                    id = uuidv7(),
-                    lane = SessionState.LANE_MAIN,
-                    runId = operationId
-                )
-            )
-        }
         promptJob?.cancel()
     }
 
@@ -359,7 +282,7 @@ class AgentSession(
             throw IllegalStateException("No API key for ${model.provider}/${model.id}")
         }
         agent.setModel(model)
-        updateConversation { it.appendModelChange(model.provider, model.id) }
+        sessionManager.appendModelChange(model.provider, model.id)
     }
 
     /**
@@ -384,26 +307,7 @@ class AgentSession(
         val previous = agent.thinkingLevel
         agent.setThinkingLevel(effective)
         if (effective != previous) {
-            updateConversation { it.appendThinkingLevelChange(effective.wire) }
-        }
-    }
-
-    /**
-     * Replace the session tree and rebuild the agent transcript from the new
-     * active path. Only valid while idle; the tree is append-only, so this
-     * is the sole reparenting entry point.
-     *
-     * @throws IllegalStateException when a prompt is running.
-     */
-    fun replaceConversation(updated: Conversation) {
-        synchronized(lock) {
-            if (active) {
-                throw IllegalStateException("Cannot navigate the session while a prompt is running")
-            }
-            // Tree first: the transcript rebuild's synchronous state
-            // emission is observed against the already-updated tree.
-            conversation = updated
-            agent.replaceTranscript(updated.activeMessages())
+            sessionManager.appendThinkingLevelChange(effective.wire)
         }
     }
 
@@ -431,9 +335,7 @@ class AgentSession(
 
     /**
      * Navigate to a different node in the session tree, staying in the same
-     * session (unlike fork). Wraps the navigation in a durable operation and
-     * is idle-only, honoring the single-open-operation-per-lane invariant;
-     * abort is coroutine cancellation.
+     * session (unlike fork). Idle-only; abort is coroutine cancellation.
      *
      * A user-message target re-edits instead of moving the leaf onto it:
      * the leaf moves to the target's parent (or root) and the text is
@@ -441,9 +343,9 @@ class AgentSession(
      * target is the current leaf (an interrupted run can leave a user
      * message as the leaf). Only non-user targets treat leaf == target as
      * a recordless no-op. When summarizing, the [BranchSummaryEntry] is
-     * appended at the navigation target position with fromId set to the
-     * abandoned leaf, and the rebuilt context projects branch summaries
-     * via [buildSessionContext].
+     * appended at the navigation target position (the abandoned leaf is
+     * recorded as its fromId inside the manager), and the rebuilt context
+     * projects branch summaries via [buildSessionContext].
      *
      * @throws IllegalStateException when a prompt/compaction is running or
      *   summarization was requested without a provider stack.
@@ -477,16 +379,6 @@ class AgentSession(
         // Entries to summarize: from the old leaf to the common ancestor.
         val collected = collectEntriesForBranchSummary(conversation, oldLeafId, targetId)
 
-        // Minted up front so the navigation intent can name its summaryEntryId.
-        val summaryEntryId = uuidv7().takeIf { options.summarize }
-        beginOperation(
-            navigationIntent(
-                targetId = targetId,
-                summarize = options.summarize,
-                customInstructions = options.customInstructions,
-                summaryEntryId = summaryEntryId
-            )
-        )
         try {
             var summary: BranchSummaryResult? = null
             if (options.summarize && collected.entries.isNotEmpty()) {
@@ -512,7 +404,6 @@ class AgentSession(
                 ) {
                     is BranchSummaryCallResult.Err -> {
                         if (outcome.error.code == BranchSummaryErrorCode.ABORTED) {
-                            finishOperation(OperationOutcome.ABORTED)
                             return NavigationResult(cancelled = true, aborted = true)
                         }
                         throw outcome.error
@@ -522,6 +413,8 @@ class AgentSession(
                 }
             }
 
+            // Summary is attached at the navigation target position, not the
+            // old branch.
             val newLeafId: String? = if (userMessage != null) targetEntry.parentId else targetId
             val editorText = userMessage
                 ?.content
@@ -530,11 +423,8 @@ class AgentSession(
 
             var summaryEntry: BranchSummaryEntry? = null
             if (summary != null) {
-                val entry = BranchSummaryEntry(
-                    id = summaryEntryId!!,
-                    parentId = newLeafId,
-                    timestamp = clock.now().toEpochMilliseconds(),
-                    fromId = oldLeafId ?: "root",
+                val entryId = sessionManager.branchWithSummary(
+                    branchFromId = newLeafId,
                     summary = summary.summary,
                     details = buildJsonObject {
                         put("readFiles", JsonArray(summary.readFiles.map(::JsonPrimitive)))
@@ -542,99 +432,23 @@ class AgentSession(
                     },
                     usage = summary.usage
                 )
-                updateConversation { Conversation(it.entries + entry, entry.id) }
-                summaryEntry = entry
+                summaryEntry = conversation.entry(entryId) as BranchSummaryEntry
             } else if (newLeafId == null) {
-                updateConversation { it.resetLeaf() }
+                sessionManager.resetLeaf()
             } else {
-                updateConversation { it.branch(newLeafId) }
+                sessionManager.branch(newLeafId)
             }
 
             agent.replaceTranscript(buildSessionContext(conversation.activeEntries()))
 
-            finishOperation(OperationOutcome.COMPLETED)
             return NavigationResult(
                 editorText = editorText,
                 cancelled = false,
                 summaryEntry = summaryEntry
             )
         } catch (e: CancellationException) {
-            finishOperation(OperationOutcome.ABORTED)
-            throw e
-        } catch (e: Exception) {
-            finishOperation(
-                OperationOutcome.FAILED,
-                RecordError(
-                    code = e::class.simpleName ?: "error",
-                    message = e.message ?: "navigation failed"
-                )
-            )
             throw e
         }
-    }
-
-    /** The navigation operation intent payload. No label field: no surface here produces entry labels. */
-    private fun navigationIntent(
-        targetId: String,
-        summarize: Boolean,
-        customInstructions: String?,
-        summaryEntryId: String?
-    ): OperationIntent = OperationIntent(
-        kind = OperationIntent.Kind.NAVIGATION,
-        payload = buildJsonObject {
-            put("kind", "navigation")
-            put("targetId", targetId)
-            put("summarize", summarize)
-            customInstructions?.let { put("customInstructions", it) }
-            summaryEntryId?.let { put("summaryEntryId", it) }
-        }
-    )
-
-    // ---- operation lifecycle records ----
-
-    /**
-     * Opens the lane's operation: appends operation_started with the current
-     * leaf as sourceLeafId (which may name an entry still buffered,
-     * unpersisted — see [LaneRecord]).
-     */
-    private suspend fun beginOperation(intent: OperationIntent): String {
-        val id = uuidv7()
-        recordAppend(
-            LaneRecord.OperationStartedRecord(
-                id = id,
-                lane = SessionState.LANE_MAIN,
-                sourceLeafId = conversation.leafId,
-                intent = intent
-            )
-        )
-        currentOperationId = id
-        return id
-    }
-
-    /** Closes the open operation (no-op when none is open) with [outcome]. */
-    private suspend fun finishOperation(outcome: OperationOutcome, error: RecordError? = null) {
-        val id = currentOperationId ?: return
-        currentOperationId = null
-        withContext(NonCancellable) {
-            recordAppend(
-                LaneRecord.OperationFinishedRecord(
-                    id = uuidv7(),
-                    lane = SessionState.LANE_MAIN,
-                    runId = id,
-                    outcome = outcome,
-                    error = error
-                )
-            )
-        }
-    }
-
-    private suspend fun recordAppend(record: LaneRecord) {
-        operationRecorder?.append(record)
-    }
-
-    /** Mutate the session tree under [conversationMutex] (see its KDoc). */
-    private suspend fun updateConversation(transform: (Conversation) -> Conversation) {
-        conversationMutex.withLock { conversation = transform(conversation) }
     }
 
     /**
@@ -653,8 +467,9 @@ class AgentSession(
             is AgentEvent.MessageEnd -> {
                 // The tree is the persistence unit and is append-only, so
                 // messages later removed from agent state (auto-retry,
-                // overflow recovery) stay in history.
-                updateConversation { it.append(event.message) }
+                // overflow recovery) stay in history. A storage failure here
+                // fails the run (pi parity).
+                sessionManager.appendMessage(event.message)
                 val assistant = event.message as? AssistantMessage
                 if (assistant != null) {
                     lastAssistantMessage = assistant
@@ -840,9 +655,6 @@ class AgentSession(
         var started = false
         compactionInProgress = true
         try {
-            // The triggering run's operation ends before compaction opens
-            // its own (one open operation per lane).
-            finishOperation(OperationOutcome.COMPLETED)
             val pathEntries = conversation.activeEntries()
             val preparation = when (
                 val outcome = prepareCompaction(pathEntries, compactionSettings)
@@ -850,10 +662,6 @@ class AgentSession(
                 is CompactionOutcome.Err -> return false
                 is CompactionOutcome.Ok -> outcome.value ?: return false
             }
-
-            // Minted up front so the operation record can name its resultEntryId.
-            val resultEntryId = uuidv7()
-            beginOperation(OperationIntent.compaction(resultEntryId))
 
             _events.emit(AgentEvent.CompactionStart(reason))
             started = true
@@ -886,7 +694,6 @@ class AgentSession(
                                 willRetry = false
                             )
                         )
-                        finishOperation(OperationOutcome.ABORTED)
                         return false
                     }
                     _events.emit(
@@ -900,13 +707,6 @@ class AgentSession(
                             )
                         )
                     )
-                    finishOperation(
-                        OperationOutcome.FAILED,
-                        RecordError(
-                            code = outcome.error.code.name,
-                            message = outcome.error.message ?: "compaction failed"
-                        )
-                    )
                     return false
                 }
 
@@ -915,16 +715,13 @@ class AgentSession(
 
             // Single append point: the tree either gains the compaction entry
             // or does not — an abort mid-summarization leaves it untouched.
-            updateConversation {
-                it.appendCompaction(
-                    summary = compactResult.summary,
-                    retainedTail = compactResult.retainedTail,
-                    tokensBefore = compactResult.tokensBefore,
-                    details = compactResult.details,
-                    usage = compactResult.usage,
-                    id = resultEntryId
-                )
-            }
+            sessionManager.appendCompaction(
+                summary = compactResult.summary,
+                firstKeptEntryId = compactResult.firstKeptEntryId,
+                tokensBefore = compactResult.tokensBefore,
+                details = compactResult.details,
+                usage = compactResult.usage
+            )
             val sessionContext = buildSessionContext(conversation.activeEntries())
             agent.replaceTranscript(sessionContext)
             val estimatedTokensAfter = sessionContext.sumOf { estimateMessageTokens(it) }
@@ -944,11 +741,7 @@ class AgentSession(
                 )
             )
 
-            finishOperation(OperationOutcome.COMPLETED)
-
             if (willRetry) {
-                // The overflow retry continues as a fresh run operation.
-                beginOperation(OperationIntent.run())
                 // The overflow response was persisted on message_end before
                 // checkCompaction removed it from agent state; rebuilding
                 // from the new compaction can restore it as the trailing
@@ -978,7 +771,6 @@ class AgentSession(
                     )
                 }
             }
-            finishOperation(OperationOutcome.ABORTED)
             throw e
         } catch (e: Exception) {
             if (started) {
@@ -994,14 +786,6 @@ class AgentSession(
                     )
                 )
             }
-            finishOperation(
-                OperationOutcome.FAILED,
-                RecordError(
-                    code = e::class.simpleName ?: "error",
-                    message =
-                        e.message ?: "compaction failed"
-                )
-            )
             return false
         } finally {
             compactionInProgress = false

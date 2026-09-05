@@ -10,7 +10,6 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.codingagent.core.session.ActiveToolsEntry
 import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
@@ -20,11 +19,10 @@ import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
 
 /**
  * Pins the entry-selection behavior of [buildSessionContext] against pi's
- * `packages/agent/src/harness/session/context.ts` at pin b8b873b98: latest
- * compaction wins, retained tail passes through verbatim, only deferred
- * assistants drop, config entries project nothing, and the branch-state fold
- * (`Conversation.effectiveConfiguration`, upstream's
- * `deriveSessionContextState`) sees the full pre-compaction path.
+ * session-manager: the latest compaction wins, kept entries start at
+ * `firstKeptEntryId`, only deferred assistants drop, config entries project
+ * nothing, and the branch-state fold
+ * ([Conversation.effectiveConfiguration]) sees the full pre-compaction path.
  */
 class SessionContextTest {
 
@@ -55,13 +53,13 @@ class SessionContextTest {
     private fun messageEntry(message: Message, parentId: String? = null) =
         MessageEntry(id = createId(), parentId = parentId, timestamp = now, message = message)
 
-    private fun compactionEntry(summary: String, parentId: String?, retainedTail: List<Message>) =
+    private fun compactionEntry(summary: String, parentId: String?, firstKeptEntryId: String) =
         CompactionEntry(
             id = createId(),
             parentId = parentId,
             timestamp = now,
             summary = summary,
-            retainedTail = retainedTail,
+            firstKeptEntryId = firstKeptEntryId,
             tokensBefore = 100
         )
 
@@ -81,13 +79,6 @@ class SessionContextTest {
         thinkingLevel = thinkingLevel
     )
 
-    private fun activeToolsEntry(parentId: String?, toolNames: List<String>) = ActiveToolsEntry(
-        id = createId(),
-        parentId = parentId,
-        timestamp = now,
-        activeToolNames = toolNames
-    )
-
     private fun textOf(message: Message): String = (message as UserMessage).let {
         (it.content[0] as TextContent).text
     }
@@ -95,22 +86,22 @@ class SessionContextTest {
     @Test
     fun `context starts at the latest of several compaction entries`() {
         val u1 = messageEntry(user("old"))
-        val first = compactionEntry("first summary", u1.id, retainedTail = listOf(user("kept one")))
+        val first = compactionEntry("first summary", u1.id, firstKeptEntryId = u1.id)
         val u2 = messageEntry(user("middle"), first.id)
-        val latest =
-            compactionEntry("latest summary", u2.id, retainedTail = listOf(user("kept two")))
+        val latest = compactionEntry("latest summary", u2.id, firstKeptEntryId = u2.id)
         val u3 = messageEntry(user("tail"), latest.id)
 
         val messages = buildSessionContext(listOf<SessionEntry>(u1, first, u2, latest, u3))
 
-        // The latest compaction's summary + retained tail + everything after it;
+        // The latest compaction's summary + the kept entries (from its
+        // firstKeptEntryId through just before it) + everything after it;
         // the earlier compaction and its surroundings are already summarized.
         assertEquals(3, messages.size)
         assertEquals(
             COMPACTION_SUMMARY_PREFIX + "latest summary" + COMPACTION_SUMMARY_SUFFIX,
             textOf(messages[0])
         )
-        assertEquals("kept two", textOf(messages[1]))
+        assertEquals("middle", textOf(messages[1]))
         assertEquals("tail", textOf(messages[2]))
 
         assertEquals(latest, getLatestCompactionEntry(listOf(u1, first, u2, latest, u3)))
@@ -122,10 +113,9 @@ class SessionContextTest {
         val u1 = messageEntry(user("one"))
         val model = modelChangeEntry(u1.id, "openai", "gpt-5")
         val thinking = thinkingLevelEntry(model.id, "high")
-        val tools = activeToolsEntry(thinking.id, listOf("read", "edit"))
-        val u2 = messageEntry(user("two"), tools.id)
+        val u2 = messageEntry(user("two"), thinking.id)
 
-        val messages = buildSessionContext(listOf<SessionEntry>(u1, model, thinking, tools, u2))
+        val messages = buildSessionContext(listOf<SessionEntry>(u1, model, thinking, u2))
 
         assertEquals(listOf("one", "two"), messages.map(::textOf))
     }
@@ -133,7 +123,7 @@ class SessionContextTest {
     @Test
     fun `error and aborted assistant messages stay in context at the pin`() {
         // Post-pin pi drops error/aborted assistants via isContextMessage; at
-        // pin b8b873b98 — and here — only deferred assistants drop.
+        // the pin — and here — only deferred assistants drop.
         val u = messageEntry(user("question"))
         val errored = messageEntry(
             assistant("boom").copy(stopReason = StopReason.ERROR, errorMessage = "overloaded"),
@@ -153,39 +143,43 @@ class SessionContextTest {
     }
 
     @Test
-    fun `retained tail passes through verbatim including failed assistants`() {
-        val tail = listOf(
-            user("kept"),
-            assistant("failed").copy(stopReason = StopReason.ERROR, errorMessage = "overloaded")
+    fun `kept entries pass through verbatim including failed assistants`() {
+        val u1 = messageEntry(user("dropped"))
+        val keptUser = messageEntry(user("kept"), u1.id)
+        val keptFailed = messageEntry(
+            assistant("failed").copy(stopReason = StopReason.ERROR, errorMessage = "overloaded"),
+            keptUser.id
         )
-        val compaction = compactionEntry("summary", null, retainedTail = tail)
+        val compaction = compactionEntry("summary", keptFailed.id, firstKeptEntryId = keptUser.id)
         val after = messageEntry(user("after"), compaction.id)
 
-        val messages = buildSessionContext(listOf<SessionEntry>(compaction, after))
+        val messages = buildSessionContext(
+            listOf<SessionEntry>(u1, keptUser, keptFailed, compaction, after)
+        )
 
         assertEquals(4, messages.size)
         assertEquals(
             COMPACTION_SUMMARY_PREFIX + "summary" + COMPACTION_SUMMARY_SUFFIX,
             textOf(messages[0])
         )
-        assertEquals(tail[0], messages[1])
-        assertEquals(tail[1], messages[2])
+        assertEquals(keptUser.message, messages[1])
+        assertEquals(keptFailed.message, messages[2])
         assertEquals(after.message, messages[3])
     }
 
     @Test
     fun `effective configuration folds the full path while context starts at compaction`() {
-        // Upstream deriveSessionContextState(pathEntries) reads the ORIGINAL
+        // pi's deriveSessionContextState(pathEntries) reads the ORIGINAL
         // path, not the post-compaction entries; pathfinder splits that fold
         // into Conversation.effectiveConfiguration over the same active path.
         val u1 = messageEntry(user("old"))
         val model = modelChangeEntry(u1.id, "openai", "gpt-5")
         val thinking = thinkingLevelEntry(model.id, "high")
-        val compaction =
-            compactionEntry("summary", thinking.id, retainedTail = listOf(user("kept")))
+        val kept = messageEntry(user("kept"), thinking.id)
+        val compaction = compactionEntry("summary", kept.id, firstKeptEntryId = kept.id)
 
         val conversation =
-            Conversation(listOf<SessionEntry>(u1, model, thinking, compaction), compaction.id)
+            Conversation(listOf<SessionEntry>(u1, model, thinking, kept, compaction), compaction.id)
 
         val messages = buildSessionContext(conversation.activeEntries())
         assertEquals(
@@ -196,7 +190,6 @@ class SessionContextTest {
         val configuration = conversation.effectiveConfiguration()
         assertEquals(Conversation.SessionModelSelection("openai", "gpt-5"), configuration.model)
         assertEquals("high", configuration.thinkingLevel)
-        assertNull(configuration.activeToolNames)
     }
 
     private fun textOfUserOrAssistant(message: Message): String = when (message) {

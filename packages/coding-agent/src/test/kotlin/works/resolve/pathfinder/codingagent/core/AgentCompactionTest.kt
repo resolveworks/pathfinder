@@ -1,6 +1,8 @@
 package works.resolve.pathfinder.codingagent.core
 
+import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
@@ -37,8 +39,11 @@ import works.resolve.pathfinder.codingagent.core.RetrySettings
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
 import works.resolve.pathfinder.codingagent.core.compaction.createCompactionSummaryMessage
 import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
+import works.resolve.pathfinder.codingagent.core.session.SessionManager
 
 class AgentCompactionTest {
+
+    private val longPrompt = "x".repeat(60_000)
 
     private val model = Model(
         id = "glm-4.6",
@@ -108,6 +113,20 @@ class AgentCompactionTest {
         return api to models
     }
 
+    /**
+     * A session pre-seeded with one large prior exchange so the cut lands
+     * on each prompt's user message with a non-empty summarize range.
+     */
+    private suspend fun seededManager(): SessionManager {
+        val manager = SessionManager.create(
+            createTempDirectory("compaction-test").toFile(),
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        manager.appendMessage(UserMessage.ofText(longPrompt))
+        manager.appendMessage(assistant("prior turn"))
+        return manager
+    }
+
     private class ScriptedStreams {
         val streams = ArrayDeque<Flow<AssistantMessageEvent>>()
         val seenContexts = CopyOnWriteArrayList<List<works.resolve.pathfinder.ai.Message>>()
@@ -117,11 +136,14 @@ class AgentCompactionTest {
         }
     }
 
-    private fun session(
+    private suspend fun session(
         streams: ScriptedStreams,
         models: Models?,
+        // The synthetic prompts are large so the cut lands on the user
+        // message with a non-empty summarize range; pi returns no
+        // preparation when nothing would be summarized.
         compactionSettings: CompactionSettings =
-            CompactionSettings(enabled = true, reserveTokens = 16_384, keepRecentTokens = 20_000),
+            CompactionSettings(enabled = true, reserveTokens = 16_384, keepRecentTokens = 10_000),
         retrySettings: RetrySettings = RetrySettings(enabled = false),
         sleep: suspend (Long) -> Unit = { }
     ) = AgentSession(
@@ -129,6 +151,7 @@ class AgentCompactionTest {
             model = model,
             streamFn = streams.streamFn
         ),
+        sessionManager = seededManager(),
         retrySettings = retrySettings,
         compactionSettings = compactionSettings,
         models = models,
@@ -140,7 +163,7 @@ class AgentCompactionTest {
             val events = mutableListOf<AgentEvent>()
             val collector = launch { agent.events.toList(events) }
             yield()
-            agent.prompt("hi")
+            agent.prompt(longPrompt)
             collector.cancelAndJoin()
             events
         }
@@ -186,8 +209,13 @@ class AgentCompactionTest {
         val entries = agent.conversation.activeEntries()
         val compaction = entries.last() as CompactionEntry
         assertEquals("SUMMARY", compaction.summary)
+        assertEquals(
+            agent.conversation.entries[2].id,
+            compaction.firstKeptEntryId
+        )
         val rebuilt = agent.state.value.messages
-        assertEquals(compaction.retainedTail.size + 1, rebuilt.size)
+        // Summary message + the kept entries (prompt user + assistant).
+        assertEquals(3, rebuilt.size)
         val summaryMessage = rebuilt.first() as UserMessage
         assertEquals(
             createCompactionSummaryMessage(
@@ -214,27 +242,16 @@ class AgentCompactionTest {
             )
         }
         // Previous assistant with huge text gives a pure-size estimate.
-        val seed = works.resolve.pathfinder.codingagent.core.session.Conversation(
-            listOf(
-                works.resolve.pathfinder.codingagent.core.session.MessageEntry(
-                    id = "u1",
-                    parentId = null,
-                    timestamp = 1L,
-                    message = works.resolve.pathfinder.ai.UserMessage.ofText("hi", 1L)
-                ),
-                works.resolve.pathfinder.codingagent.core.session.MessageEntry(
-                    id = "a1",
-                    parentId = "u1",
-                    timestamp = 2L,
-                    message = assistant(bigTail, timestamp = 2L)
-                )
-            ),
-            "a1"
+        val seed = SessionManager.create(
+            createTempDirectory("compaction-test").toFile(),
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
         )
+        seed.appendMessage(UserMessage.ofText("hi", 1L))
+        seed.appendMessage(assistant(bigTail, timestamp = 2L))
         api.responses.add(assistant("SUMMARY"))
         val agent = AgentSession(
             agent = Agent(model = model, streamFn = streams.streamFn),
-            conversation = seed,
+            sessionManager = seed,
             retrySettings = RetrySettings(enabled = false),
             models = models
         )
@@ -465,8 +482,8 @@ class AgentCompactionTest {
             val collected = mutableListOf<AgentEvent>()
             val collector = launch { agent.events.toList(collected) }
             yield()
-            agent.prompt("one")
-            agent.prompt("two")
+            agent.prompt(longPrompt)
+            agent.prompt(longPrompt)
             collector.cancelAndJoin()
             collected
         }
@@ -534,7 +551,7 @@ class AgentCompactionTest {
         yield()
         val run = launch {
             started.complete(Unit)
-            agent.prompt("hi")
+            agent.prompt(longPrompt)
         }
         started.await()
         while (!events.any { it is AgentEvent.CompactionStart }) yield()

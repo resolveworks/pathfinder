@@ -1,6 +1,8 @@
 package works.resolve.pathfinder.codingagent.core
 
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.io.path.createTempDirectory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
@@ -24,7 +26,7 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ThinkingLevelMap
-import works.resolve.pathfinder.codingagent.core.session.Conversation
+import works.resolve.pathfinder.codingagent.core.session.SessionManager
 import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
 
 class AgentSessionThinkingTest {
@@ -77,9 +79,9 @@ class AgentSessionThinkingTest {
         apis = emptyMap() // StreamFn is scripted; no request flows through Models
     )
 
-    private fun session(
+    private suspend fun session(
         model: Model,
-        conversation: Conversation = Conversation(emptyList(), null),
+        sessionManager: SessionManager? = null,
         streamFn: (
             Model,
             works.resolve.pathfinder.ai.Context,
@@ -88,8 +90,13 @@ class AgentSessionThinkingTest {
             { m, _, _ -> okStream(m) }
     ): AgentSession = AgentSession(
         agent = Agent(model = model, streamFn = StreamFn(streamFn)),
-        conversation = conversation,
+        sessionManager = sessionManager ?: newManager(),
         models = Models(listOf(provider(model)))
+    )
+
+    private suspend fun newManager(): SessionManager = SessionManager.create(
+        createTempDirectory("thinking-test").toFile(),
+        ioDispatcher = Dispatchers.Unconfined
     )
 
     @Test
@@ -145,7 +152,7 @@ class AgentSessionThinkingTest {
     }
 
     @Test
-    fun `the model's thinkingLevelMap shapes the available levels`() {
+    fun `the model's thinkingLevelMap shapes the available levels`() = runTest {
         val s = session(reasoningModel)
         assertEquals(
             listOf(
@@ -168,26 +175,24 @@ class AgentSessionThinkingTest {
     /** A branch without a thinking entry folds "off", which itself clamps:
      *  the extended map marks off unsupported, so it rounds up to low. */
     @Test
-    fun `init seeds the level from the branch fold clamped to the model`() {
-        val folded = session(
-            extendedModel,
-            Conversation(emptyList(), null)
-                .appendThinkingLevelChange("medium")
-        )
+    fun `init seeds the level from the branch fold clamped to the model`() = runTest {
+        val seeded = newManager()
+        seeded.appendThinkingLevelChange("medium")
+        val folded = session(extendedModel, seeded)
         assertEquals(
             "medium clamps up to the map's high",
             ModelThinkingLevel.HIGH,
             folded.thinkingLevel
         )
 
-        val withoutEntry = session(extendedModel, Conversation(emptyList(), null))
+        val withoutEntry = session(extendedModel)
         assertEquals(
             "the off fold clamps up to the map's low",
             ModelThinkingLevel.LOW,
             withoutEntry.thinkingLevel
         )
 
-        val plainFold = session(reasoningModel, Conversation(emptyList(), null))
+        val plainFold = session(reasoningModel)
         assertEquals(ModelThinkingLevel.OFF, plainFold.thinkingLevel)
     }
 

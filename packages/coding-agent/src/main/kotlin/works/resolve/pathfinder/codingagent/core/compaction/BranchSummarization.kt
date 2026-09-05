@@ -18,18 +18,15 @@ import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
 import works.resolve.pathfinder.ai.utils.contentText
-import works.resolve.pathfinder.codingagent.core.session.ActiveToolsEntry
 import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
 import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.CustomEntry
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
 import works.resolve.pathfinder.codingagent.core.session.SessionEntry
 import works.resolve.pathfinder.codingagent.core.session.SessionError
 import works.resolve.pathfinder.codingagent.core.session.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
-import works.resolve.pathfinder.codingagent.core.session.walkToRoot
 
 data class BranchSummaryResult(
     val summary: String,
@@ -45,6 +42,18 @@ data class BranchPreparation(
 )
 
 data class CollectEntriesResult(val entries: List<SessionEntry>, val commonAncestorId: String?)
+
+/** Leaf→root walk over [lookup]; stops at a missing parent (orphan safety). */
+private fun walkToRoot(lookup: (String) -> SessionEntry?, fromId: String): List<SessionEntry> {
+    val path = ArrayList<SessionEntry>()
+    var current = lookup(fromId)
+    val seen = HashSet<String>()
+    while (current != null && seen.add(current.id)) {
+        path.add(current)
+        current = current.parentId?.let(lookup)
+    }
+    return path
+}
 
 /**
  * The old branch's entries from (exclusive) the deepest common ancestor of
@@ -100,7 +109,7 @@ private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
         entry.timestamp
     )
 
-    is ModelChangeEntry, is ThinkingLevelEntry, is ActiveToolsEntry, is CustomEntry -> null
+    is ModelChangeEntry, is ThinkingLevelEntry -> null
 }
 
 /**

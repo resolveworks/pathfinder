@@ -1,6 +1,8 @@
 package works.resolve.pathfinder.codingagent.core
 
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.io.path.createTempDirectory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
@@ -20,8 +22,8 @@ import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.session.SessionManager
 
 class AgentSessionModelSwitchTest {
 
@@ -74,10 +76,16 @@ class AgentSessionModelSwitchTest {
 
     private fun models(vararg providers: Provider): Models = Models(providers.toList())
 
+    private suspend fun newManager(): SessionManager = SessionManager.create(
+        createTempDirectory("model-switch-test").toFile(),
+        ioDispatcher = Dispatchers.Unconfined
+    )
+
     @Test
     fun `setModel records a model_change child of the leaf and advances the leaf`() = runTest {
         val session = AgentSession(
             agent = Agent(model = modelA) { m, _, _ -> okStream(m) },
+            sessionManager = newManager(),
             models = models(provider(modelA), provider(modelB))
         )
 
@@ -108,6 +116,7 @@ class AgentSessionModelSwitchTest {
                 streamedModels.add(m)
                 okStream(m)
             },
+            sessionManager = newManager(),
             models = models(provider(modelA), provider(modelB))
         )
 
@@ -135,6 +144,7 @@ class AgentSessionModelSwitchTest {
     fun `setModel without configured auth throws and changes nothing`() = runTest {
         val session = AgentSession(
             agent = Agent(model = modelA) { m, _, _ -> okStream(m) },
+            sessionManager = newManager(),
             models = models(provider(modelA), provider(modelB, auth = { _, _ -> null }))
         )
 
@@ -163,6 +173,7 @@ class AgentSessionModelSwitchTest {
                         okStream(m).collect { emit(it) }
                     }
                 },
+                sessionManager = newManager(),
                 models = models(provider(modelA), provider(modelB))
             )
 
@@ -187,7 +198,10 @@ class AgentSessionModelSwitchTest {
 
     @Test
     fun `a session without a models stack cannot switch`() = runTest {
-        val session = AgentSession(agent = Agent(model = modelA) { m, _, _ -> okStream(m) })
+        val session = AgentSession(
+            agent = Agent(model = modelA) { m, _, _ -> okStream(m) },
+            sessionManager = newManager()
+        )
 
         val error = runCatching { session.setModel(modelB) }.exceptionOrNull()
         assertTrue(error is IllegalStateException)
@@ -200,6 +214,7 @@ class AgentSessionModelSwitchTest {
         // well-formed after the model_change entry.
         val session = AgentSession(
             agent = Agent(model = modelA) { m, _, _ -> okStream(m) },
+            sessionManager = newManager(),
             models = models(provider(modelA), provider(modelB))
         )
         session.prompt("hi")

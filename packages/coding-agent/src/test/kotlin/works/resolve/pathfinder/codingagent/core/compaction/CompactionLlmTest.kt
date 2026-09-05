@@ -79,7 +79,7 @@ class CompactionLlmTest {
     private fun createCompactionEntry(
         summary: String,
         parentId: String? = null,
-        retainedTail: List<works.resolve.pathfinder.ai.Message> = emptyList(),
+        firstKeptEntryId: String? = null,
         details: CompactionDetails? = null
     ): CompactionEntry = CompactionEntry(
         id = createId(),
@@ -87,7 +87,7 @@ class CompactionLlmTest {
         timestamp = nextId.toLong(),
         summary = summary,
         tokensBefore = 1234,
-        retainedTail = retainedTail,
+        firstKeptEntryId = firstKeptEntryId ?: "",
         details = details
     )
 
@@ -179,11 +179,7 @@ class CompactionLlmTest {
         val u2 = createMessageEntry(createUserMessage("2"), a1.id)
         val a2 = createMessageEntry(createAssistantMessage("b"), u2.id)
         val compaction =
-            createCompactionEntry(
-                "Summary of 1,a,2,b",
-                a2.id,
-                listOf(createUserMessage("2"), createAssistantMessage("b"))
-            )
+            createCompactionEntry("Summary of 1,a,2,b", a2.id, firstKeptEntryId = u2.id)
         val u3 = createMessageEntry(createUserMessage("3"), compaction.id)
         val a3 = createMessageEntry(createAssistantMessage("c"), u3.id)
         val loaded = buildSessionContext(listOf<SessionEntry>(u1, a1, u2, a2, compaction, u3, a3))
@@ -232,10 +228,13 @@ class CompactionLlmTest {
             )
         val pathEntries = listOf<SessionEntry>(u1, a1, u2, a2, compaction1, u3, a3)
         val preparation = preparationValue(
-            prepareCompaction(pathEntries, DEFAULT_COMPACTION_SETTINGS)
+            prepareCompaction(
+                pathEntries,
+                CompactionSettings(enabled = true, reserveTokens = 16_384, keepRecentTokens = 1)
+            )
         )!!
         assertEquals("First summary", preparation.previousSummary)
-        assertTrue(preparation.retainedTail.isNotEmpty())
+        assertTrue(pathEntries.any { it.id == preparation.firstKeptEntryId })
         assertEquals(
             estimateContextTokens(buildSessionContext(pathEntries)).tokens,
             preparation.tokensBefore
@@ -243,26 +242,35 @@ class CompactionLlmTest {
     }
 
     @Test
-    fun `carries a previous compaction's retained tail into the next preparation`() {
-        val retainedUser = createUserMessage("retained user")
-        val retainedAssistant = createAssistantMessage("retained assistant")
-        val compaction =
-            createCompactionEntry("previous summary", null, listOf(retainedUser, retainedAssistant))
+    fun `carries a previous compaction's firstKeptEntryId into the next preparation`() {
+        val keptUserEntry = createMessageEntry(createUserMessage("retained user"))
+        val keptAssistantEntry =
+            createMessageEntry(createAssistantMessage("retained assistant"), keptUserEntry.id)
+        val compaction = createCompactionEntry(
+            "previous summary",
+            keptAssistantEntry.id,
+            firstKeptEntryId = keptUserEntry.id
+        )
         val user = createMessageEntry(createUserMessage("new user"), compaction.id)
         val assistant = createMessageEntry(createAssistantMessage("new assistant"), user.id)
 
         val preparation = preparationValue(
             prepareCompaction(
-                listOf(compaction, user, assistant),
+                listOf<SessionEntry>(
+                    keptUserEntry,
+                    keptAssistantEntry,
+                    compaction,
+                    user,
+                    assistant
+                ),
                 CompactionSettings(enabled = true, reserveTokens = 100, keepRecentTokens = 1)
             )
         )!!
         assertEquals("previous summary", preparation.previousSummary)
-        assertEquals(
-            listOf(retainedUser, retainedAssistant, user.message, assistant.message),
-            preparation.messagesToSummarize + preparation.turnPrefixMessages +
-                preparation.retainedTail
-        )
+        // The kept entries re-enter the next compaction from firstKeptEntryId.
+        val summarized = preparation.messagesToSummarize + preparation.turnPrefixMessages
+        assertTrue(summarized.any { it == keptUserEntry.message })
+        assertTrue(summarized.any { it == user.message || it == assistant.message })
     }
 
     @Test
@@ -600,9 +608,9 @@ class CompactionLlmTest {
         settings: CompactionSettings =
             CompactionSettings(enabled = true, reserveTokens = 2000, keepRecentTokens = 20)
     ) = CompactionPreparation(
+        firstKeptEntryId = "kept",
         messagesToSummarize = messagesToSummarize,
         turnPrefixMessages = turnPrefixMessages,
-        retainedTail = messagesToSummarize,
         isSplitTurn = isSplitTurn,
         tokensBefore = tokensBefore,
         previousSummary = null,
@@ -798,7 +806,7 @@ class CompactionLlmTest {
         val result = compactValue(compact(prep, faux.models, faux.model, clock = FakeClock()))
         assertTrue(result.summary.isNotEmpty())
         assertTrue((result.usage?.totalTokens ?: 0) > 0)
-        assertTrue(result.retainedTail.isNotEmpty())
+        assertEquals(prep.firstKeptEntryId, result.firstKeptEntryId)
         assertEquals(
             CompactionDetails(readFiles = listOf("src/index.ts"), modifiedFiles = emptyList()),
             result.details

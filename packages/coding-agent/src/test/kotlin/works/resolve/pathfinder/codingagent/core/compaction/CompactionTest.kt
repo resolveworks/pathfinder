@@ -155,7 +155,7 @@ class CompactionTest {
             parentId = user.id,
             timestamp = nextId.toLong(),
             summary = "summary",
-            retainedTail = emptyList(),
+            firstKeptEntryId = user.id,
             tokensBefore = 1234
         )
         val assistant = createMessageEntry(createAssistantMessage("assistant"), compaction.id)

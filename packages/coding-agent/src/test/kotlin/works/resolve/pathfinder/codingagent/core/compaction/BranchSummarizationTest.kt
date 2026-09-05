@@ -61,16 +61,11 @@ class BranchSummarizationTest {
         timestamp = nextId.toLong()
     )
 
-    private fun messageEntry(
-        message: Message,
-        parentId: String? = null,
-        terminate: Boolean? = null
-    ) = MessageEntry(
+    private fun messageEntry(message: Message, parentId: String? = null) = MessageEntry(
         id = createId(),
         parentId = parentId,
         timestamp = nextId.toLong(),
-        message = message,
-        terminate = terminate
+        message = message
     )
 
     private fun branchSummaryEntry(
@@ -152,10 +147,10 @@ class BranchSummarizationTest {
                 parentId = null,
                 timestamp = 0,
                 summary = "compacted",
-                retainedTail = emptyList(),
+                firstKeptEntryId = root.id,
                 tokensBefore = 10
             ),
-            ModelChangeEntry(createId(), 0, null, 0, provider = "p", modelId = "m")
+            ModelChangeEntry(createId(), null, 0, provider = "p", modelId = "m")
         )
 
         val preparation = prepareBranchEntries(entries, tokenBudget = 0)
@@ -433,7 +428,7 @@ class BranchSummarizationTest {
     fun `returns placeholder without an llm call when nothing to summarize`() = runTest {
         val faux = createFaux()
         val result = generateBranchSummary(
-            listOf(ModelChangeEntry(createId(), 0, null, 0, provider = "p", modelId = "m")),
+            listOf(ModelChangeEntry(createId(), null, 0, provider = "p", modelId = "m")),
             GenerateBranchSummaryOptions(models = faux.models, model = faux.model)
         )
         val ok = assertIs<BranchSummaryCallResult.Ok>(result)
@@ -520,15 +515,5 @@ class BranchSummarizationTest {
         assertEquals("root", ((messages[0] as UserMessage).content[0] as TextContent).text)
         assertEquals("done", ((messages[1] as AssistantMessage).content[0] as TextContent).text)
         assertEquals("r", ((messages[2] as ToolResultMessage).content[0] as TextContent).text)
-    }
-
-    @Test
-    fun `terminated message entries still project into context`() {
-        // The terminate flag marks session-terminal entries but does not
-        // change context projection — pi has no terminate check here.
-        val root = messageEntry(user("root"))
-        val terminal = messageEntry(assistant("the end"), root.id, terminate = true)
-        val messages = buildSessionContext(listOf(root, terminal))
-        assertEquals(2, messages.size)
     }
 }

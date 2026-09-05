@@ -1,6 +1,8 @@
 package works.resolve.pathfinder.codingagent.core
 
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.io.path.createTempDirectory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
@@ -24,8 +26,7 @@ import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
-import works.resolve.pathfinder.codingagent.core.session.ActiveToolsEntry
-import works.resolve.pathfinder.codingagent.core.session.Conversation
+import works.resolve.pathfinder.codingagent.core.session.SessionManager
 
 class AgentSessionToolsTest {
 
@@ -79,14 +80,16 @@ class AgentSessionToolsTest {
         apis = emptyMap()
     )
 
-    private fun session(
-        conversation: Conversation = Conversation(emptyList(), null),
+    private suspend fun session(
         tools: List<AgentTool> = emptyList(),
         streamFn: (Model, Context, SimpleStreamOptions) -> Flow<AssistantMessageEvent> =
             { _, _, _ -> okStream() }
     ): AgentSession = AgentSession(
         agent = Agent(model = model, streamFn = StreamFn(streamFn)),
-        conversation = conversation,
+        sessionManager = SessionManager.create(
+            createTempDirectory("tools-test").toFile(),
+            ioDispatcher = Dispatchers.Unconfined
+        ),
         models = Models(listOf(provider())),
         tools = tools
     )
@@ -134,7 +137,7 @@ class AgentSessionToolsTest {
     }
 
     @Test
-    fun `duplicate names are not deduped`() {
+    fun `duplicate names are not deduped`() = runTest {
         val webSearch = tool("web_search")
         val s = session(tools = listOf(webSearch))
 
@@ -145,7 +148,7 @@ class AgentSessionToolsTest {
     }
 
     @Test
-    fun `an empty selection yields a null system prompt`() {
+    fun `an empty selection yields a null system prompt`() = runTest {
         val s = session(tools = listOf(tool("web_search")))
 
         s.setActiveToolsByName(emptyList())
@@ -155,55 +158,7 @@ class AgentSessionToolsTest {
     }
 
     @Test
-    fun `adoption seeds the folded active set from the branch`() {
-        val webSearch = tool("web_search")
-        val webFetch = tool("web_fetch")
-        val conversation = Conversation(emptyList(), null).let {
-            Conversation(
-                it.entries + ActiveToolsEntry(
-                    id = "e1",
-                    parentId = null,
-                    timestamp = 1L,
-                    activeToolNames = listOf("web_fetch")
-                ),
-                "e1"
-            )
-        }
-
-        val s = session(conversation = conversation, tools = listOf(webSearch, webFetch))
-
-        assertEquals(listOf("web_fetch"), s.getActiveToolNames())
-        assertEquals(buildSystemPrompt(listOf(webFetch)), s.agent.state.value.systemPrompt)
-        assertEquals("adoption does not append", 1, s.conversation.entries.size)
-    }
-
-    @Test
-    fun `the last active_tools_change on the path wins`() {
-        val webSearch = tool("web_search")
-        val webFetch = tool("web_fetch")
-        val first =
-            ActiveToolsEntry(
-                "e1",
-                parentId = null,
-                timestamp = 1L,
-                activeToolNames = listOf("web_search")
-            )
-        val second =
-            ActiveToolsEntry(
-                "e2",
-                parentId = "e1",
-                timestamp = 2L,
-                activeToolNames = listOf("web_fetch")
-            )
-        val conversation = Conversation(listOf(first, second), "e2")
-
-        val s = session(conversation = conversation, tools = listOf(webSearch, webFetch))
-
-        assertEquals(listOf("web_fetch"), s.getActiveToolNames())
-    }
-
-    @Test
-    fun `a branch without an entry activates all registry tools`() {
+    fun `a branch without an entry activates all registry tools`() = runTest {
         val webSearch = tool("web_search")
         val webFetch = tool("web_fetch")
 
@@ -217,7 +172,7 @@ class AgentSessionToolsTest {
     }
 
     @Test
-    fun `an empty registry keeps everything inert`() {
+    fun `an empty registry keeps everything inert`() = runTest {
         val s = session()
 
         assertEquals(emptyList<String>(), s.getActiveToolNames())

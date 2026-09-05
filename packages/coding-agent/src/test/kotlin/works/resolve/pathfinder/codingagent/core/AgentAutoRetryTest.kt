@@ -1,7 +1,9 @@
 package works.resolve.pathfinder.codingagent.core
 
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
@@ -36,6 +38,7 @@ import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.codingagent.core.RetrySettings
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
+import works.resolve.pathfinder.codingagent.core.session.SessionManager
 
 class AgentAutoRetryTest {
 
@@ -79,7 +82,7 @@ class AgentAutoRetryTest {
         }
     }
 
-    private fun session(
+    private suspend fun session(
         streams: ScriptedStreams,
         retrySettings: RetrySettings = RetrySettings(),
         sleep: suspend (Long) -> Unit = { }
@@ -89,6 +92,10 @@ class AgentAutoRetryTest {
             systemPrompt = "be brief",
             streamOptions = SimpleStreamOptions(),
             streamFn = streams.streamFn
+        ),
+        sessionManager = SessionManager.create(
+            createTempDirectory("auto-retry-test").toFile(),
+            ioDispatcher = Dispatchers.Unconfined
         ),
         retrySettings = retrySettings,
         sleep = sleep
@@ -244,6 +251,10 @@ class AgentAutoRetryTest {
                     streamOptions = SimpleStreamOptions(),
                     tools = listOf(fakeTool),
                     streamFn = streams.streamFn
+                ),
+                sessionManager = SessionManager.create(
+                    createTempDirectory("auto-retry-test").toFile(),
+                    ioDispatcher = Dispatchers.Unconfined
                 ),
                 retrySettings = RetrySettings(),
                 sleep = { }
