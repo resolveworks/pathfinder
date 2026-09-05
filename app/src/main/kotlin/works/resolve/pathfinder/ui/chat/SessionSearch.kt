@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.ui.chat
 
+import works.resolve.pathfinder.codingagent.core.session.SessionInfo
+
 internal data class FuzzyMatch(val matches: Boolean, val score: Double)
 
 /**
@@ -170,8 +172,6 @@ internal fun parseSearchQuery(query: String): ParsedSearchQuery {
 
 internal data class MatchResult(val matches: Boolean, val score: Double)
 
-internal data class SessionSearchEntry(val id: String, val modified: Long, val searchText: String)
-
 private fun normalizeWhitespaceLower(text: String): String =
     text.lowercase().replace(Regex("\\s+"), " ").trim()
 
@@ -207,27 +207,30 @@ internal fun matchSession(searchText: String, parsed: ParsedSearchQuery): MatchR
     return MatchResult(matches = true, score = totalScore)
 }
 
+/** Search text mirrors pi's getSearchText, minus cwd which Android sessions don't carry. */
+private fun searchText(session: SessionInfo): String = "${session.id} ${session.allMessagesText}"
+
 internal fun filterAndSortSessions(
-    sessions: List<SessionSearchEntry>,
+    sessions: List<SessionInfo>,
     query: String,
     sortMode: SessionSearchSort
-): List<SessionSearchEntry> {
+): List<SessionInfo> {
     if (query.trim().isEmpty()) return sessions
 
     val parsed = parseSearchQuery(query)
     if (parsed.error != null) return emptyList()
 
     if (sortMode == SessionSearchSort.RECENT) {
-        return sessions.filter { matchSession(it.searchText, parsed).matches }
+        return sessions.filter { matchSession(searchText(it), parsed).matches }
     }
 
     return sessions
         .mapNotNull { s ->
-            val res = matchSession(s.searchText, parsed)
+            val res = matchSession(searchText(s), parsed)
             if (res.matches) s to res.score else null
         }
         .sortedWith(
-            compareBy<Pair<SessionSearchEntry, Double>> {
+            compareBy<Pair<SessionInfo, Double>> {
                 it.second
             }.thenByDescending { it.first.modified }
         )

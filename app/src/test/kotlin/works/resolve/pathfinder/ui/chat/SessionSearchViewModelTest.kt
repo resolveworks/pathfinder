@@ -30,10 +30,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -104,56 +101,45 @@ import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
-/** Drawer session search: corpus scan, filtering, and sort. */
+/** Drawer session search: filtering and sort. */
 internal class SessionSearchViewModelTest : ChatHarnessTest() {
 
     // ---- session search ----
 
     @Test
-    fun sessionSearch_scansOnce_perQueryStretch_andFiltersResults() =
-        runTest(mainDispatcherRule.scheduler) {
-            val h = harness()
-            val vm = h.newViewModel()
-            vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
-            vm.configure(apiKey = "k")
-            vm.awaitState { it.status == ChatStatus.Ready }
+    fun sessionSearch_filtersResultsByQuery() = runTest(mainDispatcherRule.scheduler) {
+        val h = harness()
+        val vm = h.newViewModel()
+        vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.awaitState { it.status == ChatStatus.Ready }
 
-            vm.exchange(h, "Hello", "world")
-            val firstId = vm.uiState.value.activeSessionId!!
-            vm.newSession()
-            val secondId = vm.awaitState { it.activeSessionId != firstId }.activeSessionId!!
-            vm.exchange(h, "zebra facts", "reply")
-            vm.awaitState {
-                it.sessionSummaries.sumOf { s -> s.messageCount } == 4
-            }
-
-            vm.onSessionSearchQueryChange("zebra")
-            waitUntil {
-                !vm.uiState.value.isSessionSearching &&
-                    vm.uiState.value.sessionSearchResults.isNotEmpty()
-            }
-            assertEquals(listOf(secondId), vm.uiState.value.sessionSearchResults.map { it.id })
-
-            // Further keystrokes filter in memory: no rescan, no flicker.
-            vm.onSessionSearchQueryChange("zebrax")
-            assertEquals(0, vm.uiState.value.sessionSearchResults.size)
-            vm.onSessionSearchQueryChange("zebra")
-            assertEquals(listOf(secondId), vm.uiState.value.sessionSearchResults.map { it.id })
-
-            // Clearing the query clears results and drops the corpus: a new
-            // query rescans.
-            vm.onSessionSearchQueryChange("")
-            assertEquals(0, vm.uiState.value.sessionSearchResults.size)
-            assertFalse(vm.uiState.value.isSessionSearching)
-            vm.onSessionSearchQueryChange("Hello")
-            waitUntil {
-                !vm.uiState.value.isSessionSearching &&
-                    vm.uiState.value.sessionSearchResults.isNotEmpty()
-            }
-            assertEquals(listOf(firstId), vm.uiState.value.sessionSearchResults.map { it.id })
-
-            vm.closeForTest()
+        vm.exchange(h, "Hello", "world")
+        val firstId = vm.uiState.value.activeSessionId!!
+        vm.newSession()
+        val secondId = vm.awaitState { it.activeSessionId != firstId }.activeSessionId!!
+        vm.exchange(h, "zebra facts", "reply")
+        vm.awaitState {
+            it.sessionSummaries.sumOf { s -> s.messageCount } == 4
         }
+
+        vm.onSessionSearchQueryChange("zebra")
+        vm.awaitState { it.sessionSearchResults.map { s -> s.id } == listOf(secondId) }
+
+        // Further keystrokes filter in memory.
+        vm.onSessionSearchQueryChange("zebrax")
+        vm.awaitState { it.sessionSearchResults.isEmpty() }
+        vm.onSessionSearchQueryChange("zebra")
+        vm.awaitState { it.sessionSearchResults.map { s -> s.id } == listOf(secondId) }
+
+        // Clearing the query clears results.
+        vm.onSessionSearchQueryChange("")
+        vm.awaitState { it.query.isBlank() && it.sessionSearchResults.isEmpty() }
+        vm.onSessionSearchQueryChange("Hello")
+        vm.awaitState { it.sessionSearchResults.map { s -> s.id } == listOf(firstId) }
+
+        vm.closeForTest()
+    }
 
     @Test
     fun sessionSearch_sortChangeReorders_recentVsRelevance() =
@@ -172,46 +158,20 @@ internal class SessionSearchViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.sessionSummaries.sumOf { s -> s.messageCount } == 4 }
 
             vm.onSessionSearchQueryChange("zebra")
-            waitUntil {
-                !vm.uiState.value.isSessionSearching &&
-                    vm.uiState.value.sessionSearchResults.size == 2
-            }
             // Default RELEVANCE: the exact-match session ranks first.
-            assertEquals(
-                listOf(tightId, looseId),
-                vm.uiState.value.sessionSearchResults.map { it.id }
-            )
+            vm.awaitState {
+                it.sessionSearchResults.map { s -> s.id } == listOf(tightId, looseId)
+            }
 
             vm.setSessionSearchSort(SessionSearchSort.RECENT)
-            assertEquals(
-                listOf(looseId, tightId),
-                vm.uiState.value.sessionSearchResults.map { it.id }
-            )
+            vm.awaitState {
+                it.sessionSearchResults.map { s -> s.id } == listOf(looseId, tightId)
+            }
             vm.setSessionSearchSort(SessionSearchSort.RELEVANCE)
-            assertEquals(
-                listOf(tightId, looseId),
-                vm.uiState.value.sessionSearchResults.map { it.id }
-            )
+            vm.awaitState {
+                it.sessionSearchResults.map { s -> s.id } == listOf(tightId, looseId)
+            }
 
             vm.closeForTest()
         }
-
-    @Test
-    fun sessionSearch_scanFailure_degradesToEmptyResults() = runTest(mainDispatcherRule.scheduler) {
-        val h = harness()
-        val vm = h.newViewModel()
-        vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
-        vm.configure(apiKey = "k")
-        vm.awaitState { it.status == ChatStatus.Ready }
-        vm.exchange(h, "Hello", "world")
-        vm.awaitState { it.sessionSummaries.firstOrNull()?.messageCount == 2 }
-
-        h.sessions.failList = true
-        vm.onSessionSearchQueryChange("Hello")
-        waitUntil { !vm.uiState.value.isSessionSearching }
-        assertEquals(0, vm.uiState.value.sessionSearchResults.size)
-        assertNull(vm.uiState.value.error)
-
-        vm.closeForTest()
-    }
 }

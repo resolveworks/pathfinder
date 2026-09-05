@@ -2,17 +2,18 @@ package works.resolve.pathfinder.ui.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import works.resolve.pathfinder.codingagent.core.session.SessionInfo
 
 class SessionSearchTest {
-    private fun makeSession(
-        id: String,
-        modified: Long,
-        allMessagesText: String,
-        name: String? = null
-    ): SessionSearchEntry {
-        val searchText = "$id ${name ?: ""} $allMessagesText"
-        return SessionSearchEntry(id = id, modified = modified, searchText = searchText)
-    }
+    private fun makeSession(id: String, modified: Long, allMessagesText: String): SessionInfo =
+        SessionInfo(
+            id = id,
+            createdAt = modified,
+            modified = modified,
+            messageCount = 1,
+            firstMessage = "",
+            allMessagesText = allMessagesText
+        )
 
     @Test
     fun filtersByQuotedPhraseWithWhitespaceNormalization() {
@@ -84,7 +85,7 @@ class SessionSearchTest {
     fun blankQueryReturnsInputUnchanged() {
         val sessions =
             listOf(
-                makeSession("named", 3, "blueberry", name = "My Project"),
+                makeSession("named", 3, "blueberry"),
                 makeSession("other", 1, "blueberry")
             )
 

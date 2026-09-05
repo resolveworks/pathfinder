@@ -1,115 +1,67 @@
 package works.resolve.pathfinder.ui.chat
 
-import android.util.Log
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import works.resolve.pathfinder.codingagent.core.session.SessionInfo
-import works.resolve.pathfinder.data.sessions.SessionSource
 
 /**
- * The drawer's session search. Holds the searchable-text corpus only while
- * a query is active (memory bound; pi holds it only while the selector is
- * open) and filters the drawer's session summaries against it.
- * Snapshot-at-activation: list churn reuses the corpus, never rescans, and
- * sessions absent from the corpus drop out under a query (pi: unscanned
- * sessions don't appear in selector results). A scan failure degrades to
- * an empty corpus — results stay empty, no error surfaced.
+ * The drawer's session search. Filters the drawer's refreshed session
+ * summaries synchronously; there is no separate corpus, so results always
+ * track the latest summary state (divergence from pi's snapshot-at-scan).
  */
-internal class SessionSearchController(
-    private val scope: CoroutineScope,
-    private val sessionSource: SessionSource
-) {
-    /** Search surface mirrored into [ChatUiState]; the corpus itself never enters UI state. */
+internal class SessionSearchController {
+    /** Search surface mirrored into [ChatUiState]. */
     data class State(
         val query: String = "",
         /** RELEVANCE matches pi's effective default under a query (its "threaded" mode degrades to relevance). */
         val sort: SessionSearchSort = SessionSearchSort.RELEVANCE,
-        val results: List<SessionInfo> = emptyList(),
-        /** True while the one-time corpus scan runs after the query activates. */
-        val isScanning: Boolean = false
+        val results: List<SessionInfo> = emptyList()
     )
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
 
-    private var corpus: Map<String, String>? = null
-    private var scanJob: Job? = null
     private var summaries: List<SessionInfo> = emptyList()
 
-    /**
-     * Updates the search query: blank drops the corpus and results;
-     * non-blank filters synchronously against the loaded corpus or triggers
-     * the single scan that loads it.
-     */
+    /** Updates the search query: blank clears results, non-blank filters the current summaries. */
     fun onQueryChange(query: String) {
         _state.update { it.copy(query = query) }
         if (query.isBlank()) {
-            scanJob?.cancel()
-            scanJob = null
-            corpus = null
-            _state.update { it.copy(results = emptyList(), isScanning = false) }
+            _state.update { it.copy(results = emptyList()) }
             return
         }
-        if (corpus != null) {
-            applyFilter()
-            return
-        }
-        if (scanJob?.isActive == true) return
-        _state.update { it.copy(isScanning = true) }
-        scanJob = scope.launch {
-            val scanned = try {
-                sessionSource.list().associate { info ->
-                    info.id to "${info.id} ${info.allMessagesText}"
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "session_search", e)
-                emptyMap()
-            }
-            corpus = if (_state.value.query.isBlank()) null else scanned
-            _state.update { it.copy(isScanning = false) }
-            applyFilter()
-        }
+        applyFilter()
     }
 
-    /** Switches the sort and re-filters when a query is active against a loaded corpus. */
+    /** Switches the sort and re-filters when a query is active. */
     fun setSort(sort: SessionSearchSort) {
         _state.update { it.copy(sort = sort) }
-        if (_state.value.query.isNotBlank() && corpus != null) {
+        if (_state.value.query.isNotBlank()) {
             applyFilter()
         }
     }
 
-    /** Pushes the latest drawer summaries; re-filters when a query is active against a loaded corpus. */
+    /** Pushes the latest drawer summaries; re-filters when a query is active. */
     fun onSummariesChanged(updated: List<SessionInfo>) {
         summaries = updated
-        if (corpus != null && _state.value.query.isNotBlank()) {
+        if (_state.value.query.isNotBlank()) {
             applyFilter()
         }
     }
 
     private fun applyFilter() {
-        val loaded = corpus ?: return
         val state = _state.value
         if (state.query.isBlank()) return
-        val entries = summaries.map { summary ->
-            SessionSearchEntry(summary.id, summary.modified, loaded[summary.id].orEmpty())
-        }
-        val matched = filterAndSortSessions(entries, state.query, state.sort)
-        val byId = summaries.associateBy { it.id }
         _state.update {
-            it.copy(results = matched.mapNotNull { entry -> byId[entry.id] })
+            it.copy(
+                results = filterAndSortSessions(
+                    summaries,
+                    state.query,
+                    state.sort
+                )
+            )
         }
-    }
-
-    private companion object {
-        private const val TAG = "Pathfinder"
     }
 }
