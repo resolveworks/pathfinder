@@ -139,6 +139,14 @@ android {
     }
 }
 
+// Robolectric's bundled ASM cannot read newer class-file versions; keep the
+// Kotlin target aligned with the Java compile options.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
 dependencies {
     // The generated defuddle asset must exist before AGP merges assets.
     tasks.named("preBuild") { dependsOn(extractDefuddle) }
@@ -160,8 +168,6 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.core)
     debugImplementation(libs.androidx.compose.ui.tooling)
-    testImplementation(libs.androidx.compose.ui.test.junit4)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
 
     implementation(libs.kotlinx.coroutines.android)
 
@@ -192,8 +198,6 @@ dependencies {
     testImplementation(testFixtures(project(":packages:ai")))
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)
-    testImplementation(libs.robolectric)
-    testImplementation(libs.androidx.test.ext.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
 }

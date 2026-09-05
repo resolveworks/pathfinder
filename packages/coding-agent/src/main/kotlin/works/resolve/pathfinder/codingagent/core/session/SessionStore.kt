@@ -54,7 +54,7 @@ class SessionStore(
     override suspend fun create(title: String): Session = mutex.withLock {
         withContext(ioDispatcher) {
             val id = requireId(idFactory())
-            writeSpanned {
+            writeSession {
                 ensureRoot()
                 val createdAt = clock.now().toEpochMilliseconds()
                 val storage = JsonlSessionStorage.create(
@@ -80,7 +80,7 @@ class SessionStore(
         withContext(ioDispatcher) {
             sessionFiles()
                 .mapNotNull { file ->
-                    summarySpanned(file)?.let { session ->
+                    summaryOrNull(file)?.let { session ->
                         SessionSummary(
                             id = session.id,
                             title = session.title,
@@ -166,7 +166,7 @@ class SessionStore(
             if (!file.isFile) {
                 null
             } else {
-                loadSpanned(file)?.let(::defensiveCopy)
+                replay(file, sessionIdOf(file))?.let(::defensiveCopy)
             }
         }
     }
@@ -178,7 +178,7 @@ class SessionStore(
      */
     override suspend fun save(session: Session): Session = mutex.withLock {
         withContext(ioDispatcher) {
-            writeSpanned {
+            writeSession {
                 syncSession(
                     id = session.id,
                     entries = session.entries.toList(),
@@ -260,7 +260,7 @@ class SessionStore(
     ): Session = mutex.withLock {
         withContext(ioDispatcher) {
             val source = requireId(sourceId)
-            writeSpanned {
+            writeSession {
                 ensureRoot()
                 val sourceStorage = storageFor(source, fileFor(source))
                     ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Session not found: $id")
@@ -403,7 +403,7 @@ class SessionStore(
         return storage.toSession(file.lastModified())
     }
 
-    private suspend fun writeSpanned(operation: () -> Session): Session = try {
+    private suspend fun writeSession(operation: () -> Session): Session = try {
         operation()
     } catch (e: CancellationException) {
         throw e
@@ -420,10 +420,8 @@ class SessionStore(
 
     private fun sessionIdOf(file: File): String = file.name.removeSuffix(".jsonl")
 
-    private fun loadSpanned(file: File): Session? = replay(file, sessionIdOf(file))
-
     /** Summary read; failures other than cancellation skip the entry. */
-    private suspend fun summarySpanned(file: File): Session? = try {
+    private suspend fun summaryOrNull(file: File): Session? = try {
         replay(file, sessionIdOf(file))
     } catch (e: CancellationException) {
         throw e

@@ -112,9 +112,8 @@ class ProviderAuthService(
 
     /**
      * The credential is persisted only after a successful login, replacing
-     * whatever was stored. Login diagnostics (`pf.auth.login`) live at the
-     * Android caller boundary, not here — pi's login takes no telemetry
-     * context.
+     * whatever was stored. Login logging lives at the Android caller
+     * boundary, not here — pi's login takes no telemetry context.
      */
     suspend fun login(
         providerId: String,

@@ -29,8 +29,7 @@ package works.resolve.pathfinder.telemetry
  * packages/coding-agent. Porting span-name constants with no producer would
  * be dead code, and pathfinder matches the pin exactly: the `telemetryContext`
  * option is plumbed through request options (presence-redacted) but no
- * adapter starts a span. The app's actual span vocabulary is pathfinder-owned
- * (`pf.*`, PathfinderDiagnostics). No harness span or attribute is
+ * adapter starts a span. No harness span or attribute is
  * port-relevant but missing; revisit if post-pin pi wires real producers.
  *
  * Security: telemetry is operational metadata. Credentials, message text,

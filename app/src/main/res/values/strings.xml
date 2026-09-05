@@ -67,7 +67,6 @@
     <string name="action_save">Save</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_send">Send</string>
-    <string name="action_scroll_to_bottom">Scroll to bottom</string>
     <string name="action_stop">Stop</string>
     <string name="action_menu">Menu</string>
     <string name="action_back">Back</string>
