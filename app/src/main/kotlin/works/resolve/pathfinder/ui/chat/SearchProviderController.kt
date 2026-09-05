@@ -27,16 +27,20 @@ internal class SearchProviderController(
     private val service: SearchProviderService,
     private val onError: (message: String, cause: Throwable?) -> Unit
 ) {
-    /** Live search-provider surface: option rows, the Brave flag, and the credential form's success epoch. */
+    /** Live search-provider surface and the credential form's success epoch. */
     data class State(
         val options: List<ProviderOption> = emptyList(),
-        val braveConfigured: Boolean = false,
         /**
          * Incremented only after a credential has been successfully
          * persisted, never on a validation or storage failure.
          */
         val successEpoch: Long = 0
-    )
+    ) {
+        val braveConfigured: Boolean
+            get() = options.any {
+                it.id == SearchProviderService.BRAVE_PROVIDER_ID && it.configured
+            }
+    }
 
     private val _state = MutableStateFlow(State())
 
@@ -120,7 +124,6 @@ internal class SearchProviderController(
             onError(ERROR_STATUS, e)
             _state.update {
                 it.copy(
-                    braveConfigured = false,
                     options = service.providers
                         .map { provider ->
                             ProviderOption(provider.id, provider.name, configured = false)
@@ -130,10 +133,7 @@ internal class SearchProviderController(
             }
             return
         }
-        val braveConfigured =
-            options.firstOrNull { it.id == SearchProviderService.BRAVE_PROVIDER_ID }?.configured ==
-                true
-        _state.update { it.copy(options = options, braveConfigured = braveConfigured) }
+        _state.update { it.copy(options = options) }
     }
 
     /**

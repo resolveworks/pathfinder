@@ -679,7 +679,7 @@ private fun ChatDrawerContent(
                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                 )
             }
-            if (!queryBlank && !uiState.isSessionSearching && listedSessions.isEmpty()) {
+            if (!queryBlank && listedSessions.isEmpty()) {
                 item(key = "session-search-no-results") {
                     Text(
                         text = stringResource(R.string.session_search_no_results),
@@ -850,12 +850,7 @@ private val PREVIEW_AUTH_METHODS = listOf(
     )
 )
 
-private val PREVIEW_SELECTED_MODEL = SelectedModel(
-    providerId = "zai",
-    providerName = "Z.AI",
-    modelId = "model-a",
-    modelName = "Preview Model A"
-)
+private val PREVIEW_SELECTED_MODEL = PREVIEW_MODEL_OPTIONS.first()
 
 @Composable
 private fun PreviewChatScreen(

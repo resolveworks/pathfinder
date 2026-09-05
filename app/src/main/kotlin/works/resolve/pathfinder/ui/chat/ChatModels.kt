@@ -45,18 +45,6 @@ sealed interface TranscriptRow {
     ) : TranscriptRow
 }
 
-/**
- * One web_search result, parsed from a tool result's structured details at
- * render time: only the link-worthy summary — title, url, description —
- * not the extra excerpts the model's markdown keeps.
- */
-data class ChatSearchResult(
-    val title: String,
-    val url: String,
-    /** Null for results without a description (empty ones are skipped, as in the markdown content). */
-    val description: String? = null
-)
-
 @Serializable
 data object ChatNavKey : NavKey
 
@@ -114,13 +102,15 @@ data class ProviderOption(
     val authType: AuthType? = null
 )
 
-/** One row per model of a configured provider. */
+/** Display labels only: runtime models can carry request headers that must not enter UI state. */
 data class ModelOption(
     val providerId: String,
     val providerName: String,
     val modelId: String,
     val name: String
-)
+) {
+    val key: String get() = "$providerId/$modelId"
+}
 
 /**
  * An in-flight provider login: the chosen method, the ordered [AuthEvent]s
@@ -156,18 +146,6 @@ internal fun providerAuthScreenMode(methods: List<AuthMethodInfo>): ProviderAuth
     methods.size == 1 -> ProviderAuthScreenMode.START_OAUTH
     else -> ProviderAuthScreenMode.NO_METHODS
 }
-
-/**
- * The live model of the bound [works.resolve.pathfinder.codingagent.core.AgentSession],
- * projected from agent state (the same source the next prompt uses), or
- * null while unbound.
- */
-data class SelectedModel(
-    val providerId: String,
-    val providerName: String,
-    val modelId: String,
-    val modelName: String
-)
 
 /**
  * Immutable projection of the chat screen state. Contains no credentials or
@@ -211,18 +189,14 @@ data class ChatUiState(
      * behaves as no scope downstream.
      */
     val enabledModels: List<String>? = null,
-    /**
-     * Model options narrowed to the configured scope in display order; all
-     * model options when no (non-empty) scope is configured.
-     */
-    val scopedModelOptions: List<ModelOption> = emptyList(),
-    val selectedModel: SelectedModel? = null,
+    /** The bound session's live model, independent of the startup default. */
+    val selectedModel: ModelOption? = null,
     /**
      * Persisted startup default model, resolved through the catalog; null
      * when unset or no longer resolvable. Unlike [selectedModel], it never
      * follows the live session or the branch fold.
      */
-    val defaultModel: SelectedModel? = null,
+    val defaultModel: ModelOption? = null,
     /** The live thinking level of the bound session, or null when unbound. */
     val thinkingLevel: ModelThinkingLevel? = null,
     /** Thinking levels the current model supports; drives the thinking chip's visibility and the picker rows. */
@@ -231,13 +205,11 @@ data class ChatUiState(
     val defaultThinkingLevel: ModelThinkingLevel? = null,
     val activeSessionId: String? = null,
     val sessionSummaries: List<SessionInfo> = emptyList(),
-    /** Drawer session-search state; the corpus itself stays in the ViewModel (never in UI state). */
+    /** Drawer search over the current session summaries. */
     val sessionSearchQuery: String = "",
     /** RELEVANCE matches pi's effective default under a query (its "threaded" mode degrades to relevance). */
     val sessionSearchSort: SessionSearchSort = SessionSearchSort.RELEVANCE,
     val sessionSearchResults: List<SessionInfo> = emptyList(),
-    /** True while the one-time corpus scan runs after the query activates. */
-    val isSessionSearching: Boolean = false,
     val messages: List<TranscriptRow> = emptyList(),
     /** In-flight partial; role-generic in pi, assistant-only here (non-assistant partials render nothing). */
     val streamingMessage: AssistantMessage? = null,
@@ -246,7 +218,6 @@ data class ChatUiState(
     /** Transient auto-retry backoff status; null when not retrying. */
     val retryStatus: AutoRetryStatus? = null,
     val isCompacting: Boolean = false,
-    val canSend: Boolean = false,
     /** Display-only; never affects the agent. */
     val showThinking: Boolean = false,
     /** Flattened tree rows of the active session's conversation (see TreeProjection.kt). */
@@ -261,4 +232,14 @@ data class ChatUiState(
      * contract) and persist with the session.
      */
     val error: String? = null
-)
+) {
+    val canSend: Boolean
+        get() = status == ChatStatus.Ready && !isStreaming && draft.isNotBlank()
+
+    val scopedModelOptions: List<ModelOption>
+        get() {
+            if (enabledModels.isNullOrEmpty()) return modelOptions
+            val enabled = enabledModels.mapTo(mutableSetOf()) { it.lowercase() }
+            return modelOptions.filter { it.key.lowercase() in enabled }
+        }
+}

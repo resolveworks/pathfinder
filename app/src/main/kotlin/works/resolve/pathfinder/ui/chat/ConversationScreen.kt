@@ -31,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -85,7 +86,9 @@ internal fun ChatSurface(
             SelectionBar(
                 selectedModel = uiState.selectedModel,
                 defaultModel = uiState.defaultModel,
-                options = uiState.scopedModelOptions,
+                options = remember(uiState.modelOptions, uiState.enabledModels) {
+                    uiState.scopedModelOptions
+                },
                 onSelectModel = onSelectModel,
                 thinkingLevel = uiState.thinkingLevel,
                 availableThinkingLevels = uiState.availableThinkingLevels,
@@ -99,8 +102,8 @@ internal fun ChatSurface(
 /** pi's /model and /thinking bars as a compact chip row under the composer. */
 @Composable
 private fun SelectionBar(
-    selectedModel: SelectedModel?,
-    defaultModel: SelectedModel?,
+    selectedModel: ModelOption?,
+    defaultModel: ModelOption?,
     options: List<ModelOption>,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     thinkingLevel: ModelThinkingLevel?,
@@ -124,7 +127,7 @@ private fun SelectionBar(
             onClick = { sheetOpen = true },
             label = {
                 Text(
-                    text = selectedModel?.modelName ?: stringResource(R.string.model_picker_empty),
+                    text = selectedModel?.name ?: stringResource(R.string.model_picker_empty),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -295,22 +298,16 @@ private fun ThinkingLevelPickerSheet(
 @Composable
 private fun ModelPickerSheet(
     options: List<ModelOption>,
-    selectedModel: SelectedModel?,
-    defaultModel: SelectedModel?,
+    selectedModel: ModelOption?,
+    defaultModel: ModelOption?,
     onSelect: (ModelOption) -> Unit,
     onDismiss: () -> Unit
 ) {
     // pi's sortModels: current model first, then default; the stable sort
     // keeps the option list's display order otherwise (pi breaks ties by
     // provider name).
-    val isCurrent: (ModelOption) -> Boolean = { option ->
-        selectedModel?.let { option.providerId == it.providerId && option.modelId == it.modelId } ==
-            true
-    }
-    val isDefault: (ModelOption) -> Boolean = { option ->
-        defaultModel?.let { option.providerId == it.providerId && option.modelId == it.modelId } ==
-            true
-    }
+    val isCurrent: (ModelOption) -> Boolean = { it.key == selectedModel?.key }
+    val isDefault: (ModelOption) -> Boolean = { it.key == defaultModel?.key }
     val sortedOptions = options.sortedWith(
         compareByDescending<ModelOption> { isCurrent(it) }.thenByDescending { isDefault(it) }
     )
@@ -334,7 +331,7 @@ private fun ModelPickerSheet(
                         .weight(1f, fill = false)
                         .heightIn(max = 480.dp)
                 ) {
-                    items(sortedOptions, key = { "${it.providerId}/${it.modelId}" }) { option ->
+                    items(sortedOptions, key = ModelOption::key) { option ->
                         val isSelected = isCurrent(option)
                         ListItem(
                             headlineContent = { Text(option.name) },

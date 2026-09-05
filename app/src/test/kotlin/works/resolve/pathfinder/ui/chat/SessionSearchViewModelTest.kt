@@ -134,7 +134,7 @@ internal class SessionSearchViewModelTest : ChatHarnessTest() {
 
         // Clearing the query clears results.
         vm.onSessionSearchQueryChange("")
-        vm.awaitState { it.query.isBlank() && it.sessionSearchResults.isEmpty() }
+        vm.awaitState { it.sessionSearchQuery.isBlank() && it.sessionSearchResults.isEmpty() }
         vm.onSessionSearchQueryChange("Hello")
         vm.awaitState { it.sessionSearchResults.map { s -> s.id } == listOf(firstId) }
 

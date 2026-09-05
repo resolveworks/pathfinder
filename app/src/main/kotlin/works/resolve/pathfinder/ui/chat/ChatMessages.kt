@@ -38,12 +38,6 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.LinkAnnotation
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLinkStyles
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.withLink
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import kotlinx.serialization.json.JsonObject
@@ -55,9 +49,7 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.lenientJson
-import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
@@ -444,8 +436,7 @@ private fun ToolCallItem(
 }
 
 /**
- * Tool-result viewer: the whole output in a scrollable modal sheet; web_search
- * results with structured details render as result cards instead. A fresh
+ * Tool-result viewer: the whole output in a scrollable modal sheet. A fresh
  * scroll state per open anchors the viewport at the top of the content;
  * dismissing restores the transcript's scroll position because it never moved.
  */
@@ -454,8 +445,7 @@ private fun ToolCallItem(
 private fun ToolOutputSheet(call: ToolCall, result: ToolResultMessage, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         val format = ToolResultRenderers.formatFor(call.name)
-        val searchResults = remember(result) { toolResultSearchResults(result) }
-        val output = remember(result) { result.content.textContent().orEmpty() }
+        val output = remember(result) { result.content.textContent() }
         val contentColor = if (result.isError) {
             MaterialTheme.colorScheme.error
         } else {
@@ -496,15 +486,13 @@ private fun ToolOutputSheet(call: ToolCall, result: ToolResultMessage, onDismiss
                     .heightIn(max = 640.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                when {
-                    searchResults != null -> WebSearchResults(results = searchResults)
-
-                    format == ToolResultFormat.MARKDOWN -> MarkdownText(
+                when (format) {
+                    ToolResultFormat.MARKDOWN -> MarkdownText(
                         markdown = output,
                         color = contentColor
                     )
 
-                    else -> Text(
+                    ToolResultFormat.RAW -> Text(
                         text = output,
                         style = MaterialTheme.typography.bodySmall,
                         color = contentColor
@@ -549,66 +537,6 @@ private fun ThinkingLabel(active: Boolean, tokens: Int) {
 }
 
 /**
- * web_search results rendered from the structured details: per result, the
- * title link and its description — anything deeper is a link tap away.
- * Results without structured details render through the markdown/text
- * fallback above instead.
- */
-@Composable
-private fun WebSearchResults(results: List<ChatSearchResult>, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        results.forEachIndexed { index, result ->
-            if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            WebSearchResultItem(result)
-        }
-    }
-}
-
-@Composable
-private fun WebSearchResultItem(result: ChatSearchResult, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        val label = result.title.ifEmpty { result.url }.takeIf { it.isNotBlank() }
-        when {
-            label != null && result.url.isNotEmpty() -> Text(
-                text = buildAnnotatedString {
-                    withLink(
-                        LinkAnnotation.Url(
-                            result.url,
-                            TextLinkStyles(
-                                SpanStyle(
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            )
-                        )
-                    ) { append(label) }
-                },
-                style = MaterialTheme.typography.bodyLarge
-            )
-
-            label != null -> Text(
-                text = label,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Bold
-            )
-        }
-        result.description?.let { description ->
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-/**
  * pi's shown thinking state's look: markdown dimmer than the onSurface
  * answer text in both theme variants, italic.
  */
@@ -629,25 +557,6 @@ private fun ThinkingText(markdown: String, modifier: Modifier = Modifier) {
  */
 internal fun List<Content>.textContent(): String =
     filterIsInstance<TextContent>().joinToString("\n") { it.text }
-
-/**
- * web_search result entries parsed from the tool result's `details`
- * (mirrors the fields BraveWebSearchTool emits; reads are lenient so a
- * future shape change degrades to the text renderer, never a crash).
- * Null for other tools, error results, and malformed or empty shapes.
- */
-internal fun toolResultSearchResults(message: ToolResultMessage): List<ChatSearchResult>? {
-    if (message.isError || message.toolName != BraveWebSearchTool.NAME) return null
-    val results = (message.details as? JsonObject)?.arr("results") ?: return null
-    val entries = results.mapNotNull { it as? JsonObject }.map { r ->
-        ChatSearchResult(
-            title = r.str("title").orEmpty(),
-            url = r.str("url").orEmpty(),
-            description = r.str("description")?.takeIf { it.isNotEmpty() }
-        )
-    }
-    return entries.takeIf { it.isNotEmpty() }
-}
 
 @Preview(showBackground = true)
 @Composable

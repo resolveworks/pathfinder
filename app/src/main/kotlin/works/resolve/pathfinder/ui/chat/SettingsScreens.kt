@@ -11,8 +11,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.outlined.List
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -41,7 +39,7 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
  */
 @Composable
 internal fun SettingsContent(
-    defaultModel: SelectedModel?,
+    defaultModel: ModelOption?,
     defaultThinkingLevel: ModelThinkingLevel?,
     showDefaultThinkingRow: Boolean,
     showThinking: Boolean,
@@ -60,7 +58,7 @@ internal fun SettingsContent(
         ListItem(
             headlineContent = { Text(stringResource(R.string.settings_default_model)) },
             supportingContent = {
-                Text(defaultModel?.modelName ?: stringResource(R.string.settings_not_set))
+                Text(defaultModel?.name ?: stringResource(R.string.settings_not_set))
             },
             trailingContent = {
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
@@ -129,7 +127,7 @@ internal fun SettingsContent(
 @Composable
 internal fun DefaultModelContent(
     modelOptions: List<ModelOption>,
-    defaultModel: SelectedModel?,
+    defaultModel: ModelOption?,
     onSetDefault: (providerId: String, modelId: String) -> Unit,
     onOpenProviders: () -> Unit
 ) {
@@ -149,10 +147,8 @@ internal fun DefaultModelContent(
             }
         } else {
             LazyColumn {
-                items(modelOptions, key = { "${it.providerId}/${it.modelId}" }) { option ->
-                    val isDefault = defaultModel?.let {
-                        option.providerId == it.providerId && option.modelId == it.modelId
-                    } == true
+                items(modelOptions, key = ModelOption::key) { option ->
+                    val isDefault = option.key == defaultModel?.key
                     ListItem(
                         headlineContent = { Text(option.name) },
                         supportingContent = { Text(option.providerName) },
@@ -249,8 +245,8 @@ internal fun ModelsContent(
             }
         } else {
             LazyColumn(modifier = Modifier.weight(1f)) {
-                items(filteredOptions, key = { "${it.providerId}/${it.modelId}" }) { option ->
-                    val modelRef = "${option.providerId}/${option.modelId}"
+                items(filteredOptions, key = ModelOption::key) { option ->
+                    val modelRef = option.key
                     val checked = enabledModels?.contains(modelRef) ?: true
                     ListItem(
                         headlineContent = { Text(option.name) },
