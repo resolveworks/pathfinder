@@ -16,9 +16,10 @@ import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
 import works.resolve.pathfinder.ai.transport.OkHttpWebSocketTransport
-import works.resolve.pathfinder.codingagent.core.session.SessionStore
 import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
+import works.resolve.pathfinder.data.sessions.DirectorySessionSource
+import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
@@ -100,8 +101,8 @@ class PathfinderApplication : Application() {
         SettingsRepository(settingsDataStore)
     }
 
-    val sessionStore: SessionStore by lazy {
-        SessionStore(File(filesDir, SESSIONS_DIRECTORY))
+    val sessionSource: SessionSource by lazy {
+        DirectorySessionSource(File(filesDir, SESSIONS_DIRECTORY))
     }
 
     /** Generated from pi; never hand-edit the bundled asset. */
@@ -127,7 +128,7 @@ class PathfinderApplication : Application() {
                 settingsRepository = settingsRepository,
                 catalog = modelCatalog,
                 authService = authService,
-                sessionStore = sessionStore,
+                sessionSource = sessionSource,
                 agentFactory = agentFactory,
                 searchProviderService = searchProviderService,
                 modelResolver = agentFactory::resolveModel,

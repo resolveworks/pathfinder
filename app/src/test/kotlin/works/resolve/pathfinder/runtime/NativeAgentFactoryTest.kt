@@ -15,6 +15,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.AgentToolResult
 import works.resolve.pathfinder.agent.AgentToolUpdateCallback
@@ -40,11 +42,19 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.codingagent.core.buildSystemPrompt
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
-import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.session.SessionManager
 import works.resolve.pathfinder.data.settings.ModelSettings
 
 class NativeAgentFactoryTest {
+
+    @get:Rule
+    val tmpFolder = TemporaryFolder()
+
+    /** Memory-only manager; nothing touches disk until an assistant message commits. */
+    private fun session(): SessionManager = runBlocking {
+        SessionManager.create(tmpFolder.newFolder())
+    }
 
     /** Compaction off: URL/auth tests are single-request and not about compaction. */
     private val compactOff = CompactionSettings(
@@ -52,8 +62,6 @@ class NativeAgentFactoryTest {
         reserveTokens = 16384,
         keepRecentTokens = 20000
     )
-
-    private fun emptyConversation(): Conversation = Conversation(emptyList(), null)
 
     private class FakeCredentialStore(initialCredential: Credential? = null) : CredentialStore {
         val credential = MutableStateFlow(initialCredential)
@@ -115,7 +123,7 @@ class NativeAgentFactoryTest {
     fun `rejects an unsupported provider`() {
         assertFailsWith<IllegalArgumentException> {
             factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-                .create(settings(providerId = "openai"), "s1", emptyConversation())
+                .create(settings(providerId = "openai"), session())
         }
     }
 
@@ -123,27 +131,25 @@ class NativeAgentFactoryTest {
     fun `rejects an unknown model`() {
         assertFailsWith<IllegalArgumentException> {
             factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-                .create(settings(modelId = "gpt-4"), "s1", emptyConversation())
+                .create(settings(modelId = "gpt-4"), session())
         }
     }
 
     @Test
-    fun `copies the initial transcript into the agent`() {
-        val transcript: MutableList<works.resolve.pathfinder.ai.Message> = mutableListOf(
-            UserMessage.ofText("hello"),
-            UserMessage.ofText("again")
-        )
+    fun `the session manager's transcript seeds the agent`() = runBlocking {
+        val manager = SessionManager.create(tmpFolder.newFolder())
+        manager.appendMessage(UserMessage.ofText("hello"))
+        manager.appendMessage(UserMessage.ofText("again"))
         val agent = factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-            .create(
-                settings(),
-                "s1",
-                works.resolve.pathfinder.codingagent.core.session.Conversation.fromMessages(
-                    transcript
-                )
-            )
-        assertEquals(transcript, agent.state.value.messages)
-        transcript.clear()
-        assertEquals(2, agent.state.value.messages.size)
+            .create(settings(), manager)
+        val messages = agent.state.value.messages
+        assertEquals(2, messages.size)
+        assertEquals(
+            "hello",
+            (messages[0] as UserMessage).content.single().let {
+                (it as TextContent).text
+            }
+        )
     }
 
     @Test
@@ -168,11 +174,11 @@ class NativeAgentFactoryTest {
             catalog = catalog,
             transport = RecordingTransport(),
             tools = mutableListOf(tool)
-        ).create(settings(), "s1", emptyConversation())
+        ).create(settings(), session())
         assertEquals(1, withTools.state.value.tools.size)
 
         val default = factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-            .create(settings(), "s1", emptyConversation())
+            .create(settings(), session())
         assertTrue(default.state.value.tools.isEmpty())
     }
 
@@ -204,7 +210,7 @@ class NativeAgentFactoryTest {
                 catalog = catalog,
                 transport = RecordingTransport(),
                 tools = configured
-            ).create(settings(), "s1", emptyConversation())
+            ).create(settings(), session())
 
             assertEquals(listOf("web_search"), agent.getActiveToolNames())
             assertEquals(buildSystemPrompt(listOf(webSearch)), agent.state.value.systemPrompt)
@@ -231,7 +237,7 @@ class NativeAgentFactoryTest {
             val store = FakeCredentialStore(ApiKeyCredential("factory-test-key-1"))
             val transport = RecordingTransport()
             val agent = factory(store, transport)
-                .create(settings(), "s1", emptyConversation())
+                .create(settings(), session())
 
             // Rotating the stored credential after construction must be observed
             // at prompt time: the resolver stays lazy and reads the store per request.
@@ -276,8 +282,7 @@ class NativeAgentFactoryTest {
                         providerId = "cloudflare-ai-gateway",
                         modelId = "workers-ai/test-model"
                     ),
-                    "s1",
-                    emptyConversation()
+                    session()
                 )
             agent.prompt("ping")
 
@@ -405,8 +410,7 @@ class NativeAgentFactoryTest {
             )
                 .create(
                     ModelSettings(providerId = "multi", modelId = "m", compaction = compactOff),
-                    "s1",
-                    emptyConversation()
+                    session()
                 )
 
             agent.prompt("ping")
@@ -467,8 +471,7 @@ class NativeAgentFactoryTest {
                     modelId = model.id,
                     compaction = compactOff
                 ),
-                "s1",
-                emptyConversation()
+                session()
             )
 
             agent.prompt("ping")
@@ -505,7 +508,7 @@ class NativeAgentFactoryTest {
             val transport = RecordingTransport()
             val native =
                 NativeAgentFactory(credentials = store, catalog = catalog, transport = transport)
-            val agent = native.create(settings(), "s1", emptyConversation())
+            val agent = native.create(settings(), session())
 
             agent.prompt("ping") // initial provider: zai/glm-4.7
             assertEquals(
@@ -546,7 +549,7 @@ class NativeAgentFactoryTest {
                     catalog = catalog,
                     transport = RecordingTransport()
                 )
-            val agent = native.create(settings(), "s1", emptyConversation())
+            val agent = native.create(settings(), session())
 
             val error = runCatching {
                 agent.setModel(native.resolveModel("github-copilot", "gpt-4.1"))
@@ -574,8 +577,7 @@ class NativeAgentFactoryTest {
                         providerId = "cloudflare-ai-gateway",
                         modelId = "workers-ai/test-model"
                     ),
-                    "s1",
-                    emptyConversation()
+                    session()
                 )
 
             agent.prompt("ping")

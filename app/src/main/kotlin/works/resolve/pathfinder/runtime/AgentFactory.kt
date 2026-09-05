@@ -1,7 +1,7 @@
 package works.resolve.pathfinder.runtime
 
 import works.resolve.pathfinder.codingagent.core.AgentSession
-import works.resolve.pathfinder.codingagent.core.session.Conversation
+import works.resolve.pathfinder.codingagent.core.session.SessionManager
 import works.resolve.pathfinder.data.settings.ModelSettings
 
 /**
@@ -11,5 +11,5 @@ import works.resolve.pathfinder.data.settings.ModelSettings
  * agent state exists.
  */
 fun interface AgentFactory {
-    fun create(settings: ModelSettings, sessionId: String, conversation: Conversation): AgentSession
+    fun create(settings: ModelSettings, sessionManager: SessionManager): AgentSession
 }

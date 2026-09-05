@@ -7,8 +7,7 @@ import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
-import works.resolve.pathfinder.codingagent.core.session.LaneRecovery
-import works.resolve.pathfinder.codingagent.core.session.SessionSummary
+import works.resolve.pathfinder.codingagent.core.session.SessionInfo
 
 /** Which conversation surface the chat root shows: the transcript or the session tree. */
 enum class ConversationView {
@@ -307,12 +306,12 @@ data class ChatUiState(
     /** The persisted default thinking level. */
     val defaultThinkingLevel: ModelThinkingLevel? = null,
     val activeSessionId: String? = null,
-    val sessionSummaries: List<SessionSummary> = emptyList(),
+    val sessionSummaries: List<SessionInfo> = emptyList(),
     /** Drawer session-search state; the corpus itself stays in the ViewModel (never in UI state). */
     val sessionSearchQuery: String = "",
     /** RELEVANCE matches pi's effective default under a query (its "threaded" mode degrades to relevance). */
     val sessionSearchSort: SessionSearchSort = SessionSearchSort.RELEVANCE,
-    val sessionSearchResults: List<SessionSummary> = emptyList(),
+    val sessionSearchResults: List<SessionInfo> = emptyList(),
     /** True while the one-time corpus scan runs after the query activates. */
     val isSessionSearching: Boolean = false,
     val messages: List<ChatMessage> = emptyList(),
@@ -332,12 +331,6 @@ data class ChatUiState(
     val treeFilter: TreeFilter = TreeFilter.DEFAULT,
     /** The in-flight provider login flow, or null (see [ProviderAuthFlow]). */
     val authFlow: ProviderAuthFlow? = null,
-    /**
-     * Load-time lane recovery classification: [LaneRecovery.Suspended]
-     * marks an interrupted operation — its operation_finished was never
-     * persisted — as distinct from a finished one.
-     */
-    val laneRecovery: LaneRecovery = LaneRecovery.Idle,
     /**
      * Transient ViewModel-sourced failure shown as a snackbar. Agent-run
      * errors are never mirrored here: they render as transcript rows (pi's

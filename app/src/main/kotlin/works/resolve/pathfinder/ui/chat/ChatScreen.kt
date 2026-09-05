@@ -76,7 +76,7 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthType
-import works.resolve.pathfinder.codingagent.core.session.SessionSummary
+import works.resolve.pathfinder.codingagent.core.session.SessionInfo
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 @Composable
@@ -658,11 +658,11 @@ private fun ChatDrawerContent(
         val listedSessions =
             if (queryBlank) uiState.sessionSummaries else uiState.sessionSearchResults
         LazyColumn(modifier = Modifier.weight(1f)) {
-            items(listedSessions, key = SessionSummary::id) { summary ->
+            items(listedSessions, key = SessionInfo::id) { summary ->
                 NavigationDrawerItem(
                     label = {
                         Text(
-                            text = summary.title,
+                            text = summary.firstMessage,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -1147,12 +1147,13 @@ private fun ChatScreenChatViewPreview() {
             selectedModel = PREVIEW_SELECTED_MODEL,
             activeSessionId = "s1",
             sessionSummaries = listOf(
-                SessionSummary(
+                SessionInfo(
                     id = "s1",
-                    title = "Preview chat",
                     createdAt = 0L,
-                    updatedAt = 0L,
-                    messageCount = 1
+                    modified = 0L,
+                    messageCount = 1,
+                    firstMessage = "Preview chat",
+                    allMessagesText = "Preview chat"
                 )
             ),
             messages = listOf(
@@ -1191,12 +1192,13 @@ private fun ChatScreenReadyStreamingPreview() {
             selectedModel = PREVIEW_SELECTED_MODEL,
             activeSessionId = "s1",
             sessionSummaries = listOf(
-                SessionSummary(
+                SessionInfo(
                     id = "s1",
-                    title = "Preview chat",
                     createdAt = 0L,
-                    updatedAt = 0L,
-                    messageCount = 2
+                    modified = 0L,
+                    messageCount = 2,
+                    firstMessage = "Preview chat",
+                    allMessagesText = "Preview chat"
                 )
             ),
             messages = listOf(
