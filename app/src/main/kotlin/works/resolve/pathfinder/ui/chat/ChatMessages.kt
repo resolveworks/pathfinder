@@ -29,11 +29,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -321,38 +319,6 @@ internal object ToolResultRenderers {
     fun formatFor(toolName: String): ToolResultFormat = formats[toolName] ?: ToolResultFormat.RAW
 }
 
-/** pi's preview budget: Scry's markdown renderer and the generic fallback both clip at ten source lines. */
-private const val TOOL_PREVIEW_LINES = 10
-
-/** An opened tool row's display text plus what the show-all button still hides. */
-internal data class ToolPreview(val text: String, val hiddenLines: Int)
-
-/**
- * pi clips an un-expanded tool result at ten source lines and hints at the
- * rest; the port keeps the clip in the viewer sheet and turns the hint into
- * the show-all button ([showAll] reveals everything). Scry leaves error
- * output whole; the generic fallback clips errors too.
- */
-internal fun toolOutputPreview(
-    output: String,
-    format: ToolResultFormat,
-    isError: Boolean,
-    showAll: Boolean
-): ToolPreview {
-    if (showAll || (format == ToolResultFormat.MARKDOWN && isError)) {
-        return ToolPreview(output, 0)
-    }
-    val lines = output.lines()
-    return if (lines.size <= TOOL_PREVIEW_LINES) {
-        ToolPreview(output, 0)
-    } else {
-        ToolPreview(
-            lines.take(TOOL_PREVIEW_LINES).joinToString("\n"),
-            lines.size - TOOL_PREVIEW_LINES
-        )
-    }
-}
-
 /**
  * Shared row-title spec, keyed by tool name like [ToolResultRenderers]:
  * which call argument titles a tool's row ("Searched for …", "Fetched …")
@@ -444,25 +410,18 @@ private fun ToolCallItem(
 }
 
 /**
- * Tool-result viewer: pi's clipped preview with the show-all button in a
- * scrollable modal sheet; web_search results with structured details render
- * as expandable result cards instead. A fresh scroll state per open anchors
- * the viewport at the top of the content; dismissing restores the
- * transcript's scroll position because it never moved.
+ * Tool-result viewer: the whole output in a scrollable modal sheet; web_search
+ * results with structured details render as result cards instead. A fresh
+ * scroll state per open anchors the viewport at the top of the content;
+ * dismissing restores the transcript's scroll position because it never moved.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ToolOutputSheet(result: ChatToolResult, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        var showAll by remember(result.toolCallId) { mutableStateOf(false) }
         val format = ToolResultRenderers.formatFor(result.toolName)
         val searchResults = result.searchResults?.takeIf { !result.isError }
-        val preview = toolOutputPreview(
-            output = result.output.orEmpty(),
-            format = format,
-            isError = result.isError,
-            showAll = showAll
-        )
+        val output = result.output.orEmpty()
         val contentColor = if (result.isError) {
             MaterialTheme.colorScheme.error
         } else {
@@ -507,26 +466,15 @@ private fun ToolOutputSheet(result: ChatToolResult, onDismiss: () -> Unit) {
                     searchResults != null -> WebSearchResults(results = searchResults)
 
                     format == ToolResultFormat.MARKDOWN -> MarkdownText(
-                        markdown = preview.text,
+                        markdown = output,
                         color = contentColor
                     )
 
                     else -> Text(
-                        text = preview.text,
+                        text = output,
                         style = MaterialTheme.typography.bodySmall,
                         color = contentColor
                     )
-                }
-                if (searchResults == null && preview.hiddenLines > 0) {
-                    TextButton(onClick = { showAll = true }) {
-                        Text(
-                            pluralStringResource(
-                                R.plurals.tool_output_show_all,
-                                preview.hiddenLines,
-                                preview.hiddenLines
-                            )
-                        )
-                    }
                 }
             }
         }
@@ -568,8 +516,7 @@ private fun ThinkingLabel(active: Boolean, tokens: Int) {
 
 /**
  * web_search results rendered from the structured details: per result, the
- * title link and description stay visible while the extra excerpts wait
- * behind a read-more toggle, so one long result cannot dominate the sheet.
+ * title link and its description — anything deeper is a link tap away.
  * Results without structured details render through the markdown/text
  * fallback above instead.
  */
@@ -588,7 +535,6 @@ private fun WebSearchResults(results: List<ChatSearchResult>, modifier: Modifier
 
 @Composable
 private fun WebSearchResultItem(result: ChatSearchResult, modifier: Modifier = Modifier) {
-    var expanded by remember { mutableStateOf(false) }
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -624,31 +570,6 @@ private fun WebSearchResultItem(result: ChatSearchResult, modifier: Modifier = M
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-        if (expanded) {
-            result.snippets.forEach { snippet ->
-                Text(
-                    text = snippet,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        if (result.snippets.isNotEmpty()) {
-            TextButton(
-                onClick = { expanded = !expanded },
-                contentPadding = PaddingValues(0.dp)
-            ) {
-                Text(
-                    stringResource(
-                        if (expanded) {
-                            R.string.search_result_show_less
-                        } else {
-                            R.string.search_result_read_more
-                        }
-                    )
-                )
-            }
         }
     }
 }

@@ -89,14 +89,8 @@
 
     <string name="tool_status_failed">Failed</string>
     <string name="tool_output_view">View tool output</string>
-    <plurals name="tool_output_show_all">
-        <item quantity="one">Show all (%1$d more line)</item>
-        <item quantity="other">Show all (%1$d more lines)</item>
-    </plurals>
     <string name="tool_title_searched_for">Searched for %1$s</string>
     <string name="tool_title_fetched">Fetched %1$s</string>
-    <string name="search_result_read_more">Read more</string>
-    <string name="search_result_show_less">Show less</string>
 
     <string name="error_generic">Something went wrong</string>
 

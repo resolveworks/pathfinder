@@ -137,12 +137,13 @@ class BraveWebSearchToolTest {
                 "3. **[Third](https://c.example)**",
             resultText(result)
         )
-        // Structured mirror of the markdown for the app's result renderer.
+        // Structured mirror of the markdown's summary fields for the app's
+        // result renderer; the extra snippets stay model-only content.
         assertEquals(
             "{" +
                 "\"results\":[" +
                 "{\"title\":\"First\",\"url\":\"https://a.example\"," +
-                "\"description\":\"Desc one\",\"extra_snippets\":[\"s1\",\"s2\"]}," +
+                "\"description\":\"Desc one\"}," +
                 "{\"title\":\"Second\",\"url\":\"https://b.example\"}," +
                 "{\"title\":\"Third\",\"url\":\"https://c.example\"}]}",
             result.details.toString()

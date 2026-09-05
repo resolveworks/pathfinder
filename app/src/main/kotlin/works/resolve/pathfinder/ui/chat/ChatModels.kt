@@ -51,15 +51,14 @@ data class ChatMessage(
 
 /**
  * One web_search result, parsed from the tool result's structured details
- * (see `toolResultSearchResults`); `snippets` are the extra excerpts the
- * viewer keeps behind its read-more toggle.
+ * (see `toolResultSearchResults`): only the link-worthy summary — title,
+ * url, description — not the extra excerpts the model's markdown keeps.
  */
 data class ChatSearchResult(
     val title: String,
     val url: String,
     /** Null for results without a description (empty ones are skipped, as in the markdown content). */
-    val description: String? = null,
-    val snippets: List<String> = emptyList()
+    val description: String? = null
 )
 
 /**

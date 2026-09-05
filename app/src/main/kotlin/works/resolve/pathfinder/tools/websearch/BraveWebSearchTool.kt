@@ -39,8 +39,8 @@ import works.resolve.pathfinder.codingagent.core.AgentSession
  *   the system prompt never advertises an unusable tool; upstream registers
  *   unconditionally and errors at execute time.
  * - `details` carries the structured result entries (title, url,
- *   description, extra_snippets) for the app's result renderer; upstream
- *   Scry exposes only the markdown content.
+ *   description) for the app's result renderer; upstream Scry exposes only
+ *   the markdown content.
  *
  * Never logs the API key or request/response content.
  */
@@ -198,8 +198,9 @@ class BraveWebSearchTool(
                 )
             }
 
-            // Content keeps Scry's numbered markdown for the model; the
-            // same fields go into `details` for the app's result renderer.
+            // Content keeps Scry's numbered markdown — snippets included —
+            // for the model; `details` mirrors the summary fields for the
+            // app's result renderer.
             val entries = mutableListOf<JsonObject>()
             val lines = results.mapIndexed { i, element ->
                 val r = element as? JsonObject ?: JsonObject(emptyMap())
@@ -213,7 +214,6 @@ class BraveWebSearchTool(
                         put("title", title)
                         put("url", url)
                         description?.let { put("description", it) }
-                        snippets?.let { put("extra_snippets", it) }
                     }
                 )
                 val parts = mutableListOf("${i + 1}. **[$title]($url)**")

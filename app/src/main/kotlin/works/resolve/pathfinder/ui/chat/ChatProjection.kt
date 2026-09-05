@@ -13,7 +13,6 @@ import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.str
-import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.session.Conversation
@@ -151,8 +150,7 @@ internal fun List<Content>.toChatBlocks(): List<ChatBlock> {
 
 /**
  * Full text output: text parts joined with newlines. No truncation at the
- * projection boundary — renderers bound the collapsed preview, the way
- * pi's renderers cap preview lines.
+ * projection boundary — the viewer scrolls the whole text.
  */
 internal fun toolResultOutput(message: ToolResultMessage): String? {
     val parts = message.content.filterIsInstance<TextContent>()
@@ -173,10 +171,7 @@ internal fun toolResultSearchResults(message: ToolResultMessage): List<ChatSearc
         ChatSearchResult(
             title = r.str("title").orEmpty(),
             url = r.str("url").orEmpty(),
-            description = r.str("description")?.takeIf { it.isNotEmpty() },
-            snippets = r.arr("extra_snippets")
-                ?.mapNotNull { it.strOrNull()?.takeIf(String::isNotEmpty) }
-                .orEmpty()
+            description = r.str("description")?.takeIf { it.isNotEmpty() }
         )
     }
     return entries.takeIf { it.isNotEmpty() }

@@ -31,7 +31,7 @@ class ChatProjectionSearchResultsTest {
     )
 
     @Test
-    fun `details results project with description and snippets`() {
+    fun `details results project with description`() {
         val details = buildJsonObject {
             put(
                 "results",
@@ -41,14 +41,6 @@ class ChatProjectionSearchResultsTest {
                             put("title", "First")
                             put("url", "https://a.example")
                             put("description", "Desc one")
-                            put(
-                                "extra_snippets",
-                                buildJsonArray {
-                                    add(JsonPrimitive("s1"))
-                                    add(JsonPrimitive(""))
-                                    add(JsonPrimitive("s2"))
-                                }
-                            )
                         }
                     )
                     add(
@@ -65,8 +57,7 @@ class ChatProjectionSearchResultsTest {
                 ChatSearchResult(
                     title = "First",
                     url = "https://a.example",
-                    description = "Desc one",
-                    snippets = listOf("s1", "s2")
+                    description = "Desc one"
                 ),
                 ChatSearchResult(title = "", url = "https://b.example")
             ),
