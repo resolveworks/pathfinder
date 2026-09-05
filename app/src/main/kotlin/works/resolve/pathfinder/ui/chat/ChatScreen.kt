@@ -184,6 +184,13 @@ fun ChatScreen(
     // Session whose tree has been positioned on its current leaf at open.
     var positionedTreeSessionId by rememberSaveable { mutableStateOf<String?>(null) }
 
+    // Chats follow the user's own send: one deliberate jump to the newest
+    // content (index 0 in the reversed transcript), never a follow effect.
+    val sendAndFollow: () -> Unit = {
+        onSend()
+        scope.launch { chatListState.scrollToItem(0) }
+    }
+
     LaunchedEffect(uiState.error) {
         uiState.error?.let { error ->
             snackbarHostState.showSnackbar(error)
@@ -393,7 +400,7 @@ fun ChatScreen(
                                         ConversationView.Chat -> ChatSurface(
                                             uiState = uiState,
                                             onDraftChange = onDraftChange,
-                                            onSend = onSend,
+                                            onSend = sendAndFollow,
                                             onStop = onStop,
                                             onSelectModel = onSelectModel,
                                             onSelectThinkingLevel = onSelectThinkingLevel,
@@ -420,7 +427,7 @@ fun ChatScreen(
                                     ChatSurface(
                                         uiState = uiState,
                                         onDraftChange = onDraftChange,
-                                        onSend = onSend,
+                                        onSend = sendAndFollow,
                                         onStop = onStop,
                                         onSelectModel = onSelectModel,
                                         onSelectThinkingLevel = onSelectThinkingLevel,

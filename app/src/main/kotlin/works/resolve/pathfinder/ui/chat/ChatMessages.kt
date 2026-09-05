@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -7,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -14,28 +16,34 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
@@ -48,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
@@ -70,8 +79,6 @@ internal fun ConversationContent(
     val renderableMessages = remember(uiState.messages) {
         uiState.messages.filter(ChatMessage::hasRenderableContent)
     }
-    val lastItemIndex = renderableMessages.size + uiState.pendingTools.size +
-        (if (streamingId == null) 0 else 1)
 
     // Opened-viewer view state, by stable id (tool call id, or
     // "messageId:blockIndex" for a thinking block). Ephemeral state resolved
@@ -88,13 +95,29 @@ internal fun ConversationContent(
         if (messageCount == 0 && uiState.pendingTools.isEmpty() && streamingId == null) {
             EmptyStateText(text = stringResource(R.string.chat_empty))
         }
+        // reverseLayout makes the newest committed message index 0 and the
+        // visual bottom the scroll origin: insertions at the bottom keep a
+        // pinned reader pinned and never move a detached reader's anchor.
+        // Streaming growth is not in the list at all — it lives in the
+        // overlay below, because a growing item in a reversed list is the
+        // scroll anchor while partially visible, and its growth cascades
+        // through everything stacked above it.
         LazyColumn(
             state = listState,
-            contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
+            reverseLayout = true,
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            items(renderableMessages, key = ChatMessage::id) { message ->
+            // Stable index-0 key: the scroll-position bookkeeping's constant
+            // reference across commit insertions of its neighbors.
+            item(key = "transcript-bottom-anchor") {
+                Spacer(Modifier.height(with(LocalDensity.current) { 1f.toDp() }))
+            }
+
+            // Emitted newest-first; reverseLayout puts it at the bottom,
+            // preserving chronological visual order.
+            items(renderableMessages.asReversed(), key = ChatMessage::id) { message ->
                 when {
                     message.isCompactionMarker -> CompactedDivider()
 
@@ -117,18 +140,38 @@ internal fun ConversationContent(
                     )
                 }
             }
-            items(uiState.pendingTools, key = { "pending-${it.toolCallId}" }) { pending ->
-                ToolCallItem(
-                    toolName = pending.toolName,
-                    input = pending.input,
-                    output = null,
-                    isError = false,
-                    running = true,
-                    onOpenOutput = {}
-                )
-            }
-            uiState.streamingMessage?.let { streaming ->
-                item(key = streaming.id) {
+        }
+
+        // The active run — pending tool rows, then the streaming message —
+        // renders OUTSIDE the list as a bottom-anchored overlay, so its
+        // growth can never move list content: a detached reader's viewport
+        // stays frozen and a pinned reader's newest line stays at the
+        // bottom edge. Capped so it cannot swallow the transcript; overflow
+        // is top-clipped (the tail is what matters mid-run). The full text
+        // becomes scrollable history when the run commits into the list.
+        if (streamingId != null || uiState.pendingTools.isNotEmpty()) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.6f)
+                    .wrapContentHeight(Alignment.Bottom)
+                    .clipToBounds()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                uiState.pendingTools.forEach { pending ->
+                    ToolCallItem(
+                        toolName = pending.toolName,
+                        input = pending.input,
+                        output = null,
+                        isError = false,
+                        running = true,
+                        onOpenOutput = {}
+                    )
+                }
+                uiState.streamingMessage?.let { streaming ->
                     val hasVisibleText = streaming.blocks.any {
                         it is ChatBlock.Text && it.text.isNotBlank()
                     }
@@ -148,17 +191,23 @@ internal fun ConversationContent(
                     )
                 }
             }
-            item(key = "transcript-bottom-anchor") {
-                Spacer(Modifier.height(with(LocalDensity.current) { 1f.toDp() }))
-            }
         }
 
-        // SideEffect runs after the new item provider is composed but before
-        // its next measure. The old layout still tells us whether the reader
-        // was at the bottom before this update changed the content height.
-        SideEffect {
-            if (!listState.isScrollInProgress && !listState.canScrollForward) {
-                listState.requestScrollToItem(lastItemIndex)
+        // In a reversed list canScrollBackward IS the detached signal. A
+        // detached reader re-attaches by scrolling back to the bottom; this
+        // is the shortcut for it.
+        if (listState.canScrollBackward) {
+            val scope = rememberCoroutineScope()
+            SmallFloatingActionButton(
+                onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp)
+            ) {
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    contentDescription = stringResource(R.string.action_scroll_to_bottom)
+                )
             }
         }
 

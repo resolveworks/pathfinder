@@ -116,16 +116,13 @@ class ChatViewModel(
         onLoginFailed = { cause -> setError(ERROR_AUTH_LOGIN, cause) }
     )
 
-    /** Current committed configuration; updated on init and successful save. */
-    private var currentSettings: ModelSettings = ModelSettings()
-
     /**
-     * The persisted startup default provider/model pair, kept separate from
-     * [currentSettings]: initialization may seed currentSettings from a
-     * derived/branch-folded model while the stored default stays whatever
-     * settings last wrote. Only [saveStartupDefaultInternal] changes this.
+     * The persisted settings as last read or written; its provider/model
+     * fields are the startup default only. The running model lives on the
+     * bound [AgentSession] — its branch fold at load, [selectModelInternal]
+     * thereafter — and never drifts into this field.
      */
-    private var defaultModelRef: Pair<String, String> = "" to ""
+    private var currentSettings: ModelSettings = ModelSettings()
 
     private var agent: AgentSession? = null
     private var agentStateJob: Job? = null
@@ -149,6 +146,9 @@ class ChatViewModel(
 
     /** Agent transcript instance used for the latest committed-message projection. */
     private var observedAgentMessages: List<Message>? = null
+
+    /** Agent model instance behind the latest [ChatUiState.selectedModel] projection. */
+    private var observedAgentModel: Model? = null
 
     /**
      * Unsent input per session, synced only at [activateSession] boundaries:
@@ -475,27 +475,15 @@ class ChatViewModel(
             }
             if (result.cancelled) return@launch
             val updated = session.conversation
-            // The agent runs on the branch's folded configuration.
-            // Divergence from pi: a rebuild happens only when the fold
-            // changes the model (pi swaps state in-place on the live agent,
-            // which factory-built agents do not support); an unknown folded
-            // model keeps the running agent rather than failing navigation.
-            val seeded = settingsSeededFromFold(currentSettings, updated)
-            val active: AgentSession = if (
-                session.model.provider == seeded.providerId && session.model.id == seeded.modelId
-            ) {
-                session
-            } else {
-                val newAgent = tryCreateAgent(seeded, activeSession!!.id, updated) ?: return@launch
-                bindAgent(newAgent)
-                newAgent
-            }
+            // Navigation never changes the running model: pi's navigateTree
+            // rebuilds only the transcript. A branch's folded model re-applies
+            // at the next session load, not on navigation.
             updateState {
                 it.copy(
                     // A typed draft is never clobbered by navigation; the
                     // re-edit text lands only in an empty draft.
                     draft = if (it.draft.isBlank()) result.editorText ?: it.draft else it.draft,
-                    messages = projectCommitted(active.agent.state.value.messages, updated),
+                    messages = projectCommitted(session.agent.state.value.messages, updated),
                     treeRows = buildTreeRows(updated, it.treeFilter)
                 )
             }
@@ -604,10 +592,10 @@ class ChatViewModel(
                     return@launch
                 }
                 val session = sessionStore.create(DEFAULT_SESSION_TITLE)
-                // Seeding the initial model and thinking level on new
-                // sessions lets the branch's configuration fold restore both
-                // on resume.
-                val (seeded, conversation) = seededSettingsFor(session, currentSettings)
+                // The startup resolution inside seededSettingsFor (pi's
+                // findInitialModel) picks the initial model; the seeds let
+                // the branch's configuration fold restore it on resume.
+                val (seeded, conversation) = seededSettingsFor(session)
                 val newAgent = tryCreateAgent(seeded, session.id, conversation) ?: return@launch
                 if (!activateSession(session, newAgent)) return@launch
             } catch (e: CancellationException) {
@@ -630,12 +618,8 @@ class ChatViewModel(
                         setError(ERROR_SESSION_SAVE)
                         return@launch
                     }
-                    val conversation = Conversation(session.entries, session.leafId)
-                    val newAgent = tryCreateAgent(
-                        settingsSeededFromFold(currentSettings, conversation),
-                        session.id,
-                        conversation
-                    ) ?: return@launch
+                    val (seeded, conversation) = seededSettingsFor(session)
+                    val newAgent = tryCreateAgent(seeded, session.id, conversation) ?: return@launch
                     if (!activateSession(session, newAgent)) return@launch
                 }
             } catch (e: CancellationException) {
@@ -653,7 +637,6 @@ class ChatViewModel(
             val settings = settingsRepository.currentSettings()
             val summaries = sessionStore.summaries()
             currentSettings = settings
-            defaultModelRef = settings.providerId to settings.modelId
             refreshOptions()
 
             // NeedsConfiguration means exactly "no configured provider at
@@ -671,26 +654,23 @@ class ChatViewModel(
                 return
             }
 
-            // The saved default when usable, else the first available model
-            // of a configured provider. A saved model known to the catalog
-            // but absent from the credential-filtered set surfaces a safe
-            // error while the derived replacement runs; a corrupt/unknown
-            // model id is NOT "unavailable" and adds no error.
-            val dbgConfigured = isConfigured(settings)
-            val candidate = if (dbgConfigured) {
-                settings
-            } else {
-                val savedKnown = catalog.getProvider(settings.providerId)
-                    ?.model(settings.modelId) != null
-                val first = _uiState.value.modelOptions.first()
-                if (savedKnown) setError(ERROR_MODEL_UNAVAILABLE)
-                settings.copy(providerId = first.providerId, modelId = first.modelId)
+            // A saved default known to the catalog but absent from the
+            // credential-filtered set surfaces a safe error while the
+            // derived replacement runs; a corrupt/unknown model id is NOT
+            // "unavailable" and adds no error.
+            val defaultAvailable = _uiState.value.modelOptions.any {
+                it.providerId == settings.providerId && it.modelId == settings.modelId
+            }
+            if (!defaultAvailable && settings.modelId.isNotBlank() &&
+                catalog.getProvider(settings.providerId)?.model(settings.modelId) != null
+            ) {
+                setError(ERROR_MODEL_UNAVAILABLE)
             }
 
-            val session = resolveSession(candidate, summaries)
+            val session = resolveSession(settings, summaries)
             // Build the agent before committing any state: a factory failure
             // must never leave a Ready UI or persisted active-session id.
-            val (seeded, conversation) = seededSettingsFor(session, candidate)
+            val (seeded, conversation) = seededSettingsFor(session)
             val newAgent = tryCreateAgent(
                 seeded,
                 session.id,
@@ -712,10 +692,6 @@ class ChatViewModel(
                 updateState { it.copy(status = ChatStatus.Failed) }
                 return
             }
-            // currentSettings follows the effective running model; the
-            // stored default stays untouched.
-            currentSettings = seeded
-            refreshOptions()
             updateState {
                 it.copy(
                     status = ChatStatus.Ready,
@@ -872,16 +848,16 @@ class ChatViewModel(
      * Resolves the session and builds an agent for it: validation happens
      * before anything is committed. Returns null on failure (safe error set).
      */
-    private suspend fun prepareAdoption(settings: ModelSettings): Pair<Session, AgentSession>? {
+    private suspend fun prepareAdoption(): Pair<Session, AgentSession>? {
         val session = try {
-            resolveSession(settings, sessionStore.summaries())
+            resolveSession(currentSettings, sessionStore.summaries())
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             setError(ERROR_SESSION_CREATE, e)
             return null
         }
-        val (seeded, conversation) = seededSettingsFor(session, settings)
+        val (seeded, conversation) = seededSettingsFor(session)
         val newAgent = tryCreateAgent(
             seeded,
             session.id,
@@ -891,25 +867,25 @@ class ChatViewModel(
     }
 
     /**
-     * Seeds settings for [session]: the active branch's configuration fold
-     * ([Conversation.effectiveConfiguration]) overrides the provider/model
-     * when it recorded one; new (entry-less) sessions are seeded with the
-     * initial model selection so the fold can restore it on resume. A branch
-     * with no thinking_level_change entry is seeded with the stored default
-     * thinking level, else "medium", clamped to the effective model.
+     * Resolves the startup model for [session] and seeds the branch's
+     * configuration entries, in pi's sdk.ts session-init shape:
+     * [initialModelSettings] resolves the model (the active branch's folded
+     * model_change when it carries messages, else findInitialModel's
+     * scope/default/first-available order), a transcript-less branch is
+     * seeded with a model_change entry recording the resolved model, and a
+     * branch without a thinking_level_change entry is seeded with the stored
+     * default level, else "medium", clamped to the effective model — so
+     * both restore on resume.
      */
-    private fun seededSettingsFor(
-        session: Session,
-        settings: ModelSettings
-    ): Pair<ModelSettings, Conversation> {
+    private fun seededSettingsFor(session: Session): Pair<ModelSettings, Conversation> {
         var conversation = Conversation(session.entries, session.leafId)
-        if (conversation.entries.isEmpty() && settings.providerId.isNotBlank() &&
-            settings.modelId.isNotBlank()
-        ) {
-            conversation = conversation.appendModelChange(settings.providerId, settings.modelId)
+        val hasTranscript = conversation.activeMessages().isNotEmpty()
+        val base = initialModelSettings(isContinuing = hasTranscript)
+        if (!hasTranscript && base.providerId.isNotBlank() && base.modelId.isNotBlank()) {
+            conversation = conversation.appendModelChange(base.providerId, base.modelId)
         }
-        val seeded = settingsSeededFromFold(settings, conversation)
-        if (conversation.entries.none { it is ThinkingLevelEntry } &&
+        val seeded = settingsSeededFromFold(base, conversation)
+        if (conversation.activeEntries().none { it is ThinkingLevelEntry } &&
             seeded.providerId.isNotBlank() && seeded.modelId.isNotBlank()
         ) {
             // Clamped before storing. An unresolvable model fails agent
@@ -926,6 +902,38 @@ class ChatViewModel(
             }
         }
         return seeded to conversation
+    }
+
+    /**
+     * pi's findInitialModel order (model-resolver.ts), minus the CLI step:
+     * a fresh session takes the first available scoped model, else the saved
+     * default while the credential-filtered options still admit it, else the
+     * first available model; a continuing session skips the scope step (its
+     * branch fold, when present, wins in [settingsSeededFromFold]).
+     * Availability is [ChatUiState.modelOptions].
+     */
+    private fun initialModelSettings(isContinuing: Boolean): ModelSettings {
+        val options = _uiState.value.modelOptions
+        if (options.isEmpty()) return currentSettings
+        if (!isContinuing) {
+            val scoped = currentSettings.enabledModels.orEmpty().firstNotNullOfOrNull { ref ->
+                options.firstOrNull { option ->
+                    "${option.providerId}/${option.modelId}".equals(ref, ignoreCase = true)
+                }
+            }
+            if (scoped != null) {
+                return currentSettings.copy(
+                    providerId = scoped.providerId,
+                    modelId = scoped.modelId
+                )
+            }
+        }
+        val defaultAvailable = options.any {
+            it.providerId == currentSettings.providerId && it.modelId == currentSettings.modelId
+        }
+        if (defaultAvailable) return currentSettings
+        val first = options.first()
+        return currentSettings.copy(providerId = first.providerId, modelId = first.modelId)
     }
 
     /**
@@ -975,6 +983,7 @@ class ChatViewModel(
         agentEventsJob?.cancel()
         agent = newAgent
         observedAgentMessages = null
+        observedAgentModel = null
         // The recorder resolves the session at call time (mid-run session
         // switches are blocked).
         newAgent.operationRecorder = operationRecorder
@@ -1057,9 +1066,19 @@ class ChatViewModel(
             projectCommitted(state.messages, activeConversation)
         }
         observedAgentMessages = state.messages
+        // Same reference-stability trick for the model chip: the model
+        // instance changes only on setModel, so the catalog projection is
+        // not recomputed per token.
+        val modelProjection = if (state.model === observedAgentModel) {
+            null
+        } else {
+            selectedModelProjection(state.model)
+        }
+        observedAgentModel = state.model
         updateState {
             it.copy(
                 messages = committedProjection ?: it.messages,
+                selectedModel = modelProjection ?: it.selectedModel,
                 pendingTools = pendingToolExecutions(state),
                 streamingMessage = (state.streamingMessage as? AssistantMessage)?.let(
                     ::projectStreaming
@@ -1237,11 +1256,10 @@ class ChatViewModel(
         // session facade holds none of; setThinkingLevel clamps to the new
         // model and appends only on change, so this usually records nothing.
         session.setThinkingLevel(currentSettings.defaultThinkingLevel ?: session.thinkingLevel)
+        // The chip follows the agent's state emission from setModel above;
+        // only the tree needs re-projecting here.
         updateState {
-            it.copy(
-                selectedModel = selectedModelProjection(model),
-                treeRows = buildTreeRows(session.conversation, it.treeFilter)
-            )
+            it.copy(treeRows = buildTreeRows(session.conversation, it.treeFilter))
         }
         // The model_change grew the conversation: persist it.
         enqueuePersist()
@@ -1256,7 +1274,6 @@ class ChatViewModel(
         )
         if (!persistSettings(candidate)) return
         currentSettings = candidate
-        defaultModelRef = providerId to trimmed
 
         // A non-empty scope gains the default when missing (order-preserving
         // append; case-insensitive reference match).
@@ -1362,8 +1379,8 @@ class ChatViewModel(
      * Shared post-login success path: bumps the credential-success epoch so
      * the UI closes the auth screen only after confirmed persistence,
      * refreshes every credential-derived surface, and — while still
-     * unconfigured — completes configuration with the derived initial model
-     * and enters the chat directly.
+     * unconfigured — completes configuration with the resolved initial
+     * model and enters the chat directly.
      */
     private suspend fun onCredentialStored() {
         // Only a confirmed persistence bumps this epoch, so the credential
@@ -1374,18 +1391,8 @@ class ChatViewModel(
         if (_uiState.value.status == ChatStatus.NeedsConfiguration &&
             _uiState.value.modelOptions.isNotEmpty()
         ) {
-            val candidate = if (isConfigured(currentSettings)) {
-                currentSettings
-            } else {
-                val first = _uiState.value.modelOptions.first()
-                currentSettings.copy(providerId = first.providerId, modelId = first.modelId)
-            }
-            val prepared = prepareAdoption(candidate) ?: return
+            val prepared = prepareAdoption() ?: return
             if (!activateSession(prepared.first, prepared.second)) return
-            currentSettings = candidate
-            // The derivation may have changed provider/model after the
-            // pre-bind refreshOptions; re-project now that the agent is bound.
-            refreshOptions()
             updateState {
                 it.copy(
                     status = ChatStatus.Ready,
@@ -1462,35 +1469,10 @@ class ChatViewModel(
     }
 
     /**
-     * True iff settings name a catalog provider+model the stored credential
-     * can still use (in the credential-filtered set) AND the provider's
-     * stored credential resolves.
-     */
-    private suspend fun isConfigured(settings: ModelSettings): Boolean {
-        val provider = catalog.getProvider(settings.providerId) ?: return false
-        val selectable = try {
-            authService.availableModels(provider.id)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            recordDegradation("available_models", e)
-            return false
-        }
-        if (selectable.none { it.id == settings.modelId }) return false
-        return try {
-            authService.isConfigured(provider.id)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            recordDegradation("is_configured", e)
-            false
-        }
-    }
-
-    /**
      * Recomputes every credential-derived surface (provider rows, model
-     * options, scoped list, selection projection). The live session model —
-     * not the persisted settings — projects [ChatUiState.selectedModel].
+     * options, scoped list, default projection). [ChatUiState.selectedModel]
+     * is not derived here: it follows the bound agent's state (see
+     * [onAgentState]), the same source the next prompt uses.
      */
     private suspend fun refreshOptions() {
         // Search status first: a provider read failure must not leave it
@@ -1554,16 +1536,13 @@ class ChatViewModel(
                 }
             }
             .sortedWith(compareBy({ it.providerName }, { it.name }))
-        val selectedModel = agent?.let { selectedModelProjection(it.model) }
-            ?: selectedModelProjection(currentSettings.providerId, currentSettings.modelId)
-        val defaultModel = defaultModelRef
-            .takeIf { it.first.isNotBlank() && it.second.isNotBlank() }
-            ?.let { selectedModelProjection(it.first, it.second) }
+        val defaultModel = currentSettings
+            .takeIf { it.providerId.isNotBlank() && it.modelId.isNotBlank() }
+            ?.let { selectedModelProjection(it.providerId, it.modelId) }
         updateState {
             it.copy(
                 providerOptions = providerOptions,
                 modelOptions = modelOptions,
-                selectedModel = selectedModel,
                 defaultModel = defaultModel,
                 defaultThinkingLevel = currentSettings.defaultThinkingLevel
             )

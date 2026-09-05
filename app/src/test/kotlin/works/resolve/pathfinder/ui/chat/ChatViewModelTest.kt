@@ -1901,13 +1901,25 @@ class ChatViewModelTest {
             val savesBefore = h.sessions.totalSaves
 
             // Binding alone must not observe the transcript against the previous
-            // (empty) session.
+            // (empty) session. The one save is the missing-thinking-entry
+            // seed pi appends at session load: the branch has no
+            // thinking_level_change, so the clamped default is recorded.
             vm.switchSession(other.id)
             val state = vm.uiState.first { it.activeSessionId == other.id }
             assertEquals(2, state.messages.size)
-            assertEquals(savesBefore, h.sessions.totalSaves)
+            waitUntil {
+                h.sessionStore.load(other.id)!!
+                    .entries.filterIsInstance<ThinkingLevelEntry>().isNotEmpty()
+            }
+            assertEquals(savesBefore + 1, h.sessions.totalSaves)
             assertEquals(0, h.sessionStore.load(firstId)!!.messages.size)
-            assertEquals(2, h.sessionStore.load(other.id)!!.messages.size)
+            val reloaded = h.sessionStore.load(other.id)!!
+            assertEquals(2, reloaded.messages.size)
+            assertEquals(
+                listOf("medium"),
+                reloaded.entries.filterIsInstance<ThinkingLevelEntry>()
+                    .map { it.thinkingLevel }
+            )
 
             vm.closeForTest()
         }
@@ -3300,7 +3312,7 @@ class ChatViewModelTest {
         vm.selectModel("zai", "glm-5.3")
         mainDispatcherRule.scheduler.advanceUntilIdle()
         assertNull(vm.uiState.value.error)
-        assertEquals("glm-5.3", vm.uiState.value.selectedModel?.modelId)
+        vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
         assertTrue(vm.uiState.value.isStreaming)
 
         gate.complete(Unit)
@@ -3449,13 +3461,13 @@ class ChatViewModelTest {
     }
 
     /**
-     * The branch's configuration fold decides the running model: navigating
-     * back before a model_change makes the older selection effective again,
-     * and a fresh ViewModel restores the same folded model on load even
-     * though the persisted global default differs.
+     * Navigation never changes the running model (pi's navigateTree
+     * rebuilds only the transcript), while a session load restores the
+     * active branch's folded model even though the persisted global
+     * default differs.
      */
     @Test
-    fun effectiveModel_isSeededFromBranchFold_onNavigationAndRestore() =
+    fun navigationKeepsTheLiveModel_sessionLoadSeedsFromTheBranchFold() =
         runTest(mainDispatcherRule.scheduler) {
             val h = Harness()
             val vm = h.newViewModel()
@@ -3474,22 +3486,151 @@ class ChatViewModelTest {
             vm.saveStartupDefault("zai", "glm-5.3")
             vm.uiState.first { h.settings.currentSettings().modelId == "glm-5.3" }
 
-            // The branch fold is seed(glm-4.7) + assistant(glm-4.7), so the agent
-            // rebuilds on 4.7.
+            // Navigating back before the model_change truncates the
+            // transcript but keeps the live glm-5.3 agent — no rebuild, the
+            // chip still shows the running model.
+            val agentsBefore = h.createdAgents.size
             val assistantEntryId = vm.uiState.value.treeRows[1].id
             vm.navigateToTreeEntry(assistantEntryId)
-            vm.uiState.first { h.createdSettings.last().modelId == "glm-4.7" }
             vm.uiState.first { h.sessionStore.load(sessionId)!!.leafId == assistantEntryId }
+            assertEquals(agentsBefore, h.createdAgents.size)
+            assertEquals("glm-5.3", vm.uiState.value.selectedModel?.modelId)
 
             // Restore: the global default stays glm-5.3, but the branch fold
-            // seeds the running agent on glm-4.7.
+            // (seed glm-4.7 + messages, no model_change on the path) seeds
+            // the running agent on glm-4.7.
             vm.closeForTest()
             val vm2 = h.newViewModel()
-            vm2.uiState.first { it.status == ChatStatus.Ready && it.activeSessionId == sessionId }
+            val restored = vm2.uiState.first {
+                it.status == ChatStatus.Ready && it.activeSessionId == sessionId
+            }
             assertEquals("glm-5.3", h.settings.currentSettings().modelId)
             assertEquals("glm-4.7", h.createdSettings.last().modelId)
+            assertEquals("glm-4.7", restored.selectedModel?.modelId)
 
             vm2.closeForTest()
+        }
+
+    /**
+     * A new chat starts on pi's findInitialModel order — the first scoped
+     * model, else the saved default, else the first available model — never
+     * on the previously active session's running model, and its seed
+     * model_change records that initial selection.
+     */
+    @Test
+    fun newSession_startsOnTheStartupDefault_notTheResumedBranchModel() =
+        runTest(mainDispatcherRule.scheduler) {
+            val h = Harness()
+            h.settings.setProviderId("zai")
+            h.settings.setModelId("glm-4.7")
+            h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
+
+            val vm = h.newViewModel()
+            vm.uiState.first { it.status == ChatStatus.Ready }
+            val firstId = vm.uiState.value.activeSessionId!!
+
+            // The branch runs glm-5.3 via a live switch, then a restart
+            // resumes it on the branch fold.
+            vm.exchange(h, "Hello", "world")
+            vm.uiState.first {
+                it.sessionSummaries.first { s -> s.id == firstId }.messageCount == 2
+            }
+            vm.selectModel("zai", "glm-5.3")
+            vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
+            vm.closeForTest()
+
+            val vm2 = h.newViewModel()
+            vm2.uiState.first { it.status == ChatStatus.Ready }
+            assertEquals("glm-5.3", vm2.uiState.value.selectedModel?.modelId)
+
+            // The new chat starts on the saved default, not the resumed
+            // branch's glm-5.3, and records it as its seed model_change.
+            vm2.newSession()
+            val fresh = vm2.uiState.first { it.activeSessionId != firstId }
+            assertEquals("glm-4.7", fresh.selectedModel?.modelId)
+            assertEquals("glm-4.7", h.createdSettings.last().modelId)
+            vm2.uiState.first {
+                h.sessionStore.load(fresh.activeSessionId!!)!!.entries.isNotEmpty()
+            }
+            val seed = h.sessionStore.load(fresh.activeSessionId!!)!!
+                .entries.filterIsInstance<ModelChangeEntry>().single()
+            assertEquals("zai", seed.provider)
+            assertEquals("glm-4.7", seed.modelId)
+
+            vm2.closeForTest()
+        }
+
+    /** With a curated scope, a new chat starts on the first scoped model (pi's --models rule), ahead of the default. */
+    @Test
+    fun newSession_withScope_startsOnTheFirstScopedModel() = runTest(mainDispatcherRule.scheduler) {
+        val h = Harness()
+        val vm = h.newViewModel()
+        vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.uiState.first { it.status == ChatStatus.Ready }
+        val firstId = vm.uiState.value.activeSessionId!!
+
+        vm.saveStartupDefault("zai", "glm-4.7")
+        vm.uiState.first { it.defaultModel?.modelId == "glm-4.7" }
+        // Curate the scope down to glm-5.3 only.
+        vm.uiState.value.modelOptions.forEach { option ->
+            if (!(option.providerId == "zai" && option.modelId == "glm-5.3")) {
+                vm.toggleModelScope(option.providerId, option.modelId, false)
+            }
+        }
+        vm.uiState.first {
+            it.scopedModelOptions.map { option -> option.modelId } == listOf("glm-5.3")
+        }
+
+        vm.newSession()
+        val fresh = vm.uiState.first { it.activeSessionId != firstId }
+        assertEquals("glm-5.3", fresh.selectedModel?.modelId)
+        assertEquals("glm-5.3", h.createdSettings.last().modelId)
+
+        vm.closeForTest()
+    }
+
+    /** The model chip always mirrors the bound session's running model across new chats and switches. */
+    @Test
+    fun selectedModel_followsTheBoundSessionAcrossSwitches() =
+        runTest(mainDispatcherRule.scheduler) {
+            val h = Harness()
+            val vm = h.newViewModel()
+            vm.uiState.first { it.status == ChatStatus.NeedsConfiguration }
+            vm.configure(apiKey = "k")
+            vm.uiState.first { it.status == ChatStatus.Ready }
+            val firstId = vm.uiState.value.activeSessionId!!
+
+            // First session records a transcript, then switches to glm-5.3
+            // on-branch; the fold carries the switch across loads.
+            vm.exchange(h, "Hello", "world")
+            vm.uiState.first {
+                it.sessionSummaries.first { s -> s.id == firstId }.messageCount == 2
+            }
+            vm.selectModel("zai", "glm-5.3")
+            vm.uiState.first { it.selectedModel?.modelId == "glm-5.3" }
+
+            vm.newSession()
+            vm.uiState.first {
+                it.activeSessionId != firstId &&
+                    it.selectedModel?.modelId == "glm-4.7"
+            }
+            val secondId = vm.uiState.value.activeSessionId!!
+
+            // Switching back restores the branch fold; switching away again
+            // re-runs the fresh session's seed — the chip follows each time.
+            vm.switchSession(firstId)
+            vm.uiState.first {
+                it.activeSessionId == firstId &&
+                    it.selectedModel?.modelId == "glm-5.3"
+            }
+            vm.switchSession(secondId)
+            vm.uiState.first {
+                it.activeSessionId == secondId &&
+                    it.selectedModel?.modelId == "glm-4.7"
+            }
+
+            vm.closeForTest()
         }
 
     @Test

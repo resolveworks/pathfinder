@@ -235,7 +235,11 @@ internal fun providerAuthScreenMode(methods: List<AuthMethodInfo>): ProviderAuth
     else -> ProviderAuthScreenMode.NO_METHODS
 }
 
-/** The live model of the bound [works.resolve.pathfinder.codingagent.core.AgentSession], or null while unbound. */
+/**
+ * The live model of the bound [works.resolve.pathfinder.codingagent.core.AgentSession],
+ * projected from agent state (the same source the next prompt uses), or
+ * null while unbound.
+ */
 data class SelectedModel(
     val providerId: String,
     val providerName: String,
