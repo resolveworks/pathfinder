@@ -924,16 +924,14 @@ class ChatViewModelTest {
 
         vm.uiState.first { !it.isStreaming && it.messages.size == 2 }
         val state = vm.uiState.value
-        assertNotNull(state.error)
+        // Agent-run errors render as transcript rows only (pi's contract);
+        // the snackbar error stays reserved for ViewModel-sourced failures.
+        assertNull(state.error)
         assertNotNull(state.messages[1].error)
         val sessionId = state.activeSessionId!!
         vm.uiState.first { it.sessionSummaries.first { s -> s.id == sessionId }.messageCount == 2 }
         assertEquals(2, h.sessionStore.load(sessionId)!!.messages.size)
 
-        vm.dismissError()
-        assertNull(vm.uiState.value.error)
-
-        // A new successful run clears the re-surfaced agent error for good.
         vm.onDraftChange("Again")
         vm.uiState.first { it.canSend }
         h.scriptedStreams.add(

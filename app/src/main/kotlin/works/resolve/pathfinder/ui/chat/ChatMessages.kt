@@ -28,8 +28,10 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -65,6 +67,11 @@ internal fun ConversationContent(
 ) {
     val messageCount = uiState.messages.size
     val streamingId = uiState.streamingMessage?.id
+    val renderableMessages = remember(uiState.messages) {
+        uiState.messages.filter(ChatMessage::hasRenderableContent)
+    }
+    val lastItemIndex = renderableMessages.size + uiState.pendingTools.size +
+        (if (streamingId == null) 0 else 1)
 
     // Opened-viewer view state, by stable id (tool call id, or
     // "messageId:blockIndex" for a thinking block). Ephemeral state resolved
@@ -83,55 +90,11 @@ internal fun ConversationContent(
         }
         LazyColumn(
             state = listState,
-            reverseLayout = true,
             contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
             modifier = Modifier.fillMaxSize()
         ) {
-            item(key = "transcript-bottom-anchor") {
-                // Stable first item: key anchoring keeps it at the bottom across
-                // updates, but only while the reader has not scrolled past it.
-                Spacer(Modifier.height(with(LocalDensity.current) { 1f.toDp() }))
-            }
-
-            // Emitted newest-first; reverseLayout puts it at the bottom,
-            // preserving chronological visual order.
-            uiState.streamingMessage?.let { streaming ->
-                item(key = streaming.id) {
-                    val hasVisibleText = streaming.blocks.any {
-                        it is ChatBlock.Text &&
-                            it.text.isNotBlank()
-                    }
-                    val hasThinking = streaming.blocks.any { it is ChatBlock.Thinking }
-                    AssistantMessageItem(
-                        message = if (hasVisibleText || hasThinking || streaming.error != null) {
-                            streaming
-                        } else {
-                            // pi renders tool-call-only assistant messages as
-                            // zero lines (the execution shows as its own row);
-                            // the placeholder bridges until the call commits
-                            // and the pending tool row appears.
-                            streaming.copy(blocks = listOf(ChatBlock.Text(STREAMING_PLACEHOLDER)))
-                        },
-                        isStreaming = true,
-                        showThinking = uiState.showThinking
-                    )
-                }
-            }
-            items(uiState.pendingTools, key = { "pending-${it.toolCallId}" }) { pending ->
-                ToolCallItem(
-                    toolName = pending.toolName,
-                    input = pending.input,
-                    output = null,
-                    isError = false,
-                    running = true,
-                    onOpenOutput = {}
-                )
-            }
-            items(
-                uiState.messages.asReversed().filter(ChatMessage::hasRenderableContent),
-                key = ChatMessage::id
-            ) { message ->
+            items(renderableMessages, key = ChatMessage::id) { message ->
                 when {
                     message.isCompactionMarker -> CompactedDivider()
 
@@ -153,6 +116,49 @@ internal fun ConversationContent(
                         showThinking = uiState.showThinking
                     )
                 }
+            }
+            items(uiState.pendingTools, key = { "pending-${it.toolCallId}" }) { pending ->
+                ToolCallItem(
+                    toolName = pending.toolName,
+                    input = pending.input,
+                    output = null,
+                    isError = false,
+                    running = true,
+                    onOpenOutput = {}
+                )
+            }
+            uiState.streamingMessage?.let { streaming ->
+                item(key = streaming.id) {
+                    val hasVisibleText = streaming.blocks.any {
+                        it is ChatBlock.Text && it.text.isNotBlank()
+                    }
+                    val hasThinking = streaming.blocks.any { it is ChatBlock.Thinking }
+                    AssistantMessageItem(
+                        message = if (hasVisibleText || hasThinking || streaming.error != null) {
+                            streaming
+                        } else {
+                            // pi renders tool-call-only assistant messages as
+                            // zero lines (the execution shows as its own row);
+                            // the placeholder bridges until the call commits
+                            // and the pending tool row appears.
+                            streaming.copy(blocks = listOf(ChatBlock.Text(STREAMING_PLACEHOLDER)))
+                        },
+                        isStreaming = true,
+                        showThinking = uiState.showThinking
+                    )
+                }
+            }
+            item(key = "transcript-bottom-anchor") {
+                Spacer(Modifier.height(with(LocalDensity.current) { 1f.toDp() }))
+            }
+        }
+
+        // SideEffect runs after the new item provider is composed but before
+        // its next measure. The old layout still tells us whether the reader
+        // was at the bottom before this update changed the content height.
+        SideEffect {
+            if (!listState.isScrollInProgress && !listState.canScrollForward) {
+                listState.requestScrollToItem(lastItemIndex)
             }
         }
 
@@ -336,10 +342,8 @@ internal fun toolCallTitle(toolName: String, input: String?): String {
  * distinct from conversation text: the row title (a tool-specific phrase
  * like "Searched for …", else the tool name) and a spinner while running.
  * Rows with output open [ToolOutputSheet] instead of expanding in place:
- * the transcript list is reversed (so streaming pins to its bottom), which
- * pins each row's bottom edge and would grow an in-place expansion upward
- * past the tapped title — the sheet owns its scroll, starts at the top of
- * the content, and leaves the transcript untouched behind it. Per-row, never
+ * the sheet owns its scroll, starts at the top of the content, and leaves
+ * the transcript's layout and scroll position untouched behind it. Per-row, never
  * global (pi's Ctrl+O, exposed as a tap). Error coloring is a native
  * adaptation (pi signals errors through the shell, not text color).
  */

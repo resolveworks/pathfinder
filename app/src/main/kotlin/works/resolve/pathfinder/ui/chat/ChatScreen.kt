@@ -52,6 +52,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -176,9 +177,9 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
 
     // Panel scroll state lives above the Chat/Tree switch so each view keeps
-    // its own position across switches instead of re-entering at the newest
-    // content.
-    val chatListState = rememberLazyListState()
+    // its own position across view toggles. A different transcript starts
+    // with fresh list state and lets ConversationContent place it at the end.
+    val chatListState = key(uiState.activeSessionId) { rememberLazyListState() }
     val treeListState = rememberLazyListState()
     // Session whose tree has been positioned on its current leaf at open.
     var positionedTreeSessionId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -236,16 +237,9 @@ fun ChatScreen(
         }
     }
 
-    // The list's stable bottom anchor handles ordinary transcript updates.
-    // A session switch is different: the same hoisted LazyListState now owns
-    // another data set, which should open at its newest content.
+    // A session switch (or init's null -> real id) shows the transcript.
     LaunchedEffect(uiState.activeSessionId) {
         onConversationViewChange(ConversationView.Chat)
-        if (uiState.messages.isNotEmpty() || uiState.pendingTools.isNotEmpty() ||
-            uiState.streamingMessage != null
-        ) {
-            chatListState.requestScrollToItem(0)
-        }
     }
 
     // The tree opens positioned on the current leaf (pi's tree opens with

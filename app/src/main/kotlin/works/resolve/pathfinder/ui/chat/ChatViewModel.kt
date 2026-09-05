@@ -147,9 +147,6 @@ class ChatViewModel(
     private var pendingPersist: Pair<Session, Conversation>? = null
     private var persistJob: Job? = null
 
-    /** Agent-sourced error last projected into the UI, to detect agent-side clearing. */
-    private var lastAgentError: String? = null
-
     /** Agent transcript instance used for the latest committed-message projection. */
     private var observedAgentMessages: List<Message>? = null
 
@@ -977,7 +974,6 @@ class ChatViewModel(
         agentStateJob?.cancel()
         agentEventsJob?.cancel()
         agent = newAgent
-        lastAgentError = null
         observedAgentMessages = null
         // The recorder resolves the session at call time (mid-run session
         // switches are blocked).
@@ -1051,7 +1047,6 @@ class ChatViewModel(
         projectCommitted(agent?.state?.value?.messages.orEmpty(), activeConversation)
 
     private fun onAgentState(state: AgentState) {
-        val agentError = state.errorMessage
         // AgentState uses copy-on-write transcript lists. Streaming chunks
         // change only streamingMessage, so retain the existing projection
         // instead of rebuilding and structurally comparing every committed
@@ -1071,11 +1066,9 @@ class ChatViewModel(
                 ),
                 isStreaming = state.isStreaming,
                 thinkingLevel = state.thinkingLevel,
-                availableThinkingLevels = getSupportedThinkingLevels(state.model),
-                error = agentError ?: it.error?.takeIf { e -> e != lastAgentError }
+                availableThinkingLevels = getSupportedThinkingLevels(state.model)
             )
         }
-        lastAgentError = agentError
     }
 
     // ---- persistence pipeline ----

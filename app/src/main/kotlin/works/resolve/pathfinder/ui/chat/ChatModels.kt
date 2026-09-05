@@ -334,5 +334,10 @@ data class ChatUiState(
      * persisted — as distinct from a finished one.
      */
     val laneRecovery: LaneRecovery = LaneRecovery.Idle,
+    /**
+     * Transient ViewModel-sourced failure shown as a snackbar. Agent-run
+     * errors are never mirrored here: they render as transcript rows (pi's
+     * contract) and persist with the session.
+     */
     val error: String? = null
 )
