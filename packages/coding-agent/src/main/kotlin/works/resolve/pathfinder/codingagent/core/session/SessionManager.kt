@@ -248,9 +248,6 @@ class SessionManager private constructor(
     }
 
     companion object {
-        /** Bounded first-line scan for openById, like pi's MAX_SESSION_HEADER_SCAN_BYTES. */
-        private const val MAX_HEADER_SCAN_BYTES = 1024 * 1024
-
         private val secureRandom = SecureRandom()
 
         private fun defaultEntryId(): String {
@@ -385,61 +382,6 @@ class SessionManager private constructor(
         }
 
         /**
-         * Read the first valid line of [file] bounded by
-         * [MAX_HEADER_SCAN_BYTES]; a parsed non-header first entry means
-         * the file is not a session. Oversized prefixes yield null.
-         */
-        private fun readHeaderBounded(file: File): JsonlCodec.SessionHeader? {
-            file.inputStream().use { input ->
-                val buffer = ByteArray(MAX_HEADER_SCAN_BYTES + 1)
-                var filled = 0
-                var newline = -1
-                while (filled <= MAX_HEADER_SCAN_BYTES) {
-                    val read = input.read(buffer, filled, buffer.size - filled)
-                    if (read == -1) break
-                    filled += read
-                    newline = buffer.indexOf('\n'.code.toByte())
-                    if (newline != -1) break
-                }
-                if (newline > MAX_HEADER_SCAN_BYTES) return null
-                val firstLine = if (newline == -1) {
-                    if (filled > MAX_HEADER_SCAN_BYTES) return null
-                    String(buffer, 0, filled, StandardCharsets.UTF_8)
-                } else {
-                    String(buffer, 0, newline, StandardCharsets.UTF_8)
-                }
-                return when (val parsed = JsonlCodec.parseLine(firstLine)) {
-                    is JsonlCodec.Line.Header -> parsed.header
-                    else -> null
-                }
-            }
-        }
-
-        /** Scan `*.jsonl` headers for [id] and open the matching session, or null. */
-        suspend fun openById(
-            dir: File,
-            id: String,
-            clock: Clock = Clock.System,
-            idFactory: () -> String = ::uuidv7,
-            ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-            entryIdFactory: () -> String = ::defaultEntryId
-        ): SessionManager? = withContext(ioDispatcher) {
-            val files = dir.listFiles { f: File -> f.isFile && f.name.endsWith(".jsonl") }
-                ?: return@withContext null
-            for (file in files) {
-                val header = try {
-                    readHeaderBounded(file)
-                } catch (_: Exception) {
-                    null
-                }
-                if (header?.id == id) {
-                    return@withContext open(file, clock, idFactory, ioDispatcher, entryIdFactory)
-                }
-            }
-            null
-        }
-
-        /**
          * List sessions sorted by `modified` descending. Unparseable files
          * are skipped; one corrupt file must not hide the others.
          */
@@ -484,6 +426,7 @@ class SessionManager private constructor(
             }
             return SessionInfo(
                 id = loaded.header.id,
+                path = file,
                 createdAt = loaded.header.timestamp,
                 modified = lastActivity ?: loaded.header.timestamp,
                 messageCount = messageCount,

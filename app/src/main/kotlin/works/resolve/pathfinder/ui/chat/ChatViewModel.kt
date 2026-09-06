@@ -452,11 +452,22 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * Switches to a listed session. The drawer's summaries carry the
+     * session's file (pi's picker hands resume the path), so opening is a
+     * single file read; an id missing from the list surfaces a safe error.
+     */
     fun switchSession(sessionId: String) {
         viewModelScope.launch {
             if (rejectWhileBusy()) return@launch
             try {
-                val manager = sessionSource.open(sessionId)
+                val file = _uiState.value.sessionSummaries
+                    .firstOrNull { it.id == sessionId }?.path
+                    ?: run {
+                        setError(ERROR_SESSION_MISSING)
+                        return@launch
+                    }
+                val manager = sessionSource.open(file)
                 if (manager == null) {
                     setError(ERROR_SESSION_MISSING)
                     return@launch
@@ -540,7 +551,8 @@ class ChatViewModel(
             _uiState.update {
                 it.copy(
                     status = ChatStatus.Ready,
-                    showThinking = settings.showThinking
+                    showThinking = settings.showThinking,
+                    sessionSummaries = summaries
                 )
             }
         } catch (e: CancellationException) {
@@ -555,18 +567,20 @@ class ChatViewModel(
      * pi's continueRecent: the requested active session, else the most
      * recently modified listed one, else a new one. The stored id can point
      * at a never-flushed session (process death before any assistant
-     * committed) — open returns null and the flow falls through exactly as
-     * for any other missing session.
+     * committed) — it is absent from the summaries and the flow falls
+     * through exactly as for any other missing session.
      */
     private suspend fun resolveSession(
         settings: ModelSettings,
         summaries: List<SessionInfo>
     ): SessionManager {
         settings.activeSessionId?.let { id ->
-            sessionSource.open(id)?.let { return it }
+            summaries.firstOrNull { it.id == id }?.let { info ->
+                sessionSource.open(info.path)?.let { return it }
+            }
         }
         summaries.firstOrNull()?.let { info ->
-            sessionSource.open(info.id)?.let { return it }
+            sessionSource.open(info.path)?.let { return it }
         }
         return sessionSource.create()
     }
@@ -575,9 +589,13 @@ class ChatViewModel(
 
     /**
      * Makes [session] active with a prebuilt [agent]: persists the active id,
-     * binds the agent, and returns to the chat surface with a refreshed UI.
-     * Only called after the factory accepted the settings. Returns false when
-     * persisting the active id fails; in that case nothing is committed.
+     * binds the agent, and returns to the chat surface. Only called after
+     * the factory accepted the settings. Returns false when persisting the
+     * active id fails; in that case nothing is committed.
+     *
+     * Session summaries are deliberately not refreshed: activating touches
+     * no session file (pi's resume does not re-list sessions); [AgentEvent.MessageEnd]
+     * refreshes them when a file actually changed.
      */
     private suspend fun activateSession(manager: SessionManager, agent: AgentSession): Boolean {
         try {
@@ -589,7 +607,6 @@ class ChatViewModel(
             return false
         }
         val conversation = agent.conversation
-        val summaries = refreshSessionSummaries()
         val outgoing = _uiState.value
         outgoing.activeSessionId?.let { id ->
             if (outgoing.draft.isBlank()) {
@@ -612,7 +629,6 @@ class ChatViewModel(
                 messages = projectCommitted(agent.state.value.messages, conversation),
                 streamingMessage = null,
                 treeRows = buildTreeRows(conversation, it.treeFilter),
-                sessionSummaries = summaries,
                 draft = draft
             )
         }
@@ -1181,20 +1197,23 @@ class ChatViewModel(
     }
 
     /**
-     * Re-reads the session list into [ChatUiState.sessionSummaries]. A read
-     * failure degrades to the previous list (the drawer is advisory state);
-     * search results refresh when a query is active.
+     * Re-reads the session list into [ChatUiState.sessionSummaries] — the
+     * one refresh point, running when a session file actually changed (a
+     * committed message). A read failure degrades to the previous list (the
+     * drawer is advisory state); search results refresh when a query is
+     * active.
      */
-    private suspend fun refreshSessionSummaries(): List<SessionInfo> = try {
-        val summaries = sessionSource.list()
+    private suspend fun refreshSessionSummaries() {
+        val summaries = try {
+            sessionSource.list()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            recordDegradation("session_summaries", e)
+            return
+        }
         _uiState.update { it.copy(sessionSummaries = summaries) }
         sessionSearch.onSummariesChanged(summaries)
-        summaries
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        recordDegradation("session_summaries", e)
-        _uiState.value.sessionSummaries
     }
 
     /** True (and sets an error) when a session/config-changing intent arrives mid-stream. */

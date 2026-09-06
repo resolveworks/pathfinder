@@ -9,19 +9,21 @@ data class SessionTreeNode(val entry: SessionEntry, val children: List<SessionTr
 /**
  * Immutable snapshot of a session's entry tree plus its current leaf —
  * what the app layer reads. All mutations (id minting, leaf moves,
- * persistence) live in [SessionManager]; this type only projects.
- *
- * Divergence from pi's buildSessionPath: pi falls back to the last entry
- * when a given leafId is absent from the tree; here an unknown leaf yields
- * an empty path. Unreachable in practice — the leaf always comes from
- * [SessionManager] and names an entry it owns.
+ * persistence) live in [SessionManager]; this type only projects the tree
+ * semantics pi computes inside its SessionManager (buildSessionPath,
+ * getSessionContextSettings, getTree).
  */
 class Conversation(val entries: List<SessionEntry>, val leafId: String?) {
     /** The active branch's root→leaf path. */
     fun activeEntries(): List<SessionEntry> {
+        if (leafId == null) return emptyList()
         val byId = entries.associateBy { it.id }
+        // pi's buildSessionPath: a leaf absent from the tree falls back to
+        // the last entry; only a null leaf is the empty root path. The
+        // seen-set is the port's only addition — a corrupted parent cycle
+        // must not hang the reader.
+        var current = byId[leafId] ?: entries.lastOrNull()
         val path = ArrayDeque<SessionEntry>()
-        var current = leafId?.let(byId::get)
         val seen = HashSet<String>()
         while (current != null && seen.add(current.id)) {
             path.addFirst(current)

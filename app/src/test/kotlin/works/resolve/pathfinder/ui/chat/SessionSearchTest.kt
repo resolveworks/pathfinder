@@ -8,6 +8,7 @@ class SessionSearchTest {
     private fun makeSession(id: String, modified: Long, allMessagesText: String): SessionInfo =
         SessionInfo(
             id = id,
+            path = java.io.File("/tmp/$id.jsonl"),
             createdAt = modified,
             modified = modified,
             messageCount = 1,

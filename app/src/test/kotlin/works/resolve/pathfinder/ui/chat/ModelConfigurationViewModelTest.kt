@@ -210,6 +210,12 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
                 other.appendMessage(works.resolve.pathfinder.ai.UserMessage.ofText("Old", 1L))
                 other.appendMessage(h.assistant("Stock").copy(timestamp = 2L))
             }
+            // The switch entry point addresses listed sessions (the drawer
+            // renders from the summaries), so the pre-existing file must
+            // first appear there — as it would after the committed-message
+            // refresh.
+            vm.exchange(h, "hi", "ok")
+            val firstBefore = h.sessions.stored(firstId)!!.entries
 
             vm.switchSession(other.sessionId)
             val state = vm.awaitState { it.activeSessionId == other.sessionId }
@@ -218,7 +224,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
                 h.sessions.stored(other.sessionId)!!
                     .entries.filterIsInstance<ThinkingLevelEntry>().isNotEmpty()
             }
-            assertNull(h.sessions.stored(firstId))
+            assertEquals(firstBefore, h.sessions.stored(firstId)!!.entries)
             val reloaded = h.sessions.stored(other.sessionId)!!
             assertEquals(2, reloaded.activeMessages().size)
             assertEquals(

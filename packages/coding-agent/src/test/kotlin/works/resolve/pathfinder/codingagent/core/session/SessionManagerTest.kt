@@ -210,32 +210,6 @@ class SessionManagerTest {
     }
 
     @Test
-    fun `openById scans headers`() = runTest {
-        val dir = createTempDirectory()
-        val a = manager(dir)
-        a.appendMessage(user("one"))
-        a.appendMessage(assistant())
-        val b = manager(dir)
-        b.appendMessage(user("two"))
-        b.appendMessage(assistant())
-
-        val found = SessionManager.openById(
-            dir,
-            b.sessionId,
-            clock,
-            ioDispatcher = testDispatcher()
-        )!!
-        assertEquals(b.sessionId, found.sessionId)
-        assertEquals(
-            "two",
-            (found.entries[0] as MessageEntry).let {
-                (it.message as UserMessage).content.single().let { c -> (c as TextContent).text }
-            }
-        )
-        assertNull(SessionManager.openById(dir, "missing", clock, ioDispatcher = testDispatcher()))
-    }
-
-    @Test
     fun `list derives modified from message timestamps and sorts descending`() = runTest {
         val dir = createTempDirectory()
         val older = manager(dir)

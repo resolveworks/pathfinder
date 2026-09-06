@@ -1127,6 +1127,7 @@ private fun ChatScreenChatViewPreview() {
             sessionSummaries = listOf(
                 SessionInfo(
                     id = "s1",
+                    path = java.io.File("/tmp/s1.jsonl"),
                     createdAt = 0L,
                     modified = 0L,
                     messageCount = 1,
@@ -1168,6 +1169,7 @@ private fun ChatScreenReadyStreamingPreview() {
             sessionSummaries = listOf(
                 SessionInfo(
                     id = "s1",
+                    path = java.io.File("/tmp/s1.jsonl"),
                     createdAt = 0L,
                     modified = 0L,
                     messageCount = 2,

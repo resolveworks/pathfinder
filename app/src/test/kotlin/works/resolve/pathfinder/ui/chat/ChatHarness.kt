@@ -191,9 +191,8 @@ internal class TestSessionSource(tmpFolder: TemporaryFolder) : SessionSource {
         return manager
     }
 
-    override suspend fun open(id: String): SessionManager? = SessionManager.openById(
-        dir,
-        id,
+    override suspend fun open(file: File): SessionManager? = SessionManager.open(
+        file,
         idFactory = { "sess-" + nextId++ },
         ioDispatcher = Dispatchers.Unconfined
     )?.also { managers[it.sessionId] = it }
@@ -206,7 +205,9 @@ internal class TestSessionSource(tmpFolder: TemporaryFolder) : SessionSource {
 
     /** Re-reads a session from disk; null while it has never been flushed. */
     suspend fun stored(id: String): Conversation? =
-        SessionManager.openById(dir, id, ioDispatcher = Dispatchers.Unconfined)?.conversation
+        SessionManager.list(dir, ioDispatcher = Dispatchers.Unconfined)
+            .firstOrNull { it.id == id }
+            ?.let { open(it.path) }?.conversation
 }
 
 /**
