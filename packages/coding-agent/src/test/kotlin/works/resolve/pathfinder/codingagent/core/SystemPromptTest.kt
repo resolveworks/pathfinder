@@ -52,9 +52,11 @@ class SystemPromptTest {
     fun `tools without snippets render none and only always-on guidelines`() {
         val prompt = buildSystemPrompt(listOf(FakeTool("web_search")))
         assertEquals(
-            "You are an expert coding assistant operating inside pathfinder, a coding agent harness. " +
-                "You help users by reading files, executing commands, editing code, and writing new files.\n\n" +
-"Available tools:\n" +
+            "You are an expert coding assistant operating inside pathfinder, " +
+                "a coding agent harness. " +
+                "You help users by reading files, executing commands, editing code, " +
+                "and writing new files.\n\n" +
+                "Available tools:\n" +
                 "(none)\n" +
                 "\n" +
                 "Guidelines:\n" +
@@ -74,9 +76,11 @@ class SystemPromptTest {
             )
         )
         assertEquals(
-            "You are an expert coding assistant operating inside pathfinder, a coding agent harness. " +
-                "You help users by reading files, executing commands, editing code, and writing new files.\n\n" +
-"Available tools:\n" +
+            "You are an expert coding assistant operating inside pathfinder, " +
+                "a coding agent harness. " +
+                "You help users by reading files, executing commands, editing code, " +
+                "and writing new files.\n\n" +
+                "Available tools:\n" +
                 "- bash: Run shell commands\n" +
                 "- read: Read file contents\n" +
                 "\n" +
@@ -104,9 +108,11 @@ class SystemPromptTest {
             )
         )
         assertEquals(
-            "You are an expert coding assistant operating inside pathfinder, a coding agent harness. " +
-                "You help users by reading files, executing commands, editing code, and writing new files.\n\n" +
-"Available tools:\n" +
+            "You are an expert coding assistant operating inside pathfinder, " +
+                "a coding agent harness. " +
+                "You help users by reading files, executing commands, editing code, " +
+                "and writing new files.\n\n" +
+                "Available tools:\n" +
                 "- web_search: Search the web\n" +
                 "- web_fetch: Fetch a URL\n" +
                 "\n" +
@@ -125,9 +131,11 @@ class SystemPromptTest {
             listOf(FakeTool("echo", promptGuidelines = listOf("Be concise in your responses")))
         )
         assertEquals(
-            "You are an expert coding assistant operating inside pathfinder, a coding agent harness. " +
-                "You help users by reading files, executing commands, editing code, and writing new files.\n\n" +
-"Available tools:\n" +
+            "You are an expert coding assistant operating inside pathfinder, " +
+                "a coding agent harness. " +
+                "You help users by reading files, executing commands, editing code, " +
+                "and writing new files.\n\n" +
+                "Available tools:\n" +
                 "(none)\n" +
                 "\n" +
                 "Guidelines:\n" +
@@ -146,9 +154,11 @@ class SystemPromptTest {
             )
         )
         assertEquals(
-            "You are an expert coding assistant operating inside pathfinder, a coding agent harness. " +
-                "You help users by reading files, executing commands, editing code, and writing new files.\n\n" +
-"Available tools:\n" +
+            "You are an expert coding assistant operating inside pathfinder, " +
+                "a coding agent harness. " +
+                "You help users by reading files, executing commands, editing code, " +
+                "and writing new files.\n\n" +
+                "Available tools:\n" +
                 "- read: Read file contents\n" +
                 "\n" +
                 "Guidelines:\n" +
@@ -164,9 +174,11 @@ class SystemPromptTest {
             listOf(FakeTool("web_search", promptSnippet = "Search\n  the   web\r\nfor facts  "))
         )
         assertEquals(
-            "You are an expert coding assistant operating inside pathfinder, a coding agent harness. " +
-                "You help users by reading files, executing commands, editing code, and writing new files.\n\n" +
-"Available tools:\n" +
+            "You are an expert coding assistant operating inside pathfinder, " +
+                "a coding agent harness. " +
+                "You help users by reading files, executing commands, editing code, " +
+                "and writing new files.\n\n" +
+                "Available tools:\n" +
                 "- web_search: Search the web for facts\n" +
                 "\n" +
                 "Guidelines:\n" +
