@@ -52,9 +52,6 @@ data object ChatNavKey : NavKey
 data object SettingsNavKey : NavKey
 
 @Serializable
-data object ModelsNavKey : NavKey
-
-@Serializable
 data object DefaultModelNavKey : NavKey
 
 @Serializable

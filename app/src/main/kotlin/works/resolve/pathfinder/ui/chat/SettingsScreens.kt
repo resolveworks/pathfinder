@@ -1,31 +1,22 @@
 package works.resolve.pathfinder.ui.chat
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -45,7 +36,6 @@ internal fun SettingsContent(
     showThinking: Boolean,
     onOpenDefaultModel: () -> Unit,
     onOpenDefaultThinking: () -> Unit,
-    onOpenModels: () -> Unit,
     onOpenProviders: () -> Unit,
     onOpenSearchProviders: () -> Unit,
     onToggleShowThinking: (Boolean) -> Unit
@@ -81,14 +71,6 @@ internal fun SettingsContent(
                 modifier = Modifier.clickable(onClick = onOpenDefaultThinking)
             )
         }
-        ListItem(
-            headlineContent = { Text(stringResource(R.string.settings_model)) },
-            supportingContent = { Text(stringResource(R.string.settings_model_scope_hint)) },
-            trailingContent = {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
-            },
-            modifier = Modifier.clickable(onClick = onOpenModels)
-        )
         ListItem(
             headlineContent = { Text(stringResource(R.string.providers_title)) },
             supportingContent = { Text(stringResource(R.string.settings_providers_hint)) },
@@ -194,77 +176,6 @@ internal fun DefaultThinkingLevelContent(
                     modifier = Modifier.clickable { onSetDefault(level) }
                 )
                 HorizontalDivider()
-            }
-        }
-    }
-}
-
-/**
- * Scoped-models curator (pi's /scoped-models): an absent scope shows
- * everything checked; toggles persist immediately as the ordered
- * `enabledModels` list and only affect what the chat picker offers —
- * never the running model.
- */
-@Composable
-internal fun ModelsContent(
-    modelOptions: List<ModelOption>,
-    enabledModels: List<String>?,
-    onToggleScope: (providerId: String, modelId: String, checked: Boolean) -> Unit,
-    onOpenProviders: () -> Unit
-) {
-    var query by rememberSaveable { mutableStateOf("") }
-    val filteredOptions = modelOptions.filter { option ->
-        val q = query.trim()
-        q.isEmpty() || option.name.contains(q, ignoreCase = true) ||
-            option.modelId.contains(q, ignoreCase = true) ||
-            option.providerName.contains(q, ignoreCase = true)
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .imePadding()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            label = { Text(stringResource(R.string.model_search_hint)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        if (modelOptions.isEmpty()) {
-            Text(
-                text = stringResource(R.string.models_empty_configured_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            TextButton(onClick = onOpenProviders) {
-                Text(stringResource(R.string.action_set_up_providers))
-            }
-        } else {
-            LazyColumn(modifier = Modifier.weight(1f)) {
-                items(filteredOptions, key = ModelOption::key) { option ->
-                    val modelRef = option.key
-                    val checked = enabledModels?.contains(modelRef) ?: true
-                    ListItem(
-                        headlineContent = { Text(option.name) },
-                        supportingContent = { Text(option.providerName) },
-                        trailingContent = {
-                            Checkbox(
-                                checked = checked,
-                                onCheckedChange = {
-                                    onToggleScope(option.providerId, option.modelId, it)
-                                }
-                            )
-                        },
-                        modifier = Modifier.clickable {
-                            onToggleScope(option.providerId, option.modelId, !checked)
-                        }
-                    )
-                    HorizontalDivider()
-                }
             }
         }
     }

@@ -244,7 +244,6 @@ fun ChatScreen(
     }
 
     val pushSettings: () -> Unit = { backStack.add(SettingsNavKey) }
-    val pushModels: () -> Unit = { backStack.add(ModelsNavKey) }
     val pushDefaultModel: () -> Unit = { backStack.add(DefaultModelNavKey) }
     val pushDefaultThinking: () -> Unit = { backStack.add(DefaultThinkingNavKey) }
     val pushProviders: () -> Unit = { backStack.add(ProvidersNavKey) }
@@ -303,8 +302,6 @@ fun ChatScreen(
                     ChatTopBar(
                         title = when (topKey) {
                             SettingsNavKey -> stringResource(R.string.settings_title)
-
-                            ModelsNavKey -> stringResource(R.string.settings_model)
 
                             DefaultModelNavKey -> stringResource(R.string.settings_default_model)
 
@@ -419,7 +416,6 @@ fun ChatScreen(
                                     showThinking = uiState.showThinking,
                                     onOpenDefaultModel = pushDefaultModel,
                                     onOpenDefaultThinking = pushDefaultThinking,
-                                    onOpenModels = pushModels,
                                     onOpenProviders = pushProviders,
                                     onOpenSearchProviders = pushSearchProviders,
                                     onToggleShowThinking = onToggleShowThinking
@@ -438,14 +434,6 @@ fun ChatScreen(
                                     availableLevels = uiState.availableThinkingLevels,
                                     defaultLevel = uiState.defaultThinkingLevel,
                                     onSetDefault = onSetDefaultThinkingLevel
-                                )
-                            }
-                            entry<ModelsNavKey> {
-                                ModelsContent(
-                                    modelOptions = uiState.modelOptions,
-                                    enabledModels = uiState.enabledModels,
-                                    onToggleScope = onToggleModelScope,
-                                    onOpenProviders = pushProviders
                                 )
                             }
                             entry<ProvidersNavKey> {
@@ -499,6 +487,9 @@ fun ChatScreen(
                                     ProviderAuthScreen(
                                         provider = option,
                                         methods = authMethods(key.providerId),
+                                        modelOptions = uiState.modelOptions,
+                                        enabledModels = uiState.enabledModels,
+                                        onToggleModelScope = onToggleModelScope,
                                         onRemove = { onRemoveProviderCredential(key.providerId) },
                                         onOpenApiKeyForm = {
                                             pushProviderApiKeyForm(key.providerId)
@@ -787,6 +778,18 @@ private fun FailedContent(error: String, onOpenProviders: () -> Unit) {
 
 private val PREVIEW_MODEL_OPTIONS = listOf(
     ModelOption(
+        providerId = "anthropic",
+        providerName = "Anthropic",
+        modelId = "claude-sonnet-4-5",
+        name = "Preview Claude Sonnet"
+    ),
+    ModelOption(
+        providerId = "anthropic",
+        providerName = "Anthropic",
+        modelId = "claude-opus-4-1",
+        name = "Preview Claude Opus"
+    ),
+    ModelOption(
         providerId = "zai",
         providerName = "Z.AI",
         modelId = "model-a",
@@ -1013,6 +1016,25 @@ private fun ChatScreenProviderAuthPreview() {
                 emptyList()
             }
         }
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ChatScreenProviderModelsPreview() {
+    PreviewChatScreen(
+        uiState = ChatUiState(
+            status = ChatStatus.Ready,
+            providerOptions = PREVIEW_PROVIDER_OPTIONS,
+            modelOptions = PREVIEW_MODEL_OPTIONS,
+            enabledModels = listOf("anthropic/claude-sonnet-4-5"),
+            selectedModel = PREVIEW_SELECTED_MODEL
+        ),
+        extraKeys = listOf(
+            SettingsNavKey,
+            ProvidersNavKey,
+            ProviderAuthNavKey("anthropic")
+        )
     )
 }
 

@@ -13,11 +13,9 @@
 
     <string name="action_new_chat">New chat</string>
     <string name="settings_title">Settings</string>
-    <string name="settings_model">Scoped models</string>
     <string name="settings_default_model">Default model</string>
     <string name="settings_default_thinking">Default thinking level</string>
     <string name="settings_not_set">Not set</string>
-    <string name="settings_model_scope_hint">Choose which models the chat offers</string>
     <string name="settings_providers_hint">Manage sign-ins and API keys</string>
     <string name="settings_show_thinking">Show thinking</string>
     <string name="settings_show_thinking_hint">Show the model\'s reasoning as it thinks</string>
@@ -38,10 +36,9 @@
     <string name="action_remove_provider">Forget provider</string>
     <string name="remove_provider_confirm">Forget the stored credential for %1$s?</string>
     <string name="sign_out_confirm">Sign out of %1$s?</string>
-    <string name="model_search_hint">Search models</string>
     <string name="model_selected">Selected</string>
     <string name="model_picker_empty">Pick a model</string>
-    <string name="models_scope_empty">No models in scope — pick them in Settings ▸ Scoped models</string>
+    <string name="models_scope_empty">No models in scope — enable them on the provider\'s page</string>
     <string name="model_default_marker">%1$s · default</string>
     <string name="models_empty_configured_hint">Only showing models from configured providers</string>
     <string name="thinking_chip_off">thinking off</string>

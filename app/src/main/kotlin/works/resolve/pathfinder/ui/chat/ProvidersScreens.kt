@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -224,10 +225,20 @@ internal fun ProviderAuthScreen(
     methods: List<AuthMethodInfo>,
     onRemove: () -> Unit,
     onOpenApiKeyForm: () -> Unit,
-    onBeginLogin: (method: AuthMethodInfo) -> Unit
+    onBeginLogin: (method: AuthMethodInfo) -> Unit,
+    modelOptions: List<ModelOption> = emptyList(),
+    enabledModels: List<String>? = null,
+    onToggleModelScope: (providerId: String, modelId: String, checked: Boolean) -> Unit =
+        { _, _, _ -> }
 ) {
     if (provider.configured) {
-        StoredProviderContent(provider = provider, onRemove = onRemove)
+        StoredProviderContent(
+            provider = provider,
+            onRemove = onRemove,
+            modelOptions = modelOptions,
+            enabledModels = enabledModels,
+            onToggleModelScope = onToggleModelScope
+        )
         return
     }
 
@@ -265,24 +276,62 @@ internal fun ProviderAuthScreen(
  * labels the stored credential kind ("Log out" for accounts, "Forget
  * provider" for API keys); once the credential is gone the surrounding
  * page flips back to its login surfaces.
+ *
+ * The model-scope curator lives here because [modelOptions] covers
+ * configured providers only: the list vanishes with the credential and
+ * never renders for search providers (no chat models).
  */
 @Composable
-internal fun StoredProviderContent(provider: ProviderOption, onRemove: () -> Unit) {
+internal fun StoredProviderContent(
+    provider: ProviderOption,
+    onRemove: () -> Unit,
+    modelOptions: List<ModelOption> = emptyList(),
+    enabledModels: List<String>? = null,
+    onToggleModelScope: (providerId: String, modelId: String, checked: Boolean) -> Unit =
+        { _, _, _ -> }
+) {
     var confirmRemove by remember { mutableStateOf(false) }
     val isAccount = provider.authType == AuthType.OAUTH
     val removeLabel =
         if (isAccount) R.string.action_sign_out else R.string.action_remove_provider
+    val models = modelOptions.filter { it.providerId == provider.id }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        TextButton(
+        if (models.isNotEmpty()) {
+            Column {
+                models.forEach { option ->
+                    val checked = enabledModels?.contains(option.key) ?: true
+                    ListItem(
+                        headlineContent = { Text(option.name) },
+                        supportingContent = { Text(option.modelId) },
+                        trailingContent = {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = {
+                                    onToggleModelScope(option.providerId, option.modelId, it)
+                                }
+                            )
+                        },
+                        modifier = Modifier.clickable {
+                            onToggleModelScope(option.providerId, option.modelId, !checked)
+                        }
+                    )
+                    HorizontalDivider()
+                }
+            }
+        }
+
+        Button(
             onClick = { confirmRemove = true },
-            colors = ButtonDefaults.textButtonColors(
-                contentColor = MaterialTheme.colorScheme.error
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer
             )
         ) {
             Text(stringResource(removeLabel))

@@ -285,8 +285,9 @@ private fun ThinkingLevelPickerSheet(
 
 /**
  * The model picker sheet (pi's /model selector). Lists only the scoped
- * models — curating the scope is Settings' job (Settings ▸ Scoped models);
- * [options] already falls back to all catalog models when no scope is set.
+ * models — curating the scope happens on the provider pages
+ * (Settings ▸ Providers); [options] already falls back to all catalog
+ * models when no scope is set.
  *
  * Divergence from pi (deliberate, narrow): pi's Ctrl+S applies the row and
  * persists the default in one gesture; this sheet is purely ephemeral —
