@@ -90,6 +90,7 @@ class AgentSessionToolsTest {
             createTempDirectory("tools-test").toFile(),
             ioDispatcher = Dispatchers.Unconfined
         ),
+        settingsManager = SettingsManager.inMemory(),
         models = Models(listOf(provider())),
         tools = tools
     )

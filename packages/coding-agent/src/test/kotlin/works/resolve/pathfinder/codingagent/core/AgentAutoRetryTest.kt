@@ -97,7 +97,7 @@ class AgentAutoRetryTest {
             createTempDirectory("auto-retry-test").toFile(),
             ioDispatcher = Dispatchers.Unconfined
         ),
-        retrySettings = retrySettings,
+        settingsManager = SettingsManager.inMemory(Settings(retry = retrySettings)),
         sleep = sleep
     )
 
@@ -256,7 +256,7 @@ class AgentAutoRetryTest {
                     createTempDirectory("auto-retry-test").toFile(),
                     ioDispatcher = Dispatchers.Unconfined
                 ),
-                retrySettings = RetrySettings(),
+                settingsManager = SettingsManager.inMemory(Settings(retry = RetrySettings())),
                 sleep = { }
             )
 

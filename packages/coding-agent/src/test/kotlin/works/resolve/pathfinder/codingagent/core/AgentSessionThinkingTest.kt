@@ -82,6 +82,7 @@ class AgentSessionThinkingTest {
     private suspend fun session(
         model: Model,
         sessionManager: SessionManager? = null,
+        settingsManager: SettingsManager? = null,
         streamFn: (
             Model,
             works.resolve.pathfinder.ai.Context,
@@ -91,6 +92,7 @@ class AgentSessionThinkingTest {
     ): AgentSession = AgentSession(
         agent = Agent(model = model, streamFn = StreamFn(streamFn)),
         manager = sessionManager ?: newManager(),
+        settingsManager = settingsManager ?: SettingsManager.inMemory(),
         models = Models(listOf(provider(model)))
     )
 
@@ -220,5 +222,87 @@ class AgentSessionThinkingTest {
         s.setThinkingLevel(ModelThinkingLevel.OFF)
         s.prompt("third")
         assertEquals(listOf(ThinkingLevel.MEDIUM, ThinkingLevel.HIGH, null), requestReasoning)
+    }
+
+    // ---- model-switch thinking level (pi's _getThinkingLevelForModelSwitch; upstream has no direct tests) ----
+
+    @Test
+    fun `a per-model override beats the global default on model switch`() = runTest {
+        val modelTwo = reasoningModel.copy(id = "model-b")
+        val s = session(
+            reasoningModel,
+            settingsManager = SettingsManager.inMemory(
+                Settings(
+                    defaultThinkingLevel = ModelThinkingLevel.LOW,
+                    modelThinkingLevels =
+                        mapOf("${modelTwo.provider}/${modelTwo.id}" to ModelThinkingLevel.HIGH)
+                )
+            )
+        )
+
+        s.setModel(modelTwo)
+
+        assertEquals(ModelThinkingLevel.HIGH, s.thinkingLevel)
+    }
+
+    @Test
+    fun `the global default beats the current session level on model switch`() = runTest {
+        val modelTwo = reasoningModel.copy(id = "model-b")
+        val s = session(
+            reasoningModel,
+            settingsManager = SettingsManager.inMemory(
+                Settings(defaultThinkingLevel = ModelThinkingLevel.LOW)
+            )
+        )
+
+        s.setThinkingLevel(ModelThinkingLevel.HIGH)
+        s.setModel(modelTwo)
+
+        assertEquals(ModelThinkingLevel.LOW, s.thinkingLevel)
+    }
+
+    @Test
+    fun `persisting a thinking level stores the requested level even when clamped for the session`() =
+        runTest {
+            // extendedModel's map marks medium unsupported; it clamps up to high.
+            val s = session(extendedModel)
+
+            s.setThinkingLevel(ModelThinkingLevel.MEDIUM, persist = true)
+
+            assertEquals(ModelThinkingLevel.HIGH, s.thinkingLevel)
+            assertEquals(ModelThinkingLevel.MEDIUM, s.settingsManager.getDefaultThinkingLevel())
+        }
+
+    @Test
+    fun `a session-only thinking level change writes nothing to settings`() = runTest {
+        val settingsManager = SettingsManager.inMemory(
+            Settings(defaultThinkingLevel = ModelThinkingLevel.LOW)
+        )
+        val s = session(reasoningModel, settingsManager = settingsManager)
+
+        s.setThinkingLevel(ModelThinkingLevel.HIGH)
+
+        assertEquals(ModelThinkingLevel.HIGH, s.thinkingLevel)
+        assertEquals(ModelThinkingLevel.LOW, settingsManager.getDefaultThinkingLevel())
+    }
+
+    @Test
+    fun `persisting a model does not persist a thinking level`() = runTest {
+        val modelTwo = reasoningModel.copy(id = "model-b")
+        val settingsManager = SettingsManager.inMemory()
+        val s = session(reasoningModel, settingsManager = settingsManager)
+
+        s.setThinkingLevel(ModelThinkingLevel.HIGH)
+        s.setModel(modelTwo, persist = true)
+
+        assertEquals(
+            "the current session level is re-applied",
+            ModelThinkingLevel.HIGH,
+            s.thinkingLevel
+        )
+        assertNull(
+            "model persistence never rewrites the thinking default",
+            settingsManager.getDefaultThinkingLevel()
+        )
     }
 }

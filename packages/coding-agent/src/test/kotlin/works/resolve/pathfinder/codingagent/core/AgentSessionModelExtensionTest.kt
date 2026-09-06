@@ -18,6 +18,7 @@ class AgentSessionModelExtensionTest {
             createTempDirectory("model-extension-test").toFile(),
             ioDispatcher = Dispatchers.Unconfined
         ),
+        settingsManager = SettingsManager.inMemory(),
         models = faux.models
     )
 

@@ -64,6 +64,8 @@ import works.resolve.pathfinder.codingagent.core.SessionError
 import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
+import works.resolve.pathfinder.codingagent.core.Settings
+import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
@@ -346,10 +348,16 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
             ),
             manager = sessionManager,
             tools = listOf(fakeWebSearchTool),
-            retrySettings = settings.retry,
-            compactionSettings = settings.compaction,
-            models = switchModels,
-            defaultThinkingLevelProvider = defaultThinkingLevel
+            settingsManager = kotlinx.coroutines.runBlocking {
+                SettingsManager.inMemory(
+                    Settings(
+                        defaultThinkingLevel = defaultThinkingLevel(),
+                        compaction = settings.compaction,
+                        retry = settings.retry
+                    )
+                )
+            },
+            models = switchModels
         ).also { session -> createdAgents += session }
     }
 

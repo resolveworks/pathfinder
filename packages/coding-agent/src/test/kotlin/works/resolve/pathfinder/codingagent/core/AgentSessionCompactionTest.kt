@@ -84,11 +84,15 @@ class AgentSessionCompactionTest {
                     createTempDirectory("compaction-test").toFile(),
                     ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
                 ),
-                retrySettings = RetrySettings(enabled = false),
-                compactionSettings = CompactionSettings(
-                    enabled = true,
-                    reserveTokens = 400,
-                    keepRecentTokens = 1_750
+                settingsManager = SettingsManager.inMemory(
+                    Settings(
+                        retry = RetrySettings(enabled = false),
+                        compaction = CompactionSettings(
+                            enabled = true,
+                            reserveTokens = 400,
+                            keepRecentTokens = 1_750
+                        )
+                    )
                 ),
                 models = faux.models
             )
@@ -158,11 +162,15 @@ class AgentSessionCompactionTest {
                 createTempDirectory("compaction-test").toFile(),
                 ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
             ),
-            retrySettings = RetrySettings(enabled = false),
-            compactionSettings = CompactionSettings(
-                enabled = true,
-                reserveTokens = 16_384,
-                keepRecentTokens = 1
+            settingsManager = SettingsManager.inMemory(
+                Settings(
+                    retry = RetrySettings(enabled = false),
+                    compaction = CompactionSettings(
+                        enabled = true,
+                        reserveTokens = 16_384,
+                        keepRecentTokens = 1
+                    )
+                )
             ),
             models = faux.models
         )
@@ -189,11 +197,15 @@ class AgentSessionCompactionTest {
                 createTempDirectory("compaction-test").toFile(),
                 ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
             ),
-            retrySettings = RetrySettings(enabled = false),
-            compactionSettings = CompactionSettings(
-                enabled = true,
-                reserveTokens = 16_384,
-                keepRecentTokens = 1
+            settingsManager = SettingsManager.inMemory(
+                Settings(
+                    retry = RetrySettings(enabled = false),
+                    compaction = CompactionSettings(
+                        enabled = true,
+                        reserveTokens = 16_384,
+                        keepRecentTokens = 1
+                    )
+                )
             ),
             models = faux.models
         )

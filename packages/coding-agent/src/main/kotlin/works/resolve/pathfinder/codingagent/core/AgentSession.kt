@@ -42,15 +42,12 @@ import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.ai.utils.estimateMessageTokens
 import works.resolve.pathfinder.ai.utils.isContextOverflow
 import works.resolve.pathfinder.ai.utils.isRecoverableLength
-import works.resolve.pathfinder.codingagent.core.RetrySettings
 import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryCallResult
 import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryErrorCode
 import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryResult
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionErrorCode
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionPreparation
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionResult as CompactionOutcome
-import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
-import works.resolve.pathfinder.codingagent.core.compaction.DEFAULT_COMPACTION_SETTINGS
 import works.resolve.pathfinder.codingagent.core.compaction.GenerateBranchSummaryOptions
 import works.resolve.pathfinder.codingagent.core.compaction.collectEntriesForBranchSummary
 import works.resolve.pathfinder.codingagent.core.compaction.compact
@@ -58,6 +55,9 @@ import works.resolve.pathfinder.codingagent.core.compaction.estimateContextToken
 import works.resolve.pathfinder.codingagent.core.compaction.generateBranchSummary
 import works.resolve.pathfinder.codingagent.core.compaction.prepareCompaction
 import works.resolve.pathfinder.codingagent.core.compaction.shouldCompact
+
+/** pi's scopedModels entry (the `--models` flag list): a model plus an optional explicit thinking level. */
+data class ScopedModel(val model: Model, val thinkingLevel: ModelThinkingLevel? = null)
 
 /**
  * Prompt-orchestration facade over [Agent]: owns the session tree via
@@ -79,10 +79,10 @@ class AgentSession(
     val agent: Agent,
     /** Session tree and persistence owner. */
     private val manager: SessionManager,
-    /** Auto-retry budget for failed runs. */
-    val retrySettings: RetrySettings = RetrySettings(),
-    /** Compaction thresholds. */
-    val compactionSettings: CompactionSettings = DEFAULT_COMPACTION_SETTINGS,
+    /** Live settings source; effective retry/compaction/thinking defaults are read at each decision point. */
+    val settingsManager: SettingsManager,
+    /** Scoped models for cycling (pi's --models flag); see [scopedModels]. */
+    scopedModels: List<ScopedModel> = emptyList(),
     /** Tools available for per-session activation. */
     private val tools: List<AgentTool> = emptyList(),
     /** Provider stack for compaction summarization; null disables automatic compaction. */
@@ -90,18 +90,20 @@ class AgentSession(
     /** Injectable backoff sleep so tests never wait. */
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     /** Wall clock for minting message timestamps. */
-    private val clock: Clock = Clock.System,
-    /**
-     * App-owned global thinking-level default consulted by [setModel] when
-     * re-applying a level for the switched-to model (pi reads this from its
-     * settingsManager, which is app state pathfinder's platform-neutral
-     * facade does not hold). Null — the default — keeps construction working
-     * without a settings source; the app wires its repository in later.
-     */
-    private val defaultThinkingLevelProvider: () -> ModelThinkingLevel? = { null }
+    private val clock: Clock = Clock.System
 ) {
     /** Read-only session tree view (upstream's ReadonlySessionManager Pick type; unlike upstream, the mutable manager stays private). */
     val sessionManager: ReadonlySessionManager get() = manager
+
+    private var _scopedModels: List<ScopedModel> = scopedModels
+
+    /** pi's scopedModels getter: scoped models for cycling, settable via [setScopedModels]. */
+    val scopedModels: List<ScopedModel> get() = _scopedModels
+
+    /** pi's setScopedModels. */
+    fun setScopedModels(scopedModels: List<ScopedModel>) {
+        _scopedModels = scopedModels
+    }
 
     val model: Model get() = agent.model
 
@@ -225,7 +227,7 @@ class AgentSession(
             !shouldCompact(
                 estimateContextTokens(context.messages).tokens,
                 model.contextWindow,
-                compactionSettings
+                settingsManager.getCompactionSettings()
             )
         ) {
             return context
@@ -353,26 +355,45 @@ class AgentSession(
      * cannot switch.
      *
      * Like pi's setModel, a thinking level is re-applied for the new model:
-     * the app-owned default from [defaultThinkingLevelProvider], else the
-     * session's current level, clamped to the new model's capabilities
-     * (pi additionally consults per-model settings overrides, which are not
-     * ported).
+     * a per-model override, else the global default, else the session's
+     * current level, clamped to the new model's capabilities. Persists to
+     * global defaults only when [persist] is true; persistence never
+     * implicitly persists the resulting thinking level.
      *
      * @throws IllegalStateException when the provider is unregistered or
      *   unauthenticated.
      */
-    suspend fun setModel(model: Model) {
+    suspend fun setModel(model: Model, persist: Boolean = false) {
         val models = this.models
             ?: throw IllegalStateException("No model stack available for setModel")
         if (!models.checkAuth(model.provider)) {
             throw IllegalStateException("No API key for ${model.provider}/${model.id}")
         }
-        val thinkingLevel = defaultThinkingLevelProvider() ?: thinkingLevel
+        val thinkingLevel = getThinkingLevelForModelSwitch(model)
         agent.setModel(model)
         manager.appendModelChange(model.provider, model.id)
+        if (persist) {
+            settingsManager.setDefaultModelAndProvider(model.provider, model.id)
+            addPersistedDefaultToNonEmptyScope(model)
+        }
         // Apply the thinking level for the new model; setThinkingLevel
         // clamps to model capabilities and appends only on change.
         setThinkingLevel(thinkingLevel)
+    }
+
+    /** pi's _addPersistedDefaultToNonEmptyScope. */
+    private suspend fun addPersistedDefaultToNonEmptyScope(model: Model) {
+        if (_scopedModels.isEmpty()) return
+        if (_scopedModels.any { Models.modelsAreEqual(it.model, model) }) return
+
+        _scopedModels = _scopedModels + ScopedModel(model)
+
+        val enabledModels = settingsManager.getEnabledModels()
+        if (enabledModels.isNullOrEmpty()) return
+
+        val modelReference = "${model.provider}/${model.id}"
+        if (enabledModels.any { it.equals(modelReference, ignoreCase = true) }) return
+        settingsManager.setEnabledModels(enabledModels + modelReference)
     }
 
     /**
@@ -380,11 +401,13 @@ class AgentSession(
      * is clamped to what the current model supports, and a
      * `thinking_level_change` entry is appended (child of the current leaf,
      * like a model_change) only when the effective level actually changes.
+     * Persists the requested (unclamped) level to global defaults only when
+     * [persist] is true.
      *
      * There is no idle guard: the active run keeps its start-of-run level
      * (the agent snapshots it per prompt, see [Agent.setThinkingLevel]).
      */
-    suspend fun setThinkingLevel(level: ModelThinkingLevel) {
+    suspend fun setThinkingLevel(level: ModelThinkingLevel, persist: Boolean = false) {
         val available = getSupportedThinkingLevels(agent.model)
         val effective = if (available.contains(
                 level
@@ -396,9 +419,30 @@ class AgentSession(
         }
         val previous = agent.thinkingLevel
         agent.setThinkingLevel(effective)
+        if (persist) {
+            settingsManager.setDefaultThinkingLevel(level)
+        }
         if (effective != previous) {
             manager.appendThinkingLevelChange(effective.wire)
         }
+    }
+
+    /** pi's _getThinkingLevelForModelSwitch: explicit scoped level, then a
+     * per-model override for the target model, then the global default, then
+     * the session's current level. */
+    private fun getThinkingLevelForModelSwitch(
+        targetModel: Model?,
+        explicitLevel: ModelThinkingLevel? = null
+    ): ModelThinkingLevel {
+        if (explicitLevel != null) {
+            return explicitLevel
+        }
+        if (targetModel != null) {
+            settingsManager.getModelThinkingLevel(targetModel.provider, targetModel.id)?.let {
+                return it
+            }
+        }
+        return settingsManager.getDefaultThinkingLevel() ?: thinkingLevel
     }
 
     // ---- tree navigation ----
@@ -496,11 +540,7 @@ class AgentSession(
                             model = model,
                             customInstructions = options.customInstructions,
                             replaceInstructions = options.replaceInstructions,
-                            retry = RetryPolicy(
-                                enabled = retrySettings.enabled,
-                                maxRetries = retrySettings.maxRetries,
-                                baseDelayMs = retrySettings.baseDelayMs
-                            ),
+                            retry = summarizationRetryPolicy(),
                             callbacks = summarizationRetryCallbacks(
                                 AgentEvent.SummarizationSource.BranchSummary
                             ),
@@ -660,7 +700,7 @@ class AgentSession(
         assistantMessage: AssistantMessage,
         skipAbortedCheck: Boolean = true
     ): Boolean {
-        if (!compactionSettings.enabled) return false
+        if (!settingsManager.getCompactionSettings().enabled) return false
 
         // Skip if message was aborted (user cancelled) - unless the pre-prompt
         // check asked for aborted messages too.
@@ -747,7 +787,7 @@ class AgentSession(
         } else {
             contextTokens = directContextTokens
         }
-        if (shouldCompact(contextTokens, contextWindow, compactionSettings)) {
+        if (shouldCompact(contextTokens, contextWindow, settingsManager.getCompactionSettings())) {
             return runAutoCompaction(AgentEvent.CompactionReason.THRESHOLD, willRetry = false)
         }
         return false
@@ -769,7 +809,12 @@ class AgentSession(
     ): Boolean {
         if (models == null) return false
         val pathEntries = manager.getBranch()
-        val preparation = when (val outcome = prepareCompaction(pathEntries, compactionSettings)) {
+        val preparation = when (
+            val outcome = prepareCompaction(
+                pathEntries,
+                settingsManager.getCompactionSettings()
+            )
+        ) {
             is CompactionOutcome.Err -> return false
             is CompactionOutcome.Ok -> outcome.value ?: return false
         }
@@ -847,11 +892,7 @@ class AgentSession(
                     // The summary request reasons at the level the user
                     // selected, when the summarization model supports it.
                     thinkingLevel = agent.thinkingLevel,
-                    retry = RetryPolicy(
-                        enabled = retrySettings.enabled,
-                        maxRetries = retrySettings.maxRetries,
-                        baseDelayMs = retrySettings.baseDelayMs
-                    ),
+                    retry = summarizationRetryPolicy(),
                     callbacks = summarizationRetryCallbacks(
                         AgentEvent.SummarizationSource.Compaction(reason)
                     ),
@@ -943,7 +984,10 @@ class AgentSession(
                     throw IllegalStateException(formatNoModelSelectedMessage())
                 }
                 val pathEntries = manager.getBranch()
-                when (val outcome = prepareCompaction(pathEntries, compactionSettings)) {
+                when (
+                    val outcome =
+                        prepareCompaction(pathEntries, settingsManager.getCompactionSettings())
+                ) {
                     is CompactionOutcome.Err ->
                         throw IllegalStateException(outcome.error.message ?: "compaction failed")
 
@@ -996,6 +1040,16 @@ class AgentSession(
         } finally {
             compactionInProgress = false
         }
+    }
+
+    /** pi's summarization call sites read the live retry settings per call. */
+    private fun summarizationRetryPolicy(): RetryPolicy {
+        val settings = settingsManager.getRetrySettings()
+        return RetryPolicy(
+            enabled = settings.enabled,
+            maxRetries = settings.maxRetries,
+            baseDelayMs = settings.baseDelayMs
+        )
     }
 
     /**
@@ -1053,22 +1107,23 @@ class AgentSession(
      * agent state only — it stays in the append-only session tree.
      */
     private suspend fun prepareRetry(message: AssistantMessage): Boolean {
-        if (!retrySettings.enabled) return false
+        val settings = settingsManager.getRetrySettings()
+        if (!settings.enabled) return false
 
         retryAttempt++
-        if (retryAttempt > retrySettings.maxRetries) {
+        if (retryAttempt > settings.maxRetries) {
             // Preserve the completed attempt count so post-run handling can
             // emit the final failure.
             retryAttempt--
             return false
         }
 
-        val delayMs = retrySettings.baseDelayMs * (1L shl (retryAttempt - 1))
+        val delayMs = settings.baseDelayMs * (1L shl (retryAttempt - 1))
 
         _events.emit(
             AgentEvent.AutoRetryStart(
                 attempt = retryAttempt,
-                maxAttempts = retrySettings.maxRetries,
+                maxAttempts = settings.maxRetries,
                 delayMs = delayMs,
                 errorMessage = message.errorMessage ?: "Unknown error"
             )
