@@ -34,7 +34,6 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.clampThinkingLevel
 import works.resolve.pathfinder.ai.getSupportedThinkingLevels
-import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
 import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
@@ -169,22 +168,9 @@ class AgentSession(
     init {
         // A synchronous sink avoids flow-subscription races with prompt().
         agent.attachEventSink { event -> processEvent(event) }
-        // pi's sdk.ts session restore: transcript and thinking level come
-        // from the branch's session context (compaction-aware, like a fresh
-        // run after compaction).
-        val context = manager.buildSessionContext()
-        if (context.messages.isNotEmpty()) {
-            agent.replaceTranscript(context.messages)
-        }
-        // Seed the thinking level from the branch's configuration fold; a
-        // branch without a thinking entry folds "off" (the app layer seeds
-        // a default-level entry before adoption).
-        agent.setThinkingLevel(
-            clampThinkingLevel(
-                agent.model,
-                modelThinkingLevelFromWire(context.thinkingLevel) ?: ModelThinkingLevel.OFF
-            )
-        )
+        // The agent arrives already restored: createAgentSession owns the
+        // branch fold's transcript/thinking/model restoration and seeds the
+        // new-session configuration entries.
         // There is no persisted active-tools fold (pi has no such entry
         // either): tools resolve to the full registry, and the app layer
         // narrows the set per session via setActiveToolsByName.

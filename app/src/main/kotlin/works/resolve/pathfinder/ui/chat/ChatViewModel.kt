@@ -39,9 +39,6 @@ import works.resolve.pathfinder.codingagent.core.SessionError
 import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
-import works.resolve.pathfinder.codingagent.core.SessionSeedModel
-import works.resolve.pathfinder.codingagent.core.SessionSeedSettings
-import works.resolve.pathfinder.codingagent.core.seedSessionConfiguration
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsStore
@@ -229,8 +226,9 @@ class ChatViewModel(
      * Persists the default thinking level. Applies to the live session
      * first and persists after (pi's order), so a failed settings write
      * leaves the session switched. The stored default seeds sessions
-     * without a recorded branch level ([seedSession]) and is re-applied on
-     * model switches by the session itself ([AgentSession.setModel]).
+     * without a recorded branch level (the createAgentSession factory) and
+     * is re-applied on model switches by the session itself
+     * ([AgentSession.setModel]).
      */
     fun setThinkingLevelDefault(level: ModelThinkingLevel) {
         viewModelScope.launch {
@@ -452,10 +450,7 @@ class ChatViewModel(
                 // Memory-only: nothing touches disk, and the new session is
                 // absent from the drawer until its first assistant commit.
                 val manager = sessionSource.create()
-                // pi's findInitialModel picks the initial model; the seeds
-                // let the branch's configuration fold restore it on resume.
-                val seeded = seedSession(manager)
-                val newAgent = tryCreateAgent(seeded, manager) ?: return@launch
+                val newAgent = tryCreateAgent(manager) ?: return@launch
                 if (!activateSession(manager, newAgent)) return@launch
             } catch (e: CancellationException) {
                 throw e
@@ -485,8 +480,7 @@ class ChatViewModel(
                     setError(ERROR_SESSION_MISSING)
                     return@launch
                 }
-                val seeded = seedSession(manager)
-                val newAgent = tryCreateAgent(seeded, manager) ?: return@launch
+                val newAgent = tryCreateAgent(manager) ?: return@launch
                 if (!activateSession(manager, newAgent)) return@launch
             } catch (e: CancellationException) {
                 throw e
@@ -543,8 +537,7 @@ class ChatViewModel(
             val manager = resolveSession(settings, summaries)
             // Build the agent before committing any state: a factory failure
             // must never leave a Ready UI or persisted active-session id.
-            val seeded = seedSession(manager)
-            val newAgent = tryCreateAgent(seeded, manager)
+            val newAgent = tryCreateAgent(manager)
             if (newAgent == null) {
                 _uiState.update {
                     it.copy(
@@ -667,38 +660,21 @@ class ChatViewModel(
             setError(ERROR_SESSION_CREATE, e)
             return null
         }
-        val seeded = seedSession(manager)
-        val newAgent = tryCreateAgent(seeded, manager) ?: return null
+        val newAgent = tryCreateAgent(manager) ?: return null
         return manager to newAgent
     }
 
-    /** Binds this ViewModel's resolved settings into [manager] (see [seedSessionConfiguration]). */
-    private suspend fun seedSession(manager: SessionManager): ModelSettings {
-        val seeded = seedSessionConfiguration(
-            manager = manager,
-            settings = SessionSeedSettings(
-                providerId = currentSettings.providerId,
-                modelId = currentSettings.modelId,
-                enabledModels = currentSettings.enabledModels,
-                defaultThinkingLevel = currentSettings.defaultThinkingLevel
-            ),
-            modelOptions = _uiState.value.modelOptions.map {
-                SessionSeedModel(providerId = it.providerId, modelId = it.modelId)
-            },
-            modelResolver = modelResolver,
-            catalog = catalog
-        )
-        return currentSettings.copy(providerId = seeded.providerId, modelId = seeded.modelId)
-    }
-
-    /** Builds an agent or null (with a safe error surfaced) when the factory rejects the settings. */
-    private fun tryCreateAgent(
-        settings: ModelSettings,
-        sessionManager: SessionManager
-    ): AgentSession? = try {
-        agentFactory.create(settings, sessionManager) { currentSettings.defaultThinkingLevel }
+    /**
+     * Builds a session through the core createAgentSession factory (which
+     * owns model resolution, restoration, and seeding) or null (with a safe
+     * error surfaced) when the factory rejects the configuration. The
+     * fallback message is left to the settings-flow rewiring to surface.
+     */
+    private suspend fun tryCreateAgent(sessionManager: SessionManager): AgentSession? = try {
+        agentFactory.create(currentSettings, sessionManager)
             // Synchronize web_search against the current Brave credential
             // before anything binds to the session.
+            .session
             .also(searchProviders::applyTo)
     } catch (e: CancellationException) {
         throw e

@@ -49,6 +49,8 @@ const val BRANCH_SUMMARY_SUFFIX = "</summary>"
  */
 fun formatNoModelSelectedMessage(): String = "No model selected."
 
+fun formatNoModelsAvailableMessage(): String = "No models available."
+
 fun formatNoApiKeyFoundMessage(provider: String): String {
     val providerDisplay = if (provider == "unknown") "the selected model" else provider
     return "No API key found for $providerDisplay."
