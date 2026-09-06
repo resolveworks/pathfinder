@@ -3,6 +3,7 @@ package works.resolve.pathfinder.runtime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.runBlocking
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.StreamFn
@@ -28,6 +29,8 @@ import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.codingagent.core.AgentSession
 import works.resolve.pathfinder.codingagent.core.SessionManager
+import works.resolve.pathfinder.codingagent.core.Settings
+import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.data.settings.ModelSettings
 
 /**
@@ -129,11 +132,22 @@ class NativeAgentFactory(
                 }
             ),
             manager = sessionManager,
-            retrySettings = settings.retry,
-            compactionSettings = settings.compaction,
+            // Temporary wiring: a snapshot settings manager per agent until the
+            // app's settings flow is rewired onto SettingsManager. The storage
+            // lock is uncontended here, so runBlocking never parks.
+            settingsManager = runBlocking {
+                SettingsManager.inMemory(
+                    Settings(
+                        defaultProvider = settings.providerId,
+                        defaultModel = settings.modelId,
+                        defaultThinkingLevel = defaultThinkingLevel(),
+                        compaction = settings.compaction,
+                        retry = settings.retry
+                    )
+                )
+            },
             models = models,
-            tools = tools.toList(),
-            defaultThinkingLevelProvider = defaultThinkingLevel
+            tools = tools.toList()
         )
     }
 

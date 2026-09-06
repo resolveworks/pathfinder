@@ -120,7 +120,9 @@ class AgentNavigationTest {
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
             manager = manager,
             models = models,
-            retrySettings = RetrySettings(enabled = false)
+            settingsManager = SettingsManager.inMemory(
+                Settings(retry = RetrySettings(enabled = false))
+            )
         )
 
         val result = session.navigateTree(
@@ -161,7 +163,9 @@ class AgentNavigationTest {
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
             manager = manager,
-            retrySettings = RetrySettings(enabled = false)
+            settingsManager = SettingsManager.inMemory(
+                Settings(retry = RetrySettings(enabled = false))
+            )
         )
 
         val result = session.navigateTree(branchA)
@@ -175,7 +179,8 @@ class AgentNavigationTest {
         val (manager, _) = forkedSession()
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            manager = manager
+            manager = manager,
+            settingsManager = SettingsManager.inMemory()
         )
 
         val result = session.navigateTree(manager.getLeafId()!!)
@@ -192,7 +197,8 @@ class AgentNavigationTest {
         val userEntryId = manager.getLeafId()!!
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            manager = manager
+            manager = manager,
+            settingsManager = SettingsManager.inMemory()
         )
 
         val result = session.navigateTree(userEntryId)
@@ -207,7 +213,8 @@ class AgentNavigationTest {
         val (manager, _) = forkedSession()
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            manager = manager
+            manager = manager,
+            settingsManager = SettingsManager.inMemory()
         )
 
         val userEntryId = manager.getEntries().first { it.parentId == null }.id
@@ -222,7 +229,8 @@ class AgentNavigationTest {
         val (manager, branchA) = forkedSession()
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            manager = manager
+            manager = manager,
+            settingsManager = SettingsManager.inMemory()
         )
         try {
             session.navigateTree(branchA, AgentSession.NavigateTreeOptions(summarize = true))
@@ -264,7 +272,9 @@ class AgentNavigationTest {
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
             manager = manager,
             models = models,
-            retrySettings = RetrySettings(enabled = false)
+            settingsManager = SettingsManager.inMemory(
+                Settings(retry = RetrySettings(enabled = false))
+            )
         )
 
         try {
@@ -294,7 +304,8 @@ class AgentNavigationTest {
                 streamOptions = SimpleStreamOptions(),
                 streamFn = StreamFn { _, _, _ -> streams.removeFirst() }
             ),
-            manager = manager
+            manager = manager,
+            settingsManager = SettingsManager.inMemory()
         )
 
         // Instant abort: the committed empty-content assistant message with

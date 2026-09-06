@@ -256,6 +256,10 @@ class ChatViewModel(
                 setError(ERROR_SETTINGS_SAVE, e)
                 return@launch
             }
+            // Temporary wiring: keep the session's snapshot settings manager
+            // in sync so later model switches re-apply the default (removed
+            // when the app's settings flow moves onto SettingsManager).
+            session?.settingsManager?.setDefaultThinkingLevel(level)
             currentSettings = currentSettings.copy(defaultThinkingLevel = level)
             _uiState.update { it.copy(defaultThinkingLevel = level) }
             if (session != null) {

@@ -20,6 +20,7 @@ class AgentSessionPromptTest {
                 createTempDirectory("prompt-test").toFile(),
                 ioDispatcher = Dispatchers.Unconfined
             ),
+            settingsManager = SettingsManager.inMemory(),
             models = faux.models
         )
 

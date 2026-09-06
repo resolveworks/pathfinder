@@ -152,8 +152,9 @@ class AgentCompactionTest {
             streamFn = streams.streamFn
         ),
         manager = seededManager(),
-        retrySettings = retrySettings,
-        compactionSettings = compactionSettings,
+        settingsManager = SettingsManager.inMemory(
+            Settings(retry = retrySettings, compaction = compactionSettings)
+        ),
         models = models,
         sleep = sleep
     )
@@ -252,7 +253,9 @@ class AgentCompactionTest {
         val agent = AgentSession(
             agent = Agent(model = model, streamFn = streams.streamFn),
             manager = seed,
-            retrySettings = RetrySettings(enabled = false),
+            settingsManager = SettingsManager.inMemory(
+                Settings(retry = RetrySettings(enabled = false))
+            ),
             models = models
         )
 
@@ -541,7 +544,9 @@ class AgentCompactionTest {
         val agent = AgentSession(
             agent = Agent(model = model, streamFn = ScriptedStreams().streamFn),
             manager = seed,
-            retrySettings = RetrySettings(enabled = false),
+            settingsManager = SettingsManager.inMemory(
+                Settings(retry = RetrySettings(enabled = false))
+            ),
             models = models
         )
 
