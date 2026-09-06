@@ -93,7 +93,6 @@ import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.data.sessions.SessionSource
-import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
@@ -372,8 +371,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             val h = harness()
             // Valid model settings persisted, but the key is missing: logging in
             // completes configuration.
-            h.settings.setProviderId("zai")
-            h.settings.setModelId("glm-4.7")
+            h.seedStartupDefault("zai", "glm-4.7")
 
             val vm = h.newViewModel()
             vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
@@ -687,8 +685,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             val h = harness()
             // The restoration path must degrade to NeedsConfiguration rather
             // than crash: a failing credential read never blocks startup.
-            h.settings.setProviderId("zai")
-            h.settings.setModelId(testModel.id)
+            h.seedStartupDefault("zai", testModel.id)
             h.credentials.failWrites = true
             val vm = h.newViewModel()
             vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
@@ -852,8 +849,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
             h.credentials.creds["github-copilot"] = copilotCredential(stringArray("gpt-4.1"))
-            h.settings.setProviderId("github-copilot")
-            h.settings.setModelId("gpt-4.5")
+            h.seedStartupDefault("github-copilot", "gpt-4.5")
             val vm = h.newViewModel()
 
             // The saved default is credential-filtered out of the picker's

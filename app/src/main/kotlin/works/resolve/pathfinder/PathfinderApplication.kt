@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import works.resolve.pathfinder.ai.auth.CatalogAuthRegistry
 import works.resolve.pathfinder.ai.auth.CredentialStore
@@ -16,6 +17,7 @@ import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.transport.OkHttpTransport
 import works.resolve.pathfinder.ai.transport.OkHttpWebSocketTransport
+import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
 import works.resolve.pathfinder.data.sessions.DirectorySessionSource
@@ -101,6 +103,16 @@ class PathfinderApplication : Application() {
         SettingsRepository(settingsDataStore)
     }
 
+    /**
+     * The single settings manager for the whole process: every runtime-field
+     * mutation goes through it, and the repository is only its storage
+     * backend. Built with a bounded blocking load — the composition root has
+     * no suspend context and runs once before anything reads settings.
+     */
+    val settingsManager: SettingsManager by lazy {
+        runBlocking { SettingsManager.fromStorage(settingsRepository) }
+    }
+
     val sessionSource: SessionSource by lazy {
         DirectorySessionSource(File(filesDir, SESSIONS_DIRECTORY))
     }
@@ -117,6 +129,7 @@ class PathfinderApplication : Application() {
             catalog = modelCatalog,
             transport = transport,
             webSocketTransport = webSocketTransport,
+            settingsManager = settingsManager,
             authRegistry = authRegistry,
             tools = listOf(webSearchTool, webFetchTool)
         )
@@ -126,6 +139,7 @@ class PathfinderApplication : Application() {
         initializer {
             ChatViewModel(
                 settingsRepository = settingsRepository,
+                settingsManager = settingsManager,
                 catalog = modelCatalog,
                 authService = authService,
                 sessionSource = sessionSource,
