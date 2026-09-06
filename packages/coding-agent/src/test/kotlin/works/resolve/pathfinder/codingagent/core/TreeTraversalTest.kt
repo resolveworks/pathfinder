@@ -343,7 +343,7 @@ class TreeTraversalTest {
             )
         )
 
-        assertEquals(listOf("root", "orphan"), m.getTree().map { it.entry.id })
+        assertEquals(listOf("orphan", "root"), m.getTree().map { it.entry.id })
     }
 
     @Test

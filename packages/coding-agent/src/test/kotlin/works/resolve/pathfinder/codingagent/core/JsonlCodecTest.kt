@@ -181,6 +181,20 @@ class JsonlCodecTest {
     }
 
     @Test
+    fun `null or missing content decodes to empty content list`() {
+        val withNull =
+            """{"type":"message","id":"m","parentId":null,""" +
+                """"timestamp":"2026-09-05T19:03:40.386Z",""" +
+                """"message":{"role":"user","timestamp":1,"content":null}}"""
+        val missing = withNull.replace(",\"content\":null", "")
+        for (line in listOf(withNull, missing)) {
+            val entry = assertIs<JsonlCodec.Line.Entry>(JsonlCodec.parseLine(line)).entry
+            val message = assertIs<UserMessage>((entry as MessageEntry).message)
+            assertTrue(message.content.isEmpty())
+        }
+    }
+
+    @Test
     fun `blank malformed and unknown lines are skipped`() {
         assertNull(JsonlCodec.parseLine(""))
         assertNull(JsonlCodec.parseLine("   "))

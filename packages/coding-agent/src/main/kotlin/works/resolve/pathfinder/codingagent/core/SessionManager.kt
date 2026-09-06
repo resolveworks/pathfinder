@@ -17,6 +17,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -325,6 +326,9 @@ data class SessionInfo(
  *   objects for extension entries; no extension entries exist here).
  * - Old "v4" files are unreadable (their first line is not a `session`
  *   header) and no migration exists, per AGENTS.md.
+ * - Timestamps are parsed strictly (`Instant.parse`, exactly `.SSS` + `Z`);
+ *   pi's `new Date(...)` accepts laxer shapes, but only current shapes are
+ *   supported here.
  */
 internal object JsonlCodec {
     const val SESSION_VERSION = 3
@@ -643,6 +647,11 @@ internal object JsonlCodec {
         JsonArray(content.map(::encodeContent))
 
     private fun decodeContentList(element: kotlinx.serialization.json.JsonElement?): List<Content> {
+        // pi normalizes null content to [] at read time (old versions, forks,
+        // and hand-edited files contain it); here that happens at decode so
+        // the entry survives with empty content. Non-null non-array content
+        // stays invalid — the typed port cannot represent it.
+        if (element == null || element is JsonNull) return emptyList()
         val array = element as? JsonArray ?: invalid()
         return array.map(::decodeContent)
     }
@@ -1034,7 +1043,9 @@ class SessionManager private constructor(
                 if (remaining == 0) stack.addLast(byId.getValue(pid))
             }
         }
-        return rootNodes.sortedBy { it.entry.timestamp }
+        // pi pushes roots in file order; only children are timestamp-sorted.
+        val entryIndex = entries.withIndex().associate { (i, e) -> e.id to i }
+        return rootNodes.sortedBy { entryIndex[it.entry.id] ?: 0 }
     }
 
     companion object {

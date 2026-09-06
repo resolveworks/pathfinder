@@ -18,7 +18,7 @@ package works.resolve.pathfinder.telemetry
  *   omitted: its exact-type inference is TypeScript-only. Span vocabularies
  *   are documented constants next to their producers instead.
  *
- * Scope vs pi (differences.md §3.5, verified at pin b8b873b98): this file and
+ * Scope vs pi (verified at pin b8b873b98): this file and
  * [InMemoryTelemetryContext] are clean twins of the `pi-telemetry` package core
  * (`packages/telemetry/src/index.ts` + `memory.ts`) — the runtime contract
  * only. pi's agent-side `harness/telemetry.ts` is intentionally absent, not
