@@ -228,10 +228,9 @@ class OkHttpTransportTest {
      * suite itself. The test therefore pins the one stable property — the
      * truncated terminal event is never dispatched and the flow never
      * completes cleanly — using a bounded collection window. This is the
-     * accepted transport-boundary divergence (differences.md §7,
-     * OkHttpTransport KDoc). If this test ever fails, okhttp changed
-     * truncated-frame handling and both the KDoc and the codex divergence
-     * note should be revisited.
+     * accepted transport-boundary divergence (see the OkHttpTransport
+     * KDoc). If this test ever fails, okhttp changed
+     * truncated-frame handling and the divergence note should be revisited.
      */
     @Test
     fun `unterminated terminal sse frame never dispatches nor completes cleanly`() {

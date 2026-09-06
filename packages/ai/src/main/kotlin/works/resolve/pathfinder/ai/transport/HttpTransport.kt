@@ -63,14 +63,18 @@ data class TransportResponse(
     fun header(name: String): String? = headers[name.lowercase()]?.firstOrNull { it.isNotBlank() }
 }
 
-/** Carries status/headers/body for retry classification. */
+/** Carries status/headers/body for retry classification. Message mirrors the
+ * SDK shape pi's error handling matches against: an empty body yields
+ * `"<status> status code (no body)"` (see the Cerebras overflow pattern). */
 class ProviderHttpException(
     val status: Int,
     val headers: Map<String, List<String>>,
     val body: String,
     /** Status line reason phrase (fetch's Response.statusText); empty on HTTP/2. */
     val statusText: String? = null
-) : java.io.IOException("Provider returned HTTP $status") {
+) : java.io.IOException(
+    if (body.isBlank()) "$status status code (no body)" else "Provider returned HTTP $status"
+) {
     fun header(name: String): String? = headers[name.lowercase()]?.firstOrNull { it.isNotBlank() }
 }
 

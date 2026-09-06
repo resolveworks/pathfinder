@@ -540,7 +540,7 @@ data class SimpleStreamOptions(
  *
  * Upstream has no such export — each adapter merges the maps inline in its
  * `buildParams`; the shared helper here is an accepted pathfinder
- * centralization (differences.md §4).
+ * centralization.
  */
 fun mergeSamplingParams(model: Model, options: SimpleStreamOptions): Map<String, JsonElement>? =
     if (model.samplingParams.isNullOrEmpty() && options.samplingParams == null) {
@@ -554,7 +554,7 @@ fun mergeSamplingParams(model: Model, options: SimpleStreamOptions): Map<String,
  * name, and a null override value removes the header entirely.
  *
  * Upstream keeps this logic private per API file; the shared helper here is
- * an accepted pathfinder centralization (differences.md §4).
+ * an accepted pathfinder centralization.
  */
 fun mergeHeaders(base: Map<String, String?>, override: Map<String, String?>): Map<String, String?> {
     if (base.isEmpty() && override.isEmpty()) return emptyMap()
@@ -571,7 +571,7 @@ fun mergeHeaders(base: Map<String, String?>, override: Map<String, String?>): Ma
  * True when [headers] sets a non-blank value for [name] (case-insensitive).
  *
  * Upstream keeps this logic private per API file; the shared helper here is
- * an accepted pathfinder centralization (differences.md §4).
+ * an accepted pathfinder centralization.
  */
 fun hasHeader(headers: Map<String, String?>, name: String): Boolean =
     headers.any { it.key.lowercase() == name && !it.value.isNullOrBlank() }

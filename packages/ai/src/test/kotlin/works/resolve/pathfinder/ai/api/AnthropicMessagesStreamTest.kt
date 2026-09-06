@@ -1500,7 +1500,7 @@ class AnthropicMessagesStreamTest {
                 .stream(
                     managedClaude(),
                     context,
-                    AnthropicMessagesOptions(apiKey = "k", effort = AnthropicEffort.LOW)
+                    AnthropicMessagesOptions(apiKey = "k", effort = "low")
                 )
                 .toList()
                 .last()

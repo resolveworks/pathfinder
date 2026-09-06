@@ -1592,7 +1592,7 @@ class OpenAiCompletionsPayloadTest {
 
     // ---------------------------------------------------------------------
     // Case from pi test/openai-completions-tool-result-images.test.ts (wire
-    // shape only; the images stack itself is unported per differences.md §7)
+    // shape only; the images stack itself is unported)
     // ---------------------------------------------------------------------
 
     @Test

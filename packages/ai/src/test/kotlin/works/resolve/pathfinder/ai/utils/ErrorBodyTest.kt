@@ -39,15 +39,15 @@ class ErrorBodyTest {
     @Test
     fun `formatProviderError surfaces status and body without a prefix through normalize`() {
         // Upstream composes from an SDK error whose message is opaque
-        // ("403 status code (no body)"); the Kotlin analog of the opaque
-        // message is the transport exception's "Provider returned HTTP 403".
+        // ("403 status code (no body)"); the transport's pi-shaped message
+        // now matches that shape for empty bodies.
         val norm = normalizeProviderError(httpError(403, """{"error":"blocked by gateway WAF"}"""))
 
         val formatted = formatProviderError(norm)
 
         assertTrue("403" in formatted)
         assertTrue("blocked by gateway WAF" in formatted)
-        assertTrue(formatted != "Provider returned HTTP 403")
+        assertTrue(formatted != "403 status code (no body)")
     }
 
     @Test
@@ -142,12 +142,10 @@ class ErrorBodyTest {
     // the SDK already folded the body into the message (upstream "preserves
     // the message when @google/genai already folds the body into it" and "sets
     // messageCarriesBody when the message already contains the extracted
-    // body"). Not portable: ProviderHttpException's message is fixed to
-    // "Provider returned HTTP N", so an error whose message contains the body
-    // cannot be constructed here, and the Kotlin port always returns false
-    // (the only constructible near-hit would be a body that is a substring of
-    // the fixed message, e.g. body "HTTP 500"). Upstream case, kept for the
-    // day the message becomes customizable:
+    // body"). Not portable: the transport message never embeds the body
+    // (only the status-derived prefix), so the Kotlin port always returns
+    // false. Upstream case, kept for the day the message becomes
+    // customizable:
     //
     // @Test
     // fun `normalizeProviderError flags a message that already contains the body`() {
@@ -190,7 +188,7 @@ class ErrorBodyTest {
             formatCodexError(httpError(503, """{"error":{"message":"quota exceeded"}}"""))
         )
         assertEquals(
-            "Provider returned HTTP 503",
+            "503 status code (no body)",
             formatCodexError(httpError(503, ""))
         )
     }
@@ -206,7 +204,7 @@ class ErrorBodyTest {
             api.formatMistralError(httpError(403, """{"message":"blocked by gateway"}"""))
         )
         assertEquals(
-            "Mistral API error (403): Provider returned HTTP 403",
+            "Mistral API error (403): 403 status code (no body)",
             api.formatMistralError(httpError(403, ""))
         )
     }

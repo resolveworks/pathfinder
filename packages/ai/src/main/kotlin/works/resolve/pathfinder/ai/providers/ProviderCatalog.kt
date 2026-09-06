@@ -140,11 +140,13 @@ class CatalogProvider(
                 env: Map<String, String>
             ) -> ResolvedAuth?
         )? = null,
-        webSocketTransport: WebSocketStreamingTransport? = null
+        webSocketTransport: WebSocketStreamingTransport? = null,
+        auth: works.resolve.pathfinder.ai.auth.ProviderAuth? = null
     ): Provider = Provider(
         id = id,
         name = name,
         baseUrl = baseUrl,
+        auth = auth,
         authResolver = authResolver,
         models = models,
         apis = apis.mapNotNull { apiId ->

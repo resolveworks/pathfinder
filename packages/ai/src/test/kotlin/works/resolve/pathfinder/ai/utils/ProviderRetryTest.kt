@@ -3,6 +3,7 @@ package works.resolve.pathfinder.ai.utils
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import works.resolve.pathfinder.ai.StreamOptions
@@ -250,6 +251,24 @@ class ProviderRetryTest {
             .format(java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
         val error = httpError(503, mapOf("Retry-After" to listOf(future)))
         assertEquals(1000L, h.retry.retryDelayMs(error, 0, 60_000))
+    }
+
+    @Test
+    fun `parses ISO 8601 retry-after dates like Date parse`() {
+        // Date.parse accepts RFC 1123 and ISO 8601; ISO values without an
+        // offset are read as UTC. (In retryDelayMs itself a leading-digit ISO
+        // date is intercepted by the parseFloat-prefix branch first, exactly
+        // like pi's Number.parseFloat.)
+        assertEquals(
+            1_002_000L,
+            parseHttpDateMsOrNull("1970-01-01T00:16:42Z")
+        )
+        assertEquals(
+            1_003_000L,
+            parseHttpDateMsOrNull("1970-01-01T00:16:43")
+        )
+        assertEquals(86_400_000L, parseHttpDateMsOrNull("1970-01-02"))
+        assertNull(parseHttpDateMsOrNull("soon"))
     }
 
     @Test

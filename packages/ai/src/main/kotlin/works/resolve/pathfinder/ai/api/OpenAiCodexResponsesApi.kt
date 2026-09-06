@@ -86,8 +86,8 @@ import works.resolve.pathfinder.telemetry.TelemetryContext
  *   error instead — or, on an idle keep-alive connection, blocks the read
  *   indefinitely (verified against okhttp-sse 5.5.0 — see
  *   [works.resolve.pathfinder.ai.transport.OkHttpTransport] for the full
- *   characterization and the probe pinning it). The accepted
- *   transport-boundary divergence (differences.md §7) means the terminal
+ *   characterization and the probe pinning it). This accepted
+ *   transport-boundary divergence means the terminal
  *   event of a truncated Codex stream surfaces as a mid-stream transport
  *   failure (or a stall until the call is cancelled), never as the
  *   flushed terminal event.

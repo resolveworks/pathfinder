@@ -52,6 +52,13 @@ class OverflowTest {
     }
 
     @Test
+    fun `detects Cerebras empty-body overflow via the pi-shaped transport message`() {
+        // ProviderHttpException(400, "") message: "<status> status code (no body)".
+        assertTrue(isContextOverflow(createErrorMessage("400 status code (no body)")))
+        assertTrue(isContextOverflow(createErrorMessage("413 status code (no body)")))
+    }
+
+    @Test
     fun `detects Together AI context length errors`() {
         val message = createErrorMessage(
             "400 The input (516368 tokens) is longer than the model's context length (262144 tokens)."

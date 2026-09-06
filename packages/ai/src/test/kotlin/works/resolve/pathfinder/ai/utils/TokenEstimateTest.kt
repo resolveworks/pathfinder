@@ -38,11 +38,12 @@ class TokenEstimateTest {
     }
 
     @Test
-    fun `assistant tool call uses name and raw arguments string`() {
+    fun `assistant tool call uses name and compacted arguments json`() {
         val assistant = AssistantMessage(
             content = listOf(
                 TextContent("1234"),
-                ToolCall(id = "1", name = "get_weather", arguments = """{"city":"SF"}""")
+                // Re-serialized compact like JSON.stringify, so the space drops out.
+                ToolCall(id = "1", name = "get_weather", arguments = """{"city": "SF"}""")
             ),
             api = "openai-completions",
             provider = "zai",
@@ -182,7 +183,10 @@ class TokenEstimateTest {
         )
         val estimate = estimateContextTokens(context)
         assertNull(estimate.lastUsageIndex)
-        assertEquals(1 + 2 + estimateTextTokens(context.tools.toString()), estimate.tokens)
+        assertEquals(
+            1 + 2 + estimateTextTokens("""[{"name":"t","description":"d","parameters":"x"}]"""),
+            estimate.tokens
+        )
     }
 
     @Test
@@ -212,7 +216,8 @@ class TokenEstimateTest {
             tools = listOf(Tool("t", "d", JsonPrimitive("x")), addedTool)
         )
         val estimate = estimateContextTokens(context)
-        val expectedAdded = estimateTextTokens(listOf(addedTool).toString())
+        val expectedAdded =
+            estimateTextTokens("""[{"name":"late_tool","description":"d","parameters":"x"}]""")
         assertTrue("expected a positive re-add, was $expectedAdded") { expectedAdded > 0 }
         assertEquals(1, estimate.trailingTokens - expectedAdded) // ceil(2/4)
         assertEquals(100 + 1 + expectedAdded, estimate.tokens)

@@ -158,8 +158,6 @@ internal fun convertContentBlocks(content: List<Content>): Any {
     return JsonArray(blocks)
 }
 
-enum class AnthropicEffort { LOW, MEDIUM, HIGH, XHIGH, MAX }
-
 enum class AnthropicThinkingDisplay { SUMMARIZED, OMITTED }
 
 sealed interface AnthropicToolChoice {
@@ -182,8 +180,8 @@ data class AnthropicMessagesOptions(
     val thinkingEnabled: Boolean? = null,
     /** Default 1024 when enabled (older models). */
     val thinkingBudgetTokens: Int? = null,
-    /** Adaptive-thinking effort level. */
-    val effort: AnthropicEffort? = null,
+    /** Adaptive-thinking effort level (wire value, e.g. "low"/"high"; pi's string union). */
+    val effort: String? = null,
     val thinkingDisplay: AnthropicThinkingDisplay = AnthropicThinkingDisplay.SUMMARIZED,
     val interleavedThinking: Boolean = true,
     val toolChoice: AnthropicToolChoice? = null,
@@ -262,7 +260,7 @@ class AnthropicMessagesApi(
             model.provider != "github-copilot" && options.apiKey?.let { isOAuthToken(it) } == true
         val providerThinkingLevel =
             if (anthropicCompatOf(model).supportsMidConvoEffort) {
-                (options.effort ?: AnthropicEffort.HIGH).name.lowercase()
+                (options.effort ?: "high")
             } else {
                 null
             }
@@ -483,24 +481,20 @@ class AnthropicMessagesApi(
 internal fun mapThinkingLevelToEffort(
     model: Model,
     level: works.resolve.pathfinder.ai.ThinkingLevel?
-): AnthropicEffort {
+): String {
     // Core ThinkingLevel has no OFF case, so toModelThinkingLevel is total here.
+    // A mapped string is passed through verbatim, exactly as pi casts it.
     val mapped = level?.let { model.thinkingLevelMap?.forLevel(it.toModelThinkingLevel()) }
-    if (mapped is String) {
-        return try {
-            AnthropicEffort.valueOf(mapped.uppercase())
-        } catch (_: IllegalArgumentException) {
-            AnthropicEffort.HIGH
-        }
-    }
+    if (mapped is String) return mapped
+
     return when (level) {
         works.resolve.pathfinder.ai.ThinkingLevel.MINIMAL,
         works.resolve.pathfinder.ai.ThinkingLevel.LOW
-        -> AnthropicEffort.LOW
+        -> "low"
 
-        works.resolve.pathfinder.ai.ThinkingLevel.MEDIUM -> AnthropicEffort.MEDIUM
+        works.resolve.pathfinder.ai.ThinkingLevel.MEDIUM -> "medium"
 
-        else -> AnthropicEffort.HIGH
+        else -> "high"
     }
 }
 
@@ -800,7 +794,7 @@ internal fun buildRequestBody(
         normalizeToolName,
         if (managed) model.provider else null
     )
-    val activeEffort = options.effort ?: AnthropicEffort.HIGH
+    val activeEffort = options.effort ?: "high"
     val betaFeatures = getBetaFeatures(model, context, isOAuthToken, options)
 
     val body = mutableMapOf<String, JsonElement>()
@@ -878,7 +872,7 @@ internal fun buildRequestBody(
                 }
                 options.effort?.let {
                     body["output_config"] = buildJsonObject {
-                        put("effort", it.name.lowercase())
+                        put("effort", it)
                     }
                 }
             } else {
@@ -953,16 +947,16 @@ private fun imageBlock(block: ImageContent): JsonObject = buildJsonObject {
 internal data class ConvertedAnthropicMessages(
     val messages: List<JsonObject>,
     /** Per-converted-message-index historical effort for managed models. */
-    val assistantLevels: Map<Int, AnthropicEffort>
+    val assistantLevels: Map<Int, String>
 )
 
 private fun isAnthropicEffort(value: String?): Boolean =
     value == "low" || value == "medium" || value == "high" || value == "xhigh" || value == "max"
 
-private fun effortMarkerMessage(effort: AnthropicEffort): JsonObject = buildJsonObject {
+private fun effortMarkerMessage(effort: String): JsonObject = buildJsonObject {
     put("role", "system")
     put("content", JsonArray(emptyList()))
-    put("output_config", buildJsonObject { put("effort", effort.name.lowercase()) })
+    put("output_config", buildJsonObject { put("effort", effort) })
 }
 
 /**
@@ -972,7 +966,7 @@ private fun effortMarkerMessage(effort: AnthropicEffort): JsonObject = buildJson
  */
 private fun insertThinkingLevelMessages(
     converted: ConvertedAnthropicMessages,
-    activeEffort: AnthropicEffort
+    activeEffort: String
 ): List<JsonObject> {
     val messages = mutableListOf<JsonObject>()
     converted.messages.forEachIndexed { index, message ->
@@ -1042,7 +1036,7 @@ internal fun convertMessages(
     managedProvider: String? = null
 ): ConvertedAnthropicMessages {
     val params = mutableListOf<JsonObject>()
-    val assistantLevels = mutableMapOf<Int, AnthropicEffort>()
+    val assistantLevels = mutableMapOf<Int, String>()
     val loadedToolNames = mutableSetOf<String>()
 
     var i = 0
@@ -1152,8 +1146,7 @@ internal fun convertMessages(
                         assistant.provider == managedProvider &&
                         isAnthropicEffort(assistant.providerThinkingLevel)
                     ) {
-                        assistantLevels[messageIndex] =
-                            AnthropicEffort.valueOf(assistant.providerThinkingLevel!!.uppercase())
+                        assistantLevels[messageIndex] = assistant.providerThinkingLevel!!
                     }
                 }
             }

@@ -17,6 +17,7 @@ import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.auth.Credential
+import works.resolve.pathfinder.ai.auth.ProviderAuth
 import works.resolve.pathfinder.ai.mergeHeaders
 import works.resolve.pathfinder.ai.providers.CatalogProvider
 import works.resolve.pathfinder.ai.providers.GITHUB_COPILOT_PROVIDER_ID
@@ -60,6 +61,8 @@ class Provider(
     val id: String,
     val name: String,
     val baseUrl: String,
+    /** pi's Provider.auth: static auth surface (key prompts, OAuth availability). */
+    val auth: ProviderAuth? = null,
     /**
      * Resolves this provider's auth with explicit request overrides:
      * [apiKey]/[env] must be shaped by the provider's auth semantics (e.g.
@@ -90,7 +93,7 @@ class Provider(
         models: List<Model>,
         apiId: String,
         api: ChatApi
-    ) : this(id, name, baseUrl, authResolver, models, mapOf(apiId to api))
+    ) : this(id, name, baseUrl, null, authResolver, models, mapOf(apiId to api))
 }
 
 /**
@@ -132,6 +135,9 @@ class Models(providers: List<Provider>, private val clock: Clock = Clock.System)
             false
         }
     }
+
+    /** pi's `isUsingOAuth`: whether the provider authenticates via OAuth. */
+    fun isUsingOAuth(providerId: String): Boolean = getProvider(providerId)?.auth?.oauth != null
 
     companion object {
         fun modelsAreEqual(a: Model?, b: Model?): Boolean =

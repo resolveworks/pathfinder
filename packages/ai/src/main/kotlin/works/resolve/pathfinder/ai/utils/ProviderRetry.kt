@@ -92,12 +92,34 @@ class ProviderRetry(
     private fun parseHttpDateMs(value: String): Long = parseHttpDateMsOrNull(value) ?: 0L
 }
 
-internal fun parseHttpDateMsOrNull(value: String): Long? = try {
-    java.time.ZonedDateTime
-        .parse(value, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
-        .toInstant().toEpochMilli()
-} catch (_: Exception) {
-    null
+private inline fun parseDateMsOrNull(value: String, parse: (String) -> java.time.Instant): Long? =
+    try {
+        parse(value).toEpochMilli()
+    } catch (_: Exception) {
+        null
+    }
+
+internal fun parseHttpDateMsOrNull(value: String): Long? {
+    val trimmed = value.trim()
+    // Date.parse accepts RFC 1123 and ISO 8601 dates; ISO values without an
+    // offset are read as UTC.
+    return parseDateMsOrNull(trimmed) {
+        java.time.ZonedDateTime.parse(
+            it,
+            java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME
+        ).toInstant()
+    } ?: parseDateMsOrNull(trimmed) {
+        java.time.OffsetDateTime.parse(
+            it,
+            java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME
+        ).toInstant()
+    } ?: parseDateMsOrNull(trimmed) {
+        java.time.LocalDateTime.parse(it, java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+            .atZone(java.time.ZoneOffset.UTC).toInstant()
+    } ?: parseDateMsOrNull(trimmed) {
+        java.time.LocalDate.parse(it, java.time.format.DateTimeFormatter.ISO_LOCAL_DATE)
+            .atStartOfDay(java.time.ZoneOffset.UTC).toInstant()
+    }
 }
 
 /**

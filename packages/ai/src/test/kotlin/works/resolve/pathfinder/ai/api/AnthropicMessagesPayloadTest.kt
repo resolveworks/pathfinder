@@ -649,7 +649,7 @@ class AnthropicMessagesPayloadTest {
             AnthropicMessagesOptions(
                 apiKey = "k",
                 thinkingEnabled = true,
-                effort = AnthropicEffort.HIGH
+                effort = "high"
             ),
             model = adaptiveModel
         )
@@ -991,7 +991,7 @@ class AnthropicMessagesPayloadTest {
         )
     }
 
-    private fun managedOptions(effort: AnthropicEffort? = null) = AnthropicMessagesOptions(
+    private fun managedOptions(effort: String? = null) = AnthropicMessagesOptions(
         apiKey = "k",
         cacheRetention = CacheRetention.NONE,
         thinkingEnabled = true,
@@ -1008,7 +1008,7 @@ class AnthropicMessagesPayloadTest {
         val model = managedModel()
         val first = body(
             Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
-            managedOptions(AnthropicEffort.LOW),
+            managedOptions("low"),
             model
         )
         val second = body(
@@ -1019,7 +1019,7 @@ class AnthropicMessagesPayloadTest {
                     UserMessage.ofText("two", timestamp = 2)
                 )
             ),
-            managedOptions(AnthropicEffort.HIGH),
+            managedOptions("high"),
             model
         )
 
@@ -1050,7 +1050,7 @@ class AnthropicMessagesPayloadTest {
 
     @Test
     fun `managed effort preserves each native effort level`() {
-        for (effort in AnthropicEffort.entries) {
+        for (effort in listOf("low", "medium", "high", "xhigh", "max")) {
             val json = body(
                 Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
                 managedOptions(effort),
@@ -1059,7 +1059,7 @@ class AnthropicMessagesPayloadTest {
             val markers = json["messages"]!!.jsonArray.map { it.jsonObject }.effortMarkers()
             assertEquals(
                 listOf(
-                    """{"role":"system","content":[],"output_config":{"effort":"${effort.name.lowercase()}"}}"""
+                    """{"role":"system","content":[],"output_config":{"effort":"$effort"}}"""
                 ),
                 markers.map { it.wire() },
                 "effort $effort"
@@ -1101,7 +1101,7 @@ class AnthropicMessagesPayloadTest {
                     UserMessage.ofText("three", timestamp = 3)
                 )
             ),
-            managedOptions(AnthropicEffort.MEDIUM),
+            managedOptions("medium"),
             model
         )
         assertEquals(
@@ -1117,7 +1117,7 @@ class AnthropicMessagesPayloadTest {
         )
         val json = body(
             Context(messages = listOf(UserMessage.ofText("one", timestamp = 1))),
-            managedOptions(AnthropicEffort.LOW),
+            managedOptions("low"),
             model
         )
         assertEquals(

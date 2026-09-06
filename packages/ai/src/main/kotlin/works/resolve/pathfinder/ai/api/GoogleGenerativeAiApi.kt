@@ -242,7 +242,7 @@ internal object GoogleStreamEngine {
         try {
             // Retries cover only the request, never the SSE stream.
             //
-            // Retry-policy equivalence (differences.md §5.1): upstream wraps
+            // Retry-policy equivalence: upstream wraps
             // the SDK call in `retryGoogleRequest` (google-shared.ts), whose
             // only Google-specific behavior is normalizing the @google/genai
             // ApiError (`status` without `headers`) so the generic provider

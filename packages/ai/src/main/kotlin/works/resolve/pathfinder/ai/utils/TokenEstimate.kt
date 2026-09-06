@@ -3,6 +3,11 @@ package works.resolve.pathfinder.ai.utils
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.ContentType
 import works.resolve.pathfinder.ai.Context
@@ -59,7 +64,7 @@ fun estimateMessageTokens(message: Message): Int = when (message.role) {
                 is works.resolve.pathfinder.ai.ThinkingContent -> chars += block.thinking.length
 
                 is works.resolve.pathfinder.ai.ToolCall ->
-                    chars += block.name.length + block.arguments.length
+                    chars += block.name.length + safeJsonStringify(block.arguments).length
 
                 else -> {}
             }
@@ -125,8 +130,76 @@ private fun estimateMessages(messages: List<Message>): ContextUsageEstimate {
 
 private fun estimateToolsTokens(context: Context): Int = estimateToolsTokens(context.tools)
 
+/** Compact JSON re-serialization mirroring JS `JSON.stringify`; unparseable
+ * input yields the same "[unserializable]" placeholder as pi. */
+private fun safeJsonStringify(json: String): String = try {
+    safeJsonStringify(lenientJson.parseToJsonElement(json))
+} catch (_: Exception) {
+    "[unserializable]"
+}
+
+private fun safeJsonStringify(element: JsonElement): String = try {
+    lenientJson.encodeToString(JsonElement.serializer(), element)
+} catch (_: Exception) {
+    "[unserializable]"
+}
+
 private fun estimateToolsTokens(tools: List<works.resolve.pathfinder.ai.Tool>): Int =
-    if (tools.isEmpty()) 0 else estimateTextTokens(tools.toString())
+    if (tools.isEmpty()) {
+        0
+    } else {
+        estimateTextTokens(safeJsonStringify(JsonArray(tools.map(::toolToJson))))
+    }
+
+/** pi's `Tool` wire shape: JSON.stringify includes name, description,
+ * parameters, and constrainedSampling only when defined. */
+private fun toolToJson(tool: works.resolve.pathfinder.ai.Tool): JsonObject = buildJsonObject {
+    put("name", tool.name)
+    put("description", tool.description)
+    put("parameters", tool.parameters)
+    tool.constrainedSampling?.let { put("constrainedSampling", it.toJson()) }
+}
+
+private fun works.resolve.pathfinder.ai.ConstrainedSamplingConfig.toJson(): JsonElement =
+    when (this) {
+        works.resolve.pathfinder.ai.ConstrainedSamplingConfig.Disabled ->
+            kotlinx.serialization.json.JsonPrimitive(false)
+
+        is works.resolve.pathfinder.ai.ConstrainedSamplingConfig.JsonSchema -> buildJsonObject {
+            put("type", "json_schema")
+            put(
+                "strict",
+                if (strict ==
+                    works.resolve.pathfinder.ai.StrictJsonSchemaMode.PREFER
+                ) {
+                    "prefer"
+                } else {
+                    "require"
+                }
+            )
+        }
+
+        is works.resolve.pathfinder.ai.ConstrainedSamplingConfig.Grammar -> buildJsonObject {
+            put("type", "grammar")
+            put(
+                "variants",
+                buildJsonObject {
+                    variants.forEach { (format, definition) ->
+                        put(
+                            if (format ==
+                                works.resolve.pathfinder.ai.GrammarFormat.OPENAI_LARK
+                            ) {
+                                "openai_lark"
+                            } else {
+                                "openai_regex"
+                            },
+                            definition
+                        )
+                    }
+                }
+            )
+        }
+    }
 
 fun estimateContextTokens(context: Context): ContextUsageEstimate {
     val estimate = estimateMessages(context.messages)

@@ -38,7 +38,7 @@ import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
  * response body, and cancelling mid-stream must surface as a plain failure,
  * not an attempted body read. There is no auto-reconnect.
  *
- * Divergence (accepted, differences.md §7): okhttp-sse 5.5.0 does not flush
+ * Divergence (accepted): okhttp-sse 5.5.0 does not flush
  * an unterminated SSE frame at EOF — a stream whose final `data:` line lacks
  * a trailing newline is never dispatched, and the stream does not end
  * cleanly either: the reader throws an internal okio
