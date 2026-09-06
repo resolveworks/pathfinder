@@ -176,30 +176,8 @@ class AgentSessionThinkingTest {
         )
     }
 
-    /** A branch without a thinking entry folds "off", which itself clamps:
-     *  the extended map marks off unsupported, so it rounds up to low. */
-    @Test
-    fun `init seeds the level from the branch fold clamped to the model`() = runTest {
-        val seeded = newManager()
-        seeded.appendThinkingLevelChange("medium")
-        val folded = session(extendedModel, seeded)
-        assertEquals(
-            "medium clamps up to the map's high",
-            ModelThinkingLevel.HIGH,
-            folded.thinkingLevel
-        )
-
-        val withoutEntry = session(extendedModel)
-        assertEquals(
-            "the off fold clamps up to the map's low",
-            ModelThinkingLevel.LOW,
-            withoutEntry.thinkingLevel
-        )
-
-        val plainFold = session(reasoningModel)
-        assertEquals(ModelThinkingLevel.OFF, plainFold.thinkingLevel)
-    }
-
+    /** Fold-based restore and clamping moved to the createAgentSession
+     *  factory (CreateAgentSessionTest). */
     @Test
     fun `the per-run reasoning follows the run-start level and off sends none`() = runTest {
         val requestReasoning = CopyOnWriteArrayList<ThinkingLevel?>()

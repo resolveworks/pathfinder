@@ -856,11 +856,12 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             h.settings.setModelId("gpt-4.5")
             val vm = h.newViewModel()
 
-            // The saved default is credential-filtered out: a safe
-            // availability error surfaces, but the derived replacement runs —
-            // chat is usable.
+            // The saved default is credential-filtered out of the picker's
+            // options (safe availability error surfaces), but the factory
+            // resolves defaults through the raw registry like pi, so the
+            // model itself still runs — chat is usable.
             val state = vm.awaitState { it.status == ChatStatus.Ready }
-            assertEquals("gpt-4.1", state.selectedModel?.modelId)
+            assertEquals("gpt-4.5", state.selectedModel?.modelId)
             assertEquals(ChatNavKey, state.startKey)
             assertNotNull(state.error)
             assertEquals(listOf("gpt-4.1"), vm.copilotModelOptions())

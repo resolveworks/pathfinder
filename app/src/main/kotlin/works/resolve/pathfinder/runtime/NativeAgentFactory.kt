@@ -3,12 +3,9 @@ package works.resolve.pathfinder.runtime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.runBlocking
-import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.Model
-import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
@@ -27,15 +24,18 @@ import works.resolve.pathfinder.ai.providers.normalizeBaseUrl
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
-import works.resolve.pathfinder.codingagent.core.AgentSession
+import works.resolve.pathfinder.codingagent.core.CreateAgentSessionResult
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.Settings
 import works.resolve.pathfinder.codingagent.core.SettingsManager
+import works.resolve.pathfinder.codingagent.core.createAgentSession
 import works.resolve.pathfinder.data.settings.ModelSettings
 
 /**
- * Production [AgentFactory]: builds the native agent from the persisted
- * configuration, serving any provider/model pair the generated catalog knows.
+ * Production [AgentFactory]: builds the native agent stack from the persisted
+ * configuration, serving any provider/model pair the generated catalog knows;
+ * model resolution, restoration, and seeding are owned by the core
+ * createAgentSession factory.
  *
  * Divergences from pi (both accepted):
  * - pi's agent package resolves its stream function through a module-level
@@ -74,24 +74,10 @@ class NativeAgentFactory(
     private val tools: List<AgentTool> = emptyList()
 ) : AgentFactory {
 
-    override fun create(
+    override suspend fun create(
         settings: ModelSettings,
-        sessionManager: SessionManager,
-        defaultThinkingLevel: () -> ModelThinkingLevel?
-    ): AgentSession {
-        val entry = catalog.getProvider(settings.providerId)
-            ?: throw IllegalArgumentException("Unsupported provider: ${settings.providerId}")
-        val model = entry.model(settings.modelId)
-            ?: throw IllegalArgumentException(
-                "Unknown model '${settings.modelId}' for provider '${settings.providerId}'"
-            )
-        // Fail fast on APIs without a Kotlin implementation; streaming
-        // would reject them too.
-        require(ChatApiRegistry.isSupported(model.api)) {
-            "Unsupported API '${model.api}' for provider '${settings.providerId}' (model '${settings.modelId}')"
-        }
-        val effectiveModel = model.copy(baseUrl = normalizeBaseUrl(model.baseUrl))
-
+        sessionManager: SessionManager
+    ): CreateAgentSessionResult {
         // Register every catalog provider, not just the initial one: the
         // models stack is what makes live model switching
         // (AgentSession.setModel) work across providers — the next prompt
@@ -113,48 +99,41 @@ class NativeAgentFactory(
             }
         )
 
-        return AgentSession(
-            agent = Agent(
-                model = effectiveModel,
-                tools = tools.toList(),
-                streamOptions = SimpleStreamOptions(
-                    sessionId = sessionManager.getSessionId(),
-                    timeoutMs = REQUEST_TIMEOUT_MS,
-                    maxRetries = MAX_RETRIES
-                ),
-                streamFn = StreamFn { requestedModel, context, options ->
-                    // Request encoding and stream decoding run off Main; agent/session
-                    // state and tool execution stay on the collector's dispatcher.
-                    // Rendezvous delivery avoids a queue of growing partial snapshots.
-                    models.stream(requestedModel, context, options)
-                        .buffer(0)
-                        .flowOn(Dispatchers.Default)
-                }
-            ),
+        return createAgentSession(
             manager = sessionManager,
             // Temporary wiring: a snapshot settings manager per agent until the
-            // app's settings flow is rewired onto SettingsManager. The storage
-            // lock is uncontended here, so runBlocking never parks.
-            settingsManager = runBlocking {
-                SettingsManager.inMemory(
-                    Settings(
-                        defaultProvider = settings.providerId,
-                        defaultModel = settings.modelId,
-                        defaultThinkingLevel = defaultThinkingLevel(),
-                        compaction = settings.compaction,
-                        retry = settings.retry
-                    )
+            // app's settings flow is rewired onto SettingsManager.
+            settingsManager = SettingsManager.inMemory(
+                Settings(
+                    defaultProvider = settings.providerId.ifBlank { null },
+                    defaultModel = settings.modelId.ifBlank { null },
+                    defaultThinkingLevel = settings.defaultThinkingLevel,
+                    enabledModels = settings.enabledModels,
+                    compaction = settings.compaction,
+                    retry = settings.retry
                 )
-            },
+            ),
             models = models,
-            tools = tools.toList()
+            streamFn = StreamFn { requestedModel, context, options ->
+                // Request encoding and stream decoding run off Main; agent/session
+                // state and tool execution stay on the collector's dispatcher.
+                // Rendezvous delivery avoids a queue of growing partial snapshots.
+                models.stream(requestedModel, context, options)
+                    .buffer(0)
+                    .flowOn(Dispatchers.Default)
+            },
+            tools = tools.toList(),
+            streamOptions = SimpleStreamOptions(
+                sessionId = sessionManager.getSessionId(),
+                timeoutMs = REQUEST_TIMEOUT_MS,
+                maxRetries = MAX_RETRIES
+            )
         )
     }
 
     /**
      * Resolves a catalog provider/model pair to the effective request model,
-     * validating provider, model, and API support with the same errors as
-     * [create] and stamping the normalized base URL. The seam for live
+     * validating provider, model, and API support and stamping the normalized base URL. The seam for live
      * switching: callers pass the result to [AgentSession.setModel].
      */
     fun resolveModel(providerId: String, modelId: String): Model {

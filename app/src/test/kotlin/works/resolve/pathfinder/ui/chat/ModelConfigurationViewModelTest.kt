@@ -773,7 +773,6 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
         vm.newSession()
         val fresh = vm.awaitState { it.activeSessionId != firstId }
         assertEquals("glm-5.3", fresh.selectedModel?.modelId)
-        assertEquals("glm-5.3", h.createdSettings.last().modelId)
 
         vm.closeForTest()
     }
@@ -857,13 +856,14 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
         h.credentials.creds["github-copilot"] = copilotCredential(stringArray("gpt-4.1"))
         h.settings.setProviderId("github-copilot")
         // A corrupt id the catalog never carried is not "unavailable for this
-        // account": no availability error, the derived replacement just runs.
+        // account": no availability error, the derived replacement just runs
+        // (the catalog's first copilot model — pi picks registry order).
         h.settings.setModelId("corrupt-model-id")
         val vm = h.newViewModel()
 
         val state = vm.awaitState { it.status == ChatStatus.Ready }
         assertNull(state.error)
-        assertEquals("gpt-4.1", state.selectedModel?.modelId)
+        assertEquals("claude-haiku-4.5", state.selectedModel?.modelId)
         vm.closeForTest()
     }
 }

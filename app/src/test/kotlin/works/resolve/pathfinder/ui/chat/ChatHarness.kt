@@ -66,6 +66,7 @@ import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.Settings
 import works.resolve.pathfinder.codingagent.core.SettingsManager
+import works.resolve.pathfinder.codingagent.core.createAgentSession
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
@@ -325,40 +326,38 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
         nativeFactory.resolveModel(providerId, modelId)
     }
 
-    val factory = AgentFactory { settings, sessionManager, defaultThinkingLevel ->
+    val factory = AgentFactory { settings, sessionManager ->
         check(!rejectAll) { "factory unavailable" }
         require(settings.modelId !in rejectedModelIds) { "model rejected" }
         createdSettings += settings
-        AgentSession(
-            // Resolves through the same production seam as modelResolver —
-            // never a parallel hand-written Model: capabilities (reasoning,
-            // thinkingLevelMap) are behavior, and a duplicate shape
-            // diverges silently.
-            agent = Agent(
-                model = nativeFactory.resolveModel(settings.providerId, settings.modelId),
-                streamFn = StreamFn { requestedModel, _, _ ->
-                    streamedModels.add(requestedModel)
-                    val script = scriptedStreams.poll()
-                        ?: flow { kotlinx.coroutines.awaitCancellation() }
-                    // Scripts carry testModel metadata; the model that runs
-                    // decides what the transcript records, exactly like a
-                    // real provider stream.
-                    script.map { ev -> ev.restamp(requestedModel) }
-                }
-            ),
+        createAgentSession(
             manager = sessionManager,
-            tools = listOf(fakeWebSearchTool),
-            settingsManager = kotlinx.coroutines.runBlocking {
-                SettingsManager.inMemory(
-                    Settings(
-                        defaultThinkingLevel = defaultThinkingLevel(),
-                        compaction = settings.compaction,
-                        retry = settings.retry
-                    )
+            settingsManager = SettingsManager.inMemory(
+                Settings(
+                    defaultProvider = settings.providerId.ifBlank { null },
+                    defaultModel = settings.modelId.ifBlank { null },
+                    defaultThinkingLevel = settings.defaultThinkingLevel,
+                    enabledModels = settings.enabledModels,
+                    compaction = settings.compaction,
+                    retry = settings.retry
                 )
-            },
-            models = switchModels
-        ).also { session -> createdAgents += session }
+            ),
+            // The live-switch stack: checkAuth resolves stored credentials
+            // exactly like production, and capabilities (reasoning,
+            // thinkingLevelMap) come from the generated catalog — never a
+            // parallel hand-written Model.
+            models = switchModels,
+            tools = listOf(fakeWebSearchTool),
+            streamFn = StreamFn { requestedModel, _, _ ->
+                streamedModels.add(requestedModel)
+                val script = scriptedStreams.poll()
+                    ?: flow { kotlinx.coroutines.awaitCancellation() }
+                // Scripts carry testModel metadata; the model that runs
+                // decides what the transcript records, exactly like a
+                // real provider stream.
+                script.map { ev -> ev.restamp(requestedModel) }
+            }
+        ).also { result -> createdAgents += result.session }
     }
 
     fun newViewModel(): ChatViewModel = ChatViewModel(

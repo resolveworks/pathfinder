@@ -146,18 +146,22 @@ class AgentCompactionTest {
             CompactionSettings(enabled = true, reserveTokens = 16_384, keepRecentTokens = 10_000),
         retrySettings: RetrySettings = RetrySettings(enabled = false),
         sleep: suspend (Long) -> Unit = { }
-    ) = AgentSession(
-        agent = Agent(
-            model = model,
-            streamFn = streams.streamFn
-        ),
-        manager = seededManager(),
-        settingsManager = SettingsManager.inMemory(
-            Settings(retry = retrySettings, compaction = compactionSettings)
-        ),
-        models = models,
-        sleep = sleep
-    )
+    ): AgentSession {
+        // The createAgentSession factory's restore step, for the preloaded
+        // manager (pi: the factory restores the transcript into the agent).
+        val manager = seededManager()
+        return AgentSession(
+            agent = Agent(model = model, streamFn = streams.streamFn).apply {
+                replaceTranscript(manager.buildSessionContext().messages)
+            },
+            manager = manager,
+            settingsManager = SettingsManager.inMemory(
+                Settings(retry = retrySettings, compaction = compactionSettings)
+            ),
+            models = models,
+            sleep = sleep
+        )
+    }
 
     private suspend fun collectEvents(agent: AgentSession): MutableList<AgentEvent> =
         kotlinx.coroutines.coroutineScope {
@@ -251,7 +255,9 @@ class AgentCompactionTest {
         seed.appendMessage(assistant(bigTail, timestamp = 2L))
         api.responses.add(assistant("SUMMARY"))
         val agent = AgentSession(
-            agent = Agent(model = model, streamFn = streams.streamFn),
+            agent = Agent(model = model, streamFn = streams.streamFn).apply {
+                replaceTranscript(seed.buildSessionContext().messages)
+            },
             manager = seed,
             settingsManager = SettingsManager.inMemory(
                 Settings(retry = RetrySettings(enabled = false))
@@ -542,7 +548,9 @@ class AgentCompactionTest {
         val gate = CompletableDeferred<Unit>()
         api.gate = gate
         val agent = AgentSession(
-            agent = Agent(model = model, streamFn = ScriptedStreams().streamFn),
+            agent = Agent(model = model, streamFn = ScriptedStreams().streamFn).apply {
+                replaceTranscript(seed.buildSessionContext().messages)
+            },
             manager = seed,
             settingsManager = SettingsManager.inMemory(
                 Settings(retry = RetrySettings(enabled = false))

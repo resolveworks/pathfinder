@@ -82,6 +82,13 @@ class AgentNavigationTest {
         return manager to branchA
     }
 
+    /** The createAgentSession factory's restore step, for preloaded managers. */
+    private fun restoredAgent(streamFn: StreamFn, manager: SessionManager): Agent =
+        Agent(model = model, streamFn = streamFn).apply {
+            val context = manager.buildSessionContext()
+            if (context.messages.isNotEmpty()) replaceTranscript(context.messages)
+        }
+
     private fun assistant(text: String) = AssistantMessage(
         content = listOf(TextContent(text)),
         api = model.api,
@@ -117,7 +124,7 @@ class AgentNavigationTest {
         val (manager, branchA) = forkedSession()
         val oldLeaf = manager.getLeafId()
         val session = AgentSession(
-            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
+            agent = restoredAgent(StreamFn { _, _, _ -> flow { } }, manager),
             manager = manager,
             models = models,
             settingsManager = SettingsManager.inMemory(
@@ -161,7 +168,7 @@ class AgentNavigationTest {
     fun `navigation without summarize moves the leaf`() = runTest {
         val (manager, branchA) = forkedSession()
         val session = AgentSession(
-            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
+            agent = restoredAgent(StreamFn { _, _, _ -> flow { } }, manager),
             manager = manager,
             settingsManager = SettingsManager.inMemory(
                 Settings(retry = RetrySettings(enabled = false))
@@ -178,7 +185,7 @@ class AgentNavigationTest {
     fun `navigating to the current leaf is a no-op`() = runTest {
         val (manager, _) = forkedSession()
         val session = AgentSession(
-            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
+            agent = restoredAgent(StreamFn { _, _, _ -> flow { } }, manager),
             manager = manager,
             settingsManager = SettingsManager.inMemory()
         )
@@ -196,7 +203,7 @@ class AgentNavigationTest {
         manager.appendMessage(UserMessage.ofText("hello"))
         val userEntryId = manager.getLeafId()!!
         val session = AgentSession(
-            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
+            agent = restoredAgent(StreamFn { _, _, _ -> flow { } }, manager),
             manager = manager,
             settingsManager = SettingsManager.inMemory()
         )
@@ -212,7 +219,7 @@ class AgentNavigationTest {
     fun `user-message target re-edits and returns the editor text`() = runTest {
         val (manager, _) = forkedSession()
         val session = AgentSession(
-            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
+            agent = restoredAgent(StreamFn { _, _, _ -> flow { } }, manager),
             manager = manager,
             settingsManager = SettingsManager.inMemory()
         )
@@ -228,7 +235,7 @@ class AgentNavigationTest {
     fun `summarize without a provider stack is rejected`() = runTest {
         val (manager, branchA) = forkedSession()
         val session = AgentSession(
-            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
+            agent = restoredAgent(StreamFn { _, _, _ -> flow { } }, manager),
             manager = manager,
             settingsManager = SettingsManager.inMemory()
         )
@@ -269,7 +276,7 @@ class AgentNavigationTest {
         val (manager, branchA) = forkedSession()
         val oldLeaf = manager.getLeafId()
         val session = AgentSession(
-            agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
+            agent = restoredAgent(StreamFn { _, _, _ -> flow { } }, manager),
             manager = manager,
             models = models,
             settingsManager = SettingsManager.inMemory(
@@ -303,7 +310,9 @@ class AgentNavigationTest {
                 model = model,
                 streamOptions = SimpleStreamOptions(),
                 streamFn = StreamFn { _, _, _ -> streams.removeFirst() }
-            ),
+            ).apply {
+                replaceTranscript(manager.buildSessionContext().messages)
+            },
             manager = manager,
             settingsManager = SettingsManager.inMemory()
         )
