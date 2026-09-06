@@ -43,12 +43,12 @@ class BraveWebSearchToolTest {
     }
 
     @Test
-    fun `definition carries scry name description and schema`() {
+    fun `definition carries chosen name description and schema`() {
         val tool = tool()
         assertEquals("web_search", BraveWebSearchTool.NAME)
         assertEquals("web_search", tool.definition.name)
         assertEquals(
-            "Search Brave's web index and return relevant results as markdown.",
+            "Search the web with Brave and return the top results as a markdown list.",
             tool.definition.description
         )
         val params = tool.definition.parameters as JsonObject
@@ -84,7 +84,7 @@ class BraveWebSearchToolTest {
     }
 
     @Test
-    fun `sends scry request shape and headers`() = runBlocking<Unit> {
+    fun `sends chosen request shape and headers`() = runBlocking<Unit> {
         server.enqueue(
             MockResponse().setBody("""{"web":{"results":[]}}""")
         )
@@ -95,8 +95,8 @@ class BraveWebSearchToolTest {
         val path = recorded.path!!
         assertTrue(path.startsWith("/res/v1/web/search?"))
         assertTrue(path.contains("q=kotlin+coroutines"))
-        assertTrue(path.contains("count=10"))
-        assertTrue(path.contains("extra_snippets=true"))
+        assertTrue(path.contains("count=5"))
+        assertTrue(!path.contains("extra_snippets"))
         assertTrue(!path.contains("freshness"))
         assertEquals("test-key", recorded.getHeader("X-Subscription-Token"))
         assertEquals("application/json", recorded.getHeader("Accept"))
@@ -110,35 +110,31 @@ class BraveWebSearchToolTest {
     }
 
     @Test
-    fun `formats results as markdown with extra snippets`() = runBlocking<Unit> {
-        server.enqueue(
-            MockResponse().setBody(
-                """
+    fun `formats results as a one-line markdown list ignoring extra snippets`() =
+        runBlocking<Unit> {
+            server.enqueue(
+                MockResponse().setBody(
+                    """
                 {"web":{"results":[
                   {"title":"First","url":"https://a.example","description":"Desc one","extra_snippets":["s1","s2"]},
                   {"title":"Second","url":"https://b.example"},
                   {"title":"Third","url":"https://c.example","description":""}
                 ]}}
-                """.trimIndent()
+                    """.trimIndent()
+                )
             )
-        )
-        val result = tool().execute("t1", tool().validateArguments(args(query = "q")), {})
-        assertEquals(
-            "**[First](https://a.example)**\n" +
-                "Desc one\n" +
-                "> s1\n" +
-                "> s2\n" +
-                "\n" +
-                "**[Second](https://b.example)**\n" +
-                "\n" +
-                "**[Third](https://c.example)**",
-            resultText(result)
-        )
-        assertEquals("{}", result.details.toString())
-    }
+            val result = tool().execute("t1", tool().validateArguments(args(query = "q")), {})
+            assertEquals(
+                "- [First](https://a.example): Desc one\n" +
+                    "- [Second](https://b.example)\n" +
+                    "- [Third](https://c.example)",
+                resultText(result)
+            )
+            assertEquals("{}", result.details.toString())
+        }
 
     @Test
-    fun `no results yields scry message`() = runBlocking<Unit> {
+    fun `no results yields chosen message`() = runBlocking<Unit> {
         server.enqueue(MockResponse().setBody("""{"web":{"results":[]}}"""))
         var result = tool().execute("t1", tool().validateArguments(args(query = "nothing")), {})
         assertEquals("No results found for \"nothing\".", resultText(result))

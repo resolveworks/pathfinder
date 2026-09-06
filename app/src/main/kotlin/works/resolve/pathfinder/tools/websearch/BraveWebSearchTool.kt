@@ -23,10 +23,15 @@ import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.str
-import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.ai.utils.truncateErrorText
-import works.resolve.pathfinder.codingagent.core.AgentSession
 
+/**
+ * web_search agent tool backed by the Brave Search API. Pathfinder-owned
+ * app tooling (pi has no upstream web search): the parameter surface,
+ * result payload, and wording are app decisions. Credentials come from the
+ * provider-generic [SearchProviderService]; the vendor lives in this class
+ * because the wire protocol is Brave's.
+ */
 class BraveWebSearchTool(
     private val client: OkHttpClient,
     private val apiKeyResolver: suspend () -> String?,
@@ -35,7 +40,7 @@ class BraveWebSearchTool(
 
     override val definition: Tool = Tool(
         name = NAME,
-        description = "Search Brave's web index and return relevant results as markdown.",
+        description = "Search the web with Brave and return the top results as a markdown list.",
         parameters = buildJsonObject {
             put("type", "object")
             put(
@@ -55,7 +60,8 @@ class BraveWebSearchTool(
                             put("enum", JsonArray(FRESHNESS_VALUES.map { JsonPrimitive(it) }))
                             put(
                                 "description",
-                                "Filter by recency: pd (last 24h), pw (last 7 days), pm (last 31 days), py (last year)"
+                                "Restrict results by age: pd (past day), pw (past week), " +
+                                    "pm (past month), or py (past year)"
                             )
                         }
                     )
@@ -115,7 +121,7 @@ class BraveWebSearchTool(
             append(baseUrl.removeSuffix("/"))
             append("/res/v1/web/search?q=")
             append(URLEncoder.encode(query, "UTF-8"))
-            append("&count=10&extra_snippets=true")
+            append("&count=").append(RESULT_COUNT)
             if (freshness != null) append("&freshness=").append(freshness)
         }
 
@@ -126,81 +132,87 @@ class BraveWebSearchTool(
             .header("Accept", "application/json")
             .build()
 
-        // If cancellation wins the race after the response arrives but
-        // before the continuation consumes it, the resume onCancellation
-        // handler closes the response; if it comes later,
-        // invokeOnCancellation only cancels the call (the already-resumed
-        // caller owns the response, closed by its own `use`).
-        val response = suspendCancellableCoroutine { continuation ->
+        val response = send(request)
+        if (!response.successful) {
+            val reason = truncateErrorText(response.body.trim(), MAX_PROVIDER_ERROR_BODY_CHARS)
+                .ifEmpty { response.reasonPhrase }
+            return AgentToolResult(
+                content = listOf(TextContent("Search failed (${response.code}): $reason")),
+                details = EMPTY_DETAILS
+            )
+        }
+
+        val data = lenientJson.parseToJsonElement(response.body) as? JsonObject
+        val results = data?.obj("web")?.arr("results")
+        if (results == null || results.isEmpty()) {
+            return AgentToolResult(
+                content = listOf(TextContent("No results found for \"$query\".")),
+                details = EMPTY_DETAILS
+            )
+        }
+
+        val lines = results.map { element ->
+            val r = element as? JsonObject ?: JsonObject(emptyMap())
+            val title = r.str("title") ?: ""
+            val url = r.str("url") ?: ""
+            val description = r.str("description")?.takeIf { it.isNotEmpty() }
+            if (description == null) "- [$title]($url)" else "- [$title]($url): $description"
+        }
+
+        return AgentToolResult(
+            content = listOf(TextContent(lines.joinToString("\n"))),
+            details = EMPTY_DETAILS
+        )
+    }
+
+    /** A response whose body was fully read on the OkHttp dispatcher thread. */
+    private class ServedResponse(val code: Int, val reasonPhrase: String?, val body: String) {
+        val successful: Boolean get() = code in 200..299
+    }
+
+    /**
+     * The callback consumes the response (body included) before resuming, so
+     * the continuation only ever owns plain values and a cancellation racing
+     * the resume can never leak one. Cancellation of the call itself goes
+     * through [continuation.invokeOnCancellation][kotlinx.coroutines.CancellableContinuation.invokeOnCancellation];
+     * the resulting `onFailure` resume on an already-cancelled continuation
+     * is dropped.
+     */
+    private suspend fun send(request: Request): ServedResponse =
+        suspendCancellableCoroutine { continuation ->
             val call = client.newCall(request)
             continuation.invokeOnCancellation { call.cancel() }
             call.enqueue(
                 object : okhttp3.Callback {
                     override fun onFailure(call: Call, e: IOException) {
-                        // If the call was cancelled, the continuation is
-                        // already cancelled and this exception is dropped.
                         continuation.resumeWithException(e)
                     }
 
                     override fun onResponse(call: Call, response: Response) {
-                        continuation.resume(response) { _, value, _ -> value.close() }
+                        response.use {
+                            val body = try {
+                                if (it.isSuccessful) {
+                                    it.body.string()
+                                } else {
+                                    // Read at most 4x the char cap in bytes (UTF-8 worst
+                                    // case) so a huge error body is never fully buffered
+                                    // just to be truncated.
+                                    val readLimit = MAX_PROVIDER_ERROR_BODY_CHARS.toLong() * 4
+                                    val source = it.body.source()
+                                    source.request(readLimit)
+                                    val buffered = source.buffer
+                                    buffered.readUtf8(minOf(buffered.size, readLimit))
+                                }
+                            } catch (e: IOException) {
+                                continuation.resumeWithException(e)
+                                return
+                            }
+                            continuation.resume(ServedResponse(it.code, it.message, body))
+                        }
                     }
                 }
             )
         }
-
-        response.use {
-            if (!it.isSuccessful) {
-                // Read at most 4x the char cap in bytes (UTF-8 worst case)
-                // from the Okio source so a huge error body is never fully
-                // buffered just to be truncated.
-                val readLimit = MAX_PROVIDER_ERROR_BODY_CHARS.toLong() * 4
-                val body = try {
-                    val source = it.body.source()
-                    source.request(readLimit)
-                    val buffered = source.buffer
-                    buffered.readUtf8(minOf(buffered.size, readLimit))
-                } catch (_: IOException) {
-                    ""
-                }
-                val reason = truncateErrorText(body.trim(), MAX_PROVIDER_ERROR_BODY_CHARS)
-                    .ifEmpty { it.message }
-                return AgentToolResult(
-                    content = listOf(TextContent("Search failed (${it.code}): $reason")),
-                    details = EMPTY_DETAILS
-                )
-            }
-
-            val data = lenientJson.parseToJsonElement(it.body.string()) as? JsonObject
-                ?: JsonObject(emptyMap())
-            val results = data.obj("web")?.arr("results")
-            if (results == null || results.isEmpty()) {
-                return AgentToolResult(
-                    content = listOf(TextContent("No results found for \"$query\".")),
-                    details = EMPTY_DETAILS
-                )
-            }
-
-            val lines = results.map { element ->
-                val r = element as? JsonObject ?: JsonObject(emptyMap())
-                val title = r.str("title") ?: ""
-                val url = r.str("url") ?: ""
-                val description = r.str("description")?.takeIf { it.isNotEmpty() }
-                val snippets = r.arr("extra_snippets")
-                val parts = mutableListOf("**[$title]($url)**")
-                description?.let { parts.add(it) }
-                snippets?.forEach { snippet ->
-                    snippet.strOrNull()?.let { parts.add("> $it") }
-                }
-                parts.joinToString("\n")
-            }
-
-            return AgentToolResult(
-                content = listOf(TextContent(lines.joinToString("\n\n"))),
-                details = EMPTY_DETAILS
-            )
-        }
-    }
 
     companion object {
         const val NAME = "web_search"
@@ -208,6 +220,9 @@ class BraveWebSearchTool(
         val FRESHNESS_VALUES: List<String> = listOf("pd", "pw", "pm", "py")
 
         const val DEFAULT_BASE_URL = "https://api.search.brave.com"
+
+        /** Top results per search; kept small since the agent can web_fetch any result for depth. */
+        private const val RESULT_COUNT = 5
 
         /** Message text is stable so UI and tests can match it. */
         const val MISSING_KEY_MESSAGE = "Error: No Brave Search API key is configured."

@@ -11,7 +11,7 @@ import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
  */
 class ToolResultRenderersTest {
     @Test
-    fun `web_search renders as markdown (Scry renderMarkdownResult)`() {
+    fun `web_search renders as markdown`() {
         assertEquals(
             ToolResultFormat.MARKDOWN,
             ToolResultRenderers.formatFor(BraveWebSearchTool.NAME)
