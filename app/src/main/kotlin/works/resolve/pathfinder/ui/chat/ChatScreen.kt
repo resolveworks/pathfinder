@@ -159,7 +159,7 @@ fun ChatScreen(
     onRemoveProviderCredential: (providerId: String) -> Unit,
     authPrompts: (providerId: String) -> List<CatalogAuthPrompt>,
     authMethods: (providerId: String) -> List<AuthMethodInfo>,
-    onBeginProviderAuthLogin: (providerId: String, method: AuthMethodInfo) -> Unit,
+    onBeginProviderAuthLogin: (providerId: String, method: AuthMethodInfo) -> Boolean,
     onSubmitAuthPrompt: (answer: String) -> Unit,
     onCancelProviderAuthLogin: () -> Unit,
     onRefreshProviderStatus: () -> Unit,
@@ -280,6 +280,26 @@ fun ChatScreen(
     val pushProviderApiKeyForm: (String) -> Unit = { backStack.add(ProviderApiKeyNavKey(it)) }
     val pushSearchProviders: () -> Unit = { backStack.add(SearchProvidersNavKey) }
     val pushSearchProviderAuth: (String) -> Unit = { backStack.add(SearchProviderAuthNavKey(it)) }
+
+    // A provider row is itself the sign-in action when the provider's sole
+    // method is OAuth: the login begins and its screen opens straight from
+    // the list, with no sign-in interstitial. The top-of-stack check keeps
+    // a double tap from stacking a second screen under the login entry.
+    val openProvider: (String) -> Unit = { providerId ->
+        if (backStack.lastOrNull() == ProvidersNavKey) {
+            val soleOAuth = authMethods(providerId).singleOrNull()
+                ?.takeIf { it.type != AuthType.API_KEY }
+            val configured = uiState.providerOptions
+                .any { it.id == providerId && it.configured }
+            if (soleOAuth != null && !configured &&
+                onBeginProviderAuthLogin(providerId, soleOAuth)
+            ) {
+                backStack.add(ProviderLoginNavKey(providerId))
+            } else {
+                pushProviderAuth(providerId)
+            }
+        }
+    }
     val popBackStack: () -> Unit = {
         // Popping the login destination cancels its flow: a login must
         // never outlive the screen it belongs to.
@@ -480,7 +500,7 @@ fun ChatScreen(
                                 ProvidersContent(
                                     providerOptions = uiState.providerOptions,
                                     onRefresh = onRefreshProviderStatus,
-                                    onOpenProvider = pushProviderAuth
+                                    onOpenProvider = openProvider
                                 )
                             }
                             entry<SearchProvidersNavKey> {
@@ -565,8 +585,7 @@ fun ChatScreen(
                                     ?.let { flow ->
                                         ProviderLoginScreen(
                                             flow = flow,
-                                            onSubmit = onSubmitAuthPrompt,
-                                            onCancel = popBackStack
+                                            onSubmit = onSubmitAuthPrompt
                                         )
                                     }
                             }
@@ -880,7 +899,7 @@ private fun PreviewChatScreen(
             onRemoveProviderCredential = { },
             authPrompts = authPrompts,
             authMethods = authMethods,
-            onBeginProviderAuthLogin = { _, _ -> },
+            onBeginProviderAuthLogin = { _, _ -> false },
             onSubmitAuthPrompt = { },
             onCancelProviderAuthLogin = { },
             onRefreshProviderStatus = {},

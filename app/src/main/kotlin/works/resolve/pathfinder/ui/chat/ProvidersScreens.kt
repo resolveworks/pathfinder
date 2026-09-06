@@ -256,10 +256,11 @@ internal fun ProviderAuthContent(
 /**
  * The provider-auth screen (pi's /login method selection and login
  * dialog): a stored credential replaces every login surface with sign-out
- * (pi's /logout); methods, the key form, and the sign-in action appear
- * only while unconfigured. The in-flight login itself is a separate
- * destination ([ProviderLoginNavKey]); per-method routing here follows
- * [providerAuthScreenMode].
+ * (pi's /logout); methods and the key form appear only while
+ * unconfigured. A provider whose sole method is OAuth never reaches this
+ * screen — its list row begins the login directly. The in-flight login
+ * itself is a separate destination ([ProviderLoginNavKey]); per-method
+ * routing here follows [providerAuthScreenMode].
  */
 @Composable
 internal fun ProviderAuthScreen(
@@ -297,29 +298,6 @@ internal fun ProviderAuthScreen(
                 }
             }
         )
-
-        ProviderAuthScreenMode.START_OAUTH -> {
-            val method = methods.first()
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.auth_method_title, provider.name),
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    text = method.label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Button(onClick = { onBeginLogin(method) }) {
-                    Text(stringResource(R.string.auth_sign_in))
-                }
-            }
-        }
 
         ProviderAuthScreenMode.NO_METHODS -> Box(
             modifier = Modifier
@@ -455,16 +433,12 @@ private fun AuthMethodSelectorContent(
  * presents only the current action (browser button, device code, or live
  * prompt). Terminal-oriented raw URLs, progress transcripts, and the raced
  * manual-code fallback are intentionally not rendered. Leaving this
- * destination — system back, the cancel action, or the flow ending — goes
- * through one pop that also cancels the login (see ChatScreen), so a flow
- * never outlives its screen.
+ * destination — system back or the flow ending — goes through one pop
+ * that also cancels the login (see ChatScreen), so a flow never outlives
+ * its screen.
  */
 @Composable
-internal fun ProviderLoginScreen(
-    flow: ProviderAuthFlow,
-    onSubmit: (answer: String) -> Unit,
-    onCancel: () -> Unit
-) {
+internal fun ProviderLoginScreen(flow: ProviderAuthFlow, onSubmit: (answer: String) -> Unit) {
     val context = LocalContext.current
     val browserEvent = flow.events.lastOrNull {
         it is AuthEvent.AuthUrl || it is AuthEvent.DeviceCode
@@ -481,41 +455,30 @@ internal fun ProviderLoginScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         when {
-            browserEvent != null -> {
-                AuthEventItem(event = browserEvent, onOpenUri = context::openInCustomTab)
-                AuthWaitingIndicator()
-            }
+            browserEvent != null -> AuthEventItem(
+                event = browserEvent,
+                onOpenUri = context::openInCustomTab
+            )
 
             prompt != null -> AuthPromptItem(prompt = prompt, onSubmit = onSubmit)
 
-            infoEvent != null -> {
-                AuthEventItem(event = infoEvent, onOpenUri = context::openInCustomTab)
-                AuthWaitingIndicator()
+            infoEvent != null -> AuthEventItem(
+                event = infoEvent,
+                onOpenUri = context::openInCustomTab
+            )
+
+            // No event yet: the login itself is starting (e.g. the
+            // device-code request); a bare loading cue until it lands.
+            else -> Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(24.dp)
+                )
             }
-
-            else -> AuthWaitingIndicator()
         }
-        TextButton(onClick = onCancel) {
-            Text(stringResource(R.string.action_cancel_sign_in))
-        }
-    }
-}
-
-@Composable
-private fun AuthWaitingIndicator() {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        CircularProgressIndicator(
-            strokeWidth = 2.dp,
-            modifier = Modifier.size(18.dp)
-        )
-        Text(
-            text = stringResource(R.string.auth_waiting),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
@@ -576,7 +539,6 @@ private fun AuthPromptItem(prompt: AuthPrompt, onSubmit: (answer: String) -> Uni
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         when (prompt) {
             is AuthPrompt.Select -> {
-                Text(prompt.message, style = MaterialTheme.typography.bodyLarge)
                 prompt.options.forEach { option ->
                     ListItem(
                         headlineContent = { Text(option.label) },

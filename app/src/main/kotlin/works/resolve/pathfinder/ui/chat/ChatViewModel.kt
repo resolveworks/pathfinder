@@ -998,18 +998,20 @@ class ChatViewModel(
     /**
      * Starts the selected method's login flow in [loginController] (one
      * login at a time). Only [AuthType.API_KEY] with a sole method is
-     * normally started through the all-fields form instead.
+     * normally started through the all-fields form instead. Returns false
+     * (with an error set) when rejected, so callers gate navigation on it.
      */
-    fun beginProviderAuthLogin(providerId: String, method: AuthMethodInfo) {
+    fun beginProviderAuthLogin(providerId: String, method: AuthMethodInfo): Boolean {
         if (isAuthProviderBusy()) {
             setError(ERROR_AUTH_IN_PROGRESS)
-            return
+            return false
         }
         if (providerAuthMethods(providerId).none { it.type == method.type }) {
             setError(ERROR_UNKNOWN_PROVIDER)
-            return
+            return false
         }
         loginController.begin(providerId, method)
+        return true
     }
 
     /**

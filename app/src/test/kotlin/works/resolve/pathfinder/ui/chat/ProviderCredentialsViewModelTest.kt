@@ -530,7 +530,6 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
 
             assertEquals(ProviderAuthScreenMode.API_KEY_FORM, providerAuthScreenMode(cloudflare))
             assertEquals(ProviderAuthScreenMode.METHOD_CHOICE, providerAuthScreenMode(zai))
-            assertEquals(ProviderAuthScreenMode.START_OAUTH, providerAuthScreenMode(only))
             assertEquals(ProviderAuthScreenMode.NO_METHODS, providerAuthScreenMode(emptyList()))
 
             assertTrue(vm.providerAuthMethods("no-such-provider").isEmpty())

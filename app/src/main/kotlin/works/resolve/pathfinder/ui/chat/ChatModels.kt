@@ -133,17 +133,18 @@ enum class ProviderAuthScreenMode {
     /** Sole API-key method: show the credential form directly. */
     API_KEY_FORM,
 
-    /** Sole OAuth method: offer an explicit account sign-in action. */
-    START_OAUTH,
-
     /** No login method available (no catalog prompts, no registered flow). */
     NO_METHODS
 }
 
+/**
+ * A sole OAuth method has no mode: the provider row begins that login
+ * directly, so the auth screen never sees that shape (it would read as
+ * [ProviderAuthScreenMode.NO_METHODS]).
+ */
 internal fun providerAuthScreenMode(methods: List<AuthMethodInfo>): ProviderAuthScreenMode = when {
     methods.size > 1 -> ProviderAuthScreenMode.METHOD_CHOICE
     methods.size == 1 && methods[0].type == AuthType.API_KEY -> ProviderAuthScreenMode.API_KEY_FORM
-    methods.size == 1 -> ProviderAuthScreenMode.START_OAUTH
     else -> ProviderAuthScreenMode.NO_METHODS
 }
 
