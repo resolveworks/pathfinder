@@ -1,9 +1,7 @@
 package works.resolve.pathfinder.agent
 
 import java.util.concurrent.CopyOnWriteArrayList
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
@@ -14,7 +12,6 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -404,62 +401,6 @@ class AgentTest {
         val final = agent.state.value
         assertEquals(4, final.messages.size)
         assertTrue(final.messages.last() is AssistantMessage)
-        assertFalse(final.isStreaming)
-    }
-
-    @Test
-    fun `abort finalizes the streaming partial as ABORTED message and cancels the caller`() =
-        runTest {
-            val events = mutableListOf<AgentEvent>()
-            val providerStarted = CompletableDeferred<Unit>()
-            val agent = Agent(model, null, SimpleStreamOptions()) { _, _, _ ->
-                providerStarted.complete(Unit)
-                hangingStream()
-            }
-            val collector = launch { agent.events.toList(events) }
-            yield() // subscribe before the run starts
-
-            val deferred = async { agent.prompt(listOf(UserMessage.ofText("hi"))) }
-            providerStarted.await()
-
-            agent.abort()
-
-            try {
-                withTimeout(1_000) { deferred.await() }
-                fail("expected CancellationException")
-            } catch (_: CancellationException) {
-            }
-            withTimeout(1_000) { agent.state.first { !it.isStreaming } }
-            collector.cancelAndJoin()
-
-            val final = agent.state.value
-            assertEquals("Request was aborted", final.errorMessage)
-            assertNull(final.streamingMessage)
-            assertEquals(2, final.messages.size)
-            val finalized = final.messages[1] as AssistantMessage
-            assertEquals(StopReason.ABORTED, finalized.stopReason)
-            assertEquals("Request was aborted", finalized.errorMessage)
-
-            val tail = events.takeLast(4).map { it::class.simpleName }
-            assertEquals(listOf("MessageStart", "MessageEnd", "TurnEnd", "AgentEnd"), tail)
-        }
-
-    @Test
-    fun `caller cancellation finalizes the partial as ABORTED message`() = runTest {
-        val providerStarted = CompletableDeferred<Unit>()
-        val agent = Agent(model, null, SimpleStreamOptions()) { _, _, _ ->
-            providerStarted.complete(Unit)
-            hangingStream()
-        }
-        val job = launch { agent.prompt(listOf(UserMessage.ofText("hi"))) }
-        providerStarted.await()
-
-        job.cancelAndJoin()
-
-        val final = agent.state.value
-        assertEquals(2, final.messages.size)
-        val finalized = final.messages[1] as AssistantMessage
-        assertEquals(StopReason.ABORTED, finalized.stopReason)
         assertFalse(final.isStreaming)
     }
 

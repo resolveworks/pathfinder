@@ -31,6 +31,7 @@ dependencies {
     implementation(libs.zstd.jni) { artifact { type = "aar" } }
 
     testFixturesImplementation(libs.kotlinx.coroutines.core)
+    testFixturesImplementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.zstd.jni)
     testImplementation(libs.junit)
