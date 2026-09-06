@@ -489,12 +489,24 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
                     }
                 )
             )
+
+            // pi's prompt() preflight rejects the send before any message is
+            // built: an auth error surfaces, nothing streams, nothing commits.
             vm.onDraftChange("Hello")
             vm.send()
-            vm.awaitState { !it.isStreaming && it.messages.size == 2 }
+            val rejected = vm.awaitState {
+                it.error == "Could not send — check the provider sign-in"
+            }
+            assertFalse(rejected.isStreaming)
+            assertTrue(rejected.messages.isEmpty())
+            vm.dismissError()
 
             vm.saveProviderCredential("zai", "k2", emptyMap())
             vm.awaitState { it.providerOptions.first { o -> o.id == "zai" }.configured }
+
+            vm.onDraftChange("Hello")
+            vm.send()
+            vm.awaitState { !it.isStreaming && it.messages.size == 2 }
 
             vm.closeForTest()
         }
@@ -854,10 +866,13 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             assertEquals(listOf("gpt-4.1"), vm.copilotModelOptions())
             vm.dismissError()
 
+            // Selection does not re-validate credential availability (pi's
+            // picker filters, setModel validates auth only): a catalog model
+            // outside the credential's allowed list selects cleanly.
             vm.selectModel("github-copilot", "gpt-4.5")
             mainDispatcherRule.scheduler.advanceUntilIdle()
-            assertEquals("Unknown model", vm.uiState.value.error)
-            vm.dismissError()
+            assertNull(vm.uiState.value.error)
+            assertEquals("gpt-4.5", vm.uiState.value.selectedModel?.modelId)
 
             vm.selectModel("github-copilot", "gpt-4.1")
             mainDispatcherRule.scheduler.advanceUntilIdle()

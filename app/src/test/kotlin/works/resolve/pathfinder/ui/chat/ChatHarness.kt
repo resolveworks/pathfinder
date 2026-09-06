@@ -322,7 +322,7 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
         nativeFactory.resolveModel(providerId, modelId)
     }
 
-    val factory = AgentFactory { settings, sessionManager ->
+    val factory = AgentFactory { settings, sessionManager, defaultThinkingLevel ->
         check(!rejectAll) { "factory unavailable" }
         require(settings.modelId !in rejectedModelIds) { "model rejected" }
         createdSettings += settings
@@ -342,7 +342,8 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
             tools = listOf(fakeWebSearchTool),
             retrySettings = settings.retry,
             compactionSettings = settings.compaction,
-            models = switchModels
+            models = switchModels,
+            defaultThinkingLevelProvider = defaultThinkingLevel
         ).also { session -> createdAgents += session }
     }
 

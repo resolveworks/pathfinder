@@ -21,7 +21,6 @@ import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
-import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
@@ -35,11 +34,14 @@ import works.resolve.pathfinder.ai.getSupportedThinkingLevels
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.codingagent.core.AgentSession
-import works.resolve.pathfinder.codingagent.core.MessageEntry
 import works.resolve.pathfinder.codingagent.core.ReadonlySessionManager
 import works.resolve.pathfinder.codingagent.core.SessionError
+import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
+import works.resolve.pathfinder.codingagent.core.SessionSeedModel
+import works.resolve.pathfinder.codingagent.core.SessionSeedSettings
+import works.resolve.pathfinder.codingagent.core.seedSessionConfiguration
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsStore
@@ -226,8 +228,8 @@ class ChatViewModel(
      * Persists the default thinking level. Applies to the live session
      * first and persists after (pi's order), so a failed settings write
      * leaves the session switched. The stored default seeds sessions
-     * without a recorded branch level ([seedSession]) and is
-     * re-applied on model switches ([selectModelInternal]).
+     * without a recorded branch level ([seedSession]) and is re-applied on
+     * model switches by the session itself ([AgentSession.setModel]).
      */
     fun setThinkingLevelDefault(level: ModelThinkingLevel) {
         viewModelScope.launch {
@@ -379,16 +381,6 @@ class ChatViewModel(
         viewModelScope.launch {
             if (rejectWhileBusy()) return@launch
             val session = agent ?: return@launch
-            // A user-message target is a re-edit even when it is the current
-            // leaf (a run that never committed an assistant entry can leave
-            // one); only non-user targets are a true no-op at their leaf.
-            val manager = session.sessionManager
-            val reEditTarget =
-                (manager.getEntry(id) as? MessageEntry)?.message is UserMessage
-            if (id == manager.getLeafId() && !reEditTarget) {
-                setError(ERROR_ALREADY_AT_POINT)
-                return@launch
-            }
             val result = try {
                 session.navigateTree(id)
             } catch (e: CancellationException) {
@@ -404,6 +396,11 @@ class ChatViewModel(
                 return@launch
             }
             if (result.cancelled) return@launch
+            if (result.outcome == AgentSession.NavigationOutcome.NO_OP) {
+                setError(ERROR_ALREADY_AT_POINT)
+                return@launch
+            }
+            val manager = session.sessionManager
             // The manager is a live view, so these read the post-navigation
             // state; navigation requires an idle loop, so nothing mutates
             // between them.
@@ -671,21 +668,30 @@ class ChatViewModel(
     }
 
     /** Binds this ViewModel's resolved settings into [manager] (see [seedSessionConfiguration]). */
-    private suspend fun seedSession(manager: SessionManager): ModelSettings =
-        seedSessionConfiguration(
+    private suspend fun seedSession(manager: SessionManager): ModelSettings {
+        val seeded = seedSessionConfiguration(
             manager = manager,
-            settings = currentSettings,
-            modelOptions = _uiState.value.modelOptions,
+            settings = SessionSeedSettings(
+                providerId = currentSettings.providerId,
+                modelId = currentSettings.modelId,
+                enabledModels = currentSettings.enabledModels,
+                defaultThinkingLevel = currentSettings.defaultThinkingLevel
+            ),
+            modelOptions = _uiState.value.modelOptions.map {
+                SessionSeedModel(providerId = it.providerId, modelId = it.modelId)
+            },
             modelResolver = modelResolver,
             catalog = catalog
         )
+        return currentSettings.copy(providerId = seeded.providerId, modelId = seeded.modelId)
+    }
 
     /** Builds an agent or null (with a safe error surfaced) when the factory rejects the settings. */
     private fun tryCreateAgent(
         settings: ModelSettings,
         sessionManager: SessionManager
     ): AgentSession? = try {
-        agentFactory.create(settings, sessionManager)
+        agentFactory.create(settings, sessionManager) { currentSettings.defaultThinkingLevel }
             // Synchronize web_search against the current Brave credential
             // before anything binds to the session.
             .also(searchProviders::applyTo)
@@ -834,20 +840,9 @@ class ChatViewModel(
             setError(ERROR_UNKNOWN_MODEL, e)
             return
         }
-        // A catalog model the account cannot use (credential-filtered
-        // availability) is rejected like an unknown one.
-        val available = try {
-            authService.availableModels(providerId)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE, e)
-            return
-        }
-        if (available.none { it.id == model.id }) {
-            setError(ERROR_UNKNOWN_MODEL)
-            return
-        }
+        // No availability pre-check: the picker only offers
+        // credential-filtered models (pi's split), and setModel validates
+        // auth itself.
         try {
             session.setModel(model)
         } catch (e: CancellationException) {
@@ -861,25 +856,10 @@ class ChatViewModel(
             setError(ERROR_MODEL_SWITCH, e)
             return
         }
-        // Like pi's model switch, apply the thinking level for the new
-        // model: the stored global default, else the session's current
-        // level (per-model overrides are not ported). Applied after the
-        // model_change because the default is app-owned settings the
-        // session facade holds none of; setThinkingLevel clamps to the new
-        // model and appends only on change, so this usually records nothing.
-        try {
-            session.setThinkingLevel(currentSettings.defaultThinkingLevel ?: session.thinkingLevel)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: SessionError) {
-            setError(ERROR_SESSION_SAVE, e)
-            return
-        } catch (e: Exception) {
-            setError(ERROR_THINKING_SWITCH, e)
-            return
-        }
         // The chip follows the agent's state emission from setModel above;
-        // only the tree needs re-projecting here.
+        // only the tree needs re-projecting here. The new model's thinking
+        // level is re-applied inside setModel (pi's rule) from the
+        // app-owned default wired at agent creation.
         _uiState.update {
             it.copy(treeRows = treeRows(it.treeFilter))
         }
@@ -1218,6 +1198,13 @@ class ChatViewModel(
             // Abort or teardown: the agent committed its terminal state,
             // which the manager appended inline.
             throw e
+        } catch (e: SessionError) {
+            if (e.code == SessionErrorCode.AUTH) {
+                // Preflight rejection: nothing was persisted or sent.
+                setError(ERROR_PROMPT_AUTH)
+            } else {
+                setError(ERROR_SESSION_SAVE, e)
+            }
         } catch (e: IllegalStateException) {
             setError(ERROR_ALREADY_STREAMING)
         } catch (e: Exception) {
@@ -1286,6 +1273,7 @@ class ChatViewModel(
             "That model is no longer available for this account — pick another model"
         const val ERROR_MODEL_SWITCH =
             "Could not switch to that model — check the provider sign-in"
+        const val ERROR_PROMPT_AUTH = "Could not send — check the provider sign-in"
         const val ERROR_THINKING_SWITCH = "Could not switch the thinking level"
         const val ERROR_UNKNOWN_PROVIDER = "Unknown provider"
         const val ERROR_CREDENTIAL_SAVE = "Could not store the API key"

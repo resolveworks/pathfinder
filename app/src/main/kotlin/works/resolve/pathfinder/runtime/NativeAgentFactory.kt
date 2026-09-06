@@ -7,6 +7,7 @@ import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
@@ -15,6 +16,7 @@ import works.resolve.pathfinder.ai.auth.AuthContext
 import works.resolve.pathfinder.ai.auth.AuthResolutionOverrides
 import works.resolve.pathfinder.ai.auth.CatalogAuthProviderRef
 import works.resolve.pathfinder.ai.auth.CatalogAuthRegistry
+import works.resolve.pathfinder.ai.auth.CatalogProviderAuth
 import works.resolve.pathfinder.ai.auth.CredentialStore
 import works.resolve.pathfinder.ai.auth.NoopAuthContext
 import works.resolve.pathfinder.ai.auth.resolveProviderAuth
@@ -32,7 +34,7 @@ import works.resolve.pathfinder.data.settings.ModelSettings
  * Production [AgentFactory]: builds the native agent from the persisted
  * configuration, serving any provider/model pair the generated catalog knows.
  *
- * Divergences from pi (differences.md §5.1, both accepted):
+ * Divergences from pi (both accepted):
  * - pi's agent package resolves its stream function through a module-level
  *   mutable default (`stream-fn.ts`: `setDefaultStreamFn`/
  *   `getDefaultStreamFn`, falling back to it when callers omit `streamFn`).
@@ -44,8 +46,8 @@ import works.resolve.pathfinder.data.settings.ModelSettings
  * - pi's `utils/event-stream.ts` (`EventStream`, a queue-backed async
  *   iterable with an out-of-band final result) is replaced by Kotlin
  *   `Flow&lt;AssistantMessageEvent&gt;`: the stream contract in
- *   `ai/core/Types.kt` (failures terminate the flow as a terminal Error
- *   event) carries both the iteration and the final-result roles.
+ *   `packages/ai/.../ai/Types.kt` (failures terminate the flow as a terminal
+ *   Error event) carries both the iteration and the final-result roles.
  *
  * Credentials are read once per request inside Models.stream's lazy flow, so
  * a rotated or completed credential takes effect on the next prompt. Stored
@@ -69,7 +71,11 @@ class NativeAgentFactory(
     private val tools: List<AgentTool> = emptyList()
 ) : AgentFactory {
 
-    override fun create(settings: ModelSettings, sessionManager: SessionManager): AgentSession {
+    override fun create(
+        settings: ModelSettings,
+        sessionManager: SessionManager,
+        defaultThinkingLevel: () -> ModelThinkingLevel?
+    ): AgentSession {
         val entry = catalog.getProvider(settings.providerId)
             ?: throw IllegalArgumentException("Unsupported provider: ${settings.providerId}")
         val model = entry.model(settings.modelId)
@@ -98,7 +104,8 @@ class NativeAgentFactory(
                         authContext,
                         authRegistry
                     ),
-                    webSocketTransport = webSocketTransport
+                    webSocketTransport = webSocketTransport,
+                    auth = CatalogProviderAuth(entry, authRegistry)
                 )
             }
         )
@@ -125,7 +132,8 @@ class NativeAgentFactory(
             retrySettings = settings.retry,
             compactionSettings = settings.compaction,
             models = models,
-            tools = tools.toList()
+            tools = tools.toList(),
+            defaultThinkingLevelProvider = defaultThinkingLevel
         )
     }
 

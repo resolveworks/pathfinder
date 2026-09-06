@@ -41,6 +41,8 @@ import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.SessionError
+import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.buildSystemPrompt
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
@@ -123,7 +125,7 @@ class NativeAgentFactoryTest {
     fun `rejects an unsupported provider`() {
         assertFailsWith<IllegalArgumentException> {
             factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-                .create(settings(providerId = "openai"), session())
+                .create(settings(providerId = "openai"), session()) { null }
         }
     }
 
@@ -131,7 +133,7 @@ class NativeAgentFactoryTest {
     fun `rejects an unknown model`() {
         assertFailsWith<IllegalArgumentException> {
             factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-                .create(settings(modelId = "gpt-4"), session())
+                .create(settings(modelId = "gpt-4"), session()) { null }
         }
     }
 
@@ -141,7 +143,7 @@ class NativeAgentFactoryTest {
         manager.appendMessage(UserMessage.ofText("hello"))
         manager.appendMessage(UserMessage.ofText("again"))
         val agent = factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-            .create(settings(), manager)
+            .create(settings(), manager) { null }
         val messages = agent.state.value.messages
         assertEquals(2, messages.size)
         assertEquals(
@@ -174,11 +176,11 @@ class NativeAgentFactoryTest {
             catalog = catalog,
             transport = RecordingTransport(),
             tools = mutableListOf(tool)
-        ).create(settings(), session())
+        ).create(settings(), session()) { null }
         assertEquals(1, withTools.state.value.tools.size)
 
         val default = factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-            .create(settings(), session())
+            .create(settings(), session()) { null }
         assertTrue(default.state.value.tools.isEmpty())
     }
 
@@ -210,7 +212,7 @@ class NativeAgentFactoryTest {
                 catalog = catalog,
                 transport = RecordingTransport(),
                 tools = configured
-            ).create(settings(), session())
+            ).create(settings(), session()) { null }
 
             assertEquals(listOf("web_search"), agent.getActiveToolNames())
             assertEquals(buildSystemPrompt(listOf(webSearch)), agent.state.value.systemPrompt)
@@ -237,7 +239,7 @@ class NativeAgentFactoryTest {
             val store = FakeCredentialStore(ApiKeyCredential("factory-test-key-1"))
             val transport = RecordingTransport()
             val agent = factory(store, transport)
-                .create(settings(), session())
+                .create(settings(), session()) { null }
 
             // Rotating the stored credential after construction must be observed
             // at prompt time: the resolver stays lazy and reads the store per request.
@@ -251,7 +253,10 @@ class NativeAgentFactoryTest {
             assertTrue(last is works.resolve.pathfinder.ai.AssistantMessage)
             assertEquals("Hi", (last.content.single() as TextContent).text)
 
-            assertEquals(1, store.readCalls)
+            // Two resolutions per prompt, as in pi: the prompt() preflight
+            // checks auth, then the request itself resolves lazily again —
+            // so a rotated key is still observed at prompt time.
+            assertEquals(2, store.readCalls)
             val request = transport.requests.single()
             assertEquals("https://api.z.ai/api/coding/paas/v4/chat/completions", request.url)
             assertEquals("factory-test-key-2", request.bearerToken)
@@ -282,7 +287,8 @@ class NativeAgentFactoryTest {
                         providerId = "cloudflare-ai-gateway",
                         modelId = "workers-ai/test-model"
                     ),
-                    session()
+                    session(),
+                    { null }
                 )
             agent.prompt("ping")
 
@@ -410,7 +416,8 @@ class NativeAgentFactoryTest {
             )
                 .create(
                     ModelSettings(providerId = "multi", modelId = "m", compaction = compactOff),
-                    session()
+                    session(),
+                    { null }
                 )
 
             agent.prompt("ping")
@@ -471,7 +478,8 @@ class NativeAgentFactoryTest {
                     modelId = model.id,
                     compaction = compactOff
                 ),
-                session()
+                session(),
+                { null }
             )
 
             agent.prompt("ping")
@@ -508,7 +516,7 @@ class NativeAgentFactoryTest {
             val transport = RecordingTransport()
             val native =
                 NativeAgentFactory(credentials = store, catalog = catalog, transport = transport)
-            val agent = native.create(settings(), session())
+            val agent = native.create(settings(), session()) { null }
 
             agent.prompt("ping") // initial provider: zai/glm-4.7
             assertEquals(
@@ -549,7 +557,7 @@ class NativeAgentFactoryTest {
                     catalog = catalog,
                     transport = RecordingTransport()
                 )
-            val agent = native.create(settings(), session())
+            val agent = native.create(settings(), session()) { null }
 
             val error = runCatching {
                 agent.setModel(native.resolveModel("github-copilot", "gpt-4.1"))
@@ -565,7 +573,7 @@ class NativeAgentFactoryTest {
     }
 
     @Test
-    fun `an incomplete credential resolves to null and surfaces as a single error event`() {
+    fun `an incomplete credential resolves to null and rejects the prompt in preflight`() {
         runBlocking {
             // Cloudflare requires key + both gateway env values; the key alone
             // is incomplete, so the resolver must return null (defense in depth).
@@ -577,18 +585,17 @@ class NativeAgentFactoryTest {
                         providerId = "cloudflare-ai-gateway",
                         modelId = "workers-ai/test-model"
                     ),
-                    session()
+                    session(),
+                    { null }
                 )
 
-            agent.prompt("ping")
-
-            val last = agent.state.value.messages.last()
-            val error = assertIs<works.resolve.pathfinder.ai.AssistantMessage>(last)
-            assertEquals(works.resolve.pathfinder.ai.StopReason.ERROR, error.stopReason)
-            assertTrue(
-                "Provider 'cloudflare-ai-gateway' is not configured" in (error.errorMessage ?: "")
-            )
+            // pi's prompt() preflight throws before any message is built;
+            // nothing is sent and nothing is committed to the session.
+            val error = assertFailsWith<SessionError> { agent.prompt("ping") }
+            assertEquals(SessionErrorCode.AUTH, error.code)
+            assertEquals("No API key found for cloudflare-ai-gateway.", error.message)
             assertTrue(transport.requests.isEmpty(), "no request must be sent")
+            assertTrue(agent.state.value.messages.isEmpty(), "no message must be committed")
         }
     }
 }
