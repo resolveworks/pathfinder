@@ -80,7 +80,7 @@ import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.providers.AuthPrompt as CatalogAuthPrompt
-import works.resolve.pathfinder.codingagent.core.session.SessionInfo
+import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 @Composable

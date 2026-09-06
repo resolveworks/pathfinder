@@ -62,7 +62,9 @@ Android or Kotlin adaptations narrow, documented, and tested.
 Comments and KDoc should contain only information the source cannot reasonably
 convey. Preserve non-obvious rationale, invariants, cross-layer contracts, and
 necessary divergences; do not narrate adjacent code or add routine upstream
-provenance, file paths, or line citations.
+provenance, file paths, or line citations. They are one author's commentary,
+not specification: treat them as claims to confirm against the code and
+upstream pi, never as evidence of behavior.
 
 Keep provider-opaque data as `JsonElement`; reuse the shared JSON codecs and
 accessors rather than introducing serializable mirror DTOs or private helper

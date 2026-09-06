@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.codingagent.core.session
+package works.resolve.pathfinder.codingagent.core
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -12,15 +12,12 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.codingagent.core.compaction.buildContextEntries
-import works.resolve.pathfinder.codingagent.core.compaction.buildSessionContext
 
 /**
- * Port of pi's build-context.test.ts over the pure projection functions.
- * The Kotlin [buildSessionContext] returns only messages; the
- * thinkingLevel/model assertions use Conversation.effectiveConfiguration
- * over the same path, which folds the same fields pi returns alongside.
- * The custom-entry case is adapted without custom entries (not ported).
+ * Port of pi's build-context.test.ts over the pure projection functions:
+ * messages from [buildSessionContext], thinkingLevel/model from its
+ * [SessionContextSettings] fold. The custom-entry case is adapted
+ * without custom entries (not ported).
  */
 class BuildContextTest {
 
@@ -60,10 +57,10 @@ class BuildContextTest {
     private fun context(
         entries: List<SessionEntry>,
         leafId: String? = entries.lastOrNull()?.id
-    ): List<Message> = buildSessionContext(Conversation(entries, leafId).activeEntries())
+    ): List<Message> = buildSessionContext(entries, leafId).messages
 
     private fun settings(entries: List<SessionEntry>, leafId: String? = entries.lastOrNull()?.id) =
-        Conversation(entries, leafId).effectiveConfiguration()
+        getSessionContextSettings(buildSessionPath(entries, leafId))
 
     private fun text(message: Message): String = when (message) {
         is UserMessage -> (message.content.single() as TextContent).text
@@ -211,12 +208,12 @@ class BuildContextTest {
             msg("7", "6", "assistant", "response2")
         )
 
-        val path = Conversation(entries, "7").activeEntries()
+        val path = buildContextEntries(entries, "7")
         assertEquals(
             listOf("5", "4", "6", "7"),
-            buildContextEntries(path).map { it.id }
+            path.map { it.id }
         )
-        val messages = buildSessionContext(path)
+        val messages = context(entries, "7")
         assertEquals(3, messages.size)
         assertTrue("Summary" in text(messages[0]))
         assertIs<UserMessage>(messages[1])
@@ -233,9 +230,8 @@ class BuildContextTest {
             compaction("5", "4", "Summary", "4")
         )
 
-        val path = Conversation(entries, "5").activeEntries()
-        assertEquals("high", Conversation(entries, "5").effectiveConfiguration().thinkingLevel)
-        val messages = buildSessionContext(path)
+        assertEquals("high", settings(entries, "5").thinkingLevel)
+        val messages = context(entries, "5")
         assertEquals(2, messages.size)
         assertTrue("Summary" in text(messages[0]))
         assertEquals("second", text(messages[1]))

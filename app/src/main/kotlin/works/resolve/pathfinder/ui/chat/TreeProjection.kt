@@ -5,15 +5,15 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionTreeNode
+import works.resolve.pathfinder.codingagent.core.MessageEntry
+import works.resolve.pathfinder.codingagent.core.SessionEntry
+import works.resolve.pathfinder.codingagent.core.SessionTreeNode
 
 /**
- * Projects a [Conversation] into flat, renderable [TreeRow]s, mirroring
- * pi's tree selector (reduced to two filters): structure comes from
- * [Conversation.tree] (pi's getTree); a hidden entry's visible descendants
+ * Projects a session tree (pi's getTree() roots with its current
+ * [leafId]) into flat, renderable [TreeRow]s, mirroring pi's tree
+ * selector (reduced to two filters): a hidden
+ * entry's visible descendants
  * re-parent to their nearest visible ancestor and indent, connectors, and
  * gutters are recomputed over the visible tree, like pi's
  * recalculateVisualStructure. Containment runs over the full tree, so a
@@ -25,21 +25,44 @@ import works.resolve.pathfinder.codingagent.core.session.SessionTreeNode
  * single-child chains stay flat; multiple roots act as children of a
  * virtual branching root, rendering unshifted without connectors.
  */
-internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List<TreeRow> {
-    val roots = conversation.tree()
+internal fun buildTreeRows(
+    roots: List<SessionTreeNode>,
+    leafId: String?,
+    filter: TreeFilter
+): List<TreeRow> {
     if (roots.isEmpty()) return emptyList()
+
+    // Flatten pre-order once: containment, lookups, and the active-path
+    // walk all run over the same nodes (pi's selector flattens first).
+    val allNodes = ArrayList<SessionTreeNode>(roots.size)
+    val preOrder = ArrayDeque<SessionTreeNode>()
+    for (root in roots.asReversed()) preOrder.addLast(root)
+    while (preOrder.isNotEmpty()) {
+        val node = preOrder.removeLast()
+        allNodes += node
+        for (child in node.children.asReversed()) preOrder.addLast(child)
+    }
 
     // pi's toolCallMap: a tool-result row titles itself from its originating
     // call, which may survive only in history.
     val toolCalls = HashMap<String, ToolCall>()
-    for (entry in conversation.entries) {
-        val message = (entry as? MessageEntry)?.message as? AssistantMessage ?: continue
+    for (node in allNodes) {
+        val message = (node.entry as? MessageEntry)?.message as? AssistantMessage ?: continue
         for (part in message.content) {
             if (part is ToolCall) toolCalls[part.id] = part
         }
     }
-    val activePathIds = conversation.activeEntries().mapTo(mutableSetOf()) { it.id }
-    val leafId = conversation.leafId
+
+    val byId = HashMap<String, SessionEntry>(allNodes.size)
+    for (node in allNodes) byId[node.entry.id] = node.entry
+
+    // pi's buildActivePath: walk parent links from the leaf.
+    val activePathIds = HashSet<String>()
+    var pathCursor = leafId
+    while (pathCursor != null) {
+        activePathIds += pathCursor
+        pathCursor = byId[pathCursor]?.parentId
+    }
 
     fun isVisible(entry: SessionEntry): Boolean = when (filter) {
         // Bookkeeping entries (compaction cuts, model_change, ...) elide in
@@ -51,14 +74,6 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
 
     // Containment over the full node tree, hidden nodes included.
     val containsActive = HashMap<String, Boolean>()
-    val allNodes = ArrayList<SessionTreeNode>(conversation.entries.size)
-    val preOrder = ArrayDeque<SessionTreeNode>()
-    for (root in roots.asReversed()) preOrder.addLast(root)
-    while (preOrder.isNotEmpty()) {
-        val node = preOrder.removeLast()
-        allNodes += node
-        for (child in node.children.asReversed()) preOrder.addLast(child)
-    }
     for (node in allNodes.asReversed()) {
         var has = leafId != null && node.entry.id == leafId
         for (child in node.children) {
@@ -73,7 +88,6 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
 
     // pi's recalculateVisualStructure: visible nodes re-parent in flatten
     // order, so the visible-children lists inherit the active-first order.
-    val byId = conversation.entries.associateBy { it.id }
     val visibleChildren = HashMap<String?, MutableList<SessionEntry>>()
     val flatten = ArrayDeque<SessionTreeNode>()
     for (root in activeFirst(roots).asReversed()) flatten.addLast(root)
@@ -115,7 +129,7 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
         val gutters: List<Int>
     )
 
-    val rows = ArrayList<TreeRow>(conversation.entries.size)
+    val rows = ArrayList<TreeRow>(allNodes.size)
     val stack = ArrayDeque<Frame>()
     for (index in visibleRoots.indices.reversed()) {
         val root = visibleRoots[index]

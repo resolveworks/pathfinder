@@ -35,11 +35,11 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.codingagent.core.CompactionEntry
 import works.resolve.pathfinder.codingagent.core.RetrySettings
+import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
-import works.resolve.pathfinder.codingagent.core.compaction.createCompactionSummaryMessage
-import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
+import works.resolve.pathfinder.codingagent.core.createCompactionSummaryMessage
 
 class AgentCompactionTest {
 
@@ -151,7 +151,7 @@ class AgentCompactionTest {
             model = model,
             streamFn = streams.streamFn
         ),
-        sessionManager = seededManager(),
+        manager = seededManager(),
         retrySettings = retrySettings,
         compactionSettings = compactionSettings,
         models = models,
@@ -206,11 +206,11 @@ class AgentCompactionTest {
         assertEquals(150, result.usage!!.totalTokens)
 
         assertEquals(1, streams.seenContexts.size)
-        val entries = agent.conversation.activeEntries()
+        val entries = agent.sessionManager.getBranch()
         val compaction = entries.last() as CompactionEntry
         assertEquals("SUMMARY", compaction.summary)
         assertEquals(
-            agent.conversation.entries[2].id,
+            agent.sessionManager.getEntries()[2].id,
             compaction.firstKeptEntryId
         )
         val rebuilt = agent.state.value.messages
@@ -251,7 +251,7 @@ class AgentCompactionTest {
         api.responses.add(assistant("SUMMARY"))
         val agent = AgentSession(
             agent = Agent(model = model, streamFn = streams.streamFn),
-            sessionManager = seed,
+            manager = seed,
             retrySettings = RetrySettings(enabled = false),
             models = models
         )
@@ -518,8 +518,8 @@ class AgentCompactionTest {
         assertNull(end.result)
         assertEquals("Auto-compaction failed: Summarization failed: boom", end.errorMessage)
         assertTrue(
-            agent.conversation.activeEntries().none {
-                it is works.resolve.pathfinder.codingagent.core.session.CompactionEntry
+            agent.sessionManager.getBranch().none {
+                it is works.resolve.pathfinder.codingagent.core.CompactionEntry
             }
         )
     }

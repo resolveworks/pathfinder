@@ -1,7 +1,7 @@
 package works.resolve.pathfinder.runtime
 
 import works.resolve.pathfinder.codingagent.core.AgentSession
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
+import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.data.settings.ModelSettings
 
 /**

@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.codingagent.core.session
+package works.resolve.pathfinder.codingagent.core
 
 import java.io.File
 import kotlin.test.Test
@@ -61,9 +61,9 @@ class SessionManagerTest {
         m.appendMessage(user("hello"))
 
         assertTrue(jsonlFiles(dir).isEmpty())
-        assertEquals(3, m.entries.size)
-        assertEquals("e2", m.leafId)
-        assertEquals("e2", m.conversation.activeEntries().last().id)
+        assertEquals(3, m.getEntries().size)
+        assertEquals("e2", m.getLeafId())
+        assertEquals("e2", m.getBranch().last().id)
     }
 
     @Test
@@ -106,9 +106,9 @@ class SessionManagerTest {
 
         val file = jsonlFiles(dir).single()
         val reopened = SessionManager.open(file, clock, ioDispatcher = testDispatcher())
-        assertEquals(m.sessionId, reopened.sessionId)
-        assertContentEquals(m.entries.map { it.id }, reopened.entries.map { it.id })
-        assertEquals(m.leafId, reopened.leafId)
+        assertEquals(m.getSessionId(), reopened.getSessionId())
+        assertContentEquals(m.getEntries().map { it.id }, reopened.getEntries().map { it.id })
+        assertEquals(m.getLeafId(), reopened.getLeafId())
 
         clock.advanceMillis(10)
         reopened.appendMessage(user("continue"))
@@ -128,7 +128,7 @@ class SessionManagerTest {
         file.writeText(text.trimEnd())
 
         val reopened = SessionManager.open(file, clock, ioDispatcher = testDispatcher())
-        assertEquals(2, reopened.entries.size)
+        assertEquals(2, reopened.getEntries().size)
         assertTrue(file.readText().endsWith("\n"))
     }
 
@@ -150,7 +150,7 @@ class SessionManagerTest {
         val empty = File(dir, "empty.jsonl").apply { writeText("") }
         val initialized = SessionManager.open(empty, clock, ioDispatcher = testDispatcher())
         assertEquals(1, empty.readText().trimEnd().split("\n").size)
-        assertTrue(initialized.entries.isEmpty())
+        assertTrue(initialized.getEntries().isEmpty())
     }
 
     @Test
@@ -159,8 +159,8 @@ class SessionManagerTest {
         val m = manager(dir)
         m.appendMessage(user("a"))
         m.appendMessage(assistant())
-        val firstUserId = m.entries.first().id
-        val oldLeaf = m.leafId
+        val firstUserId = m.getEntries().first().id
+        val oldLeaf = m.getLeafId()
 
         val summaryId = m.branchWithSummary(
             firstUserId,
@@ -169,10 +169,10 @@ class SessionManagerTest {
             usage = null
         )
 
-        val summary = assertIs<BranchSummaryEntry>(m.conversation.entry(summaryId))
+        val summary = assertIs<BranchSummaryEntry>(m.getEntry(summaryId))
         assertEquals(oldLeaf, summary.fromId)
         assertEquals(firstUserId, summary.parentId)
-        assertEquals(summaryId, m.leafId)
+        assertEquals(summaryId, m.getLeafId())
         // The summary is persisted too.
         val file = jsonlFiles(dir).single()
         assertTrue("went elsewhere" in file.readText())
@@ -188,15 +188,15 @@ class SessionManagerTest {
         val m = manager(dir)
         m.appendMessage(user("a"))
         m.appendMessage(assistant())
-        val first = m.entries.first().id
+        val first = m.getEntries().first().id
 
         m.branch(first)
-        assertEquals(first, m.leafId)
+        assertEquals(first, m.getLeafId())
         clock.advanceMillis(10)
         m.appendMessage(user("a2"))
         assertEquals(
             listOf("a", "a2"),
-            m.conversation.activeMessages().map {
+            m.buildSessionContext().messages.map {
                 (it as UserMessage).content.single().let { c -> (c as TextContent).text }
             }
         )
@@ -205,8 +205,8 @@ class SessionManagerTest {
             .let { assertEquals(SessionErrorCode.NOT_FOUND, it.code) }
 
         m.resetLeaf()
-        assertNull(m.leafId)
-        assertTrue(m.conversation.activeEntries().isEmpty())
+        assertNull(m.getLeafId())
+        assertTrue(m.getBranch().isEmpty())
     }
 
     @Test
@@ -223,12 +223,12 @@ class SessionManagerTest {
         newer.appendMessage(assistant())
 
         val infos = SessionManager.list(dir, ioDispatcher = testDispatcher())
-        assertEquals(listOf(newer.sessionId, older.sessionId), infos.map { it.id })
+        assertEquals(listOf(newer.getSessionId(), older.getSessionId()), infos.map { it.id })
         val info = infos.first()
         assertEquals(2, info.messageCount)
         assertEquals("new", info.firstMessage)
         assertEquals("new hi", info.allMessagesText)
-        assertEquals(newer.entries[1].timestamp, info.modified)
+        assertEquals(newer.getEntries()[1].timestamp, info.modified)
         assertTrue(info.createdAt <= info.modified)
     }
 
@@ -239,7 +239,7 @@ class SessionManagerTest {
         val m = SessionManager.open(file, clock, ioDispatcher = testDispatcher())
 
         val info = SessionManager.list(dir, ioDispatcher = testDispatcher()).single()
-        assertEquals(m.sessionId, info.id)
+        assertEquals(m.getSessionId(), info.id)
         assertEquals("(no messages)", info.firstMessage)
         assertEquals(0, info.messageCount)
         assertEquals(info.createdAt, info.modified)
@@ -268,7 +268,7 @@ class SessionManagerTest {
         })
 
         assertTrue(!file.exists())
-        assertEquals(0, m.entries.size)
+        assertEquals(0, m.getEntries().size)
 
         m.appendMessage(user("hello"))
         clock.advanceMillis(10)
@@ -277,7 +277,7 @@ class SessionManagerTest {
         // Written to the explicit path, header + both entries.
         assertEquals(3, file.readText().trimEnd().split("\n").size)
         val reopened = SessionManager.open(file, clock, ioDispatcher = testDispatcher())
-        assertEquals(2, reopened.entries.size)
+        assertEquals(2, reopened.getEntries().size)
     }
 
     @Test

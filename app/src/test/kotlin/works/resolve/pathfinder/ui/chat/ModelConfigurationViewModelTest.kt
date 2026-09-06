@@ -84,15 +84,14 @@ import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.codingagent.core.AgentSession
-import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionError
-import works.resolve.pathfinder.codingagent.core.session.SessionErrorCode
-import works.resolve.pathfinder.codingagent.core.session.SessionInfo
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
-import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.BranchSummaryEntry
+import works.resolve.pathfinder.codingagent.core.MessageEntry
+import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.SessionError
+import works.resolve.pathfinder.codingagent.core.SessionErrorCode
+import works.resolve.pathfinder.codingagent.core.SessionInfo
+import works.resolve.pathfinder.codingagent.core.SessionManager
+import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
@@ -215,21 +214,22 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             // first appear there — as it would after the committed-message
             // refresh.
             vm.exchange(h, "hi", "ok")
-            val firstBefore = h.sessions.stored(firstId)!!.entries
+            val firstBefore = h.sessions.stored(firstId)!!.getEntries()
 
-            vm.switchSession(other.sessionId)
-            val state = vm.awaitState { it.activeSessionId == other.sessionId }
+            vm.switchSession(other.getSessionId())
+            val state = vm.awaitState { it.activeSessionId == other.getSessionId() }
             assertEquals(2, state.messages.size)
             waitUntil {
-                h.sessions.stored(other.sessionId)!!
-                    .entries.filterIsInstance<ThinkingLevelEntry>().isNotEmpty()
+                h.sessions.stored(other.getSessionId())!!
+                    .getEntries()
+                    .filterIsInstance<ThinkingLevelEntry>().isNotEmpty()
             }
-            assertEquals(firstBefore, h.sessions.stored(firstId)!!.entries)
-            val reloaded = h.sessions.stored(other.sessionId)!!
-            assertEquals(2, reloaded.activeMessages().size)
+            assertEquals(firstBefore, h.sessions.stored(firstId)!!.getEntries())
+            val reloaded = h.sessions.stored(other.getSessionId())!!
+            assertEquals(2, reloaded.buildSessionContext().messages.size)
             assertEquals(
                 listOf("medium"),
-                reloaded.entries.filterIsInstance<ThinkingLevelEntry>()
+                reloaded.getEntries().filterIsInstance<ThinkingLevelEntry>()
                     .map { it.thinkingLevel }
             )
 
@@ -245,7 +245,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.configure(apiKey = "k")
             vm.awaitState { it.status == ChatStatus.Ready }
             val sessionId = vm.uiState.value.activeSessionId!!
-            val entriesBefore = h.createdAgents.single().conversation.entries.size
+            val entriesBefore = h.createdAgents.single().sessionManager.getEntries().size
 
             // A key-only credential is incomplete for Cloudflare (account/gateway
             // ids required): the provider never counts as configured, and
@@ -268,7 +268,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.error != null }
             assertEquals(ChatStatus.Ready, vm.uiState.value.status)
             assertEquals("glm-4.7", vm.uiState.value.selectedModel?.modelId)
-            assertEquals(entriesBefore, h.createdAgents.single().conversation.entries.size)
+            assertEquals(entriesBefore, h.createdAgents.single().sessionManager.getEntries().size)
             assertEquals(0, h.countSessions())
 
             vm.closeForTest()
@@ -329,11 +329,11 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             )
             assertNull(ready.defaultThinkingLevel)
 
-            waitUntil { h.sessions.managers[sessionId]!!.conversation.entries.size == 2 }
-            val seeded = h.sessions.managers[sessionId]!!.conversation
+            waitUntil { h.sessions.managers[sessionId]!!.getEntries().size == 2 }
+            val seeded = h.sessions.managers[sessionId]!!
             assertEquals(
                 listOf("medium"),
-                seeded.entries.filterIsInstance<ThinkingLevelEntry>()
+                seeded.getEntries().filterIsInstance<ThinkingLevelEntry>()
                     .map { it.thinkingLevel }
             )
 
@@ -483,7 +483,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
         // file, and a reload could not restore anything.
         vm.exchange(h, "Hello", "world")
         vm.selectThinkingLevel(ModelThinkingLevel.HIGH)
-        waitUntil { h.sessions.stored(sessionId)!!.entries.size == 5 }
+        waitUntil { h.sessions.stored(sessionId)!!.getEntries().size == 5 }
         vm.closeForTest()
 
         val vm2 = h.newViewModel()
@@ -495,7 +495,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
         assertEquals(
             "the branch entry survives reload; no re-seed over it",
             listOf("medium", "high"),
-            h.sessions.stored(sessionId)!!.entries
+            h.sessions.stored(sessionId)!!.getEntries()
                 .filterIsInstance<ThinkingLevelEntry>()
                 .map { it.thinkingLevel }
         )
@@ -669,7 +669,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             val assistantEntryId = vm.uiState.value.treeRows[1].id
             vm.navigateToTreeEntry(assistantEntryId)
             vm.awaitState {
-                h.sessions.managers[sessionId]!!.conversation.leafId == assistantEntryId
+                h.sessions.managers[sessionId]!!.getLeafId() == assistantEntryId
             }
             assertEquals(agentsBefore, h.createdAgents.size)
             assertEquals("glm-5.3", vm.uiState.value.selectedModel?.modelId)
@@ -729,10 +729,10 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             assertEquals("glm-4.7", fresh.selectedModel?.modelId)
             assertEquals("glm-4.7", h.createdSettings.last().modelId)
             waitUntil {
-                h.sessions.managers[fresh.activeSessionId!!]!!.conversation.entries.isNotEmpty()
+                h.sessions.managers[fresh.activeSessionId!!]!!.getEntries().isNotEmpty()
             }
-            val seed = h.sessions.managers[fresh.activeSessionId!!]!!.conversation
-                .entries.filterIsInstance<ModelChangeEntry>().single()
+            val seed = h.sessions.managers[fresh.activeSessionId!!]!!
+                .getEntries().filterIsInstance<ModelChangeEntry>().single()
             assertEquals("zai", seed.provider)
             assertEquals("glm-4.7", seed.modelId)
 

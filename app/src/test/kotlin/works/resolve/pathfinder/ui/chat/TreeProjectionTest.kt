@@ -11,8 +11,9 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
+import works.resolve.pathfinder.codingagent.core.MessageEntry
+import works.resolve.pathfinder.codingagent.core.SessionEntry
+import works.resolve.pathfinder.codingagent.core.SessionTreeNode
 
 class TreeProjectionTest {
 
@@ -48,12 +49,33 @@ class TreeProjectionTest {
     private fun entry(id: String, parent: String?, message: works.resolve.pathfinder.ai.Message) =
         MessageEntry(id, parentId = parent, timestamp = clock++, message = message)
 
-    private fun rows(conversation: Conversation, filter: TreeFilter = TreeFilter.DEFAULT) =
-        buildTreeRows(conversation, filter)
+    private fun rows(
+        tree: List<SessionTreeNode>,
+        leafId: String?,
+        filter: TreeFilter = TreeFilter.DEFAULT
+    ) = buildTreeRows(tree, leafId, filter)
+
+    /** pi's tree-selector.test.ts buildTree: nodes over a flat entry list. */
+    private fun buildTree(entries: List<SessionEntry>): List<SessionTreeNode> {
+        val byId = entries.associateBy { it.id }
+        val children = HashMap<String, MutableList<SessionEntry>>()
+        val roots = ArrayList<SessionEntry>()
+        for (entry in entries) {
+            val parent = entry.parentId?.let(byId::get)
+            if (parent == null) {
+                roots += entry
+            } else {
+                children.getOrPut(parent.id) { mutableListOf() } += entry
+            }
+        }
+        fun nodeOf(entry: SessionEntry): SessionTreeNode =
+            SessionTreeNode(entry, (children[entry.id] ?: emptyList()).map(::nodeOf))
+        return roots.map(::nodeOf)
+    }
 
     @Test
     fun `empty conversation yields no rows`() {
-        assertTrue(rows(Conversation(emptyList(), null)).isEmpty())
+        assertTrue(rows(emptyList(), null).isEmpty())
     }
 
     @Test
@@ -62,9 +84,9 @@ class TreeProjectionTest {
         val a1 = entry("a1", "u1", assistant("answer one"))
         val u2 = entry("u2", "a1", user("second"))
         val a2 = entry("a2", "u2", assistant("answer two"))
-        val conversation = Conversation(listOf(u1, a1, u2, a2), "a2")
+        val conversation = buildTree(listOf(u1, a1, u2, a2)) to "a2"
 
-        val result = rows(conversation)
+        val result = rows(conversation.first, conversation.second)
         assertEquals(listOf("u1", "a1", "u2", "a2"), result.map { it.id })
         result.forEach { assertTrue(it.isOnActivePath) }
         assertEquals(listOf(true, false, false, false), result.map { it.isFoldable })
@@ -87,9 +109,9 @@ class TreeProjectionTest {
         val a1 = entry("a1", "u1", assistant("old answer"))
         val u2 = entry("u2", "a1", user("follow-up"))
         val a2 = entry("a2", "u1", assistant("new answer"))
-        val conversation = Conversation(listOf(u1, a1, u2, a2), "a2")
+        val conversation = buildTree(listOf(u1, a1, u2, a2)) to "a2"
 
-        val result = rows(conversation)
+        val result = rows(conversation.first, conversation.second)
         assertEquals(listOf("u1", "a2", "a1", "u2"), result.map { it.id })
         assertTrue(result[0].isFoldable)
         assertTrue(result[1].isCurrentLeaf)
@@ -105,9 +127,9 @@ class TreeProjectionTest {
         val b1 = entry("b1", "r", assistant("active"))
         val c1 = entry("c1", "b1", assistant("continuation"))
         val d1 = entry("d1", "c1", assistant("more"))
-        val conversation = Conversation(listOf(r, b2, b1, c1, d1), "d1")
+        val conversation = buildTree(listOf(r, b2, b1, c1, d1)) to "d1"
 
-        val result = rows(conversation)
+        val result = rows(conversation.first, conversation.second)
         assertEquals(listOf("r", "b1", "c1", "d1", "b2"), result.map { it.id })
         assertEquals(
             listOf(true, true, false, false, false),
@@ -122,12 +144,12 @@ class TreeProjectionTest {
         val u2 = entry("u2", "a1", user("second"))
         val a2 = entry("a2", "u2", assistant("two"))
         val u2b = entry("u2b", "u1", user("first-edited"))
-        val conversation = Conversation(listOf(u1, a1, u2, a2, u2b), "u2b")
+        val conversation = buildTree(listOf(u1, a1, u2, a2, u2b)) to "u2b"
 
-        val all = rows(conversation, TreeFilter.DEFAULT)
+        val all = rows(conversation.first, conversation.second, TreeFilter.DEFAULT)
         assertEquals(listOf("u1", "u2b", "a1", "u2", "a2"), all.map { it.id })
 
-        val filtered = rows(conversation, TreeFilter.USER_ONLY)
+        val filtered = rows(conversation.first, conversation.second, TreeFilter.USER_ONLY)
         assertEquals(listOf("u1", "u2b", "u2"), filtered.map { it.id })
         assertEquals(
             listOf("You: first", "You: first-edited", "You: second"),
@@ -147,9 +169,9 @@ class TreeProjectionTest {
         val a1 = entry("a1", "r1", assistant("world"))
         val r2 = entry("r2", null, user("hello edited"))
         val a2 = entry("a2", "r2", assistant("rewritten"))
-        val conversation = Conversation(listOf(r1, a1, r2, a2), "a2")
+        val conversation = buildTree(listOf(r1, a1, r2, a2)) to "a2"
 
-        val result = rows(conversation)
+        val result = rows(conversation.first, conversation.second)
         assertEquals(listOf("r2", "a2", "r1", "a1"), result.map { it.id })
         assertEquals(listOf(true, false, true, false), result.map { it.isFoldable })
         assertEquals(setOf("r2", "a2"), result.filter { it.isOnActivePath }.map { it.id }.toSet())
@@ -161,9 +183,9 @@ class TreeProjectionTest {
         val long = entry("l", "m", user("x".repeat(300)))
         val empty = entry("e", "l", assistant(""))
         val failed = entry("f", "e", assistant("ignored", error = "boom happened"))
-        val conversation = Conversation(listOf(multiline, long, empty, failed), "f")
+        val conversation = buildTree(listOf(multiline, long, empty, failed)) to "f"
 
-        val result = rows(conversation)
+        val result = rows(conversation.first, conversation.second)
         fun previewAt(i: Int) = (result[i].body as TreeRowBody.Text).preview
         assertEquals("You: line one line two line three", previewAt(0))
         assertEquals("You: " + "x".repeat(120), previewAt(1))
@@ -182,9 +204,9 @@ class TreeProjectionTest {
         val a1 = entry("a1", "u1", assistantCalling(call))
         val t1 = entry("t1", "a1", toolResult("t1", "web_search"))
         val a2 = entry("a2", "t1", assistant("done"))
-        val conversation = Conversation(listOf(u1, a1, t1, a2), "a2")
+        val conversation = buildTree(listOf(u1, a1, t1, a2)) to "a2"
 
-        val result = rows(conversation)
+        val result = rows(conversation.first, conversation.second)
         assertEquals(
             TreeRowBody.Tool("web_search", call),
             result.first { it.id == "t1" }.body
@@ -204,7 +226,7 @@ class TreeProjectionTest {
         val unknown = entry("t2", "t1", toolResult("t2", "mystery_tool"))
         // Orphaned result: the originating call never committed.
         val orphan = entry("t3", "t2", toolResult("t9", "web_fetch"))
-        val conversation = Conversation(
+        val conversation = buildTree(
             listOf(
                 entry("u1", null, user("q")),
                 entry(
@@ -218,11 +240,10 @@ class TreeProjectionTest {
                 badJson,
                 unknown,
                 orphan
-            ),
-            "t3"
-        )
+            )
+        ) to "t3"
 
-        val result = rows(conversation)
+        val result = rows(conversation.first, conversation.second)
         // Rows carry the originating call as-is (pi's toolCallMap); unusable
         // titles — malformed arguments, spec-less tools — fall back to the
         // bare name at render.
@@ -241,9 +262,9 @@ class TreeProjectionTest {
     fun `orphan entries become roots`() {
         val o = entry("orphan", "missing", user("orphaned"))
         val r = entry("r", null, user("root"))
-        val conversation = Conversation(listOf(r, o), "r")
+        val conversation = buildTree(listOf(r, o)) to "r"
 
-        val result = rows(conversation)
+        val result = rows(conversation.first, conversation.second)
         assertEquals(setOf("r", "orphan"), result.map { it.id }.toSet())
         assertTrue(result.first { it.id == "orphan" }.path == listOf("orphan"))
     }

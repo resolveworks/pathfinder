@@ -78,14 +78,13 @@ import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.codingagent.core.AgentSession
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionError
-import works.resolve.pathfinder.codingagent.core.session.SessionErrorCode
-import works.resolve.pathfinder.codingagent.core.session.SessionInfo
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
-import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.MessageEntry
+import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.SessionError
+import works.resolve.pathfinder.codingagent.core.SessionErrorCode
+import works.resolve.pathfinder.codingagent.core.SessionInfo
+import works.resolve.pathfinder.codingagent.core.SessionManager
+import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
@@ -356,9 +355,9 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         )
         vm.awaitState { it.isCompacting }
 
-        session.sessionManager.appendCompaction(
+        h.sessions.managers[vm.uiState.value.activeSessionId!!]!!.appendCompaction(
             summary = "SUMMARY",
-            firstKeptEntryId = session.sessionManager.conversation.leafId!!,
+            firstKeptEntryId = session.sessionManager.getLeafId()!!,
             tokensBefore = 190_010,
             details = null,
             usage = null
@@ -903,7 +902,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         }
         h.settings.setProviderId("zai")
         h.settings.setModelId("glm-4.7")
-        h.settings.setActiveSessionId(manager.sessionId)
+        h.settings.setActiveSessionId(manager.getSessionId())
         h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
 
         val vm = h.newViewModel()

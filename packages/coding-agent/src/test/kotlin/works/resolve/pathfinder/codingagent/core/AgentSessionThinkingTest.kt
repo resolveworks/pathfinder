@@ -26,8 +26,8 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ThinkingLevelMap
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
-import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.SessionManager
+import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 
 class AgentSessionThinkingTest {
 
@@ -90,7 +90,7 @@ class AgentSessionThinkingTest {
             { m, _, _ -> okStream(m) }
     ): AgentSession = AgentSession(
         agent = Agent(model = model, streamFn = StreamFn(streamFn)),
-        sessionManager = sessionManager ?: newManager(),
+        manager = sessionManager ?: newManager(),
         models = Models(listOf(provider(model)))
     )
 
@@ -109,7 +109,7 @@ class AgentSessionThinkingTest {
         assertEquals(
             "no thinking_level_change when the clamped level is unchanged",
             0,
-            s.conversation.entries.size
+            s.sessionManager.getEntries().size
         )
     }
 
@@ -121,17 +121,17 @@ class AgentSessionThinkingTest {
         s.setThinkingLevel(ModelThinkingLevel.MEDIUM)
 
         assertEquals(ModelThinkingLevel.MEDIUM, s.thinkingLevel)
-        assertEquals(1, s.conversation.entries.size)
-        val entry = s.conversation.entries.single() as ThinkingLevelEntry
+        assertEquals(1, s.sessionManager.getEntries().size)
+        val entry = s.sessionManager.getEntries().single() as ThinkingLevelEntry
         assertEquals("medium", entry.thinkingLevel)
         assertNull("the entry is a root when the leaf is unset", entry.parentId)
-        assertEquals(entry.id, s.conversation.leafId)
+        assertEquals(entry.id, s.sessionManager.getLeafId())
 
         s.setThinkingLevel(ModelThinkingLevel.HIGH)
-        val second = s.conversation.entries[1] as ThinkingLevelEntry
+        val second = s.sessionManager.getEntries()[1] as ThinkingLevelEntry
         assertEquals("high", second.thinkingLevel)
         assertEquals("the second entry chains under the first", entry.id, second.parentId)
-        assertEquals(second.id, s.conversation.leafId)
+        assertEquals(second.id, s.sessionManager.getLeafId())
     }
 
     /** Clamping rounds up to the nearest supported level first, then down. */
@@ -147,7 +147,9 @@ class AgentSessionThinkingTest {
         assertEquals(
             "each actual change appends its clamped level",
             listOf("high", "low"),
-            s.conversation.entries.filterIsInstance<ThinkingLevelEntry>().map { it.thinkingLevel }
+            s.sessionManager.getEntries().filterIsInstance<ThinkingLevelEntry>().map {
+                it.thinkingLevel
+            }
         )
     }
 

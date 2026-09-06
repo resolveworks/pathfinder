@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.codingagent.core.compaction
 
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -30,12 +31,19 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
-import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
-import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionEntry
+import works.resolve.pathfinder.codingagent.core.BRANCH_SUMMARY_PREFIX
+import works.resolve.pathfinder.codingagent.core.BRANCH_SUMMARY_SUFFIX
+import works.resolve.pathfinder.codingagent.core.BranchSummaryEntry
+import works.resolve.pathfinder.codingagent.core.COMPACTION_SUMMARY_PREFIX
+import works.resolve.pathfinder.codingagent.core.CompactionEntry
+import works.resolve.pathfinder.codingagent.core.MessageEntry
+import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.ReadonlySessionManager
+import works.resolve.pathfinder.codingagent.core.SessionContext
+import works.resolve.pathfinder.codingagent.core.SessionEntry
+import works.resolve.pathfinder.codingagent.core.SessionTreeNode
+import works.resolve.pathfinder.codingagent.core.buildContextEntries
+import works.resolve.pathfinder.codingagent.core.buildSessionContext
 
 class BranchSummarizationTest {
 
@@ -85,9 +93,9 @@ class BranchSummarizationTest {
     @Test
     fun `collects nothing when there is no old leaf`() {
         val root = messageEntry(user("root"))
-        val conversation = Conversation(listOf(root), root.id)
+        val session = sessionOf(listOf(root), root.id)
         val result =
-            collectEntriesForBranchSummary(conversation, oldLeafId = null, targetId = root.id)
+            collectEntriesForBranchSummary(session, oldLeafId = null, targetId = root.id)
         assertTrue(result.entries.isEmpty())
         assertNull(result.commonAncestorId)
     }
@@ -98,10 +106,10 @@ class BranchSummarizationTest {
         val a1 = messageEntry(user("a1"), root.id)
         val a2 = messageEntry(assistant("a2"), a1.id)
         val b1 = messageEntry(user("b1"), root.id)
-        val conversation = Conversation(listOf(root, a1, a2, b1), b1.id)
+        val session = sessionOf(listOf(root, a1, a2, b1), b1.id)
 
         val result =
-            collectEntriesForBranchSummary(conversation, oldLeafId = a2.id, targetId = b1.id)
+            collectEntriesForBranchSummary(session, oldLeafId = a2.id, targetId = b1.id)
 
         assertEquals(root.id, result.commonAncestorId)
         assertEquals(listOf<SessionEntry>(a1, a2), result.entries)
@@ -112,10 +120,10 @@ class BranchSummarizationTest {
         val root = messageEntry(user("root"))
         val a1 = messageEntry(user("a1"), root.id)
         val a2 = messageEntry(assistant("a2"), a1.id)
-        val conversation = Conversation(listOf(root, a1, a2), a2.id)
+        val session = sessionOf(listOf(root, a1, a2), a2.id)
 
         val result =
-            collectEntriesForBranchSummary(conversation, oldLeafId = a2.id, targetId = a1.id)
+            collectEntriesForBranchSummary(session, oldLeafId = a2.id, targetId = a1.id)
 
         assertEquals(a1.id, result.commonAncestorId)
         assertEquals(listOf<SessionEntry>(a2), result.entries)
@@ -125,10 +133,10 @@ class BranchSummarizationTest {
     fun `navigating to the current leaf collects nothing`() {
         val root = messageEntry(user("root"))
         val a1 = messageEntry(user("a1"), root.id)
-        val conversation = Conversation(listOf(root, a1), a1.id)
+        val session = sessionOf(listOf(root, a1), a1.id)
 
         val result =
-            collectEntriesForBranchSummary(conversation, oldLeafId = a1.id, targetId = a1.id)
+            collectEntriesForBranchSummary(session, oldLeafId = a1.id, targetId = a1.id)
 
         assertEquals(a1.id, result.commonAncestorId)
         assertTrue(result.entries.isEmpty())
@@ -470,7 +478,7 @@ class BranchSummarizationTest {
         val summary = branchSummaryEntry("what we found", root.id, fromId = "gone")
         val tail = messageEntry(user("back home"), summary.id)
 
-        val messages = buildSessionContext(listOf(root, summary, tail))
+        val messages = buildSessionContext(listOf(root, summary, tail)).messages
 
         assertEquals(3, messages.size)
         val projected = messages[1] as UserMessage
@@ -489,31 +497,61 @@ class BranchSummarizationTest {
     fun `empty branch summary entries project nothing`() {
         val root = messageEntry(user("root"))
         val summary = branchSummaryEntry("", root.id, fromId = "gone")
-        val messages = buildSessionContext(listOf(root, summary))
+        val messages = buildSessionContext(listOf(root, summary)).messages
         assertEquals(1, messages.size)
     }
 
-    @Test
-    fun `deferred assistant messages drop from context`() {
-        val root = messageEntry(user("root"))
-        val deferred =
-            messageEntry(assistant("partial").copy(stopReason = StopReason.DEFERRED), root.id)
-        val final = messageEntry(assistant("done"), deferred.id)
-        val toolResult = messageEntry(
-            ToolResultMessage(
-                toolCallId = "c",
-                toolName = "t",
-                content = listOf(TextContent("r")),
-                isError = false
-            ),
-            final.id
-        )
+    /** Read-only fake over fixed entries, for the pure collection walks. */
+    private fun sessionOf(entries: List<SessionEntry>, leafId: String?): ReadonlySessionManager =
+        object : ReadonlySessionManager {
+            override fun getSessionId(): String = ""
 
-        val messages = buildSessionContext(listOf(root, deferred, final, toolResult))
+            override fun getSessionFile(): File? = null
 
-        assertEquals(3, messages.size)
-        assertEquals("root", ((messages[0] as UserMessage).content[0] as TextContent).text)
-        assertEquals("done", ((messages[1] as AssistantMessage).content[0] as TextContent).text)
-        assertEquals("r", ((messages[2] as ToolResultMessage).content[0] as TextContent).text)
+            override fun getEntries(): List<SessionEntry> = entries
+
+            override fun getLeafId(): String? = leafId
+
+            override fun getLeafEntry(): SessionEntry? = leafId?.let(::getEntry)
+
+            override fun getEntry(id: String): SessionEntry? = entries.firstOrNull { it.id == id }
+
+            override fun getBranch(fromId: String?): List<SessionEntry> {
+                val byId = entries.associateBy { it.id }
+                val path = ArrayList<SessionEntry>()
+                var cursor = byId[fromId ?: leafId]
+                while (cursor != null) {
+                    path.add(cursor)
+                    cursor = cursor.parentId?.let(byId::get)
+                }
+                path.reverse()
+                return path
+            }
+
+            override fun buildContextEntries(): List<SessionEntry> =
+                buildContextEntries(entries, leafId)
+
+            override fun buildSessionContext(): SessionContext =
+                buildSessionContext(entries, leafId)
+
+            override fun getTree(): List<SessionTreeNode> = buildTree(entries)
+        }
+
+    /** pi's tree-selector.test.ts buildTree: nodes over a flat entry list. */
+    private fun buildTree(entries: List<SessionEntry>): List<SessionTreeNode> {
+        val byId = entries.associateBy { it.id }
+        val children = HashMap<String, MutableList<SessionEntry>>()
+        val roots = ArrayList<SessionEntry>()
+        for (entry in entries) {
+            val parent = entry.parentId?.let(byId::get)
+            if (parent == null) {
+                roots += entry
+            } else {
+                children.getOrPut(parent.id) { mutableListOf() } += entry
+            }
+        }
+        fun nodeOf(entry: SessionEntry): SessionTreeNode =
+            SessionTreeNode(entry, (children[entry.id] ?: emptyList()).map(::nodeOf))
+        return roots.map(::nodeOf)
     }
 }

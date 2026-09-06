@@ -5,9 +5,9 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.api.ChatApiRegistry
 import works.resolve.pathfinder.ai.clampThinkingLevel
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
-import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.SessionManager
+import works.resolve.pathfinder.codingagent.core.SessionModelSelection
+import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.data.settings.ModelSettings
 
 private val DEFAULT_THINKING_LEVEL = ModelThinkingLevel.MEDIUM
@@ -33,14 +33,15 @@ internal suspend fun seedSessionConfiguration(
     modelResolver: (providerId: String, modelId: String) -> Model,
     catalog: ProviderCatalog
 ): ModelSettings {
-    val conversation = manager.conversation
-    val hasExistingSession = conversation.activeMessages().isNotEmpty()
+    // pi's sdk.ts session-init: restore from the branch's session context.
+    val context = manager.buildSessionContext()
+    val hasExistingSession = context.messages.isNotEmpty()
     val base = initialModelSettings(settings, modelOptions, isContinuing = hasExistingSession)
-    val seeded = settingsSeededFromFold(base, conversation, catalog)
+    val seeded = settingsSeededFromFold(base, context.model, catalog)
     if (!hasExistingSession && seeded.providerId.isNotBlank() && seeded.modelId.isNotBlank()) {
         manager.appendModelChange(seeded.providerId, seeded.modelId)
     }
-    if (conversation.activeEntries().none { it is ThinkingLevelEntry } &&
+    if (manager.getBranch().none { it is ThinkingLevelEntry } &&
         seeded.providerId.isNotBlank() && seeded.modelId.isNotBlank()
     ) {
         // Clamped before storing. An unresolvable model fails agent
@@ -102,19 +103,19 @@ internal fun initialModelSettings(
  */
 internal fun settingsSeededFromFold(
     settings: ModelSettings,
-    conversation: Conversation,
+    model: SessionModelSelection?,
     catalog: ProviderCatalog
 ): ModelSettings {
-    val model = conversation.effectiveConfiguration().model ?: return settings
-    if (model.provider == settings.providerId &&
-        model.modelId == settings.modelId
+    val selection = model ?: return settings
+    if (selection.provider == settings.providerId &&
+        selection.modelId == settings.modelId
     ) {
         return settings
     }
-    val catalogModel = catalog.getProvider(model.provider)?.model(model.modelId)
+    val catalogModel = catalog.getProvider(selection.provider)?.model(selection.modelId)
         ?: return settings
     return if (ChatApiRegistry.isSupported(catalogModel.api)) {
-        settings.copy(providerId = model.provider, modelId = model.modelId)
+        settings.copy(providerId = selection.provider, modelId = selection.modelId)
     } else {
         settings
     }

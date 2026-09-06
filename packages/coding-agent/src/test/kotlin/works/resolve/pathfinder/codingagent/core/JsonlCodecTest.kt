@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.codingagent.core.session
+package works.resolve.pathfinder.codingagent.core
 
 import kotlin.test.Test
 import kotlin.test.assertEquals

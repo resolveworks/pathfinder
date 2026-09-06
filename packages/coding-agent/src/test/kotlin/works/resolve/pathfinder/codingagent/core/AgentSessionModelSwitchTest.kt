@@ -22,8 +22,8 @@ import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
+import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.SessionManager
 
 class AgentSessionModelSwitchTest {
 
@@ -85,7 +85,7 @@ class AgentSessionModelSwitchTest {
     fun `setModel records a model_change child of the leaf and advances the leaf`() = runTest {
         val session = AgentSession(
             agent = Agent(model = modelA) { m, _, _ -> okStream(m) },
-            sessionManager = newManager(),
+            manager = newManager(),
             models = models(provider(modelA), provider(modelB))
         )
 
@@ -95,7 +95,7 @@ class AgentSessionModelSwitchTest {
 
         assertEquals(modelB, session.model)
 
-        val entries = session.conversation.entries
+        val entries = session.sessionManager.getEntries()
         assertEquals(3, entries.size)
         val change = entries[2] as ModelChangeEntry
         assertEquals("model_change is a child of the previous leaf", entries[1].id, change.parentId)
@@ -104,7 +104,7 @@ class AgentSessionModelSwitchTest {
         assertEquals(
             "the leaf advanced to the model_change",
             change.id,
-            session.conversation.leafId
+            session.sessionManager.getLeafId()
         )
     }
 
@@ -116,7 +116,7 @@ class AgentSessionModelSwitchTest {
                 streamedModels.add(m)
                 okStream(m)
             },
-            sessionManager = newManager(),
+            manager = newManager(),
             models = models(provider(modelA), provider(modelB))
         )
 
@@ -144,7 +144,7 @@ class AgentSessionModelSwitchTest {
     fun `setModel without configured auth throws and changes nothing`() = runTest {
         val session = AgentSession(
             agent = Agent(model = modelA) { m, _, _ -> okStream(m) },
-            sessionManager = newManager(),
+            manager = newManager(),
             models = models(provider(modelA), provider(modelB, auth = { _, _ -> null }))
         )
 
@@ -155,7 +155,7 @@ class AgentSessionModelSwitchTest {
         )
 
         assertEquals(modelA, session.model)
-        assertEquals(0, session.conversation.entries.size)
+        assertEquals(0, session.sessionManager.getEntries().size)
     }
 
     @Test
@@ -173,7 +173,7 @@ class AgentSessionModelSwitchTest {
                         okStream(m).collect { emit(it) }
                     }
                 },
-                sessionManager = newManager(),
+                manager = newManager(),
                 models = models(provider(modelA), provider(modelB))
             )
 
@@ -185,13 +185,13 @@ class AgentSessionModelSwitchTest {
             // pi appends the model_change under whatever the leaf is: the switch
             // fired before the assistant message_end, so the change hangs off the
             // user entry and the assistant response becomes its child.
-            val entries = session.conversation.entries
+            val entries = session.sessionManager.getEntries()
             assertEquals(3, entries.size)
             val user = entries[0]
             val change = entries[1] as ModelChangeEntry
             assertEquals(user.id, change.parentId)
             assertEquals(change.id, entries[2].parentId)
-            assertEquals(entries[2].id, session.conversation.leafId)
+            assertEquals(entries[2].id, session.sessionManager.getLeafId())
 
             assertEquals(2, session.state.value.messages.size)
         }
@@ -200,7 +200,7 @@ class AgentSessionModelSwitchTest {
     fun `a session without a models stack cannot switch`() = runTest {
         val session = AgentSession(
             agent = Agent(model = modelA) { m, _, _ -> okStream(m) },
-            sessionManager = newManager()
+            manager = newManager()
         )
 
         val error = runCatching { session.setModel(modelB) }.exceptionOrNull()
@@ -209,18 +209,18 @@ class AgentSessionModelSwitchTest {
     }
 
     @Test
-    fun `activeMessages projection still works after a switch`() = runTest {
+    fun `session context projection still works after a switch`() = runTest {
         // Compaction/session-context consumers rely on the tree remaining
         // well-formed after the model_change entry.
         val session = AgentSession(
             agent = Agent(model = modelA) { m, _, _ -> okStream(m) },
-            sessionManager = newManager(),
+            manager = newManager(),
             models = models(provider(modelA), provider(modelB))
         )
         session.prompt("hi")
         session.setModel(modelB)
 
-        val projected = session.conversation.activeMessages()
+        val projected = session.sessionManager.buildSessionContext().messages
         assertEquals(session.state.value.messages, projected)
     }
 }

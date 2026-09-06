@@ -228,7 +228,7 @@ sealed class AgentEvent {
 
     /**
      * Payload of [AgentEvent.CompactionEnd]. Pi's `firstKeptEntryId` is not
-     * ported: [works.resolve.pathfinder.codingagent.core.session.CompactionEntry] stores
+     * ported: [works.resolve.pathfinder.codingagent.core.CompactionEntry] stores
      * the retained tail directly instead of a kept-entry pointer.
      */
     data class CompactionResult(

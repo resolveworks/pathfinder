@@ -35,11 +35,11 @@ import works.resolve.pathfinder.ai.getSupportedThinkingLevels
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.codingagent.core.AgentSession
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionError
-import works.resolve.pathfinder.codingagent.core.session.SessionInfo
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
+import works.resolve.pathfinder.codingagent.core.MessageEntry
+import works.resolve.pathfinder.codingagent.core.ReadonlySessionManager
+import works.resolve.pathfinder.codingagent.core.SessionError
+import works.resolve.pathfinder.codingagent.core.SessionInfo
+import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsStore
@@ -130,9 +130,9 @@ class ChatViewModel(
     private var agentStateJob: Job? = null
     private var agentEventsJob: Job? = null
 
-    /** The conversation tree of the bound session's manager; read here for projection. */
-    private val activeConversation: Conversation
-        get() = agent?.conversation ?: Conversation(emptyList(), null)
+    /** Read view over the bound session's tree (pi's ReadonlySessionManager); null while none is bound. */
+    private val activeSession: ReadonlySessionManager?
+        get() = agent?.sessionManager
 
     /** Agent transcript instance used for the latest committed-message projection. */
     private var observedAgentMessages: List<Message>? = null
@@ -217,7 +217,7 @@ class ChatViewModel(
                 return@launch
             }
             _uiState.update {
-                it.copy(treeRows = buildTreeRows(session.conversation, it.treeFilter))
+                it.copy(treeRows = treeRows(it.treeFilter))
             }
         }
     }
@@ -257,7 +257,7 @@ class ChatViewModel(
             _uiState.update { it.copy(defaultThinkingLevel = level) }
             if (session != null) {
                 _uiState.update {
-                    it.copy(treeRows = buildTreeRows(session.conversation, it.treeFilter))
+                    it.copy(treeRows = treeRows(it.treeFilter))
                 }
             }
         }
@@ -378,16 +378,17 @@ class ChatViewModel(
     fun navigateToTreeEntry(id: String) {
         viewModelScope.launch {
             if (rejectWhileBusy()) return@launch
+            val session = agent ?: return@launch
             // A user-message target is a re-edit even when it is the current
             // leaf (a run that never committed an assistant entry can leave
             // one); only non-user targets are a true no-op at their leaf.
+            val manager = session.sessionManager
             val reEditTarget =
-                (activeConversation.entry(id) as? MessageEntry)?.message is UserMessage
-            if (id == activeConversation.leafId && !reEditTarget) {
+                (manager.getEntry(id) as? MessageEntry)?.message is UserMessage
+            if (id == manager.getLeafId() && !reEditTarget) {
                 setError(ERROR_ALREADY_AT_POINT)
                 return@launch
             }
-            val session = agent ?: return@launch
             val result = try {
                 session.navigateTree(id)
             } catch (e: CancellationException) {
@@ -403,7 +404,10 @@ class ChatViewModel(
                 return@launch
             }
             if (result.cancelled) return@launch
-            val updated = session.conversation
+            // The manager is a live view, so these read the post-navigation
+            // state; navigation requires an idle loop, so nothing mutates
+            // between them.
+            //
             // Navigation never changes the running model: pi's navigateTree
             // rebuilds only the transcript. A branch's folded model re-applies
             // at the next session load, not on navigation.
@@ -412,8 +416,15 @@ class ChatViewModel(
                     // A typed draft is never clobbered by navigation; the
                     // re-edit text lands only in an empty draft.
                     draft = if (it.draft.isBlank()) result.editorText ?: it.draft else it.draft,
-                    messages = projectCommitted(session.agent.state.value.messages, updated),
-                    treeRows = buildTreeRows(updated, it.treeFilter)
+                    messages = projectCommitted(
+                        session.agent.state.value.messages,
+                        manager.getBranch()
+                    ),
+                    treeRows = buildTreeRows(
+                        manager.getTree(),
+                        manager.getLeafId(),
+                        it.treeFilter
+                    )
                 )
             }
         }
@@ -422,7 +433,7 @@ class ChatViewModel(
     /** Switches the tree-panel filter (in-memory only) and re-projects the rows. */
     fun setTreeFilter(filter: TreeFilter) {
         _uiState.update {
-            it.copy(treeFilter = filter, treeRows = buildTreeRows(activeConversation, filter))
+            it.copy(treeFilter = filter, treeRows = treeRows(filter))
         }
     }
 
@@ -598,14 +609,14 @@ class ChatViewModel(
      */
     private suspend fun activateSession(manager: SessionManager, agent: AgentSession): Boolean {
         try {
-            settingsRepository.setActiveSessionId(manager.sessionId)
+            settingsRepository.setActiveSessionId(manager.getSessionId())
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             setError(ERROR_SETTINGS_SAVE, e)
             return false
         }
-        val conversation = agent.conversation
+        val conversation = agent.sessionManager
         val outgoing = _uiState.value
         outgoing.activeSessionId?.let { id ->
             if (outgoing.draft.isBlank()) {
@@ -615,19 +626,26 @@ class ChatViewModel(
                     outgoing.draft
             }
         }
-        val draft = sessionDrafts[manager.sessionId].orEmpty()
+        val draft = sessionDrafts[manager.getSessionId()].orEmpty()
         // Do not suspend between binding and publishing the session id:
         // collection can start immediately, and a frame must never render
         // incoming messages with the outgoing session's scroll state.
         bindAgent(agent)
         _uiState.update {
             it.copy(
-                activeSessionId = manager.sessionId,
+                activeSessionId = manager.getSessionId(),
                 startKey = ChatNavKey,
                 navigationEpoch = it.navigationEpoch + 1,
-                messages = projectCommitted(agent.state.value.messages, conversation),
+                messages = projectCommitted(
+                    agent.state.value.messages,
+                    conversation.getBranch()
+                ),
                 streamingMessage = null,
-                treeRows = buildTreeRows(conversation, it.treeFilter),
+                treeRows = buildTreeRows(
+                    conversation.getTree(),
+                    conversation.getLeafId(),
+                    it.treeFilter
+                ),
                 draft = draft
             )
         }
@@ -708,7 +726,7 @@ class ChatViewModel(
                 _uiState.update {
                     it.copy(
                         isCompacting = false,
-                        treeRows = buildTreeRows(activeConversation, it.treeFilter)
+                        treeRows = treeRows(it.treeFilter)
                     )
                 }
             }
@@ -732,7 +750,7 @@ class ChatViewModel(
                     it.copy(
                         messages = projectCommittedAfterSessionMessageEnd(),
                         streamingMessage = null,
-                        treeRows = buildTreeRows(activeConversation, it.treeFilter)
+                        treeRows = treeRows(it.treeFilter)
                     )
                 }
                 viewModelScope.launch { refreshSessionSummaries() }
@@ -740,6 +758,12 @@ class ChatViewModel(
 
             else -> Unit
         }
+    }
+
+    /** Tree rows over the bound session's current entries and leaf. */
+    private fun treeRows(filter: TreeFilter): List<TreeRow> {
+        val manager = activeSession ?: return emptyList()
+        return buildTreeRows(manager.getTree(), manager.getLeafId(), filter)
     }
 
     /**
@@ -750,8 +774,10 @@ class ChatViewModel(
      * so the first projection sees the old tree — with no follow-up state
      * emission it would otherwise never see the committed message.
      */
-    private fun projectCommittedAfterSessionMessageEnd(): List<TranscriptRow> =
-        projectCommitted(agent?.state?.value?.messages.orEmpty(), activeConversation)
+    private fun projectCommittedAfterSessionMessageEnd(): List<TranscriptRow> = projectCommitted(
+        agent?.state?.value?.messages.orEmpty(),
+        activeSession?.getBranch().orEmpty()
+    )
 
     private fun onAgentState(state: AgentState) {
         // AgentState uses copy-on-write transcript lists. Streaming chunks
@@ -761,7 +787,7 @@ class ChatViewModel(
         val committedProjection = if (state.messages === observedAgentMessages) {
             null
         } else {
-            projectCommitted(state.messages, activeConversation)
+            projectCommitted(state.messages, activeSession?.getBranch().orEmpty())
         }
         observedAgentMessages = state.messages
         // Same reference-stability trick for the model chip: the model
@@ -855,7 +881,7 @@ class ChatViewModel(
         // The chip follows the agent's state emission from setModel above;
         // only the tree needs re-projecting here.
         _uiState.update {
-            it.copy(treeRows = buildTreeRows(session.conversation, it.treeFilter))
+            it.copy(treeRows = treeRows(it.treeFilter))
         }
     }
 

@@ -11,7 +11,7 @@ import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
-import works.resolve.pathfinder.codingagent.core.session.SessionInfo
+import works.resolve.pathfinder.codingagent.core.SessionInfo
 
 /** Which conversation surface the chat root shows: the transcript or the session tree. */
 enum class ConversationView {

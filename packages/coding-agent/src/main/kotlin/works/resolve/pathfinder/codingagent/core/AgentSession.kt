@@ -47,18 +47,12 @@ import works.resolve.pathfinder.codingagent.core.compaction.CompactionResult as 
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
 import works.resolve.pathfinder.codingagent.core.compaction.DEFAULT_COMPACTION_SETTINGS
 import works.resolve.pathfinder.codingagent.core.compaction.GenerateBranchSummaryOptions
-import works.resolve.pathfinder.codingagent.core.compaction.buildSessionContext
 import works.resolve.pathfinder.codingagent.core.compaction.collectEntriesForBranchSummary
 import works.resolve.pathfinder.codingagent.core.compaction.compact
 import works.resolve.pathfinder.codingagent.core.compaction.estimateContextTokens
 import works.resolve.pathfinder.codingagent.core.compaction.generateBranchSummary
-import works.resolve.pathfinder.codingagent.core.compaction.getLatestCompactionEntry
 import works.resolve.pathfinder.codingagent.core.compaction.prepareCompaction
 import works.resolve.pathfinder.codingagent.core.compaction.shouldCompact
-import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
 
 /**
  * Prompt-orchestration facade over [Agent]: owns the session tree via
@@ -79,7 +73,7 @@ import works.resolve.pathfinder.codingagent.core.session.SessionManager
 class AgentSession(
     val agent: Agent,
     /** Session tree and persistence owner. */
-    val sessionManager: SessionManager,
+    private val manager: SessionManager,
     /** Auto-retry budget for failed runs. */
     val retrySettings: RetrySettings = RetrySettings(),
     /** Compaction thresholds. */
@@ -93,8 +87,8 @@ class AgentSession(
     /** Wall clock for minting message timestamps. */
     private val clock: Clock = Clock.System
 ) {
-    /** The session tree snapshot; only [sessionManager] mutates it. */
-    val conversation: Conversation get() = sessionManager.conversation
+    /** Read-only session tree view (upstream's ReadonlySessionManager Pick type; unlike upstream, the mutable manager stays private). */
+    val sessionManager: ReadonlySessionManager get() = manager
 
     val model: Model get() = agent.model
 
@@ -160,17 +154,20 @@ class AgentSession(
     init {
         // A synchronous sink avoids flow-subscription races with prompt().
         agent.attachEventSink { event -> processEvent(event) }
-        if (conversation.entries.isNotEmpty()) {
-            agent.replaceTranscript(conversation.activeMessages())
+        // pi's sdk.ts session restore: transcript and thinking level come
+        // from the branch's session context (compaction-aware, like a fresh
+        // run after compaction).
+        val context = manager.buildSessionContext()
+        if (context.messages.isNotEmpty()) {
+            agent.replaceTranscript(context.messages)
         }
         // Seed the thinking level from the branch's configuration fold; a
-        // branch without a thinking entry folds "off" (the app layer seeds a
-        // default-level entry before adoption).
+        // branch without a thinking entry folds "off" (the app layer seeds
+        // a default-level entry before adoption).
         agent.setThinkingLevel(
             clampThinkingLevel(
                 agent.model,
-                modelThinkingLevelFromWire(conversation.effectiveConfiguration().thinkingLevel)
-                    ?: ModelThinkingLevel.OFF
+                modelThinkingLevelFromWire(context.thinkingLevel) ?: ModelThinkingLevel.OFF
             )
         )
         // There is no persisted active-tools fold (pi has no such entry
@@ -282,7 +279,7 @@ class AgentSession(
             throw IllegalStateException("No API key for ${model.provider}/${model.id}")
         }
         agent.setModel(model)
-        sessionManager.appendModelChange(model.provider, model.id)
+        manager.appendModelChange(model.provider, model.id)
     }
 
     /**
@@ -307,7 +304,7 @@ class AgentSession(
         val previous = agent.thinkingLevel
         agent.setThinkingLevel(effective)
         if (effective != previous) {
-            sessionManager.appendThinkingLevelChange(effective.wire)
+            manager.appendThinkingLevelChange(effective.wire)
         }
     }
 
@@ -363,8 +360,8 @@ class AgentSession(
             }
         }
 
-        val oldLeafId = conversation.leafId
-        val targetEntry = conversation.entry(targetId)
+        val oldLeafId = manager.getLeafId()
+        val targetEntry = manager.getEntry(targetId)
             ?: throw IllegalArgumentException("Entry $targetId not found")
         val userMessage = (targetEntry as? MessageEntry)?.message as? UserMessage
         if (targetId == oldLeafId && userMessage == null) {
@@ -377,7 +374,7 @@ class AgentSession(
         }
 
         // Entries to summarize: from the old leaf to the common ancestor.
-        val collected = collectEntriesForBranchSummary(conversation, oldLeafId, targetId)
+        val collected = collectEntriesForBranchSummary(manager, oldLeafId, targetId)
 
         try {
             var summary: BranchSummaryResult? = null
@@ -423,7 +420,7 @@ class AgentSession(
 
             var summaryEntry: BranchSummaryEntry? = null
             if (summary != null) {
-                val entryId = sessionManager.branchWithSummary(
+                val entryId = manager.branchWithSummary(
                     branchFromId = newLeafId,
                     summary = summary.summary,
                     details = buildJsonObject {
@@ -432,14 +429,14 @@ class AgentSession(
                     },
                     usage = summary.usage
                 )
-                summaryEntry = conversation.entry(entryId) as BranchSummaryEntry
+                summaryEntry = manager.getEntry(entryId) as BranchSummaryEntry
             } else if (newLeafId == null) {
-                sessionManager.resetLeaf()
+                manager.resetLeaf()
             } else {
-                sessionManager.branch(newLeafId)
+                manager.branch(newLeafId)
             }
 
-            agent.replaceTranscript(buildSessionContext(conversation.activeEntries()))
+            agent.replaceTranscript(manager.buildSessionContext().messages)
 
             return NavigationResult(
                 editorText = editorText,
@@ -469,7 +466,7 @@ class AgentSession(
                 // messages later removed from agent state (auto-retry,
                 // overflow recovery) stay in history. A storage failure here
                 // fails the run (pi parity).
-                sessionManager.appendMessage(event.message)
+                manager.appendMessage(event.message)
                 val assistant = event.message as? AssistantMessage
                 if (assistant != null) {
                     lastAssistantMessage = assistant
@@ -563,7 +560,7 @@ class AgentSession(
         // Skip when this assistant message predates the latest compaction
         // boundary: stale pre-compaction usage/errors must not retrigger
         // compaction on the first prompt after one just finished.
-        val compactionEntry = getLatestCompactionEntry(conversation.activeEntries())
+        val compactionEntry = getLatestCompactionEntry(manager.getBranch())
         if (compactionEntry != null && assistantMessage.timestamp <= compactionEntry.timestamp) {
             return false
         }
@@ -655,7 +652,7 @@ class AgentSession(
         var started = false
         compactionInProgress = true
         try {
-            val pathEntries = conversation.activeEntries()
+            val pathEntries = manager.getBranch()
             val preparation = when (
                 val outcome = prepareCompaction(pathEntries, compactionSettings)
             ) {
@@ -715,16 +712,16 @@ class AgentSession(
 
             // Single append point: the tree either gains the compaction entry
             // or does not — an abort mid-summarization leaves it untouched.
-            sessionManager.appendCompaction(
+            manager.appendCompaction(
                 summary = compactResult.summary,
                 firstKeptEntryId = compactResult.firstKeptEntryId,
                 tokensBefore = compactResult.tokensBefore,
                 details = compactResult.details,
                 usage = compactResult.usage
             )
-            val sessionContext = buildSessionContext(conversation.activeEntries())
-            agent.replaceTranscript(sessionContext)
-            val estimatedTokensAfter = sessionContext.sumOf { estimateMessageTokens(it) }
+            val sessionContext = manager.buildSessionContext()
+            agent.replaceTranscript(sessionContext.messages)
+            val estimatedTokensAfter = sessionContext.messages.sumOf { estimateMessageTokens(it) }
 
             _events.emit(
                 AgentEvent.CompactionEnd(

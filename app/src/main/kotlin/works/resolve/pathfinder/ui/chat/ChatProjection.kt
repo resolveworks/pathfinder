@@ -4,9 +4,9 @@ import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
-import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
+import works.resolve.pathfinder.codingagent.core.CompactionEntry
+import works.resolve.pathfinder.codingagent.core.MessageEntry
+import works.resolve.pathfinder.codingagent.core.SessionEntry
 
 /**
  * UI projection of the committed transcript: the active conversation path is
@@ -23,7 +23,7 @@ import works.resolve.pathfinder.codingagent.core.session.MessageEntry
  */
 internal fun projectCommitted(
     liveMessages: List<Message>,
-    conversation: Conversation
+    pathEntries: List<SessionEntry>
 ): List<TranscriptRow> {
     val live = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Message, Boolean>())
     live.addAll(liveMessages)
@@ -33,7 +33,7 @@ internal fun projectCommitted(
         (message as? ToolResultMessage)?.let { liveResults[it.toolCallId] = it }
     }
     val projected = mutableListOf<TranscriptRow>()
-    conversation.activeEntries().forEach { entry ->
+    pathEntries.forEach { entry ->
         when {
             // pi shows the compaction summary in a collapsible; the marker
             // stays minimal — the summary lives in LLM context only.

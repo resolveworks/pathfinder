@@ -1,24 +1,22 @@
-package works.resolve.pathfinder.codingagent.core.compaction
+package works.resolve.pathfinder.codingagent.core
 
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.UserMessage
 
 /**
- * Partial twin of pi's `packages/agent/src/harness/messages.ts` at pin
- * b8b873b98: only `createCompactionSummaryMessage`/
- * `createBranchSummaryMessage` and the four prefix/suffix constants are
- * ported.
+ * Partial twin of pi's classic `packages/coding-agent/src/core/messages.ts`:
+ * only `createCompactionSummaryMessage`/`createBranchSummaryMessage` and the
+ * four prefix/suffix constants are ported.
  *
- * pi's harness synthesizes `compactionSummary` and `branchSummary`
+ * pi's messages.ts synthesizes `compactionSummary` and `branchSummary`
  * agent-message roles that `convertToLlm` later projects to user messages
- * wrapped (verbatim) in the prefix/suffix constants below. Pathfinder
- * cannot extend the sealed core [Message] roles (that would touch
- * out-of-scope exhaustive dispatch in ai/utils/ui), so each role is
- * collapsed into its projection: the create functions here return the
- * wrapped user message directly, and `convertToLlm` is omitted — it is the
- * identity for pathfinder messages, and compaction callers already hold
- * LLM-ready messages.
+ * wrapped (verbatim) in the prefix/suffix constants below. Pathfinder cannot
+ * extend the sealed core [Message] roles (that would touch out-of-scope
+ * exhaustive dispatch in ai/utils/ui), so each role is collapsed into its
+ * projection: the create functions here return the wrapped user message
+ * directly, and `convertToLlm` is omitted — it is the identity for
+ * pathfinder messages, and callers already hold LLM-ready messages.
  *
  * The remaining upstream surface is deliberately omitted:
  * `BashExecutionMessage`/`bashExecutionToText` (pathfinder has no bash

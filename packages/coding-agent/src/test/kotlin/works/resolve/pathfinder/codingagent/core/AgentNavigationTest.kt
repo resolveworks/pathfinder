@@ -27,13 +27,12 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.codingagent.core.BranchSummaryEntry
+import works.resolve.pathfinder.codingagent.core.MessageEntry
 import works.resolve.pathfinder.codingagent.core.RetrySettings
+import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryError
-import works.resolve.pathfinder.codingagent.core.compaction.buildSessionContext
-import works.resolve.pathfinder.codingagent.core.compaction.createBranchSummaryMessage
-import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
+import works.resolve.pathfinder.codingagent.core.createBranchSummaryMessage
 
 class AgentNavigationTest {
 
@@ -77,7 +76,7 @@ class AgentNavigationTest {
         manager.appendMessage(UserMessage.ofText("hello"))
         clock.advanceMillis(1)
         manager.appendMessage(assistant("branch A"))
-        val branchA = manager.leafId!!
+        val branchA = manager.getLeafId()!!
         clock.advanceMillis(1)
         manager.appendMessage(assistant("branch B"))
         return manager to branchA
@@ -116,10 +115,10 @@ class AgentNavigationTest {
             )
         )
         val (manager, branchA) = forkedSession()
-        val oldLeaf = manager.leafId
+        val oldLeaf = manager.getLeafId()
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            sessionManager = manager,
+            manager = manager,
             models = models,
             retrySettings = RetrySettings(enabled = false)
         )
@@ -137,9 +136,9 @@ class AgentNavigationTest {
         assertEquals(branchA, summary!!.parentId)
         assertEquals(oldLeaf, summary.fromId)
         assertTrue(summary.summary.contains("## Goal"))
-        assertEquals(summary.id, session.conversation.leafId)
+        assertEquals(summary.id, session.sessionManager.getLeafId())
 
-        val context = buildSessionContext(session.conversation.activeEntries())
+        val context = buildSessionContext(session.sessionManager.getBranch()).messages
         val projected =
             createBranchSummaryMessage(summary.summary, summary.fromId, summary.timestamp)
         val projectedContent = (projected as UserMessage).content
@@ -161,14 +160,14 @@ class AgentNavigationTest {
         val (manager, branchA) = forkedSession()
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            sessionManager = manager,
+            manager = manager,
             retrySettings = RetrySettings(enabled = false)
         )
 
         val result = session.navigateTree(branchA)
 
         assertNull(result.summaryEntry)
-        assertEquals(branchA, session.conversation.leafId)
+        assertEquals(branchA, session.sessionManager.getLeafId())
     }
 
     @Test
@@ -176,12 +175,12 @@ class AgentNavigationTest {
         val (manager, _) = forkedSession()
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            sessionManager = manager
+            manager = manager
         )
 
-        val result = session.navigateTree(manager.leafId!!)
+        val result = session.navigateTree(manager.getLeafId()!!)
         assertTrue(!result.cancelled)
-        assertEquals(3, session.conversation.entries.size)
+        assertEquals(3, session.sessionManager.getEntries().size)
     }
 
     @Test
@@ -190,16 +189,16 @@ class AgentNavigationTest {
         // message as the leaf; navigating to it must re-edit uniformly.
         val manager = newManager()
         manager.appendMessage(UserMessage.ofText("hello"))
-        val userEntryId = manager.leafId!!
+        val userEntryId = manager.getLeafId()!!
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            sessionManager = manager
+            manager = manager
         )
 
         val result = session.navigateTree(userEntryId)
 
         assertEquals("hello", result.editorText)
-        assertNull(session.conversation.leafId)
+        assertNull(session.sessionManager.getLeafId())
     }
 
     @Test
@@ -207,14 +206,14 @@ class AgentNavigationTest {
         val (manager, _) = forkedSession()
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            sessionManager = manager
+            manager = manager
         )
 
-        val userEntryId = manager.entries.first { it.parentId == null }.id
+        val userEntryId = manager.getEntries().first { it.parentId == null }.id
         val result = session.navigateTree(userEntryId)
 
         assertEquals("hello", result.editorText)
-        assertNull(session.conversation.leafId)
+        assertNull(session.sessionManager.getLeafId())
     }
 
     @Test
@@ -222,7 +221,7 @@ class AgentNavigationTest {
         val (manager, branchA) = forkedSession()
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            sessionManager = manager
+            manager = manager
         )
         try {
             session.navigateTree(branchA, AgentSession.NavigateTreeOptions(summarize = true))
@@ -259,10 +258,10 @@ class AgentNavigationTest {
             )
         )
         val (manager, branchA) = forkedSession()
-        val oldLeaf = manager.leafId
+        val oldLeaf = manager.getLeafId()
         val session = AgentSession(
             agent = Agent(model = model, streamFn = StreamFn { _, _, _ -> flow { } }),
-            sessionManager = manager,
+            manager = manager,
             models = models,
             retrySettings = RetrySettings(enabled = false)
         )
@@ -273,8 +272,8 @@ class AgentNavigationTest {
         } catch (e: BranchSummaryError) {
             assertEquals("provider down", e.message?.substringAfter("Branch summary failed: "))
         }
-        assertTrue(session.conversation.entries.none { it is BranchSummaryEntry })
-        assertEquals(oldLeaf, session.conversation.leafId)
+        assertTrue(session.sessionManager.getEntries().none { it is BranchSummaryEntry })
+        assertEquals(oldLeaf, session.sessionManager.getLeafId())
     }
 
     @Test
@@ -291,7 +290,7 @@ class AgentNavigationTest {
                 streamOptions = SimpleStreamOptions(),
                 streamFn = StreamFn { _, _, _ -> streams.removeFirst() }
             ),
-            sessionManager = manager
+            manager = manager
         )
 
         // Instant abort: the committed empty-content assistant message with
@@ -317,11 +316,11 @@ class AgentNavigationTest {
 
         val file = dir.listFiles { f: File -> f.name.endsWith(".jsonl") }!!.single()
         val reopened = SessionManager.open(file, clock, ioDispatcher = Dispatchers.Unconfined)
-        assertEquals(manager.sessionId, reopened.sessionId)
-        val aborted = reopened.entries.last()
+        assertEquals(manager.getSessionId(), reopened.getSessionId())
+        val aborted = reopened.getEntries().last()
         val abortedMessage = (aborted as MessageEntry).message as AssistantMessage
         assertEquals(StopReason.ABORTED, abortedMessage.stopReason)
         assertTrue(abortedMessage.content.isEmpty())
-        assertEquals(reopened.leafId, aborted.id)
+        assertEquals(reopened.getLeafId(), aborted.id)
     }
 }

@@ -17,8 +17,10 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.calculateContextTokens
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionEntry
+import works.resolve.pathfinder.codingagent.core.MessageEntry
+import works.resolve.pathfinder.codingagent.core.SessionEntry
+import works.resolve.pathfinder.codingagent.core.createBranchSummaryMessage
+import works.resolve.pathfinder.codingagent.core.createCompactionSummaryMessage
 
 class CompactionTest {
 
@@ -95,13 +97,13 @@ class CompactionTest {
 
     @Test
     fun `covers cut-point and turn-start edge cases`() {
-        val thinking = works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry(
+        val thinking = works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry(
             id = createId(),
             parentId = null,
             timestamp = nextId.toLong(),
             thinkingLevel = "high"
         )
-        val modelChange = works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry(
+        val modelChange = works.resolve.pathfinder.codingagent.core.ModelChangeEntry(
             id = createId(),
             parentId = thinking.id,
             timestamp = nextId.toLong(),
@@ -113,7 +115,7 @@ class CompactionTest {
             findCutPoint(listOf<SessionEntry>(thinking, modelChange), 0, 2, 1)
         )
 
-        val branchSummary = works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry(
+        val branchSummary = works.resolve.pathfinder.codingagent.core.BranchSummaryEntry(
             id = createId(),
             parentId = modelChange.id,
             timestamp = nextId.toLong(),
@@ -150,7 +152,7 @@ class CompactionTest {
     @Test
     fun `never cuts immediately after a compaction entry`() {
         val user = createMessageEntry(createUserMessage("user"))
-        val compaction = works.resolve.pathfinder.codingagent.core.session.CompactionEntry(
+        val compaction = works.resolve.pathfinder.codingagent.core.CompactionEntry(
             id = createId(),
             parentId = user.id,
             timestamp = nextId.toLong(),

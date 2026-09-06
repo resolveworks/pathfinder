@@ -84,15 +84,14 @@ import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.codingagent.core.AgentSession
-import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionError
-import works.resolve.pathfinder.codingagent.core.session.SessionErrorCode
-import works.resolve.pathfinder.codingagent.core.session.SessionInfo
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
-import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.BranchSummaryEntry
+import works.resolve.pathfinder.codingagent.core.MessageEntry
+import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.SessionError
+import works.resolve.pathfinder.codingagent.core.SessionErrorCode
+import works.resolve.pathfinder.codingagent.core.SessionInfo
+import works.resolve.pathfinder.codingagent.core.SessionManager
+import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
@@ -446,10 +445,10 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             // The derivation seeds the session with a buffered model_change;
             // the file appears only at the first assistant commit.
             waitUntil {
-                h.sessions.managers[state.activeSessionId!!]!!.conversation.entries.isNotEmpty()
+                h.sessions.managers[state.activeSessionId!!]!!.getEntries().isNotEmpty()
             }
-            val seeded = h.sessions.managers[state.activeSessionId!!]!!.conversation
-            val change = seeded.entries.filterIsInstance<ModelChangeEntry>().single()
+            val seeded = h.sessions.managers[state.activeSessionId!!]!!
+            val change = seeded.getEntries().filterIsInstance<ModelChangeEntry>().single()
             assertEquals("zai", change.provider)
             assertEquals("glm-4.7", change.modelId)
             assertNull(h.sessions.stored(state.activeSessionId!!))

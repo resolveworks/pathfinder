@@ -2,7 +2,7 @@ package works.resolve.pathfinder.ui.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
-import works.resolve.pathfinder.codingagent.core.session.SessionInfo
+import works.resolve.pathfinder.codingagent.core.SessionInfo
 
 class SessionSearchTest {
     private fun makeSession(id: String, modified: Long, allMessagesText: String): SessionInfo =

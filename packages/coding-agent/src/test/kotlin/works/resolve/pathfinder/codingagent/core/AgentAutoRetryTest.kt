@@ -36,9 +36,9 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.codingagent.core.MessageEntry
 import works.resolve.pathfinder.codingagent.core.RetrySettings
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
+import works.resolve.pathfinder.codingagent.core.SessionManager
 
 class AgentAutoRetryTest {
 
@@ -93,7 +93,7 @@ class AgentAutoRetryTest {
             streamOptions = SimpleStreamOptions(),
             streamFn = streams.streamFn
         ),
-        sessionManager = SessionManager.create(
+        manager = SessionManager.create(
             createTempDirectory("auto-retry-test").toFile(),
             ioDispatcher = Dispatchers.Unconfined
         ),
@@ -252,7 +252,7 @@ class AgentAutoRetryTest {
                     tools = listOf(fakeTool),
                     streamFn = streams.streamFn
                 ),
-                sessionManager = SessionManager.create(
+                manager = SessionManager.create(
                     createTempDirectory("auto-retry-test").toFile(),
                     ioDispatcher = Dispatchers.Unconfined
                 ),
@@ -290,7 +290,7 @@ class AgentAutoRetryTest {
             assertEquals("recovered", (recovered.content.single() as TextContent).text)
             assertNull(agent.state.value.errorMessage)
 
-            val tree = agent.conversation.activeMessages()
+            val tree = agent.sessionManager.buildSessionContext().messages
             assertEquals(5, tree.size)
             val errored = tree[3] as AssistantMessage
             assertEquals(StopReason.ERROR, errored.stopReason)
@@ -307,7 +307,7 @@ class AgentAutoRetryTest {
 
         // Every message_end lands in the session tree, including the error
         // removed from agent state by the retry.
-        val entries = agent.conversation.activeEntries()
+        val entries = agent.sessionManager.getBranch()
         assertEquals(3, entries.size)
         val user = entries[0] as MessageEntry
         val text = ((user.message as UserMessage).content.single() as TextContent).text

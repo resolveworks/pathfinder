@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.codingagent.core.session
+package works.resolve.pathfinder.codingagent.core
 
 import java.io.File
 import kotlin.test.Test
@@ -18,7 +18,6 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
-import works.resolve.pathfinder.codingagent.core.compaction.buildSessionContext
 
 /**
  * Port of pi's tree-traversal.test.ts. The appendCustomEntry case and the
@@ -61,6 +60,16 @@ class TreeTraversalTest {
         entryIdFactory = { "e${entryCounter++}" }
     )
 
+    /** A manager over hand-written entries (orphans, self-parents) the append API cannot produce. */
+    private suspend fun writtenManager(dir: File, entries: List<SessionEntry>): SessionManager {
+        val file = File(dir, "written.jsonl")
+        file.writeText(
+            JsonlCodec.encodeHeaderLine(JsonlCodec.SessionHeader("written", 0L)) +
+                entries.joinToString("") { JsonlCodec.encodeEntryLine(it) }
+        )
+        return SessionManager.open(file, clock, ioDispatcher = Dispatchers.Unconfined)
+    }
+
     private fun createTempDirectory(): File =
         kotlin.io.path.createTempDirectory("tree-traversal-test").toFile()
 
@@ -69,13 +78,13 @@ class TreeTraversalTest {
         val m = manager(createTempDirectory())
 
         m.appendMessage(user("first"))
-        val id1 = m.leafId!!
+        val id1 = m.getLeafId()!!
         m.appendMessage(assistant("second"))
-        val id2 = m.leafId!!
+        val id2 = m.getLeafId()!!
         m.appendMessage(user("third"))
-        val id3 = m.leafId!!
+        val id3 = m.getLeafId()!!
 
-        val entries = m.entries
+        val entries = m.getEntries()
         assertEquals(3, entries.size)
 
         val e1 = assertIs<MessageEntry>(entries[0])
@@ -94,15 +103,15 @@ class TreeTraversalTest {
         val m = manager(createTempDirectory())
 
         m.appendMessage(user("hello"))
-        val msgId = m.leafId!!
+        val msgId = m.getLeafId()!!
         m.appendThinkingLevelChange("high")
-        val thinkingId = m.leafId!!
+        val thinkingId = m.getLeafId()!!
         m.appendMessage(assistant("response"))
 
-        val entries = m.entries
+        val entries = m.getEntries()
         assertEquals(3, entries.size)
 
-        val thinking = assertIs<ThinkingLevelEntry>(m.conversation.entry(thinkingId))
+        val thinking = assertIs<ThinkingLevelEntry>(m.getEntry(thinkingId))
         assertEquals("high", thinking.thinkingLevel)
         assertEquals(msgId, thinking.parentId)
         assertEquals(thinkingId, entries[2].parentId)
@@ -113,16 +122,16 @@ class TreeTraversalTest {
         val m = manager(createTempDirectory())
 
         m.appendMessage(user("hello"))
-        val msgId = m.leafId!!
+        val msgId = m.getLeafId()!!
         m.appendModelChange("openai", "gpt-4")
-        val modelChangeId = m.leafId!!
+        val modelChangeId = m.getLeafId()!!
         m.appendMessage(assistant("response"))
 
-        val modelChange = assertIs<ModelChangeEntry>(m.conversation.entry(modelChangeId))
+        val modelChange = assertIs<ModelChangeEntry>(m.getEntry(modelChangeId))
         assertEquals("openai", modelChange.provider)
         assertEquals("gpt-4", modelChange.modelId)
         assertEquals(msgId, modelChange.parentId)
-        assertEquals(modelChangeId, m.entries[2].parentId)
+        assertEquals(modelChangeId, m.getEntries()[2].parentId)
     }
 
     @Test
@@ -130,74 +139,74 @@ class TreeTraversalTest {
         val m = manager(createTempDirectory())
 
         m.appendMessage(user("1"))
-        val id1 = m.leafId!!
+        val id1 = m.getLeafId()!!
         m.appendMessage(assistant("2"))
-        val id2 = m.leafId!!
+        val id2 = m.getLeafId()!!
         m.appendCompaction("summary", id1, 1000, null, usage)
-        val compactionId = m.leafId!!
+        val compactionId = m.getLeafId()!!
         m.appendMessage(user("3"))
 
-        val compaction = assertIs<CompactionEntry>(m.conversation.entry(compactionId))
+        val compaction = assertIs<CompactionEntry>(m.getEntry(compactionId))
         assertEquals(id2, compaction.parentId)
         assertEquals("summary", compaction.summary)
         assertEquals(id1, compaction.firstKeptEntryId)
         assertEquals(1000, compaction.tokensBefore)
         assertEquals(usage, compaction.usage)
-        assertEquals(compactionId, m.entries[3].parentId)
+        assertEquals(compactionId, m.getEntries()[3].parentId)
     }
 
     @Test
     fun `leaf pointer advances after each append`() = runTest {
         val m = manager(createTempDirectory())
 
-        assertNull(m.leafId)
+        assertNull(m.getLeafId())
 
         m.appendMessage(user("1"))
-        val id1 = m.leafId!!
-        assertEquals(id1, m.leafId)
+        val id1 = m.getLeafId()!!
+        assertEquals(id1, m.getLeafId())
 
         m.appendMessage(assistant("2"))
-        val id2 = m.leafId!!
-        assertEquals(id2, m.leafId)
+        val id2 = m.getLeafId()!!
+        assertEquals(id2, m.getLeafId())
 
         m.appendThinkingLevelChange("high")
-        val id3 = m.leafId!!
-        assertEquals(id3, m.leafId)
+        val id3 = m.getLeafId()!!
+        assertEquals(id3, m.getLeafId())
     }
 
     @Test
-    fun `activeEntries returns empty list for empty session`() = runTest {
+    fun `getBranch returns empty list for empty session`() = runTest {
         val m = manager(createTempDirectory())
-        assertTrue(m.conversation.activeEntries().isEmpty())
+        assertTrue(m.getBranch().isEmpty())
     }
 
     @Test
-    fun `activeEntries returns single entry path`() = runTest {
+    fun `getBranch returns single entry path`() = runTest {
         val m = manager(createTempDirectory())
         m.appendMessage(user("hello"))
-        val id = m.leafId!!
+        val id = m.getLeafId()!!
 
-        val path = m.conversation.activeEntries()
+        val path = m.getBranch()
         assertEquals(1, path.size)
         assertEquals(id, path[0].id)
     }
 
     @Test
-    fun `activeEntries returns full path from root to leaf`() = runTest {
+    fun `getBranch returns full path from root to leaf`() = runTest {
         val m = manager(createTempDirectory())
 
         m.appendMessage(user("1"))
-        val id1 = m.leafId!!
+        val id1 = m.getLeafId()!!
         m.appendMessage(assistant("2"))
-        val id2 = m.leafId!!
+        val id2 = m.getLeafId()!!
         m.appendThinkingLevelChange("high")
-        val id3 = m.leafId!!
+        val id3 = m.getLeafId()!!
         m.appendMessage(user("3"))
-        val id4 = m.leafId!!
+        val id4 = m.getLeafId()!!
 
         assertEquals(
             listOf(id1, id2, id3, id4),
-            m.conversation.activeEntries().map { it.id }
+            m.getBranch().map { it.id }
         )
     }
 
@@ -206,22 +215,21 @@ class TreeTraversalTest {
         val m = manager(createTempDirectory())
 
         m.appendMessage(user("1"))
-        val id1 = m.leafId!!
+        val id1 = m.getLeafId()!!
         m.appendMessage(assistant("2"))
-        val id2 = m.leafId!!
+        val id2 = m.getLeafId()!!
         m.appendMessage(user("3"))
         m.appendMessage(assistant("4"))
 
-        // pi's getBranch(entryId): the Kotlin projection is Conversation
-        // over the same entries with an explicit leaf.
-        val path = Conversation(m.entries, id2).activeEntries()
+        val path = m.getBranch(id2)
+        assertEquals(listOf(id1, id2), path.map { it.id })
         assertEquals(listOf(id1, id2), path.map { it.id })
     }
 
     @Test
     fun `tree returns empty list for empty session`() = runTest {
         val m = manager(createTempDirectory())
-        assertTrue(m.conversation.tree().isEmpty())
+        assertTrue(m.getTree().isEmpty())
     }
 
     @Test
@@ -229,13 +237,13 @@ class TreeTraversalTest {
         val m = manager(createTempDirectory())
 
         m.appendMessage(user("1"))
-        val id1 = m.leafId!!
+        val id1 = m.getLeafId()!!
         m.appendMessage(assistant("2"))
-        val id2 = m.leafId!!
+        val id2 = m.getLeafId()!!
         m.appendMessage(user("3"))
-        val id3 = m.leafId!!
+        val id3 = m.getLeafId()!!
 
-        val tree = m.conversation.tree()
+        val tree = m.getTree()
         assertEquals(1, tree.size)
 
         val root = tree[0]
@@ -253,15 +261,15 @@ class TreeTraversalTest {
 
         m.appendMessage(user("1"))
         m.appendMessage(assistant("2"))
-        val id2 = m.leafId!!
+        val id2 = m.getLeafId()!!
         m.appendMessage(user("3"))
-        val id3 = m.leafId!!
+        val id3 = m.getLeafId()!!
 
         m.branch(id2)
         m.appendMessage(user("4-branch"))
-        val id4 = m.leafId!!
+        val id4 = m.getLeafId()!!
 
-        val tree = m.conversation.tree()
+        val tree = m.getTree()
         assertEquals(1, tree.size)
 
         val node2 = tree[0].children.single()
@@ -276,19 +284,19 @@ class TreeTraversalTest {
 
         m.appendMessage(user("root"))
         m.appendMessage(assistant("response"))
-        val id2 = m.leafId!!
+        val id2 = m.getLeafId()!!
 
         m.branch(id2)
         m.appendMessage(user("branch-A"))
-        val idA = m.leafId!!
+        val idA = m.getLeafId()!!
         m.branch(id2)
         m.appendMessage(user("branch-B"))
-        val idB = m.leafId!!
+        val idB = m.getLeafId()!!
         m.branch(id2)
         m.appendMessage(user("branch-C"))
-        val idC = m.leafId!!
+        val idC = m.getLeafId()!!
 
-        val node2 = m.conversation.tree()[0].children.single()
+        val node2 = m.getTree()[0].children.single()
         assertEquals(id2, node2.entry.id)
         assertEquals(3, node2.children.size)
         assertEquals(listOf(idA, idB, idC), node2.children.map { it.entry.id }.sorted())
@@ -300,20 +308,20 @@ class TreeTraversalTest {
 
         m.appendMessage(user("1"))
         m.appendMessage(assistant("2"))
-        val id2 = m.leafId!!
+        val id2 = m.getLeafId()!!
         m.appendMessage(user("3"))
-        val id3 = m.leafId!!
+        val id3 = m.getLeafId()!!
         m.appendMessage(assistant("4"))
 
         m.branch(id2)
         m.appendMessage(user("5"))
-        val id5 = m.leafId!!
+        val id5 = m.getLeafId()!!
         m.appendMessage(assistant("6"))
 
         m.branch(id5)
         m.appendMessage(user("7"))
 
-        val tree = m.conversation.tree()
+        val tree = m.getTree()
 
         val node2 = tree[0].children.single()
         assertEquals(2, node2.children.size)
@@ -326,18 +334,80 @@ class TreeTraversalTest {
     }
 
     @Test
+    fun `tree promotes orphans to roots`() = runTest {
+        val m = writtenManager(
+            createTempDirectory(),
+            listOf(
+                MessageEntry("orphan", "missing", 3L, user("x")),
+                MessageEntry("root", null, 1L, user("y"))
+            )
+        )
+
+        assertEquals(listOf("root", "orphan"), m.getTree().map { it.entry.id })
+    }
+
+    @Test
+    fun `tree sorts siblings oldest first`() = runTest {
+        val m = writtenManager(
+            createTempDirectory(),
+            listOf(
+                MessageEntry("young", "root", 30L, user("y")),
+                MessageEntry("middle", "root", 20L, user("m")),
+                MessageEntry("root", null, 0L, user("r")),
+                MessageEntry("old", "root", 10L, user("o"))
+            )
+        )
+
+        assertEquals(
+            listOf("old", "middle", "young"),
+            m.getTree().single().children.map { it.entry.id }
+        )
+    }
+
+    @Test
+    fun `tree treats a self-parent as root`() = runTest {
+        val m = writtenManager(
+            createTempDirectory(),
+            listOf(MessageEntry("weird", "weird", 1L, user("w")))
+        )
+
+        assertEquals(listOf("weird"), m.getTree().map { it.entry.id })
+    }
+
+    @Test
+    fun `tree builds a deep linear session without recursion`() = runTest {
+        val entries = ArrayList<SessionEntry>(20_000)
+        var parent: String? = null
+        repeat(20_000) { i ->
+            val entry = MessageEntry("d$i", parent, i.toLong(), user("m$i"))
+            entries.add(entry)
+            parent = entry.id
+        }
+        val m = writtenManager(createTempDirectory(), entries)
+
+        var node = m.getTree().single()
+        var height = 1
+        while (node.children.isNotEmpty()) {
+            node = node.children.single()
+            height++
+        }
+        assertEquals(20_000, height)
+        assertEquals(parent, node.entry.id)
+    }
+
+    @Test
     fun `branch moves leaf pointer to specified entry`() = runTest {
         val m = manager(createTempDirectory())
 
         m.appendMessage(user("1"))
-        val id1 = m.leafId!!
+        val id1 = m.getLeafId()!!
         m.appendMessage(assistant("2"))
         m.appendMessage(user("3"))
-        val id3 = m.leafId!!
+        val id3 = m.getLeafId()!!
 
-        assertEquals(id3, m.leafId)
+        assertEquals(id3, m.getLeafId())
         m.branch(id1)
-        assertEquals(id1, m.leafId)
+        assertEquals(id1, m.getLeafId())
     }
 
     @Test
@@ -356,14 +426,14 @@ class TreeTraversalTest {
         val m = manager(createTempDirectory())
 
         m.appendMessage(user("1"))
-        val id1 = m.leafId!!
+        val id1 = m.getLeafId()!!
         m.appendMessage(assistant("2"))
 
         m.branch(id1)
         m.appendMessage(user("branched"))
-        val id3 = m.leafId!!
+        val id3 = m.getLeafId()!!
 
-        assertEquals(id1, m.conversation.entry(id3)!!.parentId)
+        assertEquals(id1, m.getEntry(id3)!!.parentId)
     }
 
     @Test
@@ -372,16 +442,16 @@ class TreeTraversalTest {
             val m = manager(createTempDirectory())
 
             m.appendMessage(user("1"))
-            val id1 = m.leafId!!
+            val id1 = m.getLeafId()!!
             m.appendMessage(assistant("2"))
             m.appendMessage(user("3"))
-            val id3 = m.leafId!!
+            val id3 = m.getLeafId()!!
 
             val summaryId = m.branchWithSummary(id1, "Summary of abandoned work", null, usage)
 
-            assertEquals(summaryId, m.leafId)
+            assertEquals(summaryId, m.getLeafId())
 
-            val summary = assertIs<BranchSummaryEntry>(m.conversation.entry(summaryId))
+            val summary = assertIs<BranchSummaryEntry>(m.getEntry(summaryId))
             assertEquals(id1, summary.parentId)
             assertEquals(id3, summary.fromId)
             assertEquals("Summary of abandoned work", summary.summary)
@@ -403,26 +473,26 @@ class TreeTraversalTest {
     @Test
     fun `leaf entry is null for empty session and the current leaf otherwise`() = runTest {
         val m = manager(createTempDirectory())
-        assertNull(m.leafId?.let { m.conversation.entry(it) })
+        assertNull(m.getLeafId()?.let { m.getEntry(it) })
 
         m.appendMessage(user("1"))
         m.appendMessage(assistant("2"))
-        val id2 = m.leafId!!
+        val id2 = m.getLeafId()!!
 
-        assertEquals(id2, m.conversation.entry(m.leafId!!)!!.id)
+        assertEquals(id2, m.getEntry(m.getLeafId()!!)!!.id)
     }
 
     @Test
     fun `entry lookup returns null for non-existent id and the entry otherwise`() = runTest {
         val m = manager(createTempDirectory())
-        assertNull(m.conversation.entry("nonexistent"))
+        assertNull(m.getEntry("nonexistent"))
 
         m.appendMessage(user("first"))
-        val id1 = m.leafId!!
+        val id1 = m.getLeafId()!!
         m.appendMessage(assistant("second"))
-        val id2 = m.leafId!!
+        val id2 = m.getLeafId()!!
 
-        val entry1 = assertIs<MessageEntry>(m.conversation.entry(id1))
+        val entry1 = assertIs<MessageEntry>(m.getEntry(id1))
         assertEquals(
             "first",
             (entry1.message as UserMessage).content.single().let {
@@ -430,7 +500,7 @@ class TreeTraversalTest {
             }.text
         )
 
-        val entry2 = assertIs<MessageEntry>(m.conversation.entry(id2))
+        val entry2 = assertIs<MessageEntry>(m.getEntry(id2))
         val assistant = assertIs<AssistantMessage>(entry2.message)
         assertEquals("second", (assistant.content.single() as TextContent).text)
     }
@@ -441,13 +511,13 @@ class TreeTraversalTest {
 
         m.appendMessage(user("msg1"))
         m.appendMessage(assistant("msg2"))
-        val id2 = m.leafId!!
+        val id2 = m.getLeafId()!!
         m.appendMessage(user("msg3"))
 
         m.branch(id2)
         m.appendMessage(assistant("msg4-branch"))
 
-        val messages = buildSessionContext(m.conversation.activeEntries())
+        val messages = buildSessionContext(m.getBranch()).messages
         assertEquals(3, messages.size)
 
         assertEquals(
@@ -472,7 +542,7 @@ class TreeTraversalTest {
         val m = manager(dir)
 
         m.appendMessage(user("question"))
-        val rootId = m.leafId!!
+        val rootId = m.getLeafId()!!
         m.appendMessage(assistant("answer"))
         m.appendMessage(
             ToolResultMessage(
@@ -490,12 +560,13 @@ class TreeTraversalTest {
         val file = dir.listFiles { f: File -> f.name.endsWith(".jsonl") }!!.single()
         val reopened = SessionManager.open(file, clock, ioDispatcher = Dispatchers.Unconfined)
 
-        val compaction = assertIs<CompactionEntry>(reopened.entries.first { it is CompactionEntry })
+        val compaction =
+            assertIs<CompactionEntry>(reopened.getEntries().first { it is CompactionEntry })
         assertEquals(usage, compaction.usage)
         val branchSummary =
-            assertIs<BranchSummaryEntry>(reopened.entries.first { it is BranchSummaryEntry })
+            assertIs<BranchSummaryEntry>(reopened.getEntries().first { it is BranchSummaryEntry })
         assertEquals(usage, branchSummary.usage)
-        val toolResult = reopened.entries
+        val toolResult = reopened.getEntries()
             .filterIsInstance<MessageEntry>()
             .map { it.message }
             .filterIsInstance<ToolResultMessage>()

@@ -59,11 +59,10 @@ import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.codingagent.core.AgentSession
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.SessionError
-import works.resolve.pathfinder.codingagent.core.session.SessionErrorCode
-import works.resolve.pathfinder.codingagent.core.session.SessionInfo
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
+import works.resolve.pathfinder.codingagent.core.SessionError
+import works.resolve.pathfinder.codingagent.core.SessionErrorCode
+import works.resolve.pathfinder.codingagent.core.SessionInfo
+import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
@@ -187,7 +186,7 @@ internal class TestSessionSource(tmpFolder: TemporaryFolder) : SessionSource {
             idFactory = { "sess-" + nextId++ },
             ioDispatcher = Dispatchers.Unconfined
         )
-        managers[manager.sessionId] = manager
+        managers[manager.getSessionId()] = manager
         return manager
     }
 
@@ -195,7 +194,7 @@ internal class TestSessionSource(tmpFolder: TemporaryFolder) : SessionSource {
         file,
         idFactory = { "sess-" + nextId++ },
         ioDispatcher = Dispatchers.Unconfined
-    )?.also { managers[it.sessionId] = it }
+    )?.also { managers[it.getSessionId()] = it }
 
     override suspend fun list(): List<SessionInfo> {
         listCalls += 1
@@ -204,10 +203,10 @@ internal class TestSessionSource(tmpFolder: TemporaryFolder) : SessionSource {
     }
 
     /** Re-reads a session from disk; null while it has never been flushed. */
-    suspend fun stored(id: String): Conversation? =
+    suspend fun stored(id: String): SessionManager? =
         SessionManager.list(dir, ioDispatcher = Dispatchers.Unconfined)
             .firstOrNull { it.id == id }
-            ?.let { open(it.path) }?.conversation
+            ?.let { open(it.path) }
 }
 
 /**
@@ -339,7 +338,7 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
                     scriptedStreams.poll() ?: flow { kotlinx.coroutines.awaitCancellation() }
                 }
             ),
-            sessionManager = sessionManager,
+            manager = sessionManager,
             tools = listOf(fakeWebSearchTool),
             retrySettings = settings.retry,
             compactionSettings = settings.compaction,

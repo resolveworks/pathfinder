@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.codingagent.core.session
+package works.resolve.pathfinder.codingagent.core
 
 import java.io.File
 import kotlin.test.Test
@@ -16,7 +16,6 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
-import works.resolve.pathfinder.codingagent.core.compaction.buildContextEntries
 
 /**
  * Port of pi's load-entries.test.ts. That file targets the inMemory
@@ -82,9 +81,9 @@ class LoadEntriesTest {
             it.appendMessage(user("again"))
         }
 
-        assertEquals(source.entries.size, loaded.entries.size)
-        assertContentEquals(source.entries.map { it.id }, loaded.entries.map { it.id })
-        assertIs<ModelChangeEntry>(loaded.entries[1])
+        assertEquals(source.getEntries().size, loaded.getEntries().size)
+        assertContentEquals(source.getEntries().map { it.id }, loaded.getEntries().map { it.id })
+        assertIs<ModelChangeEntry>(loaded.getEntries()[1])
     }
 
     @Test
@@ -94,13 +93,13 @@ class LoadEntriesTest {
             it.appendMessage(user("hello"))
             it.appendMessage(user("again"))
         }
-        val lastId = loaded.entries.last().id
+        val lastId = loaded.getEntries().last().id
 
         loaded.appendMessage(user("continued"))
-        val appendedId = loaded.leafId!!
+        val appendedId = loaded.getLeafId()!!
 
-        assertEquals(appendedId, loaded.leafId)
-        assertEquals(lastId, loaded.conversation.entry(appendedId)!!.parentId)
+        assertEquals(appendedId, loaded.getLeafId())
+        assertEquals(lastId, loaded.getEntry(appendedId)!!.parentId)
     }
 
     @Test
@@ -109,7 +108,7 @@ class LoadEntriesTest {
         val source = manager(dir)
         repeat(50) { source.appendMessage(user("message $it")) }
         source.appendMessage(assistant("flush"))
-        val loadedIds = source.entries.map { it.id }
+        val loadedIds = source.getEntries().map { it.id }
         val file = jsonlFiles(dir).single()
 
         // The factory offers colliding ids first, then a fresh one.
@@ -122,7 +121,7 @@ class LoadEntriesTest {
         )
 
         loaded.appendMessage(user("continued"))
-        val appendedId = loaded.leafId!!
+        val appendedId = loaded.getLeafId()!!
         assertFalse(loadedIds.contains(appendedId))
         assertEquals("fresh", appendedId)
     }
@@ -132,13 +131,13 @@ class LoadEntriesTest {
         val dir = createTempDirectory()
         val (_, loaded) = loadedPair(dir) {
             it.appendMessage(user("hello"))
-            val first = it.entries.last().id
+            val first = it.getEntries().last().id
             it.appendMessage(user("abandoned"))
             it.branch(first)
             it.appendMessage(user("kept"))
         }
 
-        val roots = loaded.conversation.tree()
+        val roots = loaded.getTree()
         assertEquals(1, roots.size)
         assertEquals(2, roots[0].children.size)
     }
@@ -149,13 +148,13 @@ class LoadEntriesTest {
         val (source, loaded) = loadedPair(dir) {
             it.appendMessage(user("dropped"))
             it.appendMessage(user("kept"))
-            val keptId = it.entries.last().id
+            val keptId = it.getEntries().last().id
             it.appendMessage(assistant("answer"))
             it.appendCompaction("summary so far", keptId, 1000, null, null)
         }
 
-        val keptId = source.entries[1].id
-        val context = buildContextEntries(loaded.conversation.activeEntries())
+        val keptId = source.getEntries()[1].id
+        val context = buildContextEntries(loaded.getEntries(), loaded.getLeafId())
         assertTrue(context.any { it.id == keptId })
     }
 

@@ -26,7 +26,7 @@ import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
+import works.resolve.pathfinder.codingagent.core.SessionManager
 
 class AgentSessionToolsTest {
 
@@ -86,7 +86,7 @@ class AgentSessionToolsTest {
             { _, _, _ -> okStream() }
     ): AgentSession = AgentSession(
         agent = Agent(model = model, streamFn = StreamFn(streamFn)),
-        sessionManager = SessionManager.create(
+        manager = SessionManager.create(
             createTempDirectory("tools-test").toFile(),
             ioDispatcher = Dispatchers.Unconfined
         ),
@@ -129,7 +129,7 @@ class AgentSessionToolsTest {
             buildSystemPrompt(listOf(webFetch, webSearch)),
             s.agent.state.value.systemPrompt
         )
-        assertEquals("no session entry is appended", 0, s.conversation.entries.size)
+        assertEquals("no session entry is appended", 0, s.sessionManager.getEntries().size)
 
         s.prompt("go")
         assertEquals(listOf("web_fetch", "web_search"), contexts.single().tools.map { it.name })

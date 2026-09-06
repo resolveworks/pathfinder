@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.codingagent.core.session
+package works.resolve.pathfinder.codingagent.core
 
 import java.io.File
 import kotlin.test.Test
@@ -14,7 +14,6 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
-import works.resolve.pathfinder.codingagent.core.compaction.buildSessionContext
 
 /**
  * Port of pi's save-entry.test.ts. That file's single case exercises
@@ -55,23 +54,23 @@ class SaveEntryTest {
         val m = manager(dir)
 
         m.appendMessage(user("hello"))
-        val firstId = m.entries.last().id
+        val firstId = m.getEntries().last().id
         m.appendModelChange("anthropic", "claude-test")
-        val modelChangeId = m.entries.last().id
+        val modelChangeId = m.getEntries().last().id
         m.appendMessage(assistant("hi"))
-        val msg2Id = m.entries.last().id
+        val msg2Id = m.getEntries().last().id
 
-        assertEquals(3, m.entries.size)
+        assertEquals(3, m.getEntries().size)
 
-        val modelChange = assertIs<ModelChangeEntry>(m.conversation.entry(modelChangeId))
+        val modelChange = assertIs<ModelChangeEntry>(m.getEntry(modelChangeId))
         assertEquals("anthropic", modelChange.provider)
         assertEquals("claude-test", modelChange.modelId)
         assertEquals(firstId, modelChange.parentId)
 
-        val path = m.conversation.activeEntries()
+        val path = m.getBranch()
         assertEquals(listOf(firstId, modelChangeId, msg2Id), path.map { it.id })
 
-        val context = buildSessionContext(path)
+        val context = buildSessionContext(path).messages
         assertEquals(2, context.size)
         assertTrue(context.all { it !is AssistantMessage || it.model == "claude-test" })
     }

@@ -40,10 +40,10 @@ import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.SseEvent
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
+import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.buildSystemPrompt
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
-import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
 import works.resolve.pathfinder.data.settings.ModelSettings
 
 class NativeAgentFactoryTest {
@@ -528,7 +528,7 @@ class NativeAgentFactoryTest {
 
             val state = agent.state.value
             assertEquals(4, state.messages.size)
-            val entries = agent.conversation.entries
+            val entries = agent.sessionManager.getEntries()
             assertTrue(
                 entries[2] is ModelChangeEntry
             )

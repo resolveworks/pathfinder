@@ -1,4 +1,4 @@
-package works.resolve.pathfinder.codingagent.core.session
+package works.resolve.pathfinder.codingagent.core
 
 import java.io.File
 import kotlin.test.Test
@@ -50,7 +50,7 @@ class CustomSessionIdTest {
             idFactory = { "my-custom-id" },
             ioDispatcher = Dispatchers.Unconfined
         )
-        assertEquals("my-custom-id", m.sessionId)
+        assertEquals("my-custom-id", m.getSessionId())
     }
 
     @Test
@@ -61,7 +61,7 @@ class CustomSessionIdTest {
             idFactory = { "abc-123_def.456" },
             ioDispatcher = Dispatchers.Unconfined
         )
-        assertEquals("abc-123_def.456", m.sessionId)
+        assertEquals("abc-123_def.456", m.getSessionId())
     }
 
     @Test
@@ -88,7 +88,7 @@ class CustomSessionIdTest {
             clock,
             ioDispatcher = Dispatchers.Unconfined
         )
-        assertTrue(uuidV7Regex.matches(m.sessionId))
+        assertTrue(uuidV7Regex.matches(m.getSessionId()))
     }
 
     @Test
@@ -123,8 +123,8 @@ class CustomSessionIdTest {
             ioDispatcher = Dispatchers.Unconfined
         )
 
-        assertEquals("created-session-id", m.sessionId)
-        val file = m.sessionFile!!
+        assertEquals("created-session-id", m.getSessionId())
+        val file = m.getSessionFile()!!
         assertTrue("created-session-id" in file.name)
         assertTrue(
             Regex("^\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-\\d{3}Z_created-session-id\\.jsonl$")

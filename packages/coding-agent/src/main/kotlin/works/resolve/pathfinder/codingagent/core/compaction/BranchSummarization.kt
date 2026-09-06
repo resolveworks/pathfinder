@@ -18,15 +18,17 @@ import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
 import works.resolve.pathfinder.ai.utils.contentText
-import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
-import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionError
-import works.resolve.pathfinder.codingagent.core.session.SessionErrorCode
-import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.BranchSummaryEntry
+import works.resolve.pathfinder.codingagent.core.CompactionEntry
+import works.resolve.pathfinder.codingagent.core.MessageEntry
+import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.ReadonlySessionManager
+import works.resolve.pathfinder.codingagent.core.SessionEntry
+import works.resolve.pathfinder.codingagent.core.SessionError
+import works.resolve.pathfinder.codingagent.core.SessionErrorCode
+import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.createBranchSummaryMessage
+import works.resolve.pathfinder.codingagent.core.createCompactionSummaryMessage
 
 data class BranchSummaryResult(
     val summary: String,
@@ -43,46 +45,36 @@ data class BranchPreparation(
 
 data class CollectEntriesResult(val entries: List<SessionEntry>, val commonAncestorId: String?)
 
-/** Leaf→root walk over [lookup]; stops at a missing parent (orphan safety). */
-private fun walkToRoot(lookup: (String) -> SessionEntry?, fromId: String): List<SessionEntry> {
-    val path = ArrayList<SessionEntry>()
-    var current = lookup(fromId)
-    val seen = HashSet<String>()
-    while (current != null && seen.add(current.id)) {
-        path.add(current)
-        current = current.parentId?.let(lookup)
-    }
-    return path
-}
-
 /**
- * The old branch's entries from (exclusive) the deepest common ancestor of
- * [oldLeafId] and [targetId] down to [oldLeafId], in chronological order;
- * empty when there is no old leaf or nothing unique to summarize.
+ * pi's collectEntriesForBranchSummary: the old branch's entries from
+ * (exclusive) the deepest common ancestor of [oldLeafId] and [targetId]
+ * down to [oldLeafId], in chronological order. Does not stop at
+ * compaction boundaries — those are included and their summaries become
+ * context.
  */
 fun collectEntriesForBranchSummary(
-    conversation: Conversation,
+    session: ReadonlySessionManager,
     oldLeafId: String?,
     targetId: String
 ): CollectEntriesResult {
     if (oldLeafId == null) {
         return CollectEntriesResult(entries = emptyList(), commonAncestorId = null)
     }
-    val oldPath = walkToRoot(conversation::entry, oldLeafId).map { it.id }.toHashSet()
-    // The walk is leaf→root, so the first id shared with the old path is
-    // the deepest common ancestor.
-    val targetPath = walkToRoot(conversation::entry, targetId)
+    val oldPath = session.getBranch(oldLeafId).mapTo(mutableSetOf()) { it.id }
+    // The target path is root-first, so scanning it backwards finds the
+    // deepest common ancestor.
+    val targetPath = session.getBranch(targetId)
     var commonAncestorId: String? = null
-    for (entry in targetPath) {
-        if (entry.id in oldPath) {
-            commonAncestorId = entry.id
+    for (index in targetPath.indices.reversed()) {
+        if (targetPath[index].id in oldPath) {
+            commonAncestorId = targetPath[index].id
             break
         }
     }
     val entries = mutableListOf<SessionEntry>()
     var current: String? = oldLeafId
     while (current != null && current != commonAncestorId) {
-        val entry = conversation.entry(current)
+        val entry = session.getEntry(current)
             ?: throw SessionError(SessionErrorCode.NOT_FOUND, "Entry not found: $current")
         entries.add(entry)
         current = entry.parentId

@@ -1,6 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
-import works.resolve.pathfinder.codingagent.core.session.SessionInfo
+import works.resolve.pathfinder.codingagent.core.SessionInfo
 
 internal data class FuzzyMatch(val matches: Boolean, val score: Double)
 
@@ -207,7 +207,7 @@ internal fun matchSession(searchText: String, parsed: ParsedSearchQuery): MatchR
     return MatchResult(matches = true, score = totalScore)
 }
 
-/** Search text mirrors pi's getSearchText, minus cwd which Android sessions don't carry. */
+/** Search text mirrors pi's getSearchText, minus name and cwd: sessions can't be named and Android sessions carry no cwd. */
 private fun searchText(session: SessionInfo): String = "${session.id} ${session.allMessagesText}"
 
 internal fun filterAndSortSessions(

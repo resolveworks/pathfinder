@@ -32,9 +32,12 @@ import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.utils.Retry
 import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
-import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionEntry
+import works.resolve.pathfinder.codingagent.core.COMPACTION_SUMMARY_PREFIX
+import works.resolve.pathfinder.codingagent.core.COMPACTION_SUMMARY_SUFFIX
+import works.resolve.pathfinder.codingagent.core.CompactionEntry
+import works.resolve.pathfinder.codingagent.core.MessageEntry
+import works.resolve.pathfinder.codingagent.core.SessionEntry
+import works.resolve.pathfinder.codingagent.core.buildSessionContext
 import works.resolve.pathfinder.codingagent.core.utils.addUsage
 
 class CompactionLlmTest {
@@ -182,7 +185,9 @@ class CompactionLlmTest {
             createCompactionEntry("Summary of 1,a,2,b", a2.id, firstKeptEntryId = u2.id)
         val u3 = createMessageEntry(createUserMessage("3"), compaction.id)
         val a3 = createMessageEntry(createAssistantMessage("c"), u3.id)
-        val loaded = buildSessionContext(listOf<SessionEntry>(u1, a1, u2, a2, compaction, u3, a3))
+        val loaded = buildSessionContext(
+            listOf<SessionEntry>(u1, a1, u2, a2, compaction, u3, a3)
+        ).messages
         assertEquals(5, loaded.size)
         assertEquals(
             COMPACTION_SUMMARY_PREFIX + "Summary of 1,a,2,b" + COMPACTION_SUMMARY_SUFFIX,
@@ -236,7 +241,7 @@ class CompactionLlmTest {
         assertEquals("First summary", preparation.previousSummary)
         assertTrue(pathEntries.any { it.id == preparation.firstKeptEntryId })
         assertEquals(
-            estimateContextTokens(buildSessionContext(pathEntries)).tokens,
+            estimateContextTokens(buildSessionContext(pathEntries).messages).tokens,
             preparation.tokensBefore
         )
     }

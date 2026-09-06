@@ -25,7 +25,7 @@ import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.codingagent.core.AgentSession
-import works.resolve.pathfinder.codingagent.core.session.SessionManager
+import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.data.settings.ModelSettings
 
 /**
@@ -108,7 +108,7 @@ class NativeAgentFactory(
                 model = effectiveModel,
                 tools = tools.toList(),
                 streamOptions = SimpleStreamOptions(
-                    sessionId = sessionManager.sessionId,
+                    sessionId = sessionManager.getSessionId(),
                     timeoutMs = REQUEST_TIMEOUT_MS,
                     maxRetries = MAX_RETRIES
                 ),
@@ -121,7 +121,7 @@ class NativeAgentFactory(
                         .flowOn(Dispatchers.Default)
                 }
             ),
-            sessionManager = sessionManager,
+            manager = sessionManager,
             retrySettings = settings.retry,
             compactionSettings = settings.compaction,
             models = models,

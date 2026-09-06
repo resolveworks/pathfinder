@@ -25,12 +25,15 @@ import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.ai.utils.contentText
 import works.resolve.pathfinder.ai.utils.estimateMessageTokens
 import works.resolve.pathfinder.ai.utils.uuidv7
-import works.resolve.pathfinder.codingagent.core.session.BranchSummaryEntry
-import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionEntry
-import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.BranchSummaryEntry
+import works.resolve.pathfinder.codingagent.core.CompactionEntry
+import works.resolve.pathfinder.codingagent.core.MessageEntry
+import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.SessionEntry
+import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.buildSessionContext
+import works.resolve.pathfinder.codingagent.core.createBranchSummaryMessage
+import works.resolve.pathfinder.codingagent.core.createCompactionSummaryMessage
 import works.resolve.pathfinder.codingagent.core.utils.addUsage
 
 data class CompactionSettings(
@@ -581,7 +584,7 @@ fun prepareCompaction(
     }
     val boundaryEnd = pathEntries.size
 
-    val tokensBefore = estimateContextTokens(buildSessionContext(pathEntries)).tokens
+    val tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens
 
     val cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens)
     val firstKeptEntryId = pathEntries[cutPoint.firstKeptEntryIndex].id

@@ -10,19 +10,25 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.codingagent.core.session.CompactionEntry
-import works.resolve.pathfinder.codingagent.core.session.Conversation
-import works.resolve.pathfinder.codingagent.core.session.MessageEntry
-import works.resolve.pathfinder.codingagent.core.session.ModelChangeEntry
-import works.resolve.pathfinder.codingagent.core.session.SessionEntry
-import works.resolve.pathfinder.codingagent.core.session.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.COMPACTION_SUMMARY_PREFIX
+import works.resolve.pathfinder.codingagent.core.COMPACTION_SUMMARY_SUFFIX
+import works.resolve.pathfinder.codingagent.core.CompactionEntry
+import works.resolve.pathfinder.codingagent.core.MessageEntry
+import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
+import works.resolve.pathfinder.codingagent.core.SessionEntry
+import works.resolve.pathfinder.codingagent.core.SessionModelSelection
+import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
+import works.resolve.pathfinder.codingagent.core.buildSessionContext
+import works.resolve.pathfinder.codingagent.core.buildSessionPath
+import works.resolve.pathfinder.codingagent.core.getLatestCompactionEntry
+import works.resolve.pathfinder.codingagent.core.getSessionContextSettings
 
 /**
  * Pins the entry-selection behavior of [buildSessionContext] against pi's
  * session-manager: the latest compaction wins, kept entries start at
- * `firstKeptEntryId`, only deferred assistants drop, config entries project
- * nothing, and the branch-state fold
- * ([Conversation.effectiveConfiguration]) sees the full pre-compaction path.
+ * `firstKeptEntryId`, error/aborted assistants stay in context, config
+ * entries project nothing, and the branch-state fold
+ * ([getSessionContextSettings]) sees the full pre-compaction path.
  */
 class SessionContextTest {
 
@@ -91,7 +97,7 @@ class SessionContextTest {
         val latest = compactionEntry("latest summary", u2.id, firstKeptEntryId = u2.id)
         val u3 = messageEntry(user("tail"), latest.id)
 
-        val messages = buildSessionContext(listOf<SessionEntry>(u1, first, u2, latest, u3))
+        val messages = buildSessionContext(listOf<SessionEntry>(u1, first, u2, latest, u3)).messages
 
         // The latest compaction's summary + the kept entries (from its
         // firstKeptEntryId through just before it) + everything after it;
@@ -115,15 +121,16 @@ class SessionContextTest {
         val thinking = thinkingLevelEntry(model.id, "high")
         val u2 = messageEntry(user("two"), thinking.id)
 
-        val messages = buildSessionContext(listOf<SessionEntry>(u1, model, thinking, u2))
+        val messages = buildSessionContext(listOf<SessionEntry>(u1, model, thinking, u2)).messages
 
         assertEquals(listOf("one", "two"), messages.map(::textOf))
     }
 
     @Test
     fun `error and aborted assistant messages stay in context at the pin`() {
-        // Post-pin pi drops error/aborted assistants via isContextMessage; at
-        // the pin — and here — only deferred assistants drop.
+        // Post-pin pi drops error/aborted assistants in the harness via
+        // isContextMessage; the classic session-manager — and this port —
+        // keeps them.
         val u = messageEntry(user("question"))
         val errored = messageEntry(
             assistant("boom").copy(stopReason = StopReason.ERROR, errorMessage = "overloaded"),
@@ -132,7 +139,7 @@ class SessionContextTest {
         val aborted =
             messageEntry(assistant("cancelled").copy(stopReason = StopReason.ABORTED), errored.id)
 
-        val messages = buildSessionContext(listOf<SessionEntry>(u, errored, aborted))
+        val messages = buildSessionContext(listOf<SessionEntry>(u, errored, aborted)).messages
 
         assertEquals(
             listOf("question", "boom", "cancelled"),
@@ -155,7 +162,7 @@ class SessionContextTest {
 
         val messages = buildSessionContext(
             listOf<SessionEntry>(u1, keptUser, keptFailed, compaction, after)
-        )
+        ).messages
 
         assertEquals(4, messages.size)
         assertEquals(
@@ -170,25 +177,23 @@ class SessionContextTest {
     @Test
     fun `effective configuration folds the full path while context starts at compaction`() {
         // pi's deriveSessionContextState(pathEntries) reads the ORIGINAL
-        // path, not the post-compaction entries; pathfinder splits that fold
-        // into Conversation.effectiveConfiguration over the same active path.
+        // path, not the post-compaction entries; getSessionContextSettings
+        // folds the same active path.
         val u1 = messageEntry(user("old"))
         val model = modelChangeEntry(u1.id, "openai", "gpt-5")
         val thinking = thinkingLevelEntry(model.id, "high")
         val kept = messageEntry(user("kept"), thinking.id)
         val compaction = compactionEntry("summary", kept.id, firstKeptEntryId = kept.id)
+        val entries = listOf<SessionEntry>(u1, model, thinking, kept, compaction)
 
-        val conversation =
-            Conversation(listOf<SessionEntry>(u1, model, thinking, kept, compaction), compaction.id)
-
-        val messages = buildSessionContext(conversation.activeEntries())
+        val messages = buildSessionContext(entries, compaction.id).messages
         assertEquals(
             listOf(COMPACTION_SUMMARY_PREFIX + "summary" + COMPACTION_SUMMARY_SUFFIX, "kept"),
             messages.map(::textOf)
         )
 
-        val configuration = conversation.effectiveConfiguration()
-        assertEquals(Conversation.SessionModelSelection("openai", "gpt-5"), configuration.model)
+        val configuration = getSessionContextSettings(buildSessionPath(entries, compaction.id))
+        assertEquals(SessionModelSelection("openai", "gpt-5"), configuration.model)
         assertEquals("high", configuration.thinkingLevel)
     }
 

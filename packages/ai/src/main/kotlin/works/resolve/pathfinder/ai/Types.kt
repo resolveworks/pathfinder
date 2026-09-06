@@ -228,8 +228,7 @@ data class Cost(
     val total: Double = 0.0
 )
 
-/** No provider adapter produces DEFERRED; it exists because the session
- * layer drops deferred assistant messages from context. */
+/** pi's ai StopReason; the classic stack never produces DEFERRED (only the un-ported harness does). */
 enum class StopReason { PENDING, STOP, LENGTH, TOOL_USE, ERROR, ABORTED, DEFERRED }
 
 /** OpenAI grammar variants for constrained sampling. */
