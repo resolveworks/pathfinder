@@ -365,7 +365,7 @@ class BranchSummarizationTest {
         val expectedPrompt =
             "<conversation>\n[User]: explore the widget\n</conversation>\n\n$BRANCH_SUMMARY_PROMPT"
         assertEquals(expectedPrompt, promptText(faux.api.seenContexts[0]))
-        assertEquals(2048, faux.api.seenOptions[0].maxTokens)
+        assertEquals(4096, faux.api.seenOptions[0].maxTokens)
         assertEquals(1000, (faux.api.seenContexts[0].messages[0] as UserMessage).timestamp)
     }
 
@@ -469,7 +469,7 @@ class BranchSummarizationTest {
             )
         )
         assertEquals(BranchSummaryErrorCode.SUMMARIZATION_FAILED, failed.error.code)
-        assertTrue(failed.error.message.orEmpty().startsWith("Branch summary failed: boom"))
+        assertTrue(failed.error.message.orEmpty().startsWith("Branch summarization failed: boom"))
     }
 
     @Test

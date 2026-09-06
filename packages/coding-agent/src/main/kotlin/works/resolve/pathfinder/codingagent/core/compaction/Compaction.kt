@@ -14,6 +14,7 @@ import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevel
+import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.toThinkingLevelOrNull
@@ -130,6 +131,18 @@ fun shouldCompact(contextTokens: Int, contextWindow: Int, settings: CompactionSe
     return contextTokens > contextWindow - settings.reserveTokens
 }
 
+/**
+ * pi's `sessionEntryToContextMessages`, flattened to the entry's single
+ * context message: pathfinder entries project to at most one.
+ */
+private fun entryContextMessages(entry: SessionEntry): List<Message> =
+    listOfNotNull(getMessageFromEntry(entry))
+
+private fun isCutPointMessage(message: Message): Boolean = message.role != MessageRole.TOOL_RESULT
+
+private fun isTurnStartEntry(entry: SessionEntry): Boolean =
+    entry !is CompactionEntry && entryContextMessages(entry).any { it.role == MessageRole.USER }
+
 private fun findValidCutPoints(
     entries: List<SessionEntry>,
     startIndex: Int,
@@ -138,12 +151,8 @@ private fun findValidCutPoints(
     val cutPoints = mutableListOf<Int>()
     for (i in startIndex until endIndex) {
         val entry = entries[i]
-        if (entry is MessageEntry) {
-            when (entry.message.role) {
-                MessageRole.USER, MessageRole.ASSISTANT -> cutPoints.add(i)
-                MessageRole.TOOL_RESULT -> {}
-            }
-        } else if (entry is BranchSummaryEntry) {
+        if (entry is CompactionEntry) continue
+        if (entryContextMessages(entry).any { isCutPointMessage(it) }) {
             cutPoints.add(i)
         }
     }
@@ -152,11 +161,7 @@ private fun findValidCutPoints(
 
 fun findTurnStartIndex(entries: List<SessionEntry>, entryIndex: Int, startIndex: Int): Int {
     for (i in entryIndex downTo startIndex) {
-        val entry = entries[i]
-        if (entry is BranchSummaryEntry) return i
-        if (entry is MessageEntry && entry.message.role == MessageRole.USER) {
-            return i
-        }
+        if (isTurnStartEntry(entries[i])) return i
     }
     return -1
 }
@@ -183,9 +188,9 @@ fun findCutPoint(
     var cutIndex = cutPoints[0]
 
     for (i in endIndex - 1 downTo startIndex) {
-        val entry = entries[i]
-        if (entry !is MessageEntry) continue
-        accumulatedTokens += estimateTokens(entry.message)
+        val messageTokens = entryContextMessages(entries[i]).sumOf { estimateTokens(it) }
+        if (messageTokens == 0) continue
+        accumulatedTokens += messageTokens
         if (accumulatedTokens >= keepRecentTokens) {
             for (c in cutPoints.indices) {
                 if (cutPoints[c] >= i) {
@@ -198,26 +203,17 @@ fun findCutPoint(
     }
     while (cutIndex > startIndex) {
         val prevEntry = entries[cutIndex - 1]
-        if (prevEntry is CompactionEntry) break
-        if (prevEntry is MessageEntry) break
+        if (prevEntry is CompactionEntry || entryContextMessages(prevEntry).isNotEmpty()) break
         cutIndex--
     }
     val cutEntry = entries[cutIndex]
-    val isUserMessage = cutEntry is MessageEntry && cutEntry.message.role == MessageRole.USER
-    val turnStartIndex = if (isUserMessage) {
-        -1
-    } else {
-        findTurnStartIndex(
-            entries,
-            cutIndex,
-            startIndex
-        )
-    }
+    val startsTurn = isTurnStartEntry(cutEntry)
+    val turnStartIndex = if (startsTurn) -1 else findTurnStartIndex(entries, cutIndex, startIndex)
 
     return CutPointResult(
         firstKeptEntryIndex = cutIndex,
         turnStartIndex = turnStartIndex,
-        isSplitTurn = !isUserMessage && turnStartIndex != -1
+        isSplitTurn = !startsTurn && turnStartIndex != -1
     )
 }
 
@@ -290,6 +286,20 @@ sealed interface CompactionResult<out T> {
 internal fun <T> ok(value: T): CompactionResult<T> = CompactionResult.Ok(value)
 
 internal fun err(error: CompactionError): CompactionResult<Nothing> = CompactionResult.Err(error)
+
+/**
+ * pi's `getSummarizationFailure`: a length stop contains partial text and
+ * must not become a session checkpoint.
+ */
+internal fun getSummarizationFailure(response: AssistantMessage, label: String): String? {
+    if (response.stopReason == StopReason.ERROR) {
+        return "$label failed: ${response.errorMessage ?: "Unknown error"}"
+    }
+    if (response.stopReason == StopReason.LENGTH) {
+        return "$label failed: generation hit the token cap and the summary is incomplete"
+    }
+    return null
+}
 
 data class GeneratedSummary(val text: String, val usage: Usage)
 
@@ -533,11 +543,15 @@ suspend fun generateSummaryWithUsage(
             )
         )
     }
-    if (response.stopReason == StopReason.ERROR) {
+    val failure = getSummarizationFailure(response, "Summarization")
+    if (failure != null) {
+        return err(CompactionError(CompactionErrorCode.SUMMARIZATION_FAILED, failure))
+    }
+    if (response.content.any { it is ToolCall }) {
         return err(
             CompactionError(
                 CompactionErrorCode.SUMMARIZATION_FAILED,
-                "Summarization failed: ${response.errorMessage ?: "Unknown error"}"
+                "Summarization attempted to call a tool"
             )
         )
     }
@@ -741,11 +755,15 @@ private suspend fun generateTurnPrefixSummary(
             )
         )
     }
-    if (response.stopReason == StopReason.ERROR) {
+    val failure = getSummarizationFailure(response, "Turn prefix summarization")
+    if (failure != null) {
+        return err(CompactionError(CompactionErrorCode.SUMMARIZATION_FAILED, failure))
+    }
+    if (response.content.any { it is ToolCall }) {
         return err(
             CompactionError(
                 CompactionErrorCode.SUMMARIZATION_FAILED,
-                "Turn prefix summarization failed: ${response.errorMessage ?: "Unknown error"}"
+                "Turn prefix summarization attempted to call a tool"
             )
         )
     }

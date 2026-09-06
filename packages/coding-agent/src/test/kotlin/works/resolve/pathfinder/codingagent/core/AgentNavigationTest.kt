@@ -270,7 +270,10 @@ class AgentNavigationTest {
             session.navigateTree(branchA, AgentSession.NavigateTreeOptions(summarize = true))
             throw AssertionError("expected failure")
         } catch (e: BranchSummaryError) {
-            assertEquals("provider down", e.message?.substringAfter("Branch summary failed: "))
+            assertEquals(
+                "provider down",
+                e.message?.substringAfter("Branch summarization failed: ")
+            )
         }
         assertTrue(session.sessionManager.getEntries().none { it is BranchSummaryEntry })
         assertEquals(oldLeaf, session.sessionManager.getLeafId())

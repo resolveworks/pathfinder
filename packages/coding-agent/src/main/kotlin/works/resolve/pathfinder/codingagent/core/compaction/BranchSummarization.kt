@@ -12,6 +12,7 @@ import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.Retry
@@ -232,16 +233,8 @@ sealed interface BranchSummaryCallResult {
     data class Err(val error: BranchSummaryError) : BranchSummaryCallResult
 }
 
-private val BRANCH_SUMMARY_MAX_TOKENS = 2048
-
 /**
- * Mirrors upstream `generateBranchSummary` from pi's
- * `packages/agent/src/harness/compaction/branch-summarization.ts` at pin
- * b8b873b98. Upstream's `PreparedBranchSummaryOptions` and
- * `generateBranchSummaryWithRequest` do not exist at the pin (they were
- * added afterwards, visible at e44d75c20, as request-injection seams) and
- * are out of scope per the freeze: the pin's behavior lives entirely in
- * this function.
+ * Mirrors upstream `generateBranchSummary`.
  */
 suspend fun generateBranchSummary(
     entries: List<SessionEntry>,
@@ -276,6 +269,9 @@ suspend fun generateBranchSummary(
     }
     val promptText = "<conversation>\n$conversationText\n</conversation>\n\n$instructions"
 
+    val maxTokens =
+        if (options.model.maxTokens > 0) minOf(4096, options.model.maxTokens) else 4096
+
     val response = completeSimpleWithRetries(
         options.models,
         options.model,
@@ -288,7 +284,7 @@ suspend fun generateBranchSummary(
                 )
             )
         ),
-        SimpleStreamOptions(maxTokens = BRANCH_SUMMARY_MAX_TOKENS),
+        SimpleStreamOptions(maxTokens = maxTokens),
         options.retry,
         options.callbacks,
         options.retryRunner
@@ -301,11 +297,17 @@ suspend fun generateBranchSummary(
             )
         )
     }
-    if (response.stopReason == StopReason.ERROR) {
+    val failure = getSummarizationFailure(response, "Branch summarization")
+    if (failure != null) {
+        return BranchSummaryCallResult.Err(
+            BranchSummaryError(BranchSummaryErrorCode.SUMMARIZATION_FAILED, failure)
+        )
+    }
+    if (response.content.any { it is ToolCall }) {
         return BranchSummaryCallResult.Err(
             BranchSummaryError(
                 BranchSummaryErrorCode.SUMMARIZATION_FAILED,
-                "Branch summary failed: ${response.errorMessage ?: "Unknown error"}"
+                "Branch summarization attempted to call a tool"
             )
         )
     }
