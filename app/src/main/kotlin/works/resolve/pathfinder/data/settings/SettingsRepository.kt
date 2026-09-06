@@ -16,8 +16,11 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.codingagent.core.RetrySettings
+import works.resolve.pathfinder.codingagent.core.SettingsStorage
 
-class SettingsRepository(private val dataStore: DataStore<Preferences>) : SettingsStore {
+class SettingsRepository(private val dataStore: DataStore<Preferences>) :
+    SettingsStore,
+    SettingsStorage {
 
     private object Keys {
         val PROVIDER_ID = stringPreferencesKey("provider_id")
@@ -40,6 +43,9 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
          * order pi's model cycling relies on.
          */
         val ENABLED_MODELS = stringPreferencesKey("enabled_models")
+
+        /** Raw pi settings JSON; owned by `SettingsManager`, not typed here. */
+        val SETTINGS_JSON = stringPreferencesKey("settings_json")
     }
 
     val settings: Flow<ModelSettings> = dataStore.data.map { prefs ->
@@ -142,4 +148,18 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) : Settin
     }
 
     override suspend fun currentSettings(): ModelSettings = settings.first()
+
+    /**
+     * Preferences DataStore serializes `edit` calls, giving the atomic
+     * read-modify-write the contract requires. A null transform result means
+     * no write; cancellation propagates unchanged.
+     */
+    override suspend fun withLock(transform: (current: String?) -> String?) {
+        dataStore.edit { prefs ->
+            val next = transform(prefs[Keys.SETTINGS_JSON])
+            if (next != null) {
+                prefs[Keys.SETTINGS_JSON] = next
+            }
+        }
+    }
 }
