@@ -22,9 +22,11 @@ import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
@@ -229,67 +231,38 @@ class AgentLoopTest {
     }
 
     @Test
-    fun `stream completing without terminal event produces error message and normal lifecycle`() =
-        runTest {
-            val partial = assistant("partial")
-            val streamFn = StreamFn { _, _, _ ->
-                flowOf(
-                    AssistantMessageEvent.Start(assistant("")),
-                    AssistantMessageEvent.TextDelta(0, "partial", partial)
-                )
-            }
+    fun `stream completing without terminal event throws a contract violation`() = runTest {
+        val streamFn = StreamFn { _, _, _ ->
+            flowOf(
+                AssistantMessageEvent.Start(assistant("")),
+                AssistantMessageEvent.TextDelta(0, "partial", assistant("partial"))
+            )
+        }
 
-            val events = mutableListOf<AgentEvent>()
-            val result = runAgentLoop(
+        val events = mutableListOf<AgentEvent>()
+        val error = runCatching {
+            runAgentLoop(
                 listOf(UserMessage.ofText("q")),
                 AgentContext(messages = emptyList()),
                 AgentLoopConfig(model, streamFn = streamFn)
             ) { events.add(it) }
+        }.exceptionOrNull()
 
-            assertEquals(
-                listOf(
-                    "AgentStart", "TurnStart",
-                    "MessageStart", "MessageEnd",
-                    "MessageStart", "MessageUpdate", "MessageEnd", "TurnEnd", "AgentEnd"
-                ),
-                typeLabels(events)
-            )
-            val endMessage = (events[6] as AgentEvent.MessageEnd).message as AssistantMessage
-            assertEquals(StopReason.ERROR, endMessage.stopReason)
-            assertEquals(
-                "Provider stream completed without a terminal event",
-                endMessage.errorMessage
-            )
-            assertEquals(listOf(TextContent("partial")), endMessage.content)
-            assertEquals(model.provider, endMessage.provider)
-            assertEquals(model.id, endMessage.model)
-            assertEquals(2, result.size)
-            assertEquals(endMessage, result[1])
-        }
-
-    @Test
-    fun `malformed stream with no events at all gets fresh error message with timestamp`() =
-        runTest {
-            val before = System.currentTimeMillis()
-            val streamFn = StreamFn { _, _, _ -> flowOf() }
-
-            val events = mutableListOf<AgentEvent>()
-            val result = runAgentLoop(
-                listOf(UserMessage.ofText("q")),
-                AgentContext(messages = emptyList()),
-                AgentLoopConfig(model, streamFn = streamFn)
-            ) { events.add(it) }
-
-            val endMessage = (events[5] as AgentEvent.MessageEnd).message as AssistantMessage
-            assertEquals(StopReason.ERROR, endMessage.stopReason)
-            assertEquals(
-                "Provider stream completed without a terminal event",
-                endMessage.errorMessage
-            )
-            assertTrue(endMessage.content.isEmpty())
-            assertTrue("timestamp should be current", endMessage.timestamp >= before)
-            assertEquals(endMessage, result[1])
-        }
+        // pi trusts the StreamFn terminal-event contract (its `result()` would
+        // hang); this port surfaces the violation as an exception instead.
+        assertTrue(error is IllegalStateException)
+        assertEquals(
+            listOf(
+                "AgentStart",
+                "TurnStart",
+                "MessageStart",
+                "MessageEnd",
+                "MessageStart",
+                "MessageUpdate"
+            ),
+            typeLabels(events)
+        )
+    }
 
     @Test
     fun `terminal event cancels upstream and first terminal wins`() = runTest {
@@ -335,48 +308,49 @@ class AgentLoopTest {
     }
 
     @Test
-    fun `cancellation during streaming propagates without synthetic error or agent_end`() =
-        runTest {
-            val started = CompletableDeferred<Unit>()
-            var collectedAfterCancel = false
-            val streamFn = StreamFn { _, _, _ ->
-                flow {
-                    emit(AssistantMessageEvent.Start(assistant("")))
-                    started.complete(Unit)
-                    try {
-                        awaitCancellation()
-                    } catch (e: CancellationException) {
-                        collectedAfterCancel = true
-                        throw e
-                    }
+    fun `cancellation during streaming finalizes the partial and ends the run`() = runTest {
+        val started = CompletableDeferred<Unit>()
+        var collectedAfterCancel = false
+        val streamFn = StreamFn { _, _, _ ->
+            flow {
+                emit(AssistantMessageEvent.Start(assistant("")))
+                emit(AssistantMessageEvent.TextDelta(0, "partial", assistant("partial")))
+                started.complete(Unit)
+                try {
+                    awaitCancellation()
+                } catch (e: CancellationException) {
+                    collectedAfterCancel = true
+                    throw e
                 }
             }
-
-            val events = mutableListOf<AgentEvent>()
-            val job = backgroundScope.launch {
-                runAgentLoop(
-                    listOf(UserMessage.ofText("q")),
-                    AgentContext(messages = emptyList()),
-                    AgentLoopConfig(model, streamFn = streamFn)
-                ) { events.add(it) }
-            }
-            started.await()
-            job.cancel()
-            job.join()
-            assertTrue("launched job must end cancelled", job.isCancelled)
-            assertTrue(collectedAfterCancel)
-            assertEquals(
-                listOf("AgentStart", "TurnStart", "MessageStart", "MessageEnd", "MessageStart"),
-                typeLabels(events)
-            )
-            assertTrue(
-                events.none {
-                    it is AgentEvent.MessageEnd && it.message is AssistantMessage &&
-                        it.message.stopReason == StopReason.ERROR
-                }
-            )
-            assertTrue(events.none { it is AgentEvent.AgentEnd })
         }
+
+        val events = mutableListOf<AgentEvent>()
+        val job = backgroundScope.launch {
+            runAgentLoop(
+                listOf(UserMessage.ofText("q")),
+                AgentContext(messages = emptyList()),
+                AgentLoopConfig(model, streamFn = streamFn)
+            ) { events.add(it) }
+        }
+        started.await()
+        job.cancel()
+        job.join()
+        assertTrue("launched job must end cancelled", job.isCancelled)
+        assertTrue(collectedAfterCancel)
+        assertEquals(
+            listOf(
+                "AgentStart", "TurnStart",
+                "MessageStart", "MessageEnd",
+                "MessageStart", "MessageUpdate", "MessageEnd", "TurnEnd", "AgentEnd"
+            ),
+            typeLabels(events)
+        )
+        val aborted = (events[6] as AgentEvent.MessageEnd).message as AssistantMessage
+        assertEquals(StopReason.ABORTED, aborted.stopReason)
+        assertEquals("Request was aborted", aborted.errorMessage)
+        assertEquals(listOf(TextContent("partial")), aborted.content)
+    }
 
     @Test
     fun `tool definitions reach the provider in first and follow-up contexts`() = runTest {
@@ -1014,7 +988,7 @@ class AgentLoopTest {
     }
 
     @Test
-    fun `cancellation during tool execution propagates without late events`() = runTest {
+    fun `cancellation during tool execution finalizes the batch and ends the run`() = runTest {
         val toolEntered = CompletableDeferred<Unit>()
         var toolObservedCancellation = false
         val tool = FakeTool(
@@ -1053,9 +1027,68 @@ class AgentLoopTest {
                 "MessageEnd",
                 "MessageStart",
                 "MessageEnd",
-                "ToolExecutionStart"
+                "ToolExecutionStart",
+                "ToolExecutionEnd",
+                "MessageStart",
+                "MessageEnd",
+                "TurnEnd",
+                "AgentEnd"
             ),
             typeLabels(events)
         )
+        val abortedEnd = events[7] as AgentEvent.ToolExecutionEnd
+        assertTrue(abortedEnd.isError)
+        assertEquals(
+            listOf(TextContent("Operation aborted")),
+            abortedEnd.result.content
+        )
     }
+
+    @Test
+    fun `prepareNextTurn refreshes context, model, and thinking level before the next turn`() =
+        runTest {
+            val otherModel = model.copy(id = "other", provider = "other")
+            val tool = FakeTool()
+            val seen = mutableListOf<Triple<Model, Context, SimpleStreamOptions>>()
+            var call = 0
+            val streamFn = StreamFn { m, ctx, opts ->
+                seen.add(Triple(m, ctx, opts))
+                val message =
+                    if (call++ == 0) {
+                        toolCallAssistant(ToolCall("c1", "my_tool", "{}"))
+                    } else {
+                        assistant("done")
+                    }
+                flowOf(AssistantMessageEvent.Done(message.stopReason, message))
+            }
+            var invoked = 0
+            val config = AgentLoopConfig(
+                model,
+                streamFn = streamFn,
+                prepareNextTurn = { turn ->
+                    invoked++
+                    AgentLoopTurnUpdate(
+                        context = turn.context.copy(systemPrompt = "refreshed"),
+                        model = otherModel,
+                        thinkingLevel = ModelThinkingLevel.HIGH
+                    )
+                }
+            )
+
+            runAgentLoop(
+                listOf(UserMessage.ofText("q")),
+                AgentContext(tools = listOf(tool)),
+                config
+            ) { }
+
+            assertEquals(1, invoked)
+            assertEquals(listOf(model, otherModel), seen.map { it.first })
+            assertEquals(null, seen[0].second.systemPrompt)
+            assertEquals("refreshed", seen[1].second.systemPrompt)
+            // The refreshed context keeps the run's messages: the tool result
+            // from turn one is still present for the second request.
+            assertTrue(seen[1].second.messages.any { it is ToolResultMessage })
+            assertEquals(null, seen[0].third.reasoning)
+            assertEquals(ThinkingLevel.HIGH, seen[1].third.reasoning)
+        }
 }

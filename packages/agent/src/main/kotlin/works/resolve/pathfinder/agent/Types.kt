@@ -37,7 +37,14 @@ data class AgentLoopConfig(
      * forces the whole batch sequential.
      */
     val toolExecution: ToolExecutionMode = ToolExecutionMode.PARALLEL,
-    val clock: Clock = Clock.System
+    val clock: Clock = Clock.System,
+    /**
+     * Invoked after `turn_end` when the loop will continue, immediately
+     * before the next turn starts (pi's same-named config callback, wired
+     * from the Agent's `prepareNextTurnWithContext`). May return replacement
+     * context/model/thinkingLevel for the next provider request.
+     */
+    val prepareNextTurn: (suspend (PrepareNextTurnContext) -> AgentLoopTurnUpdate?)? = null
 )
 
 /**
@@ -117,6 +124,9 @@ interface AgentTool {
      * and may return a normalized copy. Instead of pi's TypeBox/JSON-Schema
      * validation, each tool owns typed decoding/validation and throws on
      * failure; the loop catches that and converts it to an error tool result.
+     *
+     * Pi's optional `prepareArguments` compatibility shim for legacy
+     * JS-extension tools (types.ts) is deliberately unported.
      */
     fun validateArguments(arguments: JsonObject): JsonObject
 
@@ -142,6 +152,24 @@ data class AgentContext(
     val systemPrompt: String? = null,
     val messages: List<Message> = emptyList(),
     val tools: List<AgentTool> = emptyList()
+)
+
+/** Completed-turn snapshot passed to `prepareNextTurnWithContext` (pi's same-named type). */
+data class PrepareNextTurnContext(
+    val message: AssistantMessage,
+    val toolResults: List<ToolResultMessage>,
+    val context: AgentContext,
+    val newMessages: List<Message>
+)
+
+/**
+ * Replacement runtime state the loop applies before the next provider request
+ * (pi's `AgentLoopTurnUpdate`); null fields keep the current values.
+ */
+data class AgentLoopTurnUpdate(
+    val context: AgentContext? = null,
+    val model: Model? = null,
+    val thinkingLevel: ModelThinkingLevel? = null
 )
 
 /** Lifecycle events emitted by the agent loop. */
@@ -228,8 +256,8 @@ sealed class AgentEvent {
 
     /**
      * Payload of [AgentEvent.CompactionEnd]. Pi's `firstKeptEntryId` is not
-     * ported: [works.resolve.pathfinder.codingagent.core.CompactionEntry] stores
-     * the retained tail directly instead of a kept-entry pointer.
+     * ported: no consumer of the event in this port reads it — the retained
+     * tail is available on the session tree itself.
      */
     data class CompactionResult(
         val summary: String,

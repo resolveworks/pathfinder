@@ -3,6 +3,7 @@ package works.resolve.pathfinder.agent
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
@@ -11,16 +12,17 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Message
-import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.toThinkingLevelOrNull
 import works.resolve.pathfinder.ai.utils.lenientJson
 
 /**
@@ -32,9 +34,14 @@ import works.resolve.pathfinder.ai.utils.lenientJson
  *
  * [context] is treated as an immutable snapshot; it is never mutated. A fresh
  * [Context] (tool definitions only) is projected for every provider request —
- * executor objects are never exposed to provider serialization. Coroutine
- * cancellation propagates as [CancellationException] without a synthetic
- * error or [AgentEvent.AgentEnd].
+ * executor objects are never exposed to provider serialization.
+ *
+ * Divergence: pi's `prompt()` resolves normally after an abort; coroutine
+ * cancellation cannot be swallowed without corrupting structured concurrency,
+ * so the loop first terminates exactly like pi — partial assistant output
+ * finalized with stopReason ABORTED, started tool calls finalized with error
+ * results, turn_end/agent_end emitted — and then rethrows the
+ * [CancellationException] to the caller.
  */
 suspend fun runAgentLoop(
     prompts: List<Message>,
@@ -92,13 +99,39 @@ private class ExecutedToolCallOutcome(val result: AgentToolResult, val isError: 
  * (nothing observes partials without steering/hooks).
  */
 private suspend fun runLoop(
-    context: AgentContext,
-    llmMessages: MutableList<Message>,
+    initialContext: AgentContext,
+    initialLlmMessages: MutableList<Message>,
     newMessages: MutableList<Message>,
-    config: AgentLoopConfig,
+    initialConfig: AgentLoopConfig,
     emit: suspend (AgentEvent) -> Unit
 ) {
+    var context = initialContext
+    var llmMessages = initialLlmMessages
+    var config = initialConfig
+    var lastCompletedTurn: PrepareNextTurnContext? = null
     while (true) {
+        if (lastCompletedTurn != null) {
+            val update = config.prepareNextTurn?.invoke(lastCompletedTurn)
+            if (update != null) {
+                update.context?.let { refreshed ->
+                    context = refreshed
+                    llmMessages = refreshed.messages.toMutableList()
+                }
+                val nextModel = update.model
+                val nextThinkingLevel = update.thinkingLevel
+                if (nextModel != null || nextThinkingLevel != null) {
+                    config = config.copy(
+                        model = nextModel ?: config.model,
+                        options = config.options.copy(
+                            reasoning = nextThinkingLevel?.toThinkingLevelOrNull()
+                                ?: config.options.reasoning
+                        )
+                    )
+                }
+            }
+            emit(AgentEvent.TurnStart)
+        }
+
         val message = streamAssistantResponse(
             llmContext = Context(
                 systemPrompt = context.systemPrompt,
@@ -112,8 +145,12 @@ private suspend fun runLoop(
         llmMessages.add(message)
 
         if (message.stopReason == StopReason.ERROR || message.stopReason == StopReason.ABORTED) {
-            emit(AgentEvent.TurnEnd(message))
-            emit(AgentEvent.AgentEnd(newMessages.toList()))
+            // The ABORTED case runs in an already-cancelled coroutine; the
+            // terminal events must still be delivered.
+            withContext(NonCancellable) {
+                emit(AgentEvent.TurnEnd(message))
+                emit(AgentEvent.AgentEnd(newMessages.toList()))
+            }
             return
         }
 
@@ -121,17 +158,40 @@ private suspend fun runLoop(
         val toolResults = mutableListOf<ToolResultMessage>()
         var terminate = false
         if (toolCalls.isNotEmpty()) {
-            // A "length" stop means the output was cut off by the token limit, so
-            // every tool call in the message may carry truncated arguments — fail
-            // them all rather than execute potentially broken calls.
-            val executedToolBatch =
-                if (message.stopReason == StopReason.LENGTH) {
-                    failToolCallsFromTruncatedMessage(toolCalls, config.clock, emit)
-                } else {
-                    executeToolCalls(context, toolCalls, config, emit)
+            val progress = ToolBatchProgress()
+            try {
+                // A "length" stop means the output was cut off by the token
+                // limit, so every tool call in the message may carry truncated
+                // arguments — fail them all rather than execute potentially
+                // broken calls.
+                val executedToolBatch =
+                    if (message.stopReason == StopReason.LENGTH) {
+                        failToolCallsFromTruncatedMessage(toolCalls, config, emit, progress)
+                    } else {
+                        executeToolCalls(context, toolCalls, config, emit, progress)
+                    }
+                toolResults.addAll(executedToolBatch.messages)
+                terminate = executedToolBatch.terminate
+            } catch (cancellation: CancellationException) {
+                // pi on abort: every started call finalizes — completed results
+                // are kept, in-flight and queued ones become "Operation aborted"
+                // error results — and the turn still ends with turn_end carrying
+                // whatever settled.
+                toolResults.addAll(
+                    withContext(NonCancellable) {
+                        recoverAbortedToolBatch(toolCalls, progress, config, emit)
+                    }
+                )
+                for (result in toolResults) {
+                    llmMessages.add(result)
+                    newMessages.add(result)
                 }
-            toolResults.addAll(executedToolBatch.messages)
-            terminate = executedToolBatch.terminate
+                withContext(NonCancellable) {
+                    emit(AgentEvent.TurnEnd(message, toolResults.toList()))
+                    emit(AgentEvent.AgentEnd(newMessages.toList()))
+                }
+                throw cancellation
+            }
             for (result in toolResults) {
                 llmMessages.add(result)
                 newMessages.add(result)
@@ -140,11 +200,17 @@ private suspend fun runLoop(
 
         emit(AgentEvent.TurnEnd(message, toolResults.toList()))
 
+        lastCompletedTurn = PrepareNextTurnContext(
+            message = message,
+            toolResults = toolResults.toList(),
+            context = context.copy(messages = llmMessages.toList()),
+            newMessages = newMessages.toList()
+        )
+
         if (toolCalls.isEmpty() || terminate) {
             emit(AgentEvent.AgentEnd(newMessages.toList()))
             return
         }
-        emit(AgentEvent.TurnStart)
     }
 }
 
@@ -152,6 +218,13 @@ private suspend fun runLoop(
  * Streams one assistant response, folding provider events into message
  * lifecycle events. The provider stream is created and collected exactly
  * once per turn.
+ *
+ * Like pi — whose loop returns via `response.result()` at the terminal event
+ * without draining the source — collection stops at the first terminal
+ * Done/Error event. Cancellation mid-stream finalizes the accumulated
+ * partial the way pi's providers do (their catch block pushes the finalized
+ * output as the terminal error event): stopReason ABORTED, errorMessage set,
+ * partial content preserved.
  */
 private suspend fun streamAssistantResponse(
     llmContext: Context,
@@ -164,76 +237,147 @@ private suspend fun streamAssistantResponse(
     var latestPartial: AssistantMessage? = null
     var finalMessage: AssistantMessage? = null
 
-    // Collected in a child job cancelled as soon as the first terminal
-    // Done/Error event is observed: a provider that hangs after emitting its
-    // terminal event cannot stall the agent, and only the first terminal
-    // event is observed. External cancellation propagates normally out of
-    // coroutineScope without synthetic events.
-    coroutineScope {
-        val upstream = launch {
-            response.collect { event ->
-                when (event) {
-                    is AssistantMessageEvent.Start -> {
-                        started = true
-                        latestPartial = event.partial
-                        emit(AgentEvent.MessageStart(event.partial))
-                    }
-
-                    is AssistantMessageEvent.TextStart,
-                    is AssistantMessageEvent.TextDelta,
-                    is AssistantMessageEvent.TextEnd,
-                    is AssistantMessageEvent.ThinkingStart,
-                    is AssistantMessageEvent.ThinkingDelta,
-                    is AssistantMessageEvent.ThinkingEnd,
-                    is AssistantMessageEvent.ToolCallStart,
-                    is AssistantMessageEvent.ToolCallDelta,
-                    is AssistantMessageEvent.ToolCallEnd
-                    -> {
-                        if (started) {
+    try {
+        coroutineScope {
+            launch {
+                response.collect { event ->
+                    when (event) {
+                        is AssistantMessageEvent.Start -> {
+                            started = true
                             latestPartial = event.partial
-                            emit(AgentEvent.MessageUpdate(event.partial, event))
+                            emit(AgentEvent.MessageStart(event.partial))
                         }
-                    }
 
-                    is AssistantMessageEvent.Done,
-                    is AssistantMessageEvent.Error
-                    -> {
-                        finalMessage = when (event) {
-                            is AssistantMessageEvent.Done -> event.message
-                            is AssistantMessageEvent.Error -> event.error
+                        is AssistantMessageEvent.TextStart,
+                        is AssistantMessageEvent.TextDelta,
+                        is AssistantMessageEvent.TextEnd,
+                        is AssistantMessageEvent.ThinkingStart,
+                        is AssistantMessageEvent.ThinkingDelta,
+                        is AssistantMessageEvent.ThinkingEnd,
+                        is AssistantMessageEvent.ToolCallStart,
+                        is AssistantMessageEvent.ToolCallDelta,
+                        is AssistantMessageEvent.ToolCallEnd
+                        -> {
+                            if (started) {
+                                latestPartial = event.partial
+                                emit(AgentEvent.MessageUpdate(event.partial, event))
+                            }
                         }
-                        this@launch.cancel()
+
+                        is AssistantMessageEvent.Done,
+                        is AssistantMessageEvent.Error
+                        -> {
+                            finalMessage = when (event) {
+                                is AssistantMessageEvent.Done -> event.message
+                                is AssistantMessageEvent.Error -> event.error
+                            }
+                            this@launch.cancel()
+                        }
                     }
                 }
-            }
+            }.join()
         }
-        upstream.join()
+    } catch (cancellation: CancellationException) {
+        // pi's providers finalize the accumulated output on abort; with no
+        // events received the output is an empty message with the run's model
+        // metadata, exactly like pi's pre-allocated assistant output.
+        val aborted = (latestPartial ?: config.emptyAssistantMessage()).copy(
+            stopReason = StopReason.ABORTED,
+            errorMessage = ABORT_ERROR_MESSAGE
+        )
+        withContext(NonCancellable) {
+            if (!started) {
+                emit(AgentEvent.MessageStart(aborted))
+            }
+            emit(AgentEvent.MessageEnd(aborted))
+        }
+        return aborted
     }
     var message = finalMessage
-    if (!started && message != null) {
+        // The StreamFn contract guarantees a terminal Done/Error event; a
+        // stream that completes without one is a contract violation.
+        ?: throw IllegalStateException("Provider stream completed without a terminal event")
+    if (!started) {
         // Setup/auth failures can arrive before any Start event; the message
         // still needs a message_start before message_end.
         emit(AgentEvent.MessageStart(message))
     }
-    if (message == null) {
-        // Malformed provider stream: completed without a terminal Done/Error.
-        // Preserve the latest partial's content and model metadata; fall back
-        // to a fresh message with a current timestamp when nothing was emitted.
-        val partial = latestPartial
-        message = if (partial != null) {
-            partial.copy(
-                stopReason = StopReason.ERROR,
-                errorMessage = "Provider stream completed without a terminal event"
-            )
-        } else {
-            unsupportedErrorMessage(config.model, config.clock.now().toEpochMilliseconds())
-        }
-        if (!started) {
-            emit(AgentEvent.MessageStart(message))
-        }
-    }
     emit(AgentEvent.MessageEnd(message))
     return message
+}
+
+/**
+ * Progress of one tool batch, shared with the run loop so an aborted batch
+ * can be finalized the way pi's abort path does: calls that never started
+ * get nothing, completed results are kept, and started-but-unsettled calls
+ * become "Operation aborted" error results. Accessed from concurrent
+ * parallel entries.
+ */
+private class ToolBatchProgress {
+    private val lock = Any()
+
+    private val startedIds = LinkedHashSet<String>()
+    private val outcomes = HashMap<String, FinalizedToolCallOutcome>()
+    private val endedIds = HashSet<String>()
+    private val resultMessages = HashMap<String, ToolResultMessage>()
+
+    fun recordStarted(toolCallId: String) = synchronized(lock) { startedIds.add(toolCallId) }
+
+    fun recordOutcome(finalized: FinalizedToolCallOutcome) = synchronized(lock) {
+        outcomes[finalized.toolCall.id] = finalized
+    }
+
+    fun recordEnded(toolCallId: String) = synchronized(lock) { endedIds.add(toolCallId) }
+
+    fun recordResultMessage(message: ToolResultMessage) = synchronized(lock) {
+        resultMessages[message.toolCallId] = message
+    }
+
+    fun startedToolCalls(toolCalls: List<ToolCall>): List<ToolCall> = synchronized(lock) {
+        toolCalls.filter { it.id in startedIds }
+    }
+
+    fun outcome(toolCallId: String): FinalizedToolCallOutcome? = synchronized(lock) {
+        outcomes[toolCallId]
+    }
+
+    fun isEnded(toolCallId: String): Boolean = synchronized(lock) { toolCallId in endedIds }
+
+    fun resultMessage(toolCallId: String): ToolResultMessage? = synchronized(lock) {
+        resultMessages[toolCallId]
+    }
+}
+
+/**
+ * Finalizes an aborted tool batch: emits the missing tool_execution_end events
+ * ("Operation aborted" for calls that never settled) and the tool-result
+ * message pairs in source order, returning the full result list for the
+ * terminal turn_end.
+ */
+private suspend fun recoverAbortedToolBatch(
+    toolCalls: List<ToolCall>,
+    progress: ToolBatchProgress,
+    config: AgentLoopConfig,
+    emit: suspend (AgentEvent) -> Unit
+): List<ToolResultMessage> {
+    val messages = mutableListOf<ToolResultMessage>()
+    for (toolCall in progress.startedToolCalls(toolCalls)) {
+        val outcome = progress.outcome(toolCall.id)
+            ?: FinalizedToolCallOutcome(
+                toolCall = toolCall,
+                result = createErrorToolResult(OPERATION_ABORTED),
+                isError = true
+            )
+        if (!progress.isEnded(toolCall.id)) {
+            emitToolExecutionEnd(outcome, emit, progress)
+        }
+        val toolResultMessage = progress.resultMessage(toolCall.id)
+            ?: createToolResultMessage(outcome, config.clock).also {
+                emitToolResultMessage(it, emit, progress)
+            }
+        messages.add(toolResultMessage)
+    }
+    return messages
 }
 
 /**
@@ -247,18 +391,13 @@ private suspend fun streamAssistantResponse(
  */
 private suspend fun failToolCallsFromTruncatedMessage(
     toolCalls: List<ToolCall>,
-    clock: Clock,
-    emit: suspend (AgentEvent) -> Unit
+    config: AgentLoopConfig,
+    emit: suspend (AgentEvent) -> Unit,
+    progress: ToolBatchProgress
 ): ExecutedToolCallBatch {
     val messages = mutableListOf<ToolResultMessage>()
     for (toolCall in toolCalls) {
-        emit(
-            AgentEvent.ToolExecutionStart(
-                toolCallId = toolCall.id,
-                toolName = toolCall.name,
-                arguments = parseRawArguments(toolCall.arguments) ?: JsonObject(emptyMap())
-            )
-        )
+        emitToolExecutionStart(toolCall, emit, progress)
         val finalized = FinalizedToolCallOutcome(
             toolCall = toolCall,
             result = createErrorToolResult(
@@ -268,9 +407,9 @@ private suspend fun failToolCallsFromTruncatedMessage(
             ),
             isError = true
         )
-        emitToolExecutionEnd(finalized, emit)
-        val toolResultMessage = createToolResultMessage(finalized, clock)
-        emitToolResultMessage(toolResultMessage, emit)
+        emitToolExecutionEnd(finalized, emit, progress)
+        val toolResultMessage = createToolResultMessage(finalized, config.clock)
+        emitToolResultMessage(toolResultMessage, emit, progress)
         messages.add(toolResultMessage)
     }
     return ExecutedToolCallBatch(messages = messages, terminate = false)
@@ -285,16 +424,17 @@ private suspend fun executeToolCalls(
     context: AgentContext,
     toolCalls: List<ToolCall>,
     config: AgentLoopConfig,
-    emit: suspend (AgentEvent) -> Unit
+    emit: suspend (AgentEvent) -> Unit,
+    progress: ToolBatchProgress
 ): ExecutedToolCallBatch {
     val hasSequentialToolCall = toolCalls.any { toolCall ->
         context.tools.firstOrNull { it.definition.name == toolCall.name }
             ?.executionMode == ToolExecutionMode.SEQUENTIAL
     }
     return if (config.toolExecution == ToolExecutionMode.SEQUENTIAL || hasSequentialToolCall) {
-        executeToolCallsSequential(context, toolCalls, config, emit)
+        executeToolCallsSequential(context, toolCalls, config, emit, progress)
     } else {
-        executeToolCallsParallel(context, toolCalls, config, emit)
+        executeToolCallsParallel(context, toolCalls, config, emit, progress)
     }
 }
 
@@ -303,21 +443,22 @@ private suspend fun executeToolCalls(
  * its tool-result message pair) before the next one starts.
  *
  * Divergence: pi breaks the loop when its abort signal fires after a call;
- * cancellation here is exceptional, so it is re-checked between calls
- * ([ensureActiveBetweenCalls]) and the next suspension throws — the run
- * propagates cancellation instead of returning a partial batch.
+ * cancellation here is exceptional, so it propagates and the run loop
+ * finalizes the batch (remaining calls get nothing, exactly like pi's
+ * post-break calls).
  */
 private suspend fun executeToolCallsSequential(
     context: AgentContext,
     toolCalls: List<ToolCall>,
     config: AgentLoopConfig,
-    emit: suspend (AgentEvent) -> Unit
+    emit: suspend (AgentEvent) -> Unit,
+    progress: ToolBatchProgress
 ): ExecutedToolCallBatch {
     val finalizedCalls = mutableListOf<FinalizedToolCallOutcome>()
     val messages = mutableListOf<ToolResultMessage>()
 
     for (toolCall in toolCalls) {
-        emitToolExecutionStart(toolCall, emit)
+        emitToolExecutionStart(toolCall, emit, progress)
 
         val preparation = prepareToolCall(context, toolCall)
         val finalized = when (preparation) {
@@ -328,9 +469,9 @@ private suspend fun executeToolCallsSequential(
                 executeAndFinalizePreparedToolCall(preparation, emit)
         }
 
-        emitToolExecutionEnd(finalized, emit)
+        emitToolExecutionEnd(finalized, emit, progress)
         val toolResultMessage = createToolResultMessage(finalized, config.clock)
-        emitToolResultMessage(toolResultMessage, emit)
+        emitToolResultMessage(toolResultMessage, emit, progress)
         finalizedCalls.add(finalized)
         messages.add(toolResultMessage)
 
@@ -351,8 +492,9 @@ private suspend fun executeToolCallsSequential(
  * in source order afterwards.
  *
  * Divergences:
- * - pi's abort-signal preflight break is a cancellation re-check
- *   ([ensureActiveBetweenCalls]); the next suspension throws instead.
+ * - pi's abort-signal preflight break and per-entry abort check are
+ *   replaced by coroutine cancellation: entries still running are cancelled
+ *   and the run loop finalizes them as "Operation aborted" results.
  * - `emit` is invoked concurrently from the async jobs; the production
  *   [Agent] facade serializes emissions.
  */
@@ -360,18 +502,19 @@ private suspend fun executeToolCallsParallel(
     context: AgentContext,
     toolCalls: List<ToolCall>,
     config: AgentLoopConfig,
-    emit: suspend (AgentEvent) -> Unit
+    emit: suspend (AgentEvent) -> Unit,
+    progress: ToolBatchProgress
 ): ExecutedToolCallBatch {
     val finalizedEntries = mutableListOf<suspend () -> FinalizedToolCallOutcome>()
 
     for (toolCall in toolCalls) {
-        emitToolExecutionStart(toolCall, emit)
+        emitToolExecutionStart(toolCall, emit, progress)
 
         val preparation = prepareToolCall(context, toolCall)
         if (preparation is ImmediateToolCallOutcome) {
             val finalized =
                 FinalizedToolCallOutcome(toolCall, preparation.result, preparation.isError)
-            emitToolExecutionEnd(finalized, emit)
+            emitToolExecutionEnd(finalized, emit, progress)
             finalizedEntries.add { finalized }
             ensureActiveBetweenCalls()
             continue
@@ -379,7 +522,7 @@ private suspend fun executeToolCallsParallel(
         check(preparation is PreparedToolCall)
         finalizedEntries.add {
             val finalized = executeAndFinalizePreparedToolCall(preparation, emit)
-            emitToolExecutionEnd(finalized, emit)
+            emitToolExecutionEnd(finalized, emit, progress)
             finalized
         }
         ensureActiveBetweenCalls()
@@ -391,7 +534,7 @@ private suspend fun executeToolCallsParallel(
     val messages = mutableListOf<ToolResultMessage>()
     for (finalized in orderedFinalizedCalls) {
         val toolResultMessage = createToolResultMessage(finalized, config.clock)
-        emitToolResultMessage(toolResultMessage, emit)
+        emitToolResultMessage(toolResultMessage, emit, progress)
         messages.add(toolResultMessage)
     }
 
@@ -469,8 +612,8 @@ private fun prepareToolCall(context: AgentContext, toolCall: ToolCall): ToolCall
  * before the end event is emitted.
  *
  * Divergence: pi catches every `execute` exception as a tool failure; here
- * [CancellationException] is rethrown so cancellation reaches the [Agent]
- * facade, which synthesizes the terminal ABORTED message.
+ * [CancellationException] is rethrown so the run loop finalizes the aborted
+ * batch with an "Operation aborted" error result, mirroring pi's abort path.
  */
 private suspend fun executeAndFinalizePreparedToolCall(
     prepared: PreparedToolCall,
@@ -525,10 +668,25 @@ private fun createErrorToolResult(message: String): AgentToolResult = AgentToolR
     details = JsonObject(emptyMap())
 )
 
+private fun AgentLoopConfig.emptyAssistantMessage(): AssistantMessage = AssistantMessage(
+    content = emptyList(),
+    api = model.api,
+    provider = model.provider,
+    model = model.id,
+    timestamp = clock.now().toEpochMilliseconds()
+)
+
+private const val ABORT_ERROR_MESSAGE = "Request was aborted"
+
+/** pi's error result for tool calls that never ran because the run aborted. */
+private const val OPERATION_ABORTED = "Operation aborted"
+
 private suspend fun emitToolExecutionEnd(
     finalized: FinalizedToolCallOutcome,
-    emit: suspend (AgentEvent) -> Unit
+    emit: suspend (AgentEvent) -> Unit,
+    progress: ToolBatchProgress
 ) {
+    progress.recordOutcome(finalized)
     emit(
         AgentEvent.ToolExecutionEnd(
             toolCallId = finalized.toolCall.id,
@@ -537,6 +695,7 @@ private suspend fun emitToolExecutionEnd(
             isError = finalized.isError
         )
     )
+    progress.recordEnded(finalized.toolCall.id)
 }
 
 private fun createToolResultMessage(
@@ -555,13 +714,19 @@ private fun createToolResultMessage(
 
 private suspend fun emitToolResultMessage(
     toolResultMessage: ToolResultMessage,
-    emit: suspend (AgentEvent) -> Unit
+    emit: suspend (AgentEvent) -> Unit,
+    progress: ToolBatchProgress
 ) {
     emit(AgentEvent.MessageStart(toolResultMessage))
     emit(AgentEvent.MessageEnd(toolResultMessage))
+    progress.recordResultMessage(toolResultMessage)
 }
 
-private suspend fun emitToolExecutionStart(toolCall: ToolCall, emit: suspend (AgentEvent) -> Unit) {
+private suspend fun emitToolExecutionStart(
+    toolCall: ToolCall,
+    emit: suspend (AgentEvent) -> Unit,
+    progress: ToolBatchProgress
+) {
     emit(
         AgentEvent.ToolExecutionStart(
             toolCallId = toolCall.id,
@@ -569,15 +734,5 @@ private suspend fun emitToolExecutionStart(toolCall: ToolCall, emit: suspend (Ag
             arguments = parseRawArguments(toolCall.arguments) ?: JsonObject(emptyMap())
         )
     )
+    progress.recordStarted(toolCall.id)
 }
-
-private fun unsupportedErrorMessage(model: Model, timestamp: Long): AssistantMessage =
-    AssistantMessage(
-        content = emptyList(),
-        api = model.api,
-        provider = model.provider,
-        model = model.id,
-        stopReason = StopReason.ERROR,
-        errorMessage = "Provider stream completed without a terminal event",
-        timestamp = timestamp
-    )

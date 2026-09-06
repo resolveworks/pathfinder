@@ -23,14 +23,19 @@ import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.toThinkingLevelOrNull
 
 /**
  * Stateful wrapper around the low-level agent loop: owns the agent
  * transcript, reduces loop events into [AgentState] before notifying
- * [events] observers, and synthesizes terminal lifecycle when a run fails at
- * this boundary. Post-run orchestration — auto-retry and compaction — belongs
- * to the higher-level coding-agent session, not to the classic Agent.
+ * [events] observers, and synthesizes terminal lifecycle when a run fails
+ * at this boundary. The loop itself already terminates aborts and provider
+ * errors with the finalized partial message; this path only covers
+ * failures that escape the loop. Post-run orchestration — auto-retry and
+ * compaction — belongs to the higher-level coding-agent session, not to
+ * the classic Agent.
  */
 class Agent(
     model: Model,
@@ -82,8 +87,10 @@ class Agent(
 
     /**
      * Select the model for subsequent runs. Safe during an in-flight run:
-     * [prompt] snapshots the model at run start, so the active run keeps its
-     * original model and the next prompt uses the new one. Validation and the
+     * [prompt] snapshots the model at run start, so the change reaches the
+     * next provider request only when a session installs
+     * [prepareNextTurnWithContext] (returning the live state, as pi's
+     * AgentSession does), otherwise the next run. Validation and the
      * session-tree model-change record are the owning session's job.
      */
     fun setModel(model: Model) {
@@ -91,10 +98,20 @@ class Agent(
     }
 
     /**
+     * Session-installed between-turns hook (pi's same-named Agent callback).
+     * Consulted after `turn_end` when the loop will continue, before the next
+     * provider request; may return refreshed context/model/thinkingLevel. A
+     * session that installs it (returning the live `state` values, like pi's
+     * AgentSession) makes mid-run setter calls take effect on the next turn.
+     */
+    var prepareNextTurnWithContext: (suspend (PrepareNextTurnContext) -> AgentLoopTurnUpdate?)? =
+        null
+
+    /**
      * Select the thinking level for subsequent runs. Safe during an in-flight
-     * run: [prompt] snapshots the level at run start, so the active run keeps
-     * its start-of-run level and the next prompt uses the new one. Clamping
-     * and the session-tree thinking_level_change record are
+     * run: like [setModel], the change reaches the next provider request only
+     * through [prepareNextTurnWithContext] when a session installs it.
+     * Clamping and the session-tree thinking_level_change record are
      * the owning session's job.
      */
     fun setThinkingLevel(level: ModelThinkingLevel) {
@@ -103,8 +120,8 @@ class Agent(
 
     /**
      * Assign the tools for subsequent runs. Safe during an in-flight run:
-     * [prompt] snapshots the tools at run start, so the active run keeps its
-     * start-of-run tool set and the next prompt uses the new ones.
+     * like [setModel], the change reaches the next provider request only
+     * through [prepareNextTurnWithContext] when a session installs it.
      */
     fun setTools(tools: List<AgentTool>) {
         reduce { it.copy(tools = tools.toList()) }
@@ -112,8 +129,8 @@ class Agent(
 
     /**
      * Assign the system prompt for subsequent runs. Safe during an in-flight
-     * run: [prompt] snapshots it at run start, so the active run keeps its
-     * start-of-run prompt and the next prompt uses the new one.
+     * run: like [setModel], the change reaches the next provider request only
+     * through [prepareNextTurnWithContext] when a session installs it.
      */
     fun setSystemPrompt(value: String?) {
         reduce { it.copy(systemPrompt = value) }
@@ -148,10 +165,11 @@ class Agent(
      * snapshot.
      *
      * @throws IllegalStateException when a run is already active.
-     * @throws CancellationException when aborted or when the caller is cancelled;
-     *   in either case a synthetic ABORTED assistant message and full terminal
-     *   lifecycle are committed first (in a non-cancellable context) so the
-     *   transcript and UI cannot remain stuck.
+     * @throws CancellationException when aborted or when the caller is
+     *   cancelled. Unlike pi, whose `prompt()` resolves normally after an
+     *   abort, cancellation is rethrown — but only after the loop has
+     *   committed the finalized partial assistant message and the terminal
+     *   lifecycle, so the transcript and UI cannot remain stuck.
      */
     suspend fun prompt(messages: List<Message>) {
         synchronized(lock) {
@@ -182,7 +200,8 @@ class Agent(
                 options = runOptions,
                 streamFn = streamFn,
                 toolExecution = toolExecution,
-                clock = clock
+                clock = clock,
+                prepareNextTurn = prepareNextTurnWithContext
             )
 
             coroutineScope {
@@ -261,7 +280,7 @@ class Agent(
         activeJob?.cancel()
     }
 
-    /** Replace the committed transcript with a copy of [messages]; only valid while idle. */
+    /** Replace the committed transcript; only valid while idle. */
     fun replaceTranscript(messages: List<Message>) {
         synchronized(lock) {
             if (active) {
@@ -272,6 +291,16 @@ class Agent(
             val copy = messages.toList()
             reduce { it.copy(messages = copy) }
         }
+    }
+
+    /**
+     * Replace the committed transcript unconditionally. pi's session assigns
+     * `agent.state.messages` directly to rebuild context after mid-run
+     * compaction; this is that mutation, valid while a run is active (it runs
+     * inside the run's own coroutine, between turns).
+     */
+    fun setMessages(messages: List<Message>) {
+        reduce { it.copy(messages = messages.toList()) }
     }
 
     /** Clear the committed transcript and any error; only valid while idle. */
@@ -288,7 +317,12 @@ class Agent(
      * Synthesize the terminal lifecycle for a run that failed at this
      * boundary: one ABORTED/ERROR assistant message carried through
      * message_start/end, turn_end, and agent_end. Skipped when the low-level
-     * loop already emitted AgentEnd, so no final message is duplicated.
+     * loop already emitted AgentEnd — the normal case for aborts and provider
+     * errors, whose partial output the loop commits itself.
+     *
+     * Message shape matches pi (empty text content, zeroed usage); the error
+     * text is sanitized because raw exception messages can embed request
+     * details such as options or credentials.
      *
      * The synthesized message carries the live selected model — a mid-run
      * switch relabels the failure even though the failed run itself used its
@@ -298,10 +332,11 @@ class Agent(
         if (sawAgentEnd) return
 
         val failure = AssistantMessage(
-            content = emptyList(),
+            content = listOf(TextContent("")),
             api = model.api,
             provider = model.provider,
             model = model.id,
+            usage = Usage(),
             stopReason = if (aborted) StopReason.ABORTED else StopReason.ERROR,
             errorMessage = if (aborted) ABORT_ERROR_MESSAGE else safeErrorMessage(cause),
             timestamp = clock.now().toEpochMilliseconds()
