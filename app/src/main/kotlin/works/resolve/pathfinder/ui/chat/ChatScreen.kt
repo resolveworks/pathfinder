@@ -79,7 +79,6 @@ import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
-import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.ai.providers.AuthPrompt as CatalogAuthPrompt
 import works.resolve.pathfinder.codingagent.core.session.SessionInfo
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
@@ -210,39 +209,12 @@ fun ChatScreen(
         backStack.add(uiState.startKey)
     }
 
-    // Successful credential save: pop exactly one credential screen
-    // (state-driven — no ViewModel navigation callback). On first-run saves
-    // both epochs bump, so the reset above runs first and leaves a
-    // single-entry root the guard never pops. A failed save never bumps
-    // this epoch, so the form and its typed inputs stay intact.
-    LaunchedEffect(uiState.credentialSuccessEpoch) {
-        val top = backStack.lastOrNull()
-        if (backStack.size > 1 &&
-            (top is ProviderAuthNavKey || top is ProviderApiKeyNavKey)
-        ) {
-            backStack.removeAt(backStack.lastIndex)
-        }
-    }
-
-    // A login in flight is its own destination on top of the provider's
-    // screen; when the flow ends (success, failure, or cancel) the entry
-    // pops back to where the login was started. A restored stack whose
-    // flow died with the process pops the dead entry here too.
+    // A login destination is pushed where its flow begins and popped by
+    // regular back (which cancels the flow); this only removes an entry
+    // whose flow has ended on its own — success, failure, or one that died
+    // with the process before a restore.
     LaunchedEffect(uiState.authFlow?.providerId) {
-        val flowProviderId = uiState.authFlow?.providerId
-        val top = backStack.lastOrNull()
-        when {
-            flowProviderId != null && top is ProviderAuthNavKey &&
-                top.providerId == flowProviderId ->
-                backStack.add(ProviderLoginNavKey(flowProviderId))
-
-            flowProviderId == null && top is ProviderLoginNavKey ->
-                backStack.removeAt(backStack.lastIndex)
-        }
-    }
-
-    LaunchedEffect(uiState.searchCredentialSuccessEpoch) {
-        if (backStack.size > 1 && backStack.lastOrNull() is SearchProviderAuthNavKey) {
+        if (uiState.authFlow == null && backStack.lastOrNull() is ProviderLoginNavKey) {
             backStack.removeAt(backStack.lastIndex)
         }
     }
@@ -280,26 +252,6 @@ fun ChatScreen(
     val pushProviderApiKeyForm: (String) -> Unit = { backStack.add(ProviderApiKeyNavKey(it)) }
     val pushSearchProviders: () -> Unit = { backStack.add(SearchProvidersNavKey) }
     val pushSearchProviderAuth: (String) -> Unit = { backStack.add(SearchProviderAuthNavKey(it)) }
-
-    // A provider row is itself the sign-in action when the provider's sole
-    // method is OAuth: the login begins and its screen opens straight from
-    // the list, with no sign-in interstitial. The top-of-stack check keeps
-    // a double tap from stacking a second screen under the login entry.
-    val openProvider: (String) -> Unit = { providerId ->
-        if (backStack.lastOrNull() == ProvidersNavKey) {
-            val soleOAuth = authMethods(providerId).singleOrNull()
-                ?.takeIf { it.type != AuthType.API_KEY }
-            val configured = uiState.providerOptions
-                .any { it.id == providerId && it.configured }
-            if (soleOAuth != null && !configured &&
-                onBeginProviderAuthLogin(providerId, soleOAuth)
-            ) {
-                backStack.add(ProviderLoginNavKey(providerId))
-            } else {
-                pushProviderAuth(providerId)
-            }
-        }
-    }
     val popBackStack: () -> Unit = {
         // Popping the login destination cancels its flow: a login must
         // never outlive the screen it belongs to.
@@ -500,7 +452,7 @@ fun ChatScreen(
                                 ProvidersContent(
                                     providerOptions = uiState.providerOptions,
                                     onRefresh = onRefreshProviderStatus,
-                                    onOpenProvider = openProvider
+                                    onOpenProvider = pushProviderAuth
                                 )
                             }
                             entry<SearchProvidersNavKey> {
@@ -514,24 +466,30 @@ fun ChatScreen(
                                 val option = uiState.searchProviderOptions
                                     .firstOrNull { it.id == key.providerId }
                                 if (option != null) {
-                                    // Search providers offer only API-key auth:
-                                    // reuse the all-fields form with the search
-                                    // catalog's prompts; env inputs are not
-                                    // forwarded.
-                                    ProviderAuthContent(
-                                        provider = option,
-                                        prompts = searchAuthPrompts(key.providerId),
-                                        onSave = { apiKeyInput, _ ->
-                                            onSaveSearchProviderCredential(
-                                                key.providerId,
-                                                apiKeyInput
-                                            )
-                                        },
-                                        onRemove = {
-                                            onRemoveSearchProviderCredential(key.providerId)
-                                        },
-                                        onClose = popBackStack
-                                    )
+                                    // Search providers offer only API-key
+                                    // auth: the page is the credential form
+                                    // while unconfigured and the stored-key
+                                    // state once saved (env inputs are not
+                                    // forwarded).
+                                    if (option.configured) {
+                                        StoredProviderContent(
+                                            provider = option,
+                                            onRemove = {
+                                                onRemoveSearchProviderCredential(key.providerId)
+                                            }
+                                        )
+                                    } else {
+                                        ProviderAuthContent(
+                                            prompts = searchAuthPrompts(key.providerId),
+                                            onSave = { apiKeyInput, _ ->
+                                                onSaveSearchProviderCredential(
+                                                    key.providerId,
+                                                    apiKeyInput
+                                                )
+                                            },
+                                            onClose = popBackStack
+                                        )
+                                    }
                                 }
                             }
                             entry<ProviderAuthNavKey> { key ->
@@ -540,23 +498,16 @@ fun ChatScreen(
                                 if (option != null) {
                                     ProviderAuthScreen(
                                         provider = option,
-                                        prompts = authPrompts(key.providerId),
                                         methods = authMethods(key.providerId),
-                                        onSave = { apiKeyInput, envInputs ->
-                                            onSaveProviderCredential(
-                                                key.providerId,
-                                                apiKeyInput,
-                                                envInputs
-                                            )
-                                        },
                                         onRemove = { onRemoveProviderCredential(key.providerId) },
                                         onOpenApiKeyForm = {
                                             pushProviderApiKeyForm(key.providerId)
                                         },
                                         onBeginLogin = { method ->
-                                            onBeginProviderAuthLogin(key.providerId, method)
-                                        },
-                                        onClose = popBackStack
+                                            if (onBeginProviderAuthLogin(key.providerId, method)) {
+                                                backStack.add(ProviderLoginNavKey(key.providerId))
+                                            }
+                                        }
                                     )
                                 }
                             }
@@ -564,8 +515,18 @@ fun ChatScreen(
                                 val option = uiState.providerOptions
                                     .firstOrNull { it.id == key.providerId }
                                 if (option != null) {
+                                    // The form finishes itself once the save is
+                                    // confirmed — the provider flipping to
+                                    // configured — so a failed save keeps the
+                                    // typed inputs for correction; a restored
+                                    // entry whose credential already persisted
+                                    // pops the same way.
+                                    LaunchedEffect(option.configured) {
+                                        if (option.configured && backStack.lastOrNull() == key) {
+                                            backStack.removeAt(backStack.lastIndex)
+                                        }
+                                    }
                                     ProviderAuthContent(
-                                        provider = option,
                                         prompts = authPrompts(key.providerId),
                                         onSave = { apiKeyInput, envInputs ->
                                             onSaveProviderCredential(
@@ -574,7 +535,6 @@ fun ChatScreen(
                                                 envInputs
                                             )
                                         },
-                                        onRemove = { onRemoveProviderCredential(key.providerId) },
                                         onClose = popBackStack
                                     )
                                 }

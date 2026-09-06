@@ -162,20 +162,17 @@ private fun ProviderListContent(
  * prompt — the first is the secret API key, later prompts fill env slots.
  * Inputs live in plain Compose memory only: never saved across process
  * death, never logged. The form is popped (and its inputs disposed) only
- * after the save is confirmed via the state's credential-success epoch, so
- * a failed save retains them for correction.
+ * after the save is confirmed — the provider flipping to configured in the
+ * surrounding entry — so a failed save retains them for correction.
  */
 @Composable
 internal fun ProviderAuthContent(
-    provider: ProviderOption,
     prompts: List<CatalogAuthPrompt>,
     onSave: (apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
-    onRemove: () -> Unit,
     onClose: () -> Unit
 ) {
     var apiKeyInput by remember { mutableStateOf("") }
     val envInputs = remember(prompts) { mutableStateMapOf<String, String>() }
-    var confirmRemove by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -202,8 +199,6 @@ internal fun ProviderAuthContent(
                 modifier = Modifier.fillMaxWidth()
             )
         }
-        // Stacked so narrow widths never put Save, Cancel, and the
-        // destructive Forget action in one horizontal row.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = { onSave(apiKeyInput, envInputs.toMap()) }
@@ -212,94 +207,32 @@ internal fun ProviderAuthContent(
             }
             TextButton(onClick = onClose) { Text(stringResource(R.string.action_cancel)) }
         }
-        if (provider.configured) {
-            TextButton(
-                onClick = { confirmRemove = true },
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                )
-            ) {
-                Text(stringResource(R.string.action_remove_provider))
-            }
-        }
-    }
-
-    if (confirmRemove) {
-        val name = provider.name
-        AlertDialog(
-            onDismissRequest = { confirmRemove = false },
-            title = { Text(stringResource(R.string.action_remove_provider)) },
-            text = { Text(stringResource(R.string.remove_provider_confirm, name)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirmRemove = false
-                        onRemove()
-                        onClose()
-                    },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Text(stringResource(R.string.action_remove_provider))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmRemove = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            }
-        )
     }
 }
 
 /**
- * The provider-auth screen (pi's /login method selection and login
- * dialog): a stored credential replaces every login surface with sign-out
- * (pi's /logout); methods and the key form appear only while
- * unconfigured. A provider whose sole method is OAuth never reaches this
- * screen — its list row begins the login directly. The in-flight login
- * itself is a separate destination ([ProviderLoginNavKey]); per-method
- * routing here follows [providerAuthScreenMode].
+ * The provider's page: with a stored credential, the signed-in state and
+ * its single leave action (pi's /logout); otherwise the provider's login
+ * methods (pi's /login method selection) — an API-key method opens the
+ * credential form ([ProviderApiKeyNavKey]), any other begins its login
+ * ([ProviderLoginNavKey]). The page follows the credential, so saving or
+ * signing out swaps its content in place.
  */
 @Composable
 internal fun ProviderAuthScreen(
     provider: ProviderOption,
-    prompts: List<CatalogAuthPrompt>,
     methods: List<AuthMethodInfo>,
-    onSave: (apiKeyInput: String, envInputs: Map<String, String>) -> Unit,
     onRemove: () -> Unit,
     onOpenApiKeyForm: () -> Unit,
-    onBeginLogin: (method: AuthMethodInfo) -> Unit,
-    onClose: () -> Unit
+    onBeginLogin: (method: AuthMethodInfo) -> Unit
 ) {
     if (provider.configured) {
         StoredProviderContent(provider = provider, onRemove = onRemove)
         return
     }
 
-    when (providerAuthScreenMode(methods)) {
-        ProviderAuthScreenMode.API_KEY_FORM -> ProviderAuthContent(
-            provider = provider,
-            prompts = prompts,
-            onSave = onSave,
-            onRemove = onRemove,
-            onClose = onClose
-        )
-
-        ProviderAuthScreenMode.METHOD_CHOICE -> AuthMethodSelectorContent(
-            providerName = provider.name,
-            methods = methods,
-            onSelect = { method ->
-                if (method.type == AuthType.API_KEY) {
-                    onOpenApiKeyForm()
-                } else {
-                    onBeginLogin(method)
-                }
-            }
-        )
-
-        ProviderAuthScreenMode.NO_METHODS -> Box(
+    if (methods.isEmpty()) {
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(24.dp),
@@ -312,17 +245,29 @@ internal fun ProviderAuthScreen(
                 textAlign = TextAlign.Center
             )
         }
+        return
     }
+
+    AuthMethodSelectorContent(
+        methods = methods,
+        onSelect = { method ->
+            if (method.type == AuthType.API_KEY) {
+                onOpenApiKeyForm()
+            } else {
+                onBeginLogin(method)
+            }
+        }
+    )
 }
 
 /**
- * The signed-in state: no login options, only leaving. Sign-out labels the
- * stored credential kind ("Log out" for accounts, "Forget provider" for
- * API keys); once the credential is gone the surrounding screen flips back
- * to the method surfaces.
+ * The signed-in state: no login options, only the leave action. Sign-out
+ * labels the stored credential kind ("Log out" for accounts, "Forget
+ * provider" for API keys); once the credential is gone the surrounding
+ * page flips back to its login surfaces.
  */
 @Composable
-private fun StoredProviderContent(provider: ProviderOption, onRemove: () -> Unit) {
+internal fun StoredProviderContent(provider: ProviderOption, onRemove: () -> Unit) {
     var confirmRemove by remember { mutableStateOf(false) }
     val isAccount = provider.authType == AuthType.OAUTH
     val removeLabel =
@@ -334,13 +279,6 @@ private fun StoredProviderContent(provider: ProviderOption, onRemove: () -> Unit
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text(
-            text = stringResource(
-                if (isAccount) R.string.provider_signed_in_body else R.string.provider_api_key_body
-            ),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
         TextButton(
             onClick = { confirmRemove = true },
             colors = ButtonDefaults.textButtonColors(
@@ -386,10 +324,9 @@ private fun StoredProviderContent(provider: ProviderOption, onRemove: () -> Unit
     }
 }
 
-/** pi's auth-type selector. */
+/** pi's auth-type selector; the top bar already names the provider. */
 @Composable
 private fun AuthMethodSelectorContent(
-    providerName: String,
     methods: List<AuthMethodInfo>,
     onSelect: (method: AuthMethodInfo) -> Unit
 ) {
@@ -398,11 +335,6 @@ private fun AuthMethodSelectorContent(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text(
-            text = stringResource(R.string.auth_method_title, providerName),
-            style = MaterialTheme.typography.titleMedium
-        )
-        Spacer(Modifier.size(16.dp))
         methods.forEach { method ->
             ListItem(
                 headlineContent = { Text(method.label) },
@@ -432,10 +364,10 @@ private fun AuthMethodSelectorContent(
  * prompts keep their upstream shapes and ordering, but the phone UI
  * presents only the current action (browser button, device code, or live
  * prompt). Terminal-oriented raw URLs, progress transcripts, and the raced
- * manual-code fallback are intentionally not rendered. Leaving this
- * destination — system back or the flow ending — goes through one pop
- * that also cancels the login (see ChatScreen), so a flow never outlives
- * its screen.
+ * manual-code fallback are intentionally not rendered. System back pops
+ * the destination and cancels the login; the flow ending on its own pops
+ * it from the ChatScreen side — either way a flow never outlives its
+ * screen.
  */
 @Composable
 internal fun ProviderLoginScreen(flow: ProviderAuthFlow, onSubmit: (answer: String) -> Unit) {

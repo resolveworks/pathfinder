@@ -16,26 +16,18 @@ import works.resolve.pathfinder.tools.websearch.SearchProviderService
 /**
  * The app's web-search feature: search-provider credentials (Brave only)
  * and the web_search tool's presence on sessions. Owns the
- * [ProviderOption] rows of the search-providers screen, the success epoch
- * its credential form pops on, and the Brave-configured fact every
- * session's tool set follows. Runs in [scope]; user-facing failures
- * surface through [onError] as static, secret-free strings, absorbed
- * degradations only log.
+ * [ProviderOption] rows of the search-providers screen and the
+ * Brave-configured fact every session's tool set follows. Runs in [scope];
+ * user-facing failures surface through [onError] as static, secret-free
+ * strings, absorbed degradations only log.
  */
 internal class SearchProviderController(
     private val scope: CoroutineScope,
     private val service: SearchProviderService,
     private val onError: (message: String, cause: Throwable?) -> Unit
 ) {
-    /** Live search-provider surface and the credential form's success epoch. */
-    data class State(
-        val options: List<ProviderOption> = emptyList(),
-        /**
-         * Incremented only after a credential has been successfully
-         * persisted, never on a validation or storage failure.
-         */
-        val successEpoch: Long = 0
-    ) {
+    /** Live search-provider surface. */
+    data class State(val options: List<ProviderOption> = emptyList()) {
         val braveConfigured: Boolean
             get() = options.any {
                 it.id == SearchProviderService.BRAVE_PROVIDER_ID && it.configured
@@ -44,7 +36,7 @@ internal class SearchProviderController(
 
     private val _state = MutableStateFlow(State())
 
-    /** The source of truth [ChatUiState.searchProviderOptions] and [ChatUiState.searchCredentialSuccessEpoch] mirror. */
+    /** The source of truth [ChatUiState.searchProviderOptions] mirrors. */
     val state: StateFlow<State> = _state.asStateFlow()
 
     /** Auth prompts for a search provider's credential form (only Brave is supported). */
@@ -58,9 +50,8 @@ internal class SearchProviderController(
     /**
      * Stores a web-search provider's API key. Blank input, an unknown
      * provider, or a storage failure surfaces a static, secret-free error
-     * and changes nothing. Only a confirmed non-blank save bumps
-     * [State.successEpoch] and enables web_search on the bound session for
-     * the next run.
+     * and changes nothing. Only a confirmed non-blank save enables
+     * web_search on the bound session for the next run.
      */
     fun saveCredential(providerId: String, apiKeyInput: String) {
         scope.launch {
@@ -81,7 +72,6 @@ internal class SearchProviderController(
                 onError(ERROR_CREDENTIAL_SAVE, e)
                 return@launch
             }
-            _state.update { it.copy(successEpoch = it.successEpoch + 1) }
             refresh()
         }
     }

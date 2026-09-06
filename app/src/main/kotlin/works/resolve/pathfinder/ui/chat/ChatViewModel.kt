@@ -112,7 +112,6 @@ class ChatViewModel(
         base.copy(
             authFlow = authFlow,
             searchProviderOptions = searchProviders.options,
-            searchCredentialSuccessEpoch = searchProviders.successEpoch,
             sessionSearchQuery = sessionSearch.query,
             sessionSearchSort = sessionSearch.sort,
             sessionSearchResults = sessionSearch.results
@@ -327,8 +326,7 @@ class ChatViewModel(
 
     /**
      * Stores a web-search provider's API key; only a confirmed non-blank
-     * save bumps [ChatUiState.searchCredentialSuccessEpoch] and enables
-     * web_search on the bound session for the next run.
+     * save enables web_search on the bound session for the next run.
      */
     fun saveSearchProviderCredential(providerId: String, apiKeyInput: String) =
         searchProviders.saveCredential(providerId, apiKeyInput)
@@ -955,17 +953,13 @@ class ChatViewModel(
     }
 
     /**
-     * Shared post-login success path: bumps the credential-success epoch so
-     * the UI closes the auth screen only after confirmed persistence,
-     * refreshes every credential-derived surface, and — while still
-     * unconfigured — completes configuration with the resolved initial
-     * model and enters the chat directly.
+     * Shared post-login success path: refreshes every credential-derived
+     * surface — the provider flipping to configured is what closes the
+     * credential form — and, while still unconfigured, completes
+     * configuration with the resolved initial model and enters the chat
+     * directly.
      */
     private suspend fun onCredentialStored() {
-        // Only a confirmed persistence bumps this epoch, so the credential
-        // form and its typed inputs survive a failed save above.
-        _uiState.update { it.copy(credentialSuccessEpoch = it.credentialSuccessEpoch + 1) }
-
         refreshOptions()
         if (_uiState.value.status == ChatStatus.NeedsConfiguration &&
             _uiState.value.modelOptions.isNotEmpty()
@@ -997,9 +991,10 @@ class ChatViewModel(
 
     /**
      * Starts the selected method's login flow in [loginController] (one
-     * login at a time). Only [AuthType.API_KEY] with a sole method is
-     * normally started through the all-fields form instead. Returns false
-     * (with an error set) when rejected, so callers gate navigation on it.
+     * login at a time). API-key credentials are never started here — they
+     * go through the all-fields form ([saveProviderCredential]). Returns
+     * false (with an error set) when rejected, so callers gate navigation
+     * on it.
      */
     fun beginProviderAuthLogin(providerId: String, method: AuthMethodInfo): Boolean {
         if (isAuthProviderBusy()) {

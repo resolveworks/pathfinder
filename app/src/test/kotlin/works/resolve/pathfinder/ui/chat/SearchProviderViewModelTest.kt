@@ -165,50 +165,49 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
         }
 
     @Test
-    fun searchSave_blankAndFailedSaves_neverBumpOrActivate() =
-        runTest(mainDispatcherRule.scheduler) {
-            val h = harness()
-            val vm = h.newViewModel()
-            vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
-            vm.configure(apiKey = "k")
-            vm.awaitState { it.status == ChatStatus.Ready }
-            val agent = h.createdAgents.single()
+    fun searchSave_blankAndFailedSaves_neverConfigure() = runTest(mainDispatcherRule.scheduler) {
+        val h = harness()
+        val vm = h.newViewModel()
+        vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
+        vm.configure(apiKey = "k")
+        vm.awaitState { it.status == ChatStatus.Ready }
+        val agent = h.createdAgents.single()
 
-            vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "   ")
-            vm.awaitState { it.error != null }
-            assertEquals(0L, vm.uiState.value.searchCredentialSuccessEpoch)
-            assertNull(h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
-            vm.dismissError()
+        vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "   ")
+        vm.awaitState { it.error != null }
+        assertFalse(vm.uiState.value.searchProviderOptions.single().configured)
+        assertNull(h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
+        vm.dismissError()
 
-            vm.saveSearchProviderCredential("nope", "k")
-            vm.awaitState { it.error != null }
-            assertEquals(0L, vm.uiState.value.searchCredentialSuccessEpoch)
-            vm.dismissError()
+        vm.saveSearchProviderCredential("nope", "k")
+        vm.awaitState { it.error != null }
+        assertFalse(vm.uiState.value.searchProviderOptions.single().configured)
+        vm.dismissError()
 
-            h.credentials.failWrites = true
-            vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
-            vm.awaitState { it.error != null }
-            assertEquals(0L, vm.uiState.value.searchCredentialSuccessEpoch)
-            assertFalse(vm.uiState.value.searchProviderOptions.single().configured)
-            assertFalse(BraveWebSearchTool.NAME in agent.getActiveToolNames())
-            vm.dismissError()
-            h.credentials.failWrites = false
+        h.credentials.failWrites = true
+        vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
+        vm.awaitState { it.error != null }
+        assertFalse(vm.uiState.value.searchProviderOptions.single().configured)
+        assertFalse(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+        vm.dismissError()
+        h.credentials.failWrites = false
 
-            // Confirmed save enables web_search on the SAME session.
-            vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
-            vm.awaitState { it.searchCredentialSuccessEpoch == 1L }
-            assertEquals("brave-key", h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
-            assertTrue(vm.uiState.value.searchProviderOptions.single().configured)
-            assertEquals(1, h.createdAgents.size)
-            assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
-            assertFalse(vm.uiState.value.toString().contains("brave-key"))
+        // Confirmed save enables web_search on the SAME session.
+        vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
+        vm.awaitState { it.searchProviderOptions.single().configured }
+        assertEquals("brave-key", h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
+        assertEquals(1, h.createdAgents.size)
+        assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
+        assertFalse(vm.uiState.value.toString().contains("brave-key"))
 
-            vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key-2")
-            vm.awaitState { it.searchCredentialSuccessEpoch == 2L }
-            assertEquals("brave-key-2", h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
+        vm.saveSearchProviderCredential(
+            SearchProviderService.BRAVE_PROVIDER_ID,
+            "brave-key-2"
+        )
+        waitUntil { h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID) == "brave-key-2" }
 
-            vm.closeForTest()
-        }
+        vm.closeForTest()
+    }
 
     @Test
     fun searchRemove_deletesKey_andDisablesWebSearch() = runTest(mainDispatcherRule.scheduler) {
@@ -220,7 +219,7 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
         val agent = h.createdAgents.single()
 
         vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
-        vm.awaitState { it.searchCredentialSuccessEpoch == 1L }
+        vm.awaitState { it.searchProviderOptions.single().configured }
         assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
 
         vm.removeSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID)
@@ -228,7 +227,6 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
         assertNull(h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
         assertFalse(BraveWebSearchTool.NAME in agent.getActiveToolNames())
         assertEquals(1, h.createdAgents.size)
-        assertEquals(1L, vm.uiState.value.searchCredentialSuccessEpoch)
 
         vm.closeForTest()
     }
@@ -243,7 +241,7 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.status == ChatStatus.Ready }
             val agent = h.createdAgents.single()
             vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
-            vm.awaitState { it.searchCredentialSuccessEpoch == 1L }
+            vm.awaitState { it.searchProviderOptions.single().configured }
             assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
 
             // A credential read failure degrades search with a safe error; chat
@@ -276,7 +274,7 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.status == ChatStatus.Ready }
             val firstId = vm.uiState.value.activeSessionId!!
             vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
-            vm.awaitState { it.searchCredentialSuccessEpoch == 1L }
+            vm.awaitState { it.searchProviderOptions.single().configured }
             assertTrue(BraveWebSearchTool.NAME in h.createdAgents.single().getActiveToolNames())
 
             // Every tryCreateAgent path synchronizes web_search.

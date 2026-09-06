@@ -125,29 +125,6 @@ data class ProviderAuthFlow(
     val pendingPrompt: AuthPrompt? = null
 )
 
-/** What the provider-auth screen shows first for a provider's method list. */
-enum class ProviderAuthScreenMode {
-    /** More than one method: choose account/subscription vs API key. */
-    METHOD_CHOICE,
-
-    /** Sole API-key method: show the credential form directly. */
-    API_KEY_FORM,
-
-    /** No login method available (no catalog prompts, no registered flow). */
-    NO_METHODS
-}
-
-/**
- * A sole OAuth method has no mode: the provider row begins that login
- * directly, so the auth screen never sees that shape (it would read as
- * [ProviderAuthScreenMode.NO_METHODS]).
- */
-internal fun providerAuthScreenMode(methods: List<AuthMethodInfo>): ProviderAuthScreenMode = when {
-    methods.size > 1 -> ProviderAuthScreenMode.METHOD_CHOICE
-    methods.size == 1 && methods[0].type == AuthType.API_KEY -> ProviderAuthScreenMode.API_KEY_FORM
-    else -> ProviderAuthScreenMode.NO_METHODS
-}
-
 /**
  * Immutable projection of the chat screen state. Contains no credentials or
  * secrets (only per-provider [ProviderOption.configured] flags and no
@@ -165,16 +142,6 @@ data class ChatUiState(
     val startKey: NavKey = ChatNavKey,
     /** Monotonic reset signal: any change tells the UI to rebuild the stack to [startKey]. */
     val navigationEpoch: Long = 0,
-    /**
-     * Monotonic success signal for provider-credential saves: incremented
-     * only after a credential has been successfully persisted, never on a
-     * validation or storage failure. The UI pops exactly one
-     * [ProviderAuthNavKey] entry when this changes while such an entry is
-     * on top of the stack; single-entry roots are never popped.
-     */
-    val credentialSuccessEpoch: Long = 0,
-    /** [credentialSuccessEpoch] counterpart for [SearchProviderAuthNavKey] entries (same pop contract). */
-    val searchCredentialSuccessEpoch: Long = 0,
     /** All catalog providers with live auth status, name-sorted. */
     val providerOptions: List<ProviderOption> = emptyList(),
     /** All catalog search providers with live auth status, name-sorted. */

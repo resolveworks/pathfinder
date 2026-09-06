@@ -136,7 +136,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
         }
 
     @Test
-    fun credentialSave_success_bumpsSuccessEpoch_failedOrIncompleteDoesNot() =
+    fun credentialSave_failedOrIncompleteLeavesProviderUnconfigured_successConfigures() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
             val vm = h.newViewModel()
@@ -144,24 +144,23 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
 
             vm.saveProviderCredential("zai", "   ", emptyMap())
             vm.awaitState { it.error != null }
-            assertEquals(0, vm.uiState.value.credentialSuccessEpoch)
+            assertFalse(vm.uiState.value.providerOptions.first { o -> o.id == "zai" }.configured)
             vm.dismissError()
 
             h.credentials.failWrites = true
             vm.saveProviderCredential("zai", "k", emptyMap())
             vm.awaitState { it.error != null }
-            assertEquals(0, vm.uiState.value.credentialSuccessEpoch)
             assertNull(h.credentials.creds["zai"])
             vm.dismissError()
             h.credentials.failWrites = false
 
             vm.saveProviderCredential("zai", "k", emptyMap())
-            vm.awaitState { it.credentialSuccessEpoch == 1L }
+            vm.awaitState { it.status == ChatStatus.Ready }
+            assertTrue(vm.uiState.value.providerOptions.first { o -> o.id == "zai" }.configured)
             assertEquals("k", h.storedApiKey("zai"))
 
             vm.saveProviderCredential("zai", "k2", emptyMap())
-            vm.awaitState { it.credentialSuccessEpoch == 2L }
-            assertEquals("k2", h.storedApiKey("zai"))
+            waitUntil { h.storedApiKey("zai") == "k2" }
 
             vm.closeForTest()
         }
@@ -192,8 +191,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             vm.dismissError()
 
             vm.saveProviderCredential("zai", "second-key", emptyMap())
-            vm.awaitState { it.credentialSuccessEpoch == 2L }
-            assertEquals("second-key", h.storedApiKey("zai"))
+            waitUntil { h.storedApiKey("zai") == "second-key" }
             assertEquals(1, h.createdAgents.size)
 
             vm.closeForTest()
@@ -230,8 +228,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             vm.dismissError()
 
             vm.saveProviderCredential("zai", "second-key", emptyMap())
-            vm.awaitState { it.credentialSuccessEpoch == 2L }
-            assertEquals("second-key", h.storedApiKey("zai"))
+            waitUntil { h.storedApiKey("zai") == "second-key" }
             assertEquals(ChatStatus.Ready, vm.uiState.value.status)
 
             vm.closeForTest()
@@ -336,7 +333,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
                 "cf-key-2",
                 mapOf("CLOUDFLARE_ACCOUNT_ID" to "acc-2", "CLOUDFLARE_GATEWAY_ID" to "gw-2")
             )
-            vm.awaitState { it.credentialSuccessEpoch == 2L }
+            waitUntil { h.storedApiKey("cloudflare-ai-gateway") == "cf-key-2" }
             val rotated = h.credentials.creds["cloudflare-ai-gateway"] as ApiKeyCredential
             assertEquals("cf-key-2", rotated.key)
             assertEquals(
@@ -506,36 +503,31 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
     // ---- provider auth methods & interactive account login ----
 
     @Test
-    fun authMethods_apiKeyOnly_bothMethods_oauthOnly_andScreenModes() =
-        runTest(mainDispatcherRule.scheduler) {
-            val h = harness()
-            val vm = h.newViewModel()
-            vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
+    fun authMethods_apiKeyOnly_bothMethods_oauthOnly() = runTest(mainDispatcherRule.scheduler) {
+        val h = harness()
+        val vm = h.newViewModel()
+        vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
 
-            val cloudflare = vm.providerAuthMethods("cloudflare-ai-gateway")
-            assertEquals(listOf(AuthType.API_KEY), cloudflare.map { it.type })
-            assertEquals("Cloudflare API key", cloudflare.single().label)
-            assertFalse(cloudflare.single().isSubscription)
+        val cloudflare = vm.providerAuthMethods("cloudflare-ai-gateway")
+        assertEquals(listOf(AuthType.API_KEY), cloudflare.map { it.type })
+        assertEquals("Cloudflare API key", cloudflare.single().label)
+        assertFalse(cloudflare.single().isSubscription)
 
-            val zai = vm.providerAuthMethods("zai")
-            assertEquals(listOf(AuthType.API_KEY, AuthType.OAUTH), zai.map { it.type })
-            assertEquals("Z.AI API key", zai[0].label)
-            assertFalse(zai[0].isSubscription)
-            assertEquals("Sign in with a Z.AI account", zai[1].label)
-            assertTrue(zai[1].isSubscription)
+        val zai = vm.providerAuthMethods("zai")
+        assertEquals(listOf(AuthType.API_KEY, AuthType.OAUTH), zai.map { it.type })
+        assertEquals("Z.AI API key", zai[0].label)
+        assertFalse(zai[0].isSubscription)
+        assertEquals("Sign in with a Z.AI account", zai[1].label)
+        assertTrue(zai[1].isSubscription)
 
-            val only = vm.providerAuthMethods("oauth-only")
-            assertEquals(listOf(AuthType.OAUTH), only.map { it.type })
-            assertTrue(only.single().isSubscription)
+        val only = vm.providerAuthMethods("oauth-only")
+        assertEquals(listOf(AuthType.OAUTH), only.map { it.type })
+        assertTrue(only.single().isSubscription)
 
-            assertEquals(ProviderAuthScreenMode.API_KEY_FORM, providerAuthScreenMode(cloudflare))
-            assertEquals(ProviderAuthScreenMode.METHOD_CHOICE, providerAuthScreenMode(zai))
-            assertEquals(ProviderAuthScreenMode.NO_METHODS, providerAuthScreenMode(emptyList()))
+        assertTrue(vm.providerAuthMethods("no-such-provider").isEmpty())
 
-            assertTrue(vm.providerAuthMethods("no-such-provider").isEmpty())
-
-            vm.closeForTest()
-        }
+        vm.closeForTest()
+    }
 
     @Test
     fun storedOAuthCredential_configuresProvider_onlyWithRegisteredFlow() =
@@ -568,7 +560,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
         }
 
     @Test
-    fun accountLogin_eventAndPromptProgression_successClosesWithEpoch() =
+    fun accountLogin_eventAndPromptProgression_successConfiguresProvider() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
             val vm = h.newViewModel()
@@ -627,10 +619,13 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
 
             vm.submitAuthPrompt("654321")
 
-            // Success: the flow clears, the epoch bumps exactly once (the UI
-            // closes the auth screen on it), and no token material ever entered
-            // the state.
-            val done = vm.awaitState { it.authFlow == null && it.credentialSuccessEpoch == 1L }
+            // Success: the flow clears, the provider flips to configured (the
+            // credential form's signal to close), and no token material ever
+            // entered the state.
+            val done = vm.awaitState {
+                it.authFlow == null &&
+                    it.providerOptions.first { o -> o.id == "zai" }.configured
+            }
             assertTrue(done.providerOptions.first { it.id == "zai" }.configured)
             assertEquals(AuthType.OAUTH, done.providerOptions.first { it.id == "zai" }.authType)
             assertTrue(done.modelOptions.any { it.providerId == "zai" })
@@ -660,13 +655,16 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
         }
 
     @Test
-    fun apiKeyLogin_persistsCredential_andBumpsEpoch() = runTest(mainDispatcherRule.scheduler) {
+    fun apiKeyLogin_persistsCredential_andConfigures() = runTest(mainDispatcherRule.scheduler) {
         val h = harness()
         val vm = h.newViewModel()
         vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
 
         vm.saveProviderCredential("zai", "k", emptyMap())
-        vm.awaitState { it.credentialSuccessEpoch > 0 }
+        vm.awaitState {
+            it.status == ChatStatus.Ready &&
+                it.providerOptions.first { o -> o.id == "zai" }.configured
+        }
         assertEquals("k", h.storedApiKey("zai"))
 
         vm.closeForTest()
@@ -703,7 +701,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.authFlow?.pendingPrompt is AuthInteractionPrompt.Secret }
             vm.cancelProviderAuthLogin()
             vm.awaitState { it.authFlow == null }
-            assertEquals(0, vm.uiState.value.credentialSuccessEpoch)
+            assertFalse(vm.uiState.value.providerOptions.first { o -> o.id == "zai" }.configured)
             assertNull(h.credentials.creds["zai"])
             assertNull(vm.uiState.value.error)
 
@@ -714,14 +712,16 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             assertEquals("Could not complete sign-in", vm.uiState.value.error)
             assertFalse(vm.uiState.value.toString().contains("access-token-2"))
             assertNull(h.credentials.creds["zai"])
-            assertEquals(0, vm.uiState.value.credentialSuccessEpoch)
+            assertFalse(vm.uiState.value.providerOptions.first { o -> o.id == "zai" }.configured)
             vm.dismissError()
 
             h.oauthZai.loginFn =
                 { OAuthCredential("access-token-3", "refresh-token-3", Long.MAX_VALUE) }
             vm.beginProviderAuthLogin("zai", oauthMethod)
-            vm.awaitState { it.authFlow == null && it.credentialSuccessEpoch == 1L }
-            assertTrue(vm.uiState.value.providerOptions.first { o -> o.id == "zai" }.configured)
+            vm.awaitState {
+                it.authFlow == null &&
+                    it.providerOptions.first { o -> o.id == "zai" }.configured
+            }
             assertFalse(vm.uiState.value.toString().contains("access-token-3"))
 
             vm.closeForTest()
@@ -754,7 +754,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
         vm.cancelProviderAuthLogin()
         vm.awaitState { it.authFlow == null }
         vm.saveProviderCredential("zai", "k", emptyMap())
-        vm.awaitState { it.credentialSuccessEpoch == 1L }
+        vm.awaitState { it.status == ChatStatus.Ready }
         assertEquals("k", (h.credentials.creds["zai"] as ApiKeyCredential).key)
 
         vm.closeForTest()
