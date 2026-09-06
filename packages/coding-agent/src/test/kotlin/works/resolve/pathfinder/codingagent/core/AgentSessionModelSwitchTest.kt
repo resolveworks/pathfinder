@@ -16,11 +16,13 @@ import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.Provider
 import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
 import works.resolve.pathfinder.codingagent.core.SessionManager
@@ -222,5 +224,69 @@ class AgentSessionModelSwitchTest {
 
         val projected = session.sessionManager.buildSessionContext().messages
         assertEquals(session.state.value.messages, projected)
+    }
+
+    @Test
+    fun `mid-run switch reaches the next provider request via the next-turn refresh`() = runTest {
+        val streamedModels = CopyOnWriteArrayList<Model>()
+        var call = 0
+        lateinit var session: AgentSession
+        session = AgentSession(
+            agent = Agent(model = modelA) { m, _, _ ->
+                streamedModels.add(m)
+                if (call++ == 0) {
+                    // Switch from inside the first turn's stream body; the
+                    // refresh applies it to the second provider request.
+                    flow {
+                        session.setModel(modelB)
+                        emit(
+                            AssistantMessageEvent.Done(
+                                StopReason.TOOL_USE,
+                                AssistantMessage(
+                                    content = listOf(
+                                        ToolCall("c1", "missing", "{}")
+                                    ),
+                                    api = m.api,
+                                    provider = m.provider,
+                                    model = m.id,
+                                    stopReason = StopReason.TOOL_USE,
+                                    timestamp = 42L
+                                )
+                            )
+                        )
+                    }
+                } else {
+                    okStream(m)
+                }
+            },
+            manager = newManager(),
+            models = models(provider(modelA), provider(modelB))
+        )
+
+        session.prompt("hi")
+
+        // The unknown tool call still produces an error tool result, so the
+        // loop takes a second turn — with the switched model.
+        assertEquals(listOf(modelA, modelB), streamedModels)
+    }
+
+    @Test
+    fun `setModel re-applies the thinking default clamped for the new model`() = runTest {
+        val session = AgentSession(
+            agent = Agent(model = modelA) { m, _, _ -> okStream(m) },
+            manager = newManager(),
+            models = models(provider(modelA), provider(modelB)),
+            defaultThinkingLevelProvider = { ModelThinkingLevel.HIGH }
+        )
+
+        session.setModel(modelB)
+
+        // modelB declares no reasoning support, so the HIGH default clamps off.
+        assertEquals(ModelThinkingLevel.OFF, session.thinkingLevel)
+        // Only the model_change is recorded; the clamped level equals the
+        // previous level, so no thinking_level_change entry is appended.
+        val entries = session.sessionManager.getEntries()
+        assertEquals(1, entries.size)
+        assertEquals(modelB.id, (entries[0] as ModelChangeEntry).modelId)
     }
 }

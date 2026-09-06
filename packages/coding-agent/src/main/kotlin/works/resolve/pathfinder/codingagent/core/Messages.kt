@@ -41,6 +41,19 @@ const val BRANCH_SUMMARY_PREFIX =
 
 const val BRANCH_SUMMARY_SUFFIX = "</summary>"
 
+/**
+ * pi's auth-guidance.ts format functions, adapted for pathfinder: the
+ * upstream help block points at pi's docs directory and its `/login`
+ * command, neither of which is ported, so only the leading sentences carry
+ * over verbatim.
+ */
+fun formatNoModelSelectedMessage(): String = "No model selected."
+
+fun formatNoApiKeyFoundMessage(provider: String): String {
+    val providerDisplay = if (provider == "unknown") "the selected model" else provider
+    return "No API key found for $providerDisplay."
+}
+
 fun createCompactionSummaryMessage(summary: String, tokensBefore: Int, timestamp: Long): Message =
     UserMessage(
         content = listOf(

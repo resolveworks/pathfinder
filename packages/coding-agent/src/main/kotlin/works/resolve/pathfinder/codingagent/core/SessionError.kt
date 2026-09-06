@@ -4,7 +4,8 @@ enum class SessionErrorCode {
     NOT_FOUND,
     INVALID_ENTRY,
     INVALID_ID,
-    STORAGE
+    STORAGE,
+    AUTH
 }
 
 /** The session layer's single exception type, carrying the typed [code]. */

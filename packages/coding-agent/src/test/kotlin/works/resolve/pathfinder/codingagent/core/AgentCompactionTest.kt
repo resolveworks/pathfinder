@@ -526,34 +526,32 @@ class AgentCompactionTest {
 
     @Test
     fun `prompt is rejected while compaction is in progress`() = runTest {
+        // pi's prompt() guard covers only manual compaction: compact() sets
+        // its abort controller before emitting compaction_start
+        // (agent-session.ts 1948-49), so observing the event means the guard
+        // is armed. Auto compaction emits before setting its controller
+        // (2267-68) and is not guarded by prompt() at all.
         val (api, models) = fauxModels()
-        val streams = ScriptedStreams().apply {
-            streams.add(
-                flowOf(
-                    AssistantMessageEvent.Done(
-                        StopReason.STOP,
-                        assistant(
-                            "long",
-                            usage = Usage(input = 190_000, output = 10, totalTokens = 190_010)
-                        )
-                    )
-                )
-            )
-        }
+        val seed = SessionManager.create(
+            createTempDirectory("compaction-test").toFile(),
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        seed.appendMessage(UserMessage.ofText("hi", 1L))
+        seed.appendMessage(assistant("x".repeat(900_000), timestamp = 2L))
         api.responses.add(assistant("SUMMARY"))
         val gate = CompletableDeferred<Unit>()
         api.gate = gate
-        val agent = session(streams, models)
+        val agent = AgentSession(
+            agent = Agent(model = model, streamFn = ScriptedStreams().streamFn),
+            manager = seed,
+            retrySettings = RetrySettings(enabled = false),
+            models = models
+        )
 
-        val started = CompletableDeferred<Unit>()
         val events = mutableListOf<AgentEvent>()
         val collector = launch { agent.events.toList(events) }
         yield()
-        val run = launch {
-            started.complete(Unit)
-            agent.prompt(longPrompt)
-        }
-        started.await()
+        val run = launch { agent.compact() }
         while (!events.any { it is AgentEvent.CompactionStart }) yield()
         try {
             agent.prompt("second")
@@ -612,5 +610,197 @@ class AgentCompactionTest {
         )
         assertEquals(1, events.filterIsInstance<AgentEvent.SummarizationRetryFinished>().size)
         assertTrue(events.filterIsInstance<AgentEvent.CompactionEnd>().single().result != null)
+    }
+
+    @Test
+    fun `pre-prompt check compacts an aborted response the post-run check skipped`() = runTest {
+        val (api, models) = fauxModels()
+        val bigTail = "x".repeat(900_000)
+        val seed = SessionManager.create(
+            createTempDirectory("compaction-test").toFile(),
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        seed.appendMessage(UserMessage.ofText("hi", 1L))
+        seed.appendMessage(assistant(bigTail, timestamp = 2L))
+        val streams = ScriptedStreams().apply {
+            streams.add(
+                flowOf(
+                    AssistantMessageEvent.Error(
+                        StopReason.ABORTED,
+                        assistant("", StopReason.ABORTED)
+                    )
+                )
+            )
+            streams.add(flowOf(AssistantMessageEvent.Done(StopReason.STOP, assistant("ok"))))
+        }
+        api.responses.add(assistant("SUMMARY"))
+        val agent = AgentSession(
+            agent = Agent(model = model, streamFn = streams.streamFn),
+            manager = seed,
+            retrySettings = RetrySettings(enabled = false),
+            models = models
+        )
+
+        val events = kotlinx.coroutines.coroutineScope {
+            val collected = mutableListOf<AgentEvent>()
+            val collector = launch { agent.events.toList(collected) }
+            yield()
+            agent.prompt("first")
+            agent.prompt("second")
+            collector.cancelAndJoin()
+            collected
+        }
+
+        // No compaction after the aborted run; the pre-prompt check on the
+        // second prompt compacts before the new user message is sent.
+        val start = events.filterIsInstance<AgentEvent.CompactionStart>().single()
+        assertEquals(AgentEvent.CompactionReason.THRESHOLD, start.reason)
+        val compactionIndex = events.indexOf(start)
+        val userStarts = events.indexOfLast {
+            it is AgentEvent.MessageStart && it.message is UserMessage
+        }
+        assertTrue(compactionIndex < userStarts)
+        // The second provider request runs on the rebuilt context.
+        val secondContext = streams.seenContexts[1]
+        val rebuilt = secondContext.first() as UserMessage
+        assertTrue((rebuilt.content.single() as TextContent).text.contains("SUMMARY"))
+    }
+
+    @Test
+    fun `mid-run checkpoint compacts between turns before the next assistant response`() = runTest {
+        val (api, models) = fauxModels()
+        // The seeded exchange stays below the threshold so the pre-prompt
+        // check does not fire; turn one's huge response grows the context
+        // past it mid-run.
+        val seed = SessionManager.create(
+            createTempDirectory("compaction-test").toFile(),
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        seed.appendMessage(UserMessage.ofText("hi", 1L))
+        seed.appendMessage(assistant("prior", timestamp = 2L))
+        val streams = ScriptedStreams().apply {
+            streams.add(
+                flowOf(
+                    AssistantMessageEvent.Done(
+                        StopReason.TOOL_USE,
+                        assistant("", stopReason = StopReason.TOOL_USE)
+                            .copy(
+                                content = listOf(
+                                    TextContent("x".repeat(900_000)),
+                                    works.resolve.pathfinder.ai.ToolCall("c1", "missing", "{}")
+                                )
+                            )
+                    )
+                )
+            )
+            streams.add(flowOf(AssistantMessageEvent.Done(StopReason.STOP, assistant("turn two"))))
+        }
+        api.responses.add(assistant("SUMMARY"))
+        api.responses.add(assistant("SUMMARY"))
+        val agent = AgentSession(
+            agent = Agent(model = model, streamFn = streams.streamFn),
+            manager = seed,
+            retrySettings = RetrySettings(enabled = false),
+            compactionSettings = CompactionSettings(
+                enabled = true,
+                reserveTokens = 16_384,
+                keepRecentTokens = 10_000
+            ),
+            models = models
+        )
+
+        val events = collectEvents(agent)
+
+        // The kept-tail cut lands inside turn one's huge response, so the
+        // compaction splits the turn and issues two summarization calls
+        // (pi compaction.ts: history + turn prefix); both are queued above.
+        // It is the only compaction: the post-run check sees the rebuilt
+        // context (summary + kept tail) far below the threshold.
+        val starts = events.filterIsInstance<AgentEvent.CompactionStart>()
+        assertEquals(1, starts.size)
+        val start = starts.single()
+        assertEquals(AgentEvent.CompactionReason.THRESHOLD, start.reason)
+        // The checkpoint runs after the first turn_end and before the second
+        // turn_start.
+        val turnStarts = events.filterIsInstance<AgentEvent.TurnStart>()
+        assertEquals(2, turnStarts.size)
+        val turnEnd1 = events.indexOf(events.first { it is AgentEvent.TurnEnd })
+        val turnStart2 = events.lastIndexOf(turnStarts[1])
+        val compactionIndex = events.indexOf(start)
+        assertTrue(turnEnd1 < compactionIndex && compactionIndex < turnStart2)
+        // The second provider request runs on the rebuilt context.
+        val secondContext = streams.seenContexts[1]
+        val first = secondContext.first() as UserMessage
+        assertTrue((first.content.single() as TextContent).text.contains("SUMMARY"))
+    }
+
+    @Test
+    fun `manual compact runs the machinery with reason manual and rebuilds context`() = runTest {
+        val (api, models) = fauxModels()
+        val seed = SessionManager.create(
+            createTempDirectory("compaction-test").toFile(),
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        seed.appendMessage(UserMessage.ofText("hi", 1L))
+        seed.appendMessage(assistant("x".repeat(900_000), timestamp = 2L))
+        api.responses.add(assistant("SUMMARY"))
+        val agent = AgentSession(
+            agent = Agent(model = model, streamFn = ScriptedStreams().streamFn),
+            manager = seed,
+            retrySettings = RetrySettings(enabled = false),
+            models = models
+        )
+
+        val events = kotlinx.coroutines.coroutineScope {
+            val collected = mutableListOf<AgentEvent>()
+            val collector = launch { agent.events.toList(collected) }
+            yield()
+            val result = agent.compact()
+            collector.cancelAndJoin()
+            collected to result
+        }
+        val (collected, result) = events
+
+        assertTrue(result.summary.contains("SUMMARY"))
+        assertEquals(
+            AgentEvent.CompactionReason.MANUAL,
+            collected.filterIsInstance<AgentEvent.CompactionStart>().single().reason
+        )
+        val end = collected.filterIsInstance<AgentEvent.CompactionEnd>().single()
+        assertEquals(AgentEvent.CompactionReason.MANUAL, end.reason)
+        assertFalse(end.aborted)
+        assertEquals(result, end.result)
+        // The transcript is rebuilt from the compaction boundary.
+        assertTrue(
+            agent.state.value.messages.first() is UserMessage &&
+                (
+                    (agent.state.value.messages.first() as UserMessage).content.single()
+                        as TextContent
+                    ).text.contains("SUMMARY")
+        )
+
+        // Compacting again hits the already-compacted leaf.
+        val second = runCatching { agent.compact() }.exceptionOrNull()
+        assertTrue(second is IllegalStateException)
+        assertEquals("Already compacted", second!!.message)
+    }
+
+    @Test
+    fun `manual compact on a too-small session reports nothing to compact`() = runTest {
+        val (api, models) = fauxModels()
+        val manager = SessionManager.create(
+            createTempDirectory("compaction-test").toFile(),
+            ioDispatcher = kotlinx.coroutines.Dispatchers.Unconfined
+        )
+        manager.appendMessage(UserMessage.ofText("hi"))
+        val agent = AgentSession(
+            agent = Agent(model = model, streamFn = ScriptedStreams().streamFn),
+            manager = manager,
+            models = models
+        )
+
+        val error = runCatching { agent.compact() }.exceptionOrNull()
+        assertTrue(error is IllegalStateException)
+        assertEquals("Nothing to compact (session too small)", error!!.message)
     }
 }

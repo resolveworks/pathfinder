@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -18,9 +19,12 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.agent.Agent
+import works.resolve.pathfinder.agent.AgentContext
 import works.resolve.pathfinder.agent.AgentEvent
+import works.resolve.pathfinder.agent.AgentLoopTurnUpdate
 import works.resolve.pathfinder.agent.AgentState
 import works.resolve.pathfinder.agent.AgentTool
+import works.resolve.pathfinder.agent.PrepareNextTurnContext
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
@@ -43,6 +47,7 @@ import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryCallRes
 import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryErrorCode
 import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryResult
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionErrorCode
+import works.resolve.pathfinder.codingagent.core.compaction.CompactionPreparation
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionResult as CompactionOutcome
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
 import works.resolve.pathfinder.codingagent.core.compaction.DEFAULT_COMPACTION_SETTINGS
@@ -85,7 +90,15 @@ class AgentSession(
     /** Injectable backoff sleep so tests never wait. */
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     /** Wall clock for minting message timestamps. */
-    private val clock: Clock = Clock.System
+    private val clock: Clock = Clock.System,
+    /**
+     * App-owned global thinking-level default consulted by [setModel] when
+     * re-applying a level for the switched-to model (pi reads this from its
+     * settingsManager, which is app state pathfinder's platform-neutral
+     * facade does not hold). Null — the default — keeps construction working
+     * without a settings source; the app wires its repository in later.
+     */
+    private val defaultThinkingLevelProvider: () -> ModelThinkingLevel? = { null }
 ) {
     /** Read-only session tree view (upstream's ReadonlySessionManager Pick type; unlike upstream, the mutable manager stays private). */
     val sessionManager: ReadonlySessionManager get() = manager
@@ -178,7 +191,53 @@ class AgentSession(
             agent.setTools(activeTools)
             agent.setSystemPrompt(buildSystemPrompt(activeTools))
         }
+        installAgentNextTurnRefresh()
     }
+
+    /**
+     * pi's _installAgentNextTurnRefresh: before every assistant response
+     * after the first, run the mid-run compaction checkpoint, then refresh
+     * context (system prompt, tools, messages) and model/thinkingLevel from
+     * the live agent state — this is what makes mid-run setter calls take
+     * effect on the next turn.
+     */
+    private fun installAgentNextTurnRefresh() {
+        agent.prepareNextTurnWithContext = { turn ->
+            val context = compactBeforeNextAssistantResponse(turn.context)
+            AgentLoopTurnUpdate(
+                context = context.copy(
+                    systemPrompt = agent.state.value.systemPrompt,
+                    tools = agent.state.value.tools.toList()
+                ),
+                model = agent.state.value.model,
+                thinkingLevel = agent.state.value.thinkingLevel
+            )
+        }
+    }
+
+    /**
+     * pi's _compactBeforeNextAssistantResponse: when the turn's context
+     * crosses the compaction threshold, run auto compaction ("threshold"
+     * reason) and rebuild the context from the agent transcript.
+     */
+    private suspend fun compactBeforeNextAssistantResponse(context: AgentContext): AgentContext {
+        if (
+            model.contextWindow <= 0 ||
+            !shouldCompact(
+                estimateContextTokens(context.messages).tokens,
+                model.contextWindow,
+                compactionSettings
+            )
+        ) {
+            return context
+        }
+        runAutoCompaction(AgentEvent.CompactionReason.THRESHOLD, willRetry = false)
+        return context.copy(messages = agent.state.value.messages.toList())
+    }
+
+    /** pi's _findLastAssistantMessage: last assistant on the current branch context. */
+    private fun findLastAssistantMessage(): AssistantMessage? =
+        agent.state.value.messages.lastOrNull { it is AssistantMessage } as AssistantMessage?
 
     fun getActiveToolNames(): List<String> = agent.state.value.tools.map { it.definition.name }
 
@@ -224,6 +283,34 @@ class AgentSession(
         }
 
         try {
+            // Preflight (pi's prompt ordering: model/auth validation before
+            // the compaction check, before any message is built). The model
+            // is non-null by construction, so only auth is checked; sessions
+            // without a provider stack (no [models]) have no auth seam and
+            // are not validated. The `/login` re-authentication hint pi
+            // appends has no pathfinder equivalent (the app owns login UX)
+            // and is dropped from both messages, as in [Messages.kt].
+            models?.let { stack ->
+                if (!stack.checkAuth(model.provider)) {
+                    val message =
+                        if (stack.isUsingOAuth(model.provider)) {
+                            "Authentication failed for \"${model.provider}\". " +
+                                "Credentials may have expired or network is unavailable."
+                        } else {
+                            formatNoApiKeyFoundMessage(model.provider)
+                        }
+                    throw SessionError(SessionErrorCode.AUTH, message)
+                }
+            }
+
+            // Check if we need to compact before sending (catches aborted
+            // responses the post-run check skips). The user's new prompt is
+            // sent below, so do not continue the agent here (pi: the result
+            // is likewise unused).
+            findLastAssistantMessage()?.let { lastAssistant ->
+                checkCompaction(lastAssistant, skipAbortedCheck = false)
+            }
+
             val promptMessage = UserMessage.ofText(text, clock.now().toEpochMilliseconds())
             coroutineScope {
                 // Lazily started so promptJob is published before the job
@@ -260,14 +347,17 @@ class AgentSession(
      * switch between prompts splits the tree like any other entry, and the
      * active-path projection restores the model on reload.
      *
-     * There is no idle guard: the active run keeps its start-of-run model
-     * (the agent snapshots it per prompt, see [Agent.setModel]) and the
-     * model_change lands wherever the leaf is when the switch happens.
+     * There is no idle guard: the active run picks up the switch on its
+     * next turn via the installed [Agent.prepareNextTurnWithContext] refresh
+     * (pi's mechanism), and the model_change lands wherever the leaf is when
+     * the switch happens. A session without a [models] stack (previews)
+     * cannot switch.
      *
-     * Divergence: pi re-applies a thinking level for the new model inside
-     * setModel; here that is the app layer's job after a successful switch,
-     * because the default it consults is app-owned settings this facade does
-     * not hold. A session without a [models] stack (previews) cannot switch.
+     * Like pi's setModel, a thinking level is re-applied for the new model:
+     * the app-owned default from [defaultThinkingLevelProvider], else the
+     * session's current level, clamped to the new model's capabilities
+     * (pi additionally consults per-model settings overrides, which are not
+     * ported).
      *
      * @throws IllegalStateException when the provider is unregistered or
      *   unauthenticated.
@@ -278,8 +368,12 @@ class AgentSession(
         if (!models.checkAuth(model.provider)) {
             throw IllegalStateException("No API key for ${model.provider}/${model.id}")
         }
+        val thinkingLevel = defaultThinkingLevelProvider() ?: thinkingLevel
         agent.setModel(model)
         manager.appendModelChange(model.provider, model.id)
+        // Apply the thinking level for the new model; setThinkingLevel
+        // clamps to model capabilities and appends only on change.
+        setThinkingLevel(thinkingLevel)
     }
 
     /**
@@ -320,8 +414,22 @@ class AgentSession(
         val replaceInstructions: Boolean = false
     )
 
+    /** What [navigateTree] did with the request. */
+    enum class NavigationOutcome {
+        /** The leaf moved to (or past) the target. */
+        NAVIGATED,
+
+        /** A user-message target: the leaf moved to its parent and the
+         * text is returned for re-editing. */
+        RE_EDIT,
+
+        /** A non-user target that is already the leaf: nothing recorded. */
+        NO_OP
+    }
+
     /** Result of [navigateTree]. */
     data class NavigationResult(
+        val outcome: NavigationOutcome = NavigationOutcome.NAVIGATED,
         /** Re-edit text for a user-message target (goes to the editor only when empty). */
         val editorText: String? = null,
         val cancelled: Boolean = false,
@@ -338,8 +446,9 @@ class AgentSession(
      * the leaf moves to the target's parent (or root) and the text is
      * returned as [NavigationResult.editorText] — including when the
      * target is the current leaf (an interrupted run can leave a user
-     * message as the leaf). Only non-user targets treat leaf == target as
-     * a recordless no-op. When summarizing, the [BranchSummaryEntry] is
+     * message as the leaf), reported as [NavigationOutcome.RE_EDIT].
+     * Only non-user targets treat leaf == target as a recordless no-op
+     * ([NavigationOutcome.NO_OP]). When summarizing, the [BranchSummaryEntry] is
      * appended at the navigation target position (the abandoned leaf is
      * recorded as its fromId inside the manager), and the rebuilt context
      * projects branch summaries via [buildSessionContext].
@@ -365,7 +474,7 @@ class AgentSession(
             ?: throw IllegalArgumentException("Entry $targetId not found")
         val userMessage = (targetEntry as? MessageEntry)?.message as? UserMessage
         if (targetId == oldLeafId && userMessage == null) {
-            return NavigationResult(cancelled = false)
+            return NavigationResult(outcome = NavigationOutcome.NO_OP, cancelled = false)
         }
 
         val summarizationModels = models
@@ -439,6 +548,11 @@ class AgentSession(
             agent.replaceTranscript(manager.buildSessionContext().messages)
 
             return NavigationResult(
+                outcome = if (userMessage != null) {
+                    NavigationOutcome.RE_EDIT
+                } else {
+                    NavigationOutcome.NAVIGATED
+                },
                 editorText = editorText,
                 cancelled = false,
                 summaryEntry = summaryEntry
@@ -542,10 +656,15 @@ class AgentSession(
      * @return Whether the post-run loop should continue the agent (overflow
      *   recovery).
      */
-    private suspend fun checkCompaction(assistantMessage: AssistantMessage): Boolean {
+    private suspend fun checkCompaction(
+        assistantMessage: AssistantMessage,
+        skipAbortedCheck: Boolean = true
+    ): Boolean {
         if (!compactionSettings.enabled) return false
 
-        if (assistantMessage.stopReason == StopReason.ABORTED) return false
+        // Skip if message was aborted (user cancelled) - unless the pre-prompt
+        // check asked for aborted messages too.
+        if (skipAbortedCheck && assistantMessage.stopReason == StopReason.ABORTED) return false
 
         if (models == null) return false
 
@@ -635,7 +754,7 @@ class AgentSession(
     }
 
     /**
-     * Execute threshold or overflow compaction.
+     * Execute threshold or overflow compaction (pi's _runAutoCompaction).
      *
      * Divergence: pi signals abort through AbortControllers; here compaction
      * runs inside the prompt coroutine, so abort is plain cancellation and
@@ -648,26 +767,83 @@ class AgentSession(
         reason: AgentEvent.CompactionReason,
         willRetry: Boolean
     ): Boolean {
-        val summarizationModels = models ?: return false
-        var started = false
+        if (models == null) return false
+        val pathEntries = manager.getBranch()
+        val preparation = when (val outcome = prepareCompaction(pathEntries, compactionSettings)) {
+            is CompactionOutcome.Err -> return false
+            is CompactionOutcome.Ok -> outcome.value ?: return false
+        }
+        _events.emit(AgentEvent.CompactionStart(reason))
+        compactionInProgress = true
+        val run = runCompactionCore(reason, willRetry, customInstructions = null, preparation)
+        if (run !is CompactionRunResult.Success) {
+            if (run is CompactionRunResult.Failure && !run.aborted) {
+                _events.emit(
+                    AgentEvent.CompactionEnd(
+                        reason = reason,
+                        aborted = false,
+                        willRetry = false,
+                        errorMessage = compactionFailureMessage(reason, run.error)
+                    )
+                )
+            }
+            return false
+        }
+
+        if (willRetry) {
+            // The overflow response was persisted on message_end before
+            // checkCompaction removed it from agent state; rebuilding
+            // from the new compaction can restore it as the trailing
+            // message, and continueRun would send from it — remove the
+            // retriable response again before continuing the turn.
+            val messages = agent.state.value.messages
+            val lastMsg = messages.lastOrNull()
+            if (lastMsg is AssistantMessage &&
+                (
+                    lastMsg.stopReason == StopReason.ERROR ||
+                        lastMsg.stopReason == StopReason.LENGTH
+                    )
+            ) {
+                agent.setMessages(messages.dropLast(1))
+            }
+            return true
+        }
+
+        // pi continues for steer/follow-up messages queued during
+        // compaction; there are no queues here.
+        return false
+    }
+
+    private sealed interface CompactionRunResult {
+        data class Success(val result: AgentEvent.CompactionResult) : CompactionRunResult
+
+        /** [aborted] failures already had their `compaction_end` emitted; others did not. */
+        data class Failure(val aborted: Boolean, val error: String?) : CompactionRunResult
+    }
+
+    /**
+     * Shared compaction machinery for the automatic and manual paths (pi's
+     * `_runDefaultCompaction` callers): streams the summary, appends the
+     * compaction entry, rebuilds the transcript, and emits the success
+     * `compaction_end`. Synchronous failures are returned unemitted so each
+     * caller formats its own failure event; cancellation emits the aborted
+     * `compaction_end` under [NonCancellable] and rethrows.
+     */
+    private suspend fun runCompactionCore(
+        reason: AgentEvent.CompactionReason,
+        willRetry: Boolean,
+        customInstructions: String?,
+        preparation: CompactionPreparation
+    ): CompactionRunResult {
+        val summarizationModels = models!!
         compactionInProgress = true
         try {
-            val pathEntries = manager.getBranch()
-            val preparation = when (
-                val outcome = prepareCompaction(pathEntries, compactionSettings)
-            ) {
-                is CompactionOutcome.Err -> return false
-                is CompactionOutcome.Ok -> outcome.value ?: return false
-            }
-
-            _events.emit(AgentEvent.CompactionStart(reason))
-            started = true
-
             val compactResult = when (
                 val outcome = compact(
                     preparation,
                     summarizationModels,
                     model,
+                    customInstructions = customInstructions,
                     // The summary request reasons at the level the user
                     // selected, when the summarization model supports it.
                     thinkingLevel = agent.thinkingLevel,
@@ -683,6 +859,7 @@ class AgentSession(
                 )
             ) {
                 is CompactionOutcome.Err -> {
+                    val raw = outcome.error.message ?: "compaction failed"
                     if (outcome.error.code == CompactionErrorCode.ABORTED) {
                         _events.emit(
                             AgentEvent.CompactionEnd(
@@ -691,20 +868,9 @@ class AgentSession(
                                 willRetry = false
                             )
                         )
-                        return false
+                        return CompactionRunResult.Failure(aborted = true, error = null)
                     }
-                    _events.emit(
-                        AgentEvent.CompactionEnd(
-                            reason = reason,
-                            aborted = false,
-                            willRetry = false,
-                            errorMessage = compactionFailureMessage(
-                                reason,
-                                outcome.error.message ?: "compaction failed"
-                            )
-                        )
-                    )
-                    return false
+                    return CompactionRunResult.Failure(aborted = false, error = raw)
                 }
 
                 is CompactionOutcome.Ok -> outcome.value
@@ -720,70 +886,113 @@ class AgentSession(
                 usage = compactResult.usage
             )
             val sessionContext = manager.buildSessionContext()
-            agent.replaceTranscript(sessionContext.messages)
+            agent.setMessages(sessionContext.messages)
             val estimatedTokensAfter = sessionContext.messages.sumOf { estimateMessageTokens(it) }
 
+            val result = AgentEvent.CompactionResult(
+                summary = compactResult.summary,
+                tokensBefore = compactResult.tokensBefore,
+                estimatedTokensAfter = estimatedTokensAfter,
+                usage = compactResult.usage,
+                details = compactResult.details
+            )
             _events.emit(
                 AgentEvent.CompactionEnd(
                     reason = reason,
-                    result = AgentEvent.CompactionResult(
-                        summary = compactResult.summary,
-                        tokensBefore = compactResult.tokensBefore,
-                        estimatedTokensAfter = estimatedTokensAfter,
-                        usage = compactResult.usage,
-                        details = compactResult.details
-                    ),
+                    result = result,
                     aborted = false,
                     willRetry = willRetry
                 )
             )
-
-            if (willRetry) {
-                // The overflow response was persisted on message_end before
-                // checkCompaction removed it from agent state; rebuilding
-                // from the new compaction can restore it as the trailing
-                // message, and continueRun would send from it — remove the
-                // retriable response again before continuing the turn.
-                val messages = agent.state.value.messages
-                val lastMsg = messages.lastOrNull()
-                if (lastMsg is AssistantMessage &&
-                    (
-                        lastMsg.stopReason == StopReason.ERROR ||
-                            lastMsg.stopReason == StopReason.LENGTH
-                        )
-                ) {
-                    agent.replaceTranscript(messages.dropLast(1))
-                }
-                return true
-            }
-
-            // pi continues for steer/follow-up messages queued during
-            // compaction; there are no queues here.
-            return false
+            return CompactionRunResult.Success(result)
         } catch (e: CancellationException) {
-            if (started) {
-                withContext(NonCancellable) {
-                    _events.emit(
-                        AgentEvent.CompactionEnd(reason = reason, aborted = true, willRetry = false)
-                    )
-                }
+            withContext(NonCancellable) {
+                _events.emit(
+                    AgentEvent.CompactionEnd(reason = reason, aborted = true, willRetry = false)
+                )
             }
             throw e
         } catch (e: Exception) {
-            if (started) {
+            return CompactionRunResult.Failure(
+                aborted = false,
+                error =
+                    e.message ?: "compaction failed"
+            )
+        } finally {
+            compactionInProgress = false
+        }
+    }
+
+    /**
+     * Manually compact the session context (pi's compact: the `/compact`
+     * entry point). Aborts a running prompt first; manual compaction never
+     * retries or continues the interrupted agent turn.
+     *
+     * @throws IllegalStateException when no provider stack is configured, the
+     *   branch is already compacted or too small to compact, or compaction
+     *   fails — after the failure `compaction_end` is emitted.
+     */
+    suspend fun compact(customInstructions: String? = null): AgentEvent.CompactionResult {
+        promptJob?.cancelAndJoin()
+        compactionInProgress = true
+        try {
+            _events.emit(AgentEvent.CompactionStart(AgentEvent.CompactionReason.MANUAL))
+
+            val preparation = try {
+                if (models == null) {
+                    throw IllegalStateException(formatNoModelSelectedMessage())
+                }
+                val pathEntries = manager.getBranch()
+                when (val outcome = prepareCompaction(pathEntries, compactionSettings)) {
+                    is CompactionOutcome.Err ->
+                        throw IllegalStateException(outcome.error.message ?: "compaction failed")
+
+                    is CompactionOutcome.Ok -> outcome.value
+                } ?: run {
+                    val lastEntry = pathEntries.lastOrNull()
+                    if (lastEntry is CompactionEntry) {
+                        throw IllegalStateException("Already compacted")
+                    }
+                    throw IllegalStateException("Nothing to compact (session too small)")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
                 _events.emit(
                     AgentEvent.CompactionEnd(
-                        reason = reason,
+                        reason = AgentEvent.CompactionReason.MANUAL,
                         aborted = false,
                         willRetry = false,
-                        errorMessage = compactionFailureMessage(
-                            reason,
-                            e.message ?: "compaction failed"
-                        )
+                        errorMessage = "Compaction failed: ${e.message}"
                     )
                 )
+                throw e
             }
-            return false
+
+            return when (
+                val run = runCompactionCore(
+                    AgentEvent.CompactionReason.MANUAL,
+                    willRetry = false,
+                    customInstructions,
+                    preparation
+                )
+            ) {
+                is CompactionRunResult.Success -> run.result
+
+                is CompactionRunResult.Failure -> {
+                    if (!run.aborted) {
+                        _events.emit(
+                            AgentEvent.CompactionEnd(
+                                reason = AgentEvent.CompactionReason.MANUAL,
+                                aborted = false,
+                                willRetry = false,
+                                errorMessage = "Compaction failed: ${run.error}"
+                            )
+                        )
+                    }
+                    throw IllegalStateException(run.error ?: "Compaction cancelled")
+                }
+            }
         } finally {
             compactionInProgress = false
         }
@@ -816,7 +1025,7 @@ class AgentSession(
 
     private fun compactionFailureMessage(
         reason: AgentEvent.CompactionReason,
-        message: String
+        message: String?
     ): String = if (reason == AgentEvent.CompactionReason.OVERFLOW) {
         "Context overflow recovery failed: $message"
     } else {
