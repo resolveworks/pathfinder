@@ -133,8 +133,12 @@ data class ResolveModelScopeResult(
  * within each) — with an optional ":level" thinking suffix. Divergence: the
  * glob translation covers `*` and `?` only (no character classes, extglob,
  * or braces); stored patterns are plain references.
+ *
+ * Public for the app layer, which resolves the stored patterns against its
+ * own available-model snapshot to update a live session's scoped models
+ * (pi's interactive-mode updateSessionModels).
  */
-internal fun resolveModelScope(
+fun resolveModelScope(
     patterns: List<String>,
     availableModels: List<Model>
 ): ResolveModelScopeResult {

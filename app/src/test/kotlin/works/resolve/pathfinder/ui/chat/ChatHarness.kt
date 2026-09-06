@@ -64,11 +64,10 @@ import works.resolve.pathfinder.codingagent.core.SessionError
 import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
-import works.resolve.pathfinder.codingagent.core.Settings
 import works.resolve.pathfinder.codingagent.core.SettingsManager
+import works.resolve.pathfinder.codingagent.core.SettingsStorage
 import works.resolve.pathfinder.codingagent.core.createAgentSession
 import works.resolve.pathfinder.data.sessions.SessionSource
-import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
@@ -136,17 +135,19 @@ internal class FakeOAuthAuth(
         ModelAuth(apiKey = credential.access)
 }
 
-internal class FailingSettingsStore(private val delegate: SettingsStore) :
-    SettingsStore by delegate {
+/**
+ * Fails app-pref writes (per flag) and, via the SettingsStorage backend,
+ * runtime settings JSON writes — SettingsManager records the latter as
+ * drained errors instead of throwing.
+ */
+internal class FailingSettingsStore(private val delegate: SettingsRepository) :
+    SettingsStore by delegate,
+    SettingsStorage by delegate {
     var failWrites = false
     var failActiveSessionWrites = false
-    override suspend fun setProviderId(providerId: String) {
+    override suspend fun withLock(transform: (current: String?) -> String?) {
         if (failWrites) throw java.io.IOException("settings write failed")
-        delegate.setProviderId(providerId)
-    }
-    override suspend fun setModelId(modelId: String) {
-        if (failWrites) throw java.io.IOException("settings write failed")
-        delegate.setModelId(modelId)
+        delegate.withLock(transform)
     }
     override suspend fun setActiveSessionId(sessionId: String?) {
         if (failActiveSessionWrites) throw java.io.IOException("active session write failed")
@@ -267,6 +268,26 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
         )
     )
     val settingsStore = FailingSettingsStore(settings)
+
+    /** The shared manager all ViewModels and the factory write through. */
+    val settingsManager: SettingsManager =
+        runBlocking { SettingsManager.fromStorage(settingsStore) }
+
+    /** Seeds a persisted startup default through the shared manager. */
+    fun seedStartupDefault(providerId: String, modelId: String) {
+        runBlocking { settingsManager.setDefaultModelAndProvider(providerId, modelId) }
+    }
+
+    /** Raw stored runtime settings JSON (null when nothing was ever written). */
+    suspend fun storedSettingsJson(): String? {
+        var content: String? = null
+        settings.withLock { current ->
+            content = current
+            null
+        }
+        return content
+    }
+
     val sessions = TestSessionSource(tmpFolder)
 
     val scriptedStreams = ConcurrentLinkedQueue<Flow<AssistantMessageEvent>>()
@@ -275,8 +296,6 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
 
     var rejectAll = false
     val createdAgents = mutableListOf<AgentSession>()
-
-    val createdSettings = mutableListOf<ModelSettings>()
 
     val streamedModels = CopyOnWriteArrayList<Model>()
 
@@ -314,6 +333,7 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
         credentials = credentials,
         catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
         transport = transport,
+        settingsManager = settingsManager,
         authRegistry = authRegistry
     )
 
@@ -326,22 +346,12 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
         nativeFactory.resolveModel(providerId, modelId)
     }
 
-    val factory = AgentFactory { settings, sessionManager ->
+    val factory = AgentFactory { sessionManager ->
         check(!rejectAll) { "factory unavailable" }
-        require(settings.modelId !in rejectedModelIds) { "model rejected" }
-        createdSettings += settings
+        require(settingsManager.getDefaultModel() !in rejectedModelIds) { "model rejected" }
         createAgentSession(
             manager = sessionManager,
-            settingsManager = SettingsManager.inMemory(
-                Settings(
-                    defaultProvider = settings.providerId.ifBlank { null },
-                    defaultModel = settings.modelId.ifBlank { null },
-                    defaultThinkingLevel = settings.defaultThinkingLevel,
-                    enabledModels = settings.enabledModels,
-                    compaction = settings.compaction,
-                    retry = settings.retry
-                )
-            ),
+            settingsManager = settingsManager,
             // The live-switch stack: checkAuth resolves stored credentials
             // exactly like production, and capabilities (reasoning,
             // thinkingLevelMap) come from the generated catalog — never a
@@ -362,6 +372,7 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
 
     fun newViewModel(): ChatViewModel = ChatViewModel(
         settingsRepository = settingsStore,
+        settingsManager = settingsManager,
         catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
         authService = authService,
         sessionSource = sessions,

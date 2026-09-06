@@ -1,32 +1,16 @@
 package works.resolve.pathfinder.data.settings
 
-import works.resolve.pathfinder.ai.ModelThinkingLevel
-import works.resolve.pathfinder.codingagent.core.RetrySettings
-
 /**
- * Settings boundary for UI-layer code, kept separate from
+ * App-owned preference boundary, kept separate from
  * [SettingsRepository] so JVM tests can substitute a failing store.
+ * Runtime model/thinking/retry/compaction/scope values live in the runtime
+ * settings JSON and mutate only through
+ * [works.resolve.pathfinder.codingagent.core.SettingsManager].
  */
 interface SettingsStore {
-    suspend fun currentSettings(): ModelSettings
-
-    suspend fun setProviderId(providerId: String)
-
-    suspend fun setModelId(modelId: String)
+    suspend fun currentSettings(): AppSettings
 
     suspend fun setActiveSessionId(sessionId: String?)
 
     suspend fun setShowThinking(showThinking: Boolean)
-
-    /** `null` clears the setting so pi's default ("medium") applies. */
-    suspend fun setDefaultThinkingLevel(level: ModelThinkingLevel?)
-
-    suspend fun setRetrySettings(settings: RetrySettings)
-
-    suspend fun setCompactionSettings(
-        settings: works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
-    )
-
-    /** `null` clears the model scope so all models are available. */
-    suspend fun setEnabledModels(models: List<String>?)
 }

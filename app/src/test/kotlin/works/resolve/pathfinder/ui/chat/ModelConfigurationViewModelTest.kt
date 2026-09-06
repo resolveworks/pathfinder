@@ -93,7 +93,6 @@ import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.data.sessions.SessionSource
-import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
@@ -137,7 +136,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             assertEquals(agentsBefore, h.createdAgents.size)
             assertTrue(vm.uiState.value.status == ChatStatus.Ready)
             assertEquals("glm-5.3", vm.uiState.value.selectedModel?.modelId)
-            assertEquals("", h.settings.currentSettings().modelId)
+            assertNull(h.settingsManager.getDefaultModel())
 
             vm.closeForTest()
         }
@@ -155,13 +154,16 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
 
             // A pick is one gesture: the live switch commits, the default
             // persist fails and surfaces its own error (pi: setModel with
-            // persist).
+            // persist). The shared manager keeps the value in memory, so the
+            // failure is asserted against the stored JSON.
             vm.selectModel("zai", "glm-5.3")
             vm.awaitState { it.selectedModel?.modelId == "glm-5.3" }
             vm.awaitState { it.error != null }
             val state = vm.uiState.value
             assertEquals(ChatStatus.Ready, state.status)
-            assertEquals("", h.settings.currentSettings().modelId)
+            assertTrue(
+                h.storedSettingsJson()?.contains("glm-5.3") != true
+            )
             vm.dismissError()
 
             h.settingsStore.failWrites = false
@@ -183,7 +185,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             }
 
             vm.saveStartupDefault("zai", "glm-5.3")
-            vm.awaitState { h.settings.currentSettings().modelId == "glm-5.3" }
+            vm.awaitState { h.settingsManager.getDefaultModel() == "glm-5.3" }
             assertNull(vm.uiState.value.error)
 
             vm.closeForTest()
@@ -278,8 +280,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
     fun unknownProviderSettings_deriveAvailableModel_andRejectUnknownPicks() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
-            h.settings.setProviderId("not-a-provider")
-            h.settings.setModelId("glm-4.7")
+            h.seedStartupDefault("not-a-provider", "glm-4.7")
             h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
 
             val vm = h.newViewModel()
@@ -359,7 +360,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
                 "no default persisted by a pick (pi persists only via Ctrl+S)",
                 switched.defaultThinkingLevel
             )
-            assertNull(h.settings.currentSettings().defaultThinkingLevel)
+            assertNull(h.settingsManager.getDefaultThinkingLevel())
 
             // Re-picking the current level is a quiet no-op.
             vm.selectThinkingLevel(ModelThinkingLevel.HIGH)
@@ -420,7 +421,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
 
             assertEquals(
                 ModelThinkingLevel.XHIGH,
-                h.settings.currentSettings().defaultThinkingLevel
+                h.settingsManager.getDefaultThinkingLevel()
             )
             assertEquals(
                 "the session runs the clamped level",
@@ -503,11 +504,12 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
 
     /**
      * Default persistence is a separate action — never part of a pick — and
-     * appends the default to a non-empty scope when missing.
+     * deliberately does NOT append the default to a non-empty scope (that
+     * append lives in the picker gesture, AgentSession's persist path).
      */
 
     @Test
-    fun saveStartupDefault_separateAction_appendsToNonEmptyScope() =
+    fun saveStartupDefault_separateAction_leavesTheModelScopeUntouched() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
             val vm = h.newViewModel()
@@ -518,27 +520,29 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.selectedModel?.modelId == "glm-4.7" }
 
             vm.saveStartupDefault("zai", "glm-4.7")
-            vm.awaitState { h.settings.currentSettings().modelId == "glm-4.7" }
-            assertNull(h.settings.currentSettings().enabledModels)
+            vm.awaitState { h.settingsManager.getDefaultModel() == "glm-4.7" }
+            assertNull(h.settingsManager.getEnabledModels())
             assertNull(vm.uiState.value.enabledModels)
 
             // Unchecking materializes the explicit scope list in display order.
             vm.toggleModelScope("zai", "glm-4.7", false)
             val scoped = vm.awaitState { it.enabledModels != null }
             assertTrue(scoped.enabledModels!!.none { it == "zai/glm-4.7" })
-            assertEquals(h.settings.currentSettings().enabledModels, scoped.enabledModels)
+            assertEquals(h.settingsManager.getEnabledModels(), scoped.enabledModels)
             assertTrue(scoped.scopedModelOptions.none { it.modelId == "glm-4.7" })
             assertEquals("glm-4.7", scoped.selectedModel?.modelId)
 
-            // Saving a default missing from the non-empty scope order-preservingly
-            // appends it.
+            // Saving a default missing from the non-empty scope leaves the
+            // scope untouched (pi: editing the settings field does not
+            // curate the scope; only the picker gesture appends).
             vm.saveStartupDefault("zai", "glm-4.7")
-            val grown = vm.awaitState {
-                it.enabledModels?.contains("zai/glm-4.7") == true
-            }.enabledModels!!
-            assertEquals("zai/glm-4.7", grown.last())
-            assertEquals(h.settings.currentSettings().enabledModels, grown)
-            assertTrue(vm.uiState.value.scopedModelOptions.any { it.modelId == "glm-4.7" })
+            vm.awaitState { it.defaultModel?.modelId == "glm-4.7" }
+            assertEquals("glm-4.7", h.settingsManager.getDefaultModel())
+            assertTrue(
+                "the scope keeps the default excluded",
+                h.settingsManager.getEnabledModels()?.none { it == "zai/glm-4.7" } == true
+            )
+            assertTrue(vm.uiState.value.scopedModelOptions.none { it.modelId == "glm-4.7" })
             assertNull(vm.uiState.value.error)
 
             vm.closeForTest()
@@ -566,7 +570,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             // without switching.
             vm.selectModel("zai", "glm-5.3")
             vm.awaitState { it.defaultModel?.modelId == "glm-5.3" }
-            assertEquals("glm-5.3", h.settings.currentSettings().modelId)
+            assertEquals("glm-5.3", h.settingsManager.getDefaultModel())
 
             vm.saveStartupDefault("zai", "glm-4.7")
             vm.awaitState { it.defaultModel?.modelId == "glm-4.7" }
@@ -580,10 +584,13 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.closeForTest()
         }
 
-    /** Persists the ordered list; a full or empty selection collapses to the unset scope, as in pi. */
-
+    /**
+     * Persists the ordered list; a FULL selection collapses to the unset
+     * scope while an EMPTY selection persists as an empty list, as in pi
+     * (the empty list behaves as no scope downstream).
+     */
     @Test
-    fun toggleModelScope_persistsOrderedList_emptyOrFullSelectionCollapsesToUnset() =
+    fun toggleModelScope_persistsOrderedList_fullSelectionCollapses_emptyPersistsEmpty() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
             val vm = h.newViewModel()
@@ -597,19 +604,61 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             val curated = vm.awaitState { it.enabledModels != null }.enabledModels!!
             assertEquals(all.drop(1).map { "${it.providerId}/${it.modelId}" }, curated)
 
-            // Unchecking everything persists the unset scope.
+            // Unchecking everything persists an EMPTY list (pi's onPersist:
+            // only a full selection persists as unset).
             all.drop(1).forEach { vm.toggleModelScope(it.providerId, it.modelId, false) }
-            val emptied = vm.awaitState { it.enabledModels == null }
-            assertNull(h.settings.currentSettings().enabledModels)
+            val emptied = vm.awaitState { it.enabledModels?.isEmpty() == true }
+            assertEquals(emptyList<String>(), h.settingsManager.getEnabledModels())
             assertEquals(emptied.modelOptions, emptied.scopedModelOptions)
 
-            // Re-checking the last missing model collapses back to unset.
-            vm.toggleModelScope(all[0].providerId, all[0].modelId, false)
-            val rematerialized = all.drop(1).map { "${it.providerId}/${it.modelId}" }
-            vm.awaitState { it.enabledModels == rematerialized }
+            // Re-checking one model rematerializes the explicit list.
+            vm.toggleModelScope(all[1].providerId, all[1].modelId, true)
+            val partial = vm.awaitState { it.enabledModels?.size == 1 }
+            assertEquals(listOf("${all[1].providerId}/${all[1].modelId}"), partial.enabledModels)
+
+            // Re-enabling every model collapses back to unset.
+            all.drop(2).forEach { vm.toggleModelScope(it.providerId, it.modelId, true) }
             vm.toggleModelScope(all[0].providerId, all[0].modelId, true)
             vm.awaitState { it.enabledModels == null }
-            assertNull(h.settings.currentSettings().enabledModels)
+            assertNull(h.settingsManager.getEnabledModels())
+
+            vm.closeForTest()
+        }
+
+    /**
+     * A stored reference to a model that is no longer offered (its provider's
+     * credential is gone) is preserved in its stored order, and a selection
+     * containing one is NOT full: checking every offered model keeps the
+     * list materialized (upstream's length-aware allEnabled).
+     */
+    @Test
+    fun toggleModelScope_staleReferenceOfAnUnofferedModel_survivesAFullOfferedSelection() =
+        runTest(mainDispatcherRule.scheduler) {
+            val h = harness()
+            val vm = h.newViewModel()
+            vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
+            vm.configure(apiKey = "k")
+            vm.awaitState { it.status == ChatStatus.Ready }
+            val all = vm.uiState.value.modelOptions
+            val stale = "github-copilot/gpt-4.1" // copilot unconfigured: not offered
+            assertTrue(all.none { it.key == stale })
+
+            kotlinx.coroutines.runBlocking {
+                h.settingsManager.setEnabledModels(
+                    listOf(stale) + all.drop(1).map { it.key }
+                )
+            }
+            vm.refreshProviderStatus()
+            vm.awaitState { it.enabledModels?.contains(stale) == true }
+
+            // Checking the last missing offered model enables everything
+            // offered — but the stale reference keeps the selection short of
+            // set equality, so the list persists with the reference kept.
+            vm.toggleModelScope(all[0].providerId, all[0].modelId, true)
+            val state = vm.awaitState { it.enabledModels?.contains(all[0].key) == true }
+            assertTrue(state.enabledModels!!.contains(stale))
+            assertEquals(h.settingsManager.getEnabledModels(), state.enabledModels)
+            assertTrue(state.enabledModels!!.last() == stale)
 
             vm.closeForTest()
         }
@@ -664,7 +713,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.selectModel("zai", "glm-5.3")
             vm.awaitState { it.selectedModel?.modelId == "glm-5.3" }
             vm.saveStartupDefault("zai", "glm-5.3")
-            vm.awaitState { h.settings.currentSettings().modelId == "glm-5.3" }
+            vm.awaitState { h.settingsManager.getDefaultModel() == "glm-5.3" }
 
             // Navigating back before the model_change truncates the
             // transcript but keeps the live glm-5.3 agent — no rebuild, the
@@ -686,8 +735,8 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             val restored = vm2.awaitState {
                 it.status == ChatStatus.Ready && it.activeSessionId == sessionId
             }
-            assertEquals("glm-5.3", h.settings.currentSettings().modelId)
-            assertEquals("glm-5.3", h.createdSettings.last().modelId)
+            assertEquals("glm-5.3", h.settingsManager.getDefaultModel())
+            assertEquals("glm-5.3", h.settingsManager.getDefaultModel())
             assertEquals("glm-5.3", restored.selectedModel?.modelId)
 
             vm2.closeForTest()
@@ -704,8 +753,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
     fun newSession_startsOnTheStartupDefault_notTheResumedBranchModel() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
-            h.settings.setProviderId("zai")
-            h.settings.setModelId("glm-4.7")
+            h.seedStartupDefault("zai", "glm-4.7")
             h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
 
             val vm = h.newViewModel()
@@ -735,7 +783,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm2.newSession()
             val fresh = vm2.awaitState { it.activeSessionId != firstId }
             assertEquals("glm-4.7", fresh.selectedModel?.modelId)
-            assertEquals("glm-4.7", h.createdSettings.last().modelId)
+            assertEquals("glm-4.7", h.settingsManager.getDefaultModel())
             waitUntil {
                 h.sessions.managers[fresh.activeSessionId!!]!!.getEntries().isNotEmpty()
             }
@@ -854,11 +902,10 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
     fun persistedUnknownModelId_isNotMarkedUnavailable() = runTest(mainDispatcherRule.scheduler) {
         val h = harness()
         h.credentials.creds["github-copilot"] = copilotCredential(stringArray("gpt-4.1"))
-        h.settings.setProviderId("github-copilot")
         // A corrupt id the catalog never carried is not "unavailable for this
         // account": no availability error, the derived replacement just runs
         // (the catalog's first copilot model — pi picks registry order).
-        h.settings.setModelId("corrupt-model-id")
+        h.seedStartupDefault("github-copilot", "corrupt-model-id")
         val vm = h.newViewModel()
 
         val state = vm.awaitState { it.status == ChatStatus.Ready }

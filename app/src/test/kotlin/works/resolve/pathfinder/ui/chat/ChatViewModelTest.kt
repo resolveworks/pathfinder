@@ -86,7 +86,6 @@ import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.data.sessions.SessionSource
-import works.resolve.pathfinder.data.settings.ModelSettings
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
@@ -213,10 +212,9 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
         // The derived initial model is NOT persisted as the startup default —
         // but the active session id is.
-        val persisted = h.settings.currentSettings()
-        assertEquals("", persisted.providerId)
-        assertEquals("", persisted.modelId)
-        assertEquals(state.activeSessionId, persisted.activeSessionId)
+        assertNull(h.settingsManager.getDefaultProvider())
+        assertNull(h.settingsManager.getDefaultModel())
+        assertEquals(state.activeSessionId, h.settings.currentSettings().activeSessionId)
 
         vm.closeForTest()
     }
@@ -859,8 +857,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
     fun initFactoryFailure_isFailed_neverReady_andRejectedConfigNotPersisted() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
-            h.settings.setProviderId("zai")
-            h.settings.setModelId("glm-4.7")
+            h.seedStartupDefault("zai", "glm-4.7")
             h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
             h.rejectAll = true
 
@@ -900,8 +897,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             manager.appendMessage(works.resolve.pathfinder.ai.UserMessage.ofText("Hello", 123L))
             manager.appendMessage(h.assistant("World").copy(timestamp = 123L))
         }
-        h.settings.setProviderId("zai")
-        h.settings.setModelId("glm-4.7")
+        h.seedStartupDefault("zai", "glm-4.7")
         h.settings.setActiveSessionId(manager.getSessionId())
         h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
 
@@ -918,8 +914,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
     fun initActiveSessionWriteFailure_isFailed_neverReady() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
-            h.settings.setProviderId("zai")
-            h.settings.setModelId("glm-4.7")
+            h.seedStartupDefault("zai", "glm-4.7")
             h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
             h.settingsStore.failActiveSessionWrites = true
 

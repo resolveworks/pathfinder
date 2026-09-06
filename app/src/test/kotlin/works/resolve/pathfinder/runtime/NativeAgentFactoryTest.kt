@@ -44,9 +44,10 @@ import works.resolve.pathfinder.codingagent.core.ModelChangeEntry
 import works.resolve.pathfinder.codingagent.core.SessionError
 import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionManager
+import works.resolve.pathfinder.codingagent.core.Settings
+import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.codingagent.core.buildSystemPrompt
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
-import works.resolve.pathfinder.data.settings.ModelSettings
 
 class NativeAgentFactoryTest {
 
@@ -115,31 +116,46 @@ class NativeAgentFactoryTest {
 
     private val catalog: ProviderCatalog = TestCatalogs.CATALOG
 
-    private fun factory(store: FakeCredentialStore, transport: RecordingTransport): AgentFactory =
-        NativeAgentFactory(credentials = store, catalog = catalog, transport = transport)
+    private fun factory(
+        store: FakeCredentialStore,
+        transport: RecordingTransport,
+        settings: Settings = Settings()
+    ): AgentFactory = NativeAgentFactory(
+        credentials = store,
+        catalog = catalog,
+        transport = transport,
+        settingsManager = runBlocking { SettingsManager.inMemory(settings) }
+    )
 
     private fun settings(providerId: String = "zai", modelId: String = "glm-4.7") =
-        ModelSettings(providerId = providerId, modelId = modelId)
+        Settings(defaultProvider = providerId, defaultModel = modelId)
 
     @Test
     fun `an unresolvable saved default falls back to an available model`() = runBlocking {
         // pi's findInitialModel: a saved default that does not resolve is
         // skipped and the per-provider preferred model is used instead.
-        val result = factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-            .create(settings(modelId = "gpt-4"), session())
+        val result = factory(
+            FakeCredentialStore(ApiKeyCredential("k")),
+            RecordingTransport(),
+            settings(modelId = "gpt-4")
+        ).create(session())
         assertEquals("glm-5.3", result.session.model.id)
         assertNull(result.modelFallbackMessage)
 
         val unknownProvider =
-            factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-                .create(settings(providerId = "openai"), session())
+            factory(
+                FakeCredentialStore(ApiKeyCredential("k")),
+                RecordingTransport(),
+                settings(providerId = "openai")
+            ).create(session())
         assertEquals("glm-5.3", unknownProvider.session.model.id)
     }
 
     @Test
     fun `no authenticated provider rejects creation`() = runBlocking {
         val error = runCatching {
-            factory(FakeCredentialStore(null), RecordingTransport()).create(settings(), session())
+            factory(FakeCredentialStore(null), RecordingTransport(), settings())
+                .create(session())
         }.exceptionOrNull()
         assertTrue(error is IllegalStateException)
     }
@@ -149,8 +165,12 @@ class NativeAgentFactoryTest {
         val manager = SessionManager.create(tmpFolder.newFolder())
         manager.appendMessage(UserMessage.ofText("hello"))
         manager.appendMessage(UserMessage.ofText("again"))
-        val result = factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-            .create(settings(), manager)
+        val result = factory(
+            FakeCredentialStore(ApiKeyCredential("k")),
+            RecordingTransport(),
+            settings()
+        )
+            .create(manager)
         val agent = result.session
         val messages = agent.state.value.messages
         assertEquals(2, messages.size)
@@ -183,12 +203,17 @@ class NativeAgentFactoryTest {
             credentials = FakeCredentialStore(ApiKeyCredential("k")),
             catalog = catalog,
             transport = RecordingTransport(),
+            settingsManager = SettingsManager.inMemory(settings()),
             tools = mutableListOf(tool)
-        ).create(settings(), session()).session
+        ).create(session()).session
         assertEquals(1, withTools.state.value.tools.size)
 
-        val default = factory(FakeCredentialStore(ApiKeyCredential("k")), RecordingTransport())
-            .create(settings(), session()).session
+        val default = factory(
+            FakeCredentialStore(ApiKeyCredential("k")),
+            RecordingTransport(),
+            settings()
+        )
+            .create(session()).session
         assertTrue(default.state.value.tools.isEmpty())
     }
 
@@ -219,8 +244,9 @@ class NativeAgentFactoryTest {
                 credentials = FakeCredentialStore(ApiKeyCredential("k")),
                 catalog = catalog,
                 transport = RecordingTransport(),
+                settingsManager = runBlocking { SettingsManager.inMemory(settings()) },
                 tools = configured
-            ).create(settings(), session()).session
+            ).create(session()).session
 
             assertEquals(listOf("web_search"), agent.getActiveToolNames())
             assertEquals(buildSystemPrompt(listOf(webSearch)), agent.state.value.systemPrompt)
@@ -246,8 +272,8 @@ class NativeAgentFactoryTest {
         runBlocking {
             val store = FakeCredentialStore(ApiKeyCredential("factory-test-key-1"))
             val transport = RecordingTransport()
-            val agent = factory(store, transport)
-                .create(settings(), session()).session
+            val agent = factory(store, transport, settings())
+                .create(session()).session
 
             // Rotating the stored credential after construction must be observed
             // at prompt time: the resolver stays lazy and reads the store per request.
@@ -290,14 +316,15 @@ class NativeAgentFactoryTest {
                 )
             )
             val transport = RecordingTransport()
-            val agent = factory(store, transport)
-                .create(
-                    settings(
-                        providerId = "cloudflare-ai-gateway",
-                        modelId = "workers-ai/test-model"
-                    ),
-                    session()
-                ).session
+            val agent = factory(
+                store,
+                transport,
+                settings(
+                    providerId = "cloudflare-ai-gateway",
+                    modelId = "workers-ai/test-model"
+                )
+            )
+                .create(session()).session
             agent.prompt("ping")
 
             val request = transport.requests.single()
@@ -420,12 +447,18 @@ class NativeAgentFactoryTest {
             val agent = NativeAgentFactory(
                 FakeCredentialStore(ApiKeyCredential("k")),
                 catalog,
-                transport
+                transport,
+                settingsManager = runBlocking {
+                    SettingsManager.inMemory(
+                        Settings(
+                            defaultProvider = "multi",
+                            defaultModel = "m",
+                            compaction = compactOff
+                        )
+                    )
+                }
             )
-                .create(
-                    ModelSettings(providerId = "multi", modelId = "m", compaction = compactOff),
-                    session()
-                ).session
+                .create(session()).session
 
             agent.prompt("ping")
 
@@ -478,15 +511,17 @@ class NativeAgentFactoryTest {
                 credentials = store,
                 catalog = openRouterCatalog,
                 transport = transport,
+                settingsManager = runBlocking {
+                    SettingsManager.inMemory(
+                        Settings(
+                            defaultProvider = "openrouter",
+                            defaultModel = model.id,
+                            compaction = compactOff
+                        )
+                    )
+                },
                 authRegistry = ProductionCatalogAuthRegistry()
-            ).create(
-                ModelSettings(
-                    providerId = "openrouter",
-                    modelId = model.id,
-                    compaction = compactOff
-                ),
-                session()
-            ).session
+            ).create(session()).session
 
             agent.prompt("ping")
 
@@ -503,7 +538,8 @@ class NativeAgentFactoryTest {
             NativeAgentFactory(
                 FakeCredentialStore(ApiKeyCredential("k")),
                 catalog,
-                RecordingTransport()
+                RecordingTransport(),
+                settingsManager = runBlocking { SettingsManager.inMemory() }
             )
         val resolved = factory.resolveModel("github-copilot", "gpt-4.1")
         assertEquals("gpt-4.1", resolved.id)
@@ -520,9 +556,13 @@ class NativeAgentFactoryTest {
             // GitHub Copilot needs a token credential for the auth check.
             val store = FakeCredentialStore(ApiKeyCredential("gh-factory-test-token"))
             val transport = RecordingTransport()
-            val native =
-                NativeAgentFactory(credentials = store, catalog = catalog, transport = transport)
-            val agent = native.create(settings(), session()).session
+            val native = NativeAgentFactory(
+                credentials = store,
+                catalog = catalog,
+                transport = transport,
+                settingsManager = SettingsManager.inMemory(settings())
+            )
+            val agent = native.create(session()).session
 
             agent.prompt("ping") // initial provider: zai/glm-4.7
             assertEquals(
@@ -565,9 +605,10 @@ class NativeAgentFactoryTest {
                 NativeAgentFactory(
                     credentials = store,
                     catalog = catalog,
-                    transport = RecordingTransport()
+                    transport = RecordingTransport(),
+                    settingsManager = SettingsManager.inMemory(settings())
                 )
-            val agent = native.create(settings(), session()).session
+            val agent = native.create(session()).session
             store.credential.value = null
 
             val error = runCatching {
@@ -592,14 +633,15 @@ class NativeAgentFactoryTest {
             // skipped for an authenticated provider's preferred model.
             val store = FakeCredentialStore(ApiKeyCredential("cf-incomplete-key"))
             val transport = RecordingTransport()
-            val result = factory(store, transport)
-                .create(
-                    settings(
-                        providerId = "cloudflare-ai-gateway",
-                        modelId = "workers-ai/test-model"
-                    ),
-                    session()
+            val result = factory(
+                store,
+                transport,
+                settings(
+                    providerId = "cloudflare-ai-gateway",
+                    modelId = "workers-ai/test-model"
                 )
+            )
+                .create(session())
             assertEquals(
                 "zai/glm-5.3",
                 "${result.session.model.provider}/${result.session.model.id}"
@@ -628,14 +670,16 @@ class NativeAgentFactoryTest {
                     catalog = ProviderCatalog(
                         listOf(catalog.getProvider("cloudflare-ai-gateway")!!)
                     ),
-                    transport = RecordingTransport()
-                ).create(
-                    settings(
-                        providerId = "cloudflare-ai-gateway",
-                        modelId = "workers-ai/test-model"
-                    ),
-                    session()
-                )
+                    transport = RecordingTransport(),
+                    settingsManager = runBlocking {
+                        SettingsManager.inMemory(
+                            settings(
+                                providerId = "cloudflare-ai-gateway",
+                                modelId = "workers-ai/test-model"
+                            )
+                        )
+                    }
+                ).create(session())
             }.exceptionOrNull()
             assertTrue(error is IllegalStateException)
             assertEquals("No models available.", error!!.message)

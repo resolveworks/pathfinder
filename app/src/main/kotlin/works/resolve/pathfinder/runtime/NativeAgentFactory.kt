@@ -26,10 +26,8 @@ import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.codingagent.core.CreateAgentSessionResult
 import works.resolve.pathfinder.codingagent.core.SessionManager
-import works.resolve.pathfinder.codingagent.core.Settings
 import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.codingagent.core.createAgentSession
-import works.resolve.pathfinder.data.settings.ModelSettings
 
 /**
  * Production [AgentFactory]: builds the native agent stack from the persisted
@@ -64,6 +62,8 @@ class NativeAgentFactory(
     private val credentials: CredentialStore,
     private val catalog: ProviderCatalog,
     private val transport: HttpStreamingTransport,
+    /** Shared process-wide settings manager; passed straight to created sessions. */
+    private val settingsManager: SettingsManager,
     private val retry: ProviderRetry = ProviderRetry(),
     /** WebSocket transport for the Codex adapter; null disables the WebSocket path. */
     private val webSocketTransport: WebSocketStreamingTransport? = null,
@@ -74,10 +74,7 @@ class NativeAgentFactory(
     private val tools: List<AgentTool> = emptyList()
 ) : AgentFactory {
 
-    override suspend fun create(
-        settings: ModelSettings,
-        sessionManager: SessionManager
-    ): CreateAgentSessionResult {
+    override suspend fun create(sessionManager: SessionManager): CreateAgentSessionResult {
         // Register every catalog provider, not just the initial one: the
         // models stack is what makes live model switching
         // (AgentSession.setModel) work across providers — the next prompt
@@ -101,18 +98,7 @@ class NativeAgentFactory(
 
         return createAgentSession(
             manager = sessionManager,
-            // Temporary wiring: a snapshot settings manager per agent until the
-            // app's settings flow is rewired onto SettingsManager.
-            settingsManager = SettingsManager.inMemory(
-                Settings(
-                    defaultProvider = settings.providerId.ifBlank { null },
-                    defaultModel = settings.modelId.ifBlank { null },
-                    defaultThinkingLevel = settings.defaultThinkingLevel,
-                    enabledModels = settings.enabledModels,
-                    compaction = settings.compaction,
-                    retry = settings.retry
-                )
-            ),
+            settingsManager = settingsManager,
             models = models,
             streamFn = StreamFn { requestedModel, context, options ->
                 // Request encoding and stream decoding run off Main; agent/session
