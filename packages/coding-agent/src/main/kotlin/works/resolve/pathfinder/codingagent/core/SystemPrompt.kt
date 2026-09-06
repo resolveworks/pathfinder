@@ -10,16 +10,16 @@ private fun normalizePromptSnippet(text: String?): String? {
 }
 
 /**
- * Builds the tool-dependent sections of pi's default system prompt (Available
- * tools, Guidelines) with the upstream section layout.
+ * Builds pi's default system prompt layout (persona header, Available
+ * tools, Guidelines) for the active tool set.
  *
  * Divergences from pi:
- * - pi's `buildSystemPrompt` additionally emits the coding-agent persona
- *   header, cwd, pi-docs paths, project context files, and skills —
- *   coding-agent app-layer text for which pathfinder has no surface.
- * - pi always sends a default persona prompt; pathfinder sends no system
- *   prompt for a no-tools chat, so this returns null when [activeTools] is
- *   empty.
+ * - The persona header names pathfinder instead of pi, and pi's
+ *   coding-agent-only sections (cwd, pi-docs paths, project context files,
+ *   skills, the custom-tools remark) are app-layer text with no pathfinder
+ *   surface and are not emitted.
+ * - Like pi, a persona prompt is always sent — an empty tool set yields
+ *   the header with an empty tools list, never null.
  *
  * Note on pi's `packages/ai/src/session-resources.ts`: it is NOT a
  * system-prompt resources concept — it is a session-scoped cleanup registry
@@ -36,11 +36,7 @@ private fun normalizePromptSnippet(text: String?): String? {
  * interactive path starts feeding loaded resources into the agent-level
  * system prompt.
  */
-fun buildSystemPrompt(activeTools: List<AgentTool>): String? {
-    if (activeTools.isEmpty()) {
-        return null
-    }
-
+fun buildSystemPrompt(activeTools: List<AgentTool>): String {
     // Inclusion rule: a tool appears in Available tools only when its
     // snippet normalizes to a non-null line (pi gates on
     // `!!toolSnippets?.[name]` — an empty string is falsy there too).
@@ -80,5 +76,10 @@ fun buildSystemPrompt(activeTools: List<AgentTool>): String? {
 
     val guidelines = guidelinesList.joinToString("\n") { "- $it" }
 
-    return "Available tools:\n$toolsList\n\nGuidelines:\n$guidelines"
+    // pi's static persona header; the harness name is pathfinder's.
+    val persona =
+        "You are an expert coding assistant operating inside pathfinder, a coding agent harness. " +
+            "You help users by reading files, executing commands, editing code, and writing new files."
+    return "$persona\n\n" +
+        "Available tools:\n$toolsList\n\nGuidelines:\n$guidelines"
 }

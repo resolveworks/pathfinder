@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -335,7 +336,12 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
                 model = nativeFactory.resolveModel(settings.providerId, settings.modelId),
                 streamFn = StreamFn { requestedModel, _, _ ->
                     streamedModels.add(requestedModel)
-                    scriptedStreams.poll() ?: flow { kotlinx.coroutines.awaitCancellation() }
+                    val script = scriptedStreams.poll()
+                        ?: flow { kotlinx.coroutines.awaitCancellation() }
+                    // Scripts carry testModel metadata; the model that runs
+                    // decides what the transcript records, exactly like a
+                    // real provider stream.
+                    script.map { ev -> ev.restamp(requestedModel) }
                 }
             ),
             manager = sessionManager,
@@ -367,6 +373,26 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
             errorMessage = error,
             timestamp = System.nanoTime()
         )
+
+    private fun AssistantMessageEvent.restamp(model: Model): AssistantMessageEvent = when (this) {
+        is AssistantMessageEvent.Start -> AssistantMessageEvent.Start(partial.withModel(model))
+
+        is AssistantMessageEvent.TextDelta ->
+            AssistantMessageEvent.TextDelta(contentIndex, delta, partial.withModel(model))
+
+        is AssistantMessageEvent.Done -> AssistantMessageEvent.Done(
+            reason,
+            message.withModel(model)
+        )
+
+        is AssistantMessageEvent.Error ->
+            AssistantMessageEvent.Error(reason, error.withModel(model))
+
+        else -> this
+    }
+
+    private fun AssistantMessage.withModel(model: Model): AssistantMessage =
+        copy(api = model.api, provider = model.provider, model = model.id)
 
     fun gatedStream(text: String, gate: CompletableDeferred<Unit>): Flow<AssistantMessageEvent> =
         flow {

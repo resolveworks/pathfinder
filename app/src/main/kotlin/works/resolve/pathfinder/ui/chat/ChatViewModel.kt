@@ -52,10 +52,9 @@ import works.resolve.pathfinder.tools.websearch.SearchProviderService
  * Chat screen controller. Owns configuration, sessions, and the active
  * [AgentSession]; projects everything into an immutable [ChatUiState] (UDF).
  *
- * Divergence from pi (deliberate): pi's picker Ctrl+S applies the highlighted
- * row AND persists it as the startup default in one gesture; Pathfinder keeps
- * the pickers ephemeral and moves default persistence to the Settings
- * screens, so "use it now AND default it" takes two steps.
+ * Model picking follows pi's gesture: applying a model switches the live
+ * session and persists the startup default together (pi's picker
+ * Ctrl+S); the Settings screens persist a default without switching.
  *
  * Transcript persistence lives inside the runtime: every append (message,
  * model/thinking change, compaction, navigation) reaches the session file
@@ -173,17 +172,19 @@ class ChatViewModel(
     /**
      * Switches the live session's model. Not busy-rejected: like pi, a
      * mid-stream pick is safe — the active run keeps its start-of-run model
-     * and the switch applies to the next prompt. Does NOT persist the
-     * startup default; that lives in [saveStartupDefault].
+     * and the switch applies to the next prompt. Also persists the
+     * startup default (pi's picker gesture, setModel persist=true);
+     * [saveStartupDefault] persists without switching.
      */
     fun selectModel(providerId: String, modelId: String) {
         viewModelScope.launch { selectModelInternal(providerId, modelId) }
     }
 
     /**
-     * Persists the startup default provider+model. Divergence from pi's
-     * Ctrl+S: this does not also switch the live session (see the class
-     * KDoc). A non-empty model scope gains the default when missing.
+     * Persists the startup default provider+model without switching the
+     * live session (pi: editing the settings field directly, not the
+     * picker gesture). A non-empty model scope gains the default when
+     * missing.
      */
     fun saveStartupDefault(providerId: String, modelId: String) {
         viewModelScope.launch { saveStartupDefaultInternal(providerId, modelId) }
@@ -863,6 +864,11 @@ class ChatViewModel(
         _uiState.update {
             it.copy(treeRows = treeRows(it.treeFilter))
         }
+        // pi's picker gesture: applying a model both switches the live
+        // session and persists it as the startup default (setModel with
+        // persist, which also appends to a non-empty scope). The switch is
+        // already committed; a failed persist surfaces its own error.
+        saveStartupDefaultInternal(model.provider, model.id)
     }
 
     private suspend fun saveStartupDefaultInternal(providerId: String, modelId: String) {

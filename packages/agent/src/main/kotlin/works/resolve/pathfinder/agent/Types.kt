@@ -67,9 +67,7 @@ data class AgentState(
 )
 
 /**
- * Final or partial result produced by a tool. Divergence: pi's `terminate`
- * field is omitted — upstream it only participates in the hook
- * early-termination rule, and hooks are out of scope.
+ * Final or partial result produced by a tool.
  */
 data class AgentToolResult(
     /** Text or image content returned to the model. */
@@ -79,7 +77,13 @@ data class AgentToolResult(
     /** Usage of the final tool execution itself; not used for main LLM context accounting. */
     val usage: Usage? = null,
     /** Tools introduced by this result, available from this transcript point onward. */
-    val addedToolNames: List<String> = emptyList()
+    val addedToolNames: List<String> = emptyList(),
+    /**
+     * Hint that the agent should stop after the current tool batch.
+     * Early termination only happens when every finalized tool result in
+     * the batch sets this to true.
+     */
+    val terminate: Boolean? = null
 ) {
     init {
         require(content.all { it is TextContent || it is ImageContent }) {

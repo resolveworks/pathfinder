@@ -148,13 +148,13 @@ class AgentSessionToolsTest {
     }
 
     @Test
-    fun `an empty selection yields a null system prompt`() = runTest {
+    fun `an empty selection still yields the persona prompt`() = runTest {
         val s = session(tools = listOf(tool("web_search")))
 
         s.setActiveToolsByName(emptyList())
 
         assertEquals(emptyList<String>(), s.getActiveToolNames())
-        assertNull(s.agent.state.value.systemPrompt)
+        assertEquals(buildSystemPrompt(emptyList()), s.agent.state.value.systemPrompt)
     }
 
     @Test
@@ -176,7 +176,7 @@ class AgentSessionToolsTest {
         val s = session()
 
         assertEquals(emptyList<String>(), s.getActiveToolNames())
-        assertNull(s.agent.state.value.systemPrompt)
+        assertEquals(buildSystemPrompt(emptyList()), s.agent.state.value.systemPrompt)
 
         s.setActiveToolsByName(listOf("web_search"))
         assertEquals(
@@ -184,6 +184,6 @@ class AgentSessionToolsTest {
             emptyList<String>(),
             s.getActiveToolNames()
         )
-        assertNull(s.agent.state.value.systemPrompt)
+        assertEquals(buildSystemPrompt(emptyList()), s.agent.state.value.systemPrompt)
     }
 }

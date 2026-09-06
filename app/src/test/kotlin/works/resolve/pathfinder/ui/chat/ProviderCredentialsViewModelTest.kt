@@ -120,13 +120,13 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             assertTrue(state.modelOptions.isEmpty())
 
             // A stored key with no model settings: the initial model is derived
-            // (first available of a configured provider) and the app enters the
+            // (pi's per-provider preferred model of the configured provider) and the app enters the
             // chat directly — while the key never appears anywhere in the UI state.
             h.credentials.creds["zai"] = ApiKeyCredential("SECRET-KEY-123")
             val vm2 = h.newViewModel()
             val state2 = vm2.awaitState { it.status == ChatStatus.Ready }
             assertTrue(state2.providerOptions.first { o -> o.id == "zai" }.configured)
-            assertEquals("glm-4.7", state2.selectedModel?.modelId)
+            assertEquals("glm-5.3", state2.selectedModel?.modelId)
             assertNotNull(state2.activeSessionId)
             assertFalse(state2.toString().contains("SECRET-KEY-123"))
 
@@ -203,7 +203,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             val vm = h.newViewModel()
             vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
 
-            h.rejectedModelIds += "glm-5.3"
+            h.rejectedModelIds += "glm-5.2"
             vm.saveProviderCredential("zai", "first-key", emptyMap())
             // The derived initial model is unaffected by the rejection.
             vm.awaitState { it.status == ChatStatus.Ready }
@@ -212,9 +212,9 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             assertTrue(state.providerOptions.first { o -> o.id == "zai" }.configured)
             assertFalse(state.toString().contains("first-key"))
 
-            vm.selectModel("zai", "glm-5.3")
+            vm.selectModel("zai", "glm-5.2")
             vm.awaitState { it.error != null }
-            assertEquals("glm-4.7", vm.uiState.value.selectedModel?.modelId)
+            assertEquals("glm-5.3", vm.uiState.value.selectedModel?.modelId)
             vm.dismissError()
 
             // An incomplete re-save (blank key: logins re-prompt everything,
@@ -258,7 +258,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
         assertTrue(after.modelOptions.isNotEmpty())
         assertTrue(after.modelOptions.all { it.providerId == "zai" })
         assertEquals("GLM-4.7", after.modelOptions.first { it.modelId == "glm-4.7" }.name)
-        assertEquals("glm-4.7", after.selectedModel?.modelId)
+        assertEquals("glm-5.3", after.selectedModel?.modelId)
         assertEquals(after.modelOptions, after.scopedModelOptions)
         assertNull(after.enabledModels)
         assertFalse(after.toString().contains("SECRET-KEY-777"))
@@ -406,7 +406,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             assertNotNull(ready.activeSessionId)
             assertEquals(0, h.countSessions())
             assertEquals("zai", ready.selectedModel?.providerId)
-            assertEquals("glm-4.7", ready.selectedModel?.modelId)
+            assertEquals("glm-5.3", ready.selectedModel?.modelId)
             assertTrue(ready.modelOptions.all { it.providerId == "zai" })
 
             vm.saveProviderCredential(
@@ -441,7 +441,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             assertEquals(AuthType.API_KEY, state.providerOptions.first { it.id == "zai" }.authType)
             assertFalse(state.toString().contains("stored-key"))
             assertNotNull(state.activeSessionId)
-            assertEquals("glm-4.7", state.selectedModel?.modelId)
+            assertEquals("glm-5.3", state.selectedModel?.modelId)
             // The derivation seeds the session with a buffered model_change;
             // the file appears only at the first assistant commit.
             waitUntil {
@@ -450,7 +450,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             val seeded = h.sessions.managers[state.activeSessionId!!]!!
             val change = seeded.getEntries().filterIsInstance<ModelChangeEntry>().single()
             assertEquals("zai", change.provider)
-            assertEquals("glm-4.7", change.modelId)
+            assertEquals("glm-5.3", change.modelId)
             assertNull(h.sessions.stored(state.activeSessionId!!))
 
             vm.closeForTest()
@@ -478,7 +478,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             assertFalse(state.providerOptions.first { o -> o.id == "zai" }.configured)
             assertTrue(state.modelOptions.isEmpty())
             // The live session model stays visible for the model chip.
-            assertEquals("glm-4.7", state.selectedModel?.modelId)
+            assertEquals("glm-5.3", state.selectedModel?.modelId)
             assertNull(h.credentials.creds["zai"])
 
             h.scriptedStreams.add(

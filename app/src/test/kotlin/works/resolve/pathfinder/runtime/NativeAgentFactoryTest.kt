@@ -220,7 +220,7 @@ class NativeAgentFactoryTest {
             agent.setActiveToolsByName(emptyList())
             assertEquals(emptyList<String>(), agent.getActiveToolNames())
             assertEquals(emptyList<AgentTool>(), agent.state.value.tools)
-            assertNull(agent.state.value.systemPrompt)
+            assertEquals(buildSystemPrompt(emptyList()), agent.state.value.systemPrompt)
 
             agent.setActiveToolsByName(listOf("web_search", "unknown"))
             assertEquals(listOf("web_search"), agent.getActiveToolNames())

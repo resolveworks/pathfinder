@@ -128,7 +128,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.error != null }
             assertEquals("Unknown model", vm.uiState.value.error)
             assertEquals(agentsBefore, h.createdAgents.size)
-            assertEquals("glm-4.7", vm.uiState.value.selectedModel?.modelId)
+            assertEquals("glm-5.3", vm.uiState.value.selectedModel?.modelId)
             vm.dismissError()
 
             h.rejectedModelIds += "glm-5.3"
@@ -136,7 +136,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.error != null }
             assertEquals(agentsBefore, h.createdAgents.size)
             assertTrue(vm.uiState.value.status == ChatStatus.Ready)
-            assertEquals("glm-4.7", vm.uiState.value.selectedModel?.modelId)
+            assertEquals("glm-5.3", vm.uiState.value.selectedModel?.modelId)
             assertEquals("", h.settings.currentSettings().modelId)
 
             vm.closeForTest()
@@ -153,11 +153,11 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
 
             h.settingsStore.failWrites = true
 
+            // A pick is one gesture: the live switch commits, the default
+            // persist fails and surfaces its own error (pi: setModel with
+            // persist).
             vm.selectModel("zai", "glm-5.3")
             vm.awaitState { it.selectedModel?.modelId == "glm-5.3" }
-            assertNull(vm.uiState.value.error)
-
-            vm.saveStartupDefault("zai", "glm-5.3")
             vm.awaitState { it.error != null }
             val state = vm.uiState.value
             assertEquals(ChatStatus.Ready, state.status)
@@ -267,7 +267,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.selectModel("cloudflare-ai-gateway", "workers-ai/test-model")
             vm.awaitState { it.error != null }
             assertEquals(ChatStatus.Ready, vm.uiState.value.status)
-            assertEquals("glm-4.7", vm.uiState.value.selectedModel?.modelId)
+            assertEquals("glm-5.3", vm.uiState.value.selectedModel?.modelId)
             assertEquals(entriesBefore, h.createdAgents.single().sessionManager.getEntries().size)
             assertEquals(0, h.countSessions())
 
@@ -284,7 +284,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
 
             val vm = h.newViewModel()
             val state = vm.awaitState { it.status == ChatStatus.Ready }
-            assertEquals("glm-4.7", state.selectedModel?.modelId)
+            assertEquals("glm-5.3", state.selectedModel?.modelId)
             assertTrue(state.modelOptions.all { it.providerId == "zai" })
             assertTrue(state.modelOptions.isNotEmpty())
 
@@ -314,16 +314,14 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             val ready = vm.awaitState { it.status == ChatStatus.Ready }
             val sessionId = ready.activeSessionId!!
 
-            // glm-4.7 is a reasoning model without a thinkingLevelMap: every
-            // level off..high is supported (xhigh/max need explicit mappings).
-            assertEquals(ModelThinkingLevel.MEDIUM, ready.thinkingLevel)
+            // glm-5.3 has a thinkingLevelMap: low/high/max supported, the
+            // "medium" default clamps up to high before seeding.
+            assertEquals(ModelThinkingLevel.HIGH, ready.thinkingLevel)
             assertEquals(
                 listOf(
-                    ModelThinkingLevel.OFF,
-                    ModelThinkingLevel.MINIMAL,
                     ModelThinkingLevel.LOW,
-                    ModelThinkingLevel.MEDIUM,
-                    ModelThinkingLevel.HIGH
+                    ModelThinkingLevel.HIGH,
+                    ModelThinkingLevel.MAX
                 ),
                 ready.availableThinkingLevels
             )
@@ -332,7 +330,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             waitUntil { h.sessions.managers[sessionId]!!.getEntries().size == 2 }
             val seeded = h.sessions.managers[sessionId]!!
             assertEquals(
-                listOf("medium"),
+                listOf("high"),
                 seeded.getEntries().filterIsInstance<ThinkingLevelEntry>()
                     .map { it.thinkingLevel }
             )
@@ -426,12 +424,12 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             )
             assertEquals(
                 "the session runs the clamped level",
-                ModelThinkingLevel.HIGH,
+                ModelThinkingLevel.MAX,
                 defaulted.thinkingLevel
             )
             assertEquals(
                 "the thinking chip projects the clamped session level",
-                ModelThinkingLevel.HIGH,
+                ModelThinkingLevel.MAX,
                 h.createdAgents.last().thinkingLevel
             )
 
@@ -482,7 +480,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
         // Flush the session first: without an assistant message there is no
         // file, and a reload could not restore anything.
         vm.exchange(h, "Hello", "world")
-        vm.selectThinkingLevel(ModelThinkingLevel.HIGH)
+        vm.selectThinkingLevel(ModelThinkingLevel.MAX)
         waitUntil { h.sessions.stored(sessionId)!!.getEntries().size == 5 }
         vm.closeForTest()
 
@@ -491,10 +489,10 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             it.status == ChatStatus.Ready &&
                 it.activeSessionId == sessionId
         }
-        assertEquals(ModelThinkingLevel.HIGH, restored.thinkingLevel)
+        assertEquals(ModelThinkingLevel.MAX, restored.thinkingLevel)
         assertEquals(
             "the branch entry survives reload; no re-seed over it",
-            listOf("medium", "high"),
+            listOf("high", "max"),
             h.sessions.stored(sessionId)!!.getEntries()
                 .filterIsInstance<ThinkingLevelEntry>()
                 .map { it.thinkingLevel }
@@ -516,6 +514,8 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
             vm.configure(apiKey = "k")
             vm.awaitState { it.status == ChatStatus.Ready }
+            vm.selectModel("zai", "glm-4.7")
+            vm.awaitState { it.selectedModel?.modelId == "glm-4.7" }
 
             vm.saveStartupDefault("zai", "glm-4.7")
             vm.awaitState { h.settings.currentSettings().modelId == "glm-4.7" }
@@ -552,7 +552,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
      */
 
     @Test
-    fun defaultModel_mirrorFollowsStoredDefault_notLiveSwitches() =
+    fun defaultModel_mirrorFollowsTheStoredDefault_picksPersistInOneGesture() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
             val vm = h.newViewModel()
@@ -561,17 +561,21 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             val ready = vm.awaitState { it.status == ChatStatus.Ready }
             assertNull(ready.defaultModel)
 
+            // A pick persists the default in the same gesture (pi's picker),
+            // so the mirror follows picks; saveStartupDefault persists
+            // without switching.
             vm.selectModel("zai", "glm-5.3")
-            vm.awaitState { it.selectedModel?.modelId == "glm-5.3" }
-            assertNull(vm.uiState.value.defaultModel)
-
-            vm.saveStartupDefault("zai", "glm-5.3")
             vm.awaitState { it.defaultModel?.modelId == "glm-5.3" }
             assertEquals("glm-5.3", h.settings.currentSettings().modelId)
 
+            vm.saveStartupDefault("zai", "glm-4.7")
+            vm.awaitState { it.defaultModel?.modelId == "glm-4.7" }
+            // Persist-only never switches the live session.
+            assertEquals("glm-5.3", vm.uiState.value.selectedModel?.modelId)
+
             vm.selectModel("zai", "glm-4.7")
             vm.awaitState { it.selectedModel?.modelId == "glm-4.7" }
-            assertEquals("glm-5.3", vm.uiState.value.defaultModel?.modelId)
+            assertEquals("glm-4.7", vm.uiState.value.defaultModel?.modelId)
 
             vm.closeForTest()
         }
@@ -716,6 +720,10 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             }
             vm.selectModel("zai", "glm-5.3")
             vm.awaitState { it.selectedModel?.modelId == "glm-5.3" }
+            // Restore the 4.7 default without switching (pi: editing the
+            // settings field), so the branch model differs from the default.
+            vm.saveStartupDefault("zai", "glm-4.7")
+            vm.awaitState { it.defaultModel?.modelId == "glm-4.7" }
             vm.closeForTest()
 
             val vm2 = h.newViewModel()
@@ -782,19 +790,21 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.status == ChatStatus.Ready }
             val firstId = vm.uiState.value.activeSessionId!!
 
-            // First session records a transcript, then switches to glm-5.3
+            // First session records a transcript, then switches to glm-5.2
             // on-branch; the fold carries the switch across loads.
             vm.exchange(h, "Hello", "world")
             vm.awaitState {
                 it.sessionSummaries.firstOrNull { s -> s.id == firstId }?.messageCount == 2
             }
-            vm.selectModel("zai", "glm-5.3")
-            vm.awaitState { it.selectedModel?.modelId == "glm-5.3" }
+            vm.selectModel("zai", "glm-5.2")
+            vm.awaitState { it.selectedModel?.modelId == "glm-5.2" }
 
+            // The pick persisted glm-5.2 as the default, so the fresh
+            // session seeds it too (pi: new sessions start on the default).
             vm.newSession()
             vm.awaitState {
                 it.activeSessionId != firstId &&
-                    it.selectedModel?.modelId == "glm-4.7"
+                    it.selectedModel?.modelId == "glm-5.2"
             }
             val secondId = vm.uiState.value.activeSessionId!!
 
@@ -808,12 +818,12 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.switchSession(firstId)
             vm.awaitState {
                 it.activeSessionId == firstId &&
-                    it.selectedModel?.modelId == "glm-5.3"
+                    it.selectedModel?.modelId == "glm-5.2"
             }
             vm.switchSession(secondId)
             vm.awaitState {
                 it.activeSessionId == secondId &&
-                    it.selectedModel?.modelId == "glm-4.7"
+                    it.selectedModel?.modelId == "glm-5.2"
             }
 
             vm.closeForTest()

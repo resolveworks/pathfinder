@@ -549,9 +549,9 @@ private suspend fun ensureActiveBetweenCalls() {
     currentCoroutineContext().ensureActive()
 }
 
-/** Always false: [AgentToolResult] has no `terminate` field. */
+/** pi's rule: terminate only when the batch is non-empty and every result sets it. */
 private fun shouldTerminateToolBatch(finalizedCalls: List<FinalizedToolCallOutcome>): Boolean =
-    false
+    finalizedCalls.isNotEmpty() && finalizedCalls.all { it.result.terminate == true }
 
 private val toolArgumentsJson = lenientJson
 

@@ -8,6 +8,52 @@ import works.resolve.pathfinder.ai.providers.ProviderCatalog
 
 private val DEFAULT_THINKING_LEVEL = ModelThinkingLevel.MEDIUM
 
+/**
+ * pi's `defaultModelPerProvider` (model-resolver.ts), restricted to the
+ * generated catalog's providers — every preferred id exists in the catalog.
+ * Consulted in table order when no default is set: the first table-listed
+ * provider with that model available wins over the options' own order.
+ */
+private val DEFAULT_MODEL_PER_PROVIDER: List<Pair<String, String>> = listOf(
+    "ant-ling" to "Ring-2.6-1T",
+    "anthropic" to "claude-opus-4-8",
+    "openai" to "gpt-5.5",
+    "azure-openai-responses" to "gpt-5.4",
+    "openai-codex" to "gpt-5.5",
+    "nvidia" to "nvidia/nemotron-3-super-120b-a12b",
+    "deepseek" to "deepseek-v4-pro",
+    "google" to "gemini-3.1-pro-preview",
+    "github-copilot" to "gpt-5.4",
+    "openrouter" to "moonshotai/kimi-k2.6",
+    "vercel-ai-gateway" to "zai/glm-5.1",
+    "xai" to "grok-4.6",
+    "groq" to "openai/gpt-oss-120b",
+    "cerebras" to "gpt-oss-120b",
+    "zai" to "glm-5.3",
+    "zai-coding-cn" to "glm-5.3",
+    "mistral" to "devstral-medium-latest",
+    "minimax" to "MiniMax-M2.7",
+    "minimax-cn" to "MiniMax-M2.7",
+    "moonshotai" to "kimi-k2.6",
+    "moonshotai-cn" to "kimi-k2.6",
+    "huggingface" to "moonshotai/Kimi-K2.6",
+    "fireworks" to "accounts/fireworks/models/kimi-k2p6",
+    "together" to "moonshotai/Kimi-K2.6",
+    "baseten" to "zai-org/GLM-5.2",
+    "opencode" to "kimi-k2.6",
+    "opencode-go" to "kimi-k2.6",
+    "kimi-coding" to "kimi-for-coding",
+    "cloudflare-workers-ai" to "@cf/moonshotai/kimi-k2.6",
+    "cloudflare-ai-gateway" to "workers-ai/@cf/moonshotai/kimi-k2.6",
+    "qwen-token-plan" to "qwen3.7-max",
+    "qwen-token-plan-cn" to "qwen3.7-max",
+    "qwen-token-plan-individual" to "qwen3.8-max",
+    "xiaomi" to "mimo-v2.5-pro",
+    "xiaomi-token-plan-cn" to "mimo-v2.5-pro",
+    "xiaomi-token-plan-ams" to "mimo-v2.5-pro",
+    "xiaomi-token-plan-sgp" to "mimo-v2.5-pro"
+)
+
 /** App-owned startup defaults a [seedSessionConfiguration] call resolves from. */
 data class SessionSeedSettings(
     val providerId: String = "",
@@ -22,8 +68,8 @@ data class SessionSeedSettings(
 data class SessionSeedModel(val providerId: String, val modelId: String)
 
 /**
- * pi's sdk.ts session-init: resolves the startup model and seeds the
- * session's configuration entries through the manager. [seedSessionConfiguration]
+ * pi's createAgentSession session-init (core/sdk.ts): resolves the startup
+ * model and seeds the session's configuration entries through the manager. [seedSessionConfiguration]
  * resolves the model ([initialModelSettings] for a fresh session — the
  * active branch's folded model_change when it carries messages, via
  * [settingsSeededFromFold]); a fresh session additionally gets a
@@ -73,9 +119,10 @@ suspend fun seedSessionConfiguration(
 }
 
 /**
- * pi's findInitialModel order (model-resolver.ts), minus the CLI step: a
- * fresh session takes the first available scoped model, else the saved
- * default while the credential-filtered options still admit it, else the
+ * pi's findInitialModel order, minus the CLI step: a fresh session takes
+ * the first available scoped model, else the saved default while the
+ * credential-filtered options still admit it, else the per-provider
+ * preferred model ([DEFAULT_MODEL_PER_PROVIDER] in table order), else the
  * first available model; a continuing session skips the scope step (its
  * branch fold, when present, wins in [settingsSeededFromFold]).
  */
@@ -99,6 +146,11 @@ internal fun initialModelSettings(
         it.providerId == settings.providerId && it.modelId == settings.modelId
     }
     if (defaultAvailable) return settings
+    for ((providerId, modelId) in DEFAULT_MODEL_PER_PROVIDER) {
+        if (modelOptions.any { it.providerId == providerId && it.modelId == modelId }) {
+            return settings.copy(providerId = providerId, modelId = modelId)
+        }
+    }
     val first = modelOptions.first()
     return settings.copy(providerId = first.providerId, modelId = first.modelId)
 }

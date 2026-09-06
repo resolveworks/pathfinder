@@ -187,10 +187,9 @@ class AgentSession(
         // either): tools resolve to the full registry, and the app layer
         // narrows the set per session via setActiveToolsByName.
         if (tools.isNotEmpty()) {
-            val activeTools = resolveTools(tools.map { it.definition.name })
-            agent.setTools(activeTools)
-            agent.setSystemPrompt(buildSystemPrompt(activeTools))
+            agent.setTools(resolveTools(tools.map { it.definition.name }))
         }
+        agent.setSystemPrompt(buildSystemPrompt(agent.state.value.tools.toList()))
         installAgentNextTurnRefresh()
     }
 
@@ -419,11 +418,12 @@ class AgentSession(
         /** The leaf moved to (or past) the target. */
         NAVIGATED,
 
-        /** A user-message target: the leaf moved to its parent and the
-         * text is returned for re-editing. */
+        /** A user-message target that is not the leaf: the leaf moved to
+         * its parent and the text is returned for re-editing. */
         RE_EDIT,
 
-        /** A non-user target that is already the leaf: nothing recorded. */
+        /** A target that is already the leaf (any entry type): nothing
+         * recorded. */
         NO_OP
     }
 
@@ -444,11 +444,11 @@ class AgentSession(
      *
      * A user-message target re-edits instead of moving the leaf onto it:
      * the leaf moves to the target's parent (or root) and the text is
-     * returned as [NavigationResult.editorText] — including when the
-     * target is the current leaf (an interrupted run can leave a user
-     * message as the leaf), reported as [NavigationOutcome.RE_EDIT].
-     * Only non-user targets treat leaf == target as a recordless no-op
-     * ([NavigationOutcome.NO_OP]). When summarizing, the [BranchSummaryEntry] is
+     * returned as [NavigationResult.editorText]
+     * ([NavigationOutcome.RE_EDIT]). A target that is already the leaf is
+     * a recordless no-op ([NavigationOutcome.NO_OP]) whatever its type —
+     * including a user-message leaf left by an interrupted run, which pi
+     * also no-ops. When summarizing, the [BranchSummaryEntry] is
      * appended at the navigation target position (the abandoned leaf is
      * recorded as its fromId inside the manager), and the rebuilt context
      * projects branch summaries via [buildSessionContext].
@@ -472,10 +472,10 @@ class AgentSession(
         val oldLeafId = manager.getLeafId()
         val targetEntry = manager.getEntry(targetId)
             ?: throw IllegalArgumentException("Entry $targetId not found")
-        val userMessage = (targetEntry as? MessageEntry)?.message as? UserMessage
-        if (targetId == oldLeafId && userMessage == null) {
+        if (targetId == oldLeafId) {
             return NavigationResult(outcome = NavigationOutcome.NO_OP, cancelled = false)
         }
+        val userMessage = (targetEntry as? MessageEntry)?.message as? UserMessage
 
         val summarizationModels = models
         if (options.summarize && summarizationModels == null) {

@@ -153,7 +153,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.saveProviderCredential("zai", "k", emptyMap())
             val configured = vm.awaitState { it.status == ChatStatus.Ready }
             assertEquals(ChatNavKey, configured.startKey)
-            assertEquals("glm-4.7", configured.selectedModel?.modelId)
+            assertEquals("glm-5.3", configured.selectedModel?.modelId)
             assertTrue(configured.navigationEpoch >= 1L)
             val firstId = configured.activeSessionId!!
 
@@ -206,7 +206,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         assertTrue(state.navigationEpoch >= 1L)
         assertNotNull(state.activeSessionId)
         assertTrue(state.providerOptions.first { o -> o.id == "zai" }.configured)
-        assertEquals("glm-4.7", state.selectedModel?.modelId)
+        assertEquals("glm-5.3", state.selectedModel?.modelId)
         assertFalse(state.toString().contains("SECRET-KEY-123"))
         // Lazy creation: the fresh session has no file and no drawer row yet.
         assertEquals(0, h.countSessions())
@@ -879,16 +879,16 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm2.awaitState { it.status == ChatStatus.NeedsConfiguration }
             vm2.configure(apiKey = "k")
             vm2.awaitState { it.status == ChatStatus.Ready }
-            h2.rejectedModelIds += "glm-5.3"
-            vm2.selectModel("zai", "glm-5.3")
+            h2.rejectedModelIds += "glm-5.2"
+            vm2.selectModel("zai", "glm-5.2")
             vm2.awaitState { it.error != null }
-            assertEquals("glm-4.7", vm2.uiState.value.selectedModel?.modelId)
+            assertEquals("glm-5.3", vm2.uiState.value.selectedModel?.modelId)
             vm2.closeForTest()
 
             val vm3 = h2.newViewModel()
             val state3 = vm3.awaitState { it.status == ChatStatus.Ready }
             assertNull(state3.error)
-            assertEquals("glm-4.7", state3.selectedModel?.modelId)
+            assertEquals("glm-5.3", state3.selectedModel?.modelId)
             vm3.closeForTest()
         }
 

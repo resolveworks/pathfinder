@@ -184,9 +184,9 @@ class AgentNavigationTest {
     }
 
     @Test
-    fun `user-message leaf target re-edits instead of the no-op`() = runTest {
+    fun `user-message leaf target is a no-op like any other leaf`() = runTest {
         // A run that never committed an assistant entry leaves its user
-        // message as the leaf; navigating to it must re-edit uniformly.
+        // message as the leaf; pi no-ops at the leaf whatever the type.
         val manager = newManager()
         manager.appendMessage(UserMessage.ofText("hello"))
         val userEntryId = manager.getLeafId()!!
@@ -197,8 +197,9 @@ class AgentNavigationTest {
 
         val result = session.navigateTree(userEntryId)
 
-        assertEquals("hello", result.editorText)
-        assertNull(session.sessionManager.getLeafId())
+        assertTrue(!result.cancelled)
+        assertNull(result.editorText)
+        assertEquals(userEntryId, session.sessionManager.getLeafId())
     }
 
     @Test

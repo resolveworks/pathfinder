@@ -455,6 +455,66 @@ class AgentLoopTest {
         }
 
     @Test
+    fun `tool results setting terminate stop the run after the batch`() = runTest {
+        // pi: "should stop after a tool batch when every tool result sets
+        // terminate=true" — no second provider request.
+        val tool = FakeTool(
+            executeImpl = { _, _, _ ->
+                AgentToolResult(listOf(TextContent("ok")), terminate = true)
+            }
+        )
+        val assistant1 = toolCallAssistant(ToolCall("c1", "my_tool", "{}"))
+        val streamFn = scriptedStream(assistant1)
+
+        val events = mutableListOf<AgentEvent>()
+        val result = runAgentLoop(
+            listOf(UserMessage.ofText("q")),
+            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            AgentLoopConfig(model, streamFn = streamFn)
+        ) { events.add(it) }
+
+        val labels = typeLabels(events)
+        val turnEnd = labels.indexOfLast { it == "TurnEnd" }
+        // The tool turn is the last turn: no TurnStart follows it.
+        assertFalse(labels.drop(turnEnd + 1).contains("TurnStart"))
+        assertEquals("AgentEnd", labels.last())
+        assertEquals(1, tool.executedCalls.size)
+        assertEquals(3, result.size) // prompt, assistant, tool result
+    }
+
+    @Test
+    fun `a batch without every result terminating continues the run`() = runTest {
+        // pi: "should continue after parallel tool calls when not all tool
+        // results terminate".
+        val tool = FakeTool(
+            executeImpl = { id, _, _ ->
+                AgentToolResult(
+                    listOf(TextContent("ok")),
+                    terminate = id == "c1"
+                )
+            }
+        )
+        val assistant1 = toolCallAssistant(
+            ToolCall("c1", "my_tool", "{}"),
+            ToolCall("c2", "my_tool", "{}")
+        )
+        val assistant2 = assistant("done")
+        val streamFn = scriptedStream(assistant1, assistant2)
+
+        val events = mutableListOf<AgentEvent>()
+        val result = runAgentLoop(
+            listOf(UserMessage.ofText("q")),
+            AgentContext(messages = emptyList(), tools = listOf(tool)),
+            AgentLoopConfig(model, streamFn = streamFn)
+        ) { events.add(it) }
+
+        val labels = typeLabels(events)
+        // The terminating result did not end the run: a second turn ran.
+        assertTrue(labels.drop(labels.indexOfFirst { it == "TurnEnd" } + 1).contains("TurnStart"))
+        assertEquals(5, result.size) // prompt, assistant, 2 tool results, final assistant
+    }
+
+    @Test
     fun `multiple tool turns continue until a response has no tool calls`() = runTest {
         val tool = FakeTool(Tool("t", "d", buildJsonObject {}))
         val a1 = toolCallAssistant(ToolCall("c1", "t", "{}"), ToolCall("c2", "t", "{}"))
