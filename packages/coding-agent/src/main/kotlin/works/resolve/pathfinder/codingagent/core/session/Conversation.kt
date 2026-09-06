@@ -7,21 +7,19 @@ import works.resolve.pathfinder.ai.Message
 data class SessionTreeNode(val entry: SessionEntry, val children: List<SessionTreeNode>)
 
 /**
- * Immutable snapshot of a session's entry tree plus its current leaf —
- * what the app layer reads. All mutations (id minting, leaf moves,
- * persistence) live in [SessionManager]; this type only projects the tree
- * semantics pi computes inside its SessionManager (buildSessionPath,
- * getSessionContextSettings, getTree).
+ * Immutable snapshot of a session's entry tree plus its current leaf.
+ * All mutations (id minting, leaf moves, persistence) live in
+ * [SessionManager]; this type only projects.
  */
 class Conversation(val entries: List<SessionEntry>, val leafId: String?) {
     /** The active branch's root→leaf path. */
     fun activeEntries(): List<SessionEntry> {
         if (leafId == null) return emptyList()
         val byId = entries.associateBy { it.id }
-        // pi's buildSessionPath: a leaf absent from the tree falls back to
-        // the last entry; only a null leaf is the empty root path. The
-        // seen-set is the port's only addition — a corrupted parent cycle
-        // must not hang the reader.
+        // pi's buildSessionPath: an unknown leaf falls back to the last
+        // entry; only a null leaf is the empty root path. The seen-set is
+        // the port's only addition — a corrupted parent cycle must not hang
+        // the reader.
         var current = byId[leafId] ?: entries.lastOrNull()
         val path = ArrayDeque<SessionEntry>()
         val seen = HashSet<String>()

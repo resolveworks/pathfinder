@@ -188,9 +188,9 @@ class ChatViewModel(
     }
 
     /**
-     * Curates the scoped models — which models the picker offers. The scope
-     * is not a hard constraint: curating never touches the running model,
-     * and the picker keeps an All view over every available model.
+     * Curates which models the picker offers (all of them while no scope
+     * is stored); never touches the running model. A full or empty
+     * selection persists as the unset scope, as in pi.
      */
     fun toggleModelScope(providerId: String, modelId: String, checked: Boolean) {
         viewModelScope.launch { toggleModelScopeInternal(providerId, modelId, checked) }
@@ -453,9 +453,9 @@ class ChatViewModel(
     }
 
     /**
-     * Switches to a listed session. The drawer's summaries carry the
-     * session's file (pi's picker hands resume the path), so opening is a
-     * single file read; an id missing from the list surfaces a safe error.
+     * Switches to a session listed in the summaries (which carry its file,
+     * like pi's picker-to-resume handoff); an unlisted id surfaces a safe
+     * error.
      */
     fun switchSession(sessionId: String) {
         viewModelScope.launch {
@@ -593,9 +593,8 @@ class ChatViewModel(
      * the factory accepted the settings. Returns false when persisting the
      * active id fails; in that case nothing is committed.
      *
-     * Session summaries are deliberately not refreshed: activating touches
-     * no session file (pi's resume does not re-list sessions); [AgentEvent.MessageEnd]
-     * refreshes them when a file actually changed.
+     * Summaries are not refreshed here: activation touches no session file;
+     * [AgentEvent.MessageEnd] refreshes when one changes.
      */
     private suspend fun activateSession(manager: SessionManager, agent: AgentSession): Boolean {
         try {
@@ -908,16 +907,23 @@ class ChatViewModel(
         // provider whose credential was removed) in their stored order.
         val ordered =
             displayOrder.filter { it in next } + stored.filter { it !in displayOrder && it in next }
+        // As in pi, a full or empty selection persists as the unset scope
+        // (models offered later stay visible); preserved references of
+        // unoffered models keep the list materialized.
+        val available = displayOrder.toSet()
+        val scope = ordered.takeUnless {
+            it.isEmpty() || (it.size == available.size && it.all(available::contains))
+        }
         try {
-            settingsRepository.setEnabledModels(ordered)
+            settingsRepository.setEnabledModels(scope)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             setError(ERROR_SETTINGS_SAVE, e)
             return
         }
-        currentSettings = currentSettings.copy(enabledModels = ordered)
-        _uiState.update { it.copy(enabledModels = ordered) }
+        currentSettings = currentSettings.copy(enabledModels = scope)
+        _uiState.update { it.copy(enabledModels = scope) }
     }
 
     private suspend fun saveProviderCredentialInternal(
@@ -1197,11 +1203,9 @@ class ChatViewModel(
     }
 
     /**
-     * Re-reads the session list into [ChatUiState.sessionSummaries] — the
-     * one refresh point, running when a session file actually changed (a
-     * committed message). A read failure degrades to the previous list (the
-     * drawer is advisory state); search results refresh when a query is
-     * active.
+     * Re-reads the session list — the drawer's refresh point, running when a
+     * session file changed. A read failure degrades to the previous list
+     * (the drawer is advisory state).
      */
     private suspend fun refreshSessionSummaries() {
         val summaries = try {

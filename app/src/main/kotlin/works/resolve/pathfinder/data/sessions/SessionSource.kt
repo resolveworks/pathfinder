@@ -9,18 +9,16 @@ import works.resolve.pathfinder.codingagent.core.session.SessionManager
 /**
  * The app's seam over a sessions directory: create/open/list via
  * [SessionManager]'s companion functions. All appends happen through the
- * returned managers themselves. Like pi's picker-to-resume handoff, opens
- * address a file listed up front ([SessionInfo.path]) — there is no id
- * discovery.
+ * returned managers themselves. Opens address a listed [SessionInfo.path]
+ * (pi's picker-to-resume handoff) — no id discovery.
  */
 interface SessionSource {
     /** New memory-only session; nothing touches disk until its first assistant message commits. */
     suspend fun create(): SessionManager
 
     /**
-     * Opens the session file at [file] (from a listed [SessionInfo.path]),
-     * or null when it no longer exists or its contents are not a session —
-     * a file the user cannot open must never block startup. Genuine
+     * Opens [file], or null when it is missing or not a session (a file
+     * the user cannot open must never block startup);
      * [SessionErrorCode.STORAGE] failures surface.
      */
     suspend fun open(file: File): SessionManager?

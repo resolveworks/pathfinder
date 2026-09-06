@@ -200,10 +200,10 @@ internal fun DefaultThinkingLevelContent(
 }
 
 /**
- * Scoped-models curator (pi's /scoped-models): an absent scope (never
- * curated) shows everything checked; toggles persist immediately as the
- * ordered `enabledModels` list and only affect what the chat picker
- * offers — never the running model.
+ * Scoped-models curator (pi's /scoped-models): an absent scope shows
+ * everything checked; toggles persist immediately as the ordered
+ * `enabledModels` list and only affect what the chat picker offers —
+ * never the running model.
  */
 @Composable
 internal fun ModelsContent(

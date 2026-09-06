@@ -576,10 +576,10 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.closeForTest()
         }
 
-    /** Persists the ordered list; an emptied scope behaves as no scope downstream. */
+    /** Persists the ordered list; a full or empty selection collapses to the unset scope, as in pi. */
 
     @Test
-    fun toggleModelScope_persistsOrderedList_emptyBehavesAsNoScope() =
+    fun toggleModelScope_persistsOrderedList_emptyOrFullSelectionCollapsesToUnset() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
             val vm = h.newViewModel()
@@ -593,15 +593,19 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             val curated = vm.awaitState { it.enabledModels != null }.enabledModels!!
             assertEquals(all.drop(1).map { "${it.providerId}/${it.modelId}" }, curated)
 
+            // Unchecking everything persists the unset scope.
             all.drop(1).forEach { vm.toggleModelScope(it.providerId, it.modelId, false) }
-            val emptied = vm.awaitState { it.enabledModels?.isEmpty() == true }
-            assertEquals(emptyList<String>(), h.settings.currentSettings().enabledModels)
+            val emptied = vm.awaitState { it.enabledModels == null }
+            assertNull(h.settings.currentSettings().enabledModels)
             assertEquals(emptied.modelOptions, emptied.scopedModelOptions)
 
-            vm.toggleModelScope(all[1].providerId, all[1].modelId, true)
-            vm.awaitState {
-                it.enabledModels == listOf("${all[1].providerId}/${all[1].modelId}")
-            }
+            // Re-checking the last missing model collapses back to unset.
+            vm.toggleModelScope(all[0].providerId, all[0].modelId, false)
+            val rematerialized = all.drop(1).map { "${it.providerId}/${it.modelId}" }
+            vm.awaitState { it.enabledModels == rematerialized }
+            vm.toggleModelScope(all[0].providerId, all[0].modelId, true)
+            vm.awaitState { it.enabledModels == null }
+            assertNull(h.settings.currentSettings().enabledModels)
 
             vm.closeForTest()
         }

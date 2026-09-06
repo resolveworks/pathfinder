@@ -8,36 +8,29 @@ import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.codingagent.core.session.Conversation
 import works.resolve.pathfinder.codingagent.core.session.MessageEntry
 import works.resolve.pathfinder.codingagent.core.session.SessionEntry
+import works.resolve.pathfinder.codingagent.core.session.SessionTreeNode
 
 /**
- * Pure projection of a [Conversation] into flat, renderable [TreeRow]s,
- * mirroring pi's tree selector (reduced to pathfinder's two filters):
+ * Projects a [Conversation] into flat, renderable [TreeRow]s, mirroring
+ * pi's tree selector (reduced to two filters): structure comes from
+ * [Conversation.tree] (pi's getTree); a hidden entry's visible descendants
+ * re-parent to their nearest visible ancestor and indent, connectors, and
+ * gutters are recomputed over the visible tree, like pi's
+ * recalculateVisualStructure. Containment runs over the full tree, so a
+ * hidden leaf (user-only filter) still prioritizes its ancestors.
  *
- * - Ordering: depth-first; among siblings the subtree containing the active
- *   leaf comes first, then oldest-first (so the active path always reads as
- *   an unbroken top-down run).
- * - Indent: branch points indent their children by one level, and so does
- *   the first generation below a branch (pi's justBranched rule, for visual
- *   grouping of the subtree); other single-child chains stay at their
- *   parent's level.
- * - Connectors: every child of a branch point carries ├─ (later siblings
- *   follow) or └─ (last visible sibling).
- * - Gutters: descendants of a ├─ connector keep a │ guide at its level while
- *   the later siblings follow below.
- * - Multiple roots behave as children of a virtual branching root: roots
- *   render unshifted and without connectors, and their descendants indent
- *   one level.
- * - [TreeFilter.USER_ONLY] hides non-user rows; in either filter a hidden
- *   entry's visible descendants re-parent to their nearest visible ancestor.
+ * Display rules ported from pi's flattenTree: the active subtree sorts
+ * first among siblings; branch points indent their children one level, as
+ * does the first generation below a branch (visual grouping), while
+ * single-child chains stay flat; multiple roots act as children of a
+ * virtual branching root, rendering unshifted without connectors.
  */
 internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List<TreeRow> {
-    if (conversation.entries.isEmpty()) return emptyList()
+    val roots = conversation.tree()
+    if (roots.isEmpty()) return emptyList()
 
-    val byId = conversation.entries.associateBy { it.id }
-
-    // pi's toolCallMap: calls collected from all assistant entries so a
-    // tool-result row can title itself from its originating call's
-    // arguments — including rows that only history keeps.
+    // pi's toolCallMap: a tool-result row titles itself from its originating
+    // call, which may survive only in history.
     val toolCalls = HashMap<String, ToolCall>()
     for (entry in conversation.entries) {
         val message = (entry as? MessageEntry)?.message as? AssistantMessage ?: continue
@@ -49,62 +42,64 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
     val leafId = conversation.leafId
 
     fun isVisible(entry: SessionEntry): Boolean = when (filter) {
-        // Bookkeeping entries (compaction cuts, model_change, ...) are
-        // elided in both filters, as in pi's default view.
+        // Bookkeeping entries (compaction cuts, model_change, ...) elide in
+        // both filters, as in pi's default view.
         TreeFilter.DEFAULT -> entry is MessageEntry
 
         TreeFilter.USER_ONLY -> entry is MessageEntry && entry.message is UserMessage
     }
 
-    val visibleChildren = HashMap<String?, MutableList<SessionEntry>>()
-    val roots = ArrayList<SessionEntry>()
-    for (entry in conversation.entries) {
-        if (!isVisible(entry)) continue
-        var ancestorId = entry.parentId
-        var attachedTo: String? = null
-        while (ancestorId != null) {
-            val ancestor = byId[ancestorId]
-            if (ancestor == null) break // orphan: promoted to a root
-            if (isVisible(ancestor)) {
-                attachedTo = ancestor.id
-                break
-            }
-            ancestorId = ancestor.parentId
-        }
-        if (attachedTo == null) {
-            roots += entry
-        } else {
-            visibleChildren.getOrPut(attachedTo) { mutableListOf() } += entry
-        }
-    }
-    roots.sortBy { it.timestamp }
-    visibleChildren.values.forEach { it.sortBy { e -> e.timestamp } }
-
-    // Whether each visible entry's subtree contains the active leaf. Because
-    // entries are append-only (a parent always precedes its children), a
-    // reverse scan visits every child before its parent — an iterative
-    // post-order, no recursion regardless of chain depth.
+    // Containment over the full node tree, hidden nodes included.
     val containsActive = HashMap<String, Boolean>()
-    for (entry in conversation.entries.asReversed()) {
-        if (!isVisible(entry)) continue
-        var has = leafId != null && entry.id == leafId
-        for (child in visibleChildren[entry.id] ?: emptyList()) {
-            if (containsActive[child.id] == true) has = true
+    val allNodes = ArrayList<SessionTreeNode>(conversation.entries.size)
+    val preOrder = ArrayDeque<SessionTreeNode>()
+    for (root in roots.asReversed()) preOrder.addLast(root)
+    while (preOrder.isNotEmpty()) {
+        val node = preOrder.removeLast()
+        allNodes += node
+        for (child in node.children.asReversed()) preOrder.addLast(child)
+    }
+    for (node in allNodes.asReversed()) {
+        var has = leafId != null && node.entry.id == leafId
+        for (child in node.children) {
+            if (containsActive[child.entry.id] == true) has = true
         }
-        containsActive[entry.id] = has
+        containsActive[node.entry.id] = has
     }
 
-    // Pi orders siblings with the active subtree first (stable, so the
-    // timestamp order breaks ties); the last-ordered sibling renders └─.
-    fun activeFirst(entries: List<SessionEntry>): List<SessionEntry> =
-        entries.sortedBy { containsActive[it.id] != true }
+    // Stable sort: tree()'s timestamp order breaks ties.
+    fun activeFirst(nodes: List<SessionTreeNode>): List<SessionTreeNode> =
+        nodes.sortedBy { containsActive[it.entry.id] != true }
 
-    val orderedRoots = activeFirst(roots)
-    val multipleRoots = orderedRoots.size > 1
+    // pi's recalculateVisualStructure: visible nodes re-parent in flatten
+    // order, so the visible-children lists inherit the active-first order.
+    val byId = conversation.entries.associateBy { it.id }
+    val visibleChildren = HashMap<String?, MutableList<SessionEntry>>()
+    val flatten = ArrayDeque<SessionTreeNode>()
+    for (root in activeFirst(roots).asReversed()) flatten.addLast(root)
+    while (flatten.isNotEmpty()) {
+        val node = flatten.removeLast()
+        if (isVisible(node.entry)) {
+            var ancestorId = node.entry.parentId
+            var attachedTo: String? = null
+            while (ancestorId != null) {
+                val ancestor = byId[ancestorId] ?: break // orphan: promoted to a root
+                if (isVisible(ancestor)) {
+                    attachedTo = ancestor.id
+                    break
+                }
+                ancestorId = ancestor.parentId
+            }
+            visibleChildren.getOrPut(attachedTo) { mutableListOf() } += node.entry
+        }
+        for (child in activeFirst(node.children).asReversed()) flatten.addLast(child)
+    }
 
-    // Pi's flattenTree works one level deeper under a virtual branching root
-    // and shifts rows one display level left when rendering; rows and
-    // gutters are stored here at display levels directly.
+    val visibleRoots = visibleChildren[null].orEmpty()
+    val multipleRoots = visibleRoots.size > 1
+
+    // pi computes one level deeper under the virtual root and shifts left
+    // at render; rows and gutters are stored at display levels directly.
     fun displayIndent(internalIndent: Int): Int =
         if (multipleRoots) internalIndent - 1 else internalIndent
 
@@ -122,8 +117,8 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
 
     val rows = ArrayList<TreeRow>(conversation.entries.size)
     val stack = ArrayDeque<Frame>()
-    for (index in orderedRoots.indices.reversed()) {
-        val root = orderedRoots[index]
+    for (index in visibleRoots.indices.reversed()) {
+        val root = visibleRoots[index]
         stack.addLast(
             Frame(
                 entry = root,
@@ -131,17 +126,15 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
                 internalIndent = if (multipleRoots) 1 else 0,
                 justBranched = multipleRoots,
                 isRoot = true,
-                // Roots render without a connector even under the virtual
-                // branching root.
                 connector = TreeConnector.NONE,
-                isLast = index == orderedRoots.lastIndex,
+                isLast = index == visibleRoots.lastIndex,
                 gutters = emptyList()
             )
         )
     }
     while (stack.isNotEmpty()) {
         val frame = stack.removeLast()
-        val children = activeFirst(visibleChildren[frame.entry.id] ?: emptyList())
+        val children = visibleChildren[frame.entry.id].orEmpty()
         val multipleChildren = children.size > 1
         rows += TreeRow(
             id = frame.entry.id,
@@ -151,8 +144,8 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
             gutters = frame.gutters,
             isOnActivePath = frame.entry.id in activePathIds,
             isCurrentLeaf = frame.entry.id == leafId,
-            // Pi's isFoldable: a segment start (root or child of a branch
-            // point) with visible children; folding hides its descendants.
+            // pi's isFoldable: segment starts (roots, branch children) with
+            // visible children.
             isFoldable = children.isNotEmpty() && (frame.isRoot || frame.justBranched),
             body = frame.entry.rowBody(toolCalls)
         )
@@ -162,7 +155,7 @@ internal fun buildTreeRows(conversation: Conversation, filter: TreeFilter): List
             else -> frame.internalIndent
         }
         val childGutters = if (frame.connector != TreeConnector.NONE && !frame.isLast) {
-            frame.gutters + (displayIndent(frame.internalIndent) - 1)
+            frame.gutters + maxOf(0, displayIndent(frame.internalIndent) - 1)
         } else {
             frame.gutters
         }
