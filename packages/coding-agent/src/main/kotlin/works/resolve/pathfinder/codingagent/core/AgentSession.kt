@@ -2,7 +2,9 @@ package works.resolve.pathfinder.codingagent.core
 
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
@@ -89,7 +91,9 @@ class AgentSession(
     /** Injectable backoff sleep so tests never wait. */
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     /** Wall clock for minting message timestamps. */
-    private val clock: Clock = Clock.System
+    private val clock: Clock = Clock.System,
+    /** Dispatcher for the prompt loop; Default keeps the loop off the caller (app: Main). */
+    private val loopDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) {
     /** Read-only session tree view (upstream's ReadonlySessionManager Pick type; unlike upstream, the mutable manager stays private). */
     val sessionManager: ReadonlySessionManager get() = manager
@@ -150,7 +154,7 @@ class AgentSession(
     /** Name→tool registry over the constructor list. */
     private val toolRegistry: Map<String, AgentTool> = tools.associateBy { it.definition.name }
 
-    private val _events = MutableSharedFlow<AgentEvent>()
+    private val _events = MutableSharedFlow<AgentEvent>(extraBufferCapacity = EVENT_BUFFER_CAPACITY)
 
     /**
      * Session lifecycle events in emission order: the agent's loop events
@@ -158,10 +162,12 @@ class AgentSession(
      * compaction). Internal state is reduced before an event is emitted, so
      * observers always see the already-reduced state.
      *
-     * Same zero-replay, zero-buffer contract as [Agent.events]: an event
-     * emitted with no subscribers is dropped, so observers must subscribe
-     * before starting a prompt to observe all of its events; the
-     * already-reduced [state] is complete regardless of subscription timing.
+     * Same zero-replay, buffered contract as [Agent.events]: an event
+     * emitted with no subscribers is dropped, and slow external collectors
+     * are decoupled from emission (bounded buffer, SUSPEND overflow — never
+     * drop), so observers must subscribe before starting a prompt to
+     * observe all of its events; the already-reduced [state] is complete
+     * regardless of subscription timing.
      */
     val events: SharedFlow<AgentEvent> = _events.asSharedFlow()
 
@@ -299,21 +305,29 @@ class AgentSession(
             }
 
             val promptMessage = UserMessage.ofText(text, clock.now().toEpochMilliseconds())
-            coroutineScope {
-                // Lazily started so promptJob is published before the job
-                // can run anything (abort guarantee).
-                val job = launch(start = CoroutineStart.LAZY) {
-                    agent.prompt(listOf(promptMessage))
-                    while (handlePostAgentRun()) {
-                        agent.continueRun()
+            // The loop runs on loopDispatcher: prompt() is Main-friendly in the app
+            // (per-token reduce, event emission, and tool execution leave the
+            // UI thread) while staying dispatcher-agnostic in tests. Tools
+            // requiring Main (WebView fetch) dispatch internally. Cancellation
+            // and the promptJob lifecycle are unchanged — withContext forwards
+            // both caller cancellation and abort() cancellation.
+            withContext(loopDispatcher) {
+                coroutineScope {
+                    // Lazily started so promptJob is published before the job
+                    // can run anything (abort guarantee).
+                    val job = launch(start = CoroutineStart.LAZY) {
+                        agent.prompt(listOf(promptMessage))
+                        while (handlePostAgentRun()) {
+                            agent.continueRun()
+                        }
                     }
-                }
-                promptJob = job
-                job.start()
+                    promptJob = job
+                    job.start()
 
-                job.join()
-                if (job.isCancelled) {
-                    throw CancellationException("Prompt aborted")
+                    job.join()
+                    if (job.isCancelled) {
+                        throw CancellationException("Prompt aborted")
+                    }
                 }
             }
         } finally {
@@ -1141,6 +1155,9 @@ class AgentSession(
     }
 
     private companion object {
+        /** Bounded emit buffer decoupling slow external collectors from the prompt loop. */
+        const val EVENT_BUFFER_CAPACITY = 64
+
         const val RETRY_CANCELLED = "Retry cancelled"
 
         const val COMPACTION_IN_PROGRESS =

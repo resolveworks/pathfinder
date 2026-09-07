@@ -102,10 +102,12 @@ class NativeAgentFactory(
             models = models,
             streamFn = StreamFn { requestedModel, context, options ->
                 // Request encoding and stream decoding run off Main; agent/session
-                // state and tool execution stay on the collector's dispatcher.
-                // Rendezvous delivery avoids a queue of growing partial snapshots.
+                // state and tool execution stay on the loop's dispatcher. A small
+                // bounded buffer keeps memory bounded per token-snapshot rate
+                // mismatch without rendezvous-coupling SSE delivery to the
+                // downstream consumer's speed; default SUSPEND overflow applies.
                 models.stream(requestedModel, context, options)
-                    .buffer(0)
+                    .buffer(STREAM_BUFFER_CAPACITY)
                     .flowOn(Dispatchers.Default)
             },
             tools = tools.toList(),
@@ -169,6 +171,9 @@ internal fun catalogAuthResolver(
             )
         }
     }
+
+/** Bounded handoff buffer between the network stream and the agent loop collector. */
+private const val STREAM_BUFFER_CAPACITY = 64
 
 /** Finite per-request timeout (covers headers through stream end via the call timeout). */
 private const val REQUEST_TIMEOUT_MS = 5L * 60 * 1000
