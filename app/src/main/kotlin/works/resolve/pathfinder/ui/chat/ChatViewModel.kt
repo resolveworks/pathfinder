@@ -757,7 +757,7 @@ class ChatViewModel(
                         treeRows = treeRows(it.treeFilter)
                     )
                 }
-                viewModelScope.launch { refreshSessionSummaries() }
+                scheduleSummariesRefresh()
             }
 
             else -> Unit
@@ -820,6 +820,9 @@ class ChatViewModel(
                 availableThinkingLevels = getSupportedThinkingLevels(state.model)
             )
         }
+        // The run went idle: land any summary refresh deferred from mid-run
+        // MessageEnds (see [scheduleSummariesRefresh]).
+        if (summariesRefreshPending && !state.isStreaming) scheduleSummariesRefresh()
     }
 
     // ---- intent internals ----
@@ -1212,6 +1215,27 @@ class ChatViewModel(
             // keeps its entries).
             setError(ERROR_SESSION_SAVE, e)
         }
+    }
+
+    private var summariesRefreshJob: Job? = null
+    private var summariesRefreshPending = false
+
+    /**
+     * Drawer summaries refresh at most once per agent run: MessageEnds
+     * while streaming only mark a refresh pending; it runs when the run
+     * goes idle (onAgentState) — or immediately when already idle — with at
+     * most one refresh in flight and concurrent requests coalesced into a
+     * single queued rerun. The heavy part is sessionSource.list(), an
+     * O(all session bytes) decode, so per-message refreshes would grow the
+     * cost with history.
+     */
+    private fun scheduleSummariesRefresh() {
+        if (_uiState.value.isStreaming || summariesRefreshJob?.isActive == true) {
+            summariesRefreshPending = true
+            return
+        }
+        summariesRefreshPending = false
+        summariesRefreshJob = viewModelScope.launch { refreshSessionSummaries() }
     }
 
     /**

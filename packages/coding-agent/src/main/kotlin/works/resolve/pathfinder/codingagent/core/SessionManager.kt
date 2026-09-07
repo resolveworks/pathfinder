@@ -765,6 +765,10 @@ class SessionManager private constructor(
     private var leafIdLocked: String? = null
     private var flushed = initialFlushed
 
+    // byId is append-only (branching moves the leaf, never removes entries),
+    // so a monotonic flag cannot drift from the true assistant presence.
+    private var hasAssistantLocked = false
+
     init {
         state = Snapshot(emptyList(), null)
     }
@@ -826,10 +830,7 @@ class SessionManager private constructor(
 
     /** pi's _persist, see class KDoc for the lazy-creation contract. */
     private fun persistLocked(entry: SessionEntry) {
-        val hasAssistant = byId.values.any {
-            it is MessageEntry && it.message is AssistantMessage
-        }
-        if (!hasAssistant) {
+        if (!hasAssistantLocked) {
             if (flushed) appendLineLocked(encodeLine(entry))
             return
         }
@@ -848,6 +849,9 @@ class SessionManager private constructor(
         mutex.withLock {
             val entry = build(generateId(), leafIdLocked, now())
             byId[entry.id] = entry
+            if (entry is MessageEntry && entry.message is AssistantMessage) {
+                hasAssistantLocked = true
+            }
             leafIdLocked = entry.id
             rebuildSnapshot()
             persistLocked(entry)
@@ -1176,6 +1180,9 @@ class SessionManager private constructor(
             for (entry in loaded?.entries ?: emptyList()) {
                 manager.byId[entry.id] = entry
                 manager.leafIdLocked = entry.id
+                if (entry is MessageEntry && entry.message is AssistantMessage) {
+                    manager.hasAssistantLocked = true
+                }
             }
             manager.rebuildSnapshot()
             if (initializingEmpty) manager.writeFullFileLocked(exclusive = false)
@@ -1195,14 +1202,35 @@ class SessionManager private constructor(
             files.mapNotNull(::buildSessionInfo).sortedByDescending { it.modified }
         }
 
-        /** pi's buildSessionInfo: one pass over the file. */
-        private fun buildSessionInfo(file: File): SessionInfo? {
-            val loaded = loadFile(file).first ?: return null
+        /**
+         * pi's buildSessionInfo: one streamed pass over the file, decoding
+         * line by line. Unlike [loadFile], never materializes the whole
+         * file; a file whose first valid line is not the header, or that
+         * fails to read, is skipped so one bad file cannot hide the others.
+         */
+        private fun buildSessionInfo(file: File): SessionInfo? = try {
+            file.bufferedReader(StandardCharsets.UTF_8).useLines {
+                buildSessionInfoFromLines(it, file)
+            }
+        } catch (_: Exception) {
+            null
+        }
+
+        private fun buildSessionInfoFromLines(lines: Sequence<String>, file: File): SessionInfo? {
+            var header: JsonlCodec.SessionHeader? = null
             var messageCount = 0
             var firstMessage: String? = null
-            val allMessages = ArrayList<String>()
             var lastActivity: Long? = null
-            for (entry in loaded.entries) {
+            val allMessages = ArrayList<String>()
+            for (line in lines) {
+                val parsed = JsonlCodec.parseLine(line) ?: continue
+                if (header == null) {
+                    if (parsed !is JsonlCodec.Line.Header) return null
+                    header = parsed.header
+                    continue
+                }
+                if (parsed !is JsonlCodec.Line.Entry) continue
+                val entry = parsed.entry
                 if (entry !is MessageEntry) continue
                 messageCount++
                 val message = entry.message
@@ -1223,11 +1251,12 @@ class SessionManager private constructor(
                     firstMessage = text
                 }
             }
+            val sessionHeader = header ?: return null
             return SessionInfo(
-                id = loaded.header.id,
+                id = sessionHeader.id,
                 path = file,
-                createdAt = loaded.header.timestamp,
-                modified = lastActivity ?: loaded.header.timestamp,
+                createdAt = sessionHeader.timestamp,
+                modified = lastActivity ?: sessionHeader.timestamp,
                 messageCount = messageCount,
                 firstMessage = firstMessage ?: "(no messages)",
                 allMessagesText = allMessages.joinToString(" ")

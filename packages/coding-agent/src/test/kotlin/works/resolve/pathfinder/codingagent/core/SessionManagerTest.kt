@@ -281,6 +281,40 @@ class SessionManagerTest {
     }
 
     @Test
+    fun `open restores the assistant-flushed state and appends single lines`() = runTest {
+        val dir = createTempDirectory()
+        val m = manager(dir)
+        m.appendMessage(user("hello"))
+        m.appendMessage(assistant())
+        val file = jsonlFiles(dir).single()
+
+        val reopened = SessionManager.open(file, clock, ioDispatcher = testDispatcher())
+        clock.advanceMillis(10)
+        reopened.appendMessage(user("more"))
+
+        // hasAssistant was restored from the loaded entries, so this append
+        // goes straight to the file instead of rewriting it exclusively.
+        assertEquals(4, file.readText().trimEnd().split("\n").size)
+    }
+
+    @Test
+    fun `list skips malformed lines but still derives the summary`() = runTest {
+        val dir = createTempDirectory()
+        val m = manager(dir)
+        m.appendMessage(user("hello"))
+        m.appendMessage(assistant())
+        val file = jsonlFiles(dir).single()
+        // A torn/garbage middle line is skipped like pi's parseSessionEntryLine.
+        file.appendText("{not json}\n")
+        file.appendText(JsonlCodec.encodeEntryLine(MessageEntry("x", null, 1L, user("tail"))))
+
+        val info = SessionManager.list(dir, ioDispatcher = testDispatcher()).single()
+        assertEquals(3, info.messageCount)
+        assertEquals("hello hi tail", info.allMessagesText)
+        assertEquals("hello", info.firstMessage)
+    }
+
+    @Test
     fun `a file whose first valid line is not the header is rejected`() = runTest {
         val dir = createTempDirectory()
         val entryLine = JsonlCodec.encodeEntryLine(
