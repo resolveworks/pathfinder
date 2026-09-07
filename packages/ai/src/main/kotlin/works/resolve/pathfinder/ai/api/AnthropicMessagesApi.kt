@@ -1281,15 +1281,20 @@ internal class AnthropicStreamState(
 ) {
     private sealed interface Block {
         val streamIndex: Int
+
+        /** Last immutable [Content] rendered for this block; null when stale. */
+        var built: Content?
     }
 
     private class Text(override val streamIndex: Int) : Block {
         val text = StringBuilder()
+        override var built: Content? = null
     }
 
     private class Thinking(override val streamIndex: Int, val redacted: Boolean) : Block {
         val thinking = StringBuilder()
         var signature = ""
+        override var built: Content? = null
     }
 
     private class Tool(override val streamIndex: Int) : Block {
@@ -1299,6 +1304,7 @@ internal class AnthropicStreamState(
         /** pi seeds `arguments` from content_block_start input; kept as raw JSON here. */
         var seedJson: String? = null
         val partialJson = StringBuilder()
+        override var built: Content? = null
     }
 
     private val blocks = mutableListOf<Block>()
@@ -1422,6 +1428,7 @@ internal class AnthropicStreamState(
                 val text = (blocks[blockIndex] as? Text) ?: return emptyList()
                 val value = delta["text"].strOrNull() ?: ""
                 text.text.append(value)
+                text.built = null
                 listOf(AssistantMessageEvent.TextDelta(blockIndex, value, snapshot()))
             }
 
@@ -1429,6 +1436,7 @@ internal class AnthropicStreamState(
                 val thinking = (blocks[blockIndex] as? Thinking) ?: return emptyList()
                 val value = delta["thinking"].strOrNull() ?: ""
                 thinking.thinking.append(value)
+                thinking.built = null
                 listOf(AssistantMessageEvent.ThinkingDelta(blockIndex, value, snapshot()))
             }
 
@@ -1436,12 +1444,14 @@ internal class AnthropicStreamState(
                 val tool = (blocks[blockIndex] as? Tool) ?: return emptyList()
                 val value = delta["partial_json"].strOrNull() ?: ""
                 tool.partialJson.append(value)
+                tool.built = null
                 listOf(AssistantMessageEvent.ToolCallDelta(blockIndex, value, snapshot()))
             }
 
             "signature_delta" -> {
                 val thinking = (blocks[blockIndex] as? Thinking) ?: return emptyList()
                 thinking.signature += delta["signature"].strOrNull() ?: ""
+                thinking.built = null
                 emptyList()
             }
 
@@ -1580,9 +1590,15 @@ internal class AnthropicStreamState(
         )
     }
 
+    /**
+     * Immutable content values are cached per block and reused across
+     * snapshots; only the block a delta landed in is re-rendered, so a delta
+     * costs O(changed block), not O(whole message). Content types are
+     * immutable, so sharing instances between snapshots is safe.
+     */
     fun snapshot(): AssistantMessage = AssistantMessage(
         content = blocks.map { block ->
-            when (block) {
+            block.built ?: when (block) {
                 is Text -> TextContent(block.text.toString())
 
                 is Thinking -> ThinkingContent(
@@ -1592,7 +1608,7 @@ internal class AnthropicStreamState(
                 )
 
                 is Tool -> toolCallOf(block)
-            }
+            }.also { block.built = it }
         },
         api = model.api,
         provider = model.provider,
