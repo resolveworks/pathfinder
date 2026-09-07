@@ -35,8 +35,11 @@ data class CreateAgentSessionResult(
  * loader, extensions, and convertToLlm wrapper are out of scope (AGENTS.md).
  *
  * Scoped models are resolved from the settings' enabledModels patterns
- * against the authenticated snapshot, so the session's scope-append guard
- * operates on the resolved scope as in pi.
+ * against the authenticated snapshot, and at startup the factory folds in
+ * pi's main.ts buildSessionOptions scope precedence: when not continuing,
+ * the saved default wins if it matches a scoped model, else the first
+ * scoped model is used, and the chosen entry's pattern thinking level is
+ * the initial thinking level.
  */
 suspend fun createAgentSession(
     manager: SessionManager,
@@ -59,6 +62,7 @@ suspend fun createAgentSession(
 
     var model: Model? = null
     var modelFallbackMessage: String? = null
+    var scopedThinkingLevel: ModelThinkingLevel? = null
 
     if (hasExistingSession && existingSession.model != null) {
         val restored =
@@ -70,6 +74,20 @@ suspend fun createAgentSession(
             modelFallbackMessage =
                 "Could not restore model ${existingSession.model.provider}/${existingSession.model.modelId}"
         }
+    }
+
+    if (model == null && !hasExistingSession && scopedModels.isNotEmpty()) {
+        // pi's main.ts buildSessionOptions prefers the saved default when it
+        // matches a scoped model, else falls back to the first scoped model;
+        // the chosen entry's explicit pattern thinking level wins at startup.
+        val saved = settingsManager.getDefaultProvider()?.let { provider ->
+            settingsManager.getDefaultModel()?.let { models.getModel(provider, it) }
+        }
+        val chosen =
+            scopedModels.firstOrNull { saved != null && Models.modelsAreEqual(it.model, saved) }
+                ?: scopedModels.first()
+        model = chosen.model
+        scopedThinkingLevel = chosen.thinkingLevel
     }
 
     if (model == null) {
@@ -94,7 +112,7 @@ suspend fun createAgentSession(
         }
     }
 
-    var thinkingLevel: ModelThinkingLevel? = null
+    var thinkingLevel: ModelThinkingLevel? = scopedThinkingLevel
     if (hasExistingSession) {
         // Divergence: pi casts the folded string; an invalid fold falls
         // back to the default level rather than failing.

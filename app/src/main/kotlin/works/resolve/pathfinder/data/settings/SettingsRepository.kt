@@ -27,7 +27,7 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) :
         val SETTINGS_JSON = stringPreferencesKey("settings_json")
     }
 
-    val settings: Flow<AppSettings> = dataStore.data.map { prefs ->
+    private val settings: Flow<AppSettings> = dataStore.data.map { prefs ->
         AppSettings(
             activeSessionId = prefs[Keys.ACTIVE_SESSION_ID]?.takeIf { it.isNotBlank() },
             showThinking = prefs[Keys.SHOW_THINKING] ?: false

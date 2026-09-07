@@ -35,6 +35,21 @@ class SettingsManagerTest {
     }
 
     @Test
+    fun emptyStoredContentLoadsAsDefaultsWithoutError() = runTest {
+        val storage = InMemorySettingsStorage()
+        writeStorage(storage, "")
+        val manager = SettingsManager.fromStorage(storage)
+
+        assertEquals(Settings(), manager.getSettings())
+        assertTrue(manager.drainErrors().isEmpty())
+
+        manager.setDefaultThinkingLevel(ModelThinkingLevel.HIGH)
+        assertTrue(manager.drainErrors().isEmpty())
+        val saved = parse(readStorage(storage)!!)
+        assertEquals("high", saved["defaultThinkingLevel"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun preservesExternallyAddedSettingsWhenChangingThinkingLevel() = runTest {
         val storage = InMemorySettingsStorage()
         writeStorage(storage, """{"theme":"dark","defaultModel":"claude-sonnet"}""")
@@ -356,7 +371,7 @@ class SettingsManagerTest {
     }
 
     @Test
-    fun getSettingsReturnsDefensiveCopies() = runTest {
+    fun getSettingsSnapshotSurvivesLaterMutations() = runTest {
         val manager = SettingsManager.inMemory(
             Settings(
                 enabledModels = listOf("a"),

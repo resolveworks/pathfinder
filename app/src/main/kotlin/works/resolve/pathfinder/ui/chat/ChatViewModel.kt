@@ -69,7 +69,7 @@ import works.resolve.pathfinder.tools.websearch.SearchProviderService
  * [ChatUiState.startKey] whenever either field changes.
  */
 class ChatViewModel(
-    private val settingsRepository: SettingsStore,
+    private val settingsStore: SettingsStore,
     /** Shared process-wide settings manager: the only writer of runtime settings fields. */
     private val settingsManager: SettingsManager,
     private val catalog: ProviderCatalog,
@@ -83,7 +83,7 @@ class ChatViewModel(
      * foreground concept), driven from MainActivity lifecycle; the OAuth
      * flows gate loopback waits and network work on it.
      */
-    private val appForegroundGate: AppForegroundGate = AppForegroundGate(),
+    private val appForegroundGate: AppForegroundGate,
     private val searchProviderService: SearchProviderService
 ) : ViewModel() {
 
@@ -124,7 +124,7 @@ class ChatViewModel(
      * scope) live on the shared [settingsManager]; the running model lives
      * on the bound [AgentSession] — its branch fold at load,
      * [selectModelInternal] thereafter. App-owned values (active session id,
-     * show-thinking) flow through [settingsRepository].
+     * show-thinking) flow through [settingsStore].
      */
     private var agent: AgentSession? = null
     private var agentStateJob: Job? = null
@@ -268,7 +268,7 @@ class ChatViewModel(
                 }
             }
             surfaceSettingsErrors()
-            _uiState.update { it.copy(defaultThinkingLevel = level) }
+            projectSettings()
             if (session != null) {
                 _uiState.update {
                     it.copy(treeRows = treeRows(it.treeFilter))
@@ -362,7 +362,7 @@ class ChatViewModel(
     fun setShowThinking(enabled: Boolean) {
         viewModelScope.launch {
             try {
-                settingsRepository.setShowThinking(enabled)
+                settingsStore.setShowThinking(enabled)
                 _uiState.update { it.copy(showThinking = enabled) }
             } catch (e: CancellationException) {
                 throw e
@@ -502,7 +502,7 @@ class ChatViewModel(
 
     private suspend fun initialize() {
         try {
-            val appSettings = settingsRepository.currentSettings()
+            val appSettings = settingsStore.currentSettings()
             val runtime = settingsManager.getSettings()
             val summaries = try {
                 sessionSource.list()
@@ -615,7 +615,7 @@ class ChatViewModel(
      */
     private suspend fun activateSession(manager: SessionManager, agent: AgentSession): Boolean {
         try {
-            settingsRepository.setActiveSessionId(manager.getSessionId())
+            settingsStore.setActiveSessionId(manager.getSessionId())
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -665,7 +665,7 @@ class ChatViewModel(
     private suspend fun prepareAdoption(): Pair<SessionManager, AgentSession>? {
         val manager = try {
             resolveSession(
-                settingsRepository.currentSettings().activeSessionId,
+                settingsStore.currentSettings().activeSessionId,
                 sessionSource.list()
             )
         } catch (e: CancellationException) {
@@ -865,7 +865,7 @@ class ChatViewModel(
         _uiState.update {
             it.copy(treeRows = treeRows(it.treeFilter))
         }
-        refreshOptions()
+        projectSettings()
     }
 
     private suspend fun saveStartupDefaultInternal(providerId: String, modelId: String) {
@@ -881,7 +881,7 @@ class ChatViewModel(
             return
         }
         surfaceSettingsErrors()
-        refreshOptions()
+        projectSettings()
     }
 
     private suspend fun toggleModelScopeInternal(
@@ -894,9 +894,10 @@ class ChatViewModel(
         // The curated list is written in display order; an absent scope
         // materializes as "everything currently offered" on first edit.
         val displayOrder = state.modelOptions.map(ModelOption::key)
-        val current = state.enabledModels?.toSet() ?: displayOrder.toSet()
+        val storedList = settingsManager.getEnabledModels()
+        val current = storedList?.toSet() ?: displayOrder.toSet()
         val next = if (checked) current + reference else current - reference
-        val stored = state.enabledModels.orEmpty()
+        val stored = storedList.orEmpty()
         // Preserve stored references not currently displayed (e.g. of a
         // provider whose credential was removed) in their stored order.
         val ordered =
@@ -927,7 +928,7 @@ class ChatViewModel(
             emptyList()
         }
         agent?.setScopedModels(scoped)
-        _uiState.update { it.copy(enabledModels = scope) }
+        projectSettings()
     }
 
     private suspend fun saveProviderCredentialInternal(
@@ -1142,14 +1143,23 @@ class ChatViewModel(
                 )
             }
             .sortedWith(compareBy({ it.providerName }, { it.name }))
+        _uiState.update {
+            it.copy(
+                providerOptions = providerOptions,
+                modelOptions = modelOptions
+            )
+        }
+        projectSettings()
+    }
+
+    /** Re-projects persisted settings into the UI state after a write. */
+    private fun projectSettings() {
         val settings = settingsManager.getSettings()
         val defaultModel = settings
             .takeIf { !it.defaultProvider.isNullOrBlank() && !it.defaultModel.isNullOrBlank() }
             ?.let { selectedModelProjection(it.defaultProvider!!, it.defaultModel!!) }
         _uiState.update {
             it.copy(
-                providerOptions = providerOptions,
-                modelOptions = modelOptions,
                 defaultModel = defaultModel,
                 defaultThinkingLevel = settings.defaultThinkingLevel,
                 enabledModels = settings.enabledModels

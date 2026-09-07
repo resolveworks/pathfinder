@@ -55,7 +55,7 @@ class SettingsRepositoryTest {
 
     @Test
     fun defaults_areEmpty() = runTest {
-        val settings = repository.settings.first()
+        val settings = repository.currentSettings()
         assertNull(settings.activeSessionId)
         assertFalse(settings.showThinking)
         assertNull(repository.currentSettings().activeSessionId)
@@ -67,22 +67,22 @@ class SettingsRepositoryTest {
 
         repository.setActiveSessionId(null)
 
-        val settings = repository.settings.first()
+        val settings = repository.currentSettings()
         assertNull(settings.activeSessionId)
     }
 
     @Test
     fun showThinking_defaultsFalse_andRoundTrips() = runTest {
-        assertFalse(repository.settings.first().showThinking)
+        assertFalse(repository.currentSettings().showThinking)
         assertFalse(repository.currentSettings().showThinking)
 
         repository.setShowThinking(true)
 
-        assertTrue(repository.settings.first().showThinking)
+        assertTrue(repository.currentSettings().showThinking)
         assertTrue(repository.currentSettings().showThinking)
 
         repository.setShowThinking(false)
-        assertFalse(repository.settings.first().showThinking)
+        assertFalse(repository.currentSettings().showThinking)
     }
 
     @Test
@@ -100,8 +100,8 @@ class SettingsRepositoryTest {
                     produceFile = { file }
                 )
             )
-            assertEquals("session-1", second.settings.first().activeSessionId)
-            assertTrue(second.settings.first().showThinking)
+            assertEquals("session-1", second.currentSettings().activeSessionId)
+            assertTrue(second.currentSettings().showThinking)
         } finally {
             secondScope.cancel()
         }

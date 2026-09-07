@@ -390,7 +390,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
         }
 
     @Test
-    fun saveProviderCredential_withoutModelSettings_derivesInitialModel_andGoesReady() =
+    fun saveProviderCredential_withoutSavedDefault_derivesInitialModel_andGoesReady() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
             val vm = h.newViewModel()

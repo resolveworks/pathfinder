@@ -188,7 +188,11 @@ class SettingsManager private constructor(
         }
 
         private suspend fun tryLoad(storage: SettingsStorage): Pair<Settings, Throwable?> {
-            val content = readContent(storage) ?: return Settings() to null
+            // pi's loadFromStorage treats empty content like nothing stored.
+            val content = readContent(storage)
+            if (content == null || content.isEmpty()) {
+                return Settings() to null
+            }
             return try {
                 decodeSettings(content) to null
             } catch (e: Exception) {
@@ -225,10 +229,7 @@ class SettingsManager private constructor(
         return drained
     }
 
-    fun getSettings(): Settings = settings.copy(
-        modelThinkingLevels = settings.modelThinkingLevels?.toMap(),
-        enabledModels = settings.enabledModels?.toList()
-    )
+    fun getSettings(): Settings = settings
 
     fun getDefaultProvider(): String? = settings.defaultProvider
 
@@ -323,7 +324,9 @@ class SettingsManager private constructor(
         writeMutex.withLock {
             try {
                 storage.withLock { current ->
-                    val base = current?.let {
+                    // pi's persistScopedSettings treats empty stored content
+                    // as an empty object rather than failing to parse.
+                    val base = current?.takeIf { it.isNotEmpty() }?.let {
                         Json.parseToJsonElement(stripBom(it)) as? JsonObject
                     } ?: JsonObject(emptyMap())
                     val merged = base.toMutableMap()

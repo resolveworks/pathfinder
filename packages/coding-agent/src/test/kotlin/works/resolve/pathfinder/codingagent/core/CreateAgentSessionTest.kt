@@ -258,7 +258,7 @@ class CreateAgentSessionTest {
     // ---- scoped models (pi's --models rule via enabledModels patterns) ----
 
     @Test
-    fun `a fresh session starts on the first scoped model ahead of the default`() = runTest {
+    fun `a fresh session prefers a saved default inside the scope`() = runTest {
         val result = create(
             manager = newManager(),
             settings = Settings(
@@ -271,8 +271,41 @@ class CreateAgentSessionTest {
             )
         )
 
-        assertEquals(otherModel, result.session.model)
+        assertEquals(model, result.session.model)
         assertEquals(listOf(otherModel, model), result.session.scopedModels.map { it.model })
+    }
+
+    @Test
+    fun `a saved default outside the scope falls back to the first scoped model`() = runTest {
+        val result = create(
+            manager = newManager(),
+            settings = Settings(
+                defaultProvider = otherModel.provider,
+                defaultModel = otherModel.id,
+                enabledModels = listOf("${model.provider}/${model.id}")
+            )
+        )
+
+        assertEquals(model, result.session.model)
+    }
+
+    @Test
+    fun `a scoped pattern thinking level is the initial level`() = runTest {
+        val result = create(
+            manager = newManager(),
+            settings = Settings(
+                defaultThinkingLevel = ModelThinkingLevel.LOW,
+                enabledModels = listOf("${model.provider}/${model.id}:high")
+            )
+        )
+
+        assertEquals(model, result.session.model)
+        assertEquals(ModelThinkingLevel.HIGH, result.session.thinkingLevel)
+        assertEquals(
+            "high",
+            result.session.sessionManager.getEntries()
+                .filterIsInstance<ThinkingLevelEntry>().single().thinkingLevel
+        )
     }
 
     @Test

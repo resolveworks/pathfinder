@@ -138,7 +138,7 @@ class PathfinderApplication : Application() {
     val chatViewModelFactory = viewModelFactory {
         initializer {
             ChatViewModel(
-                settingsRepository = settingsRepository,
+                settingsStore = settingsRepository,
                 settingsManager = settingsManager,
                 catalog = modelCatalog,
                 authService = authService,

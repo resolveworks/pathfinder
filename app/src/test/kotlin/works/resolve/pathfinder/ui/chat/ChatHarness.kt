@@ -56,6 +56,7 @@ import works.resolve.pathfinder.ai.auth.NoopAuthContext
 import works.resolve.pathfinder.ai.auth.OAuthAuth
 import works.resolve.pathfinder.ai.auth.OAuthCredential
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
+import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
@@ -371,14 +372,15 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
     }
 
     fun newViewModel(): ChatViewModel = ChatViewModel(
-        settingsRepository = settingsStore,
+        settingsStore = settingsStore,
         settingsManager = settingsManager,
         catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
         authService = authService,
         sessionSource = sessions,
         agentFactory = factory,
         modelResolver = modelResolver,
-        searchProviderService = searchProviders
+        searchProviderService = searchProviders,
+        appForegroundGate = AppForegroundGate()
     ).also { viewModels += it }
 
     fun assistant(text: String, stopReason: StopReason = StopReason.STOP, error: String? = null) =
