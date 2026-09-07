@@ -2,6 +2,7 @@ package works.resolve.pathfinder.codingagent.core
 
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.io.path.createTempDirectory
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -118,10 +119,12 @@ class AgentSessionCompactionTest {
             )
 
             val events = mutableListOf<AgentEvent>()
+            val drained = CompletableDeferred<Unit>()
             val collector = launch {
                 session.events.collect { event ->
                     events.add(event)
                     if (event is AgentEvent.CompactionStart) order.add("compaction")
+                    if (event is AgentEvent.AgentEnd) drained.complete(Unit)
                 }
             }
             yield()
@@ -129,6 +132,7 @@ class AgentSessionCompactionTest {
             session.prompt("seed recent history")
             val agentStartsBefore = events.count { it is AgentEvent.AgentStart }
             session.prompt("run the large tool")
+            drained.await() // buffered delivery: drain before cancelling
             collector.cancelAndJoin()
 
             assertEquals(listOf("compaction", "provider"), order)
@@ -211,10 +215,17 @@ class AgentSessionCompactionTest {
         )
 
         val events = mutableListOf<AgentEvent>()
-        val collector = launch { session.events.collect(events::add) }
+        val drained = CompletableDeferred<Unit>()
+        val collector = launch {
+            session.events.collect {
+                events.add(it)
+                if (it is AgentEvent.CompactionEnd) drained.complete(Unit)
+            }
+        }
         yield()
         session.prompt("Say hello")
         session.compact()
+        drained.await() // buffered delivery: drain before cancelling
         collector.cancelAndJoin()
 
         val compactionEvents = events.filter {

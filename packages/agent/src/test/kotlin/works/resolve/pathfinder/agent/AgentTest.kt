@@ -414,11 +414,18 @@ class AgentTest {
         )
 
         val failureTypes = mutableListOf<String>()
-        val collector = launch { agent.events.collect { failureTypes.add(it::class.simpleName!!) } }
+        val done = CompletableDeferred<Unit>()
+        val collector = launch {
+            agent.events.collect {
+                failureTypes.add(it::class.simpleName!!)
+                if (it is AgentEvent.AgentEnd) done.complete(Unit)
+            }
+        }
         yield() // subscribe before the run starts
 
         // Ordinary failures resolve normally rather than throwing.
         agent.prompt(listOf(UserMessage.ofText("hi")))
+        done.await() // buffered delivery: drain before cancelling
         collector.cancelAndJoin()
 
         assertEquals(
@@ -829,5 +836,75 @@ class AgentTest {
             events.filterIsInstance<AgentEvent.ToolExecutionEnd>().map { it.toolCallId }
         )
         collector.cancelAndJoin()
+    }
+
+    /**
+     * Port of pi's "should await async subscribers before prompt resolves":
+     * the session event sink is pi's awaited listener, so a sink suspended
+     * on `agent_end` keeps the run (and isStreaming) active until it settles.
+     */
+    @Test
+    fun `prompt awaits a suspended event sink before resolving`() = runTest {
+        val barrier = CompletableDeferred<Unit>()
+        var sinkFinished = false
+        val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
+        agent.attachEventSink { event ->
+            if (event is AgentEvent.AgentEnd) {
+                barrier.await()
+                sinkFinished = true
+            }
+        }
+
+        val job = launch { agent.prompt(listOf(UserMessage.ofText("hi"))) }
+        repeat(10) { yield() }
+        assertFalse(job.isCompleted)
+        assertFalse(sinkFinished)
+        assertTrue(agent.state.value.isStreaming)
+
+        barrier.complete(Unit)
+        job.join()
+        assertTrue(sinkFinished)
+        assertFalse(agent.state.value.isStreaming)
+    }
+
+    /**
+     * Divergence from pi's synchronous listeners: external SharedFlow
+     * collectors are decoupled by a bounded buffer, so a collector stuck
+     * mid-processing neither blocks the run nor loses/reorders events.
+     */
+    @Test
+    fun `slow collectors receive every event in order without backpressuring the run`() = runTest {
+        val agent = agent(streamFn = StreamFn { _, _, _ -> okStream() })
+
+        val received = CopyOnWriteArrayList<AgentEvent>()
+        val gate = CompletableDeferred<Unit>()
+        val done = CompletableDeferred<Unit>()
+        val collector = launch {
+            agent.events.collect { event ->
+                received.add(event)
+                if (event is AgentEvent.AgentStart) gate.await()
+                if (event is AgentEvent.AgentEnd) done.complete(Unit)
+            }
+        }
+        yield() // subscribe before the run starts
+
+        agent.prompt(listOf(UserMessage.ofText("hi")))
+        // The run completed although the collector is still stuck on the
+        // first event: emission was not backpressured by collector speed.
+        assertFalse(agent.state.value.isStreaming)
+        assertEquals(1, received.size)
+
+        gate.complete(Unit)
+        done.await()
+        collector.cancelAndJoin()
+        assertEquals(
+            listOf(
+                "AgentStart", "TurnStart",
+                "MessageStart", "MessageEnd", // user
+                "MessageStart", "MessageUpdate", "MessageEnd", // assistant
+                "TurnEnd", "AgentEnd"
+            ),
+            received.map { it::class.simpleName }
+        )
     }
 }

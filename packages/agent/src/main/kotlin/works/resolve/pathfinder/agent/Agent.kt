@@ -149,14 +149,20 @@ class Agent(
      * Lifecycle events in source order; state is reduced before each event is
      * emitted, so observers always see the already-reduced state.
      *
-     * Zero-replay, zero-buffer: a value emitted with no subscribers is
-     * dropped immediately, and with subscribers present `emit` suspends only
-     * until the value has been handed to every collector — not until
-     * subscribers finish processing it. Observers must subscribe before
-     * starting a run to observe all of its events; the already-reduced
-     * [state] is always complete regardless of subscription timing.
+     * Zero-replay with a bounded buffer: a value emitted with no subscribers
+     * is dropped immediately. Unlike pi, which awaits synchronous listeners
+     * inline per event, slow external collectors are decoupled: buffered
+     * delivery keeps emission non-suspending until the buffer fills (default
+     * SUSPEND overflow — never drop), so the loop is not backpressured by UI
+     * collection speed. The session's inline event sink remains awaited
+     * synchronously by [processEvent] (pi's listener contract), so ordering
+     * between reduce and emit still holds: the mutex serializes
+     * reduce+emit+sink per event, and a buffered collector observes events
+     * in emission order. Observers must subscribe before starting a run to
+     * observe all of its events; the already-reduced [state] is always
+     * complete regardless of subscription timing.
      */
-    private val _events = MutableSharedFlow<AgentEvent>()
+    private val _events = MutableSharedFlow<AgentEvent>(extraBufferCapacity = EVENT_BUFFER_CAPACITY)
     val events: SharedFlow<AgentEvent> = _events.asSharedFlow()
 
     /**
@@ -403,6 +409,9 @@ class Agent(
     }
 
     private companion object {
+        /** Bounded emit buffer decoupling slow external collectors from the loop. */
+        const val EVENT_BUFFER_CAPACITY = 64
+
         const val ABORT_ERROR_MESSAGE = "Run aborted"
 
         /**

@@ -359,6 +359,9 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
             // parallel hand-written Model.
             models = switchModels,
             tools = listOf(fakeWebSearchTool),
+            // Keep the prompt loop inside runTest's virtual clock: the
+            // production default (Dispatchers.Default) is invisible to it.
+            loopDispatcher = testDispatcher,
             streamFn = StreamFn { requestedModel, _, _ ->
                 streamedModels.add(requestedModel)
                 val script = scriptedStreams.poll()

@@ -3,6 +3,8 @@
 
 package works.resolve.pathfinder.codingagent.core
 
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.StreamFn
@@ -47,7 +49,9 @@ suspend fun createAgentSession(
     models: Models,
     streamFn: StreamFn,
     tools: List<AgentTool> = emptyList(),
-    streamOptions: SimpleStreamOptions = SimpleStreamOptions()
+    streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
+    /** Dispatcher for the session's prompt loop; see [AgentSession]. */
+    loopDispatcher: CoroutineDispatcher = Dispatchers.Default
 ): CreateAgentSessionResult {
     val existingSession = manager.buildSessionContext()
     val hasExistingSession = existingSession.messages.isNotEmpty()
@@ -157,7 +161,8 @@ suspend fun createAgentSession(
         settingsManager = settingsManager,
         scopedModels = scopedModels,
         tools = tools,
-        models = models
+        models = models,
+        loopDispatcher = loopDispatcher
     )
     return CreateAgentSessionResult(session = session, modelFallbackMessage = modelFallbackMessage)
 }
