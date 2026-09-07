@@ -21,6 +21,7 @@ import works.resolve.pathfinder.ai.CacheControlFormat
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.ChatTemplateKwargValue
+import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.ContentType
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.DeferredToolsMode
@@ -625,11 +626,12 @@ private suspend fun kotlinx.coroutines.flow.FlowCollector<AssistantMessageEvent>
 }
 
 /**
- * Accumulates streamed content into block events. Every [snapshot] builds
- * fresh content instances so partial snapshots never share mutable state
- * across events. Streamed `tool_calls[].function.arguments` fragments are
- * accumulated as a raw string; strict parsing belongs to tool execution, not
- * this provider layer.
+ * Accumulates streamed content into block events. Snapshot content values are
+ * cached per block and reused while unchanged (they are immutable, so
+ * sharing instances across snapshots is safe); a delta only re-renders the
+ * block it landed in. Streamed `tool_calls[].function.arguments` fragments
+ * are accumulated as a raw string; strict parsing belongs to tool execution,
+ * not this provider layer.
  */
 internal class StreamingState(private val model: Model, private val timestampMs: Long) {
     private sealed interface Block {
@@ -645,13 +647,17 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     }
 
     private val blocks = mutableListOf<Block>()
+
+    /** Cached rendered content per block index; null when stale. */
+    private val builtBlocks = mutableListOf<Content?>()
+
     private var textIndex = -1
     private var thinkingIndex = -1
     private val toolByIndex = mutableMapOf<Int, Int>() // stream index -> block index
     private val toolById = mutableMapOf<String, Int>()
 
-    private var text = ""
-    private var thinking = ""
+    private val text = StringBuilder()
+    private val thinking = StringBuilder()
     private var thinkingSignature: String? = null
 
     // reasoning_details are replay metadata, kept in memory during streaming
@@ -676,23 +682,34 @@ internal class StreamingState(private val model: Model, private val timestampMs:
 
     fun start(): List<AssistantMessageEvent> = listOf(AssistantMessageEvent.Start(snapshot()))
 
+    private fun addBlock(block: Block) {
+        blocks.add(block)
+        builtBlocks.add(null)
+    }
+
+    private fun invalidate(index: Int) {
+        builtBlocks[index] = null
+    }
+
     fun hasToolCalls(): Boolean = blocks.any { it is Block.Tool }
 
     fun appendText(delta: String): List<AssistantMessageEvent> {
         val events = mutableListOf<AssistantMessageEvent>()
         if (textIndex == -1) {
             textIndex = blocks.size
-            blocks.add(Block.Text)
+            addBlock(Block.Text)
             events.add(AssistantMessageEvent.TextStart(textIndex, snapshot()))
         }
-        text += delta
+        text.append(delta)
+        invalidate(textIndex)
         events.add(AssistantMessageEvent.TextDelta(textIndex, delta, snapshot()))
         return events
     }
 
     fun appendThinking(delta: String, signature: String): List<AssistantMessageEvent> {
         val events = ensureThinkingBlock(signature)
-        thinking += delta
+        thinking.append(delta)
+        invalidate(thinkingIndex)
         events.add(AssistantMessageEvent.ThinkingDelta(thinkingIndex, delta, snapshot()))
         return events
     }
@@ -701,7 +718,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         val events = mutableListOf<AssistantMessageEvent>()
         if (thinkingIndex == -1) {
             thinkingIndex = blocks.size
-            blocks.add(Block.Thinking)
+            addBlock(Block.Thinking)
             thinkingSignature = signature
             events.add(AssistantMessageEvent.ThinkingStart(thinkingIndex, snapshot()))
         }
@@ -726,6 +743,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     fun applyStreamedReasoningDetails() {
         streamedReasoningDetails?.let {
             thinkingSignature = JsonArray(it.map { detail -> JsonObject(detail) }).toString()
+            if (thinkingIndex != -1) invalidate(thinkingIndex)
         }
     }
 
@@ -740,7 +758,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         if (blockIndex == null && id != null && id.isNotEmpty()) blockIndex = toolById[id]
         if (blockIndex == null) {
             blockIndex = blocks.size
-            blocks.add(Block.Tool(ToolCallAccumulator()))
+            addBlock(Block.Tool(ToolCallAccumulator()))
             events.add(AssistantMessageEvent.ToolCallStart(blockIndex, snapshot()))
         }
         if (streamIndex != null) toolByIndex[streamIndex] = blockIndex
@@ -751,6 +769,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         if (!name.isNullOrEmpty() && accumulator.name.isEmpty()) accumulator.name = name
         val argDelta = function?.get("arguments").strOrNull() ?: ""
         accumulator.arguments.append(argDelta)
+        invalidate(blockIndex)
 
         events.add(AssistantMessageEvent.ToolCallDelta(blockIndex, argDelta, snapshot()))
         return events
@@ -762,9 +781,10 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         applyStreamedReasoningDetails()
         return blocks.mapIndexed { index, block ->
             when (block) {
-                Block.Text -> AssistantMessageEvent.TextEnd(index, text, snapshot())
+                Block.Text -> AssistantMessageEvent.TextEnd(index, text.toString(), snapshot())
 
-                Block.Thinking -> AssistantMessageEvent.ThinkingEnd(index, thinking, snapshot())
+                Block.Thinking ->
+                    AssistantMessageEvent.ThinkingEnd(index, thinking.toString(), snapshot())
 
                 is Block.Tool -> AssistantMessageEvent.ToolCallEnd(
                     index,
@@ -782,12 +802,12 @@ internal class StreamingState(private val model: Model, private val timestampMs:
     )
 
     fun snapshot(): AssistantMessage = AssistantMessage(
-        content = blocks.map { block ->
-            when (block) {
-                Block.Text -> TextContent(text)
-                Block.Thinking -> ThinkingContent(thinking, thinkingSignature)
-                is Block.Tool -> toolCallOf(block.accumulator)
-            }
+        content = blocks.indices.map { index ->
+            builtBlocks[index] ?: when (blocks[index]) {
+                Block.Text -> TextContent(text.toString())
+                Block.Thinking -> ThinkingContent(thinking.toString(), thinkingSignature)
+                is Block.Tool -> toolCallOf((blocks[index] as Block.Tool).accumulator)
+            }.also { builtBlocks[index] = it }
         },
         api = model.api,
         provider = model.provider,

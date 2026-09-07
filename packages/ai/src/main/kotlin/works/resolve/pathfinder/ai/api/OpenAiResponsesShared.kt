@@ -495,18 +495,27 @@ object OpenAiResponsesShared {
         val applyServiceTierPricing: ((usage: Usage, serviceTier: String?) -> Usage)? = null
     )
 
-    /** Snapshots render fresh immutable [Content] values so partials never share state. */
+    /**
+     * Snapshots render immutable [Content] values, cached per block and
+     * reused while unchanged (sharing instances across snapshots is safe);
+     * each event re-renders only the block it mutated.
+     */
     private sealed interface Block {
         val index: Int
+
+        /** Last rendered content; null when stale. */
+        var built: Content?
 
         class Thinking(override val index: Int) : Block {
             var thinking: String = ""
             var thinkingSignature: String? = null
+            override var built: Content? = null
         }
 
         class Text(override val index: Int) : Block {
             var text: String = ""
             var textSignature: String? = null
+            override var built: Content? = null
         }
 
         class Tool(override val index: Int) : Block {
@@ -515,6 +524,7 @@ object OpenAiResponsesShared {
             var arguments: StringBuilder = StringBuilder()
             var namespace: String? = null
             var customInput: CustomToolInput? = null
+            override var built: Content? = null
         }
     }
 
@@ -584,8 +594,11 @@ object OpenAiResponsesShared {
             )
         }
 
+        private fun renderCached(block: Block): Content =
+            block.built ?: render(block).also { block.built = it }
+
         private fun partial(): AssistantMessage = AssistantMessage(
-            content = blocks.map(::render),
+            content = blocks.map(::renderCached),
             api = model.api,
             provider = model.provider,
             model = model.id,
@@ -613,12 +626,14 @@ object OpenAiResponsesShared {
                 val slot = getSlot<Block.Thinking>(event) ?: return emptyList()
                 val delta = event.string("delta") ?: return emptyList()
                 slot.thinking += delta
+                slot.built = null
                 listOf(AssistantMessageEvent.ThinkingDelta(slot.index, delta, partial()))
             }
 
             "response.reasoning_summary_part.done" -> {
                 val slot = getSlot<Block.Thinking>(event) ?: return emptyList()
                 slot.thinking += "\n\n"
+                slot.built = null
                 listOf(AssistantMessageEvent.ThinkingDelta(slot.index, "\n\n", partial()))
             }
 
@@ -626,6 +641,7 @@ object OpenAiResponsesShared {
                 val slot = getSlot<Block.Text>(event) ?: return emptyList()
                 val delta = event.string("delta") ?: return emptyList()
                 slot.text += delta
+                slot.built = null
                 listOf(AssistantMessageEvent.TextDelta(slot.index, delta, partial()))
             }
 
@@ -633,6 +649,7 @@ object OpenAiResponsesShared {
                 val slot = getSlot<Block.Tool>(event) ?: return emptyList()
                 val delta = event.string("delta") ?: return emptyList()
                 slot.arguments.append(delta)
+                slot.built = null
                 listOf(AssistantMessageEvent.ToolCallDelta(slot.index, delta, partial()))
             }
 
@@ -643,6 +660,7 @@ object OpenAiResponsesShared {
                 val arguments = event.string("arguments") ?: return emptyList()
                 val previous = slot.arguments.toString()
                 slot.arguments = StringBuilder(arguments)
+                slot.built = null
                 if (!arguments.startsWith(previous)) return emptyList()
                 val delta = arguments.substring(previous.length)
                 if (delta.isEmpty()) return emptyList()
@@ -656,6 +674,7 @@ object OpenAiResponsesShared {
                 val out =
                     appendCustomToolCallInput(slot, slot.customInput!!.currentInput + delta, false)
                         ?: return emptyList()
+                slot.built = null
                 listOf(AssistantMessageEvent.ToolCallDelta(slot.index, out, partial()))
             }
 
@@ -664,6 +683,7 @@ object OpenAiResponsesShared {
                 if (slot.customInput == null) return emptyList()
                 val input = event.string("input") ?: return emptyList()
                 val out = appendCustomToolCallInput(slot, input, true) ?: return emptyList()
+                slot.built = null
                 listOf(AssistantMessageEvent.ToolCallDelta(slot.index, out, partial()))
             }
 
@@ -770,6 +790,7 @@ object OpenAiResponsesShared {
                         ?.joinToString("\n\n").orEmpty()
                     slot.thinking = summaryText.ifEmpty { contentText.ifEmpty { slot.thinking } }
                     slot.thinkingSignature = item.toString()
+                    slot.built = null
                     item.string("id")?.let { reasoningBlocksById[it] = slot }
                     slots.remove(outputIndex)
                     return events +
@@ -787,6 +808,7 @@ object OpenAiResponsesShared {
                         item.string("id"),
                         item.string("phase")
                     )
+                    slot.built = null
                     slots.remove(outputIndex)
                     return events + AssistantMessageEvent.TextEnd(slot.index, slot.text, partial())
                 }
@@ -796,6 +818,7 @@ object OpenAiResponsesShared {
                     val arguments = item.string("arguments")
                     if (!arguments.isNullOrBlank()) slot.arguments = StringBuilder(arguments)
                     item.string("namespace")?.let { slot.namespace = it }
+                    slot.built = null
                     slots.remove(outputIndex)
                     return events + listOf(
                         AssistantMessageEvent.ToolCallEnd(
@@ -814,6 +837,7 @@ object OpenAiResponsesShared {
                     }
                     item.string("namespace")?.let { slot.namespace = it }
                     slot.customInput = null
+                    slot.built = null
                     slots.remove(outputIndex)
                     return events + listOf(
                         AssistantMessageEvent.ToolCallEnd(
@@ -850,6 +874,7 @@ object OpenAiResponsesShared {
                     storedItem.forEach { (k, v) -> put(k, v) }
                     put("encrypted_content", encrypted)
                 }.toString()
+                block.built = null
             }
         }
 

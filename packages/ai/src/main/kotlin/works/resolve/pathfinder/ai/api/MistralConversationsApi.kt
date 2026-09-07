@@ -15,6 +15,7 @@ import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ChatApi
+import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.ContentType
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.DoneSentinel
@@ -524,9 +525,23 @@ class MistralConversationsApi(
  */
 internal class MistralStreamingState(private val model: Model, private val timestampMs: Long) {
     private sealed interface Block {
-        data class Text(var text: String) : Block
-        data class Thinking(var thinking: String) : Block
-        data class Tool(var id: String, var name: String, val arguments: StringBuilder) : Block
+        /** Last rendered content; null when stale. Immutable values may be
+         * shared across snapshots. */
+        var built: Content?
+
+        class Text : Block {
+            val text = StringBuilder()
+            override var built: Content? = null
+        }
+
+        class Thinking : Block {
+            val thinking = StringBuilder()
+            override var built: Content? = null
+        }
+
+        class Tool(val id: String, val name: String, val arguments: StringBuilder) : Block {
+            override var built: Content? = null
+        }
     }
 
     private val blocks = mutableListOf<Block>()
@@ -554,10 +569,12 @@ internal class MistralStreamingState(private val model: Model, private val times
         if (index == -1) return emptyList()
         currentBlockIndex = -1
         return when (val block = blocks[index]) {
-            is Block.Text -> listOf(AssistantMessageEvent.TextEnd(index, block.text, snapshot()))
+            is Block.Text -> listOf(
+                AssistantMessageEvent.TextEnd(index, block.text.toString(), snapshot())
+            )
 
             is Block.Thinking -> listOf(
-                AssistantMessageEvent.ThinkingEnd(index, block.thinking, snapshot())
+                AssistantMessageEvent.ThinkingEnd(index, block.thinking.toString(), snapshot())
             )
 
             is Block.Tool -> emptyList()
@@ -570,11 +587,12 @@ internal class MistralStreamingState(private val model: Model, private val times
         if (current !is Block.Text) {
             events += closeCurrentBlock()
             currentBlockIndex = blocks.size
-            blocks.add(Block.Text(""))
+            blocks.add(Block.Text())
             events.add(AssistantMessageEvent.TextStart(currentBlockIndex, snapshot()))
         }
         val textBlock = blocks[currentBlockIndex] as Block.Text
-        textBlock.text += delta
+        textBlock.text.append(delta)
+        textBlock.built = null
         events.add(AssistantMessageEvent.TextDelta(currentBlockIndex, delta, snapshot()))
         return events
     }
@@ -585,11 +603,12 @@ internal class MistralStreamingState(private val model: Model, private val times
         if (current !is Block.Thinking) {
             events += closeCurrentBlock()
             currentBlockIndex = blocks.size
-            blocks.add(Block.Thinking(""))
+            blocks.add(Block.Thinking())
             events.add(AssistantMessageEvent.ThinkingStart(currentBlockIndex, snapshot()))
         }
         val thinkingBlock = blocks[currentBlockIndex] as Block.Thinking
-        thinkingBlock.thinking += delta
+        thinkingBlock.thinking.append(delta)
+        thinkingBlock.built = null
         events.add(AssistantMessageEvent.ThinkingDelta(currentBlockIndex, delta, snapshot()))
         return events
     }
@@ -627,6 +646,7 @@ internal class MistralStreamingState(private val model: Model, private val times
             }
         } ?: ""
         toolBlock.arguments.append(argsDelta)
+        toolBlock.built = null
 
         events.add(AssistantMessageEvent.ToolCallDelta(blockIndex, argsDelta, snapshot()))
         return events
@@ -656,11 +676,13 @@ internal class MistralStreamingState(private val model: Model, private val times
 
     fun snapshot(): AssistantMessage = AssistantMessage(
         content = blocks.map { block ->
-            when (block) {
-                is Block.Text -> TextContent(block.text)
-                is Block.Thinking -> ThinkingContent(block.thinking)
-                is Block.Tool -> ToolCall(block.id, block.name, block.arguments.toString())
-            }
+            (
+                block.built ?: when (block) {
+                    is Block.Text -> TextContent(block.text.toString())
+                    is Block.Thinking -> ThinkingContent(block.thinking.toString())
+                    is Block.Tool -> ToolCall(block.id, block.name, block.arguments.toString())
+                }.also { block.built = it }
+                )
         },
         api = model.api,
         provider = model.provider,
