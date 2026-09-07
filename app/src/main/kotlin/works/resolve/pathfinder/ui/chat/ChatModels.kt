@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import androidx.compose.runtime.Immutable
 import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable
 import works.resolve.pathfinder.ai.AssistantMessage
@@ -23,8 +24,11 @@ enum class ConversationView {
  * One renderable transcript row: a compaction-cut marker, or a runtime
  * message with its stable entry id as the list key. Bodies render directly
  * from the runtime message (pi's components consume runtime messages the
- * same way).
+ * same way). Rows are @Immutable by the projection's snapshot contract:
+ * every update publishes a fresh row; runtime messages are read-only data
+ * classes never mutated in place.
  */
+@Immutable
 sealed interface TranscriptRow {
     val id: String
 
@@ -123,7 +127,9 @@ data class ProviderAuthFlow(
 )
 
 /**
- * Immutable projection of the chat screen state. Contains no credentials or
+ * Immutable projection of the chat screen state — the ViewModel publishes a
+ * fresh snapshot per change and never mutates one in place. Contains no
+ * credentials or
  * secrets (only per-provider [ProviderOption.configured] flags and no
  * provider-request options); transcript rows carry the runtime messages
  * themselves, projected as-is.
@@ -133,6 +139,7 @@ data class ProviderAuthFlow(
  * [navigationEpoch] changes, so the forced first-run provider step is a
  * single-entry dead end until configuration completes.
  */
+@Immutable
 data class ChatUiState(
     val status: ChatStatus = ChatStatus.Loading,
     /** Root of the Nav3 back stack; the stack must contain exactly this after a reset. */

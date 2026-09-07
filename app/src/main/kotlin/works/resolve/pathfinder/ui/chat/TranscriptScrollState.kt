@@ -4,13 +4,13 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -69,23 +69,22 @@ internal fun rememberTranscriptScrollState(uiState: ChatUiState): TranscriptScro
 
 @Composable
 internal fun FollowTranscriptBottom(state: TranscriptScrollState) {
-    LaunchedEffect(state) {
-        snapshotFlow {
-            // Observe measured geometry, not token counts or composition timing:
-            // thinking, markdown reflow, tools and viewport resizing all count.
-            if (state.following && !state.listState.isScrollInProgress &&
+    // Observe measured geometry, not token counts or composition timing:
+    // thinking, markdown reflow, tools and viewport resizing all count.
+    // A derived boolean (not the layoutInfo object itself, which is a fresh
+    // instance on every measure) breaks the follow feedback loop: the flow
+    // only re-fires when content growth actually makes the end scrollable
+    // again, not on the layout churn caused by our own scrollToItem.
+    val needsFollow by remember(state) {
+        derivedStateOf {
+            state.following && !state.listState.isScrollInProgress &&
                 state.listState.canScrollForward
-            ) {
-                state.listState.layoutInfo
-            } else {
-                null
-            }
-        }.collect { layout ->
-            if (layout != null && state.following && !state.listState.isScrollInProgress) {
-                // The final item is a small sentinel, not a potentially taller-
-                // than-screen message. LazyColumn clamps this to the actual end.
-                state.listState.scrollToItem(layout.totalItemsCount - 1)
-            }
         }
+    }
+    LaunchedEffect(state, needsFollow) {
+        if (!needsFollow) return@LaunchedEffect
+        // The final item is a small sentinel, not a potentially taller-
+        // than-screen message. LazyColumn clamps this to the actual end.
+        state.listState.scrollToItem(state.listState.layoutInfo.totalItemsCount - 1)
     }
 }
