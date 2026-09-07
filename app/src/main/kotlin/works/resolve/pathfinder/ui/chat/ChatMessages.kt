@@ -26,8 +26,10 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -40,6 +42,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.AssistantMessage
@@ -58,6 +61,32 @@ import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 private const val STREAMING_PLACEHOLDER = "…"
 
+/** Sampling cadence for rendering the growing streaming partial. */
+private const val STREAM_SAMPLE_INTERVAL_MS = 100L
+
+/**
+ * Streaming cadence limiter: rendering the partial re-parses its markdown,
+ * so per-token recomposition is O(n²) over a response. The partial is
+ * sampled at [STREAM_SAMPLE_INTERVAL_MS] instead; once [isStreaming] ends
+ * the caller receives the message as-is, so the final text always renders
+ * fully.
+ */
+@Composable
+private fun sampledStreamingMessage(
+    message: AssistantMessage,
+    isStreaming: Boolean
+): AssistantMessage {
+    if (!isStreaming) return message
+    val latest = remember { mutableStateOf(message) }
+    SideEffect { latest.value = message }
+    return produceState(initialValue = message) {
+        while (true) {
+            delay(STREAM_SAMPLE_INTERVAL_MS)
+            value = latest.value
+        }
+    }.value
+}
+
 @Composable
 internal fun ConversationContent(
     uiState: ChatUiState,
@@ -75,9 +104,19 @@ internal fun ConversationContent(
     // against the live rows, so a stale key (session switch, branch
     // navigation) just closes the sheet.
     var openToolResultId by rememberSaveable { mutableStateOf<String?>(null) }
-    val openToolRow = openToolResultId?.let { id ->
-        uiState.messages.filterIsInstance<TranscriptRow.Tool>().firstOrNull { it.call.id == id }
+    val openToolRow = remember(uiState.messages, openToolResultId) {
+        val id = openToolResultId
+        if (id == null) {
+            null
+        } else {
+            uiState.messages.filterIsInstance<TranscriptRow.Tool>().firstOrNull { it.call.id == id }
+        }
     }
+
+    // Narrowed reads so the item lambdas capture only stable primitives;
+    // capturing uiState would re-invalidate every visible row per token.
+    val isStreaming = uiState.isStreaming
+    val showThinking = uiState.showThinking
 
     Box(modifier = modifier.fillMaxSize()) {
         if (messageCount == 0 && uiState.streamingMessage == null) {
@@ -91,14 +130,18 @@ internal fun ConversationContent(
             verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
             modifier = Modifier.fillMaxSize().nestedScroll(scrollState.nestedScrollConnection)
         ) {
-            items(renderableMessages, key = TranscriptRow::id) { row ->
+            items(
+                renderableMessages,
+                key = TranscriptRow::id,
+                contentType = { it::class }
+            ) { row ->
                 when (row) {
                     is TranscriptRow.Compacted -> CompactedDivider()
 
                     is TranscriptRow.Tool -> ToolCallItem(
                         call = row.call,
                         result = row.result,
-                        running = row.result == null && uiState.isStreaming,
+                        running = row.result == null && isStreaming,
                         onOpenOutput = { openToolResultId = row.call.id }
                     )
 
@@ -107,7 +150,7 @@ internal fun ConversationContent(
 
                         is AssistantMessage -> AssistantMessageItem(
                             message = message,
-                            showThinking = uiState.showThinking
+                            showThinking = showThinking
                         )
 
                         // The projection never emits result messages as rows:
@@ -118,26 +161,27 @@ internal fun ConversationContent(
             }
             uiState.streamingMessage?.let { streaming ->
                 item(key = "streaming") {
-                    val hasVisibleText = streaming.content.any {
+                    val sampled = sampledStreamingMessage(streaming, isStreaming)
+                    val hasVisibleText = sampled.content.any {
                         it is TextContent && it.text.isNotBlank()
                     }
-                    val hasThinking = streaming.content.any { it is ThinkingContent }
+                    val hasThinking = sampled.content.any { it is ThinkingContent }
                     AssistantMessageItem(
                         message = if (hasVisibleText || hasThinking ||
-                            streaming.errorMessage != null
+                            sampled.errorMessage != null
                         ) {
-                            streaming
+                            sampled
                         } else {
                             // pi renders tool-call-only assistant messages as
                             // zero lines (the executions show as their own
                             // rows); the placeholder bridges until the call
                             // commits and its tool row appears.
-                            streaming.copy(
+                            sampled.copy(
                                 content = listOf(TextContent(STREAMING_PLACEHOLDER))
                             )
                         },
                         isStreaming = true,
-                        showThinking = uiState.showThinking
+                        showThinking = showThinking
                     )
                 }
             }
@@ -360,7 +404,7 @@ internal fun toolCallInput(toolName: String, arguments: String): String? {
 /** Row title: the spec's format filled with the parsed input, else the tool name. */
 @Composable
 internal fun toolCallTitle(call: ToolCall): String {
-    val input = toolCallInput(call.name, call.arguments)
+    val input = remember(call.id, call.arguments) { toolCallInput(call.name, call.arguments) }
     val spec = ToolCallTitles.specFor(call.name)
     return if (spec != null && input != null) stringResource(spec.format, input) else call.name
 }

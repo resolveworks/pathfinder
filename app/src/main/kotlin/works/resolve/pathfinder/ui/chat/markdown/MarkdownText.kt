@@ -52,6 +52,24 @@ private data class ProseStyle(
 )
 
 /**
+ * Bounded cache of parsed documents keyed by exact source text: rows
+ * re-entering the LazyColumn viewport lose their `remember` cache when
+ * disposed, and would otherwise re-parse synchronously during scroll.
+ */
+private object MarkdownDocumentCache {
+    private const val MAX_ENTRIES = 24
+
+    private val cache = object : LinkedHashMap<String, Node>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Node>): Boolean =
+            size > MAX_ENTRIES
+    }
+
+    fun get(markdown: String): Node = synchronized(cache) {
+        cache.getOrPut(markdown) { MarkdownParser.parser.parse(markdown) }
+    }
+}
+
+/**
  * Renders a markdown string as structured Compose content. Inline styling is
  * delegated to [buildInlineMarkdown][Node.buildInlineMarkdown]; this layer owns
  * block structure only.
@@ -65,7 +83,7 @@ fun MarkdownText(
     color: Color = Color.Unspecified,
     italic: Boolean = false
 ) {
-    val document: Node = remember(markdown) { MarkdownParser.parser.parse(markdown) }
+    val document: Node = remember(markdown) { MarkdownDocumentCache.get(markdown) }
     val inlineStyles = InlineMarkdownStyles(
         linkColor = MaterialTheme.colorScheme.primary,
         codeBackgroundColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -90,14 +108,14 @@ private fun RenderBlocks(parent: Node, styles: InlineMarkdownStyles, prose: Pros
 private fun RenderBlock(node: Node, styles: InlineMarkdownStyles, prose: ProseStyle) {
     when (node) {
         is Paragraph -> Text(
-            text = node.buildInlineMarkdown(styles),
+            text = remember(node, styles) { node.buildInlineMarkdown(styles) },
             style = MaterialTheme.typography.bodyLarge,
             fontStyle = if (prose.italic) FontStyle.Italic else null,
             color = prose.resolveColor()
         )
 
         is Heading -> Text(
-            text = node.buildInlineMarkdown(styles),
+            text = remember(node, styles) { node.buildInlineMarkdown(styles) },
             style = when (node.level) {
                 1 -> MaterialTheme.typography.titleLarge
                 2 -> MaterialTheme.typography.titleMedium
@@ -242,7 +260,9 @@ private fun Table(table: TableBlock, styles: InlineMarkdownStyles, prose: ProseS
                         for (cell in row.children()) {
                             if (cell is TableCell) {
                                 Text(
-                                    text = cell.buildInlineMarkdown(styles),
+                                    text = remember(cell, styles) {
+                                        cell.buildInlineMarkdown(styles)
+                                    },
                                     style = MaterialTheme.typography.bodyLarge,
                                     fontWeight = if (isHead) FontWeight.Bold else null,
                                     modifier = Modifier
