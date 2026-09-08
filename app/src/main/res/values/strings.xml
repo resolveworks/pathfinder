@@ -42,11 +42,26 @@
     <string name="ssh_host_delete">Delete host</string>
     <string name="ssh_host_delete_confirm">Delete %1$s and its key? The server\'s authorized_keys entry must be removed separately.</string>
     <string name="ssh_host_start_session">Start a chat on this host</string>
+    <string name="error_ssh_host_save">Could not save the SSH host</string>
+    <string name="error_ssh_host_remove">Could not delete the SSH host</string>
+    <string name="error_ssh_host_invalid">Enter an address, username, and port (1–65535)</string>
     <string name="ssh_host_key_title">Unknown SSH host key</string>
     <string name="ssh_host_key_body">The authenticity of %1$s cannot be established. Its %2$s key has the SHA-256 fingerprint:\n\n%3$s\n\nTrust it only if you expected this host and recognize the fingerprint.</string>
     <string name="ssh_host_key_trust">Trust</string>
     <string name="ssh_host_key_refuse">Refuse</string>
+    <string name="ssh_error_connect">Could not reach %1$s — check the address and that the host is up</string>
+    <string name="ssh_error_connect_generic">Could not connect to the SSH host</string>
+    <string name="ssh_error_auth">%1$s refused the app\'s key — add the app\'s public key to authorized_keys on the server</string>
+    <string name="ssh_error_auth_generic">The SSH host refused the app\'s key</string>
+    <string name="ssh_error_sftp">%1$s does not offer SFTP, which Pathfinder needs for remote files</string>
+    <string name="ssh_error_sftp_generic">The SSH host does not offer SFTP</string>
+    <string name="ssh_error_unknown_host">That SSH host is no longer configured</string>
+    <string name="ssh_error_no_key">No SSH key is stored for that host</string>
+    <string name="ssh_error_host_key_changed">SSH host key for %1$s changed — the connection was refused for your safety. Verify the server before trusting it again.</string>
+    <string name="ssh_error_host_key_changed_generic">The SSH host key changed — the connection was refused for your safety</string>
     <string name="search_provider_search_hint">Search providers</string>
+    <string name="error_search_credential_save">Could not store the search API key</string>
+    <string name="error_search_status">Could not read the search provider status</string>
     <string name="provider_search_hint">Search providers</string>
     <string name="no_matching_providers">No matching providers</string>
     <string name="provider_status_configured">configured</string>
@@ -105,6 +120,27 @@
     <string name="tool_title_wrote">Wrote %1$s</string>
 
     <string name="error_generic">Something went wrong</string>
+    <string name="error_init">Could not load chat data</string>
+    <string name="error_unknown_model">Unknown model</string>
+    <string name="error_model_unavailable">That model is no longer available for this account — pick another model</string>
+    <string name="error_model_switch">Could not switch to that model — check the provider sign-in</string>
+    <string name="error_prompt_auth">Could not send — check the provider sign-in</string>
+    <string name="error_thinking_switch">Could not switch the thinking level</string>
+    <string name="error_unknown_provider">Unknown provider</string>
+    <string name="error_credential_save">Could not store the API key</string>
+    <string name="error_settings_save">Could not save the configuration</string>
+    <string name="error_config_invalid">Invalid configuration</string>
+    <string name="error_session_create">Could not create a new chat</string>
+    <string name="error_session_load">Could not open the chat</string>
+    <string name="error_session_missing">That chat no longer exists</string>
+    <string name="error_session_save">Could not save the chat</string>
+    <string name="error_busy">Wait for the response to finish first</string>
+    <string name="error_auth_in_progress">A sign-in is already in progress</string>
+    <string name="error_auth_login">Could not complete sign-in</string>
+    <string name="error_already_streaming">A response is already streaming</string>
+    <string name="error_already_at_point">Already at this point</string>
+    <string name="error_entry_missing">Message not found</string>
+    <string name="error_missing_credentials">Sign-in values are still needed: %1$s</string>
 
     <string name="tree_search_hint">Search</string>
     <string name="session_search_hint">Search chats</string>
@@ -117,6 +153,7 @@
     <string name="tree_filter_user_only">User only</string>
     <string name="tree_empty">This conversation has no history yet</string>
     <string name="tree_no_matches">No entries match your search</string>
+    <string name="tree_no_content">(no content)</string>
     <string name="tree_fold_branch">Fold branch</string>
     <string name="tree_unfold_branch">Unfold branch</string>
 </resources>
