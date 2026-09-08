@@ -85,6 +85,7 @@ class SystemPromptTest {
                 "- read: Read file contents\n" +
                 "\n" +
                 "Guidelines:\n" +
+                "- Use bash for file operations like ls, rg, find\n" +
                 "- Be concise in your responses\n" +
                 "- Show file paths clearly when working with files",
             prompt
@@ -162,6 +163,7 @@ class SystemPromptTest {
                 "- read: Read file contents\n" +
                 "\n" +
                 "Guidelines:\n" +
+                "- Use bash for file operations like ls, rg, find\n" +
                 "- Be concise in your responses\n" +
                 "- Show file paths clearly when working with files",
             prompt

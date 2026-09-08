@@ -15,9 +15,13 @@ private fun normalizePromptSnippet(text: String?): String? {
  *
  * Divergences from pi:
  * - The persona header names pathfinder instead of pi, and pi's
- *   coding-agent-only sections (cwd, pi-docs paths, project context files,
+ *   coding-agent-only sections (pi-docs paths, project context files,
  *   skills, the custom-tools remark) are app-layer text with no pathfinder
- *   surface and are not emitted.
+ *   surface and are not emitted. The cwd trailer IS ported: an empty [cwd]
+ *   (a session with no working directory, e.g. web tools only) omits it
+ *   rather than writing pi's always-present line with an empty value —
+ *   Android has no working directory of its own, and the app layer passes
+ *   the SSH remote cwd (with pi ssh-example annotation) when there is one.
  * - Like pi, a persona prompt is always sent — an empty tool set yields
  *   the header with an empty tools list, never null.
  *
@@ -36,7 +40,7 @@ private fun normalizePromptSnippet(text: String?): String? {
  * interactive path starts feeding loaded resources into the agent-level
  * system prompt.
  */
-fun buildSystemPrompt(activeTools: List<AgentTool>): String {
+fun buildSystemPrompt(activeTools: List<AgentTool>, cwd: String = ""): String {
     // Inclusion rule: a tool appears in Available tools only when its
     // snippet normalizes to a non-null line (pi gates on
     // `!!toolSnippets?.[name]` — an empty string is falsy there too).
@@ -50,8 +54,8 @@ fun buildSystemPrompt(activeTools: List<AgentTool>): String {
             "(none)"
         }
 
-    // Set-deduped, insertion-ordered: per-tool guidelines first in tool
-    // order, then the always-on pair.
+    // Set-deduped, insertion-ordered: pi's file-exploration guideline
+    // first, then per-tool guidelines in tool order, then the always-on pair.
     val guidelinesList = mutableListOf<String>()
     val guidelinesSet = HashSet<String>()
     fun addGuideline(guideline: String) {
@@ -59,6 +63,18 @@ fun buildSystemPrompt(activeTools: List<AgentTool>): String {
             guidelinesSet.add(guideline)
             guidelinesList.add(guideline)
         }
+    }
+
+    val toolNames = activeTools.map { it.definition.name }.toSet()
+
+    // pi's file-exploration guideline: only the bash branch can fire here —
+    // grep/find/ls/powershell are unported, and no tool of those names
+    // reaches this prompt.
+    if ("bash" in toolNames &&
+        "grep" !in toolNames && "find" !in toolNames && "ls" !in toolNames &&
+        "powershell" !in toolNames
+    ) {
+        addGuideline("Use bash for file operations like ls, rg, find")
     }
 
     for (tool in activeTools) {
@@ -80,6 +96,9 @@ fun buildSystemPrompt(activeTools: List<AgentTool>): String {
     val persona =
         "You are an expert coding assistant operating inside pathfinder, a coding agent harness. " +
             "You help users by reading files, executing commands, editing code, and writing new files."
+    // pi normalizes Windows separators; harmless for remote POSIX paths.
+    val promptCwd = cwd.replace("\\", "/")
     return "$persona\n\n" +
-        "Available tools:\n$toolsList\n\nGuidelines:\n$guidelines"
+        "Available tools:\n$toolsList\n\nGuidelines:\n$guidelines" +
+        if (promptCwd.isNotEmpty()) "\nCurrent working directory: $promptCwd" else ""
 }

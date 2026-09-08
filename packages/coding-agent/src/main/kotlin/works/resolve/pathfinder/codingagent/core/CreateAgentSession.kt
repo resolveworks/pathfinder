@@ -49,6 +49,8 @@ suspend fun createAgentSession(
     models: Models,
     streamFn: StreamFn,
     tools: List<AgentTool> = emptyList(),
+    /** Working directory threaded to the session's system-prompt cwd line. */
+    cwd: String = "",
     streamOptions: SimpleStreamOptions = SimpleStreamOptions(),
     /** Dispatcher for the session's prompt loop; see [AgentSession]. */
     loopDispatcher: CoroutineDispatcher = Dispatchers.Default
@@ -161,6 +163,7 @@ suspend fun createAgentSession(
         settingsManager = settingsManager,
         scopedModels = scopedModels,
         tools = tools,
+        cwd = cwd,
         models = models,
         loopDispatcher = loopDispatcher
     )

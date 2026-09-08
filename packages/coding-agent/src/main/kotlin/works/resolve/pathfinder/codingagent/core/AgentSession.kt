@@ -86,6 +86,8 @@ class AgentSession(
     scopedModels: List<ScopedModel> = emptyList(),
     /** Tools available for per-session activation. */
     private val tools: List<AgentTool> = emptyList(),
+    /** Working directory for the system-prompt cwd line (pi's cwd); empty omits the line. */
+    private val cwd: String = "",
     /** Provider stack for compaction summarization; null disables automatic compaction. */
     private val models: Models? = null,
     /** Injectable backoff sleep so tests never wait. */
@@ -183,7 +185,7 @@ class AgentSession(
         if (tools.isNotEmpty()) {
             agent.setTools(resolveTools(tools.map { it.definition.name }))
         }
-        agent.setSystemPrompt(buildSystemPrompt(agent.state.value.tools.toList()))
+        agent.setSystemPrompt(buildSystemPrompt(agent.state.value.tools.toList(), cwd))
         installAgentNextTurnRefresh()
     }
 
@@ -246,7 +248,7 @@ class AgentSession(
     fun setActiveToolsByName(toolNames: List<String>) {
         val validTools = toolNames.mapNotNull(toolRegistry::get)
         agent.setTools(validTools)
-        agent.setSystemPrompt(buildSystemPrompt(validTools))
+        agent.setSystemPrompt(buildSystemPrompt(validTools, cwd))
     }
 
     private fun resolveTools(toolNames: List<String>): List<AgentTool> =
