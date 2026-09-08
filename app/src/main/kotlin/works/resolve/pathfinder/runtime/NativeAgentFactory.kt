@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.runtime
 
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.flowOn
@@ -24,10 +25,24 @@ import works.resolve.pathfinder.ai.providers.normalizeBaseUrl
 import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.codingagent.core.AgentSession
 import works.resolve.pathfinder.codingagent.core.CreateAgentSessionResult
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.codingagent.core.createAgentSession
+import works.resolve.pathfinder.codingagent.core.tools.BashToolOptions
+import works.resolve.pathfinder.codingagent.core.tools.EditToolOptions
+import works.resolve.pathfinder.codingagent.core.tools.ImageProcessing
+import works.resolve.pathfinder.codingagent.core.tools.ReadToolOptions
+import works.resolve.pathfinder.codingagent.core.tools.ToolsOptions
+import works.resolve.pathfinder.codingagent.core.tools.WriteToolOptions
+import works.resolve.pathfinder.codingagent.core.tools.createCodingTools
+import works.resolve.pathfinder.ssh.RemoteBashOperations
+import works.resolve.pathfinder.ssh.RemoteFileOperations
+import works.resolve.pathfinder.ssh.SshConnectionHelper
+import works.resolve.pathfinder.ssh.SshSessionConnections
+import works.resolve.pathfinder.ssh.SshSessionHostStore
+import works.resolve.pathfinder.ssh.UnknownHostKeyCallback
 
 /**
  * Production [AgentFactory]: builds the native agent stack from the persisted
@@ -71,7 +86,17 @@ class NativeAgentFactory(
     private val authContext: AuthContext = NoopAuthContext,
     private val authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
     /** Tools available to every created agent; copied per agent. */
-    private val tools: List<AgentTool> = emptyList()
+    private val tools: List<AgentTool> = emptyList(),
+    /** Session→host mapping and live connections; when any is null, sessions get no coding tools. */
+    private val sshSessionHosts: SshSessionHostStore? = null,
+    private val sshConnections: SshSessionConnections? = null,
+    private val sshConnectionHelper: SshConnectionHelper? = null,
+    /** Bash full-output temp dir (the app's cacheDir). */
+    private val bashTempDir: String? = null,
+    /** Image codec for the read tool's image path. */
+    private val imageProcessing: ImageProcessing? = null,
+    /** Fail-closed unknown-host-key decision; the interactive prompt is a later UI phase. */
+    private val onUnknownHostKey: UnknownHostKeyCallback = UnknownHostKeyCallback.REFUSE
 ) : AgentFactory {
 
     override suspend fun create(sessionManager: SessionManager): CreateAgentSessionResult {
@@ -96,28 +121,78 @@ class NativeAgentFactory(
             }
         )
 
-        return createAgentSession(
-            manager = sessionManager,
-            settingsManager = settingsManager,
-            models = models,
-            streamFn = StreamFn { requestedModel, context, options ->
-                // Request encoding and stream decoding run off Main; agent/session
-                // state and tool execution stay on the loop's dispatcher. A small
-                // bounded buffer keeps memory bounded per token-snapshot rate
-                // mismatch without rendezvous-coupling SSE delivery to the
-                // downstream consumer's speed; default SUSPEND overflow applies.
-                models.stream(requestedModel, context, options)
-                    .buffer(STREAM_BUFFER_CAPACITY)
-                    .flowOn(Dispatchers.Default)
-            },
-            tools = tools.toList(),
-            streamOptions = SimpleStreamOptions(
-                sessionId = sessionManager.getSessionId(),
-                timeoutMs = REQUEST_TIMEOUT_MS,
-                maxRetries = MAX_RETRIES
+        val ssh = sshCodingTools(sessionManager.getSessionId())
+        val codingTools = ssh?.tools ?: emptyList()
+
+        val result =
+            try {
+                createAgentSession(
+                    manager = sessionManager,
+                    settingsManager = settingsManager,
+                    models = models,
+                    streamFn = StreamFn { requestedModel, context, options ->
+                        // Request encoding and stream decoding run off Main; agent/session
+                        // state and tool execution stay on the loop's dispatcher. A small
+                        // bounded buffer keeps memory bounded per token-snapshot rate
+                        // mismatch without rendezvous-coupling SSE delivery to the
+                        // downstream consumer's speed; default SUSPEND overflow applies.
+                        models.stream(requestedModel, context, options)
+                            .buffer(STREAM_BUFFER_CAPACITY)
+                            .flowOn(Dispatchers.Default)
+                    },
+                    tools = tools.toList() + codingTools,
+                    streamOptions = SimpleStreamOptions(
+                        sessionId = sessionManager.getSessionId(),
+                        timeoutMs = REQUEST_TIMEOUT_MS,
+                        maxRetries = MAX_RETRIES
+                    )
+                )
+            } catch (error: Throwable) {
+                sshConnections?.close(sessionManager.getSessionId())
+                throw error
+            }
+        ssh?.createdSession?.set(result.session)
+        return result
+    }
+
+    /**
+     * Connects the session's configured host (if any) and binds the ported
+     * coding tools to that one connection. The session's model is not known
+     * until createAgentSession builds it, so the read tool's model provider
+     * reads it through [AtomicReference] filled once creation returns.
+     */
+    private suspend fun sshCodingTools(sessionId: String): SshTools? {
+        val hosts = sshSessionHosts ?: return null
+        val connections = sshConnections ?: return null
+        val helper = sshConnectionHelper ?: return null
+        val tempDir = bashTempDir ?: return null
+
+        val hostId = hosts.hostId(sessionId) ?: return null
+        val connection = helper.connect(hostId, onUnknownHostKey)
+        connections.register(sessionId, connection)
+        val files = RemoteFileOperations(connection)
+        val createdSession = AtomicReference<AgentSession>()
+        val tools = createCodingTools(
+            cwd = connection.initialWorkingDirectory,
+            options = ToolsOptions(
+                read = ReadToolOptions(
+                    operations = files,
+                    imageProcessing = imageProcessing,
+                    modelProvider = { createdSession.get()?.model }
+                ),
+                bash = BashToolOptions(RemoteBashOperations(connection), tempDir),
+                edit = EditToolOptions(files),
+                write = WriteToolOptions(files)
             )
         )
+        return SshTools(tools, createdSession)
     }
+
+    /** Coding tools plus the slot the created session lands in for the read tool's model provider. */
+    private class SshTools(
+        val tools: List<AgentTool>,
+        val createdSession: AtomicReference<AgentSession>
+    )
 
     /**
      * Resolves a catalog provider/model pair to the effective request model,
