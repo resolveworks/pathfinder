@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import android.app.Application
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -8,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.codingagent.core.AgentSession
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
@@ -23,6 +25,7 @@ import works.resolve.pathfinder.tools.websearch.SearchProviderService
  */
 internal class SearchProviderController(
     private val scope: CoroutineScope,
+    private val app: Application,
     private val service: SearchProviderService,
     private val onError: (message: String, cause: Throwable?) -> Unit
 ) {
@@ -56,12 +59,12 @@ internal class SearchProviderController(
     fun saveCredential(providerId: String, apiKeyInput: String) {
         scope.launch {
             if (providerId != SearchProviderService.BRAVE_PROVIDER_ID) {
-                onError(ERROR_CREDENTIAL_SAVE, null)
+                onError(app.getString(R.string.error_search_credential_save), null)
                 return@launch
             }
             val key = apiKeyInput.trim()
             if (key.isEmpty()) {
-                onError(ERROR_CREDENTIAL_SAVE, null)
+                onError(app.getString(R.string.error_search_credential_save), null)
                 return@launch
             }
             try {
@@ -69,7 +72,7 @@ internal class SearchProviderController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onError(ERROR_CREDENTIAL_SAVE, e)
+                onError(app.getString(R.string.error_search_credential_save), e)
                 return@launch
             }
             refresh()
@@ -84,7 +87,7 @@ internal class SearchProviderController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onError(ERROR_CREDENTIAL_SAVE, e)
+                onError(app.getString(R.string.error_search_credential_save), e)
                 return@launch
             }
             refresh()
@@ -111,7 +114,7 @@ internal class SearchProviderController(
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "search_provider_status", e)
-            onError(ERROR_STATUS, e)
+            onError(app.getString(R.string.error_search_status), e)
             _state.update {
                 it.copy(
                     options = service.providers
@@ -143,9 +146,6 @@ internal class SearchProviderController(
 
     private companion object {
         private const val TAG = "Pathfinder"
-
-        private const val ERROR_CREDENTIAL_SAVE = "Could not store the search API key"
-        private const val ERROR_STATUS = "Could not read the search provider status"
 
         /** Kept as the prompt's stable id. */
         private const val BRAVE_API_KEY_PROMPT = "BRAVE_API_KEY"
