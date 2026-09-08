@@ -22,13 +22,7 @@ import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.TextContent
-import works.resolve.pathfinder.ai.auth.AuthEvent
-import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
-import works.resolve.pathfinder.ai.auth.AuthPrompt as AuthInteractionPrompt
-import works.resolve.pathfinder.ai.auth.AuthType
-import works.resolve.pathfinder.ai.auth.CredentialType
-import works.resolve.pathfinder.ai.auth.ModelsError
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
 import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
 import works.resolve.pathfinder.ai.getSupportedThinkingLevels
@@ -110,6 +104,15 @@ class ChatViewModel(
         onLoginFailed = { cause -> setError(ERROR_AUTH_LOGIN, cause) }
     )
 
+    private val providerCredentials = ProviderCredentialsController(
+        viewModelScope,
+        catalog,
+        authService,
+        loginController::busy,
+        ::onCredentialStored,
+        ::setError
+    )
+
     private val searchProviders = SearchProviderController(
         scope = viewModelScope,
         service = searchProviderService,
@@ -146,8 +149,15 @@ class ChatViewModel(
                     sessionSearchResults = sessionSearch.results
                 )
             },
-            sshSessions.pendingHostKey
-        ) { base, pendingHostKey -> base.copy(pendingHostKey = pendingHostKey) }
+            sshSessions.pendingHostKey,
+            providerCredentials.state
+        ) { base, pendingHostKey, credentials ->
+            base.copy(
+                pendingHostKey = pendingHostKey,
+                providerOptions = credentials.providerOptions,
+                modelOptions = credentials.modelOptions
+            )
+        }
             .stateIn(viewModelScope, SharingStarted.Eagerly, _uiState.value)
 
     /**
@@ -160,13 +170,6 @@ class ChatViewModel(
     private var agent: AgentSession? = null
     private var agentStateJob: Job? = null
     private var agentEventsJob: Job? = null
-
-    /**
-     * Credential-filtered catalog models behind [ChatUiState.modelOptions],
-     * refreshed by [refreshOptions]; scope resolution runs against this
-     * snapshot (pi's getAvailableSnapshot analog).
-     */
-    private var availableModels: List<Model> = emptyList()
 
     /** Read view over the bound session's tree (pi's ReadonlySessionManager); null while none is bound. */
     private val activeSession: ReadonlySessionManager?
@@ -321,34 +324,21 @@ class ChatViewModel(
         providerId: String,
         apiKeyInput: String,
         envInputs: Map<String, String>
-    ) {
-        viewModelScope.launch { saveProviderCredentialInternal(providerId, apiKeyInput, envInputs) }
-    }
+    ) = providerCredentials.saveCredential(providerId, apiKeyInput, envInputs)
 
     /**
      * Forgets the credential for [providerId]. Never tears down sessions or
      * the agent (credentials are read per request); only the derived status
      * surfaces are refreshed.
      */
-    fun removeProviderCredential(providerId: String) {
-        viewModelScope.launch {
-            try {
-                authService.logout(providerId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                setError(ERROR_CREDENTIAL_SAVE, e)
-                return@launch
-            }
-            refreshOptions()
-        }
-    }
+    fun removeProviderCredential(providerId: String) =
+        providerCredentials.removeCredential(providerId)
 
     /** Re-reads credentials and recomputes the derived provider/model surfaces. */
     fun refreshProviderStatus() {
         viewModelScope.launch {
             try {
-                refreshOptions()
+                refreshCredentialSurfaces()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -363,7 +353,14 @@ class ChatViewModel(
      * Catalog data as-is — only envKey/message/secret exist on it.
      */
     fun providerAuthPrompts(providerId: String): List<AuthPrompt> =
-        catalog.getProvider(providerId)?.auth?.prompts.orEmpty()
+        providerCredentials.providerAuthPrompts(providerId)
+
+    /**
+     * The provider's selectable auth methods, or an empty list for an
+     * unknown provider. Never touches credentials.
+     */
+    fun providerAuthMethods(providerId: String): List<AuthMethodInfo> =
+        providerCredentials.providerAuthMethods(providerId)
 
     /** Auth prompts for a search provider's credential form (only Brave is supported). */
     fun searchProviderAuthPrompts(providerId: String): List<AuthPrompt> =
@@ -591,12 +588,12 @@ class ChatViewModel(
                 recordDegradation("session_summaries", e)
                 emptyList()
             }
-            refreshOptions()
+            refreshCredentialSurfaces()
 
             // NeedsConfiguration means exactly "no configured provider at
             // all"; once any provider credential resolves, the app enters
             // the chat directly with a derived initial model.
-            if (_uiState.value.modelOptions.isEmpty()) {
+            if (providerCredentials.state.value.modelOptions.isEmpty()) {
                 _uiState.update {
                     it.copy(
                         status = ChatStatus.NeedsConfiguration,
@@ -614,7 +611,7 @@ class ChatViewModel(
             // "unavailable" and adds no error.
             val defaultProvider = runtime.defaultProvider
             val defaultModelId = runtime.defaultModel
-            val defaultAvailable = _uiState.value.modelOptions.any {
+            val defaultAvailable = providerCredentials.state.value.modelOptions.any {
                 it.providerId == defaultProvider && it.modelId == defaultModelId
             }
             if (!defaultAvailable && !defaultProvider.isNullOrBlank() &&
@@ -1005,11 +1002,11 @@ class ChatViewModel(
         modelId: String,
         checked: Boolean
     ) {
-        val state = _uiState.value
+        val modelOptions = providerCredentials.state.value.modelOptions
         val reference = "$providerId/$modelId"
         // The curated list is written in display order; an absent scope
         // materializes as "everything currently offered" on first edit.
-        val displayOrder = state.modelOptions.map(ModelOption::key)
+        val displayOrder = modelOptions.map(ModelOption::key)
         val storedList = settingsManager.getEnabledModels()
         val current = storedList?.toSet() ?: displayOrder.toSet()
         val next = if (checked) current + reference else current - reference
@@ -1039,60 +1036,12 @@ class ChatViewModel(
         // currently available models and update the live session's scoped
         // models; a null/all-enabled or match-free selection clears them.
         val scoped = if (scope != null && scope.any { it in availableKeys }) {
-            resolveModelScope(scope, availableModels).scopedModels
+            resolveModelScope(scope, providerCredentials.availableModels).scopedModels
         } else {
             emptyList()
         }
         agent?.setScopedModels(scoped)
         projectSettings()
-    }
-
-    private suspend fun saveProviderCredentialInternal(
-        providerId: String,
-        apiKeyInput: String,
-        envInputs: Map<String, String>
-    ) {
-        val provider = catalog.getProvider(providerId) ?: run {
-            setError(ERROR_UNKNOWN_PROVIDER)
-            return
-        }
-        // A key save must not race an in-flight account login.
-        if (isAuthProviderBusy()) {
-            setError(ERROR_AUTH_IN_PROGRESS)
-            return
-        }
-        // The first auth prompt is the API key; every other prompt fills its
-        // env slot. An incomplete credential is rejected rather than
-        // persisted.
-        val newKey = apiKeyInput.trim()
-        val env = buildMap<String, String> {
-            provider.auth.prompts.drop(1).forEach { prompt ->
-                val value = envInputs[prompt.envKey]?.trim()
-                if (!value.isNullOrEmpty()) put(prompt.envKey, value)
-            }
-        }
-        val missing = provider.missingAuthPrompts(newKey.ifEmpty { null }, env)
-        if (newKey.isEmpty() || missing.isNotEmpty()) {
-            setError(missingCredentialError(missing))
-            return
-        }
-        // The form's values answer the catalog's own prompts (in order)
-        // through an in-memory interaction; the answers live only here,
-        // never in UI state.
-        val answers = buildList {
-            provider.auth.prompts.forEachIndexed { index, prompt ->
-                add(if (index == 0) newKey else env[prompt.envKey].orEmpty())
-            }
-        }
-        try {
-            authService.login(providerId, AuthType.API_KEY, FormAuthInteraction(answers))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            setError(ERROR_CREDENTIAL_SAVE, e)
-            return
-        }
-        onCredentialStored()
     }
 
     /**
@@ -1103,9 +1052,9 @@ class ChatViewModel(
      * directly.
      */
     private suspend fun onCredentialStored() {
-        refreshOptions()
+        refreshCredentialSurfaces()
         if (_uiState.value.status == ChatStatus.NeedsConfiguration &&
-            _uiState.value.modelOptions.isNotEmpty()
+            providerCredentials.state.value.modelOptions.isNotEmpty()
         ) {
             val prepared = prepareAdoption() ?: return
             if (!activateSession(prepared.first, prepared.second)) return
@@ -1144,7 +1093,7 @@ class ChatViewModel(
             setError(ERROR_AUTH_IN_PROGRESS)
             return false
         }
-        if (providerAuthMethods(providerId).none { it.type == method.type }) {
+        if (providerCredentials.providerAuthMethods(providerId).none { it.type == method.type }) {
             setError(ERROR_UNKNOWN_PROVIDER)
             return false
         }
@@ -1168,103 +1117,16 @@ class ChatViewModel(
 
     private fun isAuthProviderBusy(): Boolean = loginController.busy
 
-    /** In-memory [AuthInteraction] answering fixed form values in order. */
-    private class FormAuthInteraction(answers: List<String>) : AuthInteraction {
-        private val remaining = ArrayDeque(answers)
-
-        override suspend fun prompt(prompt: AuthInteractionPrompt): String = remaining.removeFirst()
-
-        override suspend fun notify(event: AuthEvent) {}
-    }
-
     /**
-     * The provider's selectable auth methods, or an empty list for an
-     * unknown provider. Never touches credentials.
+     * Search status first: a provider read failure must not leave it
+     * stale, and it must be fresh before any agent creation follows.
+     * Search credentials never contribute to the LLM first-run
+     * configuration — `search_`-namespaced keys are not catalog
+     * provider credentials.
      */
-    fun providerAuthMethods(providerId: String): List<AuthMethodInfo> = try {
-        authService.authMethods(providerId)
-    } catch (e: ModelsError) {
-        emptyList()
-    }
-
-    /**
-     * Recomputes every credential-derived surface (provider rows, model
-     * options, scoped list, default projection). [ChatUiState.selectedModel]
-     * is not derived here: it follows the bound agent's state (see
-     * [onAgentState]), the same source the next prompt uses.
-     */
-    private suspend fun refreshOptions() {
-        // Search status first: a provider read failure must not leave it
-        // stale, and it must be fresh before any agent creation follows.
-        // Search credentials never contribute to the LLM first-run
-        // configuration below — `search_`-namespaced keys are not catalog
-        // provider credentials.
+    private suspend fun refreshCredentialSurfaces() {
         searchProviders.refresh()
-        val providerOptions = try {
-            catalog.providers
-                .map { provider ->
-                    val configured = authService.isConfigured(provider.id)
-                    // The stored kind labels the sign-out action ("Log out"
-                    // vs "Forget provider"); read only when configured.
-                    val authType = if (configured) {
-                        authService.authStatus(provider.id).storedType
-                    } else {
-                        null
-                    }
-                    ProviderOption(
-                        id = provider.id,
-                        name = provider.name,
-                        configured = configured,
-                        authType = when (authType) {
-                            CredentialType.API_KEY -> AuthType.API_KEY
-                            CredentialType.OAUTH -> AuthType.OAUTH
-                            null -> null
-                        }
-                    )
-                }
-                .sortedBy { it.name }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            recordDegradation("provider_status", e)
-            setError(ERROR_CREDENTIAL_SAVE, e)
-            return
-        }
-        val configuredIds = providerOptions.filter { it.configured }.map { it.id }.toSet()
-        // Only models from configured providers, limited to each provider's
-        // credential-filtered set; kept as real Model instances (the scope
-        // resolution snapshot) and projected into picker options.
-        val available = catalog.providers
-            .filter { it.id in configuredIds }
-            .flatMap { provider ->
-                try {
-                    authService.availableModels(provider.id)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    recordDegradation("available_models", e)
-                    setError(ERROR_CREDENTIAL_SAVE, e)
-                    return
-                }
-            }
-        availableModels = available
-        val providerNames = catalog.providers.associate { it.id to it.name }
-        val modelOptions = available
-            .map { model ->
-                ModelOption(
-                    providerId = model.provider,
-                    providerName = providerNames.getValue(model.provider),
-                    modelId = model.id,
-                    name = model.name
-                )
-            }
-            .sortedWith(compareBy({ it.providerName }, { it.name }))
-        _uiState.update {
-            it.copy(
-                providerOptions = providerOptions,
-                modelOptions = modelOptions
-            )
-        }
+        providerCredentials.refresh()
         projectSettings()
     }
 
@@ -1422,24 +1284,14 @@ class ChatViewModel(
             "Could not switch to that model — check the provider sign-in"
         const val ERROR_PROMPT_AUTH = "Could not send — check the provider sign-in"
         const val ERROR_THINKING_SWITCH = "Could not switch the thinking level"
-        const val ERROR_UNKNOWN_PROVIDER = "Unknown provider"
-        const val ERROR_CREDENTIAL_SAVE = "Could not store the API key"
-        const val ERROR_SETTINGS_SAVE = "Could not save the configuration"
         const val ERROR_CONFIG_INVALID = "Invalid configuration"
         const val ERROR_SESSION_CREATE = "Could not create a new chat"
         const val ERROR_SESSION_LOAD = "Could not open the chat"
         const val ERROR_SESSION_MISSING = "That chat no longer exists"
-        const val ERROR_SESSION_SAVE = "Could not save the chat"
         const val ERROR_BUSY = "Wait for the response to finish first"
-        const val ERROR_AUTH_IN_PROGRESS = "A sign-in is already in progress"
         const val ERROR_AUTH_LOGIN = "Could not complete sign-in"
         const val ERROR_ALREADY_STREAMING = "A response is already streaming"
         const val ERROR_ALREADY_AT_POINT = "Already at this point"
         const val ERROR_ENTRY_MISSING = "Message not found"
-
-        /** Actionable, secret-free message naming the still-missing auth prompts. */
-        fun missingCredentialError(missing: List<AuthPrompt>): String =
-            "Sign-in values are still needed: " +
-                missing.joinToString(", ") { prompt -> prompt.message.ifEmpty { prompt.envKey } }
     }
 }
