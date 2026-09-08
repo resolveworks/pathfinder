@@ -176,6 +176,9 @@ dependencies {
     // The web_fetch tool renders pages in a hidden WebView with its own profile.
     implementation(libs.androidx.webkit)
 
+    // EXIF orientation for the read tool's image path (BitmapImageProcessing).
+    implementation(libs.androidx.exifinterface)
+
     implementation(libs.androidx.datastore.preferences)
 
     // HTTP + JSON for the native provider layer.

@@ -78,6 +78,8 @@ import works.resolve.pathfinder.runtime.catalogAuthResolver
 import works.resolve.pathfinder.ssh.SshHostKeyStore
 import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.ssh.SshPrivateKeyPem
+import works.resolve.pathfinder.ssh.SshSessionConnections
+import works.resolve.pathfinder.ssh.SshSessionHostStore
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
@@ -298,6 +300,15 @@ internal class ChatHarness(private val tmpFolder: TemporaryFolder, testDispatche
         FakeSshHostKeyStore(File(tmpFolder.root, "ssh-host-keys"))
     )
 
+    val sshSessionHosts = SshSessionHostStore(
+        PreferenceDataStoreFactory.create(
+            scope = dataStoreScope,
+            produceFile = {
+                File(tmpFolder.root, "ssh_session_hosts_${System.nanoTime()}.preferences_pb")
+            }
+        )
+    )
+
     /** The shared manager all ViewModels and the factory write through. */
     val settingsManager: SettingsManager =
         runBlocking { SettingsManager.fromStorage(settingsStore) }
@@ -412,6 +423,8 @@ internal class ChatHarness(private val tmpFolder: TemporaryFolder, testDispatche
         modelResolver = modelResolver,
         searchProviderService = searchProviders,
         sshHostStore = sshHostStore,
+        sshSessionHosts = sshSessionHosts,
+        sshSessionConnections = SshSessionConnections(),
         appForegroundGate = AppForegroundGate()
     ).also { viewModels += it }
 

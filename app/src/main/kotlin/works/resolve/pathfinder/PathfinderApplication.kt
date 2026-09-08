@@ -24,8 +24,12 @@ import works.resolve.pathfinder.data.sessions.DirectorySessionSource
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.NativeAgentFactory
+import works.resolve.pathfinder.ssh.BitmapImageProcessing
+import works.resolve.pathfinder.ssh.SshConnectionHelper
 import works.resolve.pathfinder.ssh.SshHostKeyStore
 import works.resolve.pathfinder.ssh.SshHostStore
+import works.resolve.pathfinder.ssh.SshSessionConnections
+import works.resolve.pathfinder.ssh.SshSessionHostStore
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.webfetch.WebViewPageFetcher
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
@@ -127,6 +131,14 @@ class PathfinderApplication : Application() {
         )
     }
 
+    /** Session→SSH host mapping, stored beside the hosts (same DataStore file; pi's session JSONL stays untouched). */
+    val sshSessionHostStore: SshSessionHostStore by lazy { SshSessionHostStore(sshHostsDataStore) }
+
+    /** Live per-session SSH connections; closed by ChatViewModel at session replacement. */
+    val sshSessionConnections: SshSessionConnections by lazy { SshSessionConnections() }
+
+    val sshConnectionHelper: SshConnectionHelper by lazy { SshConnectionHelper(sshHostStore) }
+
     /** Generated from pi; never hand-edit the bundled asset. */
     val modelCatalog: ProviderCatalog by lazy {
         assets.open("models-catalog.json").bufferedReader().use { it.readText() }
@@ -141,7 +153,12 @@ class PathfinderApplication : Application() {
             webSocketTransport = webSocketTransport,
             settingsManager = settingsManager,
             authRegistry = authRegistry,
-            tools = listOf(webSearchTool, webFetchTool)
+            tools = listOf(webSearchTool, webFetchTool),
+            sshSessionHosts = sshSessionHostStore,
+            sshConnections = sshSessionConnections,
+            sshConnectionHelper = sshConnectionHelper,
+            bashTempDir = cacheDir.path,
+            imageProcessing = BitmapImageProcessing()
         )
     }
 
@@ -156,6 +173,8 @@ class PathfinderApplication : Application() {
                 agentFactory = agentFactory,
                 searchProviderService = searchProviderService,
                 sshHostStore = sshHostStore,
+                sshSessionHosts = sshSessionHostStore,
+                sshSessionConnections = sshSessionConnections,
                 modelResolver = agentFactory::resolveModel,
                 appForegroundGate = appForegroundGate
             )

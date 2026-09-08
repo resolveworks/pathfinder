@@ -46,6 +46,8 @@ import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.ssh.SshHost
 import works.resolve.pathfinder.ssh.SshHostStore
+import works.resolve.pathfinder.ssh.SshSessionConnections
+import works.resolve.pathfinder.ssh.SshSessionHostStore
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
 /**
@@ -87,7 +89,11 @@ class ChatViewModel(
      */
     private val appForegroundGate: AppForegroundGate,
     private val searchProviderService: SearchProviderService,
-    private val sshHostStore: SshHostStore
+    private val sshHostStore: SshHostStore,
+    /** Session→host mapping; the app-side half of session creation that assigns a host is a later phase. */
+    private val sshSessionHosts: SshSessionHostStore,
+    /** Live per-session connections; the close seam for the outgoing session at replacement. */
+    private val sshSessionConnections: SshSessionConnections
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -388,8 +394,11 @@ class ChatViewModel(
     /** Persists edited connection fields of an SSH host. */
     fun updateSshHost(host: SshHost) = sshHosts.updateHost(host)
 
-    /** Deletes an SSH host and its keypair. */
-    fun removeSshHost(id: String) = sshHosts.removeHost(id)
+    /** Deletes an SSH host and its keypair, plus any session mappings to it. */
+    fun removeSshHost(id: String) {
+        sshHosts.removeHost(id)
+        viewModelScope.launch { sshSessionHosts.clearHost(id) }
+    }
 
     fun send() {
         viewModelScope.launch { sendInternal() }
@@ -720,6 +729,14 @@ class ChatViewModel(
     }
 
     private fun bindAgent(newAgent: AgentSession) {
+        // AgentSession has no dispose seam; closing the outgoing session's
+        // SSH connection (if any) happens here, at session replacement — the
+        // single place the previous session is discarded on new/switch.
+        val incomingId = newAgent.sessionManager.getSessionId()
+        val outgoingId = _uiState.value.activeSessionId
+        if (outgoingId != null && outgoingId != incomingId) {
+            viewModelScope.launch { sshSessionConnections.close(outgoingId) }
+        }
         agentStateJob?.cancel()
         agentEventsJob?.cancel()
         agent = newAgent
