@@ -17,8 +17,9 @@ import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
 
 /**
  * Warning when the session's saved model could not be restored: the failed
- * model and, once known, the replacement that ran instead. Structured, so
- * callers phrase the message in their own UI layer.
+ * model and, once known, the replacement that ran instead. pi's runtime
+ * hands consumers a ready-made `modelFallbackMessage` string; here the
+ * runtime stays presentation-free and callers phrase it in their UI layer.
  */
 data class ModelFallback(
     val failedProvider: String,
