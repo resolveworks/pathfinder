@@ -184,7 +184,8 @@ class PathfinderApplication : Application() {
                 sshSessionConnections = sshSessionConnections,
                 hostKeyConfirmer = hostKeyConfirmer,
                 modelResolver = agentFactory::resolveModel,
-                appForegroundGate = appForegroundGate
+                appForegroundGate = appForegroundGate,
+                app = this@PathfinderApplication
             )
         }
     }

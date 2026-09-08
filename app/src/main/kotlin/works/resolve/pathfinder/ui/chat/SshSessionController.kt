@@ -1,8 +1,10 @@
 package works.resolve.pathfinder.ui.chat
 
+import android.app.Application
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ssh.HostKeyRequest
 import works.resolve.pathfinder.ssh.SshConnectionException
 import works.resolve.pathfinder.ssh.SshHostStore
@@ -18,6 +20,7 @@ import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
  */
 internal class SshSessionController(
     private val scope: CoroutineScope,
+    private val app: Application,
     private val hostStore: SshHostStore,
     private val sessionHosts: SshSessionHostStore,
     private val connections: SshSessionConnections,
@@ -80,47 +83,36 @@ internal class SshSessionController(
         return when (error.detail) {
             SshConnectionException.Detail.HOST_KEY_REJECTED ->
                 if (label != null) {
-                    "SSH host key for $label changed — the connection was refused for your " +
-                        "safety. Verify the server before trusting it again."
+                    app.getString(R.string.ssh_error_host_key_changed, label)
                 } else {
-                    ERROR_SSH_HOST_KEY_CHANGED
+                    app.getString(R.string.ssh_error_host_key_changed_generic)
                 }
 
             SshConnectionException.Detail.CONNECT ->
                 if (label != null) {
-                    "Could not reach $label — check the address and that the host is up"
+                    app.getString(R.string.ssh_error_connect, label)
                 } else {
-                    ERROR_SSH_CONNECT
+                    app.getString(R.string.ssh_error_connect_generic)
                 }
 
             SshConnectionException.Detail.AUTH ->
                 if (label != null) {
-                    "$label refused the app's key — add the app's public key to " +
-                        "authorized_keys on the server"
+                    app.getString(R.string.ssh_error_auth, label)
                 } else {
-                    ERROR_SSH_AUTH
+                    app.getString(R.string.ssh_error_auth_generic)
                 }
 
             SshConnectionException.Detail.SFTP ->
                 if (label != null) {
-                    "$label does not offer SFTP, which Pathfinder needs for remote files"
+                    app.getString(R.string.ssh_error_sftp, label)
                 } else {
-                    ERROR_SSH_SFTP
+                    app.getString(R.string.ssh_error_sftp_generic)
                 }
 
-            SshConnectionException.Detail.UNKNOWN_HOST -> ERROR_SSH_UNKNOWN_HOST
+            SshConnectionException.Detail.UNKNOWN_HOST ->
+                app.getString(R.string.ssh_error_unknown_host)
 
-            SshConnectionException.Detail.NO_KEY -> ERROR_SSH_NO_KEY
+            SshConnectionException.Detail.NO_KEY -> app.getString(R.string.ssh_error_no_key)
         }
-    }
-
-    private companion object {
-        private const val ERROR_SSH_CONNECT = "Could not connect to the SSH host"
-        private const val ERROR_SSH_AUTH = "The SSH host refused the app's key"
-        private const val ERROR_SSH_SFTP = "The SSH host does not offer SFTP"
-        private const val ERROR_SSH_UNKNOWN_HOST = "That SSH host is no longer configured"
-        private const val ERROR_SSH_NO_KEY = "No SSH key is stored for that host"
-        private const val ERROR_SSH_HOST_KEY_CHANGED =
-            "The SSH host key changed — the connection was refused for your safety"
     }
 }

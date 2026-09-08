@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import android.app.Application
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -7,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
@@ -22,6 +24,7 @@ import works.resolve.pathfinder.codingagent.core.resolveModelScope
  */
 internal class ModelSettingsController(
     private val scope: CoroutineScope,
+    private val app: Application,
     private val settingsManager: SettingsManager,
     private val catalog: ProviderCatalog,
     /** Resolves a provider/model pair to the effective request model; throwing input is surfaced as a safe unknown-model error. */
@@ -72,10 +75,10 @@ internal class ModelSettingsController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: SessionError) {
-                onError(ERROR_SESSION_SAVE, e)
+                onError(app.getString(R.string.error_session_save), e)
                 return@launch
             } catch (e: Exception) {
-                onError(ERROR_THINKING_SWITCH, e)
+                onError(app.getString(R.string.error_thinking_switch), e)
                 return@launch
             }
             onSessionApplied()
@@ -100,10 +103,10 @@ internal class ModelSettingsController(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: SessionError) {
-                    onError(ERROR_SESSION_SAVE, e)
+                    onError(app.getString(R.string.error_session_save), e)
                     return@launch
                 } catch (e: Exception) {
-                    onError(ERROR_THINKING_SWITCH, e)
+                    onError(app.getString(R.string.error_thinking_switch), e)
                     return@launch
                 }
             } else {
@@ -112,7 +115,7 @@ internal class ModelSettingsController(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    onError(ERROR_SETTINGS_SAVE, e)
+                    onError(app.getString(R.string.error_settings_save), e)
                     return@launch
                 }
             }
@@ -130,7 +133,7 @@ internal class ModelSettingsController(
     private suspend fun selectModelInternal(providerId: String, modelId: String) {
         val session = agent()
         if (session == null) {
-            onError(ERROR_CONFIG_INVALID, null)
+            onError(app.getString(R.string.error_config_invalid), null)
             return
         }
         val model = try {
@@ -138,7 +141,7 @@ internal class ModelSettingsController(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            onError(ERROR_UNKNOWN_MODEL, e)
+            onError(app.getString(R.string.error_unknown_model), e)
             return
         }
         // No availability pre-check: the picker only offers
@@ -154,10 +157,10 @@ internal class ModelSettingsController(
         } catch (e: SessionError) {
             // A failed model_change append is a save failure, not a switch
             // failure — the agent already switched in memory.
-            onError(ERROR_SESSION_SAVE, e)
+            onError(app.getString(R.string.error_session_save), e)
             return
         } catch (e: Exception) {
-            onError(ERROR_MODEL_SWITCH, e)
+            onError(app.getString(R.string.error_model_switch), e)
             return
         }
         surfaceSettingsErrors()
@@ -178,7 +181,7 @@ internal class ModelSettingsController(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            onError(ERROR_SETTINGS_SAVE, e)
+            onError(app.getString(R.string.error_settings_save), e)
             return
         }
         surfaceSettingsErrors()
@@ -216,7 +219,7 @@ internal class ModelSettingsController(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            onError(ERROR_SETTINGS_SAVE, e)
+            onError(app.getString(R.string.error_settings_save), e)
             return
         }
         surfaceSettingsErrors()
@@ -270,14 +273,7 @@ internal class ModelSettingsController(
      */
     private fun surfaceSettingsErrors() {
         for (error in settingsManager.drainErrors()) {
-            onError(ERROR_SETTINGS_SAVE, error)
+            onError(app.getString(R.string.error_settings_save), error)
         }
-    }
-
-    private companion object {
-        const val ERROR_UNKNOWN_MODEL = "Unknown model"
-        const val ERROR_MODEL_SWITCH =
-            "Could not switch to that model — check the provider sign-in"
-        const val ERROR_THINKING_SWITCH = "Could not switch the thinking level"
     }
 }

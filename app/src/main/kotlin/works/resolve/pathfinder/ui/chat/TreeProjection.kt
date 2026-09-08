@@ -28,7 +28,8 @@ import works.resolve.pathfinder.codingagent.core.SessionTreeNode
 internal fun buildTreeRows(
     roots: List<SessionTreeNode>,
     leafId: String?,
-    filter: TreeFilter
+    filter: TreeFilter,
+    noContent: String
 ): List<TreeRow> {
     if (roots.isEmpty()) return emptyList()
 
@@ -161,7 +162,7 @@ internal fun buildTreeRows(
             // pi's isFoldable: segment starts (roots, branch children) with
             // visible children.
             isFoldable = children.isNotEmpty() && (frame.isRoot || frame.justBranched),
-            body = frame.entry.rowBody(toolCalls)
+            body = frame.entry.rowBody(toolCalls, noContent)
         )
         val childIndent = when {
             multipleChildren -> frame.internalIndent + 1
@@ -197,8 +198,8 @@ internal fun buildTreeRows(
     return rows
 }
 
-private fun SessionEntry.rowBody(toolCalls: Map<String, ToolCall>): TreeRowBody {
-    if (this !is MessageEntry) return TreeRowBody.Text("(no content)")
+private fun SessionEntry.rowBody(toolCalls: Map<String, ToolCall>, noContent: String): TreeRowBody {
+    if (this !is MessageEntry) return TreeRowBody.Text(noContent)
     return when (val entryMessage = message) {
         is ToolResultMessage -> TreeRowBody.Tool(
             name = entryMessage.toolName,

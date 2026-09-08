@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import android.app.Application
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import works.resolve.pathfinder.R
 import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.AgentState
 import works.resolve.pathfinder.ai.AssistantMessage
@@ -84,6 +86,7 @@ class ChatViewModel(
      * flows gate loopback waits and network work on it.
      */
     private val appForegroundGate: AppForegroundGate,
+    private val app: Application,
     private val searchProviderService: SearchProviderService,
     private val sshHostStore: SshHostStore,
     /** Session→host mapping; [SshSessionController] binds and rolls it back around agent creation. */
@@ -100,11 +103,12 @@ class ChatViewModel(
         scope = viewModelScope,
         authService = authService,
         onLoginSucceeded = { onCredentialStored() },
-        onLoginFailed = { cause -> setError(ERROR_AUTH_LOGIN, cause) }
+        onLoginFailed = { cause -> setError(app.getString(R.string.error_auth_login), cause) }
     )
 
     private val providerCredentials = ProviderCredentialsController(
         viewModelScope,
+        app,
         catalog,
         authService,
         loginController::busy,
@@ -114,6 +118,7 @@ class ChatViewModel(
 
     private val modelSettings = ModelSettingsController(
         viewModelScope,
+        app,
         settingsManager,
         catalog,
         modelResolver,
@@ -127,15 +132,17 @@ class ChatViewModel(
     private val searchProviders = SearchProviderController(
         scope = viewModelScope,
         service = searchProviderService,
+        app = app,
         onError = { message, cause -> setError(message, cause) }
     )
 
     private val sessionSearch = SessionSearchController()
 
-    private val sshHosts = SshHostsController(viewModelScope, sshHostStore, ::setError)
+    private val sshHosts = SshHostsController(viewModelScope, app, sshHostStore, ::setError)
 
     private val sshSessions = SshSessionController(
         viewModelScope,
+        app,
         sshHostStore,
         sshSessionHosts,
         sshSessionConnections,
@@ -310,7 +317,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_CREDENTIAL_SAVE, e)
+                setError(app.getString(R.string.error_credential_save), e)
             }
         }
     }
@@ -363,7 +370,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_SETTINGS_SAVE, e)
+                setError(app.getString(R.string.error_settings_save), e)
             }
         }
     }
@@ -414,18 +421,18 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: IllegalStateException) {
-                setError(ERROR_BUSY)
+                setError(app.getString(R.string.error_busy))
                 return@launch
             } catch (e: IllegalArgumentException) {
-                setError(ERROR_ENTRY_MISSING)
+                setError(app.getString(R.string.error_entry_missing))
                 return@launch
             } catch (e: SessionError) {
-                setError(ERROR_SESSION_SAVE, e)
+                setError(app.getString(R.string.error_session_save), e)
                 return@launch
             }
             if (result.cancelled) return@launch
             if (result.outcome == AgentSession.NavigationOutcome.NO_OP) {
-                setError(ERROR_ALREADY_AT_POINT)
+                setError(app.getString(R.string.error_already_at_point))
                 return@launch
             }
             val manager = session.sessionManager
@@ -448,7 +455,8 @@ class ChatViewModel(
                     treeRows = buildTreeRows(
                         manager.getTree(),
                         manager.getLeafId(),
-                        it.treeFilter
+                        it.treeFilter,
+                        app.getString(R.string.tree_no_content)
                     )
                 )
             }
@@ -480,7 +488,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_SESSION_CREATE, e)
+                setError(app.getString(R.string.error_session_create), e)
             }
         }
     }
@@ -507,7 +515,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_SESSION_CREATE, e)
+                setError(app.getString(R.string.error_session_create), e)
             }
         }
     }
@@ -524,12 +532,12 @@ class ChatViewModel(
                 val file = _uiState.value.sessionSummaries
                     .firstOrNull { it.id == sessionId }?.path
                     ?: run {
-                        setError(ERROR_SESSION_MISSING)
+                        setError(app.getString(R.string.error_session_missing))
                         return@launch
                     }
                 val manager = sessionSource.open(file)
                 if (manager == null) {
-                    setError(ERROR_SESSION_MISSING)
+                    setError(app.getString(R.string.error_session_missing))
                     return@launch
                 }
                 val newAgent = tryCreateAgent(manager) ?: return@launch
@@ -537,7 +545,7 @@ class ChatViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                setError(ERROR_SESSION_LOAD, e)
+                setError(app.getString(R.string.error_session_load), e)
             }
         }
     }
@@ -586,7 +594,7 @@ class ChatViewModel(
                 !defaultModelId.isNullOrBlank() &&
                 catalog.getProvider(defaultProvider!!)?.model(defaultModelId) != null
             ) {
-                setError(ERROR_MODEL_UNAVAILABLE)
+                setError(app.getString(R.string.error_model_unavailable))
             }
 
             val manager = resolveSession(appSettings.activeSessionId, summaries)
@@ -598,7 +606,7 @@ class ChatViewModel(
                     it.copy(
                         status = ChatStatus.Failed,
                         sessionSummaries = summaries,
-                        error = ERROR_CONFIG_INVALID
+                        error = app.getString(R.string.error_config_invalid)
                     )
                 }
                 return
@@ -619,7 +627,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_INIT, e)
+            setError(app.getString(R.string.error_init), e)
             _uiState.update { it.copy(status = ChatStatus.Failed) }
         }
     }
@@ -663,7 +671,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_SETTINGS_SAVE, e)
+            setError(app.getString(R.string.error_settings_save), e)
             return false
         }
         val conversation = agent.sessionManager
@@ -695,7 +703,8 @@ class ChatViewModel(
                 treeRows = buildTreeRows(
                     conversation.getTree(),
                     conversation.getLeafId(),
-                    it.treeFilter
+                    it.treeFilter,
+                    app.getString(R.string.tree_no_content)
                 ),
                 draft = draft
             )
@@ -716,7 +725,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            setError(ERROR_SESSION_CREATE, e)
+            setError(app.getString(R.string.error_session_create), e)
             return null
         }
         val newAgent = tryCreateAgent(manager) ?: return null
@@ -741,7 +750,7 @@ class ChatViewModel(
             setError(sshSessions.connectionError(e, sessionManager.getSessionId()), e)
             return null
         } catch (e: Exception) {
-            setError(ERROR_CONFIG_INVALID, e)
+            setError(app.getString(R.string.error_config_invalid), e)
             return null
         }
         result.modelFallbackMessage?.let { setError(it) }
@@ -845,7 +854,12 @@ class ChatViewModel(
     /** Tree rows over the bound session's current entries and leaf. */
     private fun treeRows(filter: TreeFilter): List<TreeRow> {
         val manager = activeSession ?: return emptyList()
-        return buildTreeRows(manager.getTree(), manager.getLeafId(), filter)
+        return buildTreeRows(
+            manager.getTree(),
+            manager.getLeafId(),
+            filter,
+            app.getString(R.string.tree_no_content)
+        )
     }
 
     /**
@@ -956,11 +970,11 @@ class ChatViewModel(
      */
     fun beginProviderAuthLogin(providerId: String, method: AuthMethodInfo): Boolean {
         if (isAuthProviderBusy()) {
-            setError(ERROR_AUTH_IN_PROGRESS)
+            setError(app.getString(R.string.error_auth_in_progress))
             return false
         }
         if (providerCredentials.providerAuthMethods(providerId).none { it.type == method.type }) {
-            setError(ERROR_UNKNOWN_PROVIDER)
+            setError(app.getString(R.string.error_unknown_provider))
             return false
         }
         loginController.begin(providerId, method)
@@ -1013,17 +1027,17 @@ class ChatViewModel(
         } catch (e: SessionError) {
             if (e.code == SessionErrorCode.AUTH) {
                 // Preflight rejection: nothing was persisted or sent.
-                setError(ERROR_PROMPT_AUTH)
+                setError(app.getString(R.string.error_prompt_auth))
             } else {
-                setError(ERROR_SESSION_SAVE, e)
+                setError(app.getString(R.string.error_session_save), e)
             }
         } catch (e: IllegalStateException) {
-            setError(ERROR_ALREADY_STREAMING)
+            setError(app.getString(R.string.error_already_streaming))
         } catch (e: Exception) {
             // The run already failed and committed its terminal state; a
             // storage failure here is a save failure (the in-memory tree
             // keeps its entries).
-            setError(ERROR_SESSION_SAVE, e)
+            setError(app.getString(R.string.error_session_save), e)
         }
     }
 
@@ -1069,7 +1083,7 @@ class ChatViewModel(
     /** True (and sets an error) when a session/config-changing intent arrives mid-stream. */
     private fun rejectWhileBusy(): Boolean {
         if (_uiState.value.isStreaming) {
-            setError(ERROR_BUSY)
+            setError(app.getString(R.string.error_busy))
             return true
         }
         return false
@@ -1099,18 +1113,5 @@ class ChatViewModel(
 
     private companion object {
         private const val TAG = "Pathfinder"
-
-        const val ERROR_INIT = "Could not load chat data"
-        const val ERROR_MODEL_UNAVAILABLE =
-            "That model is no longer available for this account — pick another model"
-        const val ERROR_PROMPT_AUTH = "Could not send — check the provider sign-in"
-        const val ERROR_SESSION_CREATE = "Could not create a new chat"
-        const val ERROR_SESSION_LOAD = "Could not open the chat"
-        const val ERROR_SESSION_MISSING = "That chat no longer exists"
-        const val ERROR_BUSY = "Wait for the response to finish first"
-        const val ERROR_AUTH_LOGIN = "Could not complete sign-in"
-        const val ERROR_ALREADY_STREAMING = "A response is already streaming"
-        const val ERROR_ALREADY_AT_POINT = "Already at this point"
-        const val ERROR_ENTRY_MISSING = "Message not found"
     }
 }
