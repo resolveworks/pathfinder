@@ -267,7 +267,7 @@ class BashTool internal constructor(private val cwd: String, private val options
             try {
                 val exitCode: Int?
                 try {
-                    val timeoutSeconds = timeout?.toLong()
+                    val timeoutSeconds = timeout
                     exitCode = if (timeoutMs != null) {
                         withTimeout(timeoutMs) {
                             options.operations.exec(command, cwd, handleData, timeoutSeconds)

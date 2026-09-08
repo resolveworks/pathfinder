@@ -91,7 +91,7 @@ class WriteTool internal constructor(
             ops.mkdir(dir)
 
             // Write the file contents.
-            ops.writeFile(absolutePath, content.toByteArray(Charsets.UTF_8))
+            ops.writeFile(absolutePath, content)
 
             AgentToolResult(content = listOf(TextContent("Successfully wrote to $path")))
         }

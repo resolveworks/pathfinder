@@ -27,6 +27,9 @@ private fun normalizePosixPath(path: String): String {
         when (segment) {
             "", "." -> {}
 
+            // ".." pops the previous segment; at the root of an absolute path it
+            // is dropped (posix normalize), and only relative paths keep leading
+            // ".." segments.
             ".." -> if (segments.isNotEmpty() && segments.last() != "..") {
                 segments.removeAt(segments.size - 1)
             } else if (!absolute) {

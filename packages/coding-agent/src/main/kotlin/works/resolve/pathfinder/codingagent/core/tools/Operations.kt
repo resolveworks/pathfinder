@@ -43,19 +43,18 @@ interface ReadOperations {
 }
 
 interface WriteOperations {
-    /** Write content to a file. */
-    suspend fun writeFile(absolutePath: String, content: ByteArray)
+    /** Write content to a file; the implementation encodes UTF-8
+     * (pi's `fsWriteFile(path, content, "utf-8")`). */
+    suspend fun writeFile(absolutePath: String, content: String)
 
     /** Create a directory recursively (pi's `mkdir(path, {recursive: true})`). */
     suspend fun mkdir(dir: String)
 }
 
 interface EditOperations {
-    /**
-     * Read file contents. Divergence from pi: pi reads a Buffer and decodes
-     * UTF-8 in the tool; here decoding is part of the operation.
-     */
-    suspend fun readFile(absolutePath: String): String
+    /** Read file contents as raw bytes; the tool decodes UTF-8 like
+     * pi's `buffer.toString("utf-8")`. */
+    suspend fun readFile(absolutePath: String): ByteArray
 
     /** Write content to a file. */
     suspend fun writeFile(absolutePath: String, content: String)
@@ -71,8 +70,8 @@ interface BashOperations {
      *
      * [onData] is the merge point for stdout and stderr: implementations
      * forward interleaved chunks in arrival order, and the shell just
-     * accumulates. [timeout] is in (whole) seconds — the truncation from pi's
-     * fractional seconds is the price of the Long seam. Implementations must
+     * accumulates. [timeout] is in seconds and may be fractional, reaching the
+     * operation raw as in pi. Implementations must
      * propagate coroutine cancellation, and may fail with message "aborted" or
      * "timeout:<seconds>" to preserve pi's local-shell error contract. Pi's
      * `env` member is deliberately absent: its only producers/consumers are
@@ -82,6 +81,6 @@ interface BashOperations {
         command: String,
         cwd: String,
         onData: (ByteArray) -> Unit,
-        timeout: Long?
+        timeout: Double?
     ): Int?
 }

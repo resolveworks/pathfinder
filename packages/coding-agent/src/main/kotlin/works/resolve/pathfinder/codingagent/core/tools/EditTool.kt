@@ -106,6 +106,48 @@ private fun validateEditInput(input: JsonObject): List<Edit> {
  * [OperationsException.code] since arbitrary Kotlin throwables carry no
  * Node-style `code` property.
  */
+private fun editsPropertySchema(): JsonObject = buildJsonObject {
+    put("type", "array")
+    put(
+        "items",
+        buildJsonObject {
+            put("type", "object")
+            put(
+                "properties",
+                buildJsonObject {
+                    put(
+                        "oldText",
+                        buildJsonObject {
+                            put("type", "string")
+                            put(
+                                "description",
+                                "Exact text for one targeted replacement. It must be unique " +
+                                    "in the original file and must not overlap with any other " +
+                                    "edits[].oldText in the same call."
+                            )
+                        }
+                    )
+                    put(
+                        "newText",
+                        buildJsonObject {
+                            put("type", "string")
+                            put("description", "Replacement text for this targeted edit.")
+                        }
+                    )
+                }
+            )
+            put("required", JsonArray(listOf(JsonPrimitive("oldText"), JsonPrimitive("newText"))))
+        }
+    )
+    put(
+        "description",
+        "One or more targeted replacements. Each edit is matched against the original " +
+            "file, not incrementally. Do not include " +
+            "overlapping or nested edits. If two changes touch the same " +
+            "block or nearby lines, merge them into one edit instead."
+    )
+}
+
 class EditTool internal constructor(private val cwd: String, private val options: EditToolOptions) :
     AgentTool {
 
@@ -129,19 +171,7 @@ class EditTool internal constructor(private val cwd: String, private val options
                             put("description", "Path to the file to edit (relative or absolute)")
                         }
                     )
-                    put(
-                        "edits",
-                        buildJsonObject {
-                            put("type", "array")
-                            put(
-                                "description",
-                                "One or more targeted replacements. Each edit is matched against " +
-                                    "the original file, not incrementally. Do not include " +
-                                    "overlapping or nested edits. If two changes touch the same " +
-                                    "block or nearby lines, merge them into one edit instead."
-                            )
-                        }
-                    )
+                    put("edits", editsPropertySchema())
                 }
             )
             put("required", JsonArray(listOf(JsonPrimitive("path"), JsonPrimitive("edits"))))
@@ -201,8 +231,8 @@ class EditTool internal constructor(private val cwd: String, private val options
                 )
             }
 
-            // Read the file.
-            val rawContent = ops.readFile(absolutePath)
+            // Read the file; decode UTF-8 with malformed-input replacement like Node.
+            val rawContent = String(ops.readFile(absolutePath), Charsets.UTF_8)
 
             // Strip BOM before matching. The model will not include an invisible BOM in oldText.
             val (bom, content) = splitBom(rawContent)
