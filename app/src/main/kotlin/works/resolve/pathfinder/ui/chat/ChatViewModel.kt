@@ -772,7 +772,31 @@ class ChatViewModel(
                     ERROR_SSH_HOST_KEY_CHANGED
                 }
 
-            else -> ERROR_SSH_CONNECT
+            SshConnectionException.Detail.CONNECT ->
+                if (label != null) {
+                    "Could not reach $label — check the address and that the host is up"
+                } else {
+                    ERROR_SSH_CONNECT
+                }
+
+            SshConnectionException.Detail.AUTH ->
+                if (label != null) {
+                    "$label refused the app's key — add the app's public key to " +
+                        "authorized_keys on the server"
+                } else {
+                    ERROR_SSH_AUTH
+                }
+
+            SshConnectionException.Detail.SFTP ->
+                if (label != null) {
+                    "$label does not offer SFTP, which Pathfinder needs for remote files"
+                } else {
+                    ERROR_SSH_SFTP
+                }
+
+            SshConnectionException.Detail.UNKNOWN_HOST -> ERROR_SSH_UNKNOWN_HOST
+
+            SshConnectionException.Detail.NO_KEY -> ERROR_SSH_NO_KEY
         }
     }
 
@@ -1457,6 +1481,10 @@ class ChatViewModel(
         const val ERROR_ALREADY_AT_POINT = "Already at this point"
         const val ERROR_ENTRY_MISSING = "Message not found"
         const val ERROR_SSH_CONNECT = "Could not connect to the SSH host"
+        const val ERROR_SSH_AUTH = "The SSH host refused the app's key"
+        const val ERROR_SSH_SFTP = "The SSH host does not offer SFTP"
+        const val ERROR_SSH_UNKNOWN_HOST = "That SSH host is no longer configured"
+        const val ERROR_SSH_NO_KEY = "No SSH key is stored for that host"
         const val ERROR_SSH_HOST_KEY_CHANGED =
             "The SSH host key changed — the connection was refused for your safety"
 
