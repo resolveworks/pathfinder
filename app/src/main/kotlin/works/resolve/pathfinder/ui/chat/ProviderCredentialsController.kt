@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import android.app.Application
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -8,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
@@ -29,6 +31,7 @@ import works.resolve.pathfinder.ai.providers.ProviderCatalog
  */
 internal class ProviderCredentialsController(
     private val scope: CoroutineScope,
+    private val app: Application,
     private val catalog: ProviderCatalog,
     private val authService: ProviderAuthService,
     /** True while an interactive login is in flight (the login controller's busy flag); a key save must not race it. */
@@ -68,12 +71,12 @@ internal class ProviderCredentialsController(
     fun saveCredential(providerId: String, apiKeyInput: String, envInputs: Map<String, String>) {
         scope.launch {
             val provider = catalog.getProvider(providerId) ?: run {
-                onError(ERROR_UNKNOWN_PROVIDER, null)
+                onError(app.getString(R.string.error_unknown_provider), null)
                 return@launch
             }
             // A key save must not race an in-flight account login.
             if (isLoginBusy()) {
-                onError(ERROR_AUTH_IN_PROGRESS, null)
+                onError(app.getString(R.string.error_auth_in_progress), null)
                 return@launch
             }
             // The first auth prompt is the API key; every other prompt fills
@@ -104,7 +107,7 @@ internal class ProviderCredentialsController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onError(ERROR_CREDENTIAL_SAVE, e)
+                onError(app.getString(R.string.error_credential_save), e)
                 return@launch
             }
             onCredentialStored()
@@ -123,7 +126,7 @@ internal class ProviderCredentialsController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onError(ERROR_CREDENTIAL_SAVE, e)
+                onError(app.getString(R.string.error_credential_save), e)
                 return@launch
             }
             refresh()
@@ -163,7 +166,7 @@ internal class ProviderCredentialsController(
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "provider_status", e)
-            onError(ERROR_CREDENTIAL_SAVE, e)
+            onError(app.getString(R.string.error_credential_save), e)
             return
         }
         val configuredIds = providerOptions.filter { it.configured }.map { it.id }.toSet()
@@ -179,7 +182,7 @@ internal class ProviderCredentialsController(
                     throw e
                 } catch (e: Exception) {
                     Log.w(TAG, "available_models", e)
-                    onError(ERROR_CREDENTIAL_SAVE, e)
+                    onError(app.getString(R.string.error_credential_save), e)
                     return
                 }
             }
@@ -230,12 +233,13 @@ internal class ProviderCredentialsController(
         override suspend fun notify(event: AuthEvent) {}
     }
 
+    /** Actionable, secret-free message naming the still-missing auth prompts. */
+    private fun missingCredentialError(missing: List<AuthPrompt>): String = app.getString(
+        R.string.error_missing_credentials,
+        missing.joinToString(", ") { prompt -> prompt.message.ifEmpty { prompt.envKey } }
+    )
+
     private companion object {
         private const val TAG = "Pathfinder"
-
-        /** Actionable, secret-free message naming the still-missing auth prompts. */
-        fun missingCredentialError(missing: List<AuthPrompt>): String =
-            "Sign-in values are still needed: " +
-                missing.joinToString(", ") { prompt -> prompt.message.ifEmpty { prompt.envKey } }
     }
 }
