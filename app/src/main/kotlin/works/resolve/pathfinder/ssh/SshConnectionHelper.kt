@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.ssh
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.connectbot.sshlib.AuthResult
 import org.connectbot.sshlib.ConnectResult
 import org.connectbot.sshlib.SftpResult
@@ -23,14 +25,16 @@ internal constructor(
     val initialWorkingDirectory: String
 ) {
     suspend fun close() {
-        client.disconnect()
+        withContext(Dispatchers.IO) { client.disconnect() }
     }
 }
 
 /**
  * Establishes per-session SSH connections from stored host configs.
  * Publickey is the only authentication ever wired: no password or
- * keyboard-interactive path exists here.
+ * keyboard-interactive path exists here. This seam owns the dispatcher for
+ * all blocking-capable SSH work: connect and close run on Dispatchers.IO, so
+ * callers stay dispatcher-agnostic.
  */
 class SshConnectionHelper(private val store: SshHostStore) {
 
@@ -43,7 +47,7 @@ class SshConnectionHelper(private val store: SshHostStore) {
     suspend fun connect(
         hostId: String,
         onUnknownHostKey: UnknownHostKeyCallback = UnknownHostKeyCallback.REFUSE
-    ): SshConnection {
+    ): SshConnection = withContext(Dispatchers.IO) {
         val host =
             store.host(hostId)
                 ?: throw SshConnectionException(
@@ -93,7 +97,7 @@ class SshConnectionHelper(private val store: SshHostStore) {
             }
 
             val cwd = resolveWorkingDirectory(client, host)
-            return SshConnection(host = host, client = client, initialWorkingDirectory = cwd)
+            SshConnection(host = host, client = client, initialWorkingDirectory = cwd)
         } catch (error: Exception) {
             client.disconnect()
             throw error
