@@ -161,6 +161,8 @@ internal fun filterTreeRows(
 private fun TreeRow.searchText(): String = when (val rowBody = body) {
     is TreeRowBody.Text -> rowBody.preview
 
+    is TreeRowBody.NoContent -> ""
+
     is TreeRowBody.Tool ->
         rowBody.name + " " +
             (rowBody.call?.let { toolCallInput(it.name, it.arguments) } ?: "")
@@ -300,6 +302,7 @@ private fun TreeRowItem(
             text = when (val rowBody = row.body) {
                 is TreeRowBody.Text -> rowBody.preview
                 is TreeRowBody.Tool -> toolCallTitle(rowBody.call, rowBody.name)
+                TreeRowBody.NoContent -> stringResource(R.string.tree_no_content)
             },
             style = MaterialTheme.typography.bodyMedium,
             maxLines = 1,

@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.ui.chat
 
-import android.app.Application
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -31,14 +30,13 @@ import works.resolve.pathfinder.ai.providers.ProviderCatalog
  */
 internal class ProviderCredentialsController(
     private val scope: CoroutineScope,
-    private val app: Application,
     private val catalog: ProviderCatalog,
     private val authService: ProviderAuthService,
     /** True while an interactive login is in flight (the login controller's busy flag); a key save must not race it. */
     private val isLoginBusy: () -> Boolean,
     /** Shared post-login success path in the ViewModel (refreshes, then completes first-run configuration). */
     private val onCredentialStored: suspend () -> Unit,
-    private val onError: (message: String, cause: Throwable?) -> Unit
+    private val onError: (message: UiString, cause: Throwable?) -> Unit
 ) {
     /** Live credential-derived provider and model surfaces. */
     data class State(
@@ -71,12 +69,12 @@ internal class ProviderCredentialsController(
     fun saveCredential(providerId: String, apiKeyInput: String, envInputs: Map<String, String>) {
         scope.launch {
             val provider = catalog.getProvider(providerId) ?: run {
-                onError(app.getString(R.string.error_unknown_provider), null)
+                onError(UiString(R.string.error_unknown_provider), null)
                 return@launch
             }
             // A key save must not race an in-flight account login.
             if (isLoginBusy()) {
-                onError(app.getString(R.string.error_auth_in_progress), null)
+                onError(UiString(R.string.error_auth_in_progress), null)
                 return@launch
             }
             // The first auth prompt is the API key; every other prompt fills
@@ -107,7 +105,7 @@ internal class ProviderCredentialsController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onError(app.getString(R.string.error_credential_save), e)
+                onError(UiString(R.string.error_credential_save), e)
                 return@launch
             }
             onCredentialStored()
@@ -126,7 +124,7 @@ internal class ProviderCredentialsController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onError(app.getString(R.string.error_credential_save), e)
+                onError(UiString(R.string.error_credential_save), e)
                 return@launch
             }
             refresh()
@@ -166,7 +164,7 @@ internal class ProviderCredentialsController(
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "provider_status", e)
-            onError(app.getString(R.string.error_credential_save), e)
+            onError(UiString(R.string.error_credential_save), e)
             return
         }
         val configuredIds = providerOptions.filter { it.configured }.map { it.id }.toSet()
@@ -182,7 +180,7 @@ internal class ProviderCredentialsController(
                     throw e
                 } catch (e: Exception) {
                     Log.w(TAG, "available_models", e)
-                    onError(app.getString(R.string.error_credential_save), e)
+                    onError(UiString(R.string.error_credential_save), e)
                     return
                 }
             }
@@ -234,9 +232,13 @@ internal class ProviderCredentialsController(
     }
 
     /** Actionable, secret-free message naming the still-missing auth prompts. */
-    private fun missingCredentialError(missing: List<AuthPrompt>): String = app.getString(
+    private fun missingCredentialError(missing: List<AuthPrompt>): UiString = UiString(
         R.string.error_missing_credentials,
-        missing.joinToString(", ") { prompt -> prompt.message.ifEmpty { prompt.envKey } }
+        listOf(
+            missing.joinToString(", ") { prompt ->
+                prompt.message.ifEmpty { prompt.envKey }
+            }
+        )
     )
 
     private companion object {

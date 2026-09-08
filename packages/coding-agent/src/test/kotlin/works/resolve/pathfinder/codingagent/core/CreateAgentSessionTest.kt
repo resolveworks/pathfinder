@@ -120,7 +120,7 @@ class CreateAgentSessionTest {
         assertEquals(model.id, modelChange.modelId)
         val thinking = entries.filterIsInstance<ThinkingLevelEntry>().single()
         assertEquals("high", thinking.thinkingLevel)
-        assertNull(result.modelFallbackMessage)
+        assertNull(result.modelFallback)
     }
 
     @Test
@@ -163,7 +163,7 @@ class CreateAgentSessionTest {
                 1,
                 manager.getEntries().filterIsInstance<ThinkingLevelEntry>().size
             )
-            assertNull(result.modelFallbackMessage)
+            assertNull(result.modelFallback)
         }
 
     @Test
@@ -204,8 +204,13 @@ class CreateAgentSessionTest {
 
         assertEquals(model, result.session.model)
         assertEquals(
-            "Could not restore model provider-a/gone. Using provider-a/model-a",
-            result.modelFallbackMessage
+            ModelFallback(
+                failedProvider = "provider-a",
+                failedModelId = "gone",
+                usedProvider = "provider-a",
+                usedModelId = "model-a"
+            ),
+            result.modelFallback
         )
     }
 

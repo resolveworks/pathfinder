@@ -28,8 +28,7 @@ import works.resolve.pathfinder.codingagent.core.SessionTreeNode
 internal fun buildTreeRows(
     roots: List<SessionTreeNode>,
     leafId: String?,
-    filter: TreeFilter,
-    noContent: String
+    filter: TreeFilter
 ): List<TreeRow> {
     if (roots.isEmpty()) return emptyList()
 
@@ -162,7 +161,7 @@ internal fun buildTreeRows(
             // pi's isFoldable: segment starts (roots, branch children) with
             // visible children.
             isFoldable = children.isNotEmpty() && (frame.isRoot || frame.justBranched),
-            body = frame.entry.rowBody(toolCalls, noContent)
+            body = frame.entry.rowBody(toolCalls)
         )
         val childIndent = when {
             multipleChildren -> frame.internalIndent + 1
@@ -198,8 +197,8 @@ internal fun buildTreeRows(
     return rows
 }
 
-private fun SessionEntry.rowBody(toolCalls: Map<String, ToolCall>, noContent: String): TreeRowBody {
-    if (this !is MessageEntry) return TreeRowBody.Text(noContent)
+private fun SessionEntry.rowBody(toolCalls: Map<String, ToolCall>): TreeRowBody {
+    if (this !is MessageEntry) return TreeRowBody.NoContent
     return when (val entryMessage = message) {
         is ToolResultMessage -> TreeRowBody.Tool(
             name = entryMessage.toolName,
@@ -209,22 +208,27 @@ private fun SessionEntry.rowBody(toolCalls: Map<String, ToolCall>, noContent: St
             call = toolCalls[entryMessage.toolCallId]
         )
 
-        is UserMessage -> TreeRowBody.Text(preview("You", entryMessage.content.textContent()))
+        is UserMessage -> preview("You", entryMessage.content.textContent())
 
-        is AssistantMessage -> TreeRowBody.Text(
-            preview("Assistant", entryMessage.errorMessage ?: entryMessage.content.textContent())
+        is AssistantMessage -> preview(
+            "Assistant",
+            entryMessage.errorMessage ?: entryMessage.content.textContent()
         )
     }
 }
 
-private fun preview(prefix: String, body: String): String {
+private fun preview(prefix: String, body: String): TreeRowBody {
     val normalized = body
         .lineSequence()
         .map { it.trim() }
         .filter { it.isNotEmpty() }
         .joinToString(" ")
         .take(PREVIEW_MAX_LENGTH)
-    return "$prefix: ${normalized.ifEmpty { "(no content)" }}"
+    return if (normalized.isEmpty()) {
+        TreeRowBody.NoContent
+    } else {
+        TreeRowBody.Text("$prefix: $normalized")
+    }
 }
 
 private const val PREVIEW_MAX_LENGTH = 120

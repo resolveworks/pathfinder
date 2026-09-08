@@ -15,12 +15,20 @@ import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.clampThinkingLevel
 import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
 
-/** Result of [createAgentSession]. */
-data class CreateAgentSessionResult(
-    val session: AgentSession,
-    /** Warning when the session's saved model could not be restored. */
-    val modelFallbackMessage: String?
+/**
+ * Warning when the session's saved model could not be restored: the failed
+ * model and, once known, the replacement that ran instead. Structured, so
+ * callers phrase the message in their own UI layer.
+ */
+data class ModelFallback(
+    val failedProvider: String,
+    val failedModelId: String,
+    val usedProvider: String? = null,
+    val usedModelId: String? = null
 )
+
+/** Result of [createAgentSession]. */
+data class CreateAgentSessionResult(val session: AgentSession, val modelFallback: ModelFallback?)
 
 /**
  * pi's createAgentSession (core/sdk.ts), ported as the single owner of
@@ -67,7 +75,7 @@ suspend fun createAgentSession(
     }
 
     var model: Model? = null
-    var modelFallbackMessage: String? = null
+    var modelFallback: ModelFallback? = null
     var scopedThinkingLevel: ModelThinkingLevel? = null
 
     if (hasExistingSession && existingSession.model != null) {
@@ -77,8 +85,10 @@ suspend fun createAgentSession(
             model = restored
         }
         if (model == null) {
-            modelFallbackMessage =
-                "Could not restore model ${existingSession.model.provider}/${existingSession.model.modelId}"
+            modelFallback = ModelFallback(
+                failedProvider = existingSession.model.provider,
+                failedModelId = existingSession.model.modelId
+            )
         }
     }
 
@@ -113,9 +123,10 @@ suspend fun createAgentSession(
         if (model == null) {
             throw IllegalStateException(formatNoModelsAvailableMessage())
         }
-        if (modelFallbackMessage != null) {
-            modelFallbackMessage += ". Using ${model.provider}/${model.id}"
-        }
+        modelFallback = modelFallback?.copy(
+            usedProvider = model.provider,
+            usedModelId = model.id
+        )
     }
 
     var thinkingLevel: ModelThinkingLevel? = scopedThinkingLevel
@@ -167,5 +178,5 @@ suspend fun createAgentSession(
         models = models,
         loopDispatcher = loopDispatcher
     )
-    return CreateAgentSessionResult(session = session, modelFallbackMessage = modelFallbackMessage)
+    return CreateAgentSessionResult(session = session, modelFallback = modelFallback)
 }

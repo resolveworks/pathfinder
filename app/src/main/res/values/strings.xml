@@ -125,6 +125,8 @@
     <string name="error_init">Could not load chat data</string>
     <string name="error_unknown_model">Unknown model</string>
     <string name="error_model_unavailable">That model is no longer available for this account — pick another model</string>
+    <string name="error_model_restore">Could not restore model %1$s</string>
+    <string name="error_model_restore_using">Could not restore model %1$s. Using %2$s</string>
     <string name="error_model_switch">Could not switch to that model — check the provider sign-in</string>
     <string name="error_prompt_auth">Could not send — check the provider sign-in</string>
     <string name="error_thinking_switch">Could not switch the thinking level</string>

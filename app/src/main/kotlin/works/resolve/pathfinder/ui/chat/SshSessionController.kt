@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.ui.chat
 
-import android.app.Application
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -25,7 +24,6 @@ import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
  */
 internal class SshSessionController(
     private val scope: CoroutineScope,
-    private val app: Application,
     private val hostStore: SshHostStore,
     private val sessionHosts: SshSessionHostStore,
     private val connections: SshSessionConnections,
@@ -93,9 +91,9 @@ internal class SshSessionController(
                     hostId = hostId,
                     running = false,
                     success = true,
-                    message = app.getString(
+                    message = UiString(
                         R.string.ssh_host_test_success,
-                        connection.initialWorkingDirectory
+                        listOf(connection.initialWorkingDirectory)
                     )
                 )
             } catch (e: CancellationException) {
@@ -112,8 +110,8 @@ internal class SshSessionController(
                     hostId = hostId,
                     running = false,
                     message = hostLabel(hostId)?.let {
-                        app.getString(R.string.ssh_error_connect, it)
-                    } ?: app.getString(R.string.ssh_error_connect_generic)
+                        UiString(R.string.ssh_error_connect, listOf(it))
+                    } ?: UiString(R.string.ssh_error_connect_generic)
                 )
             }
         }
@@ -150,52 +148,52 @@ internal class SshSessionController(
      * session's host; a pinned host-key mismatch is a hard stop — there is
      * deliberately no bypass UI for it.
      */
-    suspend fun connectionError(error: SshConnectionException, sessionId: String): String =
+    suspend fun connectionError(error: SshConnectionException, sessionId: String): UiString =
         connectionError(error, hostLabel(sessionHosts.hostId(sessionId)))
 
     /** Same mapping for a connect outside any session (the host form's test). */
     private suspend fun connectionErrorForHost(
         error: SshConnectionException,
         hostId: String
-    ): String = connectionError(error, hostLabel(hostId))
+    ): UiString = connectionError(error, hostLabel(hostId))
 
     private suspend fun hostLabel(hostId: String?): String? =
         hostId?.let { hostStore.host(it) }?.let { "${it.username}@${it.address}" }
 
-    private fun connectionError(error: SshConnectionException, label: String?): String =
+    private fun connectionError(error: SshConnectionException, label: String?): UiString =
         when (error.detail) {
             SshConnectionException.Detail.HOST_KEY_REJECTED ->
                 if (label != null) {
-                    app.getString(R.string.ssh_error_host_key_changed, label)
+                    UiString(R.string.ssh_error_host_key_changed, listOf(label))
                 } else {
-                    app.getString(R.string.ssh_error_host_key_changed_generic)
+                    UiString(R.string.ssh_error_host_key_changed_generic)
                 }
 
             SshConnectionException.Detail.CONNECT ->
                 if (label != null) {
-                    app.getString(R.string.ssh_error_connect, label)
+                    UiString(R.string.ssh_error_connect, listOf(label))
                 } else {
-                    app.getString(R.string.ssh_error_connect_generic)
+                    UiString(R.string.ssh_error_connect_generic)
                 }
 
             SshConnectionException.Detail.AUTH ->
                 if (label != null) {
-                    app.getString(R.string.ssh_error_auth, label)
+                    UiString(R.string.ssh_error_auth, listOf(label))
                 } else {
-                    app.getString(R.string.ssh_error_auth_generic)
+                    UiString(R.string.ssh_error_auth_generic)
                 }
 
             SshConnectionException.Detail.SFTP ->
                 if (label != null) {
-                    app.getString(R.string.ssh_error_sftp, label)
+                    UiString(R.string.ssh_error_sftp, listOf(label))
                 } else {
-                    app.getString(R.string.ssh_error_sftp_generic)
+                    UiString(R.string.ssh_error_sftp_generic)
                 }
 
             SshConnectionException.Detail.UNKNOWN_HOST ->
-                app.getString(R.string.ssh_error_unknown_host)
+                UiString(R.string.ssh_error_unknown_host)
 
-            SshConnectionException.Detail.NO_KEY -> app.getString(R.string.ssh_error_no_key)
+            SshConnectionException.Detail.NO_KEY -> UiString(R.string.ssh_error_no_key)
         }
 
     private companion object {

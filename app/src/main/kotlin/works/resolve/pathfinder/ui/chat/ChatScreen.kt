@@ -212,9 +212,11 @@ fun ChatScreen(
         onSend()
     }
 
+    // Resolve during composition: stringResource cannot run inside the effect.
+    val errorText = uiState.error?.asText()
     LaunchedEffect(uiState.error) {
-        uiState.error?.let { error ->
-            snackbarHostState.showSnackbar(error)
+        if (errorText != null) {
+            snackbarHostState.showSnackbar(errorText)
             onDismissError()
         }
     }
@@ -398,7 +400,7 @@ fun ChatScreen(
                     // Any settings-family destination pushed on top of a
                     // failed init replaces the error surface; popping returns.
                     uiState.status == ChatStatus.Failed && topKey == ChatNavKey -> FailedContent(
-                        error = uiState.error ?: stringResource(R.string.error_generic),
+                        error = uiState.error ?: UiString(R.string.error_generic),
                         onOpenProviders = pushProviders
                     )
 
@@ -876,7 +878,7 @@ private fun LoadingContent() {
 }
 
 @Composable
-private fun FailedContent(error: String, onOpenProviders: () -> Unit) {
+private fun FailedContent(error: UiString, onOpenProviders: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -886,7 +888,7 @@ private fun FailedContent(error: String, onOpenProviders: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = error,
+            text = error.asText(),
             style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center
         )

@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.ui.chat
 
-import android.app.Application
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -19,9 +18,8 @@ import works.resolve.pathfinder.ssh.SshHostStore
  */
 internal class SshHostsController(
     private val scope: CoroutineScope,
-    private val app: Application,
     private val hostStore: SshHostStore,
-    private val onError: (message: String, cause: Throwable?) -> Unit
+    private val onError: (message: UiString, cause: Throwable?) -> Unit
 ) {
 
     /** The source of truth [ChatUiState.sshHosts] mirrors. */
@@ -36,7 +34,7 @@ internal class SshHostsController(
     fun addHost(address: String, port: Int, username: String) {
         scope.launch {
             if (!valid(address, port, username)) {
-                onError(app.getString(R.string.error_ssh_host_invalid), null)
+                onError(UiString(R.string.error_ssh_host_invalid), null)
                 return@launch
             }
             try {
@@ -44,7 +42,7 @@ internal class SshHostsController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onError(app.getString(R.string.error_ssh_host_save), e)
+                onError(UiString(R.string.error_ssh_host_save), e)
             }
         }
     }
@@ -53,7 +51,7 @@ internal class SshHostsController(
     fun updateHost(host: SshHost) {
         scope.launch {
             if (!valid(host.address, host.port, host.username)) {
-                onError(app.getString(R.string.error_ssh_host_invalid), null)
+                onError(UiString(R.string.error_ssh_host_invalid), null)
                 return@launch
             }
             try {
@@ -61,7 +59,7 @@ internal class SshHostsController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onError(app.getString(R.string.error_ssh_host_save), e)
+                onError(UiString(R.string.error_ssh_host_save), e)
             }
         }
     }
@@ -75,7 +73,7 @@ internal class SshHostsController(
                 throw e
             } catch (e: Exception) {
                 Log.w(TAG, "ssh_host_remove", e)
-                onError(app.getString(R.string.error_ssh_host_remove), e)
+                onError(UiString(R.string.error_ssh_host_remove), e)
             }
         }
     }

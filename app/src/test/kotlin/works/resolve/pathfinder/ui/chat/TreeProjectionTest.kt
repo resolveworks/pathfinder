@@ -189,7 +189,7 @@ class TreeProjectionTest {
         fun previewAt(i: Int) = (result[i].body as TreeRowBody.Text).preview
         assertEquals("You: line one line two line three", previewAt(0))
         assertEquals("You: " + "x".repeat(120), previewAt(1))
-        assertEquals("Assistant: (no content)", previewAt(2))
+        assertEquals(TreeRowBody.NoContent, result[2].body)
         assertEquals("Assistant: boom happened", previewAt(3))
     }
 
@@ -211,7 +211,12 @@ class TreeProjectionTest {
             TreeRowBody.Tool("web_search", call),
             result.first { it.id == "t1" }.body
         )
-        result.filter { it.id != "t1" }.forEach { assertTrue(it.body is TreeRowBody.Text) }
+        // a1 carries only a tool call: no text preview exists, so its body
+        // is the no-content variant rather than an empty Text preview.
+        assertEquals(TreeRowBody.NoContent, result.first { it.id == "a1" }.body)
+        result
+            .filter { it.id != "t1" && it.id != "a1" }
+            .forEach { assertTrue(it.body is TreeRowBody.Text) }
     }
 
     @Test
