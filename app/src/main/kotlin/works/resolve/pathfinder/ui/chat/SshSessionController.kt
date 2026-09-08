@@ -1,12 +1,17 @@
 package works.resolve.pathfinder.ui.chat
 
 import android.app.Application
+import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ssh.HostKeyRequest
 import works.resolve.pathfinder.ssh.SshConnectionException
+import works.resolve.pathfinder.ssh.SshConnectionHelper
 import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.ssh.SshSessionConnections
 import works.resolve.pathfinder.ssh.SshSessionHostStore
@@ -24,7 +29,8 @@ internal class SshSessionController(
     private val hostStore: SshHostStore,
     private val sessionHosts: SshSessionHostStore,
     private val connections: SshSessionConnections,
-    private val hostKeyConfirmer: TofuHostKeyConfirmer
+    private val hostKeyConfirmer: TofuHostKeyConfirmer,
+    private val connectionHelper: SshConnectionHelper
 ) {
 
     /** The TOFU request awaiting a Trust/Refuse answer, or null when none. */
@@ -58,6 +64,61 @@ internal class SshSessionController(
         scope.launch { connections.close(sessionId) }
     }
 
+    private val _hostTest = MutableStateFlow<HostTestState?>(null)
+
+    /** Latest connection-test status, keyed by host; the host form shows only its own host's. */
+    val hostTest: StateFlow<HostTestState?> = _hostTest.asStateFlow()
+
+    /**
+     * Dials [hostId] exactly like a session connect (TOFU prompt included),
+     * closes the connection right away, and publishes progress plus a safe
+     * result. One test at a time; taps while running are ignored.
+     */
+    fun testHostConnection(hostId: String) {
+        if (_hostTest.value?.running == true) return
+        scope.launch {
+            _hostTest.value = HostTestState(hostId = hostId, running = true)
+            _hostTest.value = try {
+                val connection = withHostConnectContext(hostId) {
+                    connectionHelper.connect(hostId, hostKeyConfirmer)
+                }
+                try {
+                    connection.close()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // The test already succeeded; a close failure is noise.
+                }
+                HostTestState(
+                    hostId = hostId,
+                    running = false,
+                    success = true,
+                    message = app.getString(
+                        R.string.ssh_host_test_success,
+                        connection.initialWorkingDirectory
+                    )
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SshConnectionException) {
+                HostTestState(
+                    hostId = hostId,
+                    running = false,
+                    message = connectionErrorForHost(e, hostId)
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "ssh_host_test", e)
+                HostTestState(
+                    hostId = hostId,
+                    running = false,
+                    message = hostLabel(hostId)?.let {
+                        app.getString(R.string.ssh_error_connect, it)
+                    } ?: app.getString(R.string.ssh_error_connect_generic)
+                )
+            }
+        }
+    }
+
     /**
      * Runs [block] with the TOFU prompt's session context set, so the
      * prompt names the host the factory is about to dial.
@@ -72,15 +133,37 @@ internal class SshSessionController(
     }
 
     /**
+     * Runs [block] with the TOFU prompt's host context set, for connects
+     * that have no session (the host form's connection test).
+     */
+    private suspend fun <T> withHostConnectContext(hostId: String, block: suspend () -> T): T {
+        hostKeyConfirmer.setHostContext(hostId)
+        try {
+            return block()
+        } finally {
+            hostKeyConfirmer.setHostContext(null)
+        }
+    }
+
+    /**
      * Safe, actionable message for a failed session connect, naming the
      * session's host; a pinned host-key mismatch is a hard stop — there is
      * deliberately no bypass UI for it.
      */
-    suspend fun connectionError(error: SshConnectionException, sessionId: String): String {
-        val label = sessionHosts.hostId(sessionId)
-            ?.let { hostStore.host(it) }
-            ?.let { "${it.username}@${it.address}" }
-        return when (error.detail) {
+    suspend fun connectionError(error: SshConnectionException, sessionId: String): String =
+        connectionError(error, hostLabel(sessionHosts.hostId(sessionId)))
+
+    /** Same mapping for a connect outside any session (the host form's test). */
+    private suspend fun connectionErrorForHost(
+        error: SshConnectionException,
+        hostId: String
+    ): String = connectionError(error, hostLabel(hostId))
+
+    private suspend fun hostLabel(hostId: String?): String? =
+        hostId?.let { hostStore.host(it) }?.let { "${it.username}@${it.address}" }
+
+    private fun connectionError(error: SshConnectionException, label: String?): String =
+        when (error.detail) {
             SshConnectionException.Detail.HOST_KEY_REJECTED ->
                 if (label != null) {
                     app.getString(R.string.ssh_error_host_key_changed, label)
@@ -114,5 +197,8 @@ internal class SshSessionController(
 
             SshConnectionException.Detail.NO_KEY -> app.getString(R.string.ssh_error_no_key)
         }
+
+    private companion object {
+        private const val TAG = "Pathfinder"
     }
 }

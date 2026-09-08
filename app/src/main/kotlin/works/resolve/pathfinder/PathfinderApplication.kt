@@ -183,6 +183,7 @@ class PathfinderApplication : Application() {
                 sshSessionHosts = sshSessionHostStore,
                 sshSessionConnections = sshSessionConnections,
                 hostKeyConfirmer = hostKeyConfirmer,
+                sshConnectionHelper = sshConnectionHelper,
                 modelResolver = agentFactory::resolveModel,
                 appForegroundGate = appForegroundGate,
                 app = this@PathfinderApplication

@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import android.app.Application
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.viewModelScope
 import java.io.File
@@ -34,6 +35,10 @@ import org.junit.After
 import org.junit.Rule
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.Description
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.AgentToolResult
@@ -75,6 +80,7 @@ import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
+import works.resolve.pathfinder.ssh.SshConnectionHelper
 import works.resolve.pathfinder.ssh.SshHostKeyStore
 import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.ssh.SshPrivateKeyPem
@@ -312,6 +318,8 @@ internal class ChatHarness(private val tmpFolder: TemporaryFolder, testDispatche
 
     val hostKeyConfirmer = TofuHostKeyConfirmer(sshHostStore, sshSessionHosts)
 
+    val sshConnectionHelper = SshConnectionHelper(sshHostStore)
+
     /** The shared manager all ViewModels and the factory write through. */
     val settingsManager: SettingsManager =
         runBlocking { SettingsManager.fromStorage(settingsStore) }
@@ -429,7 +437,9 @@ internal class ChatHarness(private val tmpFolder: TemporaryFolder, testDispatche
         sshSessionHosts = sshSessionHosts,
         sshSessionConnections = SshSessionConnections(),
         hostKeyConfirmer = hostKeyConfirmer,
-        appForegroundGate = AppForegroundGate()
+        sshConnectionHelper = sshConnectionHelper,
+        appForegroundGate = AppForegroundGate(),
+        app = RuntimeEnvironment.getApplication()
     ).also { viewModels += it }
 
     fun assistant(text: String, stopReason: StopReason = StopReason.STOP, error: String? = null) =
@@ -488,8 +498,14 @@ internal class ChatHarness(private val tmpFolder: TemporaryFolder, testDispatche
  * Base for ChatViewModel behavior tests: provides the dispatcher rules and
  * live-harness tracking. [disposeHarnesses] tears every harness down even
  * when a test failed mid-body, so a still-alive ViewModel scope never
- * leaks into a later test.
+ * leaks into a later test. Runs under Robolectric so the ViewModel's
+ * resource-resolved error strings read the real strings.xml; the plain
+ * [Application] keeps the composition root out of tests. sdk pins the
+ * newest Robolectric-bundled framework below the app's targetSdk 37, which
+ * string resolution does not depend on.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class, sdk = [36])
 internal abstract class ChatHarnessTest {
     @get:Rule
     val tmpFolder = TemporaryFolder()

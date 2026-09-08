@@ -38,9 +38,17 @@ class TofuHostKeyConfirmer(
     @Volatile
     private var sessionContextId: String? = null
 
+    @Volatile
+    private var hostContextId: String? = null
+
     /** Session whose creation the next callback runs inside; resolves the prompt's host label. */
     fun setSessionContext(sessionId: String?) {
         sessionContextId = sessionId
+    }
+
+    /** Host being dialed outside a session (the host form's connection test); the label fallback. */
+    fun setHostContext(hostId: String?) {
+        hostContextId = hostId
     }
 
     /** Answers the pending request; a no-op (implicitly refusing) when none is pending. */
@@ -65,8 +73,9 @@ class TofuHostKeyConfirmer(
     }
 
     private suspend fun resolveHostLabel(): String {
-        val sessionId = sessionContextId ?: return ""
-        val hostId = sessionHosts.hostId(sessionId) ?: return ""
+        val hostId = sessionContextId?.let { sessionHosts.hostId(it) }
+            ?: hostContextId
+            ?: return ""
         val host = hostStore.host(hostId) ?: return hostId
         return "${host.username}@${host.address}:${host.port}"
     }

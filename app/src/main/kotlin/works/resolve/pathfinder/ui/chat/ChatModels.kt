@@ -137,6 +137,20 @@ data class ProviderAuthFlow(
 )
 
 /**
+ * Connection-test status for the SSH host form (see
+ * SshSessionController.testHostConnection); keyed by host so a stale result
+ * never shows under another host. [message] is a safe, resource-resolved
+ * result string.
+ */
+@Immutable
+data class HostTestState(
+    val hostId: String,
+    val running: Boolean,
+    val success: Boolean = false,
+    val message: String? = null
+)
+
+/**
  * Immutable projection of the chat screen state — the ViewModel publishes a
  * fresh snapshot per change and never mutates one in place. Contains no
  * credentials or
@@ -214,6 +228,8 @@ data class ChatUiState(
     val authFlow: ProviderAuthFlow? = null,
     /** Pending unknown-host-key request (TOFU); answering it unblocks the session creation. */
     val pendingHostKey: HostKeyRequest? = null,
+    /** Latest SSH connection-test status (host form); null before the first test. */
+    val hostTest: HostTestState? = null,
     /**
      * Transient ViewModel-sourced failure shown as a snackbar. Agent-run
      * errors are never mirrored here: they render as transcript rows (pi's

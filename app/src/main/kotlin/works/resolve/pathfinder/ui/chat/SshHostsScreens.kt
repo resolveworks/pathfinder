@@ -8,20 +8,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -30,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
@@ -44,8 +46,7 @@ import works.resolve.pathfinder.ssh.SshHost
 internal fun SshHostsContent(
     hosts: List<SshHost>,
     onAddHost: () -> Unit,
-    onOpenHost: (hostId: String) -> Unit,
-    onStartSession: (hostId: String) -> Unit
+    onOpenHost: (hostId: String) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -71,20 +72,10 @@ internal fun SshHostsContent(
                             Text(stringResource(R.string.ssh_host_port, host.port))
                         },
                         trailingContent = {
-                            Row {
-                                IconButton(onClick = { onStartSession(host.id) }) {
-                                    Icon(
-                                        Icons.AutoMirrored.Filled.Send,
-                                        contentDescription = stringResource(
-                                            R.string.ssh_host_start_session
-                                        )
-                                    )
-                                }
-                                Icon(
-                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                    contentDescription = null
-                                )
-                            }
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null
+                            )
                         },
                         modifier = Modifier.clickable { onOpenHost(host.id) }
                     )
@@ -99,11 +90,16 @@ internal fun SshHostsContent(
  * Add/edit form. A new host is created on save; editing keeps the host's
  * keypair and changes only the connection fields. The public-key section
  * (edit only) shows the authorized_keys line for copying — the only key
- * material the UI ever sees.
+ * material the UI ever sees. Also edit-only: the connection test (progress
+ * and result inline) and the start-chat action, both of which dial the
+ * saved host.
  */
 @Composable
 internal fun SshHostEditContent(
     host: SshHost?,
+    hostTest: HostTestState?,
+    onTestConnection: (hostId: String) -> Unit,
+    onNewSession: (hostId: String) -> Unit,
     onSave: (address: String, port: Int, username: String) -> Unit,
     onRemove: () -> Unit,
     onClose: () -> Unit
@@ -164,6 +160,38 @@ internal fun SshHostEditContent(
             )
             TextButton(onClick = { clipboard.setText(AnnotatedString(host.publicKeyLine)) }) {
                 Text(stringResource(R.string.ssh_host_copy_public_key))
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(
+                    onClick = { onTestConnection(host.id) },
+                    enabled = hostTest?.running != true
+                ) {
+                    Text(stringResource(R.string.ssh_host_test))
+                }
+                if (hostTest?.running == true) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp
+                    )
+                }
+                TextButton(onClick = { onNewSession(host.id) }) {
+                    Text(stringResource(R.string.ssh_host_start_session))
+                }
+            }
+            hostTest?.message?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (hostTest.success) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    }
+                )
             }
         }
 

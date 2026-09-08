@@ -41,6 +41,7 @@ import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.ssh.SshConnectionException
+import works.resolve.pathfinder.ssh.SshConnectionHelper
 import works.resolve.pathfinder.ssh.SshHost
 import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.ssh.SshSessionConnections
@@ -94,7 +95,9 @@ class ChatViewModel(
     /** Live per-session connections; [SshSessionController] closes the outgoing session at replacement. */
     private val sshSessionConnections: SshSessionConnections,
     /** Interactive TOFU host-key decisions; surfaced through [SshSessionController]. */
-    private val hostKeyConfirmer: TofuHostKeyConfirmer
+    private val hostKeyConfirmer: TofuHostKeyConfirmer,
+    /** Dials hosts for the host form's connection test (no session involved). */
+    private val sshConnectionHelper: SshConnectionHelper
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -146,7 +149,8 @@ class ChatViewModel(
         sshHostStore,
         sshSessionHosts,
         sshSessionConnections,
-        hostKeyConfirmer
+        hostKeyConfirmer,
+        sshConnectionHelper
     )
 
     val uiState: StateFlow<ChatUiState> =
@@ -168,11 +172,13 @@ class ChatViewModel(
                 )
             },
             sshSessions.pendingHostKey,
+            sshSessions.hostTest,
             providerCredentials.state,
             modelSettings.state
-        ) { base, pendingHostKey, credentials, modelSettings ->
+        ) { base, pendingHostKey, hostTest, credentials, modelSettings ->
             base.copy(
                 pendingHostKey = pendingHostKey,
+                hostTest = hostTest,
                 providerOptions = credentials.providerOptions,
                 modelOptions = credentials.modelOptions,
                 defaultModel = modelSettings.defaultModel,
@@ -395,6 +401,12 @@ class ChatViewModel(
         sshHosts.removeHost(id)
         sshSessions.clearHost(id)
     }
+
+    /**
+     * Runs a connection test against [hostId] from the host form; progress
+     * and the result land in [ChatUiState.hostTest].
+     */
+    fun testSshHostConnection(hostId: String) = sshSessions.testHostConnection(hostId)
 
     fun send() {
         viewModelScope.launch { sendInternal() }

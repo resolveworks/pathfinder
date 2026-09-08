@@ -42,6 +42,8 @@
     <string name="ssh_host_delete">Delete host</string>
     <string name="ssh_host_delete_confirm">Delete %1$s and its key? The server\'s authorized_keys entry must be removed separately.</string>
     <string name="ssh_host_start_session">Start a chat on this host</string>
+    <string name="ssh_host_test">Test connection</string>
+    <string name="ssh_host_test_success">Connected — remote directory: %1$s</string>
     <string name="error_ssh_host_save">Could not save the SSH host</string>
     <string name="error_ssh_host_remove">Could not delete the SSH host</string>
     <string name="error_ssh_host_invalid">Enter an address, username, and port (1–65535)</string>

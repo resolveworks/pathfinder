@@ -126,6 +126,7 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         onUpdateSshHost = viewModel::updateSshHost,
         onRemoveSshHost = viewModel::removeSshHost,
         onNewSessionOnHost = viewModel::newSessionOnHost,
+        onTestSshHostConnection = viewModel::testSshHostConnection,
         onTrustHostKey = viewModel::trustHostKey,
         onRefuseHostKey = viewModel::refuseHostKey,
         searchAuthPrompts = viewModel::searchProviderAuthPrompts,
@@ -181,6 +182,7 @@ fun ChatScreen(
     onUpdateSshHost: (host: SshHost) -> Unit,
     onRemoveSshHost: (hostId: String) -> Unit,
     onNewSessionOnHost: (hostId: String) -> Unit,
+    onTestSshHostConnection: (hostId: String) -> Unit,
     onTrustHostKey: () -> Unit,
     onRefuseHostKey: () -> Unit,
     onNewSession: () -> Unit,
@@ -493,8 +495,7 @@ fun ChatScreen(
                                 SshHostsContent(
                                     hosts = uiState.sshHosts,
                                     onAddHost = { pushSshHostEdit(null) },
-                                    onOpenHost = pushSshHostEdit,
-                                    onStartSession = onNewSessionOnHost
+                                    onOpenHost = pushSshHostEdit
                                 )
                             }
                             entry<SshHostEditNavKey> { key ->
@@ -508,6 +509,11 @@ fun ChatScreen(
                                 } else {
                                     SshHostEditContent(
                                         host = host,
+                                        hostTest = uiState.hostTest?.takeIf {
+                                            it.hostId == host?.id
+                                        },
+                                        onTestConnection = onTestSshHostConnection,
+                                        onNewSession = onNewSessionOnHost,
                                         onSave = { address, port, username ->
                                             if (host == null) {
                                                 onAddSshHost(address, port, username)
@@ -989,6 +995,7 @@ private fun PreviewChatScreen(
             onUpdateSshHost = { },
             onRemoveSshHost = { },
             onNewSessionOnHost = { },
+            onTestSshHostConnection = { },
             onTrustHostKey = { },
             onRefuseHostKey = { },
             onNewSession = {},
