@@ -37,7 +37,6 @@ import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.SettingsManager
-import works.resolve.pathfinder.codingagent.core.resolveModelScope
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
@@ -117,6 +116,19 @@ class ChatViewModel(
         ::setError
     )
 
+    private val modelSettings = ModelSettingsController(
+        viewModelScope,
+        app,
+        settingsManager,
+        catalog,
+        modelResolver,
+        { agent },
+        { providerCredentials.state.value.modelOptions },
+        providerCredentials::availableModels,
+        ::reprojectTreeRows,
+        ::setError
+    )
+
     private val searchProviders = SearchProviderController(
         scope = viewModelScope,
         service = searchProviderService,
@@ -156,12 +168,16 @@ class ChatViewModel(
                 )
             },
             sshSessions.pendingHostKey,
-            providerCredentials.state
-        ) { base, pendingHostKey, credentials ->
+            providerCredentials.state,
+            modelSettings.state
+        ) { base, pendingHostKey, credentials, modelSettings ->
             base.copy(
                 pendingHostKey = pendingHostKey,
                 providerOptions = credentials.providerOptions,
-                modelOptions = credentials.modelOptions
+                modelOptions = credentials.modelOptions,
+                defaultModel = modelSettings.defaultModel,
+                defaultThinkingLevel = modelSettings.defaultThinkingLevel,
+                enabledModels = modelSettings.enabledModels
             )
         }
             .stateIn(viewModelScope, SharingStarted.Eagerly, _uiState.value)
@@ -170,7 +186,7 @@ class ChatViewModel(
      * Runtime model settings (startup default, thinking default, model
      * scope) live on the shared [settingsManager]; the running model lives
      * on the bound [AgentSession] — its branch fold at load,
-     * [selectModelInternal] thereafter. App-owned values (active session id,
+     * [ModelSettingsController.selectModel] thereafter. App-owned values (active session id,
      * show-thinking) flow through [settingsStore].
      */
     private var agent: AgentSession? = null
@@ -223,7 +239,7 @@ class ChatViewModel(
      * [saveStartupDefault] persists without switching.
      */
     fun selectModel(providerId: String, modelId: String) {
-        viewModelScope.launch { selectModelInternal(providerId, modelId) }
+        modelSettings.selectModel(providerId, modelId)
     }
 
     /**
@@ -234,7 +250,7 @@ class ChatViewModel(
      * action deliberately bypasses.
      */
     fun saveStartupDefault(providerId: String, modelId: String) {
-        viewModelScope.launch { saveStartupDefaultInternal(providerId, modelId) }
+        modelSettings.saveStartupDefault(providerId, modelId)
     }
 
     /**
@@ -244,7 +260,7 @@ class ChatViewModel(
      * list (which behaves as no scope downstream), as in pi.
      */
     fun toggleModelScope(providerId: String, modelId: String, checked: Boolean) {
-        viewModelScope.launch { toggleModelScopeInternal(providerId, modelId, checked) }
+        modelSettings.toggleModelScope(providerId, modelId, checked)
     }
 
     /**
@@ -254,23 +270,7 @@ class ChatViewModel(
      * default; that lives in [setThinkingLevelDefault].
      */
     fun selectThinkingLevel(level: ModelThinkingLevel) {
-        viewModelScope.launch {
-            val session = agent ?: return@launch
-            try {
-                session.setThinkingLevel(level)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: SessionError) {
-                setError(app.getString(R.string.error_session_save), e)
-                return@launch
-            } catch (e: Exception) {
-                setError(app.getString(R.string.error_thinking_switch), e)
-                return@launch
-            }
-            _uiState.update {
-                it.copy(treeRows = treeRows(it.treeFilter))
-            }
-        }
+        modelSettings.selectThinkingLevel(level)
     }
 
     /**
@@ -283,38 +283,7 @@ class ChatViewModel(
      * ([AgentSession.setModel]).
      */
     fun setThinkingLevelDefault(level: ModelThinkingLevel) {
-        viewModelScope.launch {
-            val session = agent
-            if (session != null) {
-                try {
-                    session.setThinkingLevel(level, persist = true)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: SessionError) {
-                    setError(app.getString(R.string.error_session_save), e)
-                    return@launch
-                } catch (e: Exception) {
-                    setError(app.getString(R.string.error_thinking_switch), e)
-                    return@launch
-                }
-            } else {
-                try {
-                    settingsManager.setDefaultThinkingLevel(level)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    setError(app.getString(R.string.error_settings_save), e)
-                    return@launch
-                }
-            }
-            surfaceSettingsErrors()
-            projectSettings()
-            if (session != null) {
-                _uiState.update {
-                    it.copy(treeRows = treeRows(it.treeFilter))
-                }
-            }
-        }
+        modelSettings.setThinkingLevelDefault(level)
     }
 
     /**
@@ -923,7 +892,7 @@ class ChatViewModel(
         val modelProjection = if (state.model === observedAgentModel) {
             null
         } else {
-            selectedModelProjection(state.model)
+            modelSettings.modelOption(state.model)
         }
         observedAgentModel = state.model
         _uiState.update {
@@ -950,111 +919,9 @@ class ChatViewModel(
 
     // ---- intent internals ----
 
-    private suspend fun selectModelInternal(providerId: String, modelId: String) {
-        val session = agent
-        if (session == null) {
-            setError(app.getString(R.string.error_config_invalid))
-            return
-        }
-        val model = try {
-            modelResolver(providerId, modelId.trim())
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            setError(app.getString(R.string.error_unknown_model), e)
-            return
-        }
-        // No availability pre-check: the picker only offers
-        // credential-filtered models (pi's split), and setModel validates
-        // auth itself.
-        try {
-            // pi's picker gesture: one call both switches the live session
-            // and persists the startup default (setModel with persist, which
-            // also appends to a non-empty resolved scope).
-            session.setModel(model, persist = true)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: SessionError) {
-            // A failed model_change append is a save failure, not a switch
-            // failure — the agent already switched in memory.
-            setError(app.getString(R.string.error_session_save), e)
-            return
-        } catch (e: Exception) {
-            setError(app.getString(R.string.error_model_switch), e)
-            return
-        }
-        surfaceSettingsErrors()
-        // The chip follows the agent's state emission from setModel above;
-        // only the tree needs re-projecting here. The new model's thinking
-        // level is re-applied inside setModel (pi's rule) from the shared
-        // settings manager's default.
-        _uiState.update {
-            it.copy(treeRows = treeRows(it.treeFilter))
-        }
-        projectSettings()
-    }
-
-    private suspend fun saveStartupDefaultInternal(providerId: String, modelId: String) {
-        // Deliberately NOT the scope-append path: that lives in
-        // AgentSession's setModel persist gesture; pi's settings-file edit
-        // (this action's analog) does not touch the model scope either.
-        try {
-            settingsManager.setDefaultModelAndProvider(providerId, modelId.trim())
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            setError(app.getString(R.string.error_settings_save), e)
-            return
-        }
-        surfaceSettingsErrors()
-        projectSettings()
-    }
-
-    private suspend fun toggleModelScopeInternal(
-        providerId: String,
-        modelId: String,
-        checked: Boolean
-    ) {
-        val modelOptions = providerCredentials.state.value.modelOptions
-        val reference = "$providerId/$modelId"
-        // The curated list is written in display order; an absent scope
-        // materializes as "everything currently offered" on first edit.
-        val displayOrder = modelOptions.map(ModelOption::key)
-        val storedList = settingsManager.getEnabledModels()
-        val current = storedList?.toSet() ?: displayOrder.toSet()
-        val next = if (checked) current + reference else current - reference
-        val stored = storedList.orEmpty()
-        // Preserve stored references not currently displayed (e.g. of a
-        // provider whose credential was removed) in their stored order.
-        val ordered =
-            displayOrder.filter { it in next } + stored.filter { it !in displayOrder && it in next }
-        // As in pi: a FULL selection persists as the unset scope, but an
-        // EMPTY selection persists as an empty list (which behaves as no
-        // scope downstream). Fullness is set equality — preserved stale
-        // references keep the list materialized.
-        val availableKeys = displayOrder.toSet()
-        val fullSelection = availableKeys.isNotEmpty() &&
-            next.size == availableKeys.size && next.all { it in availableKeys }
-        val scope = if (fullSelection) null else ordered
-        try {
-            settingsManager.setEnabledModels(scope)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            setError(app.getString(R.string.error_settings_save), e)
-            return
-        }
-        surfaceSettingsErrors()
-        // pi's updateSessionModels: resolve the stored patterns against the
-        // currently available models and update the live session's scoped
-        // models; a null/all-enabled or match-free selection clears them.
-        val scoped = if (scope != null && scope.any { it in availableKeys }) {
-            resolveModelScope(scope, providerCredentials.availableModels).scopedModels
-        } else {
-            emptyList()
-        }
-        agent?.setScopedModels(scoped)
-        projectSettings()
+    /** Re-projects tree rows after a session-applied model/thinking change. */
+    private fun reprojectTreeRows() {
+        _uiState.update { it.copy(treeRows = treeRows(it.treeFilter)) }
     }
 
     /**
@@ -1140,39 +1007,8 @@ class ChatViewModel(
     private suspend fun refreshCredentialSurfaces() {
         searchProviders.refresh()
         providerCredentials.refresh()
-        projectSettings()
+        modelSettings.projectSettings()
     }
-
-    /** Re-projects persisted settings into the UI state after a write. */
-    private fun projectSettings() {
-        val settings = settingsManager.getSettings()
-        val defaultModel = settings
-            .takeIf { !it.defaultProvider.isNullOrBlank() && !it.defaultModel.isNullOrBlank() }
-            ?.let { selectedModelProjection(it.defaultProvider!!, it.defaultModel!!) }
-        _uiState.update {
-            it.copy(
-                defaultModel = defaultModel,
-                defaultThinkingLevel = settings.defaultThinkingLevel,
-                enabledModels = settings.enabledModels
-            )
-        }
-    }
-
-    /** Catalog display projection of a provider/model pair; null when unknown. */
-    private fun selectedModelProjection(providerId: String, modelId: String): ModelOption? {
-        val provider = catalog.getProvider(providerId) ?: return null
-        if (modelId.isBlank()) return null
-        val model = provider.model(modelId) ?: return null
-        return ModelOption(
-            providerId = provider.id,
-            providerName = provider.name,
-            modelId = model.id,
-            name = model.name
-        )
-    }
-
-    private fun selectedModelProjection(model: Model): ModelOption? =
-        selectedModelProjection(model.provider, model.id)
 
     private suspend fun sendInternal() {
         val state = _uiState.value
@@ -1254,17 +1090,6 @@ class ChatViewModel(
     }
 
     // ---- helpers ----
-
-    /**
-     * The shared settings manager records write failures instead of
-     * throwing (pi's SettingsManager.save); drain them after mutations and
-     * surface each as a safe settings error.
-     */
-    private fun surfaceSettingsErrors() {
-        for (error in settingsManager.drainErrors()) {
-            setError(app.getString(R.string.error_settings_save), error)
-        }
-    }
 
     /**
      * Records a degradation the ViewModel deliberately absorbs into degraded
