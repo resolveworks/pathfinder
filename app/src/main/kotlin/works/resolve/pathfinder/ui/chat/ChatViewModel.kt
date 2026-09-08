@@ -125,8 +125,7 @@ class ChatViewModel(
         sshHostStore,
         sshSessionHosts,
         sshSessionConnections,
-        hostKeyConfirmer,
-        ::setError
+        hostKeyConfirmer
     )
 
     val uiState: StateFlow<ChatUiState> =

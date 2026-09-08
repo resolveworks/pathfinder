@@ -21,8 +21,7 @@ internal class SshSessionController(
     private val hostStore: SshHostStore,
     private val sessionHosts: SshSessionHostStore,
     private val connections: SshSessionConnections,
-    private val hostKeyConfirmer: TofuHostKeyConfirmer,
-    private val onError: (message: String, cause: Throwable?) -> Unit
+    private val hostKeyConfirmer: TofuHostKeyConfirmer
 ) {
 
     /** The TOFU request awaiting a Trust/Refuse answer, or null when none. */
