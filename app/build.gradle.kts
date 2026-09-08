@@ -194,6 +194,10 @@ dependencies {
     implementation(libs.commonmark.ext.gfm.strikethrough)
     implementation(libs.commonmark.ext.task.list.items)
 
+    // cbssh, the only SSH library; confined to the app's ssh package so the
+    // seam bounds any future replacement.
+    implementation(libs.cbssh.sshlib)
+
     testImplementation(testFixtures(project(":packages:ai")))
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)

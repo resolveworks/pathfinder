@@ -24,6 +24,8 @@ import works.resolve.pathfinder.data.sessions.DirectorySessionSource
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.NativeAgentFactory
+import works.resolve.pathfinder.ssh.SshHostKeyStore
+import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.webfetch.WebViewPageFetcher
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
@@ -117,6 +119,11 @@ class PathfinderApplication : Application() {
         DirectorySessionSource(File(filesDir, SESSIONS_DIRECTORY))
     }
 
+    /** SSH host configs, per-host keys, and TOFU host-key state. */
+    val sshHostStore: SshHostStore by lazy {
+        SshHostStore(sshHostsDataStore, SshHostKeyStore(this, KeystoreAeadCipher()))
+    }
+
     /** Generated from pi; never hand-edit the bundled asset. */
     val modelCatalog: ProviderCatalog by lazy {
         assets.open("models-catalog.json").bufferedReader().use { it.readText() }
@@ -162,3 +169,5 @@ class PathfinderApplication : Application() {
 }
 
 private val Context.settingsDataStore by preferencesDataStore(name = "settings")
+
+private val Context.sshHostsDataStore by preferencesDataStore(name = "ssh_hosts")
