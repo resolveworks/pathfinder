@@ -68,12 +68,16 @@ import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.codingagent.core.SettingsStorage
 import works.resolve.pathfinder.codingagent.core.createAgentSession
+import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
+import works.resolve.pathfinder.ssh.SshHostKeyStore
+import works.resolve.pathfinder.ssh.SshHostStore
+import works.resolve.pathfinder.ssh.SshPrivateKeyPem
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
@@ -222,7 +226,7 @@ internal class TestSessionSource(tmpFolder: TemporaryFolder) : SessionSource {
  * Models/resolver paths). The scripted [factory] and [rejectedModelIds]
  * are the only behavior fakes.
  */
-internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispatcher) {
+internal class ChatHarness(private val tmpFolder: TemporaryFolder, testDispatcher: TestDispatcher) {
     val viewModels = CopyOnWriteArrayList<ChatViewModel>()
 
     val credentials = FakeCredentialStore()
@@ -269,6 +273,30 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
         )
     )
     val settingsStore = FailingSettingsStore(settings)
+
+    private class FakeSshHostKeyStore(dir: File) :
+        SshHostKeyStore(dir, KeystoreAeadCipher()) {
+        private val keys = mutableMapOf<String, SshPrivateKeyPem>()
+        override suspend fun write(hostId: String, key: SshPrivateKeyPem) {
+            keys[hostId] = key
+        }
+
+        override suspend fun read(hostId: String): SshPrivateKeyPem? = keys[hostId]
+
+        override suspend fun delete(hostId: String) {
+            keys.remove(hostId)
+        }
+    }
+
+    val sshHostStore = SshHostStore(
+        PreferenceDataStoreFactory.create(
+            scope = dataStoreScope,
+            produceFile = {
+                File(tmpFolder.root, "ssh_hosts_${System.nanoTime()}.preferences_pb")
+            }
+        ),
+        FakeSshHostKeyStore(File(tmpFolder.root, "ssh-host-keys"))
+    )
 
     /** The shared manager all ViewModels and the factory write through. */
     val settingsManager: SettingsManager =
@@ -383,6 +411,7 @@ internal class ChatHarness(tmpFolder: TemporaryFolder, testDispatcher: TestDispa
         agentFactory = factory,
         modelResolver = modelResolver,
         searchProviderService = searchProviders,
+        sshHostStore = sshHostStore,
         appForegroundGate = AppForegroundGate()
     ).also { viewModels += it }
 

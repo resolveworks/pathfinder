@@ -44,6 +44,8 @@ import works.resolve.pathfinder.codingagent.core.resolveModelScope
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
+import works.resolve.pathfinder.ssh.SshHost
+import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
 /**
@@ -84,7 +86,8 @@ class ChatViewModel(
      * flows gate loopback waits and network work on it.
      */
     private val appForegroundGate: AppForegroundGate,
-    private val searchProviderService: SearchProviderService
+    private val searchProviderService: SearchProviderService,
+    private val sshHostStore: SshHostStore
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -104,15 +107,19 @@ class ChatViewModel(
 
     private val sessionSearch = SessionSearchController()
 
+    private val sshHosts = SshHostsController(viewModelScope, sshHostStore, ::setError)
+
     val uiState: StateFlow<ChatUiState> = combine(
         _uiState,
         loginController.flow,
         searchProviders.state,
-        sessionSearch.state
-    ) { base, authFlow, searchProviders, sessionSearch ->
+        sessionSearch.state,
+        sshHosts.hosts
+    ) { base, authFlow, searchProviders, sessionSearch, sshHosts ->
         base.copy(
             authFlow = authFlow,
             searchProviderOptions = searchProviders.options,
+            sshHosts = sshHosts,
             sessionSearchQuery = sessionSearch.query,
             sessionSearchSort = sessionSearch.sort,
             sessionSearchResults = sessionSearch.results
@@ -371,6 +378,18 @@ class ChatViewModel(
             }
         }
     }
+
+    // ---- SSH hosts (Settings ▸ SSH hosts) ----
+
+    /** Creates an SSH host with a freshly generated keypair (see [SshHostsController.addHost]). */
+    fun addSshHost(address: String, port: Int, username: String) =
+        sshHosts.addHost(address, port, username)
+
+    /** Persists edited connection fields of an SSH host. */
+    fun updateSshHost(host: SshHost) = sshHosts.updateHost(host)
+
+    /** Deletes an SSH host and its keypair. */
+    fun removeSshHost(id: String) = sshHosts.removeHost(id)
 
     fun send() {
         viewModelScope.launch { sendInternal() }
