@@ -2,16 +2,9 @@
 
 ## pi
 
-The provider/chat streaming layer (under `app/src/main/kotlin/works/resolve/pathfinder/ai/`)
-and the agent loop (under `app/src/main/kotlin/works/resolve/pathfinder/agent/`) are
-Kotlin ports of portions of [pi](https://pi.dev) (the local pi project at
-`~/Projects/pi`). Those portions are:
-
 Copyright (c) 2025 Mario Zechner
 
-Licensed under the MIT License reproduced below. The attribution here applies
-to the ported portions only; it does not place a license on pathfinder as a
-whole.
+Licensed under the MIT License reproduced below.
 
 ```
 MIT License
@@ -39,17 +32,11 @@ SOFTWARE.
 
 ## defuddle
 
-The `web_fetch` tool injects the browser bundle of
+The app bundles the browser build of
 [defuddle](https://github.com/kepano/defuddle) (npm release `defuddle@0.19.3`,
-file `dist/index.full.js`) into pages rendered by its hidden WebView to extract
-article content and metadata. The bundled file is:
+file `dist/index.full.js`), which compiles in:
 
-Copyright (c) 2025 Steph Ango (@kepano)
-
-Licensed under the MIT License reproduced above.
-
-The bundled file additionally compiles in the following MIT-licensed libraries:
-
+- defuddle — Copyright (c) 2025 Steph Ango (@kepano)
 - turndown — Copyright (c) 2017 Dom Christie
 - mathml-to-latex — Copyright (c) 2020 Alexandre Nunes
 - temml — Copyright (c) 2020 Ron Kok
