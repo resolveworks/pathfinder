@@ -93,11 +93,11 @@ class ChatViewModel(
     private val appForegroundGate: AppForegroundGate,
     private val searchProviderService: SearchProviderService,
     private val sshHostStore: SshHostStore,
-    /** Session→host mapping; recorded by [newSessionOnHost] before the session's agent is created. */
+    /** Session→host mapping; [SshSessionController] binds and rolls it back around agent creation. */
     private val sshSessionHosts: SshSessionHostStore,
-    /** Live per-session connections; the close seam for the outgoing session at replacement. */
+    /** Live per-session connections; [SshSessionController] closes the outgoing session at replacement. */
     private val sshSessionConnections: SshSessionConnections,
-    /** Interactive TOFU host-key decisions for every session creation. */
+    /** Interactive TOFU host-key decisions; surfaced through [SshSessionController]. */
     private val hostKeyConfirmer: TofuHostKeyConfirmer
 ) : ViewModel() {
 
@@ -120,6 +120,15 @@ class ChatViewModel(
 
     private val sshHosts = SshHostsController(viewModelScope, sshHostStore, ::setError)
 
+    private val sshSessions = SshSessionController(
+        viewModelScope,
+        sshHostStore,
+        sshSessionHosts,
+        sshSessionConnections,
+        hostKeyConfirmer,
+        ::setError
+    )
+
     val uiState: StateFlow<ChatUiState> =
         combine(
             combine(
@@ -138,7 +147,7 @@ class ChatViewModel(
                     sessionSearchResults = sessionSearch.results
                 )
             },
-            hostKeyConfirmer.pending
+            sshSessions.pendingHostKey
         ) { base, pendingHostKey -> base.copy(pendingHostKey = pendingHostKey) }
             .stateIn(viewModelScope, SharingStarted.Eagerly, _uiState.value)
 
@@ -398,10 +407,10 @@ class ChatViewModel(
     // ---- SSH hosts (Settings ▸ SSH hosts) ----
 
     /** Trusts the pending unknown-host-key request (TOFU first connect). */
-    fun trustHostKey() = hostKeyConfirmer.answer(trust = true)
+    fun trustHostKey() = sshSessions.trustHostKey()
 
     /** Refuses the pending unknown-host-key request; also the dialog-dismiss path (fail closed). */
-    fun refuseHostKey() = hostKeyConfirmer.answer(trust = false)
+    fun refuseHostKey() = sshSessions.refuseHostKey()
 
     /** Creates an SSH host with a freshly generated keypair (see [SshHostsController.addHost]). */
     fun addSshHost(address: String, port: Int, username: String) =
@@ -413,7 +422,7 @@ class ChatViewModel(
     /** Deletes an SSH host and its keypair, plus any session mappings to it. */
     fun removeSshHost(id: String) {
         sshHosts.removeHost(id)
-        viewModelScope.launch { sshSessionHosts.clearHost(id) }
+        sshSessions.clearHost(id)
     }
 
     fun send() {
@@ -524,13 +533,12 @@ class ChatViewModel(
             if (rejectWhileBusy()) return@launch
             try {
                 val manager = sessionSource.create()
-                sshSessionHosts.setHost(manager.getSessionId(), hostId)
+                sshSessions.bindHostToSession(manager.getSessionId(), hostId)
                 val newAgent = tryCreateAgent(manager)
                 if (newAgent == null || !activateSession(manager, newAgent)) {
                     // Nothing half-bound survives: drop the mapping and the
                     // (possibly established) connection of the dead session.
-                    sshSessionHosts.clear(manager.getSessionId())
-                    sshSessionConnections.close(manager.getSessionId())
+                    sshSessions.rollbackSession(manager.getSessionId())
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -752,55 +760,6 @@ class ChatViewModel(
     }
 
     /**
-     * Safe, actionable message for a failed session connect, naming the
-     * session's host; a pinned host-key mismatch is a hard stop — there is
-     * deliberately no bypass UI for it.
-     */
-    private suspend fun sshConnectionError(
-        error: SshConnectionException,
-        sessionId: String
-    ): String {
-        val label = sshSessionHosts.hostId(sessionId)
-            ?.let { sshHostStore.host(it) }
-            ?.let { "${it.username}@${it.address}" }
-        return when (error.detail) {
-            SshConnectionException.Detail.HOST_KEY_REJECTED ->
-                if (label != null) {
-                    "SSH host key for $label changed — the connection was refused for your " +
-                        "safety. Verify the server before trusting it again."
-                } else {
-                    ERROR_SSH_HOST_KEY_CHANGED
-                }
-
-            SshConnectionException.Detail.CONNECT ->
-                if (label != null) {
-                    "Could not reach $label — check the address and that the host is up"
-                } else {
-                    ERROR_SSH_CONNECT
-                }
-
-            SshConnectionException.Detail.AUTH ->
-                if (label != null) {
-                    "$label refused the app's key — add the app's public key to " +
-                        "authorized_keys on the server"
-                } else {
-                    ERROR_SSH_AUTH
-                }
-
-            SshConnectionException.Detail.SFTP ->
-                if (label != null) {
-                    "$label does not offer SFTP, which Pathfinder needs for remote files"
-                } else {
-                    ERROR_SSH_SFTP
-                }
-
-            SshConnectionException.Detail.UNKNOWN_HOST -> ERROR_SSH_UNKNOWN_HOST
-
-            SshConnectionException.Detail.NO_KEY -> ERROR_SSH_NO_KEY
-        }
-    }
-
-    /**
      * Builds a session through the core createAgentSession factory (which
      * owns model resolution, restoration, and seeding) or null (with a safe
      * error surfaced) when the factory rejects the configuration. A model
@@ -808,20 +767,18 @@ class ChatViewModel(
      * as a safe error while the fallback model runs.
      */
     private suspend fun tryCreateAgent(sessionManager: SessionManager): AgentSession? {
-        // The TOFU prompt must name the host the factory is about to dial.
-        hostKeyConfirmer.setSessionContext(sessionManager.getSessionId())
         val result = try {
-            agentFactory.create(sessionManager)
+            sshSessions.withConnectContext(sessionManager.getSessionId()) {
+                agentFactory.create(sessionManager)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: SshConnectionException) {
-            setError(sshConnectionError(e, sessionManager.getSessionId()), e)
+            setError(sshSessions.connectionError(e, sessionManager.getSessionId()), e)
             return null
         } catch (e: Exception) {
             setError(ERROR_CONFIG_INVALID, e)
             return null
-        } finally {
-            hostKeyConfirmer.setSessionContext(null)
         }
         result.modelFallbackMessage?.let { setError(it) }
         // Synchronize web_search against the current Brave credential
@@ -836,7 +793,7 @@ class ChatViewModel(
         val incomingId = newAgent.sessionManager.getSessionId()
         val outgoingId = _uiState.value.activeSessionId
         if (outgoingId != null && outgoingId != incomingId) {
-            viewModelScope.launch { sshSessionConnections.close(outgoingId) }
+            sshSessions.closeConnection(outgoingId)
         }
         agentStateJob?.cancel()
         agentEventsJob?.cancel()
@@ -1480,13 +1437,6 @@ class ChatViewModel(
         const val ERROR_ALREADY_STREAMING = "A response is already streaming"
         const val ERROR_ALREADY_AT_POINT = "Already at this point"
         const val ERROR_ENTRY_MISSING = "Message not found"
-        const val ERROR_SSH_CONNECT = "Could not connect to the SSH host"
-        const val ERROR_SSH_AUTH = "The SSH host refused the app's key"
-        const val ERROR_SSH_SFTP = "The SSH host does not offer SFTP"
-        const val ERROR_SSH_UNKNOWN_HOST = "That SSH host is no longer configured"
-        const val ERROR_SSH_NO_KEY = "No SSH key is stored for that host"
-        const val ERROR_SSH_HOST_KEY_CHANGED =
-            "The SSH host key changed — the connection was refused for your safety"
 
         /** Actionable, secret-free message naming the still-missing auth prompts. */
         fun missingCredentialError(missing: List<AuthPrompt>): String =
