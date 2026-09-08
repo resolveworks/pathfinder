@@ -13,6 +13,7 @@ import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.codingagent.core.SessionInfo
+import works.resolve.pathfinder.ssh.HostKeyRequest
 import works.resolve.pathfinder.ssh.SshHost
 
 /** Which conversation surface the chat root shows: the transcript or the session tree. */
@@ -196,6 +197,8 @@ data class ChatUiState(
     val messages: List<TranscriptRow> = emptyList(),
     /** In-flight partial; role-generic in pi, assistant-only here (non-assistant partials render nothing). */
     val streamingMessage: AssistantMessage? = null,
+    /** Live partial output by tool call id (bash streaming); cleared when the result commits. */
+    val toolPartials: Map<String, String> = emptyMap(),
     val draft: String = "",
     val isStreaming: Boolean = false,
     /** Transient auto-retry backoff status; null when not retrying. */
@@ -209,6 +212,8 @@ data class ChatUiState(
     val treeFilter: TreeFilter = TreeFilter.DEFAULT,
     /** The in-flight provider login flow, or null (see [ProviderAuthFlow]). */
     val authFlow: ProviderAuthFlow? = null,
+    /** Pending unknown-host-key request (TOFU); answering it unblocks the session creation. */
+    val pendingHostKey: HostKeyRequest? = null,
     /**
      * Transient ViewModel-sourced failure shown as a snackbar. Agent-run
      * errors are never mirrored here: they render as transcript rows (pi's

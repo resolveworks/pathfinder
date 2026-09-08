@@ -30,6 +30,7 @@ import works.resolve.pathfinder.ssh.SshHostKeyStore
 import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.ssh.SshSessionConnections
 import works.resolve.pathfinder.ssh.SshSessionHostStore
+import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.webfetch.WebViewPageFetcher
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
@@ -139,6 +140,11 @@ class PathfinderApplication : Application() {
 
     val sshConnectionHelper: SshConnectionHelper by lazy { SshConnectionHelper(sshHostStore) }
 
+    /** Interactive TOFU host-key decisions for every session connect. */
+    val hostKeyConfirmer: TofuHostKeyConfirmer by lazy {
+        TofuHostKeyConfirmer(sshHostStore, sshSessionHostStore)
+    }
+
     /** Generated from pi; never hand-edit the bundled asset. */
     val modelCatalog: ProviderCatalog by lazy {
         assets.open("models-catalog.json").bufferedReader().use { it.readText() }
@@ -158,7 +164,8 @@ class PathfinderApplication : Application() {
             sshConnections = sshSessionConnections,
             sshConnectionHelper = sshConnectionHelper,
             bashTempDir = cacheDir.path,
-            imageProcessing = BitmapImageProcessing()
+            imageProcessing = BitmapImageProcessing(),
+            onUnknownHostKey = hostKeyConfirmer
         )
     }
 
@@ -175,6 +182,7 @@ class PathfinderApplication : Application() {
                 sshHostStore = sshHostStore,
                 sshSessionHosts = sshSessionHostStore,
                 sshSessionConnections = sshSessionConnections,
+                hostKeyConfirmer = hostKeyConfirmer,
                 modelResolver = agentFactory::resolveModel,
                 appForegroundGate = appForegroundGate
             )

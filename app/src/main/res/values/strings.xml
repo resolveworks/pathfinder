@@ -41,6 +41,11 @@
     <string name="ssh_host_copy_public_key">Copy public key</string>
     <string name="ssh_host_delete">Delete host</string>
     <string name="ssh_host_delete_confirm">Delete %1$s and its key? The server\'s authorized_keys entry must be removed separately.</string>
+    <string name="ssh_host_start_session">Start a chat on this host</string>
+    <string name="ssh_host_key_title">Unknown SSH host key</string>
+    <string name="ssh_host_key_body">The authenticity of %1$s cannot be established. Its %2$s key has the SHA-256 fingerprint:\n\n%3$s\n\nTrust it only if you expected this host and recognize the fingerprint.</string>
+    <string name="ssh_host_key_trust">Trust</string>
+    <string name="ssh_host_key_refuse">Refuse</string>
     <string name="search_provider_search_hint">Search providers</string>
     <string name="provider_search_hint">Search providers</string>
     <string name="no_matching_providers">No matching providers</string>
@@ -94,6 +99,10 @@
     <string name="tool_output_view">View tool output</string>
     <string name="tool_title_searched_for">Searched for %1$s</string>
     <string name="tool_title_fetched">Fetched %1$s</string>
+    <string name="tool_title_ran">Ran %1$s</string>
+    <string name="tool_title_read">Read %1$s</string>
+    <string name="tool_title_edited">Edited %1$s</string>
+    <string name="tool_title_wrote">Wrote %1$s</string>
 
     <string name="error_generic">Something went wrong</string>
 

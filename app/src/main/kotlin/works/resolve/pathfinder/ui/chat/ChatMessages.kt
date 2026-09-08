@@ -40,6 +40,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -60,6 +61,9 @@ import works.resolve.pathfinder.ui.chat.markdown.MarkdownText
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 private const val STREAMING_PLACEHOLDER = "…"
+
+/** Cap on the in-row bash partial preview; the full output opens in the sheet. */
+private const val PARTIAL_OUTPUT_MAX_LINES = 4
 
 /** Sampling cadence for rendering the growing streaming partial. */
 private const val STREAM_SAMPLE_INTERVAL_MS = 100L
@@ -117,6 +121,7 @@ internal fun ConversationContent(
     // capturing uiState would re-invalidate every visible row per token.
     val isStreaming = uiState.isStreaming
     val showThinking = uiState.showThinking
+    val toolPartials = uiState.toolPartials
 
     Box(modifier = modifier.fillMaxSize()) {
         if (messageCount == 0 && uiState.streamingMessage == null) {
@@ -142,6 +147,7 @@ internal fun ConversationContent(
                         call = row.call,
                         result = row.result,
                         running = row.result == null && isStreaming,
+                        partialOutput = if (row.result == null) toolPartials[row.call.id] else null,
                         onOpenOutput = { openToolResultId = row.call.id }
                     )
 
@@ -381,7 +387,11 @@ internal object ToolCallTitles {
 
     private val specs: Map<String, Spec> = mapOf(
         BraveWebSearchTool.NAME to Spec("query", R.string.tool_title_searched_for),
-        WebFetchTool.NAME to Spec("url", R.string.tool_title_fetched)
+        WebFetchTool.NAME to Spec("url", R.string.tool_title_fetched),
+        CodingTools.BASH to Spec("command", R.string.tool_title_ran),
+        CodingTools.READ to Spec("path", R.string.tool_title_read),
+        CodingTools.EDIT to Spec("path", R.string.tool_title_edited),
+        CodingTools.WRITE to Spec("path", R.string.tool_title_wrote)
     )
 
     fun specFor(toolName: String): Spec? = specs[toolName]
@@ -399,6 +409,23 @@ internal fun toolCallInput(toolName: String, arguments: String): String? {
         runCatching { lenientJson.parseToJsonElement(arguments) }.getOrNull() as? JsonObject
             ?: return null
     return parsed.string(argument)?.takeIf { it.isNotEmpty() }
+}
+
+/** Tool names of the ported coding tools (labels only; rendering keys off them). */
+internal object CodingTools {
+    const val BASH = "bash"
+    const val READ = "read"
+    const val EDIT = "edit"
+    const val WRITE = "write"
+}
+
+/**
+ * The display diff of an edit result, from its details (pi's edit renderer
+ * shows the diff); null for non-edit calls or missing details.
+ */
+internal fun editDiff(result: ToolResultMessage): String? {
+    if (result.toolName != CodingTools.EDIT) return null
+    return (result.details as? JsonObject)?.string("diff")?.takeIf { it.isNotEmpty() }
 }
 
 /** Row title: the spec's format filled with the parsed input, else the tool name. */
@@ -422,18 +449,21 @@ internal fun toolCallTitle(call: ToolCall?, fallbackName: String?): String =
  * distinct from conversation text: the row title (a tool-specific phrase
  * like "Searched for …", else the tool name) and a spinner while running
  * (the call committed but its result has not, and the run is still live —
- * pi's component spins between its start and end events). Rows with output
- * open [ToolOutputSheet] instead of expanding in place: the sheet owns its
- * scroll, starts at the top of the content, and leaves the transcript's
- * layout and scroll position untouched behind it. Per-row, never global
- * (pi's Ctrl+O, exposed as a tap). Error coloring is a native adaptation
- * (pi signals errors through the shell, not text color).
+ * pi's component spins between its start and end events). A running bash
+ * call previews its throttled partial output under the title (pi's bash
+ * renderer streams it). Rows with output open [ToolOutputSheet] instead
+ * of expanding in place: the sheet owns its scroll, starts at the top of
+ * the content, and leaves the transcript's layout and scroll position
+ * untouched behind it. Per-row, never global (pi's Ctrl+O, exposed as a
+ * tap). Error coloring is a native adaptation (pi signals errors through
+ * the shell, not text color).
  */
 @Composable
 private fun ToolCallItem(
     call: ToolCall,
     result: ToolResultMessage?,
     running: Boolean,
+    partialOutput: String?,
     onOpenOutput: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -456,12 +486,22 @@ private fun ToolCallItem(
                 Modifier
             }.padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            Text(
-                text = toolCallTitle(call),
-                style = MaterialTheme.typography.labelLarge,
-                color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified,
-                modifier = Modifier.weight(1f)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = toolCallTitle(call),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified
+                )
+                partialOutput?.takeIf { it.isNotBlank() }?.let { partial ->
+                    Text(
+                        text = partial,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = PARTIAL_OUTPUT_MAX_LINES,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
             if (running) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(18.dp),
@@ -529,13 +569,23 @@ private fun ToolOutputSheet(call: ToolCall, result: ToolResultMessage, onDismiss
                     .heightIn(max = 640.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                when (format) {
-                    ToolResultFormat.MARKDOWN -> MarkdownText(
+                val diff = remember(result) { editDiff(result) }
+                when {
+                    // pi's edit renderer shows the display diff from details,
+                    // not the bare result line.
+                    diff != null -> Text(
+                        text = diff,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = contentColor
+                    )
+
+                    format == ToolResultFormat.MARKDOWN -> MarkdownText(
                         markdown = output,
                         color = contentColor
                     )
 
-                    ToolResultFormat.RAW -> Text(
+                    // Raw fallback: pi's generic result renderer.
+                    else -> Text(
                         text = output,
                         style = MaterialTheme.typography.bodySmall,
                         color = contentColor

@@ -80,6 +80,7 @@ import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.ssh.SshPrivateKeyPem
 import works.resolve.pathfinder.ssh.SshSessionConnections
 import works.resolve.pathfinder.ssh.SshSessionHostStore
+import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
@@ -309,6 +310,8 @@ internal class ChatHarness(private val tmpFolder: TemporaryFolder, testDispatche
         )
     )
 
+    val hostKeyConfirmer = TofuHostKeyConfirmer(sshHostStore, sshSessionHosts)
+
     /** The shared manager all ViewModels and the factory write through. */
     val settingsManager: SettingsManager =
         runBlocking { SettingsManager.fromStorage(settingsStore) }
@@ -425,6 +428,7 @@ internal class ChatHarness(private val tmpFolder: TemporaryFolder, testDispatche
         sshHostStore = sshHostStore,
         sshSessionHosts = sshSessionHosts,
         sshSessionConnections = SshSessionConnections(),
+        hostKeyConfirmer = hostKeyConfirmer,
         appForegroundGate = AppForegroundGate()
     ).also { viewModels += it }
 

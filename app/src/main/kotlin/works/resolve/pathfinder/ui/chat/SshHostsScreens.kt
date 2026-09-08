@@ -13,11 +13,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -42,7 +44,8 @@ import works.resolve.pathfinder.ssh.SshHost
 internal fun SshHostsContent(
     hosts: List<SshHost>,
     onAddHost: () -> Unit,
-    onOpenHost: (hostId: String) -> Unit
+    onOpenHost: (hostId: String) -> Unit,
+    onStartSession: (hostId: String) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -68,10 +71,20 @@ internal fun SshHostsContent(
                             Text(stringResource(R.string.ssh_host_port, host.port))
                         },
                         trailingContent = {
-                            Icon(
-                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = null
-                            )
+                            Row {
+                                IconButton(onClick = { onStartSession(host.id) }) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.Send,
+                                        contentDescription = stringResource(
+                                            R.string.ssh_host_start_session
+                                        )
+                                    )
+                                }
+                                Icon(
+                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = null
+                                )
+                            }
                         },
                         modifier = Modifier.clickable { onOpenHost(host.id) }
                     )
