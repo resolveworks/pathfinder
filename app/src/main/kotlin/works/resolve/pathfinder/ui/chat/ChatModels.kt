@@ -13,6 +13,7 @@ import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.codingagent.core.SessionInfo
+import works.resolve.pathfinder.ssh.SshHost
 
 /** Which conversation surface the chat root shows: the transcript or the session tree. */
 enum class ConversationView {
@@ -66,6 +67,14 @@ data object ProvidersNavKey : NavKey
 
 @Serializable
 data object SearchProvidersNavKey : NavKey
+
+/** The SSH host list (Settings ▸ SSH hosts). */
+@Serializable
+data object SshHostsNavKey : NavKey
+
+/** Host add/edit form; a null [hostId] adds, otherwise it edits that host. */
+@Serializable
+data class SshHostEditNavKey(val hostId: String?) : NavKey
 
 @Serializable
 data class SearchProviderAuthNavKey(val providerId: String) : NavKey
@@ -150,6 +159,8 @@ data class ChatUiState(
     val providerOptions: List<ProviderOption> = emptyList(),
     /** All catalog search providers with live auth status, name-sorted. */
     val searchProviderOptions: List<ProviderOption> = emptyList(),
+    /** Configured SSH hosts (Settings ▸ SSH hosts), store-sorted. */
+    val sshHosts: List<SshHost> = emptyList(),
     /**
      * Models of configured providers only, sorted by provider then model
      * name; the scope curator's universe.

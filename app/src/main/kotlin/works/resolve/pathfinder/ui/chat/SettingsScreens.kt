@@ -38,6 +38,7 @@ internal fun SettingsContent(
     onOpenDefaultThinking: () -> Unit,
     onOpenProviders: () -> Unit,
     onOpenSearchProviders: () -> Unit,
+    onOpenSshHosts: () -> Unit,
     onToggleShowThinking: (Boolean) -> Unit
 ) {
     Column(
@@ -86,6 +87,14 @@ internal fun SettingsContent(
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },
             modifier = Modifier.clickable(onClick = onOpenSearchProviders)
+        )
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.ssh_hosts_title)) },
+            supportingContent = { Text(stringResource(R.string.ssh_hosts_hint)) },
+            trailingContent = {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+            },
+            modifier = Modifier.clickable(onClick = onOpenSshHosts)
         )
         ListItem(
             headlineContent = { Text(stringResource(R.string.settings_show_thinking)) },

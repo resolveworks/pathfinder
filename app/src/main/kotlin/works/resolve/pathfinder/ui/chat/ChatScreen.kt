@@ -81,6 +81,7 @@ import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.providers.AuthPrompt as CatalogAuthPrompt
 import works.resolve.pathfinder.codingagent.core.SessionInfo
+import works.resolve.pathfinder.ssh.SshHost
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 @Composable
@@ -117,6 +118,9 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         onSaveSearchProviderCredential = viewModel::saveSearchProviderCredential,
         onRemoveSearchProviderCredential = viewModel::removeSearchProviderCredential,
         onRefreshSearchProviderStatus = viewModel::refreshSearchProviderStatus,
+        onAddSshHost = viewModel::addSshHost,
+        onUpdateSshHost = viewModel::updateSshHost,
+        onRemoveSshHost = viewModel::removeSshHost,
         searchAuthPrompts = viewModel::searchProviderAuthPrompts,
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
@@ -166,6 +170,9 @@ fun ChatScreen(
     onRemoveSearchProviderCredential: (providerId: String) -> Unit,
     onRefreshSearchProviderStatus: () -> Unit,
     searchAuthPrompts: (providerId: String) -> List<CatalogAuthPrompt>,
+    onAddSshHost: (address: String, port: Int, username: String) -> Unit,
+    onUpdateSshHost: (host: SshHost) -> Unit,
+    onRemoveSshHost: (hostId: String) -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
     onSessionSearchQueryChange: (query: String) -> Unit,
@@ -250,6 +257,8 @@ fun ChatScreen(
     val pushProviderAuth: (String) -> Unit = { backStack.add(ProviderAuthNavKey(it)) }
     val pushProviderApiKeyForm: (String) -> Unit = { backStack.add(ProviderApiKeyNavKey(it)) }
     val pushSearchProviders: () -> Unit = { backStack.add(SearchProvidersNavKey) }
+    val pushSshHosts: () -> Unit = { backStack.add(SshHostsNavKey) }
+    val pushSshHostEdit: (String?) -> Unit = { backStack.add(SshHostEditNavKey(it)) }
     val pushSearchProviderAuth: (String) -> Unit = { backStack.add(SearchProviderAuthNavKey(it)) }
     val popBackStack: () -> Unit = {
         // Popping the login destination cancels its flow: a login must
@@ -312,6 +321,16 @@ fun ChatScreen(
                             ProvidersNavKey -> stringResource(R.string.providers_title)
 
                             SearchProvidersNavKey -> stringResource(R.string.search_providers_title)
+
+                            SshHostsNavKey -> stringResource(R.string.ssh_hosts_title)
+
+                            is SshHostEditNavKey -> stringResource(
+                                if (topKey.hostId == null) {
+                                    R.string.ssh_hosts_add
+                                } else {
+                                    R.string.ssh_host_edit_title
+                                }
+                            )
 
                             is SearchProviderAuthNavKey ->
                                 uiState.searchProviderOptions
@@ -418,6 +437,7 @@ fun ChatScreen(
                                     onOpenDefaultThinking = pushDefaultThinking,
                                     onOpenProviders = pushProviders,
                                     onOpenSearchProviders = pushSearchProviders,
+                                    onOpenSshHosts = pushSshHosts,
                                     onToggleShowThinking = onToggleShowThinking
                                 )
                             }
@@ -449,6 +469,46 @@ fun ChatScreen(
                                     onRefresh = onRefreshSearchProviderStatus,
                                     onOpenProvider = pushSearchProviderAuth
                                 )
+                            }
+                            entry<SshHostsNavKey> {
+                                SshHostsContent(
+                                    hosts = uiState.sshHosts,
+                                    onAddHost = { pushSshHostEdit(null) },
+                                    onOpenHost = pushSshHostEdit
+                                )
+                            }
+                            entry<SshHostEditNavKey> { key ->
+                                val host = key.hostId?.let { id ->
+                                    uiState.sshHosts.firstOrNull { it.id == id }
+                                }
+                                if (key.hostId != null && host == null) {
+                                    // Deleted elsewhere (or a stale restored
+                                    // entry): the form has nothing to edit.
+                                    LaunchedEffect(key) { popBackStack() }
+                                } else {
+                                    SshHostEditContent(
+                                        host = host,
+                                        onSave = { address, port, username ->
+                                            if (host == null) {
+                                                onAddSshHost(address, port, username)
+                                            } else {
+                                                onUpdateSshHost(
+                                                    host.copy(
+                                                        address = address.trim(),
+                                                        port = port,
+                                                        username = username.trim()
+                                                    )
+                                                )
+                                            }
+                                            popBackStack()
+                                        },
+                                        onRemove = {
+                                            host?.let { onRemoveSshHost(it.id) }
+                                            popBackStack()
+                                        },
+                                        onClose = popBackStack
+                                    )
+                                }
                             }
                             entry<SearchProviderAuthNavKey> { key ->
                                 val option = uiState.searchProviderOptions
@@ -870,6 +930,9 @@ private fun PreviewChatScreen(
             onRemoveSearchProviderCredential = { _ -> },
             onRefreshSearchProviderStatus = {},
             searchAuthPrompts = searchAuthPrompts,
+            onAddSshHost = { _, _, _ -> },
+            onUpdateSshHost = { },
+            onRemoveSshHost = { },
             onNewSession = {},
             onSwitchSession = {},
             onSessionSearchQueryChange = {},

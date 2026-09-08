@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.ssh
 
-import android.content.Context
 import java.io.File
 import java.security.KeyPair
 import java.security.KeyPairGenerator
@@ -52,27 +51,28 @@ object SshHostKeys {
  * Encrypted at-rest storage for the per-host private keys, reusing
  * [EncryptedCredentialStore] over a dedicated directory so host keys never
  * appear among provider credentials. Entries are keyed by a
- * provider-id-regex-safe derivation of the host id.
+ * provider-id-regex-safe derivation of the host id. Open so the app's JVM
+ * test harness can substitute an in-memory store.
  */
-class SshHostKeyStore(context: Context, cipher: KeystoreAeadCipher) {
+open class SshHostKeyStore(dir: File, cipher: KeystoreAeadCipher) {
 
     private val credentials =
         EncryptedCredentialStore(
-            dir = File(context.filesDir, DIRECTORY),
+            dir = dir,
             encrypt = cipher::encrypt,
             decrypt = cipher::decrypt
         )
 
-    suspend fun write(hostId: String, key: SshPrivateKeyPem) {
+    open suspend fun write(hostId: String, key: SshPrivateKeyPem) {
         credentials.modify(credentialKey(hostId)) { ApiKeyCredential(key = key.pem) }
     }
 
-    suspend fun read(hostId: String): SshPrivateKeyPem? =
+    open suspend fun read(hostId: String): SshPrivateKeyPem? =
         (credentials.read(credentialKey(hostId)) as? ApiKeyCredential)
             ?.key
             ?.let(::SshPrivateKeyPem)
 
-    suspend fun delete(hostId: String) {
+    open suspend fun delete(hostId: String) {
         credentials.delete(credentialKey(hostId))
     }
 
@@ -85,7 +85,6 @@ class SshHostKeyStore(context: Context, cipher: KeystoreAeadCipher) {
     }
 
     private companion object {
-        const val DIRECTORY = "ssh-host-keys"
         const val KEY_PREFIX = "sshhost-"
         const val MAX_KEY_LENGTH = 64
     }

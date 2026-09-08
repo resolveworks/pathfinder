@@ -121,7 +121,10 @@ class PathfinderApplication : Application() {
 
     /** SSH host configs, per-host keys, and TOFU host-key state. */
     val sshHostStore: SshHostStore by lazy {
-        SshHostStore(sshHostsDataStore, SshHostKeyStore(this, KeystoreAeadCipher()))
+        SshHostStore(
+            sshHostsDataStore,
+            SshHostKeyStore(File(filesDir, "ssh-host-keys"), KeystoreAeadCipher())
+        )
     }
 
     /** Generated from pi; never hand-edit the bundled asset. */
@@ -152,6 +155,7 @@ class PathfinderApplication : Application() {
                 sessionSource = sessionSource,
                 agentFactory = agentFactory,
                 searchProviderService = searchProviderService,
+                sshHostStore = sshHostStore,
                 modelResolver = agentFactory::resolveModel,
                 appForegroundGate = appForegroundGate
             )
