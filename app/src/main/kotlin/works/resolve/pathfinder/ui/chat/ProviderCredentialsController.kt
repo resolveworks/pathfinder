@@ -233,9 +233,6 @@ internal class ProviderCredentialsController(
     private companion object {
         private const val TAG = "Pathfinder"
 
-        private const val ERROR_CREDENTIAL_SAVE = "Could not store the API key"
-        private const val ERROR_UNKNOWN_PROVIDER = "Unknown provider"
-
         /** Actionable, secret-free message naming the still-missing auth prompts. */
         fun missingCredentialError(missing: List<AuthPrompt>): String =
             "Sign-in values are still needed: " +

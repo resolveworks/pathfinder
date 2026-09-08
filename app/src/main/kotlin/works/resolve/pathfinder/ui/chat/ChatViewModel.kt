@@ -338,9 +338,7 @@ class ChatViewModel(
     fun refreshProviderStatus() {
         viewModelScope.launch {
             try {
-                searchProviders.refresh()
-                providerCredentials.refresh()
-                projectSettings()
+                refreshCredentialSurfaces()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -590,9 +588,7 @@ class ChatViewModel(
                 recordDegradation("session_summaries", e)
                 emptyList()
             }
-            searchProviders.refresh()
-            providerCredentials.refresh()
-            projectSettings()
+            refreshCredentialSurfaces()
 
             // NeedsConfiguration means exactly "no configured provider at
             // all"; once any provider credential resolves, the app enters
@@ -1056,9 +1052,7 @@ class ChatViewModel(
      * directly.
      */
     private suspend fun onCredentialStored() {
-        searchProviders.refresh()
-        providerCredentials.refresh()
-        projectSettings()
+        refreshCredentialSurfaces()
         if (_uiState.value.status == ChatStatus.NeedsConfiguration &&
             providerCredentials.state.value.modelOptions.isNotEmpty()
         ) {
@@ -1122,6 +1116,19 @@ class ChatViewModel(
     fun cancelProviderAuthLogin() = loginController.cancel()
 
     private fun isAuthProviderBusy(): Boolean = loginController.busy
+
+    /**
+     * Search status first: a provider read failure must not leave it
+     * stale, and it must be fresh before any agent creation follows.
+     * Search credentials never contribute to the LLM first-run
+     * configuration — `search_`-namespaced keys are not catalog
+     * provider credentials.
+     */
+    private suspend fun refreshCredentialSurfaces() {
+        searchProviders.refresh()
+        providerCredentials.refresh()
+        projectSettings()
+    }
 
     /** Re-projects persisted settings into the UI state after a write. */
     private fun projectSettings() {
