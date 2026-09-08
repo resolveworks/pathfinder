@@ -31,7 +31,9 @@ Port only:
 - The classic `packages/agent` Agent and agent loop.
 - The classic `packages/coding-agent` `AgentSession` behavior used by the app:
   retry, compaction, conversation trees, JSONL persistence, and recovery, plus
-  selected interaction semantics adapted into native Android UX.
+  selected interaction semantics adapted into native Android UX. The built-in
+  coding tools (read/bash/edit/write) with their Operations seam are ported
+  scope; SSH transport is an app-layer adapter over that seam.
 - The minimum telemetry contract required by those runtime pieces.
 
 Do not port:
@@ -44,7 +46,8 @@ Do not port:
 - Extensions, hooks for third-party customization, Chord plugins/facets, pi
   packages, skills, prompt templates, themes, or resource discovery.
 - The TUI, CLI, print/JSON/RPC/SDK modes, terminal keybindings, project trust,
-  context-file discovery, or built-in coding tools.
+  context-file discovery, or pi's local-file Operations adapter (the built-in
+  tools run over remote SSH operations instead).
 - The remote Chord/client/protocol/server stack, Node session backends, image
   generation, dynamic model stores, or legacy compatibility APIs.
 

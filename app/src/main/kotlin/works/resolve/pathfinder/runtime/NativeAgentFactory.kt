@@ -123,6 +123,10 @@ class NativeAgentFactory(
 
         val ssh = sshCodingTools(sessionManager.getSessionId())
         val codingTools = ssh?.tools ?: emptyList()
+        // pi's ssh example annotates the remote cwd as `... (via SSH: user@host)`
+        // in the system prompt; the same string is the session's persisted cwd.
+        val cwd = ssh?.cwd ?: ""
+        sessionManager.updateCwd(cwd)
 
         val result =
             try {
@@ -141,6 +145,7 @@ class NativeAgentFactory(
                             .flowOn(Dispatchers.Default)
                     },
                     tools = tools.toList() + codingTools,
+                    cwd = cwd,
                     streamOptions = SimpleStreamOptions(
                         sessionId = sessionManager.getSessionId(),
                         timeoutMs = REQUEST_TIMEOUT_MS,
@@ -185,12 +190,17 @@ class NativeAgentFactory(
                 write = WriteToolOptions(files)
             )
         )
-        return SshTools(tools, createdSession)
+        return SshTools(
+            tools,
+            "${connection.initialWorkingDirectory} (via SSH: ${connection.host.username}@${connection.host.address})",
+            createdSession
+        )
     }
 
-    /** Coding tools plus the slot the created session lands in for the read tool's model provider. */
+    /** Coding tools plus the cwd string and slot the created session lands in for the read tool's model provider. */
     private class SshTools(
         val tools: List<AgentTool>,
+        val cwd: String,
         val createdSession: AtomicReference<AgentSession>
     )
 

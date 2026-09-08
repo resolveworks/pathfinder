@@ -318,8 +318,12 @@ data class SessionInfo(
  * millisecond digits; internally entries carry epoch millis.
  *
  * Divergences from pi:
- * - `cwd` is written as a constant empty string (Android has no working
- *   directory) and ignored on read.
+ * - `cwd` carries the session's working directory (a connected SSH remote,
+ *   annotated app-side) or the empty string when there is none; unlike pi's
+ *   constructor-time `process.cwd()`, it is supplied after construction via
+ *   [updateCwd] because the SSH connection is established after the manager
+ *   exists. Updates land before the header line's lazy first persistence;
+ *   the persisted header stays immutable like pi's.
  * - Decode is permissive like pi's parseSessionEntryLine but entry payloads
  *   decode into typed [SessionEntry]s: any line that fails typed decode is
  *   skipped, and unknown entry `type`s are skipped (pi reads them as raw
@@ -333,7 +337,7 @@ data class SessionInfo(
 internal object JsonlCodec {
     const val SESSION_VERSION = 3
 
-    data class SessionHeader(val id: String, val timestamp: Long)
+    data class SessionHeader(val id: String, val timestamp: Long, val cwd: String = "")
 
     /** Header or entry produced by one line. */
     sealed interface Line {
@@ -361,7 +365,7 @@ internal object JsonlCodec {
         put("version", SESSION_VERSION)
         put("id", header.id)
         put("timestamp", formatIso(header.timestamp))
-        put("cwd", "")
+        put("cwd", header.cwd)
     }.toString() + "\n"
 
     fun encodeEntryLine(entry: SessionEntry): String = buildJsonObject {
@@ -422,7 +426,8 @@ internal object JsonlCodec {
                 "session" -> {
                     val id = obj.string("id") ?: return null
                     val timestamp = obj.string("timestamp")?.let(::parseIso) ?: return null
-                    Line.Header(SessionHeader(id, timestamp))
+                    val cwd = obj.string("cwd") ?: ""
+                    Line.Header(SessionHeader(id, timestamp, cwd))
                 }
 
                 "message", "compaction", "model_change", "thinking_level_change",
@@ -743,7 +748,8 @@ class SessionManager private constructor(
     private val clock: Clock,
     private val ioDispatcher: CoroutineDispatcher,
     private val entryIdFactory: () -> String,
-    private val header: JsonlCodec.SessionHeader,
+    @Volatile
+    private var header: JsonlCodec.SessionHeader,
     private val sessionFile: File?,
     initialFlushed: Boolean
 ) : ReadonlySessionManager {
@@ -790,6 +796,18 @@ class SessionManager private constructor(
     }
 
     private fun now(): Long = clock.now().toEpochMilliseconds()
+
+    /**
+     * pi fixes the header cwd at construction from process.cwd(); Android
+     * has none, and the session's cwd (the SSH remote) is only known once
+     * the app factory has connected. [writeFullFileLocked] reads [header]
+     * under the persistence mutex, so a value set before the lazy first
+     * flush lands in the persisted header line; a later update cannot
+     * rewrite an already-persisted header, matching pi's immutable header.
+     */
+    fun updateCwd(cwd: String) {
+        header = header.copy(cwd = cwd)
+    }
 
     private fun encodeLine(entry: SessionEntry): String = JsonlCodec.encodeEntryLine(entry)
 
