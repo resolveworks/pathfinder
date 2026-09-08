@@ -21,10 +21,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,6 +49,7 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -81,6 +84,7 @@ import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.providers.AuthPrompt as CatalogAuthPrompt
 import works.resolve.pathfinder.codingagent.core.SessionInfo
+import works.resolve.pathfinder.ssh.HostKeyRequest
 import works.resolve.pathfinder.ssh.SshHost
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
@@ -121,6 +125,9 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         onAddSshHost = viewModel::addSshHost,
         onUpdateSshHost = viewModel::updateSshHost,
         onRemoveSshHost = viewModel::removeSshHost,
+        onNewSessionOnHost = viewModel::newSessionOnHost,
+        onTrustHostKey = viewModel::trustHostKey,
+        onRefuseHostKey = viewModel::refuseHostKey,
         searchAuthPrompts = viewModel::searchProviderAuthPrompts,
         onNewSession = viewModel::newSession,
         onSwitchSession = viewModel::switchSession,
@@ -173,6 +180,9 @@ fun ChatScreen(
     onAddSshHost: (address: String, port: Int, username: String) -> Unit,
     onUpdateSshHost: (host: SshHost) -> Unit,
     onRemoveSshHost: (hostId: String) -> Unit,
+    onNewSessionOnHost: (hostId: String) -> Unit,
+    onTrustHostKey: () -> Unit,
+    onRefuseHostKey: () -> Unit,
     onNewSession: () -> Unit,
     onSwitchSession: (sessionId: String) -> Unit,
     onSessionSearchQueryChange: (query: String) -> Unit,
@@ -251,6 +261,15 @@ fun ChatScreen(
     }
 
     val pushSettings: () -> Unit = { backStack.add(SettingsNavKey) }
+    // The TOFU prompt sits above every destination: it unblocks a connect
+    // that any session-creating intent started, wherever the user is.
+    uiState.pendingHostKey?.let { request ->
+        HostKeyDialog(
+            request = request,
+            onTrust = onTrustHostKey,
+            onRefuse = onRefuseHostKey
+        )
+    }
     val pushDefaultModel: () -> Unit = { backStack.add(DefaultModelNavKey) }
     val pushDefaultThinking: () -> Unit = { backStack.add(DefaultThinkingNavKey) }
     val pushProviders: () -> Unit = { backStack.add(ProvidersNavKey) }
@@ -474,7 +493,8 @@ fun ChatScreen(
                                 SshHostsContent(
                                     hosts = uiState.sshHosts,
                                     onAddHost = { pushSshHostEdit(null) },
-                                    onOpenHost = pushSshHostEdit
+                                    onOpenHost = pushSshHostEdit,
+                                    onStartSession = onNewSessionOnHost
                                 )
                             }
                             entry<SshHostEditNavKey> { key ->
@@ -606,6 +626,41 @@ fun ChatScreen(
             }
         }
     }
+}
+
+/**
+ * Unknown-host-key confirmation (TOFU first connect): shows the host, key
+ * type, and SHA-256 fingerprint. Both the Refuse action and dismissing
+ * the dialog refuse — verification fails closed. Trusting persists the
+ * fingerprint (the verifier owns that), so the prompt appears once per
+ * host; a later pinned-mismatch is a hard error, never this dialog.
+ */
+@Composable
+private fun HostKeyDialog(request: HostKeyRequest, onTrust: () -> Unit, onRefuse: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onRefuse,
+        title = { Text(stringResource(R.string.ssh_host_key_title)) },
+        text = {
+            Text(
+                stringResource(
+                    R.string.ssh_host_key_body,
+                    request.hostLabel,
+                    request.keyType,
+                    request.fingerprint
+                )
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onTrust) {
+                Text(stringResource(R.string.ssh_host_key_trust))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onRefuse) {
+                Text(stringResource(R.string.ssh_host_key_refuse))
+            }
+        }
+    )
 }
 
 @Composable
@@ -933,6 +988,9 @@ private fun PreviewChatScreen(
             onAddSshHost = { _, _, _ -> },
             onUpdateSshHost = { },
             onRemoveSshHost = { },
+            onNewSessionOnHost = { },
+            onTrustHostKey = { },
+            onRefuseHostKey = { },
             onNewSession = {},
             onSwitchSession = {},
             onSessionSearchQueryChange = {},
