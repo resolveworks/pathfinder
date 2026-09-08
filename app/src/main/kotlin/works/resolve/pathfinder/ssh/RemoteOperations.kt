@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ssh
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.selects.select
 import org.connectbot.sshlib.SessionExit
@@ -150,6 +151,7 @@ class RemoteFileOperations(private val connection: SshConnection) :
         withSftp("stat") { sftp -> sftp.stat(absolutePath).unwrap("stat", absolutePath) }
     }
 
+    /** Sniffs the remote head; a failed sniff is not an image (pi's ssh.ts returns null on error), but cancellation propagates. */
     override suspend fun detectImageMimeType(absolutePath: String): String? = try {
         withSftp("read") { sftp ->
             val handle = sftp.open(
@@ -163,6 +165,8 @@ class RemoteFileOperations(private val connection: SshConnection) :
                 sftp.close(handle)
             }
         }
+    } catch (e: CancellationException) {
+        throw e
     } catch (_: Exception) {
         null
     }
