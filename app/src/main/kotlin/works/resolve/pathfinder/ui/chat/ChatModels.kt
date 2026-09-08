@@ -139,15 +139,15 @@ data class ProviderAuthFlow(
 /**
  * Connection-test status for the SSH host form (see
  * SshSessionController.testHostConnection); keyed by host so a stale result
- * never shows under another host. [message] is a safe, resource-resolved
- * result string.
+ * never shows under another host. [message] is a safe result string, held
+ * unresolved (see [UiString]).
  */
 @Immutable
 data class HostTestState(
     val hostId: String,
     val running: Boolean,
     val success: Boolean = false,
-    val message: String? = null
+    val message: UiString? = null
 )
 
 /**
@@ -235,7 +235,7 @@ data class ChatUiState(
      * errors are never mirrored here: they render as transcript rows (pi's
      * contract) and persist with the session.
      */
-    val error: String? = null
+    val error: UiString? = null
 ) {
     val canSend: Boolean
         get() = status == ChatStatus.Ready && !isStreaming && draft.isNotBlank()

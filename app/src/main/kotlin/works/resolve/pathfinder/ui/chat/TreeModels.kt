@@ -27,6 +27,9 @@ sealed class TreeRowBody {
     /** Whitespace-normalized, bounded, role-prefixed single-line preview. */
     data class Text(val preview: String) : TreeRowBody()
 
+    /** Bookkeeping entry or empty message text; resolved to text at render. */
+    data object NoContent : TreeRowBody()
+
     data class Tool(
         val name: String,
         /** Originating call, titled at render like chat tool rows; null when only history keeps the result. */

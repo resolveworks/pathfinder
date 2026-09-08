@@ -138,8 +138,6 @@ android {
     }
 }
 
-// Robolectric's bundled ASM cannot read newer class-file versions; keep the
-// Kotlin target aligned with the Java compile options.
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)

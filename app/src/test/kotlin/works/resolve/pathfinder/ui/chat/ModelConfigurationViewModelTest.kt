@@ -40,6 +40,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.Description
+import works.resolve.pathfinder.R
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.AgentTool
@@ -125,7 +126,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
 
             vm.selectModel("zai", "not-a-model")
             vm.awaitState { it.error != null }
-            assertEquals("Unknown model", vm.uiState.value.error)
+            assertEquals(UiString(R.string.error_unknown_model), vm.uiState.value.error)
             assertEquals(agentsBefore, h.createdAgents.size)
             assertEquals("glm-5.3", vm.uiState.value.selectedModel?.modelId)
             vm.dismissError()
@@ -292,7 +293,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.selectModel("not-a-provider", "glm-4.7")
             vm.awaitState { it.error != null }
             assertEquals(ChatStatus.Ready, vm.uiState.value.status)
-            assertEquals("Unknown model", vm.uiState.value.error)
+            assertEquals(UiString(R.string.error_unknown_model), vm.uiState.value.error)
 
             vm.closeForTest()
         }
@@ -888,12 +889,12 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
 
             vm.selectModel("no-such-provider", "gpt-4.1")
             mainDispatcherRule.scheduler.advanceUntilIdle()
-            assertEquals("Unknown model", vm.uiState.value.error)
+            assertEquals(UiString(R.string.error_unknown_model), vm.uiState.value.error)
             vm.dismissError()
 
             vm.selectModel("github-copilot", "not-a-catalog-model")
             mainDispatcherRule.scheduler.advanceUntilIdle()
-            assertEquals("Unknown model", vm.uiState.value.error)
+            assertEquals(UiString(R.string.error_unknown_model), vm.uiState.value.error)
 
             vm.closeForTest()
         }

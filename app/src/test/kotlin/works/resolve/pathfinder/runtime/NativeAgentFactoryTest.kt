@@ -140,7 +140,7 @@ class NativeAgentFactoryTest {
             settings(modelId = "gpt-4")
         ).create(session())
         assertEquals("glm-5.3", result.session.model.id)
-        assertNull(result.modelFallbackMessage)
+        assertNull(result.modelFallback)
 
         val unknownProvider =
             factory(

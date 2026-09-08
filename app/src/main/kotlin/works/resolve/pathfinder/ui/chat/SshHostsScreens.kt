@@ -184,7 +184,7 @@ internal fun SshHostEditContent(
             }
             hostTest?.message?.let { message ->
                 Text(
-                    text = message,
+                    text = message.asText(),
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (hostTest.success) {
                         MaterialTheme.colorScheme.onSurfaceVariant

@@ -40,6 +40,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.Description
+import works.resolve.pathfinder.R
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.AgentTool
@@ -994,7 +995,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.onDraftChange("Hello")
             vm.send()
             vm.awaitState { it.error != null && !it.isStreaming }
-            assertEquals("Could not save the chat", vm.uiState.value.error)
+            assertEquals(UiString(R.string.error_session_save), vm.uiState.value.error)
             assertNull(h.sessions.stored(sessionId))
 
             // The in-memory tree kept the run's entries; the next prompt
@@ -1145,7 +1146,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             val leafId = vm.uiState.value.treeRows.last().id
 
             vm.navigateToTreeEntry(leafId)
-            vm.awaitState { it.error == "Already at this point" }
+            vm.awaitState { it.error == UiString(R.string.error_already_at_point) }
             assertEquals(2, vm.uiState.value.messages.size)
             vm.dismissError()
 

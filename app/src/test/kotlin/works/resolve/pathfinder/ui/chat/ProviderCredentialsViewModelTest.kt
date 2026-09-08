@@ -40,6 +40,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.Description
+import works.resolve.pathfinder.R
 import works.resolve.pathfinder.agent.Agent
 import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.AgentTool
@@ -180,8 +181,10 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.error != null }
             val state = vm.uiState.value
             val error = checkNotNull(state.error)
-            assertTrue(error.contains("API key"))
-            assertFalse(error.contains("first-key"))
+            assertEquals(R.string.error_missing_credentials, error.res)
+            val missing = error.args.single() as String
+            assertTrue(missing.contains("API key"))
+            assertFalse(missing.contains("first-key"))
             assertFalse(state.toString().contains("first-key"))
             assertEquals(ChatStatus.Ready, state.status)
             assertTrue(state.providerOptions.first { o -> o.id == "zai" }.configured)
@@ -220,7 +223,9 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             // nothing is merged) is rejected; the stored credential survives.
             vm.saveProviderCredential("zai", "  ", emptyMap())
             vm.awaitState { it.error != null }
-            assertFalse(checkNotNull(vm.uiState.value.error).contains("first-key"))
+            assertFalse(
+                (checkNotNull(vm.uiState.value.error).args.single() as String).contains("first-key")
+            )
             assertEquals("first-key", h.storedApiKey("zai"))
             assertFalse(vm.uiState.value.toString().contains("first-key"))
             vm.dismissError()
@@ -298,9 +303,11 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             vm.saveProviderCredential("cloudflare-ai-gateway", "cf-key", emptyMap())
             val state = vm.awaitState { it.error != null }
             val error = checkNotNull(state.error)
-            assertTrue(error.contains("account ID"))
-            assertTrue(error.contains("gateway ID"))
-            assertFalse(error.contains("cf-key"))
+            assertEquals(R.string.error_missing_credentials, error.res)
+            val missing = error.args.single() as String
+            assertTrue(missing.contains("account ID"))
+            assertTrue(missing.contains("gateway ID"))
+            assertFalse(missing.contains("cf-key"))
             assertNull(h.credentials.creds["cloudflare-ai-gateway"])
             assertFalse(
                 vm.uiState.value.providerOptions.first { o ->
@@ -348,9 +355,10 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             )
             vm.awaitState { it.error != null }
             val retryError = checkNotNull(vm.uiState.value.error)
-            assertTrue(retryError.contains("gateway ID"))
-            assertFalse(retryError.contains("cf-key"))
-            assertFalse(retryError.contains("acc-3"))
+            val retryMissing = retryError.args.single() as String
+            assertTrue(retryMissing.contains("gateway ID"))
+            assertFalse(retryMissing.contains("cf-key"))
+            assertFalse(retryMissing.contains("acc-3"))
             assertEquals(rotated, h.credentials.creds["cloudflare-ai-gateway"])
             vm.dismissError()
 
@@ -493,7 +501,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             vm.onDraftChange("Hello")
             vm.send()
             val rejected = vm.awaitState {
-                it.error == "Could not send — check the provider sign-in"
+                it.error == UiString(R.string.error_prompt_auth)
             }
             assertFalse(rejected.isStreaming)
             assertTrue(rejected.messages.isEmpty())
@@ -658,7 +666,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
             h.oauthZai.loginFn = { throw IllegalStateException("token exchange failed (400)") }
             vm.beginProviderAuthLogin("zai", oauthMethod)
             val failed = vm.awaitState { it.authFlow == null && it.error != null }
-            assertEquals("Could not complete sign-in", failed.error)
+            assertEquals(UiString(R.string.error_auth_login), failed.error)
 
             vm.closeForTest()
         }
@@ -717,7 +725,7 @@ internal class ProviderCredentialsViewModelTest : ChatHarnessTest() {
                 { throw IllegalStateException("token endpoint returned access-token-2") }
             vm.beginProviderAuthLogin("zai", oauthMethod)
             vm.awaitState { it.authFlow == null && it.error != null }
-            assertEquals("Could not complete sign-in", vm.uiState.value.error)
+            assertEquals(UiString(R.string.error_auth_login), vm.uiState.value.error)
             assertFalse(vm.uiState.value.toString().contains("access-token-2"))
             assertNull(h.credentials.creds["zai"])
             assertFalse(vm.uiState.value.providerOptions.first { o -> o.id == "zai" }.configured)

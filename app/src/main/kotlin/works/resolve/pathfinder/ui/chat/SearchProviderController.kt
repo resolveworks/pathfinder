@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.ui.chat
 
-import android.app.Application
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -25,9 +24,8 @@ import works.resolve.pathfinder.tools.websearch.SearchProviderService
  */
 internal class SearchProviderController(
     private val scope: CoroutineScope,
-    private val app: Application,
     private val service: SearchProviderService,
-    private val onError: (message: String, cause: Throwable?) -> Unit
+    private val onError: (message: UiString, cause: Throwable?) -> Unit
 ) {
     /** Live search-provider surface. */
     data class State(val options: List<ProviderOption> = emptyList()) {
@@ -59,12 +57,12 @@ internal class SearchProviderController(
     fun saveCredential(providerId: String, apiKeyInput: String) {
         scope.launch {
             if (providerId != SearchProviderService.BRAVE_PROVIDER_ID) {
-                onError(app.getString(R.string.error_search_credential_save), null)
+                onError(UiString(R.string.error_search_credential_save), null)
                 return@launch
             }
             val key = apiKeyInput.trim()
             if (key.isEmpty()) {
-                onError(app.getString(R.string.error_search_credential_save), null)
+                onError(UiString(R.string.error_search_credential_save), null)
                 return@launch
             }
             try {
@@ -72,7 +70,7 @@ internal class SearchProviderController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onError(app.getString(R.string.error_search_credential_save), e)
+                onError(UiString(R.string.error_search_credential_save), e)
                 return@launch
             }
             refresh()
@@ -87,7 +85,7 @@ internal class SearchProviderController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onError(app.getString(R.string.error_search_credential_save), e)
+                onError(UiString(R.string.error_search_credential_save), e)
                 return@launch
             }
             refresh()
@@ -114,7 +112,7 @@ internal class SearchProviderController(
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "search_provider_status", e)
-            onError(app.getString(R.string.error_search_status), e)
+            onError(UiString(R.string.error_search_status), e)
             _state.update {
                 it.copy(
                     options = service.providers
