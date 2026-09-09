@@ -138,7 +138,7 @@ data class ProviderAuthFlow(
 
 /**
  * Connection-test status for the SSH host form (see
- * SshSessionController.testHostConnection); keyed by host so a stale result
+ * SshHostsController.testHostConnection); keyed by host so a stale result
  * never shows under another host. [message] is a safe result string, held
  * unresolved (see [UiString]).
  */

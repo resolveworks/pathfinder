@@ -29,8 +29,6 @@ import works.resolve.pathfinder.ssh.SshConnectionHelper
 import works.resolve.pathfinder.ssh.SshConnectionProvider
 import works.resolve.pathfinder.ssh.SshHostKeyStore
 import works.resolve.pathfinder.ssh.SshHostStore
-import works.resolve.pathfinder.ssh.SshSessionConnections
-import works.resolve.pathfinder.ssh.SshSessionHostStore
 import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.webfetch.WebViewPageFetcher
@@ -133,12 +131,6 @@ class PathfinderApplication : Application() {
         )
     }
 
-    /** Session→SSH host mapping, stored beside the hosts (same DataStore file; pi's session JSONL stays untouched). */
-    val sshSessionHostStore: SshSessionHostStore by lazy { SshSessionHostStore(sshHostsDataStore) }
-
-    /** Live per-session SSH connections; closed by ChatViewModel at session replacement. */
-    val sshSessionConnections: SshSessionConnections by lazy { SshSessionConnections() }
-
     val sshConnectionHelper: SshConnectionHelper by lazy { SshConnectionHelper(sshHostStore) }
 
     /** Interactive TOFU host-key decisions for every dial. */
@@ -181,10 +173,8 @@ class PathfinderApplication : Application() {
                 agentFactory = agentFactory,
                 searchProviderService = searchProviderService,
                 sshHostStore = sshHostStore,
-                sshSessionHosts = sshSessionHostStore,
-                sshSessionConnections = sshSessionConnections,
                 hostKeyConfirmer = hostKeyConfirmer,
-                sshConnectionHelper = sshConnectionHelper,
+                sshConnectionProvider = sshConnectionProvider,
                 modelResolver = agentFactory::resolveModel,
                 appForegroundGate = appForegroundGate
             )

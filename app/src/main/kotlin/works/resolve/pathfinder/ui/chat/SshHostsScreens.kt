@@ -91,15 +91,13 @@ internal fun SshHostsContent(
  * keypair and changes only the connection fields. The public-key section
  * (edit only) shows the authorized_keys line for copying — the only key
  * material the UI ever sees. Also edit-only: the connection test (progress
- * and result inline) and the start-chat action, both of which dial the
- * saved host.
+ * and result inline), which dials the saved host.
  */
 @Composable
 internal fun SshHostEditContent(
     host: SshHost?,
     hostTest: HostTestState?,
     onTestConnection: (hostId: String) -> Unit,
-    onNewSession: (hostId: String) -> Unit,
     onSave: (address: String, port: Int, username: String, cwd: String) -> Unit,
     onRemove: () -> Unit,
     onClose: () -> Unit
@@ -189,9 +187,6 @@ internal fun SshHostEditContent(
                         modifier = Modifier.size(20.dp),
                         strokeWidth = 2.dp
                     )
-                }
-                TextButton(onClick = { onNewSession(host.id) }) {
-                    Text(stringResource(R.string.ssh_host_start_session))
                 }
             }
             hostTest?.message?.let { message ->
