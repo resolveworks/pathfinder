@@ -16,16 +16,6 @@ import java.text.Normalizer
 
 enum class LineEnding { CRLF, LF }
 
-/** Split a leading UTF-8 byte order mark off decoded text (pi's `splitBom`). */
-fun splitBom(content: String): BomSplit {
-    if (!content.startsWith("")) {
-        return BomSplit(bom = "", text = content)
-    }
-    return BomSplit(bom = "﻿", text = content.substring(1))
-}
-
-data class BomSplit(val bom: String, val text: String)
-
 fun detectLineEnding(content: String): LineEnding {
     val crlfIdx = content.indexOf("\r\n")
     val lfIdx = content.indexOf("\n")

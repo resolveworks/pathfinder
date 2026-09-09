@@ -12,6 +12,7 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.str
+import works.resolve.pathfinder.codingagent.core.utils.splitBom
 
 class EditToolOptions(val operations: EditOperations)
 

@@ -13,6 +13,7 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.modelThinkingLevelFromWire
 import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
 import works.resolve.pathfinder.codingagent.core.compaction.DEFAULT_COMPACTION_SETTINGS
+import works.resolve.pathfinder.codingagent.core.utils.stripBom
 
 /**
  * Divergences from pi's `Settings`: one global scope only (no project scope,
@@ -59,8 +60,6 @@ private val prettyJson = Json {
     prettyPrint = true
     prettyPrintIndent = "  "
 }
-
-private fun stripBom(content: String): String = content.removePrefix("\uFEFF")
 
 private fun encodeSettings(settings: Settings): JsonObject = JsonObject(
     buildMap {
