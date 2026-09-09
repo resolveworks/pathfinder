@@ -178,7 +178,7 @@ fun ChatScreen(
     onRemoveSearchProviderCredential: (providerId: String) -> Unit,
     onRefreshSearchProviderStatus: () -> Unit,
     searchAuthPrompts: (providerId: String) -> List<CatalogAuthPrompt>,
-    onAddSshHost: (address: String, port: Int, username: String) -> Unit,
+    onAddSshHost: (address: String, port: Int, username: String, cwd: String) -> Unit,
     onUpdateSshHost: (host: SshHost) -> Unit,
     onRemoveSshHost: (hostId: String) -> Unit,
     onNewSessionOnHost: (hostId: String) -> Unit,
@@ -516,15 +516,16 @@ fun ChatScreen(
                                         },
                                         onTestConnection = onTestSshHostConnection,
                                         onNewSession = onNewSessionOnHost,
-                                        onSave = { address, port, username ->
+                                        onSave = { address, port, username, cwd ->
                                             if (host == null) {
-                                                onAddSshHost(address, port, username)
+                                                onAddSshHost(address, port, username, cwd)
                                             } else {
                                                 onUpdateSshHost(
                                                     host.copy(
                                                         address = address.trim(),
                                                         port = port,
-                                                        username = username.trim()
+                                                        username = username.trim(),
+                                                        cwd = cwd.trim()
                                                     )
                                                 )
                                             }
@@ -993,7 +994,7 @@ private fun PreviewChatScreen(
             onRemoveSearchProviderCredential = { _ -> },
             onRefreshSearchProviderStatus = {},
             searchAuthPrompts = searchAuthPrompts,
-            onAddSshHost = { _, _, _ -> },
+            onAddSshHost = { _, _, _, _ -> },
             onUpdateSshHost = { },
             onRemoveSshHost = { },
             onNewSessionOnHost = { },

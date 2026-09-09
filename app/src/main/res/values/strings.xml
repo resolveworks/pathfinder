@@ -37,6 +37,8 @@
     <string name="ssh_host_port_label">Port</string>
     <string name="ssh_host_port">Port %1$d</string>
     <string name="ssh_host_username">Username</string>
+    <string name="ssh_host_cwd">Working directory</string>
+    <string name="ssh_host_cwd_hint">Absolute path on the host, e.g. /home/user/project</string>
     <string name="ssh_host_public_key_hint">Add this line to the server\'s ~/.ssh/authorized_keys so Pathfinder can connect with its key:</string>
     <string name="ssh_host_copy_public_key">Copy public key</string>
     <string name="ssh_host_delete">Delete host</string>
@@ -46,7 +48,7 @@
     <string name="ssh_host_test_success">Connected — remote directory: %1$s</string>
     <string name="error_ssh_host_save">Could not save the SSH host</string>
     <string name="error_ssh_host_remove">Could not delete the SSH host</string>
-    <string name="error_ssh_host_invalid">Enter an address, username, and port (1–65535)</string>
+    <string name="error_ssh_host_invalid">Enter an address, username, absolute working directory, and port (1–65535)</string>
     <string name="ssh_host_key_title">Unknown SSH host key</string>
     <string name="ssh_host_key_body">The authenticity of %1$s cannot be established. Its %2$s key has the SHA-256 fingerprint:\n\n%3$s\n\nTrust it only if you expected this host and recognize the fingerprint.</string>
     <string name="ssh_host_key_trust">Trust</string>

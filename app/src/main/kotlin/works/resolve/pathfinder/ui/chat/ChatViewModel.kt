@@ -384,8 +384,8 @@ class ChatViewModel(
     fun refuseHostKey() = sshSessions.refuseHostKey()
 
     /** Creates an SSH host with a freshly generated keypair (see [SshHostsController.addHost]). */
-    fun addSshHost(address: String, port: Int, username: String) =
-        sshHosts.addHost(address, port, username)
+    fun addSshHost(address: String, port: Int, username: String, cwd: String) =
+        sshHosts.addHost(address, port, username, cwd)
 
     /** Persists edited connection fields of an SSH host. */
     fun updateSshHost(host: SshHost) = sshHosts.updateHost(host)
