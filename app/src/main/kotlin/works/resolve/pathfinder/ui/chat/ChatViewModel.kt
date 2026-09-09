@@ -745,9 +745,7 @@ class ChatViewModel(
      */
     private suspend fun tryCreateAgent(sessionManager: SessionManager): AgentSession? {
         val result = try {
-            sshSessions.withConnectContext(sessionManager.getSessionId()) {
-                agentFactory.create(sessionManager)
-            }
+            agentFactory.create(sessionManager)
         } catch (e: CancellationException) {
             throw e
         } catch (e: SshConnectionException) {

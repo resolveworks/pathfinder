@@ -26,6 +26,7 @@ import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.ssh.BitmapImageProcessing
 import works.resolve.pathfinder.ssh.SshConnectionHelper
+import works.resolve.pathfinder.ssh.SshConnectionProvider
 import works.resolve.pathfinder.ssh.SshHostKeyStore
 import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.ssh.SshSessionConnections
@@ -140,9 +141,12 @@ class PathfinderApplication : Application() {
 
     val sshConnectionHelper: SshConnectionHelper by lazy { SshConnectionHelper(sshHostStore) }
 
-    /** Interactive TOFU host-key decisions for every session connect. */
-    val hostKeyConfirmer: TofuHostKeyConfirmer by lazy {
-        TofuHostKeyConfirmer(sshHostStore, sshSessionHostStore)
+    /** Interactive TOFU host-key decisions for every dial. */
+    val hostKeyConfirmer: TofuHostKeyConfirmer by lazy { TofuHostKeyConfirmer() }
+
+    /** Process-wide lazy SSH connections; the coding tools dial on demand. */
+    val sshConnectionProvider: SshConnectionProvider by lazy {
+        SshConnectionProvider(sshHostStore, sshConnectionHelper, hostKeyConfirmer)
     }
 
     /** Generated from pi; never hand-edit the bundled asset. */
@@ -160,12 +164,9 @@ class PathfinderApplication : Application() {
             settingsManager = settingsManager,
             authRegistry = authRegistry,
             tools = listOf(webSearchTool, webFetchTool),
-            sshSessionHosts = sshSessionHostStore,
-            sshConnections = sshSessionConnections,
-            sshConnectionHelper = sshConnectionHelper,
             bashTempDir = cacheDir.path,
             imageProcessing = BitmapImageProcessing(),
-            onUnknownHostKey = hostKeyConfirmer
+            sshConnectionProvider = sshConnectionProvider
         )
     }
 

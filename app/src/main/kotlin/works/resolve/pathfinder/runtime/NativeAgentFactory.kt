@@ -39,10 +39,7 @@ import works.resolve.pathfinder.codingagent.core.tools.WriteToolOptions
 import works.resolve.pathfinder.codingagent.core.tools.createCodingTools
 import works.resolve.pathfinder.ssh.RemoteBashOperations
 import works.resolve.pathfinder.ssh.RemoteFileOperations
-import works.resolve.pathfinder.ssh.SshConnectionHelper
-import works.resolve.pathfinder.ssh.SshSessionConnections
-import works.resolve.pathfinder.ssh.SshSessionHostStore
-import works.resolve.pathfinder.ssh.UnknownHostKeyCallback
+import works.resolve.pathfinder.ssh.SshConnectionProvider
 
 /**
  * Production [AgentFactory]: builds the native agent stack from the persisted
@@ -87,16 +84,12 @@ class NativeAgentFactory(
     private val authRegistry: CatalogAuthRegistry = CatalogAuthRegistry.EMPTY,
     /** Tools available to every created agent; copied per agent. */
     private val tools: List<AgentTool> = emptyList(),
-    /** Session→host mapping and live connections; when any is null, sessions get no coding tools. */
-    private val sshSessionHosts: SshSessionHostStore? = null,
-    private val sshConnections: SshSessionConnections? = null,
-    private val sshConnectionHelper: SshConnectionHelper? = null,
+    /** Process-wide SSH connection provider; when null, sessions get no coding tools. */
+    private val sshConnectionProvider: SshConnectionProvider? = null,
     /** Bash full-output temp dir (the app's cacheDir). */
     private val bashTempDir: String? = null,
     /** Image codec for the read tool's image path. */
-    private val imageProcessing: ImageProcessing? = null,
-    /** Fail-closed unknown-host-key decision; the interactive prompt is a later UI phase. */
-    private val onUnknownHostKey: UnknownHostKeyCallback = UnknownHostKeyCallback.REFUSE
+    private val imageProcessing: ImageProcessing? = null
 ) : AgentFactory {
 
     override suspend fun create(sessionManager: SessionManager): CreateAgentSessionResult {
@@ -121,7 +114,7 @@ class NativeAgentFactory(
             }
         )
 
-        val ssh = sshCodingTools(sessionManager.getSessionId())
+        val ssh = sshCodingTools()
         val codingTools = ssh?.tools ?: emptyList()
         // pi's ssh example annotates the remote cwd as `... (via SSH: user@host)`
         // in the system prompt; the same string is the session's persisted cwd.
@@ -129,70 +122,63 @@ class NativeAgentFactory(
         sessionManager.updateCwd(cwd)
 
         val result =
-            try {
-                createAgentSession(
-                    manager = sessionManager,
-                    settingsManager = settingsManager,
-                    models = models,
-                    streamFn = StreamFn { requestedModel, context, options ->
-                        // Request encoding and stream decoding run off Main; agent/session
-                        // state and tool execution stay on the loop's dispatcher. A small
-                        // bounded buffer keeps memory bounded per token-snapshot rate
-                        // mismatch without rendezvous-coupling SSE delivery to the
-                        // downstream consumer's speed; default SUSPEND overflow applies.
-                        models.stream(requestedModel, context, options)
-                            .buffer(STREAM_BUFFER_CAPACITY)
-                            .flowOn(Dispatchers.Default)
-                    },
-                    tools = tools.toList() + codingTools,
-                    cwd = cwd,
-                    streamOptions = SimpleStreamOptions(
-                        sessionId = sessionManager.getSessionId(),
-                        timeoutMs = REQUEST_TIMEOUT_MS,
-                        maxRetries = MAX_RETRIES
-                    )
+            createAgentSession(
+                manager = sessionManager,
+                settingsManager = settingsManager,
+                models = models,
+                streamFn = StreamFn { requestedModel, context, options ->
+                    // Request encoding and stream decoding run off Main; agent/session
+                    // state and tool execution stay on the loop's dispatcher. A small
+                    // bounded buffer keeps memory bounded per token-snapshot rate
+                    // mismatch without rendezvous-coupling SSE delivery to the
+                    // downstream consumer's speed; default SUSPEND overflow applies.
+                    models.stream(requestedModel, context, options)
+                        .buffer(STREAM_BUFFER_CAPACITY)
+                        .flowOn(Dispatchers.Default)
+                },
+                tools = tools.toList() + codingTools,
+                cwd = cwd,
+                streamOptions = SimpleStreamOptions(
+                    sessionId = sessionManager.getSessionId(),
+                    timeoutMs = REQUEST_TIMEOUT_MS,
+                    maxRetries = MAX_RETRIES
                 )
-            } catch (error: Throwable) {
-                sshConnections?.close(sessionManager.getSessionId())
-                throw error
-            }
+            )
         ssh?.createdSession?.set(result.session)
         return result
     }
 
     /**
-     * Connects the session's configured host (if any) and binds the ported
-     * coding tools to that one connection. The session's model is not known
-     * until createAgentSession builds it, so the read tool's model provider
-     * reads it through [AtomicReference] filled once creation returns.
+     * Builds the ported coding tools against the currently selected SSH
+     * host's configured cwd, or null when no host is configured (or no
+     * provider is wired). Tools dial lazily per call; nothing connects
+     * here. The session's model is not known until createAgentSession builds
+     * it, so the read tool's model provider reads it through
+     * [AtomicReference] filled once creation returns.
      */
-    private suspend fun sshCodingTools(sessionId: String): SshTools? {
-        val hosts = sshSessionHosts ?: return null
-        val connections = sshConnections ?: return null
-        val helper = sshConnectionHelper ?: return null
+    private suspend fun sshCodingTools(): SshTools? {
+        val provider = sshConnectionProvider ?: return null
         val tempDir = bashTempDir ?: return null
 
-        val hostId = hosts.hostId(sessionId) ?: return null
-        val connection = helper.connect(hostId, onUnknownHostKey)
-        connections.register(sessionId, connection)
-        val files = RemoteFileOperations(connection)
+        val host = provider.currentHost() ?: return null
+        val files = RemoteFileOperations(provider)
         val createdSession = AtomicReference<AgentSession>()
         val tools = createCodingTools(
-            cwd = connection.initialWorkingDirectory,
+            cwd = host.cwd,
             options = ToolsOptions(
                 read = ReadToolOptions(
                     operations = files,
                     imageProcessing = imageProcessing,
                     modelProvider = { createdSession.get()?.model }
                 ),
-                bash = BashToolOptions(RemoteBashOperations(connection), tempDir),
+                bash = BashToolOptions(RemoteBashOperations(provider), tempDir),
                 edit = EditToolOptions(files),
                 write = WriteToolOptions(files)
             )
         )
         return SshTools(
             tools,
-            "${connection.initialWorkingDirectory} (via SSH: ${connection.host.username}@${connection.host.address})",
+            "${host.cwd} (via SSH: ${host.username}@${host.address})",
             createdSession
         )
     }

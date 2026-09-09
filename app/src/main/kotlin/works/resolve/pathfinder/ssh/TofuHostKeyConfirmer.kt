@@ -13,20 +13,12 @@ import kotlinx.coroutines.flow.asStateFlow
 data class HostKeyRequest(val hostLabel: String, val keyType: String, val fingerprint: String)
 
 /**
- * App-layer [UnknownHostKeyCallback]: publishes the pending request as UI
+ * App-layer unknown-host-key decision: publishes the pending request as UI
  * state and suspends until the user answers. Fails closed everywhere — an
- * unanswered request (dismissed dialog, cancelled creation coroutine)
- * never completes, so the suspended connect is cancelled instead.
- *
- * The callback signature carries no host identity, and connects happen
- * inside the agent factory; the session being created is published here
- * ([setSessionContext]) by the single factory-call seam so the prompt can
- * name the host.
+ * unanswered request (dismissed dialog, cancelled connect coroutine) never
+ * completes, so the suspended connect is cancelled instead.
  */
-class TofuHostKeyConfirmer(
-    private val hostStore: SshHostStore,
-    private val sessionHosts: SshSessionHostStore
-) : UnknownHostKeyCallback {
+class TofuHostKeyConfirmer {
 
     private val _pending = MutableStateFlow<HostKeyRequest?>(null)
 
@@ -35,32 +27,17 @@ class TofuHostKeyConfirmer(
 
     private var response: CompletableDeferred<Boolean>? = null
 
-    @Volatile
-    private var sessionContextId: String? = null
-
-    @Volatile
-    private var hostContextId: String? = null
-
-    /** Session whose creation the next callback runs inside; resolves the prompt's host label. */
-    fun setSessionContext(sessionId: String?) {
-        sessionContextId = sessionId
-    }
-
-    /** Host being dialed outside a session (the host form's connection test); the label fallback. */
-    fun setHostContext(hostId: String?) {
-        hostContextId = hostId
-    }
-
     /** Answers the pending request; a no-op (implicitly refusing) when none is pending. */
     fun answer(trust: Boolean) {
         response?.complete(trust)
     }
 
-    override suspend fun confirm(fingerprint: String, keyType: String): Boolean {
+    /** Publishes the prompt for [host] and suspends for the user's Trust/Refuse answer. */
+    suspend fun confirm(host: SshHost, fingerprint: String, keyType: String): Boolean {
         val deferred = CompletableDeferred<Boolean>()
         response = deferred
         _pending.value = HostKeyRequest(
-            hostLabel = resolveHostLabel(),
+            hostLabel = "${host.username}@${host.address}:${host.port}",
             keyType = keyType,
             fingerprint = fingerprint
         )
@@ -70,13 +47,5 @@ class TofuHostKeyConfirmer(
             _pending.value = null
             response = null
         }
-    }
-
-    private suspend fun resolveHostLabel(): String {
-        val hostId = sessionContextId?.let { sessionHosts.hostId(it) }
-            ?: hostContextId
-            ?: return ""
-        val host = hostStore.host(hostId) ?: return hostId
-        return "${host.username}@${host.address}:${host.port}"
     }
 }

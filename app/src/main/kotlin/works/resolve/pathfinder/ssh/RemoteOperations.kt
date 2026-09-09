@@ -34,8 +34,27 @@ private fun sftpFailure(operation: String, statusCode: SftpStatusCode, message: 
         }
     )
 
+/** Safe stage-naming message for a failed dial; never includes secret material. */
+private fun connectionFailureMessage(detail: SshConnectionException.Detail): String =
+    when (detail) {
+        SshConnectionException.Detail.UNKNOWN_HOST -> "SSH host unavailable: no host configured"
+        SshConnectionException.Detail.CONNECT -> "SSH host unavailable: connect failed"
+        SshConnectionException.Detail.HOST_KEY_REJECTED -> "SSH host unavailable: host key rejected"
+        SshConnectionException.Detail.AUTH -> "SSH host unavailable: auth failed"
+        SshConnectionException.Detail.SFTP -> "SSH host unavailable: SFTP failed"
+        SshConnectionException.Detail.NO_KEY -> "SSH host unavailable: no stored key"
+    }
+
+private suspend fun connect(provider: SshConnectionProvider): SshConnection = try {
+    provider.connection()
+} catch (e: CancellationException) {
+    throw e
+} catch (e: SshConnectionException) {
+    throw OperationsException(connectionFailureMessage(e.detail))
+}
+
 /**
- * Bash operations over one session-owned SSH connection, following pi's
+ * Bash operations over the process-wide SSH connection, following pi's
  * ssh.ts extension: the command runs wrapped in `cd {cwd} && {command}`.
  *
  * [timeout] is left to the shell's `withTimeout` (category-3 adaptation):
@@ -44,7 +63,7 @@ private fun sftpFailure(operation: String, statusCode: SftpStatusCode, message: 
  * kills the process tree, remote termination is server-side best effort on
  * channel close.
  */
-class RemoteBashOperations(private val connection: SshConnection) : BashOperations {
+class RemoteBashOperations(private val provider: SshConnectionProvider) : BashOperations {
 
     override suspend fun exec(
         command: String,
@@ -52,6 +71,7 @@ class RemoteBashOperations(private val connection: SshConnection) : BashOperatio
         onData: (ByteArray) -> Unit,
         timeout: Double?
     ): Int? {
+        val connection = connect(provider)
         val session = connection.client.openSession()
             ?: throw OperationsException("SSH session channel could not be opened")
         session.use {
@@ -95,18 +115,18 @@ class RemoteBashOperations(private val connection: SshConnection) : BashOperatio
 }
 
 /**
- * Read/write/edit operations over one session-owned SSH connection: file
+ * Read/write/edit operations over the process-wide SSH connection: file
  * bodies move via SFTP, recursive `mkdir` shells out because SFTP's mkdir is
  * a single-level operation. Mirrors pi's ssh.ts approach; paths are remote
  * paths and are never interpreted locally.
  */
-class RemoteFileOperations(private val connection: SshConnection) :
+class RemoteFileOperations(private val provider: SshConnectionProvider) :
     ReadOperations,
     WriteOperations,
     EditOperations {
 
     private suspend fun <T> withSftp(operation: String, block: suspend (SftpClient) -> T): T {
-        val sftp = when (val opened = connection.client.openSftp()) {
+        val sftp = when (val opened = connect(provider).client.openSftp()) {
             is SftpResult.Success -> opened.value
 
             is SftpResult.ServerError ->
@@ -190,9 +210,9 @@ class RemoteFileOperations(private val connection: SshConnection) :
     }
 
     override suspend fun mkdir(dir: String) {
-        val exit = RemoteBashOperations(connection).exec(
+        val exit = RemoteBashOperations(provider).exec(
             "mkdir -p ${shellQuote(dir)}",
-            connection.initialWorkingDirectory,
+            "/",
             {},
             null
         )

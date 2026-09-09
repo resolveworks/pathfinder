@@ -311,7 +311,7 @@ internal class ChatHarness(private val tmpFolder: TemporaryFolder, testDispatche
         )
     )
 
-    val hostKeyConfirmer = TofuHostKeyConfirmer(sshHostStore, sshSessionHosts)
+    val hostKeyConfirmer = TofuHostKeyConfirmer()
 
     val sshConnectionHelper = SshConnectionHelper(sshHostStore)
 
