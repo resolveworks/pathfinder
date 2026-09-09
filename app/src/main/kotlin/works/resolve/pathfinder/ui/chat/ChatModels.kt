@@ -181,7 +181,7 @@ data class ChatUiState(
     val searchProviderOptions: List<ProviderOption> = emptyList(),
     /** Configured machines (Settings ▸ Machines), store-sorted. */
     val machines: List<Machine> = emptyList(),
-    /** The effective machine selection (see SshConnectionProvider.effectiveMachineId), for display. */
+    /** The effective machine selection (see SshConnectionProvider.machine), for display. */
     val selectedMachine: Machine? = null,
     /**
      * Models of configured providers only, sorted by provider then model

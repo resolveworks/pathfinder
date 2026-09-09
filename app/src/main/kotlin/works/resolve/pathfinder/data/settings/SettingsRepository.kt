@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import works.resolve.pathfinder.codingagent.core.SettingsStorage
@@ -62,6 +63,10 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) :
     }
 
     override suspend fun currentSettings(): AppSettings = settings.first()
+
+    val selectedMachineId: Flow<String?> = settings.map {
+        it.selectedMachineId
+    }.distinctUntilChanged()
 
     /**
      * Preferences DataStore serializes `edit` calls, giving the atomic

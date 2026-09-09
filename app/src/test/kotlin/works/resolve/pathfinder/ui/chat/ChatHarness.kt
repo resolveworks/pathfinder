@@ -15,6 +15,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -308,6 +309,8 @@ internal class ChatHarness(
 
     val sshConnectionHelper = SshConnectionHelper(machineStore)
 
+    val selectedMachineId = MutableStateFlow<String?>(null)
+
     /** The shared manager all ViewModels and the factory write through. */
     val settingsManager: SettingsManager =
         runBlocking { SettingsManager.fromStorage(settingsStore) }
@@ -426,7 +429,8 @@ internal class ChatHarness(
         sshConnectionProvider = SshConnectionProvider(
             machineStore,
             sshConnectionHelper,
-            hostKeyConfirmer
+            hostKeyConfirmer,
+            selectedMachineId
         ),
         appForegroundGate = AppForegroundGate(),
         defaultDispatcher = testDispatcher

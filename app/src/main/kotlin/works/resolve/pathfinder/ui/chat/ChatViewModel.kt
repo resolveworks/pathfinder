@@ -99,9 +99,6 @@ class ChatViewModel(
 
     private val _uiState = MutableStateFlow(ChatUiState())
 
-    /** Mirror of the persisted machine selection; the provider applies it to tool dials. */
-    private val selectedMachineId = MutableStateFlow<String?>(null)
-
     private val loginController = ProviderLoginController(
         scope = viewModelScope,
         authService = authService,
@@ -146,14 +143,6 @@ class ChatViewModel(
         ::setError
     )
 
-    /** The effective machine for display, resolved like the provider's effectiveMachineId. */
-    private val selectedMachine =
-        combine(selectedMachineId, machinesController.machines) { id, machines ->
-            id?.let { selected -> machines.firstOrNull { it.id == selected } }
-                ?: machines.singleOrNull()
-                ?: machines.firstOrNull()
-        }
-
     val uiState: StateFlow<ChatUiState> =
         combine(
             combine(
@@ -161,7 +150,10 @@ class ChatViewModel(
                 loginController.flow,
                 searchProviders.state,
                 sessionSearch.state,
-                combine(machinesController.machines, selectedMachine) { machines, selected ->
+                combine(machinesController.machines, sshConnectionProvider.machine) {
+                        machines,
+                        selected
+                    ->
                     machines to selected
                 }
             ) { base, authFlow, searchProviders, sessionSearch, (machines, selectedMachine) ->
@@ -394,14 +386,12 @@ class ChatViewModel(
     // ---- Machines (Settings ▸ Machines) ----
 
     /**
-     * Switches the process-wide machine selection. Not busy-rejected:
+     * Persists the machine selection. Not busy-rejected:
      * like a model pick, it applies to the next tool call. A store failure
-     * surfaces a settings-save error while the in-memory selection keeps
-     * the picked machine.
+     * surfaces a settings-save error while the persisted selection keeps
+     * its previous value.
      */
     fun selectMachine(machineId: String) {
-        selectedMachineId.value = machineId
-        sshConnectionProvider.select(machineId)
         viewModelScope.launch {
             try {
                 settingsStore.setSelectedMachineId(machineId)
@@ -575,8 +565,6 @@ class ChatViewModel(
     private suspend fun initialize() {
         try {
             val appSettings = settingsStore.currentSettings()
-            selectedMachineId.value = appSettings.selectedMachineId
-            sshConnectionProvider.select(appSettings.selectedMachineId)
             val runtime = settingsManager.getSettings()
             val summaries = try {
                 sessionSource.list()

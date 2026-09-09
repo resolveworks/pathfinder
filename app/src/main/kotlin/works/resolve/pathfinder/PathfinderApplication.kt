@@ -138,7 +138,12 @@ class PathfinderApplication : Application() {
 
     /** Process-wide lazy SSH connections; the coding tools dial on demand. */
     val sshConnectionProvider: SshConnectionProvider by lazy {
-        SshConnectionProvider(machineStore, sshConnectionHelper, hostKeyConfirmer)
+        SshConnectionProvider(
+            machineStore,
+            sshConnectionHelper,
+            hostKeyConfirmer,
+            settingsRepository.selectedMachineId
+        )
     }
 
     /** Generated from pi; never hand-edit the bundled asset. */
