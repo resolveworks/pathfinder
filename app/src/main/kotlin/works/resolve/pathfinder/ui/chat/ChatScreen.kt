@@ -53,6 +53,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -63,6 +64,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -91,6 +93,13 @@ import works.resolve.pathfinder.ui.theme.PathfinderTheme
 @Composable
 fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    // Keep the screen awake while a response streams; cleared on dispose so
+    // the flag never outlives the composable.
+    val view = LocalView.current
+    DisposableEffect(uiState.isStreaming) {
+        view.keepScreenOn = uiState.isStreaming
+        onDispose { view.keepScreenOn = false }
+    }
     // The chat/tree view selection is presentation state: saveable, owned
     // here, and hoisted into the stateless ChatScreen.
     var conversationView by rememberSaveable { mutableStateOf(ConversationView.Chat) }
