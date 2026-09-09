@@ -1,5 +1,7 @@
 package works.resolve.pathfinder.ssh
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.connectbot.sshlib.AuthResult
 import org.connectbot.sshlib.ConnectResult
 import org.connectbot.sshlib.SshClient
@@ -16,7 +18,7 @@ class SshConnectionException(message: String, val detail: Detail) : Exception(me
  */
 class SshConnection internal constructor(val host: SshHost, val client: SshClient) {
     suspend fun close() {
-        client.disconnect()
+        withContext(Dispatchers.IO) { client.disconnect() }
     }
 }
 
@@ -24,6 +26,12 @@ class SshConnection internal constructor(val host: SshHost, val client: SshClien
  * Establishes SSH connections from stored host configs. Publickey is the
  * only authentication ever wired: no password or keyboard-interactive path
  * exists here.
+ *
+ * Main-safe by ownership: cbssh's Ktor transport dials on the caller's
+ * dispatcher (only DNS is confined internally), so this seam owns
+ * [Dispatchers.IO] for dial and disconnect. Every connection path in the
+ * app — the host-form test on Main, tool dials via the provider — goes
+ * through here; callers may dial from any dispatcher.
  */
 class SshConnectionHelper(private val store: SshHostStore) {
 
@@ -36,7 +44,7 @@ class SshConnectionHelper(private val store: SshHostStore) {
     suspend fun connect(
         hostId: String,
         onUnknownHostKey: UnknownHostKeyCallback = UnknownHostKeyCallback.REFUSE
-    ): SshConnection {
+    ): SshConnection = withContext(Dispatchers.IO) {
         val host =
             store.host(hostId)
                 ?: throw SshConnectionException(
@@ -93,7 +101,7 @@ class SshConnectionHelper(private val store: SshHostStore) {
                     )
             }
 
-            return SshConnection(host = host, client = client)
+            SshConnection(host = host, client = client)
         } catch (error: Exception) {
             client.disconnect()
             throw error
