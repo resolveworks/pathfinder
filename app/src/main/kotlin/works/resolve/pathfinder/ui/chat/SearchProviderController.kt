@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.ui.chat
 
-import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -8,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.slf4j.LoggerFactory
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.codingagent.core.AgentSession
@@ -111,7 +111,7 @@ internal class SearchProviderController(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "search_provider_status", e)
+            logger.warn("search_provider_status", e)
             onError(UiString(R.string.error_search_status), e)
             _state.update {
                 it.copy(
@@ -143,7 +143,7 @@ internal class SearchProviderController(
     }
 
     private companion object {
-        private const val TAG = "Pathfinder"
+        private val logger = LoggerFactory.getLogger(SearchProviderController::class.java)
 
         /** Kept as the prompt's stable id. */
         private const val BRAVE_API_KEY_PROMPT = "BRAVE_API_KEY"
