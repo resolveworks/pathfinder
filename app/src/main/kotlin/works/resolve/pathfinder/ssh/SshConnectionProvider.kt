@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.slf4j.LoggerFactory
 
 /**
  * The process-wide SSH connection owner: resolves the effective host
@@ -21,6 +22,10 @@ class SshConnectionProvider(
     private val mutex = Mutex()
 
     private var cached: Pair<String, SshConnection>? = null
+
+    private companion object {
+        private val logger = LoggerFactory.getLogger(SshConnectionProvider::class.java)
+    }
 
     /** Sets the process-wide host selection (null = unset; falls back to sole/first host). */
     fun select(hostId: String?) {
@@ -66,10 +71,19 @@ class SshConnectionProvider(
         ) {
             return existing.second
         }
-        existing?.second?.close()
+        if (existing != null) {
+            if (existing.first == hostId) {
+                logger.info("ssh_cache_dead_closing: hostId={}", existing.first)
+            } else {
+                logger.info("ssh_cache_host_changed_closing: hostId={}", existing.first)
+            }
+            existing.second.close()
+        }
+        logger.info("ssh_dial_start: hostId={}", hostId)
         val connection = helper.connect(hostId) { fingerprint, keyType ->
             hostKeyConfirmer.confirm(host, fingerprint, keyType)
         }
+        logger.info("ssh_dial_success: hostId={}", hostId)
         cached = hostId to connection
         return connection
     }
@@ -79,6 +93,7 @@ class SshConnectionProvider(
         mutex.withLock {
             val existing = cached
             if (existing != null && existing.first == hostId) {
+                logger.info("ssh_evict_closing: hostId={}", hostId)
                 cached = null
                 existing.second.close()
             }
