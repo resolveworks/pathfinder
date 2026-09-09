@@ -125,6 +125,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     sourceSets["main"].assets.srcDirs(defuddleAssetsDir.get())
@@ -200,10 +201,9 @@ dependencies {
     implementation(libs.cbssh.sshlib)
 
     // sshlib declares slf4j-api as implementation, so the app must declare it
-    // itself. The backend is debug-only: release builds get slf4j's NOP and
-    // log nothing.
+    // itself. The Android binding in works.resolve.pathfinder.logging routes
+    // slf4j to logcat; release builds log warn and above.
     implementation(libs.slf4j.api)
-    debugImplementation(libs.slf4j.simple)
 
     testImplementation(testFixtures(project(":packages:ai")))
     testImplementation(libs.junit)
