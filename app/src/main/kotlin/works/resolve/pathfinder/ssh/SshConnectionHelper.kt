@@ -1,11 +1,10 @@
 package works.resolve.pathfinder.ssh
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.connectbot.sshlib.AuthResult
 import org.connectbot.sshlib.ConnectResult
 import org.connectbot.sshlib.SftpResult
 import org.connectbot.sshlib.SshClient
+import org.connectbot.sshlib.SshClientConfig
 
 /** Connection setup failed; [detail] names the stage without secret material. */
 class SshConnectionException(message: String, val detail: Detail) : Exception(message) {
@@ -25,16 +24,14 @@ internal constructor(
     val initialWorkingDirectory: String
 ) {
     suspend fun close() {
-        withContext(Dispatchers.IO) { client.disconnect() }
+        client.disconnect()
     }
 }
 
 /**
  * Establishes per-session SSH connections from stored host configs.
  * Publickey is the only authentication ever wired: no password or
- * keyboard-interactive path exists here. This seam owns the dispatcher for
- * all blocking-capable SSH work: connect and close run on Dispatchers.IO, so
- * callers stay dispatcher-agnostic.
+ * keyboard-interactive path exists here.
  */
 class SshConnectionHelper(private val store: SshHostStore) {
 
@@ -47,7 +44,7 @@ class SshConnectionHelper(private val store: SshHostStore) {
     suspend fun connect(
         hostId: String,
         onUnknownHostKey: UnknownHostKeyCallback = UnknownHostKeyCallback.REFUSE
-    ): SshConnection = withContext(Dispatchers.IO) {
+    ): SshConnection {
         val host =
             store.host(hostId)
                 ?: throw SshConnectionException(
@@ -62,7 +59,15 @@ class SshConnectionHelper(private val store: SshHostStore) {
                 )
 
         val verifier = TofuHostKeyVerifier(store, hostId, onUnknownHostKey)
-        val client = SshClient(host = host.address, hostKeyVerifier = verifier, port = host.port)
+        val client =
+            SshClient(
+                SshClientConfig {
+                    this.host = host.address
+                    this.port = host.port
+                    this.hostKeyVerifier = verifier
+                    autoDisconnectOnLastChannelClose = false
+                }
+            )
         try {
             when (val result = client.connect()) {
                 is ConnectResult.Success -> {}
@@ -97,7 +102,7 @@ class SshConnectionHelper(private val store: SshHostStore) {
             }
 
             val cwd = resolveWorkingDirectory(client, host)
-            SshConnection(host = host, client = client, initialWorkingDirectory = cwd)
+            return SshConnection(host = host, client = client, initialWorkingDirectory = cwd)
         } catch (error: Exception) {
             client.disconnect()
             throw error
