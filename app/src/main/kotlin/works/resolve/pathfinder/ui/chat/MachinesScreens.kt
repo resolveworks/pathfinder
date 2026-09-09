@@ -39,14 +39,14 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import works.resolve.pathfinder.R
-import works.resolve.pathfinder.ssh.SshHost
+import works.resolve.pathfinder.ssh.Machine
 
-/** SSH host list (Settings ▸ SSH hosts). */
+/** Machine list (Settings ▸ Machines). */
 @Composable
-internal fun SshHostsContent(
-    hosts: List<SshHost>,
-    onAddHost: () -> Unit,
-    onOpenHost: (hostId: String) -> Unit
+internal fun MachinesContent(
+    machines: List<Machine>,
+    onAddMachine: () -> Unit,
+    onOpenMachine: (machineId: String) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -54,22 +54,22 @@ internal fun SshHostsContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Button(onClick = onAddHost) {
-            Text(stringResource(R.string.ssh_hosts_add))
+        Button(onClick = onAddMachine) {
+            Text(stringResource(R.string.machines_add))
         }
-        if (hosts.isEmpty()) {
+        if (machines.isEmpty()) {
             Text(
-                text = stringResource(R.string.ssh_hosts_empty),
+                text = stringResource(R.string.machines_empty),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         } else {
             Column {
-                hosts.forEach { host ->
+                machines.forEach { machine ->
                     ListItem(
-                        headlineContent = { Text(hostLabel(host)) },
+                        headlineContent = { Text(machineLabel(machine)) },
                         supportingContent = {
-                            Text(stringResource(R.string.ssh_host_port, host.port))
+                            Text(stringResource(R.string.machine_port, machine.port))
                         },
                         trailingContent = {
                             Icon(
@@ -77,7 +77,7 @@ internal fun SshHostsContent(
                                 contentDescription = null
                             )
                         },
-                        modifier = Modifier.clickable { onOpenHost(host.id) }
+                        modifier = Modifier.clickable { onOpenMachine(machine.id) }
                     )
                     HorizontalDivider()
                 }
@@ -87,25 +87,27 @@ internal fun SshHostsContent(
 }
 
 /**
- * Add/edit form. A new host is created on save; editing keeps the host's
+ * Add/edit form. A new machine is created on save; editing keeps the machine's
  * keypair and changes only the connection fields. The public-key section
  * (edit only) shows the authorized_keys line for copying — the only key
  * material the UI ever sees. Also edit-only: the connection test (progress
- * and result inline), which dials the saved host.
+ * and result inline), which dials the saved machine.
  */
 @Composable
-internal fun SshHostEditContent(
-    host: SshHost?,
-    hostTest: HostTestState?,
-    onTestConnection: (hostId: String) -> Unit,
+internal fun MachineEditContent(
+    machine: Machine?,
+    machineTest: MachineTestState?,
+    onTestConnection: (machineId: String) -> Unit,
     onSave: (address: String, port: Int, username: String, cwd: String) -> Unit,
     onRemove: () -> Unit,
     onClose: () -> Unit
 ) {
-    var address by rememberSaveable(host?.id) { mutableStateOf(host?.address.orEmpty()) }
-    var port by rememberSaveable(host?.id) { mutableStateOf(host?.port?.toString().orEmpty()) }
-    var username by rememberSaveable(host?.id) { mutableStateOf(host?.username.orEmpty()) }
-    var cwd by rememberSaveable(host?.id) { mutableStateOf(host?.cwd.orEmpty()) }
+    var address by rememberSaveable(machine?.id) { mutableStateOf(machine?.address.orEmpty()) }
+    var port by rememberSaveable(machine?.id) {
+        mutableStateOf(machine?.port?.toString().orEmpty())
+    }
+    var username by rememberSaveable(machine?.id) { mutableStateOf(machine?.username.orEmpty()) }
+    var cwd by rememberSaveable(machine?.id) { mutableStateOf(machine?.cwd.orEmpty()) }
     var confirmRemove by rememberSaveable { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
 
@@ -126,14 +128,14 @@ internal fun SshHostEditContent(
         OutlinedTextField(
             value = address,
             onValueChange = { address = it },
-            label = { Text(stringResource(R.string.ssh_host_address)) },
+            label = { Text(stringResource(R.string.machine_address)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
             value = port,
             onValueChange = { port = it },
-            label = { Text(stringResource(R.string.ssh_host_port_label)) },
+            label = { Text(stringResource(R.string.machine_port_label)) },
             isError = port.isNotEmpty() && (portNumber == null || portNumber !in 1..65535),
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -142,34 +144,34 @@ internal fun SshHostEditContent(
         OutlinedTextField(
             value = username,
             onValueChange = { username = it },
-            label = { Text(stringResource(R.string.ssh_host_username)) },
+            label = { Text(stringResource(R.string.machine_username)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
             value = cwd,
             onValueChange = { cwd = it },
-            label = { Text(stringResource(R.string.ssh_host_cwd)) },
+            label = { Text(stringResource(R.string.machine_cwd)) },
             supportingText = {
-                Text(stringResource(R.string.ssh_host_cwd_hint))
+                Text(stringResource(R.string.machine_cwd_hint))
             },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
 
-        if (host != null) {
+        if (machine != null) {
             Text(
-                text = stringResource(R.string.ssh_host_public_key_hint),
+                text = stringResource(R.string.machine_public_key_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                text = host.publicKeyLine,
+                text = machine.publicKeyLine,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.fillMaxWidth()
             )
-            TextButton(onClick = { clipboard.setText(AnnotatedString(host.publicKeyLine)) }) {
-                Text(stringResource(R.string.ssh_host_copy_public_key))
+            TextButton(onClick = { clipboard.setText(AnnotatedString(machine.publicKeyLine)) }) {
+                Text(stringResource(R.string.machine_copy_public_key))
             }
 
             Row(
@@ -177,23 +179,23 @@ internal fun SshHostEditContent(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedButton(
-                    onClick = { onTestConnection(host.id) },
-                    enabled = hostTest?.running != true
+                    onClick = { onTestConnection(machine.id) },
+                    enabled = machineTest?.running != true
                 ) {
-                    Text(stringResource(R.string.ssh_host_test))
+                    Text(stringResource(R.string.machine_test))
                 }
-                if (hostTest?.running == true) {
+                if (machineTest?.running == true) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(20.dp),
                         strokeWidth = 2.dp
                     )
                 }
             }
-            hostTest?.message?.let { message ->
+            machineTest?.message?.let { message ->
                 Text(
                     text = message.asText(),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (hostTest.success) {
+                    color = if (machineTest.success) {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     } else {
                         MaterialTheme.colorScheme.error
@@ -210,24 +212,24 @@ internal fun SshHostEditContent(
                 Text(stringResource(R.string.action_save))
             }
             TextButton(onClick = onClose) { Text(stringResource(R.string.action_cancel)) }
-            if (host != null) {
+            if (machine != null) {
                 TextButton(
                     onClick = { confirmRemove = true },
                     colors = ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.error
                     )
                 ) {
-                    Text(stringResource(R.string.ssh_host_delete))
+                    Text(stringResource(R.string.machine_delete))
                 }
             }
         }
     }
 
-    if (confirmRemove && host != null) {
+    if (confirmRemove && machine != null) {
         AlertDialog(
             onDismissRequest = { confirmRemove = false },
-            title = { Text(stringResource(R.string.ssh_host_delete)) },
-            text = { Text(stringResource(R.string.ssh_host_delete_confirm, hostLabel(host))) },
+            title = { Text(stringResource(R.string.machine_delete)) },
+            text = { Text(stringResource(R.string.machine_delete_confirm, machineLabel(machine))) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -238,7 +240,7 @@ internal fun SshHostEditContent(
                         contentColor = MaterialTheme.colorScheme.error
                     )
                 ) {
-                    Text(stringResource(R.string.ssh_host_delete))
+                    Text(stringResource(R.string.machine_delete))
                 }
             },
             dismissButton = {
@@ -250,4 +252,4 @@ internal fun SshHostEditContent(
     }
 }
 
-private fun hostLabel(host: SshHost): String = "${host.username}@${host.address}"
+private fun machineLabel(machine: Machine): String = "${machine.username}@${machine.address}"

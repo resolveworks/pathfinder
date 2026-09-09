@@ -106,8 +106,8 @@ flows, and the app layer logs them. App code logs through slf4j only; debug
 builds bind it to `android.util.Log` with a tag per class, logging info and
 above; release builds log warn and above. Lifecycle transitions log at info, recoverable
 degradation at warn, surfaced failures at error. Never log credentials,
-message text, model responses, or tool arguments and results; log host ids,
-not host addresses.
+message text, model responses, or tool arguments and results; log machine ids,
+not machine addresses.
 
 ## Check
 

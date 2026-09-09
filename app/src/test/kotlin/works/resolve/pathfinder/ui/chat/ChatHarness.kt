@@ -75,10 +75,10 @@ import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
+import works.resolve.pathfinder.ssh.MachineKeyStore
+import works.resolve.pathfinder.ssh.MachineStore
 import works.resolve.pathfinder.ssh.SshConnectionHelper
 import works.resolve.pathfinder.ssh.SshConnectionProvider
-import works.resolve.pathfinder.ssh.SshHostKeyStore
-import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.ssh.SshPrivateKeyPem
 import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
@@ -280,33 +280,33 @@ internal class ChatHarness(
     )
     val settingsStore = FailingSettingsStore(settings)
 
-    private class FakeSshHostKeyStore(dir: File) :
-        SshHostKeyStore(dir, KeystoreAeadCipher()) {
+    private class FakeMachineKeyStore(dir: File) :
+        MachineKeyStore(dir, KeystoreAeadCipher()) {
         private val keys = mutableMapOf<String, SshPrivateKeyPem>()
-        override suspend fun write(hostId: String, key: SshPrivateKeyPem) {
-            keys[hostId] = key
+        override suspend fun write(machineId: String, key: SshPrivateKeyPem) {
+            keys[machineId] = key
         }
 
-        override suspend fun read(hostId: String): SshPrivateKeyPem? = keys[hostId]
+        override suspend fun read(machineId: String): SshPrivateKeyPem? = keys[machineId]
 
-        override suspend fun delete(hostId: String) {
-            keys.remove(hostId)
+        override suspend fun delete(machineId: String) {
+            keys.remove(machineId)
         }
     }
 
-    val sshHostStore = SshHostStore(
+    val machineStore = MachineStore(
         PreferenceDataStoreFactory.create(
             scope = dataStoreScope,
             produceFile = {
-                File(tmpFolder.root, "ssh_hosts_${System.nanoTime()}.preferences_pb")
+                File(tmpFolder.root, "machines_${System.nanoTime()}.preferences_pb")
             }
         ),
-        FakeSshHostKeyStore(File(tmpFolder.root, "ssh-host-keys"))
+        FakeMachineKeyStore(File(tmpFolder.root, "machine-keys"))
     )
 
     val hostKeyConfirmer = TofuHostKeyConfirmer()
 
-    val sshConnectionHelper = SshConnectionHelper(sshHostStore)
+    val sshConnectionHelper = SshConnectionHelper(machineStore)
 
     /** The shared manager all ViewModels and the factory write through. */
     val settingsManager: SettingsManager =
@@ -421,10 +421,10 @@ internal class ChatHarness(
         agentFactory = factory,
         modelResolver = modelResolver,
         searchProviderService = searchProviders,
-        sshHostStore = sshHostStore,
+        machineStore = machineStore,
         hostKeyConfirmer = hostKeyConfirmer,
         sshConnectionProvider = SshConnectionProvider(
-            sshHostStore,
+            machineStore,
             sshConnectionHelper,
             hostKeyConfirmer
         ),

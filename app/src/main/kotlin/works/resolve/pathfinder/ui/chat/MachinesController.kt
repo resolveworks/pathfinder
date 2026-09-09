@@ -10,53 +10,53 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
 import works.resolve.pathfinder.R
+import works.resolve.pathfinder.ssh.Machine
+import works.resolve.pathfinder.ssh.MachineStore
 import works.resolve.pathfinder.ssh.SshConnectionException
 import works.resolve.pathfinder.ssh.SshConnectionHelper
-import works.resolve.pathfinder.ssh.SshHost
-import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
 
 /**
- * The SSH hosts screen's model: a live view over [SshHostStore], the
- * add/edit/remove intents, and the host form's connection test. The store
+ * The machines screen's model: a live view over [MachineStore], the
+ * add/edit/remove intents, and the machine form's connection test. The store
  * owns persistence and key material; only validation and safe errors live
  * here.
  */
-internal class SshHostsController(
+internal class MachinesController(
     private val scope: CoroutineScope,
-    private val hostStore: SshHostStore,
+    private val machineStore: MachineStore,
     private val connectionHelper: SshConnectionHelper,
     private val hostKeyConfirmer: TofuHostKeyConfirmer,
     private val onError: (message: UiString, cause: Throwable?) -> Unit
 ) {
 
-    /** The source of truth [ChatUiState.sshHosts] mirrors. */
-    val hosts: StateFlow<List<SshHost>> =
-        hostStore.hosts.stateIn(scope, SharingStarted.Eagerly, emptyList())
+    /** The source of truth [ChatUiState.machines] mirrors. */
+    val machines: StateFlow<List<Machine>> =
+        machineStore.machines.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
-    private val _hostTest = MutableStateFlow<HostTestState?>(null)
+    private val _machineTest = MutableStateFlow<MachineTestState?>(null)
 
-    /** Latest connection-test status, keyed by host; the host form shows only its own host's. */
-    val hostTest: StateFlow<HostTestState?> = _hostTest.asStateFlow()
+    /** Latest connection-test status, keyed by machine; the machine form shows only its own machine's. */
+    val machineTest: StateFlow<MachineTestState?> = _machineTest.asStateFlow()
 
     /**
-     * Dials [hostId] exactly like a tool-call connect (TOFU prompt included),
+     * Dials [machineId] exactly like a tool-call connect (TOFU prompt included),
      * closes the connection right away, and publishes progress plus a safe
      * result. One test at a time; taps while running are ignored.
      */
-    fun testHostConnection(hostId: String) {
-        if (_hostTest.value?.running == true) return
+    fun testMachineConnection(machineId: String) {
+        if (_machineTest.value?.running == true) return
         scope.launch {
-            _hostTest.value = HostTestState(hostId = hostId, running = true)
-            _hostTest.value = try {
-                val host =
-                    hostStore.host(hostId)
+            _machineTest.value = MachineTestState(machineId = machineId, running = true)
+            _machineTest.value = try {
+                val machine =
+                    machineStore.machine(machineId)
                         ?: throw SshConnectionException(
-                            "Unknown SSH host",
-                            SshConnectionException.Detail.UNKNOWN_HOST
+                            "Unknown machine",
+                            SshConnectionException.Detail.UNKNOWN_MACHINE
                         )
-                val connection = connectionHelper.connect(hostId) { fingerprint, keyType ->
-                    hostKeyConfirmer.confirm(host, fingerprint, keyType)
+                val connection = connectionHelper.connect(machineId) { fingerprint, keyType ->
+                    hostKeyConfirmer.confirm(machine, fingerprint, keyType)
                 }
                 try {
                     connection.close()
@@ -65,29 +65,29 @@ internal class SshHostsController(
                 } catch (_: Exception) {
                     // The test already succeeded; a close failure is noise.
                 }
-                HostTestState(
-                    hostId = hostId,
+                MachineTestState(
+                    machineId = machineId,
                     running = false,
                     success = true,
                     message = UiString(
-                        R.string.ssh_host_test_success,
-                        listOf(host.cwd)
+                        R.string.machine_test_success,
+                        listOf(machine.cwd)
                     )
                 )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: SshConnectionException) {
-                HostTestState(
-                    hostId = hostId,
+                MachineTestState(
+                    machineId = machineId,
                     running = false,
-                    message = connectionError(e, hostLabel(hostId))
+                    message = connectionError(e, machineLabel(machineId))
                 )
             } catch (e: Exception) {
-                logger.warn("ssh_host_test", e)
-                HostTestState(
-                    hostId = hostId,
+                logger.warn("machine_test", e)
+                MachineTestState(
+                    machineId = machineId,
                     running = false,
-                    message = hostLabel(hostId)?.let {
+                    message = machineLabel(machineId)?.let {
                         UiString(R.string.ssh_error_connect, listOf(it))
                     } ?: UiString(R.string.ssh_error_connect_generic)
                 )
@@ -96,61 +96,61 @@ internal class SshHostsController(
     }
 
     /**
-     * Creates a host (with its freshly generated keypair, see
-     * [SshHostStore.addHost]). Invalid input or a storage failure surfaces
+     * Creates a machine (with its freshly generated keypair, see
+     * [MachineStore.addMachine]). Invalid input or a storage failure surfaces
      * a safe error and stores nothing.
      */
-    fun addHost(address: String, port: Int, username: String, cwd: String) {
+    fun addMachine(address: String, port: Int, username: String, cwd: String) {
         scope.launch {
             if (!valid(address, port, username, cwd)) {
-                onError(UiString(R.string.error_ssh_host_invalid), null)
+                onError(UiString(R.string.error_machine_invalid), null)
                 return@launch
             }
             try {
-                hostStore.addHost(address.trim(), port, username.trim(), cwd.trim())
+                machineStore.addMachine(address.trim(), port, username.trim(), cwd.trim())
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onError(UiString(R.string.error_ssh_host_save), e)
+                onError(UiString(R.string.error_machine_save), e)
             }
         }
     }
 
     /** Persists edited connection fields; the key material never changes. */
-    fun updateHost(host: SshHost) {
+    fun updateMachine(machine: Machine) {
         scope.launch {
-            if (!valid(host.address, host.port, host.username, host.cwd)) {
-                onError(UiString(R.string.error_ssh_host_invalid), null)
+            if (!valid(machine.address, machine.port, machine.username, machine.cwd)) {
+                onError(UiString(R.string.error_machine_invalid), null)
                 return@launch
             }
             try {
-                hostStore.updateHost(host)
+                machineStore.updateMachine(machine)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onError(UiString(R.string.error_ssh_host_save), e)
+                onError(UiString(R.string.error_machine_save), e)
             }
         }
     }
 
-    /** Deletes a host and its keypair; a failure surfaces a safe error. */
-    fun removeHost(id: String) {
+    /** Deletes a machine and its keypair; a failure surfaces a safe error. */
+    fun removeMachine(id: String) {
         scope.launch {
             try {
-                hostStore.removeHost(id)
+                machineStore.removeMachine(id)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                logger.warn("ssh_host_remove", e)
-                onError(UiString(R.string.error_ssh_host_remove), e)
+                logger.warn("machine_remove", e)
+                onError(UiString(R.string.error_machine_remove), e)
             }
         }
     }
 
-    private suspend fun hostLabel(hostId: String?): String? =
-        hostId?.let { hostStore.host(it) }?.let { "${it.username}@${it.address}" }
+    private suspend fun machineLabel(machineId: String?): String? =
+        machineId?.let { machineStore.machine(it) }?.let { "${it.username}@${it.address}" }
 
-    /** Safe, actionable message for a failed test connect, naming the host. */
+    /** Safe, actionable message for a failed test connect, naming the machine. */
     private fun connectionError(error: SshConnectionException, label: String?): UiString {
         logger.warn("ssh_connection_failed: {}", error.detail, error)
         return when (error.detail) {
@@ -175,8 +175,8 @@ internal class SshHostsController(
                     UiString(R.string.ssh_error_auth_generic)
                 }
 
-            SshConnectionException.Detail.UNKNOWN_HOST ->
-                UiString(R.string.ssh_error_unknown_host)
+            SshConnectionException.Detail.UNKNOWN_MACHINE ->
+                UiString(R.string.ssh_error_unknown_machine)
 
             SshConnectionException.Detail.NO_KEY -> UiString(R.string.ssh_error_no_key)
         }
@@ -187,6 +187,6 @@ internal class SshHostsController(
             port in 1..65535
 
     private companion object {
-        private val logger = LoggerFactory.getLogger(SshHostsController::class.java)
+        private val logger = LoggerFactory.getLogger(MachinesController::class.java)
     }
 }

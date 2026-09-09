@@ -14,5 +14,5 @@ interface SettingsStore {
 
     suspend fun setShowThinking(showThinking: Boolean)
 
-    suspend fun setSelectedSshHostId(hostId: String?)
+    suspend fun setSelectedMachineId(machineId: String?)
 }

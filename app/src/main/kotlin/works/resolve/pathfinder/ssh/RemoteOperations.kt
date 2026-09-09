@@ -37,11 +37,16 @@ private fun sftpFailure(operation: String, statusCode: SftpStatusCode, message: 
 /** Safe stage-naming message for a failed dial; never includes secret material. */
 private fun connectionFailureMessage(detail: SshConnectionException.Detail): String =
     when (detail) {
-        SshConnectionException.Detail.UNKNOWN_HOST -> "SSH host unavailable: no host configured"
-        SshConnectionException.Detail.CONNECT -> "SSH host unavailable: connect failed"
-        SshConnectionException.Detail.HOST_KEY_REJECTED -> "SSH host unavailable: host key rejected"
-        SshConnectionException.Detail.AUTH -> "SSH host unavailable: auth failed"
-        SshConnectionException.Detail.NO_KEY -> "SSH host unavailable: no stored key"
+        SshConnectionException.Detail.UNKNOWN_MACHINE ->
+            "Machine unavailable: no machine configured"
+
+        SshConnectionException.Detail.CONNECT -> "Machine unavailable: connect failed"
+
+        SshConnectionException.Detail.HOST_KEY_REJECTED -> "Machine unavailable: host key rejected"
+
+        SshConnectionException.Detail.AUTH -> "Machine unavailable: auth failed"
+
+        SshConnectionException.Detail.NO_KEY -> "Machine unavailable: no stored key"
     }
 
 private suspend fun connect(provider: SshConnectionProvider): SshConnection = try {
@@ -216,7 +221,7 @@ class RemoteFileOperations(private val provider: SshConnectionProvider) :
             null
         )
         if (exit != 0) {
-            throw OperationsException("mkdir failed on remote host")
+            throw OperationsException("mkdir failed on remote machine")
         }
     }
 

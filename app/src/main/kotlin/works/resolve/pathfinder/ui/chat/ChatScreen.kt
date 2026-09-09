@@ -88,7 +88,7 @@ import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.providers.AuthPrompt as CatalogAuthPrompt
 import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.ssh.HostKeyRequest
-import works.resolve.pathfinder.ssh.SshHost
+import works.resolve.pathfinder.ssh.Machine
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 @Composable
@@ -121,7 +121,7 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         onToggleModelScope = viewModel::toggleModelScope,
         onSelectThinkingLevel = viewModel::selectThinkingLevel,
         onSetDefaultThinkingLevel = viewModel::setThinkingLevelDefault,
-        onSelectSshHost = viewModel::selectSshHost,
+        onSelectMachine = viewModel::selectMachine,
         onSaveProviderCredential = viewModel::saveProviderCredential,
         onRemoveProviderCredential = viewModel::removeProviderCredential,
         authPrompts = viewModel::providerAuthPrompts,
@@ -133,10 +133,10 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         onSaveSearchProviderCredential = viewModel::saveSearchProviderCredential,
         onRemoveSearchProviderCredential = viewModel::removeSearchProviderCredential,
         onRefreshSearchProviderStatus = viewModel::refreshSearchProviderStatus,
-        onAddSshHost = viewModel::addSshHost,
-        onUpdateSshHost = viewModel::updateSshHost,
-        onRemoveSshHost = viewModel::removeSshHost,
-        onTestSshHostConnection = viewModel::testSshHostConnection,
+        onAddMachine = viewModel::addMachine,
+        onUpdateMachine = viewModel::updateMachine,
+        onRemoveMachine = viewModel::removeMachine,
+        onTestMachineConnection = viewModel::testMachineConnection,
         onTrustHostKey = viewModel::trustHostKey,
         onRefuseHostKey = viewModel::refuseHostKey,
         searchAuthPrompts = viewModel::searchProviderAuthPrompts,
@@ -172,7 +172,7 @@ fun ChatScreen(
     onToggleModelScope: (providerId: String, modelId: String, checked: Boolean) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
     onSetDefaultThinkingLevel: (ModelThinkingLevel) -> Unit,
-    onSelectSshHost: (hostId: String) -> Unit,
+    onSelectMachine: (machineId: String) -> Unit,
     onSaveProviderCredential: (
         providerId: String,
         apiKeyInput: String,
@@ -189,10 +189,10 @@ fun ChatScreen(
     onRemoveSearchProviderCredential: (providerId: String) -> Unit,
     onRefreshSearchProviderStatus: () -> Unit,
     searchAuthPrompts: (providerId: String) -> List<CatalogAuthPrompt>,
-    onAddSshHost: (address: String, port: Int, username: String, cwd: String) -> Unit,
-    onUpdateSshHost: (host: SshHost) -> Unit,
-    onRemoveSshHost: (hostId: String) -> Unit,
-    onTestSshHostConnection: (hostId: String) -> Unit,
+    onAddMachine: (address: String, port: Int, username: String, cwd: String) -> Unit,
+    onUpdateMachine: (machine: Machine) -> Unit,
+    onRemoveMachine: (machineId: String) -> Unit,
+    onTestMachineConnection: (machineId: String) -> Unit,
     onTrustHostKey: () -> Unit,
     onRefuseHostKey: () -> Unit,
     onNewSession: () -> Unit,
@@ -290,8 +290,8 @@ fun ChatScreen(
     val pushProviderAuth: (String) -> Unit = { backStack.add(ProviderAuthNavKey(it)) }
     val pushProviderApiKeyForm: (String) -> Unit = { backStack.add(ProviderApiKeyNavKey(it)) }
     val pushSearchProviders: () -> Unit = { backStack.add(SearchProvidersNavKey) }
-    val pushSshHosts: () -> Unit = { backStack.add(SshHostsNavKey) }
-    val pushSshHostEdit: (String?) -> Unit = { backStack.add(SshHostEditNavKey(it)) }
+    val pushMachines: () -> Unit = { backStack.add(MachinesNavKey) }
+    val pushMachineEdit: (String?) -> Unit = { backStack.add(MachineEditNavKey(it)) }
     val pushSearchProviderAuth: (String) -> Unit = { backStack.add(SearchProviderAuthNavKey(it)) }
     val popBackStack: () -> Unit = {
         // Popping the login destination cancels its flow: a login must
@@ -393,13 +393,13 @@ fun ChatScreen(
 
                             SearchProvidersNavKey -> stringResource(R.string.search_providers_title)
 
-                            SshHostsNavKey -> stringResource(R.string.ssh_hosts_title)
+                            MachinesNavKey -> stringResource(R.string.machines_title)
 
-                            is SshHostEditNavKey -> stringResource(
-                                if (topKey.hostId == null) {
-                                    R.string.ssh_hosts_add
+                            is MachineEditNavKey -> stringResource(
+                                if (topKey.machineId == null) {
+                                    R.string.machines_add
                                 } else {
-                                    R.string.ssh_host_edit_title
+                                    R.string.machine_edit_title
                                 }
                             )
 
@@ -450,7 +450,7 @@ fun ChatScreen(
                                             onStop = onStop,
                                             onSelectModel = onSelectModel,
                                             onSelectThinkingLevel = onSelectThinkingLevel,
-                                            onSelectSshHost = onSelectSshHost,
+                                            onSelectMachine = onSelectMachine,
                                             scrollState = chatScrollState
                                         )
 
@@ -478,7 +478,7 @@ fun ChatScreen(
                                         onStop = onStop,
                                         onSelectModel = onSelectModel,
                                         onSelectThinkingLevel = onSelectThinkingLevel,
-                                        onSelectSshHost = onSelectSshHost,
+                                        onSelectMachine = onSelectMachine,
                                         scrollState = chatScrollState
                                     )
                                 }
@@ -494,7 +494,7 @@ fun ChatScreen(
                                     onOpenDefaultThinking = pushDefaultThinking,
                                     onOpenProviders = pushProviders,
                                     onOpenSearchProviders = pushSearchProviders,
-                                    onOpenSshHosts = pushSshHosts,
+                                    onOpenMachines = pushMachines,
                                     onToggleShowThinking = onToggleShowThinking
                                 )
                             }
@@ -527,34 +527,34 @@ fun ChatScreen(
                                     onOpenProvider = pushSearchProviderAuth
                                 )
                             }
-                            entry<SshHostsNavKey> {
-                                SshHostsContent(
-                                    hosts = uiState.sshHosts,
-                                    onAddHost = { pushSshHostEdit(null) },
-                                    onOpenHost = pushSshHostEdit
+                            entry<MachinesNavKey> {
+                                MachinesContent(
+                                    machines = uiState.machines,
+                                    onAddMachine = { pushMachineEdit(null) },
+                                    onOpenMachine = pushMachineEdit
                                 )
                             }
-                            entry<SshHostEditNavKey> { key ->
-                                val host = key.hostId?.let { id ->
-                                    uiState.sshHosts.firstOrNull { it.id == id }
+                            entry<MachineEditNavKey> { key ->
+                                val machine = key.machineId?.let { id ->
+                                    uiState.machines.firstOrNull { it.id == id }
                                 }
-                                if (key.hostId != null && host == null) {
+                                if (key.machineId != null && machine == null) {
                                     // Deleted elsewhere (or a stale restored
                                     // entry): the form has nothing to edit.
                                     LaunchedEffect(key) { popBackStack() }
                                 } else {
-                                    SshHostEditContent(
-                                        host = host,
-                                        hostTest = uiState.hostTest?.takeIf {
-                                            it.hostId == host?.id
+                                    MachineEditContent(
+                                        machine = machine,
+                                        machineTest = uiState.machineTest?.takeIf {
+                                            it.machineId == machine?.id
                                         },
-                                        onTestConnection = onTestSshHostConnection,
+                                        onTestConnection = onTestMachineConnection,
                                         onSave = { address, port, username, cwd ->
-                                            if (host == null) {
-                                                onAddSshHost(address, port, username, cwd)
+                                            if (machine == null) {
+                                                onAddMachine(address, port, username, cwd)
                                             } else {
-                                                onUpdateSshHost(
-                                                    host.copy(
+                                                onUpdateMachine(
+                                                    machine.copy(
                                                         address = address.trim(),
                                                         port = port,
                                                         username = username.trim(),
@@ -565,7 +565,7 @@ fun ChatScreen(
                                             popBackStack()
                                         },
                                         onRemove = {
-                                            host?.let { onRemoveSshHost(it.id) }
+                                            machine?.let { onRemoveMachine(it.id) }
                                             popBackStack()
                                         },
                                         onClose = popBackStack
@@ -665,22 +665,22 @@ fun ChatScreen(
 }
 
 /**
- * Unknown-host-key confirmation (TOFU first connect): shows the host, key
+ * Unknown-host-key confirmation (TOFU first connect): shows the machine, key
  * type, and SHA-256 fingerprint. Both the Refuse action and dismissing
  * the dialog refuse — verification fails closed. Trusting persists the
  * fingerprint (the verifier owns that), so the prompt appears once per
- * host; a later pinned-mismatch is a hard error, never this dialog.
+ * machine; a later pinned-mismatch is a hard error, never this dialog.
  */
 @Composable
 private fun HostKeyDialog(request: HostKeyRequest, onTrust: () -> Unit, onRefuse: () -> Unit) {
     AlertDialog(
         onDismissRequest = onRefuse,
-        title = { Text(stringResource(R.string.ssh_host_key_title)) },
+        title = { Text(stringResource(R.string.host_key_title)) },
         text = {
             Text(
                 stringResource(
-                    R.string.ssh_host_key_body,
-                    request.hostLabel,
+                    R.string.host_key_body,
+                    request.machineLabel,
                     request.keyType,
                     request.fingerprint
                 )
@@ -688,12 +688,12 @@ private fun HostKeyDialog(request: HostKeyRequest, onTrust: () -> Unit, onRefuse
         },
         confirmButton = {
             TextButton(onClick = onTrust) {
-                Text(stringResource(R.string.ssh_host_key_trust))
+                Text(stringResource(R.string.host_key_trust))
             }
         },
         dismissButton = {
             TextButton(onClick = onRefuse) {
-                Text(stringResource(R.string.ssh_host_key_refuse))
+                Text(stringResource(R.string.host_key_refuse))
             }
         }
     )
@@ -991,8 +991,8 @@ private val PREVIEW_AUTH_METHODS = listOf(
 
 private val PREVIEW_SELECTED_MODEL = PREVIEW_MODEL_OPTIONS.first()
 
-private val PREVIEW_SSH_HOSTS = listOf(
-    SshHost(
+private val PREVIEW_MACHINES = listOf(
+    Machine(
         id = "h1",
         address = "server.example",
         port = 22,
@@ -1026,7 +1026,7 @@ private fun PreviewChatScreen(
             onToggleModelScope = { _, _, _ -> },
             onSelectThinkingLevel = { },
             onSetDefaultThinkingLevel = { },
-            onSelectSshHost = { },
+            onSelectMachine = { },
             onSaveProviderCredential = { _, _, _ -> },
             onRemoveProviderCredential = { },
             authPrompts = authPrompts,
@@ -1039,10 +1039,10 @@ private fun PreviewChatScreen(
             onRemoveSearchProviderCredential = { _ -> },
             onRefreshSearchProviderStatus = {},
             searchAuthPrompts = searchAuthPrompts,
-            onAddSshHost = { _, _, _, _ -> },
-            onUpdateSshHost = { },
-            onRemoveSshHost = { },
-            onTestSshHostConnection = { },
+            onAddMachine = { _, _, _, _ -> },
+            onUpdateMachine = { },
+            onRemoveMachine = { },
+            onTestMachineConnection = { },
             onTrustHostKey = { },
             onRefuseHostKey = { },
             onNewSession = {},
@@ -1320,8 +1320,8 @@ private fun ChatScreenChatViewPreview() {
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
-            sshHosts = PREVIEW_SSH_HOSTS,
-            selectedSshHost = PREVIEW_SSH_HOSTS.first(),
+            machines = PREVIEW_MACHINES,
+            selectedMachine = PREVIEW_MACHINES.first(),
             activeSessionId = "s1",
             sessionSummaries = listOf(
                 SessionInfo(

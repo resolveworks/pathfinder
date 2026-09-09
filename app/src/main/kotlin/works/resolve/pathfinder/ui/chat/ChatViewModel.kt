@@ -42,10 +42,10 @@ import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
+import works.resolve.pathfinder.ssh.Machine
+import works.resolve.pathfinder.ssh.MachineStore
 import works.resolve.pathfinder.ssh.SshConnectionHelper
 import works.resolve.pathfinder.ssh.SshConnectionProvider
-import works.resolve.pathfinder.ssh.SshHost
-import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
@@ -88,10 +88,10 @@ class ChatViewModel(
      */
     private val appForegroundGate: AppForegroundGate,
     private val searchProviderService: SearchProviderService,
-    private val sshHostStore: SshHostStore,
+    private val machineStore: MachineStore,
     /** Interactive TOFU host-key decisions; surfaced through the pending-host-key prompt. */
     private val hostKeyConfirmer: TofuHostKeyConfirmer,
-    /** Process-wide SSH connections; the hosts controller tests dials and host deletion evicts. */
+    /** Process-wide SSH connections; the machines controller tests dials and machine deletion evicts. */
     private val sshConnectionProvider: SshConnectionProvider,
     /** Where bulk transcript parses run; the test harness keeps them on virtual time. */
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
@@ -99,8 +99,8 @@ class ChatViewModel(
 
     private val _uiState = MutableStateFlow(ChatUiState())
 
-    /** Mirror of the persisted SSH host selection; the provider applies it to tool dials. */
-    private val selectedSshHostId = MutableStateFlow<String?>(null)
+    /** Mirror of the persisted machine selection; the provider applies it to tool dials. */
+    private val selectedMachineId = MutableStateFlow<String?>(null)
 
     private val loginController = ProviderLoginController(
         scope = viewModelScope,
@@ -138,20 +138,20 @@ class ChatViewModel(
 
     private val sessionSearch = SessionSearchController()
 
-    private val sshHosts = SshHostsController(
+    private val machinesController = MachinesController(
         viewModelScope,
-        sshHostStore,
-        SshConnectionHelper(sshHostStore),
+        machineStore,
+        SshConnectionHelper(machineStore),
         hostKeyConfirmer,
         ::setError
     )
 
-    /** The effective host for display, resolved like the provider's effectiveHostId. */
-    private val selectedSshHost =
-        combine(selectedSshHostId, sshHosts.hosts) { id, hosts ->
-            id?.let { selected -> hosts.firstOrNull { it.id == selected } }
-                ?: hosts.singleOrNull()
-                ?: hosts.firstOrNull()
+    /** The effective machine for display, resolved like the provider's effectiveMachineId. */
+    private val selectedMachine =
+        combine(selectedMachineId, machinesController.machines) { id, machines ->
+            id?.let { selected -> machines.firstOrNull { it.id == selected } }
+                ?: machines.singleOrNull()
+                ?: machines.firstOrNull()
         }
 
     val uiState: StateFlow<ChatUiState> =
@@ -161,26 +161,28 @@ class ChatViewModel(
                 loginController.flow,
                 searchProviders.state,
                 sessionSearch.state,
-                combine(sshHosts.hosts, selectedSshHost) { hosts, selected -> hosts to selected }
-            ) { base, authFlow, searchProviders, sessionSearch, (hosts, selectedHost) ->
+                combine(machinesController.machines, selectedMachine) { machines, selected ->
+                    machines to selected
+                }
+            ) { base, authFlow, searchProviders, sessionSearch, (machines, selectedMachine) ->
                 base.copy(
                     authFlow = authFlow,
                     searchProviderOptions = searchProviders.options,
-                    sshHosts = hosts,
-                    selectedSshHost = selectedHost,
+                    machines = machines,
+                    selectedMachine = selectedMachine,
                     sessionSearchQuery = sessionSearch.query,
                     sessionSearchSort = sessionSearch.sort,
                     sessionSearchResults = sessionSearch.results
                 )
             },
             hostKeyConfirmer.pending,
-            sshHosts.hostTest,
+            machinesController.machineTest,
             providerCredentials.state,
             modelSettings.state
-        ) { base, pendingHostKey, hostTest, credentials, modelSettings ->
+        ) { base, pendingHostKey, machineTest, credentials, modelSettings ->
             base.copy(
                 pendingHostKey = pendingHostKey,
-                hostTest = hostTest,
+                machineTest = machineTest,
                 providerOptions = credentials.providerOptions,
                 modelOptions = credentials.modelOptions,
                 defaultModel = modelSettings.defaultModel,
@@ -389,20 +391,20 @@ class ChatViewModel(
         }
     }
 
-    // ---- SSH hosts (Settings ▸ SSH hosts) ----
+    // ---- Machines (Settings ▸ Machines) ----
 
     /**
-     * Switches the process-wide SSH host selection. Not busy-rejected:
+     * Switches the process-wide machine selection. Not busy-rejected:
      * like a model pick, it applies to the next tool call. A store failure
      * surfaces a settings-save error while the in-memory selection keeps
-     * the picked host.
+     * the picked machine.
      */
-    fun selectSshHost(hostId: String) {
-        selectedSshHostId.value = hostId
-        sshConnectionProvider.select(hostId)
+    fun selectMachine(machineId: String) {
+        selectedMachineId.value = machineId
+        sshConnectionProvider.select(machineId)
         viewModelScope.launch {
             try {
-                settingsStore.setSelectedSshHostId(hostId)
+                settingsStore.setSelectedMachineId(machineId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -417,24 +419,25 @@ class ChatViewModel(
     /** Refuses the pending unknown-host-key request; also the dialog-dismiss path (fail closed). */
     fun refuseHostKey() = hostKeyConfirmer.answer(trust = false)
 
-    /** Creates an SSH host with a freshly generated keypair (see [SshHostsController.addHost]). */
-    fun addSshHost(address: String, port: Int, username: String, cwd: String) =
-        sshHosts.addHost(address, port, username, cwd)
+    /** Creates a machine with a freshly generated keypair (see [MachinesController.addMachine]). */
+    fun addMachine(address: String, port: Int, username: String, cwd: String) =
+        machinesController.addMachine(address, port, username, cwd)
 
-    /** Persists edited connection fields of an SSH host. */
-    fun updateSshHost(host: SshHost) = sshHosts.updateHost(host)
+    /** Persists edited connection fields of a machine. */
+    fun updateMachine(machine: Machine) = machinesController.updateMachine(machine)
 
-    /** Deletes an SSH host and its keypair, plus its cached connection. */
-    fun removeSshHost(id: String) {
-        sshHosts.removeHost(id)
+    /** Deletes a machine and its keypair, plus its cached connection. */
+    fun removeMachine(id: String) {
+        machinesController.removeMachine(id)
         viewModelScope.launch { sshConnectionProvider.evict(id) }
     }
 
     /**
-     * Runs a connection test against [hostId] from the host form; progress
-     * and the result land in [ChatUiState.hostTest].
+     * Runs a connection test against [machineId] from the machine form; progress
+     * and the result land in [ChatUiState.machineTest].
      */
-    fun testSshHostConnection(hostId: String) = sshHosts.testHostConnection(hostId)
+    fun testMachineConnection(machineId: String) =
+        machinesController.testMachineConnection(machineId)
 
     fun send() {
         viewModelScope.launch { sendInternal() }
@@ -572,8 +575,8 @@ class ChatViewModel(
     private suspend fun initialize() {
         try {
             val appSettings = settingsStore.currentSettings()
-            selectedSshHostId.value = appSettings.selectedSshHostId
-            sshConnectionProvider.select(appSettings.selectedSshHostId)
+            selectedMachineId.value = appSettings.selectedMachineId
+            sshConnectionProvider.select(appSettings.selectedMachineId)
             val runtime = settingsManager.getSettings()
             val summaries = try {
                 sessionSource.list()

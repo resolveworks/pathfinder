@@ -7,17 +7,17 @@ import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 
 /**
- * The process-wide SSH connection owner: resolves the effective host
+ * The process-wide SSH connection owner: resolves the effective machine
  * selection, dials lazily on demand, and caches one authenticated
- * connection: a host switch closes the previous. A cached connection that
+ * connection: a machine switch closes the previous. A cached connection that
  * is no longer authenticated is closed and redialed.
  */
 class SshConnectionProvider(
-    private val store: SshHostStore,
+    private val store: MachineStore,
     private val helper: SshConnectionHelper,
     private val hostKeyConfirmer: TofuHostKeyConfirmer
 ) {
-    private val selectedHostId = MutableStateFlow<String?>(null)
+    private val selectedMachineId = MutableStateFlow<String?>(null)
 
     private val mutex = Mutex()
 
@@ -27,73 +27,73 @@ class SshConnectionProvider(
         private val logger = LoggerFactory.getLogger(SshConnectionProvider::class.java)
     }
 
-    /** Sets the process-wide host selection (null = unset; falls back to sole/first host). */
-    fun select(hostId: String?) {
-        selectedHostId.value = hostId
+    /** Sets the process-wide machine selection (null = unset; falls back to sole/first machine). */
+    fun select(machineId: String?) {
+        selectedMachineId.value = machineId
     }
 
     /**
      * The effective selection, resolved cold: the selected id if it still
-     * exists, else the sole host, else the first host, else null.
+     * exists, else the sole machine, else the first machine, else null.
      */
-    private suspend fun effectiveHostId(): String? {
-        val hosts = store.hosts.first()
-        val selected = selectedHostId.value
-        if (selected != null && hosts.any { it.id == selected }) return selected
-        return hosts.singleOrNull()?.id ?: hosts.firstOrNull()?.id
+    private suspend fun effectiveMachineId(): String? {
+        val machines = store.machines.first()
+        val selected = selectedMachineId.value
+        if (selected != null && machines.any { it.id == selected }) return selected
+        return machines.singleOrNull()?.id ?: machines.firstOrNull()?.id
     }
 
-    /** The host tool calls dial; null when no host is configured. */
-    suspend fun currentHost(): SshHost? = effectiveHostId()?.let { store.host(it) }
+    /** The machine tool calls dial; null when no machine is configured. */
+    suspend fun currentMachine(): Machine? = effectiveMachineId()?.let { store.machine(it) }
 
     /**
-     * The current host's live connection, dialing when needed. A dead cache
+     * The current machine's live connection, dialing when needed. A dead cache
      * entry is closed and redialed; a dial failure propagates as
      * [SshConnectionException] to the caller (the agent loop turns it into
      * an error tool result).
      */
     suspend fun connection(): SshConnection = mutex.withLock {
-        val hostId =
-            effectiveHostId()
+        val machineId =
+            effectiveMachineId()
                 ?: throw SshConnectionException(
-                    "No SSH host configured",
-                    SshConnectionException.Detail.UNKNOWN_HOST
+                    "No machine configured",
+                    SshConnectionException.Detail.UNKNOWN_MACHINE
                 )
-        val host =
-            store.host(hostId)
+        val machine =
+            store.machine(machineId)
                 ?: throw SshConnectionException(
-                    "Unknown SSH host",
-                    SshConnectionException.Detail.UNKNOWN_HOST
+                    "Unknown machine",
+                    SshConnectionException.Detail.UNKNOWN_MACHINE
                 )
         val existing = cached
-        if (existing != null && existing.first == hostId &&
+        if (existing != null && existing.first == machineId &&
             existing.second.client.isAuthenticated
         ) {
             return existing.second
         }
         if (existing != null) {
-            if (existing.first == hostId) {
-                logger.info("ssh_cache_dead_closing: hostId={}", existing.first)
+            if (existing.first == machineId) {
+                logger.info("ssh_cache_dead_closing: machineId={}", existing.first)
             } else {
-                logger.info("ssh_cache_host_changed_closing: hostId={}", existing.first)
+                logger.info("ssh_cache_machine_changed_closing: machineId={}", existing.first)
             }
             existing.second.close()
         }
-        logger.info("ssh_dial_start: hostId={}", hostId)
-        val connection = helper.connect(hostId) { fingerprint, keyType ->
-            hostKeyConfirmer.confirm(host, fingerprint, keyType)
+        logger.info("ssh_dial_start: machineId={}", machineId)
+        val connection = helper.connect(machineId) { fingerprint, keyType ->
+            hostKeyConfirmer.confirm(machine, fingerprint, keyType)
         }
-        logger.info("ssh_dial_success: hostId={}", hostId)
-        cached = hostId to connection
+        logger.info("ssh_dial_success: machineId={}", machineId)
+        cached = machineId to connection
         return connection
     }
 
-    /** Closes and drops the cached connection for [hostId], if any. */
-    suspend fun evict(hostId: String) {
+    /** Closes and drops the cached connection for [machineId], if any. */
+    suspend fun evict(machineId: String) {
         mutex.withLock {
             val existing = cached
-            if (existing != null && existing.first == hostId) {
-                logger.info("ssh_evict_closing: hostId={}", hostId)
+            if (existing != null && existing.first == machineId) {
+                logger.info("ssh_evict_closing: machineId={}", machineId)
                 cached = null
                 existing.second.close()
             }

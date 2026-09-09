@@ -14,7 +14,7 @@ import works.resolve.pathfinder.ai.auth.AuthPrompt
 import works.resolve.pathfinder.ai.auth.AuthType
 import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.ssh.HostKeyRequest
-import works.resolve.pathfinder.ssh.SshHost
+import works.resolve.pathfinder.ssh.Machine
 
 /** Which conversation surface the chat root shows: the transcript or the session tree. */
 enum class ConversationView {
@@ -74,13 +74,13 @@ data object ProvidersNavKey : NavKey
 @Serializable
 data object SearchProvidersNavKey : NavKey
 
-/** The SSH host list (Settings ▸ SSH hosts). */
+/** The machine list (Settings ▸ Machines). */
 @Serializable
-data object SshHostsNavKey : NavKey
+data object MachinesNavKey : NavKey
 
-/** Host add/edit form; a null [hostId] adds, otherwise it edits that host. */
+/** Machine add/edit form; a null [machineId] adds, otherwise it edits that machine. */
 @Serializable
-data class SshHostEditNavKey(val hostId: String?) : NavKey
+data class MachineEditNavKey(val machineId: String?) : NavKey
 
 @Serializable
 data class SearchProviderAuthNavKey(val providerId: String) : NavKey
@@ -142,14 +142,14 @@ data class ProviderAuthFlow(
 )
 
 /**
- * Connection-test status for the SSH host form (see
- * SshHostsController.testHostConnection); keyed by host so a stale result
- * never shows under another host. [message] is a safe result string, held
+ * Connection-test status for the machine form (see
+ * MachinesController.testMachineConnection); keyed by machine so a stale result
+ * never shows under another machine. [message] is a safe result string, held
  * unresolved (see [UiString]).
  */
 @Immutable
-data class HostTestState(
-    val hostId: String,
+data class MachineTestState(
+    val machineId: String,
     val running: Boolean,
     val success: Boolean = false,
     val message: UiString? = null
@@ -179,10 +179,10 @@ data class ChatUiState(
     val providerOptions: List<ProviderOption> = emptyList(),
     /** All catalog search providers with live auth status, name-sorted. */
     val searchProviderOptions: List<ProviderOption> = emptyList(),
-    /** Configured SSH hosts (Settings ▸ SSH hosts), store-sorted. */
-    val sshHosts: List<SshHost> = emptyList(),
-    /** The effective SSH host selection (see SshConnectionProvider.effectiveHostId), for display. */
-    val selectedSshHost: SshHost? = null,
+    /** Configured machines (Settings ▸ Machines), store-sorted. */
+    val machines: List<Machine> = emptyList(),
+    /** The effective machine selection (see SshConnectionProvider.effectiveMachineId), for display. */
+    val selectedMachine: Machine? = null,
     /**
      * Models of configured providers only, sorted by provider then model
      * name; the scope curator's universe.
@@ -241,8 +241,8 @@ data class ChatUiState(
     val authFlow: ProviderAuthFlow? = null,
     /** Pending unknown-host-key request (TOFU); answering it unblocks the session creation. */
     val pendingHostKey: HostKeyRequest? = null,
-    /** Latest SSH connection-test status (host form); null before the first test. */
-    val hostTest: HostTestState? = null,
+    /** Latest SSH connection-test status (machine form); null before the first test. */
+    val machineTest: MachineTestState? = null,
     /**
      * Transient ViewModel-sourced failure shown as a snackbar. Agent-run
      * errors are never mirrored here: they render as transcript rows (pi's

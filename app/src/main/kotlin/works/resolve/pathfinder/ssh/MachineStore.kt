@@ -12,36 +12,37 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 /**
- * Persistent store of [SshHost] configs plus the per-host trusted host-key
- * fingerprint (TOFU state). Private keys live in [SshHostKeyStore], not here.
+ * Persistent store of [Machine] configs plus the per-machine trusted
+ * host-key fingerprint (TOFU state). Private keys live in [MachineKeyStore],
+ * not here.
  *
- * Hosts are stored as one preference group per host id; [hosts] regroups
- * them on every emission for the settings UI. The id is opaque to users:
- * 32 lowercase hex chars, generated once at creation.
+ * Machines are stored as one preference group per machine id; [machines]
+ * regroups them on every emission for the settings UI. The id is opaque to
+ * users: 32 lowercase hex chars, generated once at creation.
  */
-class SshHostStore(
+class MachineStore(
     private val dataStore: DataStore<Preferences>,
-    private val keyStore: SshHostKeyStore
+    private val keyStore: MachineKeyStore
 ) {
 
-    val hosts: Flow<List<SshHost>> = dataStore.data.map { prefs -> decodeHosts(prefs) }
+    val machines: Flow<List<Machine>> = dataStore.data.map { prefs -> decodeMachines(prefs) }
 
-    suspend fun host(id: String): SshHost? = decodeHosts(dataStore.data.first()).firstOrNull {
+    suspend fun machine(id: String): Machine? = decodeMachines(dataStore.data.first()).firstOrNull {
         it.id ==
             id
     }
 
     /**
-     * Creates a host with a freshly generated per-host keypair. The keypair
-     * is persisted before the config becomes visible, so a listed host always
-     * has a usable key.
+     * Creates a machine with a freshly generated per-machine keypair. The
+     * keypair is persisted before the config becomes visible, so a listed
+     * machine always has a usable key.
      */
-    suspend fun addHost(address: String, port: Int, username: String, cwd: String): SshHost {
+    suspend fun addMachine(address: String, port: Int, username: String, cwd: String): Machine {
         val id = UUID.randomUUID().toString().replace("-", "")
-        val keypair = SshHostKeys.generate()
+        val keypair = MachineKeys.generate()
         keyStore.write(id, keypair.privateKey)
-        val host =
-            SshHost(
+        val machine =
+            Machine(
                 id = id,
                 address = address,
                 port = port,
@@ -49,15 +50,15 @@ class SshHostStore(
                 cwd = cwd,
                 publicKeyLine = keypair.publicKeyLine
             )
-        dataStore.edit { prefs -> writeHost(prefs, host) }
-        return host
+        dataStore.edit { prefs -> writeMachine(prefs, machine) }
+        return machine
     }
 
-    suspend fun updateHost(host: SshHost) {
-        dataStore.edit { prefs -> writeHost(prefs, host) }
+    suspend fun updateMachine(machine: Machine) {
+        dataStore.edit { prefs -> writeMachine(prefs, machine) }
     }
 
-    suspend fun removeHost(id: String) {
+    suspend fun removeMachine(id: String) {
         dataStore.edit { prefs ->
             prefs.remove(addressKey(id))
             prefs.remove(portKey(id))
@@ -78,8 +79,8 @@ class SshHostStore(
         dataStore.edit { it[trustedFingerprintKey(id)] = fingerprint }
     }
 
-    private fun decodeHosts(prefs: Preferences): List<SshHost> {
-        val hosts = mutableListOf<SshHost>()
+    private fun decodeMachines(prefs: Preferences): List<Machine> {
+        val machines = mutableListOf<Machine>()
         for (key in prefs.asMap().keys) {
             if (!key.name.startsWith(PREFIX) || !key.name.endsWith(SUFFIX_ADDRESS)) continue
             val id = key.name.removePrefix(PREFIX).removeSuffix(SUFFIX_ADDRESS)
@@ -88,17 +89,17 @@ class SshHostStore(
             val cwd = prefs[cwdKey(id)] ?: continue
             val port = prefs[portKey(id)] ?: DEFAULT_PORT
             val publicKeyLine = prefs[publicKeyKey(id)] ?: continue
-            hosts += SshHost(id, address, port, username, cwd, publicKeyLine)
+            machines += Machine(id, address, port, username, cwd, publicKeyLine)
         }
-        return hosts.sortedBy { it.id }
+        return machines.sortedBy { it.id }
     }
 
-    private fun writeHost(prefs: MutablePreferences, host: SshHost) {
-        prefs[addressKey(host.id)] = host.address
-        prefs[portKey(host.id)] = host.port
-        prefs[usernameKey(host.id)] = host.username
-        prefs[cwdKey(host.id)] = host.cwd
-        prefs[publicKeyKey(host.id)] = host.publicKeyLine
+    private fun writeMachine(prefs: MutablePreferences, machine: Machine) {
+        prefs[addressKey(machine.id)] = machine.address
+        prefs[portKey(machine.id)] = machine.port
+        prefs[usernameKey(machine.id)] = machine.username
+        prefs[cwdKey(machine.id)] = machine.cwd
+        prefs[publicKeyKey(machine.id)] = machine.publicKeyLine
     }
 
     private fun addressKey(id: String) = stringPreferencesKey("${PREFIX}$id$SUFFIX_ADDRESS")
@@ -110,7 +111,7 @@ class SshHostStore(
         stringPreferencesKey("${PREFIX}$id$SUFFIX_TRUSTED_FINGERPRINT")
 
     private companion object {
-        const val PREFIX = "host."
+        const val PREFIX = "machine."
         const val SUFFIX_ADDRESS = ".address"
         const val SUFFIX_PORT = ".port"
         const val SUFFIX_USERNAME = ".username"

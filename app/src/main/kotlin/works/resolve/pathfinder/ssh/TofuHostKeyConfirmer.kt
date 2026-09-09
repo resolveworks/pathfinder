@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * target (username@address:port), the key type, and the SHA-256
  * fingerprint. Public data only.
  */
-data class HostKeyRequest(val hostLabel: String, val keyType: String, val fingerprint: String)
+data class HostKeyRequest(val machineLabel: String, val keyType: String, val fingerprint: String)
 
 /**
  * App-layer unknown-host-key decision: publishes the pending request as UI
@@ -32,12 +32,12 @@ class TofuHostKeyConfirmer {
         response?.complete(trust)
     }
 
-    /** Publishes the prompt for [host] and suspends for the user's Trust/Refuse answer. */
-    suspend fun confirm(host: SshHost, fingerprint: String, keyType: String): Boolean {
+    /** Publishes the prompt for [machine] and suspends for the user's Trust/Refuse answer. */
+    suspend fun confirm(machine: Machine, fingerprint: String, keyType: String): Boolean {
         val deferred = CompletableDeferred<Boolean>()
         response = deferred
         _pending.value = HostKeyRequest(
-            hostLabel = "${host.username}@${host.address}:${host.port}",
+            machineLabel = "${machine.username}@${machine.address}:${machine.port}",
             keyType = keyType,
             fingerprint = fingerprint
         )

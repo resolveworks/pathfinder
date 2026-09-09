@@ -149,8 +149,8 @@ class NativeAgentFactory(
     }
 
     /**
-     * Builds the ported coding tools against the currently selected SSH
-     * host's configured cwd, or null when no host is configured (or no
+     * Builds the ported coding tools against the currently selected
+     * machine's configured cwd, or null when no machine is configured (or no
      * provider is wired). Tools dial lazily per call; nothing connects
      * here. The session's model is not known until createAgentSession builds
      * it, so the read tool's model provider reads it through
@@ -160,11 +160,11 @@ class NativeAgentFactory(
         val provider = sshConnectionProvider ?: return null
         val tempDir = bashTempDir ?: return null
 
-        val host = provider.currentHost() ?: return null
+        val machine = provider.currentMachine() ?: return null
         val files = RemoteFileOperations(provider)
         val createdSession = AtomicReference<AgentSession>()
         val tools = createCodingTools(
-            cwd = host.cwd,
+            cwd = machine.cwd,
             options = ToolsOptions(
                 read = ReadToolOptions(
                     operations = files,
@@ -178,7 +178,7 @@ class NativeAgentFactory(
         )
         return SshTools(
             tools,
-            "${host.cwd} (via SSH: ${host.username}@${host.address})",
+            "${machine.cwd} (via SSH: ${machine.username}@${machine.address})",
             createdSession
         )
     }

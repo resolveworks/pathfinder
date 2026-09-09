@@ -42,7 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.ModelThinkingLevel
-import works.resolve.pathfinder.ssh.SshHost
+import works.resolve.pathfinder.ssh.Machine
 
 /**
  * The conversation transcript surface: messages plus the composer column.
@@ -58,7 +58,7 @@ internal fun ChatSurface(
     onStop: () -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
-    onSelectSshHost: (hostId: String) -> Unit,
+    onSelectMachine: (machineId: String) -> Unit,
     scrollState: TranscriptScrollState
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -96,9 +96,9 @@ internal fun ChatSurface(
                 availableThinkingLevels = uiState.availableThinkingLevels,
                 defaultThinkingLevel = uiState.defaultThinkingLevel,
                 onSelectThinkingLevel = onSelectThinkingLevel,
-                sshHosts = uiState.sshHosts,
-                selectedSshHost = uiState.selectedSshHost,
-                onSelectSshHost = onSelectSshHost
+                machines = uiState.machines,
+                selectedMachine = uiState.selectedMachine,
+                onSelectMachine = onSelectMachine
             )
         }
     }
@@ -115,14 +115,14 @@ private fun SelectionBar(
     availableThinkingLevels: List<ModelThinkingLevel>,
     defaultThinkingLevel: ModelThinkingLevel?,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
-    sshHosts: List<SshHost>,
-    selectedSshHost: SshHost?,
-    onSelectSshHost: (hostId: String) -> Unit,
+    machines: List<Machine>,
+    selectedMachine: Machine?,
+    onSelectMachine: (machineId: String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var sheetOpen by rememberSaveable { mutableStateOf(false) }
     var thinkingSheetOpen by rememberSaveable { mutableStateOf(false) }
-    var hostSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var machineSheetOpen by rememberSaveable { mutableStateOf(false) }
     // pi's footer condition `state.model?.reasoning`: a non-reasoning model's
     // only supported level is OFF, so >1 level means reasoning.
     val showThinkingChip = availableThinkingLevels.size > 1
@@ -173,13 +173,13 @@ private fun SelectionBar(
                 }
             )
         }
-        if (sshHosts.isNotEmpty()) {
+        if (machines.isNotEmpty()) {
             Spacer(Modifier.width(8.dp))
             AssistChip(
-                onClick = { hostSheetOpen = true },
+                onClick = { machineSheetOpen = true },
                 label = {
                     Text(
-                        text = "${selectedSshHost?.username}@${selectedSshHost?.address}",
+                        text = "${selectedMachine?.username}@${selectedMachine?.address}",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -218,15 +218,15 @@ private fun SelectionBar(
             onDismiss = { thinkingSheetOpen = false }
         )
     }
-    if (hostSheetOpen) {
-        HostPickerSheet(
-            hosts = sshHosts,
-            selectedHost = selectedSshHost,
-            onSelect = { host ->
-                hostSheetOpen = false
-                onSelectSshHost(host.id)
+    if (machineSheetOpen) {
+        MachinePickerSheet(
+            machines = machines,
+            selectedMachine = selectedMachine,
+            onSelect = { machine ->
+                machineSheetOpen = false
+                onSelectMachine(machine.id)
             },
-            onDismiss = { hostSheetOpen = false }
+            onDismiss = { machineSheetOpen = false }
         )
     }
 }
@@ -323,13 +323,13 @@ private fun ThinkingLevelPickerSheet(
     }
 }
 
-/** The SSH host picker sheet: one row per configured host, the effective selection checked. */
+/** The machine picker sheet: one row per configured machine, the effective selection checked. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HostPickerSheet(
-    hosts: List<SshHost>,
-    selectedHost: SshHost?,
-    onSelect: (SshHost) -> Unit,
+private fun MachinePickerSheet(
+    machines: List<Machine>,
+    selectedMachine: Machine?,
+    onSelect: (Machine) -> Unit,
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -344,11 +344,11 @@ private fun HostPickerSheet(
                     .weight(1f, fill = false)
                     .heightIn(max = 480.dp)
             ) {
-                items(hosts, key = SshHost::id) { host ->
+                items(machines, key = Machine::id) { machine ->
                     ListItem(
-                        headlineContent = { Text("${host.username}@${host.address}") },
-                        supportingContent = { Text(host.cwd) },
-                        trailingContent = if (host.id == selectedHost?.id) {
+                        headlineContent = { Text("${machine.username}@${machine.address}") },
+                        supportingContent = { Text(machine.cwd) },
+                        trailingContent = if (machine.id == selectedMachine?.id) {
                             {
                                 Icon(
                                     Icons.Default.Check,
@@ -359,7 +359,7 @@ private fun HostPickerSheet(
                         } else {
                             null
                         },
-                        modifier = Modifier.clickable { onSelect(host) }
+                        modifier = Modifier.clickable { onSelect(machine) }
                     )
                 }
             }

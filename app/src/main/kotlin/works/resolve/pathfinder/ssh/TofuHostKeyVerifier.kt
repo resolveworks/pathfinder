@@ -18,24 +18,24 @@ fun interface UnknownHostKeyCallback {
 }
 
 /**
- * Minimal TOFU host-key verification for one host. The first connect
+ * Minimal TOFU host-key verification for one machine. The first connect
  * captures [KeyFingerprint.sha256] and persists it; later connects compare
  * and a mismatch is a hard rejection. An unknown key is accepted only if the
  * caller-supplied callback confirms, and is then persisted.
  */
 class TofuHostKeyVerifier(
-    private val store: SshHostStore,
-    private val hostId: String,
+    private val store: MachineStore,
+    private val machineId: String,
     private val onUnknownKey: UnknownHostKeyCallback = UnknownHostKeyCallback.REFUSE
 ) : HostKeyVerifier {
 
     override suspend fun verify(key: PublicKey): Boolean {
         val fingerprint = KeyFingerprint.sha256(key.encoded)
-        val trusted = store.trustedHostKeyFingerprint(hostId)
+        val trusted = store.trustedHostKeyFingerprint(machineId)
         return when {
             trusted == null -> {
                 if (onUnknownKey.confirm(fingerprint, key.type)) {
-                    store.trustHostKeyFingerprint(hostId, fingerprint)
+                    store.trustHostKeyFingerprint(machineId, fingerprint)
                     true
                 } else {
                     false

@@ -25,10 +25,10 @@ import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.ssh.BitmapImageProcessing
+import works.resolve.pathfinder.ssh.MachineKeyStore
+import works.resolve.pathfinder.ssh.MachineStore
 import works.resolve.pathfinder.ssh.SshConnectionHelper
 import works.resolve.pathfinder.ssh.SshConnectionProvider
-import works.resolve.pathfinder.ssh.SshHostKeyStore
-import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.webfetch.WebViewPageFetcher
@@ -123,22 +123,22 @@ class PathfinderApplication : Application() {
         DirectorySessionSource(File(filesDir, SESSIONS_DIRECTORY))
     }
 
-    /** SSH host configs, per-host keys, and TOFU host-key state. */
-    val sshHostStore: SshHostStore by lazy {
-        SshHostStore(
-            sshHostsDataStore,
-            SshHostKeyStore(File(filesDir, "ssh-host-keys"), KeystoreAeadCipher())
+    /** Machine configs, per-machine keys, and TOFU host-key state. */
+    val machineStore: MachineStore by lazy {
+        MachineStore(
+            machinesDataStore,
+            MachineKeyStore(File(filesDir, "machine-keys"), KeystoreAeadCipher())
         )
     }
 
-    val sshConnectionHelper: SshConnectionHelper by lazy { SshConnectionHelper(sshHostStore) }
+    val sshConnectionHelper: SshConnectionHelper by lazy { SshConnectionHelper(machineStore) }
 
     /** Interactive TOFU host-key decisions for every dial. */
     val hostKeyConfirmer: TofuHostKeyConfirmer by lazy { TofuHostKeyConfirmer() }
 
     /** Process-wide lazy SSH connections; the coding tools dial on demand. */
     val sshConnectionProvider: SshConnectionProvider by lazy {
-        SshConnectionProvider(sshHostStore, sshConnectionHelper, hostKeyConfirmer)
+        SshConnectionProvider(machineStore, sshConnectionHelper, hostKeyConfirmer)
     }
 
     /** Generated from pi; never hand-edit the bundled asset. */
@@ -172,7 +172,7 @@ class PathfinderApplication : Application() {
                 sessionSource = sessionSource,
                 agentFactory = agentFactory,
                 searchProviderService = searchProviderService,
-                sshHostStore = sshHostStore,
+                machineStore = machineStore,
                 hostKeyConfirmer = hostKeyConfirmer,
                 sshConnectionProvider = sshConnectionProvider,
                 modelResolver = agentFactory::resolveModel,
@@ -193,4 +193,4 @@ class PathfinderApplication : Application() {
 
 private val Context.settingsDataStore by preferencesDataStore(name = "settings")
 
-private val Context.sshHostsDataStore by preferencesDataStore(name = "ssh_hosts")
+private val Context.machinesDataStore by preferencesDataStore(name = "machines")

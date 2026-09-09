@@ -1,13 +1,14 @@
 package works.resolve.pathfinder.ssh
 
 /**
- * A configured SSH host. Authentication is always the per-host public key
- * generated at creation; there is deliberately no auth-method field.
+ * A configured machine reached over SSH. Authentication is always the
+ * per-machine public key generated at creation; there is deliberately no
+ * auth-method field.
  *
- * [publicKeyLine] is the host's `authorized_keys` line (public data, shown
- * by the settings UI for copying to the server).
+ * [publicKeyLine] is the machine's `authorized_keys` line (public data,
+ * shown by the settings UI for copying to the server).
  */
-data class SshHost(
+data class Machine(
     val id: String,
     val address: String,
     val port: Int,
