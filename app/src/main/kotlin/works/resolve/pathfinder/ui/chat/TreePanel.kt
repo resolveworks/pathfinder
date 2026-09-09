@@ -157,15 +157,15 @@ internal fun filterTreeRows(
     }
 }
 
-/** Text the search filter matches: the preview, or a tool row's title pieces. */
+/** Text the search filter matches: the preview, or a tool row's name and
+ * raw arguments JSON. */
 private fun TreeRow.searchText(): String = when (val rowBody = body) {
     is TreeRowBody.Text -> rowBody.preview
 
     is TreeRowBody.NoContent -> ""
 
     is TreeRowBody.Tool ->
-        rowBody.name + " " +
-            (rowBody.call?.let { toolCallInput(it.name, it.arguments) } ?: "")
+        rowBody.name + " " + (rowBody.call?.arguments ?: "")
 }.lowercase()
 
 /** One guide cell per indent level. */

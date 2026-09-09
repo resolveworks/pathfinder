@@ -837,8 +837,7 @@ class ChatViewModel(
             // Streaming tool output (bash partials): retained until the
             // execution ends; the committed result takes over the row.
             is AgentEvent.ToolExecutionUpdate -> {
-                val partial = event.partialResult.content.filterIsInstance<TextContent>()
-                    .joinToString("\n") { it.text }
+                val partial = event.partialResult.content.textContent()
                 if (partial.isNotEmpty()) {
                     _uiState.update {
                         it.copy(toolPartials = it.toolPartials + (event.toolCallId to partial))

@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -57,8 +58,13 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.string
+import works.resolve.pathfinder.codingagent.core.tools.BashTool
+import works.resolve.pathfinder.codingagent.core.tools.EditTool
+import works.resolve.pathfinder.codingagent.core.tools.ReadTool
+import works.resolve.pathfinder.codingagent.core.tools.WriteTool
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
@@ -354,72 +360,19 @@ private fun StreamingMarkdownBlock(text: String, thinking: Boolean) {
 }
 
 internal enum class ToolResultFormat {
-    RAW,
+    MONO,
 
     MARKDOWN
 }
 
-/**
- * pi resolves per-tool result renderers by tool name, falling back to
- * generic raw text; the port's equivalent is this name-keyed table —
- * listed tools render their output as Markdown, everything else keeps
- * pi's raw fallback.
- */
+/** The two Pathfinder-owned web tools render their result as Markdown; pi
+ * has no web tools. Everything else is [ToolResultFormat.MONO] — the port
+ * of pi's generic raw terminal-output fallback. */
 internal object ToolResultRenderers {
-    private val formats: Map<String, ToolResultFormat> = mapOf(
-        BraveWebSearchTool.NAME to ToolResultFormat.MARKDOWN,
-        WebFetchTool.NAME to ToolResultFormat.MARKDOWN
-    )
+    private val MARKDOWN_TOOLS = setOf(BraveWebSearchTool.NAME, WebFetchTool.NAME)
 
-    fun formatFor(toolName: String): ToolResultFormat = formats[toolName] ?: ToolResultFormat.RAW
-}
-
-/**
- * Shared row-title spec, keyed by tool name like [ToolResultRenderers]:
- * which call argument titles a tool's row ("Searched for …", "Fetched …")
- * and the string format rendering it. Tools without a spec keep the bare
- * tool name as their title; adding a tool is one table entry.
- */
-internal object ToolCallTitles {
-    data class Spec(
-        /** JSON-argument key holding the row-title input. */
-        val argument: String,
-        /** Title format filled with the parsed argument (strings.xml). */
-        val format: Int
-    )
-
-    private val specs: Map<String, Spec> = mapOf(
-        BraveWebSearchTool.NAME to Spec("query", R.string.tool_title_searched_for),
-        WebFetchTool.NAME to Spec("url", R.string.tool_title_fetched),
-        CodingTools.BASH to Spec("command", R.string.tool_title_ran),
-        CodingTools.READ to Spec("path", R.string.tool_title_read),
-        CodingTools.EDIT to Spec("path", R.string.tool_title_edited),
-        CodingTools.WRITE to Spec("path", R.string.tool_title_wrote)
-    )
-
-    fun specFor(toolName: String): Spec? = specs[toolName]
-}
-
-/**
- * The one call argument a tool's row title is built from, parsed from the
- * raw JSON arguments string; the argument key comes from the shared
- * [ToolCallTitles] spec table. Null for tools without a spec and for
- * malformed arguments or a missing/empty value.
- */
-internal fun toolCallInput(toolName: String, arguments: String): String? {
-    val argument = ToolCallTitles.specFor(toolName)?.argument ?: return null
-    val parsed =
-        runCatching { lenientJson.parseToJsonElement(arguments) }.getOrNull() as? JsonObject
-            ?: return null
-    return parsed.string(argument)?.takeIf { it.isNotEmpty() }
-}
-
-/** Tool names of the ported coding tools (labels only; rendering keys off them). */
-internal object CodingTools {
-    const val BASH = "bash"
-    const val READ = "read"
-    const val EDIT = "edit"
-    const val WRITE = "write"
+    fun formatFor(toolName: String): ToolResultFormat =
+        if (toolName in MARKDOWN_TOOLS) ToolResultFormat.MARKDOWN else ToolResultFormat.MONO
 }
 
 /**
@@ -427,16 +380,58 @@ internal object CodingTools {
  * shows the diff); null for non-edit calls or missing details.
  */
 internal fun editDiff(result: ToolResultMessage): String? {
-    if (result.toolName != CodingTools.EDIT) return null
+    if (result.toolName != EditTool.NAME) return null
     return (result.details as? JsonObject)?.string("diff")?.takeIf { it.isNotEmpty() }
 }
 
-/** Row title: the spec's format filled with the parsed input, else the tool name. */
+/**
+ * Row title, in pi's renderCall grammar: tool name (or the `$` prompt for
+ * bash) followed by the key argument, plain concatenation. pi's read range
+ * and bash timeout suffixes are ported as-is. A missing spec, malformed
+ * arguments, or a missing/empty key argument leave the bare tool name.
+ */
 @Composable
 internal fun toolCallTitle(call: ToolCall): String {
-    val input = remember(call.id, call.arguments) { toolCallInput(call.name, call.arguments) }
-    val spec = ToolCallTitles.specFor(call.name)
-    return if (spec != null && input != null) stringResource(spec.format, input) else call.name
+    val parsed = remember(call.id, call.arguments) {
+        runCatching { lenientJson.parseToJsonElement(call.arguments) }.getOrNull() as? JsonObject
+    }
+    return when (call.name) {
+        BashTool.NAME -> {
+            val command = parsed?.string("command")?.takeIf { it.isNotEmpty() } ?: return call.name
+            val timeout = parsed?.int("timeout")
+            "$ " + command + (if (timeout != null) " (timeout ${timeout}s)" else "")
+        }
+
+        ReadTool.NAME -> {
+            val path = parsed?.string("path")?.takeIf { it.isNotEmpty() } ?: return call.name
+            val offset = parsed?.int("offset")
+            val limit = parsed?.int("limit")
+            val range = if (offset == null && limit == null) {
+                ""
+            } else {
+                val start = offset ?: 1
+                if (limit != null) ":$start-${start + limit - 1}" else ":$start"
+            }
+            "read " + path + range
+        }
+
+        EditTool.NAME, WriteTool.NAME -> {
+            val path = parsed?.string("path")?.takeIf { it.isNotEmpty() } ?: return call.name
+            call.name + " " + path
+        }
+
+        BraveWebSearchTool.NAME -> {
+            val query = parsed?.string("query")?.takeIf { it.isNotEmpty() } ?: return call.name
+            stringResource(R.string.tool_title_searched_for, query)
+        }
+
+        WebFetchTool.NAME -> {
+            val url = parsed?.string("url")?.takeIf { it.isNotEmpty() } ?: return call.name
+            stringResource(R.string.tool_title_fetched, url)
+        }
+
+        else -> call.name
+    }
 }
 
 /**
@@ -448,9 +443,40 @@ internal fun toolCallTitle(call: ToolCall?, fallbackName: String?): String =
     if (call == null) fallbackName ?: "tool" else toolCallTitle(call)
 
 /**
+ * Shared tool-call header: the row title (monospace for bash calls) with the
+ * trailing "Failed" label on errors. The title stays on one line; the sheet
+ * is about the output.
+ */
+@Composable
+private fun ToolHeader(call: ToolCall, isError: Boolean) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            text = toolCallTitle(call),
+            style = MaterialTheme.typography.labelLarge,
+            fontFamily = if (call.name == BashTool.NAME) FontFamily.Monospace else null,
+            color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        if (isError) {
+            Text(
+                text = stringResource(R.string.tool_status_failed),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+    }
+}
+
+/**
  * One tool execution as a single fixed-height line in a tonal container,
- * distinct from conversation text: the row title (a tool-specific phrase
- * like "Searched for …", else the tool name) and a spinner while running
+ * distinct from conversation text: the row title (the call's key argument,
+ * else the tool name) and a spinner while running
  * (the call committed but its result has not, and the run is still live —
  * pi's component spins between its start and end events). A running bash
  * call previews its throttled partial output under the title (pi's bash
@@ -490,15 +516,12 @@ private fun ToolCallItem(
             }.padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = toolCallTitle(call),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (isError) MaterialTheme.colorScheme.error else Color.Unspecified
-                )
+                ToolHeader(call = call, isError = isError)
                 partialOutput?.takeIf { it.isNotBlank() }?.let { partial ->
                     Text(
                         text = partial,
                         style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = PARTIAL_OUTPUT_MAX_LINES,
                         overflow = TextOverflow.Ellipsis
@@ -509,12 +532,6 @@ private fun ToolCallItem(
                 CircularProgressIndicator(
                     modifier = Modifier.size(18.dp),
                     strokeWidth = 2.dp
-                )
-            } else if (isError) {
-                Text(
-                    text = stringResource(R.string.tool_status_failed),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error
                 )
             }
         }
@@ -543,34 +560,13 @@ private fun ToolOutputSheet(call: ToolCall, result: ToolResultMessage, onDismiss
                 .padding(horizontal = 16.dp)
                 .navigationBarsPadding()
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(bottom = 8.dp)
-            ) {
-                Text(
-                    text = toolCallTitle(call),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (result.isError) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-                if (result.isError) {
-                    Text(
-                        text = stringResource(R.string.tool_status_failed),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
+            ToolHeader(call = call, isError = result.isError)
             Column(
                 modifier = Modifier
                     .weight(1f, fill = false)
                     .heightIn(max = 640.dp)
                     .verticalScroll(rememberScrollState())
+                    .padding(top = 8.dp)
             ) {
                 val diff = remember(result) { editDiff(result) }
                 when {
@@ -579,6 +575,7 @@ private fun ToolOutputSheet(call: ToolCall, result: ToolResultMessage, onDismiss
                     diff != null -> Text(
                         text = diff,
                         style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
                         color = contentColor
                     )
 
@@ -592,6 +589,7 @@ private fun ToolOutputSheet(call: ToolCall, result: ToolResultMessage, onDismiss
                     else -> Text(
                         text = output,
                         style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
                         color = contentColor
                     )
                 }

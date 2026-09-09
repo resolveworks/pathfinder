@@ -6,8 +6,8 @@ import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 
 /**
- * Pins pi's renderer resolution: a custom renderResult is looked up by tool
- * name, and every other tool falls back to raw text.
+ * Pins result-format resolution: the two Pathfinder-owned web tools render
+ * Markdown, everything else is monospace raw output (pi's generic fallback).
  */
 class ToolResultRenderersTest {
     @Test
@@ -27,9 +27,9 @@ class ToolResultRenderersTest {
     }
 
     @Test
-    fun `unregistered tools render as raw text (pi generic fallback)`() {
-        assertEquals(ToolResultFormat.RAW, ToolResultRenderers.formatFor("bash"))
-        assertEquals(ToolResultFormat.RAW, ToolResultRenderers.formatFor("read"))
-        assertEquals(ToolResultFormat.RAW, ToolResultRenderers.formatFor("some_future_tool"))
+    fun `every other tool renders as monospace raw output (pi generic fallback)`() {
+        assertEquals(ToolResultFormat.MONO, ToolResultRenderers.formatFor("bash"))
+        assertEquals(ToolResultFormat.MONO, ToolResultRenderers.formatFor("read"))
+        assertEquals(ToolResultFormat.MONO, ToolResultRenderers.formatFor("some_future_tool"))
     }
 }

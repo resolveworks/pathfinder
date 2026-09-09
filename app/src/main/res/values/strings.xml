@@ -112,10 +112,6 @@
     <string name="tool_output_view">View tool output</string>
     <string name="tool_title_searched_for">Searched for %1$s</string>
     <string name="tool_title_fetched">Fetched %1$s</string>
-    <string name="tool_title_ran">Ran %1$s</string>
-    <string name="tool_title_read">Read %1$s</string>
-    <string name="tool_title_edited">Edited %1$s</string>
-    <string name="tool_title_wrote">Wrote %1$s</string>
 
     <string name="error_generic">Something went wrong</string>
     <string name="error_init">Could not load chat data</string>

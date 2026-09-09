@@ -731,10 +731,14 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         val rows = vm.uiState.value.messages.filterIsInstance<TranscriptRow.Tool>()
         assertEquals(listOf("call-1", "call-2", "call-3"), rows.map { it.call.id })
         assertEquals(
-            // Title inputs parse from each call's arguments; malformed
-            // arguments (call-3) fall back to the bare name at render.
-            listOf("kotlin flow", "https://example.com", null),
-            rows.map { toolCallInput(it.call.name, it.call.arguments) }
+            // Rows carry each call's arguments as-is; titles parse at render,
+            // malformed arguments (call-3) falling back to the bare name.
+            listOf(
+                """{"query":"kotlin flow"}""",
+                """{"url":"https://example.com"}""",
+                "not json"
+            ),
+            rows.map { it.call.arguments }
         )
 
         val searchResult = ToolResultMessage(
@@ -754,7 +758,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         val settled = vm.uiState.value.messages
             .filterIsInstance<TranscriptRow.Tool>()
             .single { it.call.id == "call-1" }
-        assertEquals("kotlin flow", toolCallInput(settled.call.name, settled.call.arguments))
+        assertEquals("""{"query":"kotlin flow"}""", settled.call.arguments)
 
         vm.closeForTest()
     }
