@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -264,12 +265,14 @@ private fun UserMessageItem(message: UserMessage, modifier: Modifier = Modifier)
         ) {
             // pi renders user markdown literally (markers preserved, not
             // parsed), so the bubble stays plain text.
-            Text(
-                text = message.content.textContent(),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-            )
+            SelectionContainer {
+                Text(
+                    text = message.content.textContent(),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                )
+            }
         }
     }
 }
@@ -291,61 +294,67 @@ private fun AssistantMessageItem(
     modifier: Modifier = Modifier,
     isStreaming: Boolean = false
 ) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        var index = 0
-        var seenThinking = false
-        while (index < message.content.size) {
-            val part = message.content[index]
-            when (part) {
-                is TextContent -> {
-                    part.text.takeIf { it.isNotBlank() }?.let { MarkdownText(markdown = it) }
-                    index++
-                }
-
-                is ThinkingContent -> {
-                    val runStart = index
-                    while (index < message.content.size &&
-                        message.content[index] is ThinkingContent
-                    ) {
+    // One container per message: LazyColumn rows recycle, so a container
+    // around the list itself could not span items.
+    SelectionContainer(modifier = modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            var index = 0
+            var seenThinking = false
+            while (index < message.content.size) {
+                val part = message.content[index]
+                when (part) {
+                    is TextContent -> {
+                        part.text.takeIf { it.isNotBlank() }?.let {
+                            MarkdownText(markdown = it)
+                        }
                         index++
                     }
-                    val merged = message.content.subList(runStart, index)
-                        .filterIsInstance<ThinkingContent>()
-                        .joinToString("\n\n") { it.thinking }
-                        .trim()
-                    if (merged.isNotEmpty()) {
-                        if (showThinking) {
-                            ThinkingText(markdown = merged)
-                        } else {
-                            ThinkingLabel(
-                                // Active only while this run is the message's
-                                // growing tail: nothing renderable follows it.
-                                active = isStreaming && message.content.drop(index).none {
-                                    it is ToolCall ||
-                                        (it is TextContent && it.text.isNotBlank())
-                                },
-                                // usage.reasoning is message-level: only the
-                                // first collapsed run shows it, later runs
-                                // stay uncounted.
-                                tokens = if (seenThinking) 0 else message.usage.reasoning
-                            )
-                        }
-                    }
-                    seenThinking = true
-                }
 
-                else -> index++
+                    is ThinkingContent -> {
+                        val runStart = index
+                        while (index < message.content.size &&
+                            message.content[index] is ThinkingContent
+                        ) {
+                            index++
+                        }
+                        val merged = message.content.subList(runStart, index)
+                            .filterIsInstance<ThinkingContent>()
+                            .joinToString("\n\n") { it.thinking }
+                            .trim()
+                        if (merged.isNotEmpty()) {
+                            if (showThinking) {
+                                ThinkingText(markdown = merged)
+                            } else {
+                                ThinkingLabel(
+                                    // Active only while this run is the message's
+                                    // growing tail: nothing renderable follows it.
+                                    active = isStreaming && message.content.drop(index).none {
+                                        it is ToolCall ||
+                                            (it is TextContent && it.text.isNotBlank())
+                                    },
+                                    // usage.reasoning is message-level: only the
+                                    // first collapsed run shows it, later runs
+                                    // stay uncounted.
+                                    tokens = if (seenThinking) 0 else message.usage.reasoning
+                                )
+                            }
+                        }
+                        seenThinking = true
+                    }
+
+                    else -> index++
+                }
             }
-        }
-        message.errorMessage?.let { error ->
-            Text(
-                text = error,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error
-            )
+            message.errorMessage?.let { error ->
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
         }
     }
 }
