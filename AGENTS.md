@@ -99,6 +99,16 @@ arguments and results. Secret form values remain ephemeral, secret-bearing
 types must redact their string representations, and persisted credentials stay
 behind the Android Keystore-backed boundary.
 
+## Logging
+
+`packages/` stays quiet like pi: failures surface through typed errors and
+flows, and the app layer logs them. App code logs through slf4j only; debug
+builds bind it to `android.util.Log` with a tag per class, release builds
+log warn and above. Lifecycle transitions log at info, recoverable
+degradation at warn, surfaced failures at error. Never log credentials,
+message text, model responses, or tool arguments and results; log host ids,
+not host addresses.
+
 ## Check
 
 Pathfinder is in early alpha. Do not add regression tests unless explicitly
