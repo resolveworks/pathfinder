@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -27,6 +28,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -212,10 +214,11 @@ internal fun ProviderAuthContent(
 }
 
 /**
- * The provider's page: with a stored credential, the signed-in state and
- * its single leave action (pi's /logout); otherwise the provider's login
- * methods (pi's /login method selection) — an API-key method opens the
- * credential form ([ProviderApiKeyNavKey]), any other begins its login
+ * The provider's page: with a stored credential, the signed-in state (its
+ * model-scope curator — the leave action, pi's /logout, lives in the top
+ * bar as [ProviderLeaveAction]); otherwise the provider's login methods
+ * (pi's /login method selection) — an API-key method opens the credential
+ * form ([ProviderApiKeyNavKey]), any other begins its login
  * ([ProviderLoginNavKey]). The page follows the credential, so saving or
  * signing out swaps its content in place.
  */
@@ -223,7 +226,6 @@ internal fun ProviderAuthContent(
 internal fun ProviderAuthScreen(
     provider: ProviderOption,
     methods: List<AuthMethodInfo>,
-    onRemove: () -> Unit,
     onOpenApiKeyForm: () -> Unit,
     onBeginLogin: (method: AuthMethodInfo) -> Unit,
     modelOptions: List<ModelOption> = emptyList(),
@@ -234,7 +236,6 @@ internal fun ProviderAuthScreen(
     if (provider.configured) {
         StoredProviderContent(
             provider = provider,
-            onRemove = onRemove,
             modelOptions = modelOptions,
             enabledModels = enabledModels,
             onToggleModelScope = onToggleModelScope
@@ -272,28 +273,23 @@ internal fun ProviderAuthScreen(
 }
 
 /**
- * The signed-in state: no login options, only the leave action. Sign-out
- * labels the stored credential kind ("Log out" for accounts, "Forget
- * provider" for API keys); once the credential is gone the surrounding
- * page flips back to its login surfaces.
+ * The signed-in state's body: the model-scope curator, nothing else — the
+ * leave action lives in the top bar ([ProviderLeaveAction]); once the
+ * credential is gone the surrounding page flips back to its login
+ * surfaces.
  *
- * The model-scope curator lives here because [modelOptions] covers
- * configured providers only: the list vanishes with the credential and
- * never renders for search providers (no chat models).
+ * The curator lives here because [modelOptions] covers configured
+ * providers only: the list vanishes with the credential and never renders
+ * for search providers (no chat models).
  */
 @Composable
 internal fun StoredProviderContent(
     provider: ProviderOption,
-    onRemove: () -> Unit,
     modelOptions: List<ModelOption> = emptyList(),
     enabledModels: List<String>? = null,
     onToggleModelScope: (providerId: String, modelId: String, checked: Boolean) -> Unit =
         { _, _, _ -> }
 ) {
-    var confirmRemove by remember { mutableStateOf(false) }
-    val isAccount = provider.authType == AuthType.OAUTH
-    val removeLabel =
-        if (isAccount) R.string.action_sign_out else R.string.action_remove_provider
     val models = modelOptions.filter { it.providerId == provider.id }
 
     Column(
@@ -326,16 +322,28 @@ internal fun StoredProviderContent(
                 }
             }
         }
+    }
+}
 
-        Button(
-            onClick = { confirmRemove = true },
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer
-            )
-        ) {
-            Text(stringResource(removeLabel))
-        }
+/**
+ * The stored credential's single leave action (pi's /logout), carried by
+ * the top bar beside the provider's own name. It labels the stored
+ * credential kind ("Log out" for accounts, "Forget provider" for API
+ * keys) and confirms before removing; the page below follows the
+ * credential and swaps back to its login surfaces.
+ */
+@Composable
+internal fun ProviderLeaveAction(provider: ProviderOption, onRemove: () -> Unit) {
+    var confirmRemove by remember { mutableStateOf(false) }
+    val isAccount = provider.authType == AuthType.OAUTH
+    val removeLabel =
+        if (isAccount) R.string.action_sign_out else R.string.action_remove_provider
+
+    IconButton(onClick = { confirmRemove = true }) {
+        Icon(
+            Icons.AutoMirrored.Filled.ExitToApp,
+            contentDescription = stringResource(removeLabel)
+        )
     }
 
     if (confirmRemove) {

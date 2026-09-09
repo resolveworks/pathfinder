@@ -301,6 +301,17 @@ fun ChatScreen(
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
     val topKey = backStack.lastOrNull() ?: ChatNavKey
+    // The provider-family destination's option (chat or search provider),
+    // resolved once for the top bar: its name is the title, and once a
+    // credential is stored the bar carries the leave action beside it.
+    val topProviderOption = when (topKey) {
+        is SearchProviderAuthNavKey ->
+            uiState.searchProviderOptions.firstOrNull { it.id == topKey.providerId }
+
+        else -> providerNavKeyId(topKey)?.let { providerId ->
+            uiState.providerOptions.firstOrNull { it.id == providerId }
+        }
+    }
     val chatRoot = topKey == ChatNavKey && uiState.status == ChatStatus.Ready
     val openDrawer: () -> Unit = { scope.launch { drawerState.open() } }
 
@@ -340,8 +351,35 @@ fun ChatScreen(
             topBar = {
                 if (uiState.status != ChatStatus.Loading) {
                     val canPop = backStack.size > 1
+                    // A configured provider carries its leave action in the
+                    // bar, beside its name; the page itself keeps only its
+                    // content surfaces.
+                    val topBarActions: @Composable RowScope.() -> Unit =
+                        if (chatRoot) {
+                            {
+                                ConversationViewToggle(
+                                    view = conversationView,
+                                    onViewChange = onConversationViewChange
+                                )
+                            }
+                        } else if (topProviderOption?.configured == true) {
+                            {
+                                ProviderLeaveAction(
+                                    provider = topProviderOption,
+                                    onRemove = {
+                                        if (topKey is SearchProviderAuthNavKey) {
+                                            onRemoveSearchProviderCredential(topProviderOption.id)
+                                        } else {
+                                            onRemoveProviderCredential(topProviderOption.id)
+                                        }
+                                    }
+                                )
+                            }
+                        } else {
+                            {}
+                        }
                     ChatTopBar(
-                        title = when (topKey) {
+                        title = topProviderOption?.name ?: when (topKey) {
                             SettingsNavKey -> stringResource(R.string.settings_title)
 
                             DefaultModelNavKey -> stringResource(R.string.settings_default_model)
@@ -365,16 +403,9 @@ fun ChatScreen(
                             )
 
                             is SearchProviderAuthNavKey ->
-                                uiState.searchProviderOptions
-                                    .firstOrNull { it.id == topKey.providerId }?.name
-                                    ?: stringResource(R.string.search_providers_title)
+                                stringResource(R.string.search_providers_title)
 
-                            else -> providerNavKeyId(topKey)
-                                ?.let { providerId ->
-                                    uiState.providerOptions
-                                        .firstOrNull { it.id == providerId }?.name
-                                }
-                                ?: stringResource(R.string.session_title)
+                            else -> stringResource(R.string.session_title)
                         },
                         // The drawer belongs to the Chat root (on both its
                         // views); nested destinations navigate up instead. A
@@ -382,16 +413,7 @@ fun ChatScreen(
                         // arrow.
                         onOpenDrawer = if (chatRoot) openDrawer else null,
                         onBack = if (canPop) popBackStack else null,
-                        actions = if (chatRoot) {
-                            {
-                                ConversationViewToggle(
-                                    view = conversationView,
-                                    onViewChange = onConversationViewChange
-                                )
-                            }
-                        } else {
-                            {}
-                        }
+                        actions = topBarActions
                     )
                 }
             },
@@ -559,12 +581,7 @@ fun ChatScreen(
                                     // state once saved (env inputs are not
                                     // forwarded).
                                     if (option.configured) {
-                                        StoredProviderContent(
-                                            provider = option,
-                                            onRemove = {
-                                                onRemoveSearchProviderCredential(key.providerId)
-                                            }
-                                        )
+                                        StoredProviderContent(provider = option)
                                     } else {
                                         ProviderAuthContent(
                                             prompts = searchAuthPrompts(key.providerId),
@@ -589,7 +606,6 @@ fun ChatScreen(
                                         modelOptions = uiState.modelOptions,
                                         enabledModels = uiState.enabledModels,
                                         onToggleModelScope = onToggleModelScope,
-                                        onRemove = { onRemoveProviderCredential(key.providerId) },
                                         onOpenApiKeyForm = {
                                             pushProviderApiKeyForm(key.providerId)
                                         },
@@ -819,7 +835,13 @@ private fun ChatTopBar(
     actions: @Composable RowScope.() -> Unit = {}
 ) {
     TopAppBar(
-        title = { Text(title) },
+        title = {
+            Text(
+                title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
         navigationIcon = {
             when {
                 onOpenDrawer != null -> IconButton(onClick = onOpenDrawer) {
