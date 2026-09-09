@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -291,6 +292,16 @@ internal fun StoredProviderContent(
         { _, _, _ -> }
 ) {
     val models = modelOptions.filter { it.providerId == provider.id }
+    var query by rememberSaveable { mutableStateOf("") }
+    val trimmed = query.trim()
+    val visibleModels = if (trimmed.isEmpty()) {
+        models
+    } else {
+        models.filter { option ->
+            option.name.contains(trimmed, ignoreCase = true) ||
+                option.modelId.contains(trimmed, ignoreCase = true)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -300,25 +311,54 @@ internal fun StoredProviderContent(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         if (models.isNotEmpty()) {
-            Column {
-                models.forEach { option ->
-                    val checked = enabledModels?.contains(option.key) ?: true
-                    ListItem(
-                        headlineContent = { Text(option.name) },
-                        supportingContent = { Text(option.modelId) },
-                        trailingContent = {
-                            Checkbox(
-                                checked = checked,
-                                onCheckedChange = {
-                                    onToggleModelScope(option.providerId, option.modelId, it)
-                                }
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text(stringResource(R.string.search_hint)) },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = { query = "" }) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = stringResource(R.string.search_clear)
                             )
-                        },
-                        modifier = Modifier.clickable {
-                            onToggleModelScope(option.providerId, option.modelId, !checked)
                         }
-                    )
-                    HorizontalDivider()
+                    }
+                }
+            )
+            if (visibleModels.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.models_search_no_matches),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Column {
+                    visibleModels.forEach { option ->
+                        val checked = enabledModels?.contains(option.key) ?: true
+                        ListItem(
+                            headlineContent = { Text(option.name) },
+                            supportingContent = { Text(option.modelId) },
+                            trailingContent = {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = {
+                                        onToggleModelScope(
+                                            option.providerId,
+                                            option.modelId,
+                                            it
+                                        )
+                                    }
+                                )
+                            },
+                            modifier = Modifier.clickable {
+                                onToggleModelScope(option.providerId, option.modelId, !checked)
+                            }
+                        )
+                        HorizontalDivider()
+                    }
                 }
             }
         }

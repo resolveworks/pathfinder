@@ -743,7 +743,7 @@ private fun ChatDrawerContent(
                         IconButton(onClick = { onSessionSearchQueryChange("") }) {
                             Icon(
                                 Icons.Filled.Close,
-                                contentDescription = stringResource(R.string.session_search_clear)
+                                contentDescription = stringResource(R.string.search_clear)
                             )
                         }
                     }
