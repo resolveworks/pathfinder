@@ -39,7 +39,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -281,8 +280,7 @@ private fun UserMessageItem(message: UserMessage, modifier: Modifier = Modifier)
  * Assistant message: plain full-width markdown with no container, so it
  * reads like a reply rather than a bubble. With showThinking on, thinking
  * blocks render inline and stream as they arrive (pi's shown state); with
- * it off they collapse to [ThinkingLabel] (pi's hidden state, plus a
- * duration once the run completes). An error renders below the body in
+ * it off they collapse to [ThinkingLabel] (pi's hidden state). An error renders below the body in
  * error color. Content renders in order straight from the runtime message
  * (pi's AssistantMessageComponent does the same single pass): consecutive
  * thinking parts merge into one block, blank parts drop.
@@ -302,7 +300,6 @@ private fun AssistantMessageItem(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             var index = 0
-            var seenThinking = false
             while (index < message.content.size) {
                 val part = message.content[index]
                 when (part) {
@@ -334,15 +331,10 @@ private fun AssistantMessageItem(
                                     active = isStreaming && message.content.drop(index).none {
                                         it is ToolCall ||
                                             (it is TextContent && it.text.isNotBlank())
-                                    },
-                                    // usage.reasoning is message-level: only the
-                                    // first collapsed run shows it, later runs
-                                    // stay uncounted.
-                                    tokens = if (seenThinking) 0 else message.usage.reasoning
+                                    }
                                 )
                             }
                         }
-                        seenThinking = true
                     }
 
                     else -> index++
@@ -607,13 +599,12 @@ private fun ToolOutputSheet(call: ToolCall, result: ToolResultMessage, onDismiss
 
 /**
  * pi's hidden thinking state as a non-interactive label line: spinner on
- * the left while the run streams, the message's reported thinking-token
- * count once committed (plain "thought" when the provider reports none).
- * Same tone as the thinking text itself; showing thinking is the setting's
+ * the left while the run streams, a static label once committed. Same
+ * tone as the thinking text itself; showing thinking is the setting's
  * job, never a per-block interaction.
  */
 @Composable
-private fun ThinkingLabel(active: Boolean, tokens: Int) {
+private fun ThinkingLabel(active: Boolean) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -627,10 +618,10 @@ private fun ThinkingLabel(active: Boolean, tokens: Int) {
             )
         }
         Text(
-            text = when {
-                active -> stringResource(R.string.thinking_label)
-                tokens > 0 -> pluralStringResource(R.plurals.thought_tokens, tokens, tokens)
-                else -> stringResource(R.string.thought_label)
+            text = if (active) {
+                stringResource(R.string.thinking_label)
+            } else {
+                stringResource(R.string.thought_label)
             },
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.outline
