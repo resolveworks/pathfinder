@@ -2,7 +2,6 @@ package works.resolve.pathfinder.ssh
 
 import org.connectbot.sshlib.AuthResult
 import org.connectbot.sshlib.ConnectResult
-import org.connectbot.sshlib.SftpResult
 import org.connectbot.sshlib.SshClient
 import org.connectbot.sshlib.SshClientConfig
 
@@ -12,34 +11,27 @@ class SshConnectionException(message: String, val detail: Detail) : Exception(me
 }
 
 /**
- * One authenticated SSH connection, owned by exactly one session. The holder
- * must call [close] (once the session ends) — cbssh exposes no pooling or
- * reconnect, and the underlying [client] must not be shared.
+ * One authenticated SSH connection. The holder must call [close] when
+ * done — cbssh exposes no pooling or reconnect.
  */
-class SshConnection
-internal constructor(
-    val host: SshHost,
-    val client: SshClient,
-    /** Remote working directory at connect time (`sftp.realpath(".")`). */
-    val initialWorkingDirectory: String
-) {
+class SshConnection internal constructor(val host: SshHost, val client: SshClient) {
     suspend fun close() {
         client.disconnect()
     }
 }
 
 /**
- * Establishes per-session SSH connections from stored host configs.
- * Publickey is the only authentication ever wired: no password or
- * keyboard-interactive path exists here.
+ * Establishes SSH connections from stored host configs. Publickey is the
+ * only authentication ever wired: no password or keyboard-interactive path
+ * exists here.
  */
 class SshConnectionHelper(private val store: SshHostStore) {
 
     /**
-     * Connects to [hostId], authenticates with the host's stored key, and
-     * resolves the initial remote working directory. The unknown-host decision
-     * is delegated to [onUnknownHostKey] (fail-closed by default). On any
-     * failure the client is disconnected and nothing is returned.
+     * Connects to [hostId] and authenticates with the host's stored key.
+     * The unknown-host decision is delegated to [onUnknownHostKey]
+     * (fail-closed by default). On any failure the client is disconnected
+     * and nothing is returned.
      */
     suspend fun connect(
         hostId: String,
@@ -101,41 +93,10 @@ class SshConnectionHelper(private val store: SshHostStore) {
                     )
             }
 
-            val cwd = resolveWorkingDirectory(client, host)
-            return SshConnection(host = host, client = client, initialWorkingDirectory = cwd)
+            return SshConnection(host = host, client = client)
         } catch (error: Exception) {
             client.disconnect()
             throw error
-        }
-    }
-
-    private suspend fun resolveWorkingDirectory(client: SshClient, host: SshHost): String {
-        val sftp =
-            when (val result = client.openSftp()) {
-                is SftpResult.Success -> result.value
-
-                is SftpResult.IoError ->
-                    throw SshConnectionException(
-                        "SFTP error: ${result.cause.message}",
-                        SshConnectionException.Detail.SFTP
-                    )
-
-                else ->
-                    throw SshConnectionException(
-                        "Server does not provide SFTP",
-                        SshConnectionException.Detail.SFTP
-                    )
-            }
-        sftp.use {
-            return when (val path = it.realpath(".")) {
-                is SftpResult.Success -> path.value
-
-                else ->
-                    throw SshConnectionException(
-                        "Could not resolve remote working directory",
-                        SshConnectionException.Detail.SFTP
-                    )
-            }
         }
     }
 }

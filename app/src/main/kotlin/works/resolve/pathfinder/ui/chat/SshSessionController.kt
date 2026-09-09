@@ -18,9 +18,9 @@ import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
 
 /**
  * The SSH session-connection lifecycle: the session↔host mapping (bind,
- * rollback, host-deletion cascade), the TOFU prompt context and answers,
- * connection close at session replacement, and the safe message mapping
- * for a failed connect.
+ * rollback, host-deletion cascade), TOFU prompt answers, connection close
+ * at session replacement, and the safe message mapping for a failed
+ * connect.
  */
 internal class SshSessionController(
     private val scope: CoroutineScope,
@@ -68,7 +68,7 @@ internal class SshSessionController(
     val hostTest: StateFlow<HostTestState?> = _hostTest.asStateFlow()
 
     /**
-     * Dials [hostId] exactly like a session connect (TOFU prompt included),
+     * Dials [hostId] exactly like a tool-call connect (TOFU prompt included),
      * closes the connection right away, and publishes progress plus a safe
      * result. One test at a time; taps while running are ignored.
      */
@@ -77,8 +77,14 @@ internal class SshSessionController(
         scope.launch {
             _hostTest.value = HostTestState(hostId = hostId, running = true)
             _hostTest.value = try {
-                val connection = withHostConnectContext(hostId) {
-                    connectionHelper.connect(hostId, hostKeyConfirmer)
+                val host =
+                    hostStore.host(hostId)
+                        ?: throw SshConnectionException(
+                            "Unknown SSH host",
+                            SshConnectionException.Detail.UNKNOWN_HOST
+                        )
+                val connection = connectionHelper.connect(hostId) { fingerprint, keyType ->
+                    hostKeyConfirmer.confirm(host, fingerprint, keyType)
                 }
                 try {
                     connection.close()
@@ -93,7 +99,7 @@ internal class SshSessionController(
                     success = true,
                     message = UiString(
                         R.string.ssh_host_test_success,
-                        listOf(connection.initialWorkingDirectory)
+                        listOf(host.cwd)
                     )
                 )
             } catch (e: CancellationException) {
@@ -114,32 +120,6 @@ internal class SshSessionController(
                     } ?: UiString(R.string.ssh_error_connect_generic)
                 )
             }
-        }
-    }
-
-    /**
-     * Runs [block] with the TOFU prompt's session context set, so the
-     * prompt names the host the factory is about to dial.
-     */
-    suspend fun <T> withConnectContext(sessionId: String, block: suspend () -> T): T {
-        hostKeyConfirmer.setSessionContext(sessionId)
-        try {
-            return block()
-        } finally {
-            hostKeyConfirmer.setSessionContext(null)
-        }
-    }
-
-    /**
-     * Runs [block] with the TOFU prompt's host context set, for connects
-     * that have no session (the host form's connection test).
-     */
-    private suspend fun <T> withHostConnectContext(hostId: String, block: suspend () -> T): T {
-        hostKeyConfirmer.setHostContext(hostId)
-        try {
-            return block()
-        } finally {
-            hostKeyConfirmer.setHostContext(null)
         }
     }
 
