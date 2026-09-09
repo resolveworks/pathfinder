@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ssh
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.slf4j.LoggerFactory
 
 /**
  * Live per-session SSH connections: one connection per session, owned by the
@@ -12,6 +13,10 @@ import kotlinx.coroutines.sync.withLock
  */
 class SshSessionConnections {
 
+    private companion object {
+        private val logger = LoggerFactory.getLogger(SshSessionConnections::class.java)
+    }
+
     private val mutex = Mutex()
     private val connections = mutableMapOf<String, SshConnection>()
 
@@ -21,13 +26,17 @@ class SshSessionConnections {
      */
     suspend fun register(sessionId: String, connection: SshConnection): SshConnection =
         mutex.withLock {
-            connections.remove(sessionId)?.close()
+            connections.remove(sessionId)?.let {
+                logger.info("closing replaced connection for session {}", sessionId)
+                it.close()
+            }
             connections[sessionId] = connection
             connection
         }
 
     suspend fun close(sessionId: String) {
         val connection = mutex.withLock { connections.remove(sessionId) } ?: return
+        logger.info("closing connection for session {}", sessionId)
         connection.close()
     }
 }

@@ -1,12 +1,12 @@
 package works.resolve.pathfinder.ui.chat
 
-import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.slf4j.LoggerFactory
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ssh.HostKeyRequest
 import works.resolve.pathfinder.ssh.SshConnectionException
@@ -105,7 +105,7 @@ internal class SshSessionController(
                     message = connectionErrorForHost(e, hostId)
                 )
             } catch (e: Exception) {
-                Log.w(TAG, "ssh_host_test", e)
+                logger.warn("ssh_host_test", e)
                 HostTestState(
                     hostId = hostId,
                     running = false,
@@ -160,8 +160,9 @@ internal class SshSessionController(
     private suspend fun hostLabel(hostId: String?): String? =
         hostId?.let { hostStore.host(it) }?.let { "${it.username}@${it.address}" }
 
-    private fun connectionError(error: SshConnectionException, label: String?): UiString =
-        when (error.detail) {
+    private fun connectionError(error: SshConnectionException, label: String?): UiString {
+        logger.warn("ssh_connection_failed: {}", error.detail, error)
+        return when (error.detail) {
             SshConnectionException.Detail.HOST_KEY_REJECTED ->
                 if (label != null) {
                     UiString(R.string.ssh_error_host_key_changed, listOf(label))
@@ -195,8 +196,9 @@ internal class SshSessionController(
 
             SshConnectionException.Detail.NO_KEY -> UiString(R.string.ssh_error_no_key)
         }
+    }
 
     private companion object {
-        private const val TAG = "Pathfinder"
+        private val logger = LoggerFactory.getLogger(SshSessionController::class.java)
     }
 }
