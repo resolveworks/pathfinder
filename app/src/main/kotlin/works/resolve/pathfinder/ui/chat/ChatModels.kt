@@ -36,7 +36,12 @@ sealed interface TranscriptRow {
 
     data class Compacted(override val id: String) : TranscriptRow
 
-    data class Chat(override val id: String, val message: Message) : TranscriptRow
+    data class Chat(
+        override val id: String,
+        val message: Message,
+        /** Assistant markdown pre-parsed by the projection; empty for other roles. */
+        val blocks: List<MarkdownBlock> = emptyList()
+    ) : TranscriptRow
 
     /**
      * One tool execution, like pi's per-call execution component: the row
@@ -213,6 +218,12 @@ data class ChatUiState(
     val messages: List<TranscriptRow> = emptyList(),
     /** In-flight partial; role-generic in pi, assistant-only here (non-assistant partials render nothing). */
     val streamingMessage: AssistantMessage? = null,
+    /**
+     * Pre-parsed blocks of [streamingMessage]'s committed prefix (every
+     * part but the growing tail), held across token updates so a part
+     * finalizing never blanks what already renders.
+     */
+    val streamingBlocks: List<MarkdownBlock> = emptyList(),
     /** Live partial output by tool call id (bash streaming); cleared when the result commits. */
     val toolPartials: Map<String, String> = emptyMap(),
     val draft: String = "",

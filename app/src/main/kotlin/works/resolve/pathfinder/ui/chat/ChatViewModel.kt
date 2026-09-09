@@ -3,7 +3,9 @@ package works.resolve.pathfinder.ui.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -14,6 +16,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.agent.AgentEvent
@@ -89,7 +92,9 @@ class ChatViewModel(
     /** Interactive TOFU host-key decisions; surfaced through the pending-host-key prompt. */
     private val hostKeyConfirmer: TofuHostKeyConfirmer,
     /** Process-wide SSH connections; the hosts controller tests dials and host deletion evicts. */
-    private val sshConnectionProvider: SshConnectionProvider
+    private val sshConnectionProvider: SshConnectionProvider,
+    /** Where bulk transcript parses run; the test harness keeps them on virtual time. */
+    private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -205,6 +210,12 @@ class ChatViewModel(
 
     /** Agent model instance behind the latest [ChatUiState.selectedModel] projection. */
     private var observedAgentModel: Model? = null
+
+    /** Transcript parse cache (see [TranscriptMarkdown]). */
+    private val transcriptMarkdown = TranscriptMarkdown()
+
+    /** Part count of the latest projected [ChatUiState.streamingMessage]; null while none. */
+    private var observedStreamingContentSize: Int? = null
 
     /**
      * Unsent input per session, synced only at [activateSession] boundaries:
@@ -467,20 +478,25 @@ class ChatViewModel(
             val manager = session.sessionManager
             // The manager is a live view, so these read the post-navigation
             // state; navigation requires an idle loop, so nothing mutates
-            // between them.
+            // between them and the publish below. The branch's parses
+            // prefetch off the main thread, like session activation.
             //
             // Navigation never changes the running model: pi's navigateTree
             // rebuilds only the transcript. A branch's folded model re-applies
             // at the next session load, not on navigation.
+            val rows = withContext(defaultDispatcher) {
+                projectCommitted(
+                    session.agent.state.value.messages,
+                    manager.getBranch(),
+                    transcriptMarkdown::parse
+                )
+            }
             _uiState.update {
                 it.copy(
                     // A typed draft is never clobbered by navigation; the
                     // re-edit text lands only in an empty draft.
                     draft = if (it.draft.isBlank()) result.editorText ?: it.draft else it.draft,
-                    messages = projectCommitted(
-                        session.agent.state.value.messages,
-                        manager.getBranch()
-                    ),
+                    messages = rows,
                     treeRows = buildTreeRows(
                         manager.getTree(),
                         manager.getLeafId(),
@@ -688,6 +704,18 @@ class ChatViewModel(
             }
         }
         val draft = sessionDrafts[manager.getSessionId()].orEmpty()
+        // Prefetch the incoming conversation's parses off the main thread
+        // (dropping the outgoing session's cache) before anything binds, so
+        // the first Ready frame renders fully. This suspension stays ahead
+        // of the binding, keeping the no-suspend window below intact.
+        transcriptMarkdown.clear()
+        withContext(defaultDispatcher) {
+            projectCommitted(
+                agent.state.value.messages,
+                conversation.getBranch(),
+                transcriptMarkdown::parse
+            )
+        }
         // Do not suspend between binding and publishing the session id:
         // collection can start immediately, and a frame must never render
         // incoming messages with the outgoing session's scroll state.
@@ -699,9 +727,11 @@ class ChatViewModel(
                 navigationEpoch = it.navigationEpoch + 1,
                 messages = projectCommitted(
                     agent.state.value.messages,
-                    conversation.getBranch()
+                    conversation.getBranch(),
+                    transcriptMarkdown::parse
                 ),
                 streamingMessage = null,
+                streamingBlocks = emptyList(),
                 toolPartials = emptyMap(),
                 treeRows = buildTreeRows(
                     conversation.getTree(),
@@ -777,6 +807,7 @@ class ChatViewModel(
         agent = newAgent
         observedAgentMessages = null
         observedAgentModel = null
+        observedStreamingContentSize = null
         agentStateJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
             newAgent.state.collect { state -> onAgentState(state) }
         }
@@ -845,6 +876,7 @@ class ChatViewModel(
                     it.copy(
                         messages = projectCommittedAfterSessionMessageEnd(),
                         streamingMessage = null,
+                        streamingBlocks = emptyList(),
                         treeRows = treeRows(it.treeFilter)
                     )
                 }
@@ -875,7 +907,8 @@ class ChatViewModel(
      */
     private fun projectCommittedAfterSessionMessageEnd(): List<TranscriptRow> = projectCommitted(
         agent?.state?.value?.messages.orEmpty(),
-        activeSession?.getBranch().orEmpty()
+        activeSession?.getBranch().orEmpty(),
+        transcriptMarkdown::parse
     )
 
     private fun onAgentState(state: AgentState) {
@@ -886,7 +919,11 @@ class ChatViewModel(
         val committedProjection = if (state.messages === observedAgentMessages) {
             null
         } else {
-            projectCommitted(state.messages, activeSession?.getBranch().orEmpty())
+            projectCommitted(
+                state.messages,
+                activeSession?.getBranch().orEmpty(),
+                transcriptMarkdown::parse
+            )
         }
         observedAgentMessages = state.messages
         // Same reference-stability trick for the model chip: the model
@@ -898,6 +935,21 @@ class ChatViewModel(
             modelSettings.modelOption(state.model)
         }
         observedAgentModel = state.model
+        val streaming = state.streamingMessage as? AssistantMessage
+        // A part boundary (a new tail part starting) finalizes the previous
+        // tail; its blocks must exist before publication so the row never
+        // blanks at the handoff. Between boundaries only the tail text
+        // grows, so the committed blocks are retained.
+        val streamingBlocks = if (streaming != null &&
+            streaming.content.size != observedStreamingContentSize
+        ) {
+            val tail = growingTailIndex(streaming.content)
+            val committed = if (tail >= 0) streaming.content.subList(0, tail) else streaming.content
+            buildMarkdownBlocks(committed, transcriptMarkdown::parse)
+        } else {
+            null
+        }
+        observedStreamingContentSize = streaming?.content?.size
         _uiState.update {
             it.copy(
                 messages = committedProjection ?: it.messages,
@@ -908,8 +960,8 @@ class ChatViewModel(
                 // until the MessageEnd handler lands the committed row, keeping
                 // the streaming→committed handoff inside a single uiState
                 // update instead of blinking out across the persistence write.
-                streamingMessage = state.streamingMessage as? AssistantMessage
-                    ?: it.streamingMessage,
+                streamingMessage = streaming ?: it.streamingMessage,
+                streamingBlocks = streamingBlocks ?: it.streamingBlocks,
                 isStreaming = state.isStreaming,
                 thinkingLevel = state.thinkingLevel,
                 availableThinkingLevels = getSupportedThinkingLevels(state.model)

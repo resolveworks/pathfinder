@@ -45,6 +45,8 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
+import com.mikepenz.markdown.model.State
+import com.mikepenz.markdown.model.parseMarkdown
 import com.mikepenz.markdown.model.rememberStreamingMarkdownState
 import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.R
@@ -97,6 +99,7 @@ internal fun ConversationContent(
     val isStreaming = uiState.isStreaming
     val showThinking = uiState.showThinking
     val toolPartials = uiState.toolPartials
+    val streamingBlocks = uiState.streamingBlocks
 
     Box(modifier = modifier.fillMaxSize()) {
         if (messageCount == 0 && uiState.streamingMessage == null) {
@@ -131,6 +134,7 @@ internal fun ConversationContent(
 
                         is AssistantMessage -> AssistantMessageItem(
                             message = message,
+                            blocks = row.blocks,
                             showThinking = showThinking
                         )
 
@@ -161,7 +165,8 @@ internal fun ConversationContent(
                             )
                         },
                         isStreaming = true,
-                        showThinking = showThinking
+                        showThinking = showThinking,
+                        blocks = streamingBlocks
                     )
                 }
             }
@@ -209,12 +214,7 @@ internal fun TranscriptRow.hasRenderableContent(): Boolean = when (this) {
     is TranscriptRow.Tool -> true
 
     is TranscriptRow.Chat -> when (val message = this.message) {
-        is AssistantMessage ->
-            message.errorMessage != null ||
-                message.content.any {
-                    (it is TextContent && it.text.isNotBlank()) || it is ThinkingContent
-                }
-
+        is AssistantMessage -> message.errorMessage != null || blocks.isNotEmpty()
         else -> true
     }
 }
@@ -252,19 +252,20 @@ private fun UserMessageItem(message: UserMessage, modifier: Modifier = Modifier)
 
 /**
  * Assistant message: plain full-width markdown with no container, so it
- * reads like a reply rather than a bubble. With showThinking on, thinking
- * blocks render inline and stream as they arrive (pi's shown state); with
- * it off they collapse to [ThinkingLabel] (pi's hidden state). An error renders below the body in
- * error color. Content renders in order straight from the runtime message
- * (pi's AssistantMessageComponent does the same single pass): consecutive
- * thinking parts merge into one block, blank parts drop. While streaming,
- * the final text/thinking part is the only growing one; it renders through
- * the renderer's append-only streaming state (re-parsing just the unstable
- * tail), everything before it is final.
+ * reads like a reply rather than a bubble. Blocks arrive pre-parsed from
+ * the projection (see [TranscriptMarkdown]) and render in order (pi's
+ * AssistantMessageComponent does the same single pass). With showThinking
+ * on, thinking blocks render inline (pi's shown state); with it off they
+ * collapse to [ThinkingLabel] (pi's hidden state). An error renders below
+ * the body in error color. While streaming, the final text/thinking part
+ * is the only growing one; it renders through the renderer's append-only
+ * streaming state (re-parsing just the unstable tail), everything before
+ * it is final.
  */
 @Composable
 private fun AssistantMessageItem(
     message: AssistantMessage,
+    blocks: List<MarkdownBlock>,
     showThinking: Boolean,
     modifier: Modifier = Modifier,
     isStreaming: Boolean = false
@@ -276,67 +277,41 @@ private fun AssistantMessageItem(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Content parts are append-only and grow in place, so the last
-            // text/thinking part is the streaming tail; its index is a
-            // stable identity for the per-part streaming state.
-            val tail = message.content.lastOrNull()
-            val tailIndex = if (isStreaming && (tail is TextContent || tail is ThinkingContent)) {
-                message.content.lastIndex
-            } else {
-                -1
-            }
-            val committed =
-                if (tailIndex >= 0) message.content.subList(0, tailIndex) else message.content
-            var index = 0
-            while (index < committed.size) {
-                val part = committed[index]
-                when (part) {
-                    is TextContent -> {
-                        part.text.takeIf { it.isNotBlank() }?.let {
-                            Markdown(content = it, modifier = Modifier.fillMaxWidth())
-                        }
-                        index++
-                    }
+            blocks.forEach { block ->
+                when (block) {
+                    is MarkdownBlock.Text -> Markdown(
+                        state = block.state,
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
-                    is ThinkingContent -> {
-                        val runStart = index
-                        while (index < committed.size &&
-                            committed[index] is ThinkingContent
-                        ) {
-                            index++
-                        }
-                        val merged = committed.subList(runStart, index)
-                            .filterIsInstance<ThinkingContent>()
-                            .joinToString("\n\n") { it.thinking }
-                            .trim()
-                        if (merged.isNotEmpty()) {
-                            if (showThinking) {
-                                ThinkingText(markdown = merged)
-                            } else {
-                                ThinkingLabel(active = false)
-                            }
-                        }
+                    is MarkdownBlock.Thinking -> if (showThinking) {
+                        ThinkingText(block.state)
+                    } else {
+                        ThinkingLabel(active = false)
                     }
-
-                    else -> index++
                 }
             }
-            if (tailIndex >= 0 && tail != null) {
-                key(tailIndex) {
-                    when (tail) {
-                        is TextContent -> StreamingMarkdownBlock(
-                            text = tail.text,
-                            thinking = false
-                        )
+            if (isStreaming) {
+                // The tail part's index is a stable identity for the
+                // per-part streaming state.
+                val tailIndex = growingTailIndex(message.content)
+                if (tailIndex >= 0) {
+                    key(tailIndex) {
+                        when (val tail = message.content[tailIndex]) {
+                            is TextContent -> StreamingMarkdownBlock(
+                                text = tail.text,
+                                thinking = false
+                            )
 
-                        is ThinkingContent -> if (showThinking) {
-                            StreamingMarkdownBlock(text = tail.thinking, thinking = true)
-                        } else {
-                            ThinkingLabel(active = true)
+                            is ThinkingContent -> if (showThinking) {
+                                StreamingMarkdownBlock(text = tail.thinking, thinking = true)
+                            } else {
+                                ThinkingLabel(active = true)
+                            }
+
+                            // Unreachable: tailIndex is only set for text/thinking tails.
+                            else -> Unit
                         }
-
-                        // Unreachable: tailIndex is only set for text/thinking tails.
-                        else -> Unit
                     }
                 }
             }
@@ -662,9 +637,9 @@ private fun ThinkingLabel(active: Boolean) {
  * answer text in both theme variants.
  */
 @Composable
-private fun ThinkingText(markdown: String) {
+private fun ThinkingText(state: State) {
     Markdown(
-        content = markdown,
+        state = state,
         colors = markdownColor(text = MaterialTheme.colorScheme.outline),
         modifier = Modifier.fillMaxWidth()
     )
@@ -689,9 +664,8 @@ private fun ConversationContentThinkingPreview() {
             showThinking = true,
             messages = listOf(
                 TranscriptRow.Chat("m1", UserMessage.ofText("What is 2 + 2?")),
-                TranscriptRow.Chat(
-                    "m2",
-                    AssistantMessage(
+                run {
+                    val message = AssistantMessage(
                         content = listOf(
                             ThinkingContent(
                                 "The user asks a simple arithmetic question. *2 + 2* equals " +
@@ -707,7 +681,14 @@ private fun ConversationContentThinkingPreview() {
                         model = "preview",
                         usage = works.resolve.pathfinder.ai.Usage()
                     )
-                ),
+                    TranscriptRow.Chat(
+                        "m2",
+                        message,
+                        // Previews parse inline: inspection-mode rendering,
+                        // like the renderer's own preview defaults.
+                        buildMarkdownBlocks(message.content, ::parseMarkdown)
+                    )
+                },
                 TranscriptRow.Tool(
                     "m3:t1",
                     ToolCall(

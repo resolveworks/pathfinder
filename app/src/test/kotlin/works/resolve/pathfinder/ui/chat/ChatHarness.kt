@@ -229,7 +229,10 @@ internal class TestSessionSource(tmpFolder: TemporaryFolder) : SessionSource {
  * Models/resolver paths). The scripted [factory] and [rejectedModelIds]
  * are the only behavior fakes.
  */
-internal class ChatHarness(private val tmpFolder: TemporaryFolder, testDispatcher: TestDispatcher) {
+internal class ChatHarness(
+    private val tmpFolder: TemporaryFolder,
+    private val testDispatcher: TestDispatcher
+) {
     val viewModels = CopyOnWriteArrayList<ChatViewModel>()
 
     val credentials = FakeCredentialStore()
@@ -425,7 +428,8 @@ internal class ChatHarness(private val tmpFolder: TemporaryFolder, testDispatche
             sshConnectionHelper,
             hostKeyConfirmer
         ),
-        appForegroundGate = AppForegroundGate()
+        appForegroundGate = AppForegroundGate(),
+        defaultDispatcher = testDispatcher
     ).also { viewModels += it }
 
     fun assistant(text: String, stopReason: StopReason = StopReason.STOP, error: String? = null) =

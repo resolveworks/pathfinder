@@ -75,6 +75,7 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
+import com.mikepenz.markdown.model.parseMarkdown
 import kotlinx.coroutines.launch
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.AssistantMessage
@@ -1377,15 +1378,21 @@ private fun ChatScreenReadyStreamingPreview() {
             ),
             messages = listOf(
                 TranscriptRow.Chat("m1", UserMessage.ofText("Hello there")),
-                TranscriptRow.Chat(
-                    "m2",
-                    AssistantMessage(
+                run {
+                    val message = AssistantMessage(
                         content = listOf(TextContent("Hi! How can I help?")),
                         api = "preview",
                         provider = "preview",
                         model = "preview"
                     )
-                )
+                    TranscriptRow.Chat(
+                        "m2",
+                        message,
+                        // Previews parse inline: inspection-mode rendering,
+                        // like the renderer's own preview defaults.
+                        buildMarkdownBlocks(message.content, ::parseMarkdown)
+                    )
+                }
             ),
             streamingMessage = AssistantMessage(
                 content = listOf(TextContent("Sure, ")),

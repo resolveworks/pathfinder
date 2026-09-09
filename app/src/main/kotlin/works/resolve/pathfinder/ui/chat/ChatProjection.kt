@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
+import com.mikepenz.markdown.model.State
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.ToolCall
@@ -23,7 +24,8 @@ import works.resolve.pathfinder.codingagent.core.SessionEntry
  */
 internal fun projectCommitted(
     liveMessages: List<Message>,
-    pathEntries: List<SessionEntry>
+    pathEntries: List<SessionEntry>,
+    parse: (String) -> State
 ): List<TranscriptRow> {
     val live = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Message, Boolean>())
     live.addAll(liveMessages)
@@ -44,7 +46,12 @@ internal fun projectCommitted(
                 // Tool results render through their call's row below — a
                 // standalone row would double every settled execution.
                 if (message !is ToolResultMessage) {
-                    projected.add(TranscriptRow.Chat(entry.id, message))
+                    val blocks = if (message is AssistantMessage) {
+                        buildMarkdownBlocks(message.content, parse)
+                    } else {
+                        emptyList()
+                    }
+                    projected.add(TranscriptRow.Chat(entry.id, message, blocks))
                     if (message is AssistantMessage) {
                         for (part in message.content) {
                             if (part is ToolCall) {
