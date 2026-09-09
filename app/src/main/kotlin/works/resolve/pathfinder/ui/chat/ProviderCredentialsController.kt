@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.ui.chat
 
-import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -8,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.slf4j.LoggerFactory
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.auth.AuthEvent
@@ -163,7 +163,7 @@ internal class ProviderCredentialsController(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "provider_status", e)
+            logger.warn("provider_status", e)
             onError(UiString(R.string.error_credential_save), e)
             return
         }
@@ -179,7 +179,7 @@ internal class ProviderCredentialsController(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    Log.w(TAG, "available_models", e)
+                    logger.warn("available_models", e)
                     onError(UiString(R.string.error_credential_save), e)
                     return
                 }
@@ -242,6 +242,6 @@ internal class ProviderCredentialsController(
     )
 
     private companion object {
-        private const val TAG = "Pathfinder"
+        private val logger = LoggerFactory.getLogger(ProviderCredentialsController::class.java)
     }
 }

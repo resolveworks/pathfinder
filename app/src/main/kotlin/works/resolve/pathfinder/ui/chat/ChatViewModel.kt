@@ -1,6 +1,5 @@
 package works.resolve.pathfinder.ui.chat
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -15,6 +14,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.slf4j.LoggerFactory
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.AgentState
@@ -1115,7 +1115,7 @@ class ChatViewModel(
      * must be distinguishable from an actually-missing credential.
      */
     private fun recordDegradation(operation: String, cause: Throwable) {
-        Log.w(TAG, operation, cause)
+        logger.warn(operation, cause)
     }
 
     /**
@@ -1126,10 +1126,10 @@ class ChatViewModel(
      */
     private fun setError(message: UiString, cause: Throwable? = null) {
         _uiState.update { it.copy(error = message) }
-        Log.e(TAG, message.toString(), cause)
+        logger.error(message.toString(), cause)
     }
 
     private companion object {
-        private const val TAG = "Pathfinder"
+        private val logger = LoggerFactory.getLogger(ChatViewModel::class.java)
     }
 }

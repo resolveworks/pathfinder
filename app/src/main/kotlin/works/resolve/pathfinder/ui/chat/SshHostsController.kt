@@ -1,12 +1,12 @@
 package works.resolve.pathfinder.ui.chat
 
-import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import org.slf4j.LoggerFactory
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ssh.SshHost
 import works.resolve.pathfinder.ssh.SshHostStore
@@ -72,7 +72,7 @@ internal class SshHostsController(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "ssh_host_remove", e)
+                logger.warn("ssh_host_remove", e)
                 onError(UiString(R.string.error_ssh_host_remove), e)
             }
         }
@@ -82,6 +82,6 @@ internal class SshHostsController(
         address.isNotBlank() && username.isNotBlank() && port in 1..65535
 
     private companion object {
-        private const val TAG = "Pathfinder"
+        private val logger = LoggerFactory.getLogger(SshHostsController::class.java)
     }
 }
