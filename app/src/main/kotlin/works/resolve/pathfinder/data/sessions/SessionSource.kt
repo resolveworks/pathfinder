@@ -1,6 +1,7 @@
 package works.resolve.pathfinder.data.sessions
 
 import java.io.File
+import org.slf4j.LoggerFactory
 import works.resolve.pathfinder.codingagent.core.SessionError
 import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionInfo
@@ -35,9 +36,17 @@ class DirectorySessionSource(private val dir: File) : SessionSource {
     } catch (e: SessionError) {
         when (e.code) {
             SessionErrorCode.STORAGE -> throw e
-            else -> null
+
+            else -> {
+                logger.warn("session_open_skipped: file={}", file.name, e)
+                null
+            }
         }
     }
 
     override suspend fun list(): List<SessionInfo> = SessionManager.list(dir)
+
+    private companion object {
+        private val logger = LoggerFactory.getLogger(DirectorySessionSource::class.java)
+    }
 }
