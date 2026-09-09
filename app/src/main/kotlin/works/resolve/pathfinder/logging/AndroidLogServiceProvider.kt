@@ -46,9 +46,11 @@ private class AndroidLogLogger(name: String) : LegacyAbstractLogger() {
 
     override fun getFullyQualifiedCallerName(): String? = null
 
-    override fun isTraceEnabled(): Boolean = debugBuild
+    // Debug/trace stay off even in debug builds: cbssh logs full exec
+    // commands (tool arguments) at debug level.
+    override fun isTraceEnabled(): Boolean = false
 
-    override fun isDebugEnabled(): Boolean = debugBuild
+    override fun isDebugEnabled(): Boolean = false
 
     override fun isInfoEnabled(): Boolean = debugBuild
 
