@@ -111,6 +111,7 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         onToggleModelScope = viewModel::toggleModelScope,
         onSelectThinkingLevel = viewModel::selectThinkingLevel,
         onSetDefaultThinkingLevel = viewModel::setThinkingLevelDefault,
+        onSelectSshHost = viewModel::selectSshHost,
         onSaveProviderCredential = viewModel::saveProviderCredential,
         onRemoveProviderCredential = viewModel::removeProviderCredential,
         authPrompts = viewModel::providerAuthPrompts,
@@ -161,6 +162,7 @@ fun ChatScreen(
     onToggleModelScope: (providerId: String, modelId: String, checked: Boolean) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
     onSetDefaultThinkingLevel: (ModelThinkingLevel) -> Unit,
+    onSelectSshHost: (hostId: String) -> Unit,
     onSaveProviderCredential: (
         providerId: String,
         apiKeyInput: String,
@@ -416,6 +418,7 @@ fun ChatScreen(
                                             onStop = onStop,
                                             onSelectModel = onSelectModel,
                                             onSelectThinkingLevel = onSelectThinkingLevel,
+                                            onSelectSshHost = onSelectSshHost,
                                             scrollState = chatScrollState
                                         )
 
@@ -443,6 +446,7 @@ fun ChatScreen(
                                         onStop = onStop,
                                         onSelectModel = onSelectModel,
                                         onSelectThinkingLevel = onSelectThinkingLevel,
+                                        onSelectSshHost = onSelectSshHost,
                                         scrollState = chatScrollState
                                     )
                                 }
@@ -955,6 +959,17 @@ private val PREVIEW_AUTH_METHODS = listOf(
 
 private val PREVIEW_SELECTED_MODEL = PREVIEW_MODEL_OPTIONS.first()
 
+private val PREVIEW_SSH_HOSTS = listOf(
+    SshHost(
+        id = "h1",
+        address = "server.example",
+        port = 22,
+        username = "user",
+        cwd = "/home/user/project",
+        publicKeyLine = ""
+    )
+)
+
 @Composable
 private fun PreviewChatScreen(
     uiState: ChatUiState,
@@ -979,6 +994,7 @@ private fun PreviewChatScreen(
             onToggleModelScope = { _, _, _ -> },
             onSelectThinkingLevel = { },
             onSetDefaultThinkingLevel = { },
+            onSelectSshHost = { },
             onSaveProviderCredential = { _, _, _ -> },
             onRemoveProviderCredential = { },
             authPrompts = authPrompts,
@@ -1272,6 +1288,8 @@ private fun ChatScreenChatViewPreview() {
             status = ChatStatus.Ready,
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
+            sshHosts = PREVIEW_SSH_HOSTS,
+            selectedSshHost = PREVIEW_SSH_HOSTS.first(),
             activeSessionId = "s1",
             sessionSummaries = listOf(
                 SessionInfo(

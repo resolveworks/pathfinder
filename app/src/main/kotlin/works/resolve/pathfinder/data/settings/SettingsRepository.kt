@@ -22,6 +22,7 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) :
     private object Keys {
         val ACTIVE_SESSION_ID = stringPreferencesKey("active_session_id")
         val SHOW_THINKING = booleanPreferencesKey("show_thinking")
+        val SELECTED_SSH_HOST_ID = stringPreferencesKey("selected_ssh_host_id")
 
         /** Raw pi settings JSON; owned by `SettingsManager`, not typed here. */
         val SETTINGS_JSON = stringPreferencesKey("settings_json")
@@ -30,7 +31,9 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) :
     private val settings: Flow<AppSettings> = dataStore.data.map { prefs ->
         AppSettings(
             activeSessionId = prefs[Keys.ACTIVE_SESSION_ID]?.takeIf { it.isNotBlank() },
-            showThinking = prefs[Keys.SHOW_THINKING] ?: false
+            showThinking = prefs[Keys.SHOW_THINKING] ?: false,
+            selectedSshHostId =
+                prefs[Keys.SELECTED_SSH_HOST_ID]?.takeIf { it.isNotBlank() }
         )
     }
 
@@ -46,6 +49,16 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) :
 
     override suspend fun setShowThinking(showThinking: Boolean) {
         dataStore.edit { it[Keys.SHOW_THINKING] = showThinking }
+    }
+
+    override suspend fun setSelectedSshHostId(hostId: String?) {
+        dataStore.edit { prefs ->
+            if (hostId == null) {
+                prefs.remove(Keys.SELECTED_SSH_HOST_ID)
+            } else {
+                prefs[Keys.SELECTED_SSH_HOST_ID] = hostId
+            }
+        }
     }
 
     override suspend fun currentSettings(): AppSettings = settings.first()

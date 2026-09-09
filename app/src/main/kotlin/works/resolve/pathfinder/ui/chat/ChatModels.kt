@@ -176,6 +176,8 @@ data class ChatUiState(
     val searchProviderOptions: List<ProviderOption> = emptyList(),
     /** Configured SSH hosts (Settings ▸ SSH hosts), store-sorted. */
     val sshHosts: List<SshHost> = emptyList(),
+    /** The effective SSH host selection (see SshConnectionProvider.effectiveHostId), for display. */
+    val selectedSshHost: SshHost? = null,
     /**
      * Models of configured providers only, sorted by provider then model
      * name; the scope curator's universe.

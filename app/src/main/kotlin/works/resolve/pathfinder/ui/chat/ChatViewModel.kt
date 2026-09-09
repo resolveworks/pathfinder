@@ -94,6 +94,9 @@ class ChatViewModel(
 
     private val _uiState = MutableStateFlow(ChatUiState())
 
+    /** Mirror of the persisted SSH host selection; the provider applies it to tool dials. */
+    private val selectedSshHostId = MutableStateFlow<String?>(null)
+
     private val loginController = ProviderLoginController(
         scope = viewModelScope,
         authService = authService,
@@ -138,6 +141,14 @@ class ChatViewModel(
         ::setError
     )
 
+    /** The effective host for display, resolved like the provider's effectiveHostId. */
+    private val selectedSshHost =
+        combine(selectedSshHostId, sshHosts.hosts) { id, hosts ->
+            id?.let { selected -> hosts.firstOrNull { it.id == selected } }
+                ?: hosts.singleOrNull()
+                ?: hosts.firstOrNull()
+        }
+
     val uiState: StateFlow<ChatUiState> =
         combine(
             combine(
@@ -145,12 +156,13 @@ class ChatViewModel(
                 loginController.flow,
                 searchProviders.state,
                 sessionSearch.state,
-                sshHosts.hosts
-            ) { base, authFlow, searchProviders, sessionSearch, sshHosts ->
+                combine(sshHosts.hosts, selectedSshHost) { hosts, selected -> hosts to selected }
+            ) { base, authFlow, searchProviders, sessionSearch, (hosts, selectedHost) ->
                 base.copy(
                     authFlow = authFlow,
                     searchProviderOptions = searchProviders.options,
-                    sshHosts = sshHosts,
+                    sshHosts = hosts,
+                    selectedSshHost = selectedHost,
                     sessionSearchQuery = sessionSearch.query,
                     sessionSearchSort = sessionSearch.sort,
                     sessionSearchResults = sessionSearch.results
@@ -368,6 +380,26 @@ class ChatViewModel(
 
     // ---- SSH hosts (Settings ▸ SSH hosts) ----
 
+    /**
+     * Switches the process-wide SSH host selection. Not busy-rejected:
+     * like a model pick, it applies to the next tool call. A store failure
+     * surfaces a settings-save error while the in-memory selection keeps
+     * the picked host.
+     */
+    fun selectSshHost(hostId: String) {
+        selectedSshHostId.value = hostId
+        sshConnectionProvider.select(hostId)
+        viewModelScope.launch {
+            try {
+                settingsStore.setSelectedSshHostId(hostId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError(UiString(R.string.error_settings_save), e)
+            }
+        }
+    }
+
     /** Trusts the pending unknown-host-key request (TOFU first connect). */
     fun trustHostKey() = hostKeyConfirmer.answer(trust = true)
 
@@ -524,6 +556,8 @@ class ChatViewModel(
     private suspend fun initialize() {
         try {
             val appSettings = settingsStore.currentSettings()
+            selectedSshHostId.value = appSettings.selectedSshHostId
+            sshConnectionProvider.select(appSettings.selectedSshHostId)
             val runtime = settingsManager.getSettings()
             val summaries = try {
                 sessionSource.list()

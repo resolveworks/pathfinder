@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ssh.SshHost
 
 /**
  * The conversation transcript surface: messages plus the composer column.
@@ -57,6 +58,7 @@ internal fun ChatSurface(
     onStop: () -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
+    onSelectSshHost: (hostId: String) -> Unit,
     scrollState: TranscriptScrollState
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -93,7 +95,10 @@ internal fun ChatSurface(
                 thinkingLevel = uiState.thinkingLevel,
                 availableThinkingLevels = uiState.availableThinkingLevels,
                 defaultThinkingLevel = uiState.defaultThinkingLevel,
-                onSelectThinkingLevel = onSelectThinkingLevel
+                onSelectThinkingLevel = onSelectThinkingLevel,
+                sshHosts = uiState.sshHosts,
+                selectedSshHost = uiState.selectedSshHost,
+                onSelectSshHost = onSelectSshHost
             )
         }
     }
@@ -110,10 +115,14 @@ private fun SelectionBar(
     availableThinkingLevels: List<ModelThinkingLevel>,
     defaultThinkingLevel: ModelThinkingLevel?,
     onSelectThinkingLevel: (ModelThinkingLevel) -> Unit,
+    sshHosts: List<SshHost>,
+    selectedSshHost: SshHost?,
+    onSelectSshHost: (hostId: String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var sheetOpen by rememberSaveable { mutableStateOf(false) }
     var thinkingSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var hostSheetOpen by rememberSaveable { mutableStateOf(false) }
     // pi's footer condition `state.model?.reasoning`: a non-reasoning model's
     // only supported level is OFF, so >1 level means reasoning.
     val showThinkingChip = availableThinkingLevels.size > 1
@@ -164,6 +173,26 @@ private fun SelectionBar(
                 }
             )
         }
+        if (sshHosts.isNotEmpty()) {
+            Spacer(Modifier.width(8.dp))
+            AssistChip(
+                onClick = { hostSheetOpen = true },
+                label = {
+                    Text(
+                        text = "${selectedSshHost?.username}@${selectedSshHost?.address}",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                trailingIcon = {
+                    Icon(
+                        Icons.Default.ArrowDropDown,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            )
+        }
     }
     if (sheetOpen) {
         ModelPickerSheet(
@@ -187,6 +216,17 @@ private fun SelectionBar(
                 onSelectThinkingLevel(level)
             },
             onDismiss = { thinkingSheetOpen = false }
+        )
+    }
+    if (hostSheetOpen) {
+        HostPickerSheet(
+            hosts = sshHosts,
+            selectedHost = selectedSshHost,
+            onSelect = { host ->
+                hostSheetOpen = false
+                onSelectSshHost(host.id)
+            },
+            onDismiss = { hostSheetOpen = false }
         )
     }
 }
@@ -276,6 +316,50 @@ private fun ThinkingLevelPickerSheet(
                             null
                         },
                         modifier = Modifier.clickable { onSelect(level) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The SSH host picker sheet: one row per configured host, the effective selection checked. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HostPickerSheet(
+    hosts: List<SshHost>,
+    selectedHost: SshHost?,
+    onSelect: (SshHost) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .navigationBarsPadding()
+        ) {
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .heightIn(max = 480.dp)
+            ) {
+                items(hosts, key = SshHost::id) { host ->
+                    ListItem(
+                        headlineContent = { Text("${host.username}@${host.address}") },
+                        supportingContent = { Text(host.cwd) },
+                        trailingContent = if (host.id == selectedHost?.id) {
+                            {
+                                Icon(
+                                    Icons.Default.Check,
+                                    contentDescription = stringResource(R.string.model_selected),
+                                    tint = MaterialTheme.colorScheme.secondary
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        modifier = Modifier.clickable { onSelect(host) }
                     )
                 }
             }
