@@ -100,19 +100,21 @@ internal fun SshHostEditContent(
     hostTest: HostTestState?,
     onTestConnection: (hostId: String) -> Unit,
     onNewSession: (hostId: String) -> Unit,
-    onSave: (address: String, port: Int, username: String) -> Unit,
+    onSave: (address: String, port: Int, username: String, cwd: String) -> Unit,
     onRemove: () -> Unit,
     onClose: () -> Unit
 ) {
     var address by rememberSaveable(host?.id) { mutableStateOf(host?.address.orEmpty()) }
     var port by rememberSaveable(host?.id) { mutableStateOf(host?.port?.toString().orEmpty()) }
     var username by rememberSaveable(host?.id) { mutableStateOf(host?.username.orEmpty()) }
+    var cwd by rememberSaveable(host?.id) { mutableStateOf(host?.cwd.orEmpty()) }
     var confirmRemove by rememberSaveable { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
 
     val portNumber = port.trim().toIntOrNull()
     val valid = address.isNotBlank() &&
         username.isNotBlank() &&
+        cwd.trim().startsWith("/") &&
         portNumber != null && portNumber in 1..65535
 
     Column(
@@ -143,6 +145,16 @@ internal fun SshHostEditContent(
             value = username,
             onValueChange = { username = it },
             label = { Text(stringResource(R.string.ssh_host_username)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = cwd,
+            onValueChange = { cwd = it },
+            label = { Text(stringResource(R.string.ssh_host_cwd)) },
+            supportingText = {
+                Text(stringResource(R.string.ssh_host_cwd_hint))
+            },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -197,7 +209,7 @@ internal fun SshHostEditContent(
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = { onSave(address, portNumber ?: 0, username) },
+                onClick = { onSave(address, portNumber ?: 0, username, cwd) },
                 enabled = valid
             ) {
                 Text(stringResource(R.string.action_save))

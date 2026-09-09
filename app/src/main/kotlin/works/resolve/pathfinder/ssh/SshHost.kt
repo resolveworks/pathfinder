@@ -12,6 +12,7 @@ data class SshHost(
     val address: String,
     val port: Int,
     val username: String,
+    val cwd: String,
     val publicKeyLine: String
 )
 

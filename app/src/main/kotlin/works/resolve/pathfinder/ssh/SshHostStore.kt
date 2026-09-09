@@ -36,7 +36,7 @@ class SshHostStore(
      * is persisted before the config becomes visible, so a listed host always
      * has a usable key.
      */
-    suspend fun addHost(address: String, port: Int, username: String): SshHost {
+    suspend fun addHost(address: String, port: Int, username: String, cwd: String): SshHost {
         val id = UUID.randomUUID().toString().replace("-", "")
         val keypair = SshHostKeys.generate()
         keyStore.write(id, keypair.privateKey)
@@ -46,6 +46,7 @@ class SshHostStore(
                 address = address,
                 port = port,
                 username = username,
+                cwd = cwd,
                 publicKeyLine = keypair.publicKeyLine
             )
         dataStore.edit { prefs -> writeHost(prefs, host) }
@@ -61,6 +62,7 @@ class SshHostStore(
             prefs.remove(addressKey(id))
             prefs.remove(portKey(id))
             prefs.remove(usernameKey(id))
+            prefs.remove(cwdKey(id))
             prefs.remove(publicKeyKey(id))
             prefs.remove(trustedFingerprintKey(id))
         }
@@ -83,9 +85,10 @@ class SshHostStore(
             val id = key.name.removePrefix(PREFIX).removeSuffix(SUFFIX_ADDRESS)
             val address = prefs[key] as? String ?: continue
             val username = prefs[usernameKey(id)] ?: continue
+            val cwd = prefs[cwdKey(id)] ?: continue
             val port = prefs[portKey(id)] ?: DEFAULT_PORT
             val publicKeyLine = prefs[publicKeyKey(id)] ?: continue
-            hosts += SshHost(id, address, port, username, publicKeyLine)
+            hosts += SshHost(id, address, port, username, cwd, publicKeyLine)
         }
         return hosts.sortedBy { it.id }
     }
@@ -94,12 +97,14 @@ class SshHostStore(
         prefs[addressKey(host.id)] = host.address
         prefs[portKey(host.id)] = host.port
         prefs[usernameKey(host.id)] = host.username
+        prefs[cwdKey(host.id)] = host.cwd
         prefs[publicKeyKey(host.id)] = host.publicKeyLine
     }
 
     private fun addressKey(id: String) = stringPreferencesKey("${PREFIX}$id$SUFFIX_ADDRESS")
     private fun portKey(id: String) = intPreferencesKey("${PREFIX}$id$SUFFIX_PORT")
     private fun usernameKey(id: String) = stringPreferencesKey("${PREFIX}$id$SUFFIX_USERNAME")
+    private fun cwdKey(id: String) = stringPreferencesKey("${PREFIX}$id$SUFFIX_CWD")
     private fun publicKeyKey(id: String) = stringPreferencesKey("${PREFIX}$id$SUFFIX_PUBLIC_KEY")
     private fun trustedFingerprintKey(id: String) =
         stringPreferencesKey("${PREFIX}$id$SUFFIX_TRUSTED_FINGERPRINT")
@@ -109,6 +114,7 @@ class SshHostStore(
         const val SUFFIX_ADDRESS = ".address"
         const val SUFFIX_PORT = ".port"
         const val SUFFIX_USERNAME = ".username"
+        const val SUFFIX_CWD = ".cwd"
         const val SUFFIX_PUBLIC_KEY = ".public_key"
         const val SUFFIX_TRUSTED_FINGERPRINT = ".trusted_fingerprint"
         const val DEFAULT_PORT = 22

@@ -31,14 +31,14 @@ internal class SshHostsController(
      * [SshHostStore.addHost]). Invalid input or a storage failure surfaces
      * a safe error and stores nothing.
      */
-    fun addHost(address: String, port: Int, username: String) {
+    fun addHost(address: String, port: Int, username: String, cwd: String) {
         scope.launch {
-            if (!valid(address, port, username)) {
+            if (!valid(address, port, username, cwd)) {
                 onError(UiString(R.string.error_ssh_host_invalid), null)
                 return@launch
             }
             try {
-                hostStore.addHost(address.trim(), port, username.trim())
+                hostStore.addHost(address.trim(), port, username.trim(), cwd.trim())
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -50,7 +50,7 @@ internal class SshHostsController(
     /** Persists edited connection fields; the key material never changes. */
     fun updateHost(host: SshHost) {
         scope.launch {
-            if (!valid(host.address, host.port, host.username)) {
+            if (!valid(host.address, host.port, host.username, host.cwd)) {
                 onError(UiString(R.string.error_ssh_host_invalid), null)
                 return@launch
             }
@@ -78,8 +78,9 @@ internal class SshHostsController(
         }
     }
 
-    private fun valid(address: String, port: Int, username: String): Boolean =
-        address.isNotBlank() && username.isNotBlank() && port in 1..65535
+    private fun valid(address: String, port: Int, username: String, cwd: String): Boolean =
+        address.isNotBlank() && username.isNotBlank() && cwd.trim().startsWith("/") &&
+            port in 1..65535
 
     private companion object {
         private val logger = LoggerFactory.getLogger(SshHostsController::class.java)
