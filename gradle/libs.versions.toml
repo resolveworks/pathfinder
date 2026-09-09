@@ -21,6 +21,8 @@ serializationJson = "1.11.0"
 zstd = "1.5.7-15"
 # cbssh, the only SSH library; exact pin, confined to the app's ssh package
 cbssh = "0.4.2"
+# matches sshlib's slf4j-api so there is no version skew
+slf4j = "2.0.18"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
@@ -51,6 +53,8 @@ commonmark-ext-task-list-items = { module = "org.commonmark:commonmark-ext-task-
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serializationJson" }
 zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstd" }
 cbssh-sshlib = { module = "org.connectbot.sshlib:sshlib", version.ref = "cbssh" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 

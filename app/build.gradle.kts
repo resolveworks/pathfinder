@@ -199,6 +199,12 @@ dependencies {
     // seam bounds any future replacement.
     implementation(libs.cbssh.sshlib)
 
+    // sshlib declares slf4j-api as implementation, so the app must declare it
+    // itself. The backend is debug-only: release builds get slf4j's NOP and
+    // log nothing.
+    implementation(libs.slf4j.api)
+    debugImplementation(libs.slf4j.simple)
+
     testImplementation(testFixtures(project(":packages:ai")))
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)
