@@ -18,7 +18,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
@@ -379,11 +378,13 @@ internal fun ProviderLeaveAction(provider: ProviderOption, onRemove: () -> Unit)
     val removeLabel =
         if (isAccount) R.string.action_sign_out else R.string.action_remove_provider
 
-    IconButton(onClick = { confirmRemove = true }) {
-        Icon(
-            Icons.AutoMirrored.Filled.ExitToApp,
-            contentDescription = stringResource(removeLabel)
+    TextButton(
+        onClick = { confirmRemove = true },
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = MaterialTheme.colorScheme.error
         )
+    ) {
+        Text(stringResource(removeLabel))
     }
 
     if (confirmRemove) {
