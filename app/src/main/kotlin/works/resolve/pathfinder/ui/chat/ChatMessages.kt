@@ -27,10 +27,10 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -43,7 +43,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
+import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownColor
+import com.mikepenz.markdown.model.rememberStreamingMarkdownState
 import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.AssistantMessage
@@ -57,39 +59,12 @@ import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.string
 import works.resolve.pathfinder.tools.webfetch.WebFetchTool
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
-import works.resolve.pathfinder.ui.chat.markdown.MarkdownText
 import works.resolve.pathfinder.ui.theme.PathfinderTheme
 
 private const val STREAMING_PLACEHOLDER = "…"
 
 /** Cap on the in-row bash partial preview; the full output opens in the sheet. */
 private const val PARTIAL_OUTPUT_MAX_LINES = 4
-
-/** Sampling cadence for rendering the growing streaming partial. */
-private const val STREAM_SAMPLE_INTERVAL_MS = 100L
-
-/**
- * Streaming cadence limiter: rendering the partial re-parses its markdown,
- * so per-token recomposition is O(n²) over a response. The partial is
- * sampled at [STREAM_SAMPLE_INTERVAL_MS] instead; once [isStreaming] ends
- * the caller receives the message as-is, so the final text always renders
- * fully.
- */
-@Composable
-private fun sampledStreamingMessage(
-    message: AssistantMessage,
-    isStreaming: Boolean
-): AssistantMessage {
-    if (!isStreaming) return message
-    val latest = remember { mutableStateOf(message) }
-    SideEffect { latest.value = message }
-    return produceState(initialValue = message) {
-        while (true) {
-            delay(STREAM_SAMPLE_INTERVAL_MS)
-            value = latest.value
-        }
-    }.value
-}
 
 @Composable
 internal fun ConversationContent(
@@ -167,22 +142,21 @@ internal fun ConversationContent(
             }
             uiState.streamingMessage?.let { streaming ->
                 item(key = "streaming") {
-                    val sampled = sampledStreamingMessage(streaming, isStreaming)
-                    val hasVisibleText = sampled.content.any {
+                    val hasVisibleText = streaming.content.any {
                         it is TextContent && it.text.isNotBlank()
                     }
-                    val hasThinking = sampled.content.any { it is ThinkingContent }
+                    val hasThinking = streaming.content.any { it is ThinkingContent }
                     AssistantMessageItem(
                         message = if (hasVisibleText || hasThinking ||
-                            sampled.errorMessage != null
+                            streaming.errorMessage != null
                         ) {
-                            sampled
+                            streaming
                         } else {
                             // pi renders tool-call-only assistant messages as
                             // zero lines (the executions show as their own
                             // rows); the placeholder bridges until the call
                             // commits and its tool row appears.
-                            sampled.copy(
+                            streaming.copy(
                                 content = listOf(TextContent(STREAMING_PLACEHOLDER))
                             )
                         },
@@ -283,7 +257,10 @@ private fun UserMessageItem(message: UserMessage, modifier: Modifier = Modifier)
  * it off they collapse to [ThinkingLabel] (pi's hidden state). An error renders below the body in
  * error color. Content renders in order straight from the runtime message
  * (pi's AssistantMessageComponent does the same single pass): consecutive
- * thinking parts merge into one block, blank parts drop.
+ * thinking parts merge into one block, blank parts drop. While streaming,
+ * the final text/thinking part is the only growing one; it renders through
+ * the renderer's append-only streaming state (re-parsing just the unstable
+ * tail), everything before it is final.
  */
 @Composable
 private fun AssistantMessageItem(
@@ -299,25 +276,36 @@ private fun AssistantMessageItem(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Content parts are append-only and grow in place, so the last
+            // text/thinking part is the streaming tail; its index is a
+            // stable identity for the per-part streaming state.
+            val tail = message.content.lastOrNull()
+            val tailIndex = if (isStreaming && (tail is TextContent || tail is ThinkingContent)) {
+                message.content.lastIndex
+            } else {
+                -1
+            }
+            val committed =
+                if (tailIndex >= 0) message.content.subList(0, tailIndex) else message.content
             var index = 0
-            while (index < message.content.size) {
-                val part = message.content[index]
+            while (index < committed.size) {
+                val part = committed[index]
                 when (part) {
                     is TextContent -> {
                         part.text.takeIf { it.isNotBlank() }?.let {
-                            MarkdownText(markdown = it)
+                            Markdown(content = it, modifier = Modifier.fillMaxWidth())
                         }
                         index++
                     }
 
                     is ThinkingContent -> {
                         val runStart = index
-                        while (index < message.content.size &&
-                            message.content[index] is ThinkingContent
+                        while (index < committed.size &&
+                            committed[index] is ThinkingContent
                         ) {
                             index++
                         }
-                        val merged = message.content.subList(runStart, index)
+                        val merged = committed.subList(runStart, index)
                             .filterIsInstance<ThinkingContent>()
                             .joinToString("\n\n") { it.thinking }
                             .trim()
@@ -325,19 +313,31 @@ private fun AssistantMessageItem(
                             if (showThinking) {
                                 ThinkingText(markdown = merged)
                             } else {
-                                ThinkingLabel(
-                                    // Active only while this run is the message's
-                                    // growing tail: nothing renderable follows it.
-                                    active = isStreaming && message.content.drop(index).none {
-                                        it is ToolCall ||
-                                            (it is TextContent && it.text.isNotBlank())
-                                    }
-                                )
+                                ThinkingLabel(active = false)
                             }
                         }
                     }
 
                     else -> index++
+                }
+            }
+            if (tailIndex >= 0 && tail != null) {
+                key(tailIndex) {
+                    when (tail) {
+                        is TextContent -> StreamingMarkdownBlock(
+                            text = tail.text,
+                            thinking = false
+                        )
+
+                        is ThinkingContent -> if (showThinking) {
+                            StreamingMarkdownBlock(text = tail.thinking, thinking = true)
+                        } else {
+                            ThinkingLabel(active = true)
+                        }
+
+                        // Unreachable: tailIndex is only set for text/thinking tails.
+                        else -> Unit
+                    }
                 }
             }
             message.errorMessage?.let { error ->
@@ -349,6 +349,33 @@ private fun AssistantMessageItem(
             }
         }
     }
+}
+
+/**
+ * The growing tail of a streaming message, fed into the renderer's
+ * append-only streaming state: each update re-parses only the unstable
+ * tail of the document, not the whole text.
+ */
+@Composable
+private fun StreamingMarkdownBlock(text: String, thinking: Boolean) {
+    val streamingState = rememberStreamingMarkdownState()
+    // Message updates grow the part's text in place, so only the new
+    // suffix is appended; a shorter or equal text means nothing new.
+    LaunchedEffect(text) {
+        val appended = streamingState.content.length
+        if (text.length > appended) {
+            streamingState.append(text.substring(appended))
+        }
+    }
+    Markdown(
+        streamingMarkdownState = streamingState,
+        colors = if (thinking) {
+            markdownColor(text = MaterialTheme.colorScheme.outline)
+        } else {
+            markdownColor()
+        },
+        modifier = Modifier.fillMaxWidth()
+    )
 }
 
 internal enum class ToolResultFormat {
@@ -580,9 +607,10 @@ private fun ToolOutputSheet(call: ToolCall, result: ToolResultMessage, onDismiss
                         color = contentColor
                     )
 
-                    format == ToolResultFormat.MARKDOWN -> MarkdownText(
-                        markdown = output,
-                        color = contentColor
+                    format == ToolResultFormat.MARKDOWN -> Markdown(
+                        content = output,
+                        colors = markdownColor(text = contentColor),
+                        modifier = Modifier.fillMaxWidth()
                     )
 
                     // Raw fallback: pi's generic result renderer.
@@ -631,15 +659,14 @@ private fun ThinkingLabel(active: Boolean) {
 
 /**
  * pi's shown thinking state's look: markdown dimmer than the onSurface
- * answer text in both theme variants, italic.
+ * answer text in both theme variants.
  */
 @Composable
-private fun ThinkingText(markdown: String, modifier: Modifier = Modifier) {
-    MarkdownText(
-        markdown = markdown,
-        modifier = modifier,
-        color = MaterialTheme.colorScheme.outline,
-        italic = true
+private fun ThinkingText(markdown: String) {
+    Markdown(
+        content = markdown,
+        colors = markdownColor(text = MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
     )
 }
 

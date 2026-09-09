@@ -190,11 +190,9 @@ dependencies {
     implementation(libs.zstd.jni) { artifact { type = "aar" } }
     testImplementation(libs.zstd.jni)
 
-    // Markdown parsing for message rendering.
-    implementation(libs.commonmark)
-    implementation(libs.commonmark.ext.gfm.tables)
-    implementation(libs.commonmark.ext.gfm.strikethrough)
-    implementation(libs.commonmark.ext.task.list.items)
+    // Markdown rendering for message and tool-result content (Material 3 themed).
+    implementation(libs.markdown.renderer)
+    implementation(libs.markdown.renderer.m3)
 
     // cbssh, the only SSH library; confined to the app's ssh package so the
     // seam bounds any future replacement.
