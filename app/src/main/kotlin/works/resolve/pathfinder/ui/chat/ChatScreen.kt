@@ -125,7 +125,6 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
         onAddSshHost = viewModel::addSshHost,
         onUpdateSshHost = viewModel::updateSshHost,
         onRemoveSshHost = viewModel::removeSshHost,
-        onNewSessionOnHost = viewModel::newSessionOnHost,
         onTestSshHostConnection = viewModel::testSshHostConnection,
         onTrustHostKey = viewModel::trustHostKey,
         onRefuseHostKey = viewModel::refuseHostKey,
@@ -181,7 +180,6 @@ fun ChatScreen(
     onAddSshHost: (address: String, port: Int, username: String, cwd: String) -> Unit,
     onUpdateSshHost: (host: SshHost) -> Unit,
     onRemoveSshHost: (hostId: String) -> Unit,
-    onNewSessionOnHost: (hostId: String) -> Unit,
     onTestSshHostConnection: (hostId: String) -> Unit,
     onTrustHostKey: () -> Unit,
     onRefuseHostKey: () -> Unit,
@@ -515,7 +513,6 @@ fun ChatScreen(
                                             it.hostId == host?.id
                                         },
                                         onTestConnection = onTestSshHostConnection,
-                                        onNewSession = onNewSessionOnHost,
                                         onSave = { address, port, username, cwd ->
                                             if (host == null) {
                                                 onAddSshHost(address, port, username, cwd)
@@ -997,7 +994,6 @@ private fun PreviewChatScreen(
             onAddSshHost = { _, _, _, _ -> },
             onUpdateSshHost = { },
             onRemoveSshHost = { },
-            onNewSessionOnHost = { },
             onTestSshHostConnection = { },
             onTrustHostKey = { },
             onRefuseHostKey = { },

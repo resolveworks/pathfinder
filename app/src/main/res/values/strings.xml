@@ -43,7 +43,6 @@
     <string name="ssh_host_copy_public_key">Copy public key</string>
     <string name="ssh_host_delete">Delete host</string>
     <string name="ssh_host_delete_confirm">Delete %1$s and its key? The server\'s authorized_keys entry must be removed separately.</string>
-    <string name="ssh_host_start_session">Start a chat on this host</string>
     <string name="ssh_host_test">Test connection</string>
     <string name="ssh_host_test_success">Connected — remote directory: %1$s</string>
     <string name="error_ssh_host_save">Could not save the SSH host</string>
@@ -57,8 +56,6 @@
     <string name="ssh_error_connect_generic">Could not connect to the SSH host</string>
     <string name="ssh_error_auth">%1$s refused the app\'s key — add the app\'s public key to authorized_keys on the server</string>
     <string name="ssh_error_auth_generic">The SSH host refused the app\'s key</string>
-    <string name="ssh_error_sftp">%1$s does not offer SFTP, which Pathfinder needs for remote files</string>
-    <string name="ssh_error_sftp_generic">The SSH host does not offer SFTP</string>
     <string name="ssh_error_unknown_host">That SSH host is no longer configured</string>
     <string name="ssh_error_no_key">No SSH key is stored for that host</string>
     <string name="ssh_error_host_key_changed">SSH host key for %1$s changed — the connection was refused for your safety. Verify the server before trusting it again.</string>

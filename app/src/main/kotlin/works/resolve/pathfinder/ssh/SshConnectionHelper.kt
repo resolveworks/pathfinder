@@ -7,7 +7,7 @@ import org.connectbot.sshlib.SshClientConfig
 
 /** Connection setup failed; [detail] names the stage without secret material. */
 class SshConnectionException(message: String, val detail: Detail) : Exception(message) {
-    enum class Detail { UNKNOWN_HOST, CONNECT, HOST_KEY_REJECTED, AUTH, SFTP, NO_KEY }
+    enum class Detail { UNKNOWN_HOST, CONNECT, HOST_KEY_REJECTED, AUTH, NO_KEY }
 }
 
 /**

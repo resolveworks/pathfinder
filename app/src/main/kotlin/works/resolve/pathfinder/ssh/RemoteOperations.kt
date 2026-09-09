@@ -41,7 +41,6 @@ private fun connectionFailureMessage(detail: SshConnectionException.Detail): Str
         SshConnectionException.Detail.CONNECT -> "SSH host unavailable: connect failed"
         SshConnectionException.Detail.HOST_KEY_REJECTED -> "SSH host unavailable: host key rejected"
         SshConnectionException.Detail.AUTH -> "SSH host unavailable: auth failed"
-        SshConnectionException.Detail.SFTP -> "SSH host unavailable: SFTP failed"
         SshConnectionException.Detail.NO_KEY -> "SSH host unavailable: no stored key"
     }
 

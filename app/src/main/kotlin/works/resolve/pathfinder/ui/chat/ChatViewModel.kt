@@ -39,12 +39,10 @@ import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
-import works.resolve.pathfinder.ssh.SshConnectionException
 import works.resolve.pathfinder.ssh.SshConnectionHelper
+import works.resolve.pathfinder.ssh.SshConnectionProvider
 import works.resolve.pathfinder.ssh.SshHost
 import works.resolve.pathfinder.ssh.SshHostStore
-import works.resolve.pathfinder.ssh.SshSessionConnections
-import works.resolve.pathfinder.ssh.SshSessionHostStore
 import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
@@ -88,14 +86,10 @@ class ChatViewModel(
     private val appForegroundGate: AppForegroundGate,
     private val searchProviderService: SearchProviderService,
     private val sshHostStore: SshHostStore,
-    /** Session→host mapping; [SshSessionController] binds and rolls it back around agent creation. */
-    private val sshSessionHosts: SshSessionHostStore,
-    /** Live per-session connections; [SshSessionController] closes the outgoing session at replacement. */
-    private val sshSessionConnections: SshSessionConnections,
-    /** Interactive TOFU host-key decisions; surfaced through [SshSessionController]. */
+    /** Interactive TOFU host-key decisions; surfaced through the pending-host-key prompt. */
     private val hostKeyConfirmer: TofuHostKeyConfirmer,
-    /** Dials hosts for the host form's connection test (no session involved). */
-    private val sshConnectionHelper: SshConnectionHelper
+    /** Process-wide SSH connections; the hosts controller tests dials and host deletion evicts. */
+    private val sshConnectionProvider: SshConnectionProvider
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -136,15 +130,12 @@ class ChatViewModel(
 
     private val sessionSearch = SessionSearchController()
 
-    private val sshHosts = SshHostsController(viewModelScope, sshHostStore, ::setError)
-
-    private val sshSessions = SshSessionController(
+    private val sshHosts = SshHostsController(
         viewModelScope,
         sshHostStore,
-        sshSessionHosts,
-        sshSessionConnections,
+        SshConnectionHelper(sshHostStore),
         hostKeyConfirmer,
-        sshConnectionHelper
+        ::setError
     )
 
     val uiState: StateFlow<ChatUiState> =
@@ -165,8 +156,8 @@ class ChatViewModel(
                     sessionSearchResults = sessionSearch.results
                 )
             },
-            sshSessions.pendingHostKey,
-            sshSessions.hostTest,
+            hostKeyConfirmer.pending,
+            sshHosts.hostTest,
             providerCredentials.state,
             modelSettings.state
         ) { base, pendingHostKey, hostTest, credentials, modelSettings ->
@@ -378,10 +369,10 @@ class ChatViewModel(
     // ---- SSH hosts (Settings ▸ SSH hosts) ----
 
     /** Trusts the pending unknown-host-key request (TOFU first connect). */
-    fun trustHostKey() = sshSessions.trustHostKey()
+    fun trustHostKey() = hostKeyConfirmer.answer(trust = true)
 
     /** Refuses the pending unknown-host-key request; also the dialog-dismiss path (fail closed). */
-    fun refuseHostKey() = sshSessions.refuseHostKey()
+    fun refuseHostKey() = hostKeyConfirmer.answer(trust = false)
 
     /** Creates an SSH host with a freshly generated keypair (see [SshHostsController.addHost]). */
     fun addSshHost(address: String, port: Int, username: String, cwd: String) =
@@ -390,17 +381,17 @@ class ChatViewModel(
     /** Persists edited connection fields of an SSH host. */
     fun updateSshHost(host: SshHost) = sshHosts.updateHost(host)
 
-    /** Deletes an SSH host and its keypair, plus any session mappings to it. */
+    /** Deletes an SSH host and its keypair, plus its cached connection. */
     fun removeSshHost(id: String) {
         sshHosts.removeHost(id)
-        sshSessions.clearHost(id)
+        viewModelScope.launch { sshConnectionProvider.evict(id) }
     }
 
     /**
      * Runs a connection test against [hostId] from the host form; progress
      * and the result land in [ChatUiState.hostTest].
      */
-    fun testSshHostConnection(hostId: String) = sshSessions.testHostConnection(hostId)
+    fun testSshHostConnection(hostId: String) = sshHosts.testHostConnection(hostId)
 
     fun send() {
         viewModelScope.launch { sendInternal() }
@@ -490,33 +481,6 @@ class ChatViewModel(
                 val manager = sessionSource.create()
                 val newAgent = tryCreateAgent(manager) ?: return@launch
                 if (!activateSession(manager, newAgent)) return@launch
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                setError(UiString(R.string.error_session_create), e)
-            }
-        }
-    }
-
-    /**
-     * Creates a new chat session bound to the configured host [hostId]:
-     * the mapping is recorded before the factory runs (the factory resolves
-     * it and connects), and any failure — including a refused/failed host-key
-     * prompt — clears the mapping again so nothing half-bound survives. The
-     * UI stays on the previous session; success re-enters the chat surface.
-     */
-    fun newSessionOnHost(hostId: String) {
-        viewModelScope.launch {
-            if (rejectWhileBusy()) return@launch
-            try {
-                val manager = sessionSource.create()
-                sshSessions.bindHostToSession(manager.getSessionId(), hostId)
-                val newAgent = tryCreateAgent(manager)
-                if (newAgent == null || !activateSession(manager, newAgent)) {
-                    // Nothing half-bound survives: drop the mapping and the
-                    // (possibly established) connection of the dead session.
-                    sshSessions.rollbackSession(manager.getSessionId())
-                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -748,9 +712,6 @@ class ChatViewModel(
             agentFactory.create(sessionManager)
         } catch (e: CancellationException) {
             throw e
-        } catch (e: SshConnectionException) {
-            setError(sshSessions.connectionError(e, sessionManager.getSessionId()), e)
-            return null
         } catch (e: Exception) {
             setError(UiString(R.string.error_config_invalid), e)
             return null
@@ -777,14 +738,6 @@ class ChatViewModel(
     }
 
     private fun bindAgent(newAgent: AgentSession) {
-        // AgentSession has no dispose seam; closing the outgoing session's
-        // SSH connection (if any) happens here, at session replacement — the
-        // single place the previous session is discarded on new/switch.
-        val incomingId = newAgent.sessionManager.getSessionId()
-        val outgoingId = _uiState.value.activeSessionId
-        if (outgoingId != null && outgoingId != incomingId) {
-            sshSessions.closeConnection(outgoingId)
-        }
         agentStateJob?.cancel()
         agentEventsJob?.cancel()
         agent = newAgent

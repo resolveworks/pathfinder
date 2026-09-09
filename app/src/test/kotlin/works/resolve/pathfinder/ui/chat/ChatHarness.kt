@@ -76,11 +76,10 @@ import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
 import works.resolve.pathfinder.ssh.SshConnectionHelper
+import works.resolve.pathfinder.ssh.SshConnectionProvider
 import works.resolve.pathfinder.ssh.SshHostKeyStore
 import works.resolve.pathfinder.ssh.SshHostStore
 import works.resolve.pathfinder.ssh.SshPrivateKeyPem
-import works.resolve.pathfinder.ssh.SshSessionConnections
-import works.resolve.pathfinder.ssh.SshSessionHostStore
 import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
@@ -302,15 +301,6 @@ internal class ChatHarness(private val tmpFolder: TemporaryFolder, testDispatche
         FakeSshHostKeyStore(File(tmpFolder.root, "ssh-host-keys"))
     )
 
-    val sshSessionHosts = SshSessionHostStore(
-        PreferenceDataStoreFactory.create(
-            scope = dataStoreScope,
-            produceFile = {
-                File(tmpFolder.root, "ssh_session_hosts_${System.nanoTime()}.preferences_pb")
-            }
-        )
-    )
-
     val hostKeyConfirmer = TofuHostKeyConfirmer()
 
     val sshConnectionHelper = SshConnectionHelper(sshHostStore)
@@ -429,10 +419,12 @@ internal class ChatHarness(private val tmpFolder: TemporaryFolder, testDispatche
         modelResolver = modelResolver,
         searchProviderService = searchProviders,
         sshHostStore = sshHostStore,
-        sshSessionHosts = sshSessionHosts,
-        sshSessionConnections = SshSessionConnections(),
         hostKeyConfirmer = hostKeyConfirmer,
-        sshConnectionHelper = sshConnectionHelper,
+        sshConnectionProvider = SshConnectionProvider(
+            sshHostStore,
+            sshConnectionHelper,
+            hostKeyConfirmer
+        ),
         appForegroundGate = AppForegroundGate()
     ).also { viewModels += it }
 
