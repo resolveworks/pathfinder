@@ -1,14 +1,16 @@
 package works.resolve.pathfinder.codingagent.core.tools
 
+import com.github.difflib.DiffUtils
 import java.text.Normalizer
 
 /**
  * Shared diff computation utilities for the edit and similar tools.
  *
- * Divergence from pi: the line diff itself (upstream: the `diff` npm package)
- * is an equivalent minimal Myers line diff, not a port of jsdiff internals —
- * both produce minimal diffs, but tie-breaking between equally minimal diffs
- * can differ, which may place otherwise-identical hunks slightly differently.
+ * Divergence from pi: the line diff engine is java-diff-utils' Myers diff
+ * where pi uses jsdiff's `diffLines` — both produce minimal diffs, but
+ * tie-breaking between equally minimal diffs can differ, which may place
+ * otherwise-identical hunks slightly differently or interleave "+/-" lines
+ * within one change block.
  * The display diff and unified patch *formatting* is ported exactly (including
  * `diff`'s structuredPatch/context handling and "\ No newline at end of file"
  * markers). Pi's `computeEditsDiff` preview helpers are TUI-only and unported.
@@ -390,173 +392,45 @@ fun applyEditsToNormalizedContent(
 
 internal class DiffPart(val added: Boolean, val removed: Boolean, val value: String)
 
-private enum class DiffOp { EQUAL, DELETE, INSERT }
-
-/**
- * Guard against the O(D²) Myers trace blowing up memory on pathological
- * inputs (e.g. a full rewrite of a very large file): past this edit distance
- * the middle is diffed as one wholesale replacement, which is still a valid
- * diff, just not the minimal one.
- */
-private const val MAX_MYERS_D = 4096
-
-private fun tokenizeLines(value: String): List<String> {
-    val tokens = mutableListOf<String>()
-    var i = 0
-    while (i < value.length) {
-        val newline = value.indexOf('\n', i)
-        if (newline == -1) {
-            tokens.add(value.substring(i))
-            break
-        }
-        tokens.add(value.substring(i, newline + 1))
-        i = newline + 1
-    }
-    return tokens
-}
-
-private fun myersOps(a: List<String>, b: List<String>): List<Pair<DiffOp, Int>>? {
-    val n = a.size
-    val m = b.size
-    if (n == 0 && m == 0) return emptyList()
-    val max = n + m
-    val offset = max
-    val trace = ArrayList<IntArray>()
-    val v = IntArray(2 * max + 1)
-    var foundD = -1
-
-    outer@ for (d in 0..max) {
-        var k = -d
-        while (k <= d) {
-            val x = if (k == -d || (k != d && v[k - 1 + offset] < v[k + 1 + offset])) {
-                v[k + 1 + offset]
-            } else {
-                v[k - 1 + offset] + 1
-            }
-            var cx = x
-            var y = cx - k
-            while (cx < n && y < m && a[cx] == b[y]) {
-                cx++
-                y++
-            }
-            v[k + offset] = cx
-            if (cx >= n && y >= m) {
-                trace.add(v.copyOf())
-                foundD = d
-                break@outer
-            }
-            k += 2
-        }
-        trace.add(v.copyOf())
-        if (d == MAX_MYERS_D) return null
-    }
-    if (foundD == -1) return null
-
-    val ops = mutableListOf<Pair<DiffOp, Int>>()
-    var x = n
-    var y = m
-    for (d in foundD downTo 1) {
-        val vPrev = trace[d - 1]
-        val k = x - y
-        val prevK = if (k == -d ||
-            (k != d && vPrev[k - 1 + offset] < vPrev[k + 1 + offset])
-        ) {
-            k + 1
-        } else {
-            k - 1
-        }
-        val prevX = vPrev[prevK + offset]
-        val prevY = prevX - prevK
-        while (x > prevX && y > prevY) {
-            x--
-            y--
-            ops.add(DiffOp.EQUAL to x)
-        }
-        if (x == prevX) {
-            y--
-            ops.add(DiffOp.INSERT to y)
-        } else {
-            x--
-            ops.add(DiffOp.DELETE to x)
-        }
-    }
-    while (x > 0 && y > 0) {
-        x--
-        y--
-        ops.add(DiffOp.EQUAL to x)
-    }
-    ops.reverse()
-    return ops
-}
-
 internal fun diffLineParts(oldContent: String, newContent: String): List<DiffPart> {
-    // Trim the common prefix/suffix first so Myers only sees the changed middle.
-    val a0 = tokenizeLines(oldContent)
-    val b0 = tokenizeLines(newContent)
-    var prefix = 0
-    while (prefix < a0.size && prefix < b0.size && a0[prefix] == b0[prefix]) {
-        prefix++
-    }
-    var suffix = 0
-    while (
-        suffix < a0.size - prefix && suffix < b0.size - prefix &&
-        a0[a0.size - 1 - suffix] == b0[b0.size - 1 - suffix]
-    ) {
-        suffix++
-    }
-    val a = a0.subList(prefix, a0.size - suffix)
-    val b = b0.subList(prefix, b0.size - suffix)
-
-    val ops = myersOps(a, b) ?: run {
-        // Fallback: wholesale replacement of the changed middle.
-        buildList {
-            for (i in a.indices) add(DiffOp.DELETE to i)
-            for (i in b.indices) add(DiffOp.INSERT to i)
-        }
-    }
+    val oldTokens = splitLinesWithEndings(oldContent)
+    val newTokens = splitLinesWithEndings(newContent)
 
     val parts = mutableListOf<DiffPart>()
-    val sb = StringBuilder()
-    var current: DiffOp? = null
-    fun flush() {
-        if (current != null && sb.isNotEmpty()) {
+    var sourceCursor = 0
+    for (delta in DiffUtils.diff(oldTokens, newTokens).deltas) {
+        if (delta.source.position > sourceCursor) {
             parts.add(
                 DiffPart(
-                    added = current == DiffOp.INSERT,
-                    removed = current == DiffOp.DELETE,
-                    value = sb.toString()
+                    added = false,
+                    removed = false,
+                    value = oldTokens.subList(sourceCursor, delta.source.position).joinToString("")
                 )
             )
         }
-        sb.clear()
-    }
-    if (prefix > 0) {
-        parts.add(
-            DiffPart(added = false, removed = false, value = a0.subList(0, prefix).joinToString(""))
-        )
-    }
-    for ((op, index) in ops) {
-        val token = when (op) {
-            DiffOp.EQUAL -> a[index]
-            DiffOp.DELETE -> a[index]
-            DiffOp.INSERT -> b[index]
+        // Removed lines before added lines within one delta: jsdiff's hunk order.
+        if (delta.source.lines.isNotEmpty()) {
+            parts.add(
+                DiffPart(added = false, removed = true, value = delta.source.lines.joinToString(""))
+            )
         }
-        if (op != current) {
-            flush()
-            current = op
+        if (delta.target.lines.isNotEmpty()) {
+            parts.add(
+                DiffPart(added = true, removed = false, value = delta.target.lines.joinToString(""))
+            )
         }
-        sb.append(token)
+        sourceCursor = delta.source.position + delta.source.lines.size
     }
-    flush()
-    if (suffix > 0) {
+    if (sourceCursor < oldTokens.size) {
         parts.add(
             DiffPart(
                 added = false,
                 removed = false,
-                value = a0.subList(a0.size - suffix, a0.size).joinToString("")
+                value = oldTokens.subList(sourceCursor, oldTokens.size).joinToString("")
             )
         )
     }
+
     // Merge adjacent parts with identical flags (jsdiff joins consecutive
     // same-kind components; the prefix/suffix parts may abut equal middle runs).
     val merged = mutableListOf<DiffPart>()

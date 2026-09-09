@@ -23,6 +23,8 @@ zstd = "1.5.7-15"
 cbssh = "0.4.2"
 # matches sshlib's slf4j-api so there is no version skew
 slf4j = "2.0.18"
+# line-diff engine for the edit tool's diffs and unified patches
+diffutils = "4.15"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
@@ -52,6 +54,7 @@ kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstd" }
 cbssh-sshlib = { module = "org.connectbot.sshlib:sshlib", version.ref = "cbssh" }
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+diffutils = { module = "io.github.java-diff-utils:java-diff-utils", version.ref = "diffutils" }
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 

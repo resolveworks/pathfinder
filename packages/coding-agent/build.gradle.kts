@@ -24,6 +24,7 @@ dependencies {
     implementation(project(":packages:telemetry"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.diffutils)
 
     testImplementation(project(":packages:telemetry"))
     testImplementation(testFixtures(project(":packages:ai")))
