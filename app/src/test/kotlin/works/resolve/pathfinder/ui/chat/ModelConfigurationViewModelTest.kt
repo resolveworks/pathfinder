@@ -94,7 +94,6 @@ import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.data.settings.SettingsRepository
-import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
@@ -150,7 +149,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.configure(apiKey = "k")
             vm.awaitState { it.status == ChatStatus.Ready }
 
-            h.settingsStore.failWrites = true
+            h.failingDataStore.failWrites = true
 
             // A pick is one gesture: the live switch commits, the default
             // persist fails and surfaces its own error (pi: setModel with
@@ -161,12 +160,11 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.awaitState { it.error != null }
             val state = vm.uiState.value
             assertEquals(ChatStatus.Ready, state.status)
+            h.failingDataStore.failWrites = false
             assertTrue(
                 h.storedSettingsJson()?.contains("glm-5.3") != true
             )
             vm.dismissError()
-
-            h.settingsStore.failWrites = false
             h.scriptedStreams.add(
                 h.gatedStream(
                     "world",

@@ -16,9 +16,7 @@ import works.resolve.pathfinder.codingagent.core.SettingsStorage
  * JSON. The runtime JSON is mutated only through SettingsManager — this
  * class's [withLock] is the storage mechanism, not a write API.
  */
-class SettingsRepository(private val dataStore: DataStore<Preferences>) :
-    SettingsStore,
-    SettingsStorage {
+class SettingsRepository(private val dataStore: DataStore<Preferences>) : SettingsStorage {
 
     private object Keys {
         val ACTIVE_SESSION_ID = stringPreferencesKey("active_session_id")
@@ -38,7 +36,7 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) :
         )
     }
 
-    override suspend fun setActiveSessionId(sessionId: String?) {
+    suspend fun setActiveSessionId(sessionId: String?) {
         dataStore.edit { prefs ->
             if (sessionId == null) {
                 prefs.remove(Keys.ACTIVE_SESSION_ID)
@@ -48,11 +46,11 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) :
         }
     }
 
-    override suspend fun setShowThinking(showThinking: Boolean) {
+    suspend fun setShowThinking(showThinking: Boolean) {
         dataStore.edit { it[Keys.SHOW_THINKING] = showThinking }
     }
 
-    override suspend fun setSelectedMachineId(machineId: String?) {
+    suspend fun setSelectedMachineId(machineId: String?) {
         dataStore.edit { prefs ->
             if (machineId == null) {
                 prefs.remove(Keys.SELECTED_MACHINE_ID)
@@ -62,7 +60,7 @@ class SettingsRepository(private val dataStore: DataStore<Preferences>) :
         }
     }
 
-    override suspend fun currentSettings(): AppSettings = settings.first()
+    suspend fun currentSettings(): AppSettings = settings.first()
 
     val selectedMachineId: Flow<String?> = settings.map {
         it.selectedMachineId

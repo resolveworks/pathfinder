@@ -110,15 +110,11 @@ class WebFetchToolTest {
 
     @Test
     fun `execute truncates oversized text`() = runBlocking {
-        page =
-            PageContent(
-                "https://example.com/",
-                null,
-                "x".repeat(WebFetchTool.MAX_CONTENT_CHARS + 5000)
-            )
+        val maxChars = 50_000
+        page = PageContent("https://example.com/", null, "x".repeat(maxChars + 5000))
         val text = resultText(tool.execute("call-1", args("https://example.com/")) {})
         assertEquals(
-            "Source: https://example.com/\n\n" + "x".repeat(WebFetchTool.MAX_CONTENT_CHARS) +
+            "Source: https://example.com/\n\n" + "x".repeat(maxChars) +
                 "\n\n[Content truncated]",
             text
         )

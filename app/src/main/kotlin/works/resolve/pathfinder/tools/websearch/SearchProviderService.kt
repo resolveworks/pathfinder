@@ -26,11 +26,10 @@ class SearchProviderService(private val credentials: CredentialStore) {
         credentials.delete(credentialId(providerId))
     }
 
-    /** Null when not configured; a blank stored key counts as unconfigured. */
+    /** Null when not configured. */
     suspend fun apiKey(providerId: String): String? {
         requireKnown(providerId)
         return (credentials.read(credentialId(providerId)) as? ApiKeyCredential)?.key
-            ?.takeIf { it.isNotBlank() }
     }
 
     private fun requireKnown(providerId: String) {
@@ -44,7 +43,5 @@ class SearchProviderService(private val credentials: CredentialStore) {
 
         /** Namespace separating search credentials from AI provider credentials. */
         private const val CREDENTIAL_PREFIX = "search_"
-
-        const val BRAVE_CREDENTIAL_ID = "$CREDENTIAL_PREFIX$BRAVE_PROVIDER_ID"
     }
 }

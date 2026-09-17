@@ -45,7 +45,7 @@ import works.resolve.pathfinder.codingagent.core.SessionError
 import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.SettingsManager
-import works.resolve.pathfinder.data.settings.SettingsStore
+import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.ssh.Machine
 import works.resolve.pathfinder.ssh.MachineStore
@@ -78,7 +78,7 @@ import works.resolve.pathfinder.tools.websearch.SearchProviderService
  * [ChatUiState.startKey] whenever either field changes.
  */
 class ChatViewModel(
-    private val settingsStore: SettingsStore,
+    private val settingsStore: SettingsRepository,
     /** Shared process-wide settings manager: the only writer of runtime settings fields. */
     private val settingsManager: SettingsManager,
     private val catalog: ProviderCatalog,

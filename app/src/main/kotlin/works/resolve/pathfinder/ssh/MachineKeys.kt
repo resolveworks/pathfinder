@@ -51,28 +51,27 @@ object MachineKeys {
  * Encrypted at-rest storage for the per-machine private keys, reusing
  * [EncryptedCredentialStore] over a dedicated directory so machine keys never
  * appear among provider credentials. Entries are keyed by a
- * provider-id-regex-safe derivation of the machine id. Open so the app's JVM
- * test harness can substitute an in-memory store.
+ * provider-id-regex-safe derivation of the machine id.
  */
-open class MachineKeyStore(dir: File, cipher: KeystoreAeadCipher) {
+class MachineKeyStore(
+    dir: File,
+    encrypt: (ByteArray) -> ByteArray,
+    decrypt: (ByteArray) -> ByteArray
+) {
 
     private val credentials =
-        EncryptedCredentialStore(
-            dir = dir,
-            encrypt = cipher::encrypt,
-            decrypt = cipher::decrypt
-        )
+        EncryptedCredentialStore(dir = dir, encrypt = encrypt, decrypt = decrypt)
 
-    open suspend fun write(machineId: String, key: SshPrivateKeyPem) {
+    suspend fun write(machineId: String, key: SshPrivateKeyPem) {
         credentials.modify(credentialKey(machineId)) { ApiKeyCredential(key = key.pem) }
     }
 
-    open suspend fun read(machineId: String): SshPrivateKeyPem? =
+    suspend fun read(machineId: String): SshPrivateKeyPem? =
         (credentials.read(credentialKey(machineId)) as? ApiKeyCredential)
             ?.key
             ?.let(::SshPrivateKeyPem)
 
-    open suspend fun delete(machineId: String) {
+    suspend fun delete(machineId: String) {
         credentials.delete(credentialKey(machineId))
     }
 

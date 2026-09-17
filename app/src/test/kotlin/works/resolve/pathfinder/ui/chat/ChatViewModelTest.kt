@@ -87,7 +87,6 @@ import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.data.settings.SettingsRepository
-import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
@@ -111,7 +110,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             assertTrue(h.settings.currentSettings().showThinking)
             assertNull(vm.uiState.value.error)
 
-            h.settingsStore.failWrites = true
+            h.failingDataStore.failWrites = true
             vm.setShowThinking(false)
             vm.awaitState { it.error != null }
             assertTrue(vm.uiState.value.showThinking)
@@ -119,7 +118,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.dismissError()
 
             // setShowThinking is display-only: configuration is unaffected.
-            h.settingsStore.failWrites = false
+            h.failingDataStore.failWrites = false
             vm.configure(apiKey = "k")
             vm.awaitState { it.status == ChatStatus.Ready }
             vm.setShowThinking(false)
@@ -936,7 +935,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             val h = harness()
             h.seedStartupDefault("zai", "glm-4.7")
             h.credentials.creds["zai"] = ApiKeyCredential("stored-key")
-            h.settingsStore.failActiveSessionWrites = true
+            h.failingDataStore.failWrites = true
 
             val vm = h.newViewModel()
             val state = vm.awaitState { it.status != ChatStatus.Loading }
