@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNot
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -94,7 +95,7 @@ class ChatViewModel(
     private val hostKeyConfirmer: TofuHostKeyConfirmer,
     /** Process-wide SSH connections; the machines controller tests dials and machine deletion evicts. */
     private val sshConnectionProvider: SshConnectionProvider,
-    /** Where bulk transcript parses and agent-event collection run; the test harness keeps them on virtual time. */
+    /** Where bulk transcript parses run; the test harness keeps them on virtual time. */
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) : ViewModel() {
 
@@ -812,16 +813,16 @@ class ChatViewModel(
             newAgent.state.collect { state -> onAgentState(state) }
         }
         // Events are zero-replay flow: the subscriber must be bound before
-        // any prompt starts. Collection runs off Main because every
-        // MessageUpdate (one per streamed chunk) would otherwise cost a
-        // Main dispatch just to hit onAgentEvent's ignored branch — its
-        // projection arrives through the state collection above. Handled
-        // events hop to Main in emission order.
-        agentEventsJob = viewModelScope.launch(defaultDispatcher) {
-            newAgent.events.collect { event ->
-                if (event is AgentEvent.MessageUpdate) return@collect
-                withContext(Dispatchers.Main) { onAgentEvent(event) }
-            }
+        // any prompt starts. MessageUpdate is the per-chunk hot path and is
+        // projected through the state collection above, so it is filtered
+        // out here; every handled event stays on Main.immediate. The agent
+        // reduces state before emitting each event, and both collectors run
+        // on Main.immediate, so onAgentState and onAgentEvent observe agent
+        // emissions in FIFO order.
+        agentEventsJob = viewModelScope.launch {
+            newAgent.events
+                .filterNot { it is AgentEvent.MessageUpdate }
+                .collect { event -> onAgentEvent(event) }
         }
     }
 
@@ -877,15 +878,10 @@ class ChatViewModel(
             // the drawer summaries refresh here — model/thinking appends do
             // not change any observable summary field. This is also where a
             // retained streaming row hands off to its committed row (see
-            // [onAgentState]): both updates run in one Main block, so the
-            // collectors observe them in the same recomposition and the row
-            // neither blanks out nor doubles across the two flows. Only an
-            // assistant MessageEnd retires a streaming row: the projection
-            // holds assistant partials only (in emission order a
-            // user/tool-result MessageEnd always finds it already null), and
-            // this collector can trail later state emissions, so a late
-            // user/tool-result MessageEnd must not clear a partial
-            // published after it.
+            // [onAgentState]): the two flow updates run in one synchronous
+            // Main block with no suspension between them, so Compose observes
+            // the committed row and the cleared streaming row in a single
+            // recomposition.
             is AgentEvent.MessageEnd -> {
                 _uiState.update {
                     it.copy(
@@ -893,10 +889,8 @@ class ChatViewModel(
                         treeRows = treeRows(it.treeFilter)
                     )
                 }
-                if (event.message is AssistantMessage) {
-                    _streamingState.update {
-                        it.copy(streamingMessage = null, streamingBlocks = emptyList())
-                    }
+                _streamingState.update {
+                    it.copy(streamingMessage = null, streamingBlocks = emptyList())
                 }
                 scheduleSummariesRefresh()
             }
