@@ -987,9 +987,11 @@ class ChatViewModel(
                 availableThinkingLevels = getSupportedThinkingLevels(state.model)
             )
         }
-        // The run went idle: land any summary patch deferred from mid-run
-        // MessageEnds (see [scheduleSummaryPatch]).
-        if (summaryPatchPending && !state.isStreaming) scheduleSummaryPatch()
+        // The run-idle transition patches the active session's drawer row:
+        // mid-run MessageEnds are skipped while streaming (see
+        // [scheduleSummaryPatch]).
+        if (agentStreaming && !state.isStreaming) scheduleSummaryPatch()
+        agentStreaming = state.isStreaming
     }
 
     // ---- intent internals ----
@@ -1116,24 +1118,20 @@ class ChatViewModel(
         }
     }
 
-    private var summaryPatchJob: Job? = null
-    private var summaryPatchPending = false
+    /** True while the bound agent is streaming; run-idle transitions trigger a patch. */
+    private var agentStreaming = false
 
     /**
-     * The active session's drawer row is patched at most once per agent run:
-     * MessageEnds while streaming only mark a patch pending; it runs when
-     * the run goes idle (onAgentState) — or immediately when already idle —
-     * with at most one patch in flight and concurrent requests coalesced
-     * into a single queued rerun. The machinery exists only to coalesce
-     * per-message triggers into one per-run single-file read.
+     * Patches the active session's drawer row with one single-file read.
+     * MessageEnds mid-run return (the run-idle transition in [onAgentState]
+     * patches); one landing when already idle patches immediately —
+     * whichever fires after the final file append reads the complete file.
+     * Overlapping reads at run boundaries race harmlessly: they read the
+     * same file, and the next trigger re-lands the row.
      */
     private fun scheduleSummaryPatch() {
-        if (_uiState.value.isStreaming || summaryPatchJob?.isActive == true) {
-            summaryPatchPending = true
-            return
-        }
-        summaryPatchPending = false
-        summaryPatchJob = viewModelScope.launch { patchActiveSessionSummary() }
+        if (_uiState.value.isStreaming) return
+        viewModelScope.launch { patchActiveSessionSummary() }
     }
 
     /**
