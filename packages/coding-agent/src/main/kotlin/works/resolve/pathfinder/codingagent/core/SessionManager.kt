@@ -1,6 +1,8 @@
 package works.resolve.pathfinder.codingagent.core
 
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -1214,24 +1216,32 @@ class SessionManager private constructor(
         suspend fun list(
             dir: File,
             ioDispatcher: CoroutineDispatcher = Dispatchers.IO
-        ): List<SessionInfo> = withContext(ioDispatcher) {
-            val files = dir.listFiles { f: File -> f.isFile && f.name.endsWith(".jsonl") }
-                ?: return@withContext emptyList()
-            files.mapNotNull(::buildSessionInfo).sortedByDescending { it.modified }
+        ): List<SessionInfo> {
+            val files = withContext(ioDispatcher) {
+                dir.listFiles { f: File -> f.isFile && f.name.endsWith(".jsonl") }
+            } ?: return emptyList()
+            return files.mapNotNull { buildSessionInfo(it, ioDispatcher) }
+                .sortedByDescending { it.modified }
         }
 
         /**
          * pi's buildSessionInfo: one streamed pass over the file, decoding
          * line by line. Unlike [loadFile], never materializes the whole
          * file; a file whose first valid line is not the header, or that
-         * fails to read, is skipped so one bad file cannot hide the others.
+         * fails to read, reads as null so one bad file cannot hide the
+         * others.
          */
-        private fun buildSessionInfo(file: File): SessionInfo? = try {
-            file.bufferedReader(StandardCharsets.UTF_8).useLines {
-                buildSessionInfoFromLines(it, file)
+        suspend fun buildSessionInfo(
+            file: File,
+            ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+        ): SessionInfo? = withContext(ioDispatcher) {
+            try {
+                file.bufferedReader(StandardCharsets.UTF_8).useLines {
+                    buildSessionInfoFromLines(it, file)
+                }
+            } catch (_: Exception) {
+                null
             }
-        } catch (_: Exception) {
-            null
         }
 
         private fun buildSessionInfoFromLines(lines: Sequence<String>, file: File): SessionInfo? {
@@ -1279,6 +1289,120 @@ class SessionManager private constructor(
                 firstMessage = firstMessage ?: "(no messages)",
                 allMessagesText = allMessages.joinToString(" ")
             )
+        }
+
+        private const val SESSION_HEADER_READ_BUFFER_SIZE = 4096
+        private const val MAX_SESSION_HEADER_SCAN_BYTES = 1024 * 1024
+        private const val NEWLINE_BYTE: Byte = 10
+
+        /**
+         * Bounded scan for the session header: blank and malformed lines
+         * are skipped, and the first parsed line must be the session header
+         * — any other first valid line means the file is not a session.
+         * Reads at most [MAX_SESSION_HEADER_SCAN_BYTES]. Divergence from
+         * pi: it throws past that bound so its caller can fall back to a
+         * full load, but no consumer here needs the distinction, so a
+         * past-bound file, like an unreadable one, reads as null.
+         */
+        private fun readSessionHeader(file: File): JsonlCodec.SessionHeader? = try {
+            FileInputStream(file).use { input ->
+                val buffer = ByteArray(SESSION_HEADER_READ_BUFFER_SIZE)
+                val pending = ByteArrayOutputStream()
+                var scannedBytes = 0
+                while (scannedBytes < MAX_SESSION_HEADER_SCAN_BYTES) {
+                    val readLength =
+                        minOf(buffer.size, MAX_SESSION_HEADER_SCAN_BYTES - scannedBytes)
+                    val bytesRead = input.read(buffer, 0, readLength)
+                    if (bytesRead == -1) return@use pendingLineHeader(pending)
+                    scannedBytes += bytesRead
+                    for (i in 0 until bytesRead) {
+                        if (buffer[i] != NEWLINE_BYTE) {
+                            pending.write(buffer[i].toInt())
+                            continue
+                        }
+                        when (val candidate = parseSessionHeaderCandidate(pendingLine(pending))) {
+                            is SessionHeaderCandidate.Header -> return candidate.header
+                            SessionHeaderCandidate.NotASession -> return null
+                            null -> Unit
+                        }
+                        pending.reset()
+                    }
+                }
+                // pi probes one byte past the bound: a final unterminated
+                // header still counts when the file ends exactly there.
+                if (input.read() != -1) return@use null
+                pendingLineHeader(pending)
+            }
+        } catch (_: Exception) {
+            null
+        }
+
+        private sealed interface SessionHeaderCandidate {
+            data object NotASession : SessionHeaderCandidate
+
+            data class Header(val header: JsonlCodec.SessionHeader) : SessionHeaderCandidate
+        }
+
+        /**
+         * pi's parseSessionHeaderCandidate, tri-state over one physical
+         * line: null keeps scanning (blank or non-JSON), NotASession rejects
+         * the file (a parsed line that is not a session header), Header
+         * accepts. Divergence: pi accepts a session line on type and id
+         * alone even when the rest fails to decode; here a session line
+         * that fails the codec's strict decode (e.g. a junk timestamp)
+         * also rejects the file, so discovery agrees with [open].
+         */
+        private fun parseSessionHeaderCandidate(line: String): SessionHeaderCandidate? {
+            if (line.isBlank()) return null
+            val element = try {
+                Json.parseToJsonElement(line)
+            } catch (_: Exception) {
+                return null
+            }
+            val obj = element as? JsonObject
+                ?: return SessionHeaderCandidate.NotASession
+            if (obj.string("type") != "session" || obj.string("id") == null) {
+                return SessionHeaderCandidate.NotASession
+            }
+            return (JsonlCodec.parseLine(line) as? JsonlCodec.Line.Header)
+                ?.let { SessionHeaderCandidate.Header(it.header) }
+                ?: SessionHeaderCandidate.NotASession
+        }
+
+        // Lines split on the byte level so multibyte sequences never break
+        // across chunks; decode replaces dangling tails like pi's StringDecoder.
+        private fun pendingLine(pending: ByteArrayOutputStream): String =
+            String(pending.toByteArray(), StandardCharsets.UTF_8)
+
+        private fun pendingLineHeader(pending: ByteArrayOutputStream): JsonlCodec.SessionHeader? = (
+            parseSessionHeaderCandidate(pendingLine(pending))
+                as? SessionHeaderCandidate.Header
+            )?.header
+
+        /**
+         * pi's findMostRecentSession: the session file with the newest
+         * [File.lastModified] in [dir], or null when none. Divergence: pi
+         * optionally filters sessions by header cwd; sessions here share
+         * one unscoped directory, so that filter is omitted.
+         */
+        suspend fun findMostRecentSession(
+            dir: File,
+            ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+        ): File? = withContext(ioDispatcher) {
+            val files = dir.listFiles { f: File -> f.isFile && f.name.endsWith(".jsonl") }
+                ?: return@withContext null
+            files.filter { readSessionHeader(it) != null }.maxByOrNull { it.lastModified() }
+        }
+
+        /** The session file whose header id equals [id], or null when none. */
+        suspend fun findSessionById(
+            dir: File,
+            id: String,
+            ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+        ): File? = withContext(ioDispatcher) {
+            val files = dir.listFiles { f: File -> f.isFile && f.name.endsWith(".jsonl") }
+                ?: return@withContext null
+            files.firstOrNull { readSessionHeader(it)?.id == id }
         }
     }
 }
