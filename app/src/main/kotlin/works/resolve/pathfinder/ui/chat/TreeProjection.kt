@@ -1,7 +1,6 @@
 package works.resolve.pathfinder.ui.chat
 
 import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.UserMessage

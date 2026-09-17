@@ -20,8 +20,6 @@ import works.resolve.pathfinder.ai.transport.OkHttpWebSocketTransport
 import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.data.credentials.EncryptedCredentialStore
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
-import works.resolve.pathfinder.data.sessions.DirectorySessionSource
-import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.ssh.BitmapImageProcessing
@@ -119,10 +117,6 @@ class PathfinderApplication : Application() {
         runBlocking { SettingsManager.fromStorage(settingsRepository) }
     }
 
-    val sessionSource: SessionSource by lazy {
-        DirectorySessionSource(File(filesDir, SESSIONS_DIRECTORY))
-    }
-
     /** Machine configs, per-machine keys, and TOFU host-key state. */
     val machineStore: MachineStore by lazy {
         MachineStore(
@@ -174,7 +168,7 @@ class PathfinderApplication : Application() {
                 settingsManager = settingsManager,
                 catalog = modelCatalog,
                 authService = authService,
-                sessionSource = sessionSource,
+                sessionsDir = File(filesDir, SESSIONS_DIRECTORY),
                 agentFactory = agentFactory,
                 searchProviderService = searchProviderService,
                 machineStore = machineStore,
@@ -184,10 +178,6 @@ class PathfinderApplication : Application() {
                 appForegroundGate = appForegroundGate
             )
         }
-    }
-
-    override fun onCreate() {
-        super.onCreate()
     }
 
     private companion object {

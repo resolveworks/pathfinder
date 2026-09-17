@@ -86,7 +86,6 @@ import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
-import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
@@ -355,7 +354,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         )
         vm.awaitState { it.isCompacting }
 
-        h.sessions.managers[vm.uiState.value.activeSessionId!!]!!.appendCompaction(
+        h.liveManager(vm.uiState.value.activeSessionId!!).appendCompaction(
             summary = "SUMMARY",
             firstKeptEntryId = session.sessionManager.getLeafId()!!,
             tokensBefore = 190_010,
@@ -483,7 +482,12 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         val state = vm2.awaitState { it.status == ChatStatus.Ready }
         assertEquals(originalId, state.activeSessionId)
         assertEquals(2, state.messages.size)
-        assertEquals("Hello", state.sessionSummaries.first { it.id == originalId!! }.firstMessage)
+        // Summaries land asynchronously after Ready; wait for the build.
+        vm2.awaitState { it.sessionSummaries.any { s -> s.id == originalId } }
+        assertEquals(
+            "Hello",
+            vm2.uiState.value.sessionSummaries.first { it.id == originalId!! }.firstMessage
+        )
 
         vm2.closeForTest()
     }
@@ -899,7 +903,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
     @Test
     fun sameTimestampMessages_getDistinctKeys() = runTest(mainDispatcherRule.scheduler) {
         val h = harness()
-        val manager = kotlinx.coroutines.runBlocking { h.sessions.create() }
+        val manager = kotlinx.coroutines.runBlocking { h.createSession() }
         kotlinx.coroutines.runBlocking {
             manager.appendMessage(works.resolve.pathfinder.ai.UserMessage.ofText("Hello", 123L))
             manager.appendMessage(h.assistant("World").copy(timestamp = 123L))
@@ -945,6 +949,8 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.configure(apiKey = "k")
             vm.awaitState { it.status == ChatStatus.Ready }
             val firstId = vm.uiState.value.activeSessionId!!
+            // The background build has landed — with zero rows for a fresh app.
+            vm.awaitState { it.sessionSummariesLoaded }
             assertEquals(0, vm.uiState.value.sessionSummaries.size)
 
             vm.exchange(h, "Hello", "world")
@@ -989,7 +995,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
             // The directory becomes read-only: the first assistant commit's
             // file creation fails inside prompt() and the run fails.
-            h.sessions.denyWrites = true
+            h.denyWrites = true
             h.scriptedStreams.add(
                 h.gatedStream(
                     "world",
@@ -1002,11 +1008,11 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.send()
             vm.awaitState { it.error != null && !it.isStreaming }
             assertEquals(UiString(R.string.error_session_save), vm.uiState.value.error)
-            assertNull(h.sessions.stored(sessionId))
+            assertNull(h.stored(sessionId))
 
             // The in-memory tree kept the run's entries; the next prompt
             // works and the recovery flush writes everything.
-            h.sessions.denyWrites = false
+            h.denyWrites = false
             vm.dismissError()
             h.scriptedStreams.add(
                 h.gatedStream(

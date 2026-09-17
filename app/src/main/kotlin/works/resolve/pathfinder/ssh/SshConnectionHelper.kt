@@ -16,7 +16,7 @@ class SshConnectionException(message: String, val detail: Detail) : Exception(me
  * One authenticated SSH connection. The holder must call [close] when
  * done — cbssh exposes no pooling or reconnect.
  */
-class SshConnection internal constructor(val machine: Machine, val client: SshClient) {
+class SshConnection internal constructor(val client: SshClient) {
     suspend fun close() {
         withContext(Dispatchers.IO) { client.disconnect() }
     }
@@ -101,7 +101,7 @@ class SshConnectionHelper(private val store: MachineStore) {
                     )
             }
 
-            SshConnection(machine = machine, client = client)
+            SshConnection(client = client)
         } catch (error: Exception) {
             client.disconnect()
             throw error

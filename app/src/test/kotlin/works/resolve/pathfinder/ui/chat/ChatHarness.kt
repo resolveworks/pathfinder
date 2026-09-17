@@ -3,10 +3,11 @@ package works.resolve.pathfinder.ui.chat
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.viewModelScope
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -62,15 +63,11 @@ import works.resolve.pathfinder.ai.transport.HttpStreamingTransport
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.codingagent.core.AgentSession
-import works.resolve.pathfinder.codingagent.core.SessionError
-import works.resolve.pathfinder.codingagent.core.SessionErrorCode
-import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.SettingsManager
 import works.resolve.pathfinder.codingagent.core.SettingsStorage
 import works.resolve.pathfinder.codingagent.core.createAgentSession
 import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
-import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
@@ -166,61 +163,6 @@ internal class FailingSettingsStore(private val delegate: SettingsRepository) :
         if (failWrites) throw java.io.IOException("settings write failed")
         delegate.setShowThinking(showThinking)
     }
-}
-
-/**
- * Real managers over a temp dir (the source is a thin seam). All manager
- * IO runs on [Dispatchers.Unconfined] — inline on the caller, as in the
- * ported SessionManagerTest — so nothing escapes the test scheduler onto
- * a real dispatcher the virtual clock cannot see (the certain-hang
- * combination). `denyWrites` flips the directory read-only so the next
- * assistant commit fails with SessionError(STORAGE), like a full disk;
- * `managers` keeps the live instance per id so buffered (never-flushed)
- * entries stay inspectable.
- */
-internal class TestSessionSource(tmpFolder: TemporaryFolder) : SessionSource {
-    // Created eagerly: denyWrites's read-only flip is a no-op on a
-    // nonexistent dir (the manager would just mkdirs a writable one at
-    // the first flush).
-    val dir = File(tmpFolder.root, "sessions_${System.nanoTime()}").apply { mkdirs() }
-    val managers = ConcurrentHashMap<String, SessionManager>()
-    var nextId = 0
-    var failList = false
-    var listCalls = 0
-        private set
-    var denyWrites = false
-        set(value) {
-            field = value
-            dir.setWritable(!value)
-        }
-
-    override suspend fun create(): SessionManager {
-        val manager = SessionManager.create(
-            dir,
-            idFactory = { "sess-" + nextId++ },
-            ioDispatcher = Dispatchers.Unconfined
-        )
-        managers[manager.getSessionId()] = manager
-        return manager
-    }
-
-    override suspend fun open(file: File): SessionManager? = SessionManager.open(
-        file,
-        idFactory = { "sess-" + nextId++ },
-        ioDispatcher = Dispatchers.Unconfined
-    )?.also { managers[it.getSessionId()] = it }
-
-    override suspend fun list(): List<SessionInfo> {
-        listCalls += 1
-        if (failList) throw SessionError(SessionErrorCode.STORAGE, "list failed")
-        return SessionManager.list(dir, ioDispatcher = Dispatchers.Unconfined)
-    }
-
-    /** Re-reads a session from disk; null while it has never been flushed. */
-    suspend fun stored(id: String): SessionManager? =
-        SessionManager.list(dir, ioDispatcher = Dispatchers.Unconfined)
-            .firstOrNull { it.id == id }
-            ?.let { open(it.path) }
 }
 
 /**
@@ -330,7 +272,30 @@ internal class ChatHarness(
         return content
     }
 
-    val sessions = TestSessionSource(tmpFolder)
+    /**
+     * Real session managers over a temp dir: all manager IO runs on
+     * [Dispatchers.Unconfined] — inline on the caller, as in the ported
+     * SessionManagerTest — so nothing escapes the test scheduler onto a
+     * real dispatcher the virtual clock cannot see (the certain-hang
+     * combination). `denyWrites` flips the directory read-only so the next
+     * assistant commit fails with SessionError(STORAGE), like a full disk.
+     */
+    // Created eagerly: denyWrites's read-only flip is a no-op on a
+    // nonexistent dir (the manager would just mkdirs a writable one at
+    // the first flush).
+    val sessionsDir = File(tmpFolder.root, "sessions_${System.nanoTime()}").apply { mkdirs() }
+
+    private val nextSessionId = AtomicInteger()
+
+    val sessionIdFactory: () -> String = { "sess-" + nextSessionId.getAndIncrement() }
+
+    val sessionIoDispatcher: CoroutineDispatcher = Dispatchers.Unconfined
+
+    var denyWrites = false
+        set(value) {
+            field = value
+            sessionsDir.setWritable(!value)
+        }
 
     val scriptedStreams = ConcurrentLinkedQueue<Flow<AssistantMessageEvent>>()
 
@@ -338,6 +303,11 @@ internal class ChatHarness(
 
     var rejectAll = false
     val createdAgents = mutableListOf<AgentSession>()
+
+    // The harness's write handle into the live sessions: AgentSession keeps
+    // its mutable manager private (a ReadonlySessionManager view only), so
+    // the exact instances the factory received are recorded here.
+    val createdManagers = mutableListOf<SessionManager>()
 
     val streamedModels = CopyOnWriteArrayList<Model>()
 
@@ -412,7 +382,10 @@ internal class ChatHarness(
                 // real provider stream.
                 script.map { ev -> ev.restamp(requestedModel) }
             }
-        ).also { result -> createdAgents += result.session }
+        ).also { result ->
+            createdAgents += result.session
+            createdManagers += sessionManager
+        }
     }
 
     fun newViewModel(): ChatViewModel = ChatViewModel(
@@ -420,7 +393,9 @@ internal class ChatHarness(
         settingsManager = settingsManager,
         catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
         authService = authService,
-        sessionSource = sessions,
+        sessionsDir = sessionsDir,
+        sessionIdFactory = sessionIdFactory,
+        sessionIoDispatcher = sessionIoDispatcher,
         agentFactory = factory,
         modelResolver = modelResolver,
         searchProviderService = searchProviders,
@@ -479,10 +454,30 @@ internal class ChatHarness(
     fun errorStream(message: AssistantMessage) =
         flowOf(AssistantMessageEvent.Error(StopReason.ERROR, message))
 
-    suspend fun countSessions(): Int = sessions.list().size
+    suspend fun countSessions(): Int =
+        SessionManager.list(sessionsDir, ioDispatcher = sessionIoDispatcher).size
+
+    /** Creates a real manager in the temp dir, outside any ViewModel. */
+    suspend fun createSession(): SessionManager = SessionManager.create(
+        sessionsDir,
+        idFactory = sessionIdFactory,
+        ioDispatcher = sessionIoDispatcher
+    )
 
     /** The live manager the ViewModel holds for [id] (includes buffered entries). */
-    fun liveManager(id: String): SessionManager = sessions.managers.getValue(id)
+    fun liveManager(id: String): SessionManager = createdManagers.first { it.getSessionId() == id }
+
+    /** Re-reads a session from disk; null while it has never been flushed. */
+    suspend fun stored(id: String): SessionManager? =
+        SessionManager.list(sessionsDir, ioDispatcher = sessionIoDispatcher)
+            .firstOrNull { it.id == id }
+            ?.let {
+                SessionManager.open(
+                    it.path,
+                    idFactory = sessionIdFactory,
+                    ioDispatcher = sessionIoDispatcher
+                )
+            }
 
     fun storedApiKey(providerId: String): String? =
         (credentials.creds[providerId] as? ApiKeyCredential)?.key

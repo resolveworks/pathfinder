@@ -213,6 +213,8 @@ data class ChatUiState(
     val defaultThinkingLevel: ModelThinkingLevel? = null,
     val activeSessionId: String? = null,
     val sessionSummaries: List<SessionInfo> = emptyList(),
+    /** False until the one-time background summary build lands; true even when the list is empty. */
+    val sessionSummariesLoaded: Boolean = false,
     /** Drawer search over the current session summaries. */
     val sessionSearchQuery: String = "",
     /** RELEVANCE matches pi's effective default under a query (its "threaded" mode degrades to relevance). */

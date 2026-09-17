@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
@@ -33,14 +34,13 @@ import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
 import works.resolve.pathfinder.ai.getSupportedThinkingLevels
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
+import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.codingagent.core.AgentSession
 import works.resolve.pathfinder.codingagent.core.ReadonlySessionManager
 import works.resolve.pathfinder.codingagent.core.SessionError
 import works.resolve.pathfinder.codingagent.core.SessionErrorCode
-import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.SettingsManager
-import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.ssh.Machine
@@ -79,7 +79,11 @@ class ChatViewModel(
     private val settingsManager: SettingsManager,
     private val catalog: ProviderCatalog,
     private val authService: ProviderAuthService,
-    private val sessionSource: SessionSource,
+    private val sessionsDir: File,
+    /** New session ids; pi's uuidv7 (SessionManager.create's default). */
+    private val sessionIdFactory: () -> String = ::uuidv7,
+    /** Where session manager IO runs; the test harness keeps it on virtual time. */
+    private val sessionIoDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val agentFactory: AgentFactory,
     /** Resolves a provider/model pair to the effective request model; throwing input is surfaced as a safe unknown-model error. */
     private val modelResolver: (providerId: String, modelId: String) -> Model,
@@ -234,6 +238,9 @@ class ChatViewModel(
 
     init {
         viewModelScope.launch { initialize() }
+        // The one-time summary build runs beside startup: Ready publishes
+        // without waiting on it.
+        viewModelScope.launch { buildSessionSummaries() }
         viewModelScope.launch {
             searchProviders.state.map { it.braveConfigured }.distinctUntilChanged().collect {
                 agent?.let(searchProviders::applyTo)
@@ -531,7 +538,11 @@ class ChatViewModel(
             try {
                 // Memory-only: nothing touches disk, and the new session is
                 // absent from the drawer until its first assistant commit.
-                val manager = sessionSource.create()
+                val manager = SessionManager.create(
+                    sessionsDir,
+                    idFactory = sessionIdFactory,
+                    ioDispatcher = sessionIoDispatcher
+                )
                 val newAgent = tryCreateAgent(manager) ?: return@launch
                 if (!activateSession(manager, newAgent)) return@launch
             } catch (e: CancellationException) {
@@ -557,7 +568,7 @@ class ChatViewModel(
                         setError(UiString(R.string.error_session_missing))
                         return@launch
                     }
-                val manager = sessionSource.open(file)
+                val manager = openSession(file)
                 if (manager == null) {
                     setError(UiString(R.string.error_session_missing))
                     return@launch
@@ -578,14 +589,6 @@ class ChatViewModel(
         try {
             val appSettings = settingsStore.currentSettings()
             val runtime = settingsManager.getSettings()
-            val summaries = try {
-                sessionSource.list()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                recordDegradation("session_summaries", e)
-                emptyList()
-            }
             refreshCredentialSurfaces()
 
             // NeedsConfiguration means exactly "no configured provider at
@@ -596,8 +599,7 @@ class ChatViewModel(
                     it.copy(
                         status = ChatStatus.NeedsConfiguration,
                         startKey = ProvidersNavKey,
-                        showThinking = appSettings.showThinking,
-                        sessionSummaries = summaries
+                        showThinking = appSettings.showThinking
                     )
                 }
                 return
@@ -619,7 +621,7 @@ class ChatViewModel(
                 setError(UiString(R.string.error_model_unavailable))
             }
 
-            val manager = resolveSession(appSettings.activeSessionId, summaries)
+            val manager = resolveSession(appSettings.activeSessionId)
             // Build the agent before committing any state: a factory failure
             // must never leave a Ready UI or persisted active-session id.
             val newAgent = tryCreateAgent(manager)
@@ -627,7 +629,6 @@ class ChatViewModel(
                 _uiState.update {
                     it.copy(
                         status = ChatStatus.Failed,
-                        sessionSummaries = summaries,
                         error = UiString(R.string.error_config_invalid)
                     )
                 }
@@ -642,8 +643,7 @@ class ChatViewModel(
             _uiState.update {
                 it.copy(
                     status = ChatStatus.Ready,
-                    showThinking = appSettings.showThinking,
-                    sessionSummaries = summaries
+                    showThinking = appSettings.showThinking
                 )
             }
         } catch (e: CancellationException) {
@@ -655,25 +655,58 @@ class ChatViewModel(
     }
 
     /**
-     * pi's continueRecent: the requested active session, else the most
-     * recently modified listed one, else a new one. The stored id can point
-     * at a never-flushed session (process death before any assistant
-     * committed) — it is absent from the summaries and the flow falls
-     * through exactly as for any other missing session.
+     * One-time background build of the drawer's summary list — the only
+     * decode of every session file (Ready publishes without waiting on it,
+     * and [patchActiveSessionSummary] keeps the list current from then on).
+     * Sets [ChatUiState.sessionSummariesLoaded] even when the list is empty.
      */
-    private suspend fun resolveSession(
-        activeSessionId: String?,
-        summaries: List<SessionInfo>
-    ): SessionManager {
-        activeSessionId?.let { id ->
-            summaries.firstOrNull { it.id == id }?.let { info ->
-                sessionSource.open(info.path)?.let { return it }
+    private suspend fun buildSessionSummaries() {
+        val summaries = SessionManager.list(sessionsDir, ioDispatcher = sessionIoDispatcher)
+        _uiState.update {
+            it.copy(sessionSummaries = summaries, sessionSummariesLoaded = true)
+        }
+        sessionSearch.onSummariesChanged(summaries)
+    }
+
+    /**
+     * pi's continueRecent: the stored active session, else the most recently
+     * modified session file, else a new one. The most-recent fallback ranks
+     * by file mtime — pi's continueRecent shape — not the message-derived
+     * `modified` the drawer rows sort by. The stored id can point at a
+     * never-flushed session (process death before any assistant committed)
+     * — no file matches and the flow falls through exactly as for any other
+     * missing session.
+     */
+    private suspend fun resolveSession(activeSessionId: String?): SessionManager {
+        if (activeSessionId != null) {
+            SessionManager.findSessionById(sessionsDir, activeSessionId, sessionIoDispatcher)
+                ?.let { file -> openSession(file)?.let { return it } }
+        }
+        SessionManager.findMostRecentSession(sessionsDir, sessionIoDispatcher)
+            ?.let { file -> openSession(file)?.let { return it } }
+        return SessionManager.create(
+            sessionsDir,
+            idFactory = sessionIdFactory,
+            ioDispatcher = sessionIoDispatcher
+        )
+    }
+
+    /**
+     * Opens [file], or null when it is not a session (a file the user
+     * cannot open must never block startup); [SessionErrorCode.STORAGE]
+     * failures surface.
+     */
+    private suspend fun openSession(file: File): SessionManager? = try {
+        SessionManager.open(file, idFactory = sessionIdFactory, ioDispatcher = sessionIoDispatcher)
+    } catch (e: SessionError) {
+        when (e.code) {
+            SessionErrorCode.STORAGE -> throw e
+
+            else -> {
+                logger.warn("session_open_skipped: file={}", file.name, e)
+                null
             }
         }
-        summaries.firstOrNull()?.let { info ->
-            sessionSource.open(info.path)?.let { return it }
-        }
-        return sessionSource.create()
     }
 
     // ---- session / agent lifecycle ----
@@ -684,8 +717,8 @@ class ChatViewModel(
      * the factory accepted the settings. Returns false when persisting the
      * active id fails; in that case nothing is committed.
      *
-     * Summaries are not refreshed here: activation touches no session file;
-     * [AgentEvent.MessageEnd] refreshes when one changes.
+     * Summaries are not touched here: activation changes no session file;
+     * [AgentEvent.MessageEnd] patches the active row when one changes.
      */
     private suspend fun activateSession(manager: SessionManager, agent: AgentSession): Boolean {
         try {
@@ -751,10 +784,7 @@ class ChatViewModel(
      */
     private suspend fun prepareAdoption(): Pair<SessionManager, AgentSession>? {
         val manager = try {
-            resolveSession(
-                settingsStore.currentSettings().activeSessionId,
-                sessionSource.list()
-            )
+            resolveSession(settingsStore.currentSettings().activeSessionId)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -875,13 +905,17 @@ class ChatViewModel(
             // auto-retry or overflow recovery removes the error message from
             // agent state while the append-only tree keeps it. A message may
             // also create the session file (or land in an existing one), so
-            // the drawer summaries refresh here — model/thinking appends do
-            // not change any observable summary field. This is also where a
-            // retained streaming row hands off to its committed row (see
-            // [onAgentState]): the two flow updates run in one synchronous
-            // Main block with no suspension between them, so Compose observes
-            // the committed row and the cleared streaming row in a single
-            // recomposition.
+            // Re-project on tree growth, not agent-transcript growth: an
+            // auto-retry or overflow recovery removes the error message from
+            // agent state while the append-only tree keeps it. A message may
+            // also create the session file (or land in an existing one), so
+            // the active session's drawer row is patched here —
+            // model/thinking appends do not change any observable summary
+            // field. This is also where a retained streaming row hands off to
+            // its committed row (see [onAgentState]): the two flow updates run
+            // in one synchronous Main block with no suspension between them,
+            // so Compose observes the committed row and the cleared streaming
+            // row in a single recomposition.
             is AgentEvent.MessageEnd -> {
                 _uiState.update {
                     it.copy(
@@ -892,7 +926,7 @@ class ChatViewModel(
                 _streamingState.update {
                     it.copy(streamingMessage = null, streamingBlocks = emptyList())
                 }
-                scheduleSummariesRefresh()
+                scheduleSummaryPatch()
             }
 
             else -> Unit
@@ -981,9 +1015,11 @@ class ChatViewModel(
                 streamingBlocks = streamingBlocks ?: it.streamingBlocks
             )
         }
-        // The run went idle: land any summary refresh deferred from mid-run
-        // MessageEnds (see [scheduleSummariesRefresh]).
-        if (summariesRefreshPending && !state.isStreaming) scheduleSummariesRefresh()
+        // The run-idle transition patches the active session's drawer row:
+        // mid-run MessageEnds are skipped while streaming (see
+        // [scheduleSummaryPatch]).
+        if (agentStreaming && !state.isStreaming) scheduleSummaryPatch()
+        agentStreaming = state.isStreaming
     }
 
     // ---- intent internals ----
@@ -1110,43 +1146,39 @@ class ChatViewModel(
         }
     }
 
-    private var summariesRefreshJob: Job? = null
-    private var summariesRefreshPending = false
+    /** True while the bound agent is streaming; run-idle transitions trigger a patch. */
+    private var agentStreaming = false
 
     /**
-     * Drawer summaries refresh at most once per agent run: MessageEnds
-     * while streaming only mark a refresh pending; it runs when the run
-     * goes idle (onAgentState) — or immediately when already idle — with at
-     * most one refresh in flight and concurrent requests coalesced into a
-     * single queued rerun. The heavy part is sessionSource.list(), an
-     * O(all session bytes) decode, so per-message refreshes would grow the
-     * cost with history.
+     * Patches the active session's drawer row with one single-file read.
+     * MessageEnds mid-run return (the run-idle transition in [onAgentState]
+     * patches); one landing when already idle patches immediately —
+     * whichever fires after the final file append reads the complete file.
+     * Overlapping reads at run boundaries race harmlessly: they read the
+     * same file, and the next trigger re-lands the row.
      */
-    private fun scheduleSummariesRefresh() {
-        if (_uiState.value.isStreaming || summariesRefreshJob?.isActive == true) {
-            summariesRefreshPending = true
-            return
-        }
-        summariesRefreshPending = false
-        summariesRefreshJob = viewModelScope.launch { refreshSessionSummaries() }
+    private fun scheduleSummaryPatch() {
+        if (_uiState.value.isStreaming) return
+        viewModelScope.launch { patchActiveSessionSummary() }
     }
 
     /**
-     * Re-reads the session list — the drawer's refresh point, running when a
-     * session file changed. A read failure degrades to the previous list
-     * (the drawer is advisory state).
+     * Re-reads only the active session's file and insert-or-replaces its
+     * drawer row. The sessions dir is app-private and only the active
+     * session's manager writes to it, so no other row can have changed
+     * since the one-time [buildSessionSummaries]; an unflushed session
+     * (null session file) or an unreadable file leaves the list as-is.
      */
-    private suspend fun refreshSessionSummaries() {
-        val summaries = try {
-            sessionSource.list()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            recordDegradation("session_summaries", e)
-            return
+    private suspend fun patchActiveSessionSummary() {
+        val file = activeSession?.getSessionFile() ?: return
+        val info = SessionManager.buildSessionInfo(file, sessionIoDispatcher) ?: return
+        _uiState.update { state ->
+            state.copy(
+                sessionSummaries = (state.sessionSummaries.filterNot { it.id == info.id } + info)
+                    .sortedByDescending { it.modified }
+            )
         }
-        _uiState.update { it.copy(sessionSummaries = summaries) }
-        sessionSearch.onSummariesChanged(summaries)
+        sessionSearch.onSummariesChanged(_uiState.value.sessionSummaries)
     }
 
     /** True (and sets an error) when a session/config-changing intent arrives mid-stream. */
@@ -1159,15 +1191,6 @@ class ChatViewModel(
     }
 
     // ---- helpers ----
-
-    /**
-     * Records a degradation the ViewModel deliberately absorbs into degraded
-     * UI state instead of an error — the credential store failing to read
-     * must be distinguishable from an actually-missing credential.
-     */
-    private fun recordDegradation(operation: String, cause: Throwable) {
-        logger.warn(operation, cause)
-    }
 
     /**
      * Surfaces [message] as the UI error and logs message plus [cause] at
