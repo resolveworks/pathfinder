@@ -136,7 +136,10 @@ class TelemetryOptionsTest {
                 SimpleStreamOptions(apiKey = "k", telemetryContext = telemetry)
             )
             .toList()
-        assertEquals(works.resolve.pathfinder.ai.StopReason.STOP, events.last().partial.stopReason)
+        assertEquals(
+            works.resolve.pathfinder.ai.StopReason.STOP,
+            (events.last() as AssistantMessageEvent.Done).reason
+        )
         assertEquals(0, telemetry.getSpans().size)
     }
 }

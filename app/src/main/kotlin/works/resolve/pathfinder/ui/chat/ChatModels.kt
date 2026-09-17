@@ -3,7 +3,6 @@ package works.resolve.pathfinder.ui.chat
 import androidx.compose.runtime.Immutable
 import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable
-import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.ToolCall
@@ -266,14 +265,31 @@ data class ChatUiState(
  */
 @Immutable
 data class StreamingUiState(
-    /** In-flight partial; role-generic in pi, assistant-only here (non-assistant partials render nothing). */
-    val streamingMessage: AssistantMessage? = null,
-    /**
-     * Pre-parsed blocks of [streamingMessage]'s committed prefix (every
-     * part but the growing tail), held across token updates so a part
-     * finalizing never blanks what already renders.
-     */
-    val streamingBlocks: List<MarkdownBlock> = emptyList(),
+    /** Delta fold of the streaming assistant message (see ChatViewModel); null while nothing streams. */
+    val streaming: StreamingMessageUi? = null,
     /** Live partial output by tool call id (bash streaming); cleared when the result commits. */
     val toolPartials: Map<String, String> = emptyMap()
 )
+
+/**
+ * One in-flight assistant message as folded from provider boundary events
+ * and deltas: [blocks] are the pre-parsed finalized parts (everything before
+ * the growing tail), [tail] the growing text/thinking part fed by deltas,
+ * [hasBody] whether anything renders before the placeholder bridge kicks in,
+ * and [errorMessage] a provider stop error surfaced at a boundary.
+ */
+@Immutable
+data class StreamingMessageUi(
+    val blocks: List<MarkdownBlock> = emptyList(),
+    val tail: StreamingTailUi? = null,
+    val hasBody: Boolean = false,
+    val errorMessage: String? = null
+)
+
+/**
+ * The growing tail part of a streaming message; [text] is materialized per
+ * frame, not per token. [index] is the part's content index — a stable
+ * identity for the renderer's per-part streaming state.
+ */
+@Immutable
+data class StreamingTailUi(val index: Int, val thinking: Boolean, val text: String)

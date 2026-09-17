@@ -449,14 +449,14 @@ internal object GoogleStreamEngine {
                         currentThinkingSignature,
                         part["thoughtSignature"].strOrNull()
                     )
-                    events.add(AssistantMessageEvent.ThinkingDelta(blockIndex(), text, snapshot()))
+                    events.add(AssistantMessageEvent.ThinkingDelta(blockIndex(), text))
                 } else {
                     currentText!!.append(text)
                     currentTextSignature = GoogleShared.retainThoughtSignature(
                         currentTextSignature,
                         part["thoughtSignature"].strOrNull()
                     )
-                    events.add(AssistantMessageEvent.TextDelta(blockIndex(), text, snapshot()))
+                    events.add(AssistantMessageEvent.TextDelta(blockIndex(), text))
                 }
             }
 
@@ -484,9 +484,7 @@ internal object GoogleStreamEngine {
                 )
                 content.add(toolCall)
                 events.add(AssistantMessageEvent.ToolCallStart(blockIndex(), snapshot()))
-                events.add(
-                    AssistantMessageEvent.ToolCallDelta(blockIndex(), args.toString(), snapshot())
-                )
+                events.add(AssistantMessageEvent.ToolCallDelta(blockIndex(), args.toString()))
                 events.add(AssistantMessageEvent.ToolCallEnd(blockIndex(), toolCall, snapshot()))
             }
 

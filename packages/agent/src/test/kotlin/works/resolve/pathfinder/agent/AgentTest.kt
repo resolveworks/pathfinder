@@ -60,7 +60,7 @@ class AgentTest {
 
     private fun okStream(): Flow<AssistantMessageEvent> = flowOf(
         AssistantMessageEvent.Start(assistant(text = "")),
-        AssistantMessageEvent.TextDelta(0, "he", assistant(text = "he")),
+        AssistantMessageEvent.TextDelta(0, "he"),
         AssistantMessageEvent.Done(StopReason.STOP, assistant(text = "hello"))
     )
 

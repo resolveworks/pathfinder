@@ -426,7 +426,7 @@ internal class ChatHarness(
         is AssistantMessageEvent.Start -> AssistantMessageEvent.Start(partial.withModel(model))
 
         is AssistantMessageEvent.TextDelta ->
-            AssistantMessageEvent.TextDelta(contentIndex, delta, partial.withModel(model))
+            AssistantMessageEvent.TextDelta(contentIndex, delta)
 
         is AssistantMessageEvent.Done -> AssistantMessageEvent.Done(
             reason,
@@ -446,8 +446,15 @@ internal class ChatHarness(
         flow {
             emit(AssistantMessageEvent.Start(assistant("")))
             gate.await()
+            emit(
+                AssistantMessageEvent.TextStart(
+                    0,
+                    assistant("").copy(content = listOf(TextContent("")))
+                )
+            )
+            emit(AssistantMessageEvent.TextDelta(0, text))
             val full = assistant(text)
-            emit(AssistantMessageEvent.TextDelta(0, text, full))
+            emit(AssistantMessageEvent.TextEnd(0, text, full))
             emit(AssistantMessageEvent.Done(StopReason.STOP, full))
         }
 

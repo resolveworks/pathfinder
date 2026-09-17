@@ -593,7 +593,7 @@ internal class MistralStreamingState(private val model: Model, private val times
         val textBlock = blocks[currentBlockIndex] as Block.Text
         textBlock.text.append(delta)
         textBlock.built = null
-        events.add(AssistantMessageEvent.TextDelta(currentBlockIndex, delta, snapshot()))
+        events.add(AssistantMessageEvent.TextDelta(currentBlockIndex, delta))
         return events
     }
 
@@ -609,7 +609,7 @@ internal class MistralStreamingState(private val model: Model, private val times
         val thinkingBlock = blocks[currentBlockIndex] as Block.Thinking
         thinkingBlock.thinking.append(delta)
         thinkingBlock.built = null
-        events.add(AssistantMessageEvent.ThinkingDelta(currentBlockIndex, delta, snapshot()))
+        events.add(AssistantMessageEvent.ThinkingDelta(currentBlockIndex, delta))
         return events
     }
 
@@ -648,7 +648,7 @@ internal class MistralStreamingState(private val model: Model, private val times
         toolBlock.arguments.append(argsDelta)
         toolBlock.built = null
 
-        events.add(AssistantMessageEvent.ToolCallDelta(blockIndex, argsDelta, snapshot()))
+        events.add(AssistantMessageEvent.ToolCallDelta(blockIndex, argsDelta))
         return events
     }
 

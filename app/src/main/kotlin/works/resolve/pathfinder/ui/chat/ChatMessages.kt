@@ -112,10 +112,9 @@ internal fun ConversationContent(
     val isStreaming = uiState.isStreaming
     val showThinking = uiState.showThinking
     val toolPartials = streaming.toolPartials
-    val streamingBlocks = streaming.streamingBlocks
 
     Box(modifier = modifier.fillMaxSize()) {
-        if (messageCount == 0 && streaming.streamingMessage == null) {
+        if (messageCount == 0 && streaming.streaming == null) {
             EmptyStateText(text = stringResource(R.string.chat_empty))
         }
         // Forward layout anchors the TOP of a visible message, so appending
@@ -157,29 +156,11 @@ internal fun ConversationContent(
                     }
                 }
             }
-            streaming.streamingMessage?.let { streaming ->
+            streaming.streaming?.let { streaming ->
                 item(key = "streaming") {
-                    val hasVisibleText = streaming.content.any {
-                        it is TextContent && it.text.isNotBlank()
-                    }
-                    val hasThinking = streaming.content.any { it is ThinkingContent }
-                    AssistantMessageItem(
-                        message = if (hasVisibleText || hasThinking ||
-                            streaming.errorMessage != null
-                        ) {
-                            streaming
-                        } else {
-                            // pi renders tool-call-only assistant messages as
-                            // zero lines (the executions show as their own
-                            // rows); the placeholder bridges until the call
-                            // commits and its tool row appears.
-                            streaming.copy(
-                                content = listOf(TextContent(STREAMING_PLACEHOLDER))
-                            )
-                        },
-                        isStreaming = true,
-                        showThinking = showThinking,
-                        blocks = streamingBlocks
+                    StreamingAssistantMessageItem(
+                        streaming = streaming,
+                        showThinking = showThinking
                     )
                 }
             }
@@ -263,25 +244,40 @@ private fun UserMessageItem(message: UserMessage, modifier: Modifier = Modifier)
     }
 }
 
+/** Rendered markdown blocks shared by committed and streaming rows. */
+@Composable
+private fun MarkdownBlocks(blocks: List<MarkdownBlock>, showThinking: Boolean) {
+    blocks.forEach { block ->
+        when (block) {
+            is MarkdownBlock.Text -> Markdown(
+                state = block.state,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            is MarkdownBlock.Thinking -> if (showThinking) {
+                ThinkingText(block.state)
+            } else {
+                ThinkingLabel(active = false)
+            }
+        }
+    }
+}
+
 /**
- * Assistant message: plain full-width markdown with no container, so it
- * reads like a reply rather than a bubble. Blocks arrive pre-parsed from
- * the projection (see [TranscriptMarkdown]) and render in order (pi's
+ * Committed assistant message: plain full-width markdown with no container,
+ * so it reads like a reply rather than a bubble. Blocks arrive pre-parsed
+ * from the projection (see [TranscriptMarkdown]) and render in order (pi's
  * AssistantMessageComponent does the same single pass). With showThinking
  * on, thinking blocks render inline (pi's shown state); with it off they
  * collapse to [ThinkingLabel] (pi's hidden state). An error renders below
- * the body in error color. While streaming, the final text/thinking part
- * is the only growing one; it renders through the renderer's append-only
- * streaming state (re-parsing just the unstable tail), everything before
- * it is final.
+ * the body in error color.
  */
 @Composable
 private fun AssistantMessageItem(
     message: AssistantMessage,
     blocks: List<MarkdownBlock>,
     showThinking: Boolean,
-    modifier: Modifier = Modifier,
-    isStreaming: Boolean = false
+    modifier: Modifier = Modifier
 ) {
     // One container per message: LazyColumn rows recycle, so a container
     // around the list itself could not span items.
@@ -290,44 +286,7 @@ private fun AssistantMessageItem(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            blocks.forEach { block ->
-                when (block) {
-                    is MarkdownBlock.Text -> Markdown(
-                        state = block.state,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    is MarkdownBlock.Thinking -> if (showThinking) {
-                        ThinkingText(block.state)
-                    } else {
-                        ThinkingLabel(active = false)
-                    }
-                }
-            }
-            if (isStreaming) {
-                // The tail part's index is a stable identity for the
-                // per-part streaming state.
-                val tailIndex = growingTailIndex(message.content)
-                if (tailIndex >= 0) {
-                    key(tailIndex) {
-                        when (val tail = message.content[tailIndex]) {
-                            is TextContent -> StreamingMarkdownBlock(
-                                text = tail.text,
-                                thinking = false
-                            )
-
-                            is ThinkingContent -> if (showThinking) {
-                                StreamingMarkdownBlock(text = tail.thinking, thinking = true)
-                            } else {
-                                ThinkingLabel(active = true)
-                            }
-
-                            // Unreachable: tailIndex is only set for text/thinking tails.
-                            else -> Unit
-                        }
-                    }
-                }
-            }
+            MarkdownBlocks(blocks, showThinking)
             message.errorMessage?.let { error ->
                 Text(
                     text = error,
@@ -340,9 +299,54 @@ private fun AssistantMessageItem(
 }
 
 /**
+ * The streaming assistant row: finalized parts render pre-parsed like a
+ * committed message, while the growing tail part renders through the
+ * renderer's append-only streaming state (re-parsing just the unstable
+ * tail, keyed by its part index so a new tail starts a fresh state). With
+ * nothing visible yet — pi renders tool-call-only assistant messages as
+ * zero lines (the executions show as their own rows) — the placeholder
+ * bridges until the call commits and its tool row appears.
+ */
+@Composable
+private fun StreamingAssistantMessageItem(streaming: StreamingMessageUi, showThinking: Boolean) {
+    SelectionContainer(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            MarkdownBlocks(streaming.blocks, showThinking)
+            if (streaming.hasBody || streaming.errorMessage != null) {
+                streaming.tail?.let { tail ->
+                    key(tail.index) {
+                        if (tail.thinking) {
+                            if (showThinking) {
+                                StreamingMarkdownBlock(text = tail.text, thinking = true)
+                            } else {
+                                ThinkingLabel(active = true)
+                            }
+                        } else {
+                            StreamingMarkdownBlock(text = tail.text, thinking = false)
+                        }
+                    }
+                }
+            } else {
+                StreamingMarkdownBlock(text = STREAMING_PLACEHOLDER, thinking = false)
+            }
+            streaming.errorMessage?.let { error ->
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+/**
  * The growing tail of a streaming message, fed into the renderer's
- * append-only streaming state: each update re-parses only the unstable
- * tail of the document, not the whole text.
+ * append-only streaming state: each update re-parses only the new suffix
+ * of the document, not the whole text.
  */
 @Composable
 private fun StreamingMarkdownBlock(text: String, thinking: Boolean) {

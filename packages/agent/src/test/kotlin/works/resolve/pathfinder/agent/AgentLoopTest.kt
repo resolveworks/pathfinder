@@ -116,7 +116,7 @@ class AgentLoopTest {
             capturedOptions = opts
             flowOf(
                 AssistantMessageEvent.Start(assistant("")),
-                AssistantMessageEvent.TextDelta(0, "hi ", assistant("hi ")),
+                AssistantMessageEvent.TextDelta(0, "hi "),
                 AssistantMessageEvent.TextEnd(0, "hi there", final),
                 AssistantMessageEvent.Done(StopReason.STOP, final)
             )
@@ -142,9 +142,10 @@ class AgentLoopTest {
         )
         assertEquals(prompt, (events[2] as AgentEvent.MessageStart).message)
         assertEquals(assistant(""), (events[4] as AgentEvent.MessageStart).message)
-        assertEquals(assistant("hi "), (events[5] as AgentEvent.MessageUpdate).message)
-        val updateEvent = events[5] as AgentEvent.MessageUpdate
-        assertTrue(updateEvent.assistantMessageEvent is AssistantMessageEvent.TextDelta)
+        val updateDelta = (events[5] as AgentEvent.MessageUpdate).assistantMessageEvent
+        assertEquals(AssistantMessageEvent.TextDelta(0, "hi "), updateDelta)
+        val updateEnd = (events[6] as AgentEvent.MessageUpdate).assistantMessageEvent
+        assertTrue(updateEnd is AssistantMessageEvent.TextEnd)
         assertEquals(final, (events[7] as AgentEvent.MessageEnd).message)
         assertEquals(final, (events[8] as AgentEvent.TurnEnd).message)
         assertEquals(listOf<Message>(prompt, final), result)
@@ -238,7 +239,7 @@ class AgentLoopTest {
         val streamFn = StreamFn { _, _, _ ->
             flow {
                 emit(AssistantMessageEvent.Start(assistant("")))
-                emit(AssistantMessageEvent.TextDelta(0, "done", final))
+                emit(AssistantMessageEvent.TextDelta(0, "done"))
                 emit(AssistantMessageEvent.Done(StopReason.STOP, final))
                 try {
                     awaitCancellation()

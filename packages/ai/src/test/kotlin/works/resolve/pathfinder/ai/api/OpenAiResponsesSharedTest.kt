@@ -720,13 +720,7 @@ class OpenAiResponsesSharedTest {
         val delta = s.onEvent(
             event("""{"type":"response.output_text.delta","output_index":0,"delta":"he"}""")
         )
-        assertIs<AssistantMessageEvent.TextDelta>(delta.single())
-        assertEquals(
-            "he",
-            (delta.single() as AssistantMessageEvent.TextDelta).partial.content.single().let {
-                (it as TextContent).text
-            }
-        )
+        assertEquals("he", (delta.single() as AssistantMessageEvent.TextDelta).delta)
         val delta2 = s.onEvent(
             event("""{"type":"response.output_text.delta","output_index":0,"delta":"llo"}""")
         )

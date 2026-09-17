@@ -369,12 +369,11 @@ class Agent(
             is AgentEvent.SummarizationRetryScheduled,
             is AgentEvent.SummarizationRetryAttemptStart,
             AgentEvent.SummarizationRetryFinished,
-            is AgentEvent.ToolExecutionUpdate
+            is AgentEvent.ToolExecutionUpdate,
+            is AgentEvent.MessageUpdate
             -> Unit
 
             is AgentEvent.MessageStart -> reduce { it.copy(streamingMessage = event.message) }
-
-            is AgentEvent.MessageUpdate -> reduce { it.copy(streamingMessage = event.message) }
 
             is AgentEvent.MessageEnd -> {
                 reduce { it.copy(messages = it.messages + event.message, streamingMessage = null) }

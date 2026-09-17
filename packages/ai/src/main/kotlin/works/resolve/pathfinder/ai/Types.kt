@@ -303,86 +303,100 @@ data class Context(
 )
 
 /**
- * A successful stream emits `Start` first, then block events carrying
- * immutable partial snapshots, and terminates with `Done`. A stream may
- * terminate directly with `Error` when request setup fails before generation
- * starts; after `Start`, failures also terminate with `Error`. `Done` and
- * `Error` are mutually exclusive terminal events, and updates and `Done`
- * never appear before `Start`.
+ * A successful stream emits `Start` first, then block events, and
+ * terminates with `Done`. A stream may terminate directly with `Error`
+ * when request setup fails before generation starts; after `Start`,
+ * failures also terminate with `Error`. `Done` and `Error` are mutually
+ * exclusive terminal events, and updates and `Done` never appear before
+ * `Start`.
  *
- * `partial` is the shared live response-so-far helper, not an event-time
- * snapshot. Text and thinking blocks are empty when their `*_start` event
- * is emitted and grow only through their corresponding `*_delta` events
- * until the authoritative `*_end`. Redacted thinking may be complete at
- * start and emit no deltas. Tool-call arguments at `ToolCallStart` are
- * provider-specific; `ToolCallDelta` carries subsequent JSON updates.
+ * Divergence from pi's `partial` contract: upstream pushes the same live
+ * mutable response object onto every event (cheap there — reference
+ * sharing plus V8 rope strings), so each event observes the fully
+ * accumulated message. An immutable port cannot copy that without
+ * materializing the whole message per delta, quadratic in output length.
+ * Here delta events carry only `contentIndex` and `delta`; accurate
+ * snapshots ride the boundary events — [Start], the block `Start`/`End`
+ * events, [Done], and [Error] (whose snapshot includes everything
+ * accumulated before the failure). Mid-stream content must be folded from
+ * the deltas; a fold is append-only per open block except tool-call
+ * arguments, which are provider-shaped (Google sends one complete-args
+ * delta after a complete `ToolCallStart` scaffold; OpenAI/Anthropic/Mistral
+ * stream argument fragments) — take tool arguments from the deltas when
+ * any arrived, else from the start scaffold.
+ *
+ * Text and thinking blocks are empty when their `*_start` event is emitted
+ * and grow only through their corresponding `*_delta` events until the
+ * authoritative `*_end` (whose snapshot and `content` are final).
+ * Redacted thinking may be complete at start and emit no deltas. Tool-call
+ * arguments at `ToolCallStart` are provider-specific; `ToolCallDelta`
+ * carries subsequent JSON updates.
  *
  * Coroutine cancellation is not a failure: cancelling the collecting
  * coroutine propagates normally (the flow simply stops emitting) and no
  * `Error` event is produced.
  */
 sealed class AssistantMessageEvent {
-    abstract val partial: AssistantMessage
 
-    data class Start(override val partial: AssistantMessage) : AssistantMessageEvent()
+    /**
+     * The message/block start and end events, which carry an accurate
+     * snapshot of the message as of the boundary (see the class contract).
+     */
+    sealed interface Boundary {
+        val partial: AssistantMessage
+    }
+
+    data class Start(override val partial: AssistantMessage) :
+        AssistantMessageEvent(),
+        Boundary
 
     data class TextStart(val contentIndex: Int, override val partial: AssistantMessage) :
-        AssistantMessageEvent()
+        AssistantMessageEvent(),
+        Boundary
 
-    data class TextDelta(
-        val contentIndex: Int,
-        val delta: String,
-        override val partial: AssistantMessage
-    ) : AssistantMessageEvent()
+    data class TextDelta(val contentIndex: Int, val delta: String) : AssistantMessageEvent()
 
     data class TextEnd(
         val contentIndex: Int,
         val content: String,
         override val partial: AssistantMessage
-    ) : AssistantMessageEvent()
+    ) : AssistantMessageEvent(),
+        Boundary
 
     data class ThinkingStart(val contentIndex: Int, override val partial: AssistantMessage) :
-        AssistantMessageEvent()
+        AssistantMessageEvent(),
+        Boundary
 
-    data class ThinkingDelta(
-        val contentIndex: Int,
-        val delta: String,
-        override val partial: AssistantMessage
-    ) : AssistantMessageEvent()
+    data class ThinkingDelta(val contentIndex: Int, val delta: String) : AssistantMessageEvent()
 
     data class ThinkingEnd(
         val contentIndex: Int,
         val content: String,
         override val partial: AssistantMessage
-    ) : AssistantMessageEvent()
+    ) : AssistantMessageEvent(),
+        Boundary
 
     data class ToolCallStart(val contentIndex: Int, override val partial: AssistantMessage) :
-        AssistantMessageEvent()
+        AssistantMessageEvent(),
+        Boundary
 
-    data class ToolCallDelta(
-        val contentIndex: Int,
-        val delta: String,
-        override val partial: AssistantMessage
-    ) : AssistantMessageEvent()
+    data class ToolCallDelta(val contentIndex: Int, val delta: String) : AssistantMessageEvent()
 
     data class ToolCallEnd(
         val contentIndex: Int,
         val toolCall: ToolCall,
         override val partial: AssistantMessage
-    ) : AssistantMessageEvent()
+    ) : AssistantMessageEvent(),
+        Boundary
 
     data class Done(val reason: StopReason, val message: AssistantMessage) :
-        AssistantMessageEvent() {
-        override val partial: AssistantMessage get() = message
-    }
+        AssistantMessageEvent()
 
     data class Error(
         val reason: StopReason,
         /** Final assistant message with stopReason ABORTED/ERROR and errorMessage set. */
         val error: AssistantMessage
-    ) : AssistantMessageEvent() {
-        override val partial: AssistantMessage get() = error
-    }
+    ) : AssistantMessageEvent()
 }
 
 data class ProviderResponse(val status: Int, val headers: Map<String, String>)

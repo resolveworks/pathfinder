@@ -235,7 +235,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         vm.send()
 
         vm.awaitState { it.isStreaming }
-        vm.awaitStreaming { it.streamingMessage != null }
+        vm.awaitStreaming { it.streaming != null }
         val mid = vm.uiState.value
         assertEquals(1, mid.messages.size)
         assertEquals("Hello", mid.messages[0].singleText())
@@ -247,7 +247,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
         vm.awaitState { !it.isStreaming && it.messages.size == 2 }
         val done = vm.uiState.value
-        assertNull(vm.streamingState.value.streamingMessage)
+        assertNull(vm.streamingState.value.streaming)
         assertEquals("world", done.messages[1].singleText())
         assertTrue(done.messages[1].message() is AssistantMessage)
         assertNull(done.error)
@@ -277,23 +277,32 @@ internal class ChatViewModelTest : ChatHarnessTest() {
                 flow {
                     val started = h.assistant("")
                     emit(AssistantMessageEvent.Start(started))
-                    val first = started.copy(content = listOf(TextContent("first")))
-                    emit(AssistantMessageEvent.TextDelta(0, "first", first))
+                    emit(
+                        AssistantMessageEvent.TextStart(
+                            0,
+                            started.copy(content = listOf(TextContent("")))
+                        )
+                    )
+                    emit(AssistantMessageEvent.TextDelta(0, "first"))
                     releaseSecondChunk.await()
-                    val second = started.copy(content = listOf(TextContent("first second")))
-                    emit(AssistantMessageEvent.TextDelta(0, " second", second))
+                    emit(AssistantMessageEvent.TextDelta(0, " second"))
                     releaseDone.await()
-                    emit(AssistantMessageEvent.Done(StopReason.STOP, second))
+                    emit(
+                        AssistantMessageEvent.Done(
+                            StopReason.STOP,
+                            started.copy(content = listOf(TextContent("first second")))
+                        )
+                    )
                 }
             )
 
             vm.onDraftChange("Hello")
             vm.send()
-            vm.awaitStreaming { it.streamingMessage?.singleText() == "first" }
+            vm.awaitStreaming { it.streaming?.tail?.text == "first" }
             val committed = vm.uiState.value.messages
 
             releaseSecondChunk.complete(Unit)
-            vm.awaitStreaming { it.streamingMessage?.singleText() == "first second" }
+            vm.awaitStreaming { it.streaming?.tail?.text == "first second" }
             assertSame(committed, vm.uiState.value.messages)
 
             releaseDone.complete(Unit)
@@ -513,7 +522,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         vm.newSession()
         val fresh = vm.awaitState { it.activeSessionId != firstId }
         assertTrue(fresh.messages.isEmpty())
-        assertNull(vm.streamingState.value.streamingMessage)
+        assertNull(vm.streamingState.value.streaming)
         // Only the flushed session is listed: the new one is absent until its
         // first assistant message commits.
         assertEquals(1, fresh.sessionSummaries.size)
@@ -664,7 +673,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             session.agent.processEvent(AgentEvent.MessageEnd(ok))
             waitUntil {
                 vm.uiState.value.messages.size == 4 &&
-                    vm.streamingState.value.streamingMessage == null
+                    vm.streamingState.value.streaming == null
             }
 
             // The result joins the SAME row (no remove-and-re-add across the
@@ -1288,20 +1297,30 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             h.scriptedStreams.add(
                 flow {
                     emit(AssistantMessageEvent.Start(h.assistant("")))
-                    val partial = h.assistant(
-                        ""
-                    ).copy(content = listOf(ThinkingContent("reasoning so far")))
-                    emit(AssistantMessageEvent.ThinkingDelta(0, "reasoning", partial))
+                    emit(
+                        AssistantMessageEvent.ThinkingStart(
+                            0,
+                            h.assistant("").copy(content = listOf(ThinkingContent("")))
+                        )
+                    )
+                    emit(AssistantMessageEvent.ThinkingDelta(0, "reasoning"))
                     gate.await()
-                    emit(AssistantMessageEvent.Done(StopReason.STOP, partial))
+                    emit(
+                        AssistantMessageEvent.Done(
+                            StopReason.STOP,
+                            h.assistant("").copy(content = listOf(ThinkingContent("reasoning")))
+                        )
+                    )
                 }
             )
             vm.onDraftChange("hi")
             vm.send()
 
-            vm.awaitStreaming { it.streamingMessage?.content?.isNotEmpty() == true }
-            val streaming = vm.streamingState.value.streamingMessage!!
-            assertEquals(listOf(ThinkingContent("reasoning so far")), streaming.content)
+            vm.awaitStreaming { it.streaming?.tail?.thinking == true }
+            val streaming = vm.streamingState.value.streaming!!
+            assertEquals("reasoning", streaming.tail?.text)
+            assertTrue(streaming.hasBody)
+            assertNull(streaming.errorMessage)
 
             // Let the stream finish so teardown never abandons it.
             gate.complete(Unit)

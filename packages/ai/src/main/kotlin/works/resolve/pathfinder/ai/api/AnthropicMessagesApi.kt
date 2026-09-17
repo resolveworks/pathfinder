@@ -1429,7 +1429,7 @@ internal class AnthropicStreamState(
                 val value = delta["text"].strOrNull() ?: ""
                 text.text.append(value)
                 text.built = null
-                listOf(AssistantMessageEvent.TextDelta(blockIndex, value, snapshot()))
+                listOf(AssistantMessageEvent.TextDelta(blockIndex, value))
             }
 
             "thinking_delta" -> {
@@ -1437,7 +1437,7 @@ internal class AnthropicStreamState(
                 val value = delta["thinking"].strOrNull() ?: ""
                 thinking.thinking.append(value)
                 thinking.built = null
-                listOf(AssistantMessageEvent.ThinkingDelta(blockIndex, value, snapshot()))
+                listOf(AssistantMessageEvent.ThinkingDelta(blockIndex, value))
             }
 
             "input_json_delta" -> {
@@ -1445,7 +1445,7 @@ internal class AnthropicStreamState(
                 val value = delta["partial_json"].strOrNull() ?: ""
                 tool.partialJson.append(value)
                 tool.built = null
-                listOf(AssistantMessageEvent.ToolCallDelta(blockIndex, value, snapshot()))
+                listOf(AssistantMessageEvent.ToolCallDelta(blockIndex, value))
             }
 
             "signature_delta" -> {
@@ -1591,10 +1591,10 @@ internal class AnthropicStreamState(
     }
 
     /**
-     * Immutable content values are cached per block and reused across
-     * snapshots; only the block a delta landed in is re-rendered, so a delta
-     * costs O(changed block), not O(whole message). Content types are
-     * immutable, so sharing instances between snapshots is safe.
+     * Accurate as of the last boundary event (block start/stop, done,
+     * error): immutable content values are cached per block and reused
+     * across snapshots, so a boundary snapshot re-renders only the blocks a
+     * delta landed in since the previous one.
      */
     fun snapshot(): AssistantMessage = AssistantMessage(
         content = blocks.map { block ->

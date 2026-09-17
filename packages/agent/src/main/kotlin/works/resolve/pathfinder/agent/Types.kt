@@ -53,6 +53,13 @@ data class AgentLoopConfig(
  * role, since user and tool-result message starts transiently occupy it too —
  * and [pendingToolCalls] the ids of tool calls whose execution has started
  * but not ended.
+ *
+ * Divergence from pi: `message_update` here carries only the provider delta
+ * event (accurate snapshots exist only at stream boundaries), so
+ * [streamingMessage] is assigned at `message_start` and committed or cleared
+ * at `message_end`/`agent_end`; mid-run it holds the boundary value from
+ * `message_start` rather than tracking per-delta partials. Consumers needing
+ * mid-stream content fold [AgentEvent.MessageUpdate].
  */
 data class AgentState(
     val model: Model,
@@ -193,11 +200,12 @@ sealed class AgentEvent {
 
     data class MessageStart(val message: Message) : AgentEvent()
 
-    /** Only emitted for assistant messages while streaming. */
-    data class MessageUpdate(
-        val message: AssistantMessage,
-        val assistantMessageEvent: AssistantMessageEvent
-    ) : AgentEvent()
+    /**
+     * Only emitted for assistant messages while streaming. Carries the
+     * provider's delta/boundary event itself — no partial message (see
+     * [AssistantMessageEvent] for the snapshot contract).
+     */
+    data class MessageUpdate(val assistantMessageEvent: AssistantMessageEvent) : AgentEvent()
 
     data class MessageEnd(val message: Message) : AgentEvent()
 

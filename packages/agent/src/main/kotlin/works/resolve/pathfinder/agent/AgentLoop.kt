@@ -20,6 +20,7 @@ import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.toThinkingLevelOrNull
@@ -223,8 +224,10 @@ private suspend fun runLoop(
  * without draining the source — collection stops at the first terminal
  * Done/Error event. Cancellation mid-stream finalizes the accumulated
  * partial the way pi's providers do (their catch block pushes the finalized
- * output as the terminal error event): stopReason ABORTED, errorMessage set,
- * partial content preserved.
+ * output as the terminal error event; here the provider flow rethrows the
+ * cancellation, so the loop folds the deltas since the last boundary
+ * snapshot and finalizes the partial itself): stopReason ABORTED,
+ * errorMessage set, partial content preserved.
  */
 private suspend fun streamAssistantResponse(
     llmContext: Context,
@@ -234,7 +237,7 @@ private suspend fun streamAssistantResponse(
     val response = config.streamFn.stream(config.model, llmContext, config.options)
 
     var started = false
-    var latestPartial: AssistantMessage? = null
+    val fold = AssistantStreamFold()
     var finalMessage: AssistantMessage? = null
 
     try {
@@ -244,23 +247,35 @@ private suspend fun streamAssistantResponse(
                     when (event) {
                         is AssistantMessageEvent.Start -> {
                             started = true
-                            latestPartial = event.partial
+                            fold.onBoundary(event.partial)
                             emit(AgentEvent.MessageStart(event.partial))
                         }
 
-                        is AssistantMessageEvent.TextStart,
-                        is AssistantMessageEvent.TextDelta,
-                        is AssistantMessageEvent.TextEnd,
-                        is AssistantMessageEvent.ThinkingStart,
-                        is AssistantMessageEvent.ThinkingDelta,
-                        is AssistantMessageEvent.ThinkingEnd,
-                        is AssistantMessageEvent.ToolCallStart,
-                        is AssistantMessageEvent.ToolCallDelta,
-                        is AssistantMessageEvent.ToolCallEnd
-                        -> {
+                        is AssistantMessageEvent.Boundary -> {
                             if (started) {
-                                latestPartial = event.partial
-                                emit(AgentEvent.MessageUpdate(event.partial, event))
+                                fold.onBoundary(event.partial)
+                                emit(AgentEvent.MessageUpdate(event))
+                            }
+                        }
+
+                        is AssistantMessageEvent.TextDelta -> {
+                            if (started) {
+                                fold.appendText(event.contentIndex, event.delta)
+                                emit(AgentEvent.MessageUpdate(event))
+                            }
+                        }
+
+                        is AssistantMessageEvent.ThinkingDelta -> {
+                            if (started) {
+                                fold.appendThinking(event.contentIndex, event.delta)
+                                emit(AgentEvent.MessageUpdate(event))
+                            }
+                        }
+
+                        is AssistantMessageEvent.ToolCallDelta -> {
+                            if (started) {
+                                fold.appendToolArguments(event.contentIndex, event.delta)
+                                emit(AgentEvent.MessageUpdate(event))
                             }
                         }
 
@@ -281,7 +296,7 @@ private suspend fun streamAssistantResponse(
         // pi's providers finalize the accumulated output on abort; with no
         // events received the output is an empty message with the run's model
         // metadata, exactly like pi's pre-allocated assistant output.
-        val aborted = (latestPartial ?: config.emptyAssistantMessage()).copy(
+        val aborted = (fold.materialize() ?: config.emptyAssistantMessage()).copy(
             stopReason = StopReason.ABORTED,
             errorMessage = ABORT_ERROR_MESSAGE
         )
@@ -304,6 +319,74 @@ private suspend fun streamAssistantResponse(
     }
     emit(AgentEvent.MessageEnd(message))
     return message
+}
+
+/**
+ * Folds a provider stream so an aborted run can still finalize the
+ * accumulated partial (pi's providers do this themselves by pushing the
+ * live output as the terminal error event; here cancellation propagates
+ * out of the provider flow, so the loop materializes at its own boundary).
+ *
+ * Boundary snapshots are accurate as emitted: text/thinking content is the
+ * base plus the deltas appended since the last boundary (providers append
+ * those incrementally). Tool-call arguments are not append-safe — Google
+ * emits the complete arguments as a single redundant delta after a complete
+ * start scaffold, while other providers stream fragments — so joined deltas
+ * replace the scaffold's arguments whenever any arrived.
+ */
+private class AssistantStreamFold {
+    private var boundary: AssistantMessage? = null
+    private val textSinceBoundary = mutableMapOf<Int, StringBuilder>()
+    private val thinkingSinceBoundary = mutableMapOf<Int, StringBuilder>()
+    private val toolArguments = mutableMapOf<Int, StringBuilder>()
+
+    fun onBoundary(partial: AssistantMessage) {
+        boundary = partial
+        textSinceBoundary.clear()
+        thinkingSinceBoundary.clear()
+    }
+
+    fun appendText(contentIndex: Int, delta: String) {
+        textSinceBoundary.getOrPut(contentIndex) { StringBuilder() }.append(delta)
+    }
+
+    fun appendThinking(contentIndex: Int, delta: String) {
+        thinkingSinceBoundary.getOrPut(contentIndex) { StringBuilder() }.append(delta)
+    }
+
+    fun appendToolArguments(contentIndex: Int, delta: String) {
+        toolArguments.getOrPut(contentIndex) { StringBuilder() }.append(delta)
+    }
+
+    fun materialize(): AssistantMessage? {
+        val base = boundary ?: return null
+        return base.copy(
+            content = base.content.mapIndexed { index, block ->
+                when (block) {
+                    is TextContent ->
+                        textSinceBoundary[index]
+                            ?.let { block.copy(text = block.text + it.toString()) }
+                            ?: block
+
+                    is ThinkingContent ->
+                        thinkingSinceBoundary[index]
+                            ?.let { block.copy(thinking = block.thinking + it.toString()) }
+                            ?: block
+
+                    is ToolCall ->
+                        toolArguments[index]
+                            ?.let { args ->
+                                block.copy(
+                                    arguments = args.toString().ifEmpty { block.arguments }
+                                )
+                            }
+                            ?: block
+
+                    else -> block
+                }
+            }
+        )
+    }
 }
 
 /**

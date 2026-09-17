@@ -160,10 +160,9 @@ private fun streamWithDeltas(message: AssistantMessage): Flow<AssistantMessageEv
                 content.add(ThinkingContent(""))
                 emit(AssistantMessageEvent.ThinkingStart(index, partial()))
                 for (chunk in splitStringByTokenSize(block.thinking)) {
-                    val current = content[index] as ThinkingContent
-                    content[index] = current.copy(thinking = current.thinking + chunk)
-                    emit(AssistantMessageEvent.ThinkingDelta(index, chunk, partial()))
+                    emit(AssistantMessageEvent.ThinkingDelta(index, chunk))
                 }
+                content[index] = block
                 emit(AssistantMessageEvent.ThinkingEnd(index, block.thinking, partial()))
             }
 
@@ -171,10 +170,9 @@ private fun streamWithDeltas(message: AssistantMessage): Flow<AssistantMessageEv
                 content.add(TextContent(""))
                 emit(AssistantMessageEvent.TextStart(index, partial()))
                 for (chunk in splitStringByTokenSize(block.text)) {
-                    val current = content[index] as TextContent
-                    content[index] = current.copy(text = current.text + chunk)
-                    emit(AssistantMessageEvent.TextDelta(index, chunk, partial()))
+                    emit(AssistantMessageEvent.TextDelta(index, chunk))
                 }
+                content[index] = block
                 emit(AssistantMessageEvent.TextEnd(index, block.text, partial()))
             }
 
@@ -182,7 +180,7 @@ private fun streamWithDeltas(message: AssistantMessage): Flow<AssistantMessageEv
                 content.add(block.copy(arguments = "{}"))
                 emit(AssistantMessageEvent.ToolCallStart(index, partial()))
                 for (chunk in splitStringByTokenSize(block.arguments)) {
-                    emit(AssistantMessageEvent.ToolCallDelta(index, chunk, partial()))
+                    emit(AssistantMessageEvent.ToolCallDelta(index, chunk))
                 }
                 content[index] = block
                 emit(AssistantMessageEvent.ToolCallEnd(index, block, partial()))

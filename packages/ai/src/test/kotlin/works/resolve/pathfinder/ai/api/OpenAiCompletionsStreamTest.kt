@@ -132,7 +132,7 @@ class OpenAiCompletionsStreamTest {
             )
             .toList()
         val error = assertIs<AssistantMessageEvent.Error>(events.single())
-        assertTrue(error.partial.errorMessage!!.contains("No API key"))
+        assertTrue(error.error.errorMessage!!.contains("No API key"))
         assertTrue(transport.requests.isEmpty())
     }
 
@@ -198,8 +198,12 @@ class OpenAiCompletionsStreamTest {
         val events = api(
             transport
         ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
-        assertEquals(1_770_000_000_000L, events.first().partial.timestamp)
-        assertEquals(1_770_000_000_000L, events.last().partial.timestamp)
+        assertEquals(
+            1_770_000_000_000L,
+            (events.first() as AssistantMessageEvent.Start).partial.timestamp
+        )
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(1_770_000_000_000L, done.message.timestamp)
     }
 
     @Test
@@ -811,7 +815,7 @@ class OpenAiCompletionsStreamTest {
     }
 
     @Test
-    fun `snapshots are immutable across text deltas`() = runTest {
+    fun `deltas accumulate into the boundary snapshots`() = runTest {
         val transport = FakeTransport()
         transport.enqueueResponse(
             sse(
@@ -826,11 +830,13 @@ class OpenAiCompletionsStreamTest {
         ).stream(model, context, OpenAiCompletionsOptions(apiKey = "test-key")).toList()
         val deltas = events.filterIsInstance<AssistantMessageEvent.TextDelta>()
         assertEquals(listOf("a", "b"), deltas.map { it.delta })
-        // TextDelta snapshots carry the accumulated text at that point.
-        assertEquals("a", assertIs<TextContent>(deltas[0].partial.content.single()).text)
-        assertEquals("ab", assertIs<TextContent>(deltas[1].partial.content.single()).text)
-        // Earlier snapshot unaffected by later deltas.
-        assertEquals("a", assertIs<TextContent>(deltas[0].partial.content.single()).text)
+        // Deltas carry no snapshot; the accumulated text appears at the
+        // end boundary, which re-renders only the block the deltas landed in.
+        val textEnd = assertIs<AssistantMessageEvent.TextEnd>(events[events.size - 2])
+        assertEquals("ab", textEnd.content)
+        assertEquals("ab", assertIs<TextContent>(textEnd.partial.content.single()).text)
+        val done = assertIs<AssistantMessageEvent.Done>(events.last())
+        assertEquals(textEnd.partial.content, done.message.content)
     }
 
     @Test

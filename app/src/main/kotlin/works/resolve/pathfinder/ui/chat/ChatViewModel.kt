@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mikepenz.markdown.model.State
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -25,9 +26,12 @@ import works.resolve.pathfinder.R
 import works.resolve.pathfinder.agent.AgentEvent
 import works.resolve.pathfinder.agent.AgentState
 import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
+import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
 import works.resolve.pathfinder.ai.auth.ProviderAuthService
 import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
@@ -224,8 +228,18 @@ class ChatViewModel(
     /** Transcript parse cache (see [TranscriptMarkdown]). */
     private val transcriptMarkdown = TranscriptMarkdown()
 
-    /** Part count of the latest projected [StreamingUiState.streamingMessage]; null while none. */
-    private var observedStreamingContentSize: Int? = null
+    /**
+     * Delta fold of the streaming assistant message (null while none
+     * streams); see [StreamingMessageFold].
+     */
+    private var streamingFold: StreamingMessageFold? = null
+
+    /**
+     * Conflated signal that the streaming tail grew. The collector
+     * materializes the tail text once per main-loop pass — the per-frame
+     * ceiling — instead of once per delta; the fold's appends stay O(delta).
+     */
+    private val tailGrew = MutableStateFlow(0L)
 
     /**
      * Unsent input per session, synced only at [activateSession] boundaries:
@@ -237,6 +251,12 @@ class ChatViewModel(
     private val sessionDrafts = mutableMapOf<String, String>()
 
     init {
+        viewModelScope.launch {
+            tailGrew.collect {
+                val fold = streamingFold ?: return@collect
+                _streamingState.update { state -> state.copy(streaming = fold.snapshot()) }
+            }
+        }
         viewModelScope.launch { initialize() }
         // The one-time summary build runs beside startup: Ready publishes
         // without waiting on it.
@@ -756,6 +776,7 @@ class ChatViewModel(
         // collection can start immediately, and a frame must never render
         // incoming messages with the outgoing session's scroll state.
         bindAgent(agent)
+        streamingFold = null
         _streamingState.value = StreamingUiState()
         _uiState.update {
             it.copy(
@@ -838,21 +859,19 @@ class ChatViewModel(
         agent = newAgent
         observedAgentMessages = null
         observedAgentModel = null
-        observedStreamingContentSize = null
+        streamingFold = null
         agentStateJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
             newAgent.state.collect { state -> onAgentState(state) }
         }
         // Events are zero-replay flow: the subscriber must be bound before
-        // any prompt starts. MessageUpdate is the per-chunk hot path and is
-        // projected through the state collection above, so it is filtered
-        // out here; every handled event stays on Main.immediate. The agent
-        // reduces state before emitting each event, and both collectors run
-        // on Main.immediate, so onAgentState and onAgentEvent observe agent
+        // any prompt starts. MessageUpdate is the per-chunk hot path: it
+        // feeds the streaming fold directly and touches nothing else, so
+        // every handled event stays on Main.immediate. The agent reduces
+        // state before emitting each event, and both collectors run on
+        // Main.immediate, so onAgentState and onAgentEvent observe agent
         // emissions in FIFO order.
         agentEventsJob = viewModelScope.launch {
-            newAgent.events
-                .filterNot { it is AgentEvent.MessageUpdate }
-                .collect { event -> onAgentEvent(event) }
+            newAgent.events.collect { event -> onAgentEvent(event) }
         }
     }
 
@@ -901,10 +920,41 @@ class ChatViewModel(
                 }
             }
 
-            // Re-project on tree growth, not agent-transcript growth: an
-            // auto-retry or overflow recovery removes the error message from
-            // agent state while the append-only tree keeps it. A message may
-            // also create the session file (or land in an existing one), so
+            // The streaming fold is driven by the assistant message
+            // lifecycle: the start's boundary partial seeds it, MessageUpdate
+            // feeds boundaries and deltas into it.
+            is AgentEvent.MessageStart -> {
+                val message = event.message
+                if (message is AssistantMessage) {
+                    streamingFold = StreamingMessageFold(transcriptMarkdown::parse)
+                        .apply { onBoundary(message) }
+                    publishStreamingFold()
+                }
+            }
+
+            is AgentEvent.MessageUpdate -> when (val streamEvent = event.assistantMessageEvent) {
+                is AssistantMessageEvent.Boundary -> {
+                    streamingFold?.onBoundary(streamEvent.partial)
+                    publishStreamingFold()
+                }
+
+                is AssistantMessageEvent.TextDelta -> {
+                    streamingFold?.appendText(streamEvent.contentIndex, streamEvent.delta)
+                    tailGrew.update { it + 1L }
+                }
+
+                is AssistantMessageEvent.ThinkingDelta -> {
+                    streamingFold?.appendThinking(streamEvent.contentIndex, streamEvent.delta)
+                    tailGrew.update { it + 1L }
+                }
+
+                is AssistantMessageEvent.ToolCallDelta -> Unit
+
+                is AssistantMessageEvent.Start,
+                is AssistantMessageEvent.Done,
+                is AssistantMessageEvent.Error -> Unit
+            }
+
             // Re-project on tree growth, not agent-transcript growth: an
             // auto-retry or overflow recovery removes the error message from
             // agent state while the append-only tree keeps it. A message may
@@ -923,9 +973,12 @@ class ChatViewModel(
                         treeRows = treeRows(it.treeFilter)
                     )
                 }
-                _streamingState.update {
-                    it.copy(streamingMessage = null, streamingBlocks = emptyList())
-                }
+                // Lands the committed row and drops the streaming fold in
+                // the same synchronous Main block, so Compose observes the
+                // committed row and the cleared streaming row in a single
+                // recomposition.
+                streamingFold = null
+                _streamingState.update { it.copy(streaming = null) }
                 scheduleSummaryPatch()
             }
 
@@ -959,9 +1012,9 @@ class ChatViewModel(
 
     private fun onAgentState(state: AgentState) {
         // AgentState uses copy-on-write transcript lists. Streaming chunks
-        // change only streamingMessage, so retain the existing projection
-        // instead of rebuilding and structurally comparing every committed
-        // message (including potentially large tool outputs) for every token.
+        // never touch this projection (they flow through the MessageUpdate
+        // fold in [onAgentEvent]), so it rebuilds only when the committed
+        // transcript or model actually changes.
         val committedProjection = if (state.messages === observedAgentMessages) {
             null
         } else {
@@ -979,21 +1032,6 @@ class ChatViewModel(
         val modelProjection = if (modelChanged) modelSettings.modelOption(state.model) else null
         val thinkingLevels = if (modelChanged) getSupportedThinkingLevels(state.model) else null
         observedAgentModel = state.model
-        val streaming = state.streamingMessage as? AssistantMessage
-        // A part boundary (a new tail part starting) finalizes the previous
-        // tail; its blocks must exist before publication so the row never
-        // blanks at the handoff. Between boundaries only the tail text
-        // grows, so the committed blocks are retained.
-        val streamingBlocks = if (streaming != null &&
-            streaming.content.size != observedStreamingContentSize
-        ) {
-            val tail = growingTailIndex(streaming.content)
-            val committed = if (tail >= 0) streaming.content.subList(0, tail) else streaming.content
-            buildMarkdownBlocks(committed, transcriptMarkdown::parse)
-        } else {
-            null
-        }
-        observedStreamingContentSize = streaming?.content?.size
         _uiState.update {
             it.copy(
                 messages = committedProjection ?: it.messages,
@@ -1003,23 +1041,17 @@ class ChatViewModel(
                 availableThinkingLevels = thinkingLevels ?: it.availableThinkingLevels
             )
         }
-        _streamingState.update {
-            it.copy(
-                // message_end commits to agent state (clearing streamingMessage)
-                // before the session persists the message and grows the tree, so
-                // null here does not mean the row left: retain the projection
-                // until the MessageEnd handler lands the committed row, keeping
-                // the streaming→committed handoff inside a single frame instead
-                // of blinking out across the persistence write.
-                streamingMessage = streaming ?: it.streamingMessage,
-                streamingBlocks = streamingBlocks ?: it.streamingBlocks
-            )
-        }
         // The run-idle transition patches the active session's drawer row:
         // mid-run MessageEnds are skipped while streaming (see
         // [scheduleSummaryPatch]).
         if (agentStreaming && !state.isStreaming) scheduleSummaryPatch()
         agentStreaming = state.isStreaming
+    }
+
+    /** Publishes the streaming fold's current projection, boundaries and deltas alike. */
+    private fun publishStreamingFold() {
+        val fold = streamingFold ?: return
+        _streamingState.update { it.copy(streaming = fold.snapshot()) }
     }
 
     // ---- intent internals ----
@@ -1206,4 +1238,68 @@ class ChatViewModel(
     private companion object {
         private val logger = LoggerFactory.getLogger(ChatViewModel::class.java)
     }
+}
+
+/**
+ * UI fold of one streaming assistant message, driven by the agent's
+ * message lifecycle: boundary events (message and part start/end) publish
+ * from their accurate snapshots — finalized parts commit into
+ * [StreamingMessageUi.blocks] and an opening tail re-seeds from its
+ * scaffold — while deltas append O(delta) into the tail buffer and publish
+ * per main-loop pass via the [ChatViewModel] tail pump. Deltas for a block
+ * that is not the renderable tail are dropped, matching the renderer's
+ * last-part-only tail (a text block resumed after a tool call started
+ * becomes visible at its end boundary).
+ */
+private class StreamingMessageFold(private val parse: (String) -> State) {
+    private var blocks: List<MarkdownBlock> = emptyList()
+    private var tailIndex = -1
+    private var tailThinking = false
+    private val tailText = StringBuilder()
+    private var hasBody = false
+    private var errorMessage: String? = null
+
+    fun onBoundary(partial: AssistantMessage) {
+        val content = partial.content
+        val tail = growingTailIndex(content)
+        blocks = buildMarkdownBlocks(
+            (if (tail >= 0) content.subList(0, tail) else content).toList(),
+            parse
+        )
+        tailIndex = tail
+        tailThinking = tail >= 0 && content[tail] is ThinkingContent
+        tailText.clear()
+        when (val open = content.getOrNull(tail)) {
+            is TextContent -> tailText.append(open.text)
+            is ThinkingContent -> tailText.append(open.thinking)
+            else -> {}
+        }
+        hasBody = content.any {
+            it is ThinkingContent || (it is TextContent && it.text.isNotBlank())
+        }
+        errorMessage = partial.errorMessage
+    }
+
+    fun appendText(contentIndex: Int, delta: String) {
+        if (contentIndex != tailIndex) return
+        tailText.append(delta)
+        if (delta.any { !it.isWhitespace() }) hasBody = true
+    }
+
+    fun appendThinking(contentIndex: Int, delta: String) {
+        if (contentIndex != tailIndex) return
+        tailText.append(delta)
+        hasBody = true
+    }
+
+    fun snapshot(): StreamingMessageUi = StreamingMessageUi(
+        blocks = blocks,
+        tail = if (tailIndex >= 0) {
+            StreamingTailUi(tailIndex, tailThinking, tailText.toString())
+        } else {
+            null
+        },
+        hasBody = hasBody,
+        errorMessage = errorMessage
+    )
 }

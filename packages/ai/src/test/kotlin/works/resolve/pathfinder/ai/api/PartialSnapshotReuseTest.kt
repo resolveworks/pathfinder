@@ -12,6 +12,7 @@ import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelCost
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
+import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
@@ -22,10 +23,10 @@ import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 
 /**
- * Partial snapshots must reflect the full accumulated message at each delta
- * (pi's live `partial` reference observes the same state) while reusing the
- * immutable content instances of blocks a delta did not touch. Only the
- * changed block may be re-rendered per delta.
+ * Delta events carry no snapshot; boundary events (part start/end, done)
+ * carry accurate snapshots that reuse the immutable content instances of
+ * blocks no delta touched since the previous boundary — only a block a
+ * delta landed in may be re-rendered between two boundaries.
  */
 class PartialSnapshotReuseTest {
 
@@ -35,7 +36,7 @@ class PartialSnapshotReuseTest {
     private fun clock() = FakeClock(1_770_000_000_000L)
 
     @Test
-    fun `anthropic reuses unchanged block instances across deltas`() = runTest {
+    fun `anthropic reuses unchanged block instances across boundaries`() = runTest {
         val model = Model(
             id = "claude-sonnet-4-5",
             name = "Claude Sonnet 4.5",
@@ -77,23 +78,39 @@ class PartialSnapshotReuseTest {
 
         val deltas = events.filterIsInstance<AssistantMessageEvent.TextDelta>()
         assertEquals(listOf("Hel", "lo"), deltas.map { it.delta })
-        // The thinking block preceding the text is the same immutable
-        // instance in every text-delta snapshot.
-        val first = deltas[0].partial.content[0]
-        val second = deltas[1].partial.content[0]
-        assertTrue(first === second, "unchanged block must reuse its content instance")
-        val thinking = assertIs<ThinkingContent>(first)
-        assertEquals("deep", thinking.thinking)
-        assertEquals("sig", thinking.thinkingSignature)
-        // The changed block reflects full accumulated state at each delta.
-        assertEquals("Hel", assertIs<TextContent>(deltas[0].partial.content[1]).text)
-        assertEquals("Hello", assertIs<TextContent>(deltas[1].partial.content[1]).text)
-        // Earlier snapshots are unaffected by later deltas.
-        assertEquals("Hel", assertIs<TextContent>(deltas[0].partial.content[1]).text)
+        val thinkingEnd = events.filterIsInstance<AssistantMessageEvent.ThinkingEnd>().single()
+        assertEquals("deep", thinkingEnd.content)
+        assertEquals(
+            "deep",
+            assertIs<ThinkingContent>(thinkingEnd.partial.content[0]).thinking
+        )
+        assertEquals(
+            "sig",
+            assertIs<ThinkingContent>(thinkingEnd.partial.content[0]).thinkingSignature
+        )
+        val textStart = events.filterIsInstance<AssistantMessageEvent.TextStart>().single()
+        val textEnd = events.filterIsInstance<AssistantMessageEvent.TextEnd>().single()
+        // The finished thinking block is the same immutable instance in every
+        // later boundary snapshot.
+        assertTrue(
+            thinkingEnd.partial.content[0] === textStart.partial.content[0],
+            "unchanged block must reuse its content instance"
+        )
+        assertTrue(
+            thinkingEnd.partial.content[0] === textEnd.partial.content[0],
+            "unchanged block must reuse its content instance"
+        )
+        // The text block accumulated only through deltas until its end.
+        assertEquals("", assertIs<TextContent>(textStart.partial.content[1]).text)
+        assertEquals("Hello", textEnd.content)
+        assertEquals("Hello", assertIs<TextContent>(textEnd.partial.content[1]).text)
+        val done = events.last()
+        assertEquals(StopReason.STOP, (done as AssistantMessageEvent.Done).reason)
+        assertEquals(done.message.content, textEnd.partial.content)
     }
 
     @Test
-    fun `openai completions reuses unchanged block instances across deltas`() = runTest {
+    fun `openai completions reuses unchanged block instances across boundaries`() = runTest {
         val model = Model(
             id = "glm-5.2",
             name = "GLM-5.2",
@@ -121,26 +138,32 @@ class PartialSnapshotReuseTest {
 
         val toolDeltas = events.filterIsInstance<AssistantMessageEvent.ToolCallDelta>()
         assertEquals(listOf("""{"pa""", """th":"/x"}"""), toolDeltas.map { it.delta })
-        val textBlock = toolDeltas[0].partial.content[0]
+        // The tool-call start scaffold carries the id and name, like pi's
+        // block creation.
+        val toolStart = events.filterIsInstance<AssistantMessageEvent.ToolCallStart>().single()
+        val scaffold = assertIs<ToolCall>(toolStart.partial.content[1])
+        assertEquals("c1", scaffold.id)
+        assertEquals("read", scaffold.name)
+        assertEquals("", scaffold.arguments)
+        // The text block is the same immutable instance in every later
+        // boundary snapshot, and the tool arguments accumulate to the final
+        // call only at the end boundary.
+        val textEnd = events.filterIsInstance<AssistantMessageEvent.TextEnd>().single()
+        val toolEnd = events.filterIsInstance<AssistantMessageEvent.ToolCallEnd>().single()
         assertTrue(
-            textBlock === toolDeltas[1].partial.content[0],
+            textEnd.partial.content[0] === toolEnd.partial.content[0],
             "unchanged text block must reuse its content instance"
         )
-        assertEquals("pre ", assertIs<TextContent>(textBlock).text)
+        assertEquals("pre ", textEnd.content)
         assertEquals(
             """{"path":"/x"}""",
-            assertIs<ToolCall>(toolDeltas[1].partial.content[1]).arguments
+            assertIs<ToolCall>(toolEnd.partial.content[1]).arguments
         )
-        // Accumulated arguments on the first snapshot, then still intact later.
-        assertEquals(
-            """{"pa""",
-            assertIs<ToolCall>(toolDeltas[0].partial.content[1]).arguments
-        )
-        assertEquals("pre ", assertIs<TextContent>(toolDeltas[0].partial.content[0]).text)
+        assertEquals("""{"path":"/x"}""", toolEnd.toolCall.arguments)
     }
 
     @Test
-    fun `openai responses reuses unchanged block instances across deltas`() = runTest {
+    fun `openai responses accumulates deltas into the done message`() = runTest {
         val model = Model(
             id = "gpt-5-mini",
             name = "GPT-5 Mini",
@@ -175,19 +198,15 @@ class PartialSnapshotReuseTest {
 
         val textDeltas = events.filterIsInstance<AssistantMessageEvent.TextDelta>()
         assertEquals(listOf("He", "llo"), textDeltas.map { it.delta })
-        val thinking = textDeltas[0].partial.content[0]
-        assertTrue(
-            thinking === textDeltas[1].partial.content[0],
-            "unchanged reasoning block must reuse its content instance"
-        )
-        assertEquals("hmm", assertIs<ThinkingContent>(thinking).thinking)
-        assertEquals("He", assertIs<TextContent>(textDeltas[0].partial.content[1]).text)
-        assertEquals("Hello", assertIs<TextContent>(textDeltas[1].partial.content[1]).text)
-        assertEquals("He", assertIs<TextContent>(textDeltas[0].partial.content[1]).text)
+        // The completed response finalizes the streamed blocks; the start
+        // scaffolds were empty and only the deltas carried content.
+        val done = events.last() as AssistantMessageEvent.Done
+        assertEquals("hmm", assertIs<ThinkingContent>(done.message.content[0]).thinking)
+        assertEquals("Hello", assertIs<TextContent>(done.message.content[1]).text)
     }
 
     @Test
-    fun `mistral reuses unchanged block instances across deltas`() = runTest {
+    fun `mistral reuses closed block instances across boundaries`() = runTest {
         val model = Model(
             id = "mistral-large-latest",
             name = "Mistral Large",
@@ -215,19 +234,21 @@ class PartialSnapshotReuseTest {
 
         val textDeltas = events.filterIsInstance<AssistantMessageEvent.TextDelta>()
         assertEquals(listOf("a", "b"), textDeltas.map { it.delta })
-        assertEquals("a", assertIs<TextContent>(textDeltas[0].partial.content.single()).text)
-        assertEquals("ab", assertIs<TextContent>(textDeltas[1].partial.content.single()).text)
-        val toolDelta = events.filterIsInstance<AssistantMessageEvent.ToolCallDelta>().single()
-        val textAfter = toolDelta.partial.content[0]
+        // The closed text block is finalized at the tool-call start boundary
+        // and reused in every later boundary snapshot.
+        val toolStart = events.filterIsInstance<AssistantMessageEvent.ToolCallStart>().single()
+        assertEquals("ab", assertIs<TextContent>(toolStart.partial.content[0]).text)
+        val toolEnd = events.filterIsInstance<AssistantMessageEvent.ToolCallEnd>().single()
         assertTrue(
-            textAfter === textDeltas[1].partial.content[0],
+            toolStart.partial.content[0] === toolEnd.partial.content[0],
             "closed text block must reuse its content instance"
         )
-        assertEquals("ab", assertIs<TextContent>(textAfter).text)
+        assertEquals("ab", assertIs<TextContent>(toolEnd.partial.content[0]).text)
+        assertEquals("{}", toolEnd.toolCall.arguments)
     }
 
     @Test
-    fun `google reuses closed block instances across deltas`() = runTest {
+    fun `google reuses closed block instances across boundaries`() = runTest {
         val model = Model(
             id = "gemini-2.5-flash",
             name = "Gemini",
@@ -263,14 +284,19 @@ class PartialSnapshotReuseTest {
 
         val textDeltas = events.filterIsInstance<AssistantMessageEvent.TextDelta>()
         assertEquals(listOf("He", "llo"), textDeltas.map { it.delta })
-        val thinking = textDeltas[0].partial.content[0]
+        // The thinking block closes at the text start boundary and its
+        // instance is reused in every later boundary snapshot.
+        val thinkingEnd = events.filterIsInstance<AssistantMessageEvent.ThinkingEnd>().single()
+        val textEnd = events.filterIsInstance<AssistantMessageEvent.TextEnd>().single()
+        assertEquals("think", thinkingEnd.content)
         assertTrue(
-            thinking === textDeltas[1].partial.content[0],
+            thinkingEnd.partial.content[0] === textEnd.partial.content[0],
             "closed thinking block must reuse its content instance"
         )
-        assertEquals("think", assertIs<ThinkingContent>(thinking).thinking)
-        assertEquals("He", assertIs<TextContent>(textDeltas[0].partial.content[1]).text)
-        assertEquals("Hello", assertIs<TextContent>(textDeltas[1].partial.content[1]).text)
-        assertEquals("He", assertIs<TextContent>(textDeltas[0].partial.content[1]).text)
+        assertEquals("Hello", textEnd.content)
+        // The stream ends without a finishReason, so the terminal event is
+        // the accurate error snapshot — equal to the last boundary content.
+        val error = assertIs<AssistantMessageEvent.Error>(events.last())
+        assertEquals(textEnd.partial.content, error.error.content)
     }
 }

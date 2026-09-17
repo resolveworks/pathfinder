@@ -626,12 +626,14 @@ private suspend fun kotlinx.coroutines.flow.FlowCollector<AssistantMessageEvent>
 }
 
 /**
- * Accumulates streamed content into block events. Snapshot content values are
- * cached per block and reused while unchanged (they are immutable, so
- * sharing instances across snapshots is safe); a delta only re-renders the
- * block it landed in. Streamed `tool_calls[].function.arguments` fragments
- * are accumulated as a raw string; strict parsing belongs to tool execution,
- * not this provider layer.
+ * Accumulates streamed content into block events. Snapshots materialize
+ * only at boundaries — the message start, each block's start/end, done, and
+ * the error path — while deltas append into per-block builders; immutable
+ * content values are cached per block and reused while unchanged, so a
+ * boundary snapshot re-renders only the blocks a delta landed in.
+ * Streamed `tool_calls[].function.arguments` fragments are accumulated as
+ * a raw string; strict parsing belongs to tool execution, not this
+ * provider layer.
  */
 internal class StreamingState(private val model: Model, private val timestampMs: Long) {
     private sealed interface Block {
@@ -702,7 +704,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         }
         text.append(delta)
         invalidate(textIndex)
-        events.add(AssistantMessageEvent.TextDelta(textIndex, delta, snapshot()))
+        events.add(AssistantMessageEvent.TextDelta(textIndex, delta))
         return events
     }
 
@@ -710,7 +712,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         val events = ensureThinkingBlock(signature)
         thinking.append(delta)
         invalidate(thinkingIndex)
-        events.add(AssistantMessageEvent.ThinkingDelta(thinkingIndex, delta, snapshot()))
+        events.add(AssistantMessageEvent.ThinkingDelta(thinkingIndex, delta))
         return events
     }
 
@@ -758,7 +760,12 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         if (blockIndex == null && id != null && id.isNotEmpty()) blockIndex = toolById[id]
         if (blockIndex == null) {
             blockIndex = blocks.size
-            addBlock(Block.Tool(ToolCallAccumulator()))
+            val accumulator = ToolCallAccumulator()
+            // The start snapshot is emitted with the scaffold (id/name) in
+            // place, like pi's block creation.
+            accumulator.id = id.orEmpty()
+            accumulator.name = name.orEmpty()
+            addBlock(Block.Tool(accumulator))
             events.add(AssistantMessageEvent.ToolCallStart(blockIndex, snapshot()))
         }
         if (streamIndex != null) toolByIndex[streamIndex] = blockIndex
@@ -771,7 +778,7 @@ internal class StreamingState(private val model: Model, private val timestampMs:
         accumulator.arguments.append(argDelta)
         invalidate(blockIndex)
 
-        events.add(AssistantMessageEvent.ToolCallDelta(blockIndex, argDelta, snapshot()))
+        events.add(AssistantMessageEvent.ToolCallDelta(blockIndex, argDelta))
         return events
     }
 

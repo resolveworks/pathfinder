@@ -1428,11 +1428,8 @@ private fun ChatScreenReadyStreamingPreview() {
             isStreaming = true
         ),
         streaming = StreamingUiState(
-            streamingMessage = AssistantMessage(
-                content = listOf(TextContent("Sure, ")),
-                api = "preview",
-                provider = "preview",
-                model = "preview"
+            streaming = StreamingMessageUi(
+                tail = StreamingTailUi(index = 0, thinking = false, text = "Sure, ")
             )
         )
     )
