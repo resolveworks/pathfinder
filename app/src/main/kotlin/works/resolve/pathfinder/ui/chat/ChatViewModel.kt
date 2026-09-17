@@ -2,6 +2,7 @@ package works.resolve.pathfinder.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
@@ -32,6 +33,7 @@ import works.resolve.pathfinder.ai.auth.oauth.AppForegroundGate
 import works.resolve.pathfinder.ai.getSupportedThinkingLevels
 import works.resolve.pathfinder.ai.providers.AuthPrompt
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
+import works.resolve.pathfinder.ai.utils.uuidv7
 import works.resolve.pathfinder.codingagent.core.AgentSession
 import works.resolve.pathfinder.codingagent.core.ReadonlySessionManager
 import works.resolve.pathfinder.codingagent.core.SessionError
@@ -39,7 +41,6 @@ import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.SettingsManager
-import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.ssh.Machine
@@ -77,7 +78,11 @@ class ChatViewModel(
     private val settingsManager: SettingsManager,
     private val catalog: ProviderCatalog,
     private val authService: ProviderAuthService,
-    private val sessionSource: SessionSource,
+    private val sessionsDir: File,
+    /** New session ids; pi's uuidv7 (SessionManager.create's default). */
+    private val sessionIdFactory: () -> String = ::uuidv7,
+    /** Where session manager IO runs; the test harness keeps it on virtual time. */
+    private val sessionIoDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val agentFactory: AgentFactory,
     /** Resolves a provider/model pair to the effective request model; throwing input is surfaced as a safe unknown-model error. */
     private val modelResolver: (providerId: String, modelId: String) -> Model,
@@ -519,7 +524,11 @@ class ChatViewModel(
             try {
                 // Memory-only: nothing touches disk, and the new session is
                 // absent from the drawer until its first assistant commit.
-                val manager = sessionSource.create()
+                val manager = SessionManager.create(
+                    sessionsDir,
+                    idFactory = sessionIdFactory,
+                    ioDispatcher = sessionIoDispatcher
+                )
                 val newAgent = tryCreateAgent(manager) ?: return@launch
                 if (!activateSession(manager, newAgent)) return@launch
             } catch (e: CancellationException) {
@@ -545,7 +554,7 @@ class ChatViewModel(
                         setError(UiString(R.string.error_session_missing))
                         return@launch
                     }
-                val manager = sessionSource.open(file)
+                val manager = openSession(file)
                 if (manager == null) {
                     setError(UiString(R.string.error_session_missing))
                     return@launch
@@ -566,14 +575,7 @@ class ChatViewModel(
         try {
             val appSettings = settingsStore.currentSettings()
             val runtime = settingsManager.getSettings()
-            val summaries = try {
-                sessionSource.list()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                recordDegradation("session_summaries", e)
-                emptyList()
-            }
+            val summaries = SessionManager.list(sessionsDir, ioDispatcher = sessionIoDispatcher)
             refreshCredentialSurfaces()
 
             // NeedsConfiguration means exactly "no configured provider at
@@ -655,13 +657,35 @@ class ChatViewModel(
     ): SessionManager {
         activeSessionId?.let { id ->
             summaries.firstOrNull { it.id == id }?.let { info ->
-                sessionSource.open(info.path)?.let { return it }
+                openSession(info.path)?.let { return it }
             }
         }
         summaries.firstOrNull()?.let { info ->
-            sessionSource.open(info.path)?.let { return it }
+            openSession(info.path)?.let { return it }
         }
-        return sessionSource.create()
+        return SessionManager.create(
+            sessionsDir,
+            idFactory = sessionIdFactory,
+            ioDispatcher = sessionIoDispatcher
+        )
+    }
+
+    /**
+     * Opens [file], or null when it is not a session (a file the user
+     * cannot open must never block startup); [SessionErrorCode.STORAGE]
+     * failures surface.
+     */
+    private suspend fun openSession(file: File): SessionManager? = try {
+        SessionManager.open(file, idFactory = sessionIdFactory, ioDispatcher = sessionIoDispatcher)
+    } catch (e: SessionError) {
+        when (e.code) {
+            SessionErrorCode.STORAGE -> throw e
+
+            else -> {
+                logger.warn("session_open_skipped: file={}", file.name, e)
+                null
+            }
+        }
     }
 
     // ---- session / agent lifecycle ----
@@ -743,7 +767,7 @@ class ChatViewModel(
         val manager = try {
             resolveSession(
                 settingsStore.currentSettings().activeSessionId,
-                sessionSource.list()
+                SessionManager.list(sessionsDir, ioDispatcher = sessionIoDispatcher)
             )
         } catch (e: CancellationException) {
             throw e
@@ -1094,7 +1118,7 @@ class ChatViewModel(
      * while streaming only mark a refresh pending; it runs when the run
      * goes idle (onAgentState) — or immediately when already idle — with at
      * most one refresh in flight and concurrent requests coalesced into a
-     * single queued rerun. The heavy part is sessionSource.list(), an
+     * single queued rerun. The heavy part is SessionManager.list(), an
      * O(all session bytes) decode, so per-message refreshes would grow the
      * cost with history.
      */
@@ -1109,18 +1133,10 @@ class ChatViewModel(
 
     /**
      * Re-reads the session list — the drawer's refresh point, running when a
-     * session file changed. A read failure degrades to the previous list
-     * (the drawer is advisory state).
+     * session file changed.
      */
     private suspend fun refreshSessionSummaries() {
-        val summaries = try {
-            sessionSource.list()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            recordDegradation("session_summaries", e)
-            return
-        }
+        val summaries = SessionManager.list(sessionsDir, ioDispatcher = sessionIoDispatcher)
         _uiState.update { it.copy(sessionSummaries = summaries) }
         sessionSearch.onSummariesChanged(summaries)
     }
@@ -1135,15 +1151,6 @@ class ChatViewModel(
     }
 
     // ---- helpers ----
-
-    /**
-     * Records a degradation the ViewModel deliberately absorbs into degraded
-     * UI state instead of an error — the credential store failing to read
-     * must be distinguishable from an actually-missing credential.
-     */
-    private fun recordDegradation(operation: String, cause: Throwable) {
-        logger.warn(operation, cause)
-    }
 
     /**
      * Surfaces [message] as the UI error and logs message plus [cause] at

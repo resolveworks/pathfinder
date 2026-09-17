@@ -93,7 +93,6 @@ import works.resolve.pathfinder.codingagent.core.SessionErrorCode
 import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
-import works.resolve.pathfinder.data.sessions.SessionSource
 import works.resolve.pathfinder.data.settings.SettingsRepository
 import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
@@ -206,7 +205,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             // an older process, hand-built here): switching to it appends the
             // clamped-default thinking_level_change in place through the
             // manager — no rewrite, no cross-session leakage.
-            val other = kotlinx.coroutines.runBlocking { h.sessions.create() }
+            val other = kotlinx.coroutines.runBlocking { h.createSession() }
             kotlinx.coroutines.runBlocking {
                 other.appendModelChange("zai", "glm-4.7")
                 other.appendMessage(works.resolve.pathfinder.ai.UserMessage.ofText("Old", 1L))
@@ -217,18 +216,18 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             // first appear there — as it would after the committed-message
             // refresh.
             vm.exchange(h, "hi", "ok")
-            val firstBefore = h.sessions.stored(firstId)!!.getEntries()
+            val firstBefore = h.stored(firstId)!!.getEntries()
 
             vm.switchSession(other.getSessionId())
             val state = vm.awaitState { it.activeSessionId == other.getSessionId() }
             assertEquals(2, state.messages.size)
             waitUntil {
-                h.sessions.stored(other.getSessionId())!!
+                h.stored(other.getSessionId())!!
                     .getEntries()
                     .filterIsInstance<ThinkingLevelEntry>().isNotEmpty()
             }
-            assertEquals(firstBefore, h.sessions.stored(firstId)!!.getEntries())
-            val reloaded = h.sessions.stored(other.getSessionId())!!
+            assertEquals(firstBefore, h.stored(firstId)!!.getEntries())
+            val reloaded = h.stored(other.getSessionId())!!
             assertEquals(2, reloaded.buildSessionContext().messages.size)
             assertEquals(
                 listOf("medium"),
@@ -329,8 +328,8 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             )
             assertNull(ready.defaultThinkingLevel)
 
-            waitUntil { h.sessions.managers[sessionId]!!.getEntries().size == 2 }
-            val seeded = h.sessions.managers[sessionId]!!
+            waitUntil { h.liveManager(sessionId).getEntries().size == 2 }
+            val seeded = h.liveManager(sessionId)
             assertEquals(
                 listOf("high"),
                 seeded.getEntries().filterIsInstance<ThinkingLevelEntry>()
@@ -483,7 +482,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
         // file, and a reload could not restore anything.
         vm.exchange(h, "Hello", "world")
         vm.selectThinkingLevel(ModelThinkingLevel.MAX)
-        waitUntil { h.sessions.stored(sessionId)!!.getEntries().size == 5 }
+        waitUntil { h.stored(sessionId)!!.getEntries().size == 5 }
         vm.closeForTest()
 
         val vm2 = h.newViewModel()
@@ -495,7 +494,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
         assertEquals(
             "the branch entry survives reload; no re-seed over it",
             listOf("high", "max"),
-            h.sessions.stored(sessionId)!!.getEntries()
+            h.stored(sessionId)!!.getEntries()
                 .filterIsInstance<ThinkingLevelEntry>()
                 .map { it.thinkingLevel }
         )
@@ -723,7 +722,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             val assistantEntryId = vm.uiState.value.treeRows[1].id
             vm.navigateToTreeEntry(assistantEntryId)
             vm.awaitState {
-                h.sessions.managers[sessionId]!!.getLeafId() == assistantEntryId
+                h.liveManager(sessionId).getLeafId() == assistantEntryId
             }
             assertEquals(agentsBefore, h.createdAgents.size)
             assertEquals("glm-5.3", vm.uiState.value.selectedModel?.modelId)
@@ -786,9 +785,9 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             assertEquals("glm-4.7", fresh.selectedModel?.modelId)
             assertEquals("glm-4.7", h.settingsManager.getDefaultModel())
             waitUntil {
-                h.sessions.managers[fresh.activeSessionId!!]!!.getEntries().isNotEmpty()
+                h.liveManager(fresh.activeSessionId!!).getEntries().isNotEmpty()
             }
-            val seed = h.sessions.managers[fresh.activeSessionId!!]!!
+            val seed = h.liveManager(fresh.activeSessionId!!)
                 .getEntries().filterIsInstance<ModelChangeEntry>().single()
             assertEquals("zai", seed.provider)
             assertEquals("glm-4.7", seed.modelId)
