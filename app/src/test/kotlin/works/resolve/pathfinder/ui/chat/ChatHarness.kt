@@ -544,6 +544,12 @@ internal suspend fun ChatViewModel.awaitState(
     predicate: suspend (ChatUiState) -> Boolean
 ): ChatUiState = withTimeout(timeoutMs) { uiState.first { predicate(it) } }
 
+/** Same bounded wait over the per-chunk streaming projection. */
+internal suspend fun ChatViewModel.awaitStreaming(
+    timeoutMs: Long = 5_000,
+    predicate: suspend (StreamingUiState) -> Boolean
+): StreamingUiState = withTimeout(timeoutMs) { streamingState.first { predicate(it) } }
+
 internal suspend fun ChatViewModel.closeForTest() {
     val job = viewModelScope.coroutineContext[Job]!!
     job.cancel()

@@ -163,6 +163,9 @@ data class MachineTestState(
  * provider-request options); transcript rows carry the runtime messages
  * themselves, projected as-is.
  *
+ * Per-chunk streaming surfaces live in [StreamingUiState] instead, so a
+ * streamed token republishes only the streaming row's inputs.
+ *
  * Navigation is signaled from this state rather than commanded: the UI owns
  * the Nav3 back stack and resets it to [startKey] whenever [startKey] or
  * [navigationEpoch] changes, so the forced first-run provider step is a
@@ -216,16 +219,6 @@ data class ChatUiState(
     val sessionSearchSort: SessionSearchSort = SessionSearchSort.RELEVANCE,
     val sessionSearchResults: List<SessionInfo> = emptyList(),
     val messages: List<TranscriptRow> = emptyList(),
-    /** In-flight partial; role-generic in pi, assistant-only here (non-assistant partials render nothing). */
-    val streamingMessage: AssistantMessage? = null,
-    /**
-     * Pre-parsed blocks of [streamingMessage]'s committed prefix (every
-     * part but the growing tail), held across token updates so a part
-     * finalizing never blanks what already renders.
-     */
-    val streamingBlocks: List<MarkdownBlock> = emptyList(),
-    /** Live partial output by tool call id (bash streaming); cleared when the result commits. */
-    val toolPartials: Map<String, String> = emptyMap(),
     val draft: String = "",
     val isStreaming: Boolean = false,
     /** Transient auto-retry backoff status; null when not retrying. */
@@ -260,3 +253,25 @@ data class ChatUiState(
             return modelOptions.filter { it.key.lowercase() in enabled }
         }
 }
+
+/**
+ * The transcript's per-chunk streaming projection, deliberately outside
+ * [ChatUiState]: a streamed token changes only these fields, and a dedicated
+ * flow lets the streaming row (its sole reader, [ConversationContent]) be
+ * the only thing that recomposes per chunk. Instances copy the same
+ * reference-stability discipline as the committed projection — unchanged
+ * fields keep their instances across token updates.
+ */
+@Immutable
+data class StreamingUiState(
+    /** In-flight partial; role-generic in pi, assistant-only here (non-assistant partials render nothing). */
+    val streamingMessage: AssistantMessage? = null,
+    /**
+     * Pre-parsed blocks of [streamingMessage]'s committed prefix (every
+     * part but the growing tail), held across token updates so a part
+     * finalizing never blanks what already renders.
+     */
+    val streamingBlocks: List<MarkdownBlock> = emptyList(),
+    /** Live partial output by tool call id (bash streaming); cleared when the result commits. */
+    val toolPartials: Map<String, String> = emptyMap()
+)

@@ -44,11 +44,14 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
 import com.mikepenz.markdown.model.rememberStreamingMarkdownState
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.AssistantMessage
@@ -77,9 +80,13 @@ private const val PARTIAL_OUTPUT_MAX_LINES = 4
 @Composable
 internal fun ConversationContent(
     uiState: ChatUiState,
+    streamingState: StateFlow<StreamingUiState>,
     scrollState: TranscriptScrollState,
     modifier: Modifier = Modifier
 ) {
+    // Collected here — the streaming row's scope — so per-chunk updates
+    // recompose nothing above this composable.
+    val streaming by streamingState.collectAsStateWithLifecycle()
     val listState = scrollState.listState
     FollowTranscriptBottom(scrollState)
     val messageCount = uiState.messages.size
@@ -104,11 +111,11 @@ internal fun ConversationContent(
     // capturing uiState would re-invalidate every visible row per token.
     val isStreaming = uiState.isStreaming
     val showThinking = uiState.showThinking
-    val toolPartials = uiState.toolPartials
-    val streamingBlocks = uiState.streamingBlocks
+    val toolPartials = streaming.toolPartials
+    val streamingBlocks = streaming.streamingBlocks
 
     Box(modifier = modifier.fillMaxSize()) {
-        if (messageCount == 0 && uiState.streamingMessage == null) {
+        if (messageCount == 0 && streaming.streamingMessage == null) {
             EmptyStateText(text = stringResource(R.string.chat_empty))
         }
         // Forward layout anchors the TOP of a visible message, so appending
@@ -150,7 +157,7 @@ internal fun ConversationContent(
                     }
                 }
             }
-            uiState.streamingMessage?.let { streaming ->
+            streaming.streamingMessage?.let { streaming ->
                 item(key = "streaming") {
                     val hasVisibleText = streaming.content.any {
                         it is TextContent && it.text.isNotBlank()
@@ -706,7 +713,8 @@ private fun ConversationContentThinkingPreview() {
         )
         ConversationContent(
             uiState = uiState,
-            scrollState = rememberTranscriptScrollState(uiState)
+            streamingState = remember { MutableStateFlow(StreamingUiState()) },
+            scrollState = rememberTranscriptScrollState(uiState.messages)
         )
     }
 }

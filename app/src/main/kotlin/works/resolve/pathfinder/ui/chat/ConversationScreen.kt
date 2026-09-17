@@ -40,6 +40,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.StateFlow
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ssh.Machine
@@ -53,6 +54,7 @@ import works.resolve.pathfinder.ssh.Machine
 @Composable
 internal fun ChatSurface(
     uiState: ChatUiState,
+    streamingState: StateFlow<StreamingUiState>,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -64,6 +66,7 @@ internal fun ChatSurface(
     Column(modifier = Modifier.fillMaxSize()) {
         ConversationContent(
             uiState = uiState,
+            streamingState = streamingState,
             scrollState = scrollState,
             modifier = Modifier.weight(1f)
         )

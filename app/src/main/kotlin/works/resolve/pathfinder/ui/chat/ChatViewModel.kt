@@ -10,6 +10,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -51,7 +52,8 @@ import works.resolve.pathfinder.tools.websearch.SearchProviderService
 
 /**
  * Chat screen controller. Owns configuration, sessions, and the active
- * [AgentSession]; projects everything into an immutable [ChatUiState] (UDF).
+ * [AgentSession]; projects everything into an immutable [ChatUiState] (UDF),
+ * except the per-chunk streaming surfaces that live in [streamingState].
  *
  * Model picking follows pi's gesture: applying a model switches the live
  * session and persists the startup default together (pi's picker
@@ -93,11 +95,21 @@ class ChatViewModel(
     private val hostKeyConfirmer: TofuHostKeyConfirmer,
     /** Process-wide SSH connections; the machines controller tests dials and machine deletion evicts. */
     private val sshConnectionProvider: SshConnectionProvider,
-    /** Where bulk transcript parses run; the test harness keeps them on virtual time. */
+    /** Where bulk transcript parses and agent-event collection run; the test harness keeps them on virtual time. */
     private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
+
+    /**
+     * Per-chunk streaming projection (see [StreamingUiState]): a StateFlow
+     * conflates like the old whole-state republish did, and only the
+     * transcript content observes it, so a token updates the streaming row
+     * alone.
+     */
+    private val _streamingState = MutableStateFlow(StreamingUiState())
+
+    val streamingState: StateFlow<StreamingUiState> = _streamingState.asStateFlow()
 
     private val loginController = ProviderLoginController(
         scope = viewModelScope,
@@ -208,7 +220,7 @@ class ChatViewModel(
     /** Transcript parse cache (see [TranscriptMarkdown]). */
     private val transcriptMarkdown = TranscriptMarkdown()
 
-    /** Part count of the latest projected [ChatUiState.streamingMessage]; null while none. */
+    /** Part count of the latest projected [StreamingUiState.streamingMessage]; null while none. */
     private var observedStreamingContentSize: Int? = null
 
     /**
@@ -711,6 +723,7 @@ class ChatViewModel(
         // collection can start immediately, and a frame must never render
         // incoming messages with the outgoing session's scroll state.
         bindAgent(agent)
+        _streamingState.value = StreamingUiState()
         _uiState.update {
             it.copy(
                 activeSessionId = manager.getSessionId(),
@@ -721,9 +734,6 @@ class ChatViewModel(
                     conversation.getBranch(),
                     transcriptMarkdown::parse
                 ),
-                streamingMessage = null,
-                streamingBlocks = emptyList(),
-                toolPartials = emptyMap(),
                 treeRows = buildTreeRows(
                     conversation.getTree(),
                     conversation.getLeafId(),
@@ -803,9 +813,17 @@ class ChatViewModel(
             newAgent.state.collect { state -> onAgentState(state) }
         }
         // Events are zero-replay flow: the subscriber must be bound before
-        // any prompt starts.
-        agentEventsJob =
-            viewModelScope.launch { newAgent.events.collect { event -> onAgentEvent(event) } }
+        // any prompt starts. Collection runs off Main because every
+        // MessageUpdate (one per streamed chunk) would otherwise cost a
+        // Main dispatch just to hit onAgentEvent's ignored branch — its
+        // projection arrives through the state collection above. Handled
+        // events hop to Main in emission order.
+        agentEventsJob = viewModelScope.launch(defaultDispatcher) {
+            newAgent.events.collect { event ->
+                if (event is AgentEvent.MessageUpdate) return@collect
+                withContext(Dispatchers.Main) { onAgentEvent(event) }
+            }
+        }
     }
 
     /** Projects session lifecycle events into transient UI surfaces. */
@@ -839,13 +857,13 @@ class ChatViewModel(
             is AgentEvent.ToolExecutionUpdate -> {
                 val partial = event.partialResult.content.textContent()
                 if (partial.isNotEmpty()) {
-                    _uiState.update {
+                    _streamingState.update {
                         it.copy(toolPartials = it.toolPartials + (event.toolCallId to partial))
                     }
                 }
             }
 
-            is AgentEvent.ToolExecutionEnd -> _uiState.update {
+            is AgentEvent.ToolExecutionEnd -> _streamingState.update {
                 if (event.toolCallId in it.toolPartials) {
                     it.copy(toolPartials = it.toolPartials - event.toolCallId)
                 } else {
@@ -860,15 +878,26 @@ class ChatViewModel(
             // the drawer summaries refresh here — model/thinking appends do
             // not change any observable summary field. This is also where a
             // retained streaming row hands off to its committed row (see
-            // [onAgentState]), in the same update.
+            // [onAgentState]): both updates run in one Main block, so the
+            // collectors observe them in the same recomposition and the row
+            // neither blanks out nor doubles across the two flows. Only an
+            // assistant MessageEnd retires a streaming row: the projection
+            // holds assistant partials only (in emission order a
+            // user/tool-result MessageEnd always finds it already null), and
+            // this collector can trail later state emissions, so a late
+            // user/tool-result MessageEnd must not clear a partial
+            // published after it.
             is AgentEvent.MessageEnd -> {
                 _uiState.update {
                     it.copy(
                         messages = projectCommittedAfterSessionMessageEnd(),
-                        streamingMessage = null,
-                        streamingBlocks = emptyList(),
                         treeRows = treeRows(it.treeFilter)
                     )
+                }
+                if (event.message is AssistantMessage) {
+                    _streamingState.update {
+                        it.copy(streamingMessage = null, streamingBlocks = emptyList())
+                    }
                 }
                 scheduleSummariesRefresh()
             }
@@ -917,13 +946,11 @@ class ChatViewModel(
         }
         observedAgentMessages = state.messages
         // Same reference-stability trick for the model chip: the model
-        // instance changes only on setModel, so the catalog projection is
-        // not recomputed per token.
-        val modelProjection = if (state.model === observedAgentModel) {
-            null
-        } else {
-            modelSettings.modelOption(state.model)
-        }
+        // instance changes only on setModel, so neither the catalog
+        // projection nor the thinking-level lookup runs per token.
+        val modelChanged = state.model !== observedAgentModel
+        val modelProjection = if (modelChanged) modelSettings.modelOption(state.model) else null
+        val thinkingLevels = if (modelChanged) getSupportedThinkingLevels(state.model) else null
         observedAgentModel = state.model
         val streaming = state.streamingMessage as? AssistantMessage
         // A part boundary (a new tail part starting) finalizes the previous
@@ -944,17 +971,21 @@ class ChatViewModel(
             it.copy(
                 messages = committedProjection ?: it.messages,
                 selectedModel = modelProjection ?: it.selectedModel,
+                isStreaming = state.isStreaming,
+                thinkingLevel = state.thinkingLevel,
+                availableThinkingLevels = thinkingLevels ?: it.availableThinkingLevels
+            )
+        }
+        _streamingState.update {
+            it.copy(
                 // message_end commits to agent state (clearing streamingMessage)
                 // before the session persists the message and grows the tree, so
                 // null here does not mean the row left: retain the projection
                 // until the MessageEnd handler lands the committed row, keeping
-                // the streaming→committed handoff inside a single uiState
-                // update instead of blinking out across the persistence write.
+                // the streaming→committed handoff inside a single frame instead
+                // of blinking out across the persistence write.
                 streamingMessage = streaming ?: it.streamingMessage,
-                streamingBlocks = streamingBlocks ?: it.streamingBlocks,
-                isStreaming = state.isStreaming,
-                thinkingLevel = state.thinkingLevel,
-                availableThinkingLevels = getSupportedThinkingLevels(state.model)
+                streamingBlocks = streamingBlocks ?: it.streamingBlocks
             )
         }
         // The run went idle: land any summary refresh deferred from mid-run

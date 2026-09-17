@@ -235,7 +235,8 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         assertTrue(vm.uiState.value.canSend)
         vm.send()
 
-        vm.awaitState { it.isStreaming && it.streamingMessage != null }
+        vm.awaitState { it.isStreaming }
+        vm.awaitStreaming { it.streamingMessage != null }
         val mid = vm.uiState.value
         assertEquals(1, mid.messages.size)
         assertEquals("Hello", mid.messages[0].singleText())
@@ -247,7 +248,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
         vm.awaitState { !it.isStreaming && it.messages.size == 2 }
         val done = vm.uiState.value
-        assertNull(done.streamingMessage)
+        assertNull(vm.streamingState.value.streamingMessage)
         assertEquals("world", done.messages[1].singleText())
         assertTrue(done.messages[1].message() is AssistantMessage)
         assertNull(done.error)
@@ -289,12 +290,12 @@ internal class ChatViewModelTest : ChatHarnessTest() {
 
             vm.onDraftChange("Hello")
             vm.send()
-            val first = vm.awaitState { it.streamingMessage?.singleText() == "first" }
-            val committed = first.messages
+            vm.awaitStreaming { it.streamingMessage?.singleText() == "first" }
+            val committed = vm.uiState.value.messages
 
             releaseSecondChunk.complete(Unit)
-            val second = vm.awaitState { it.streamingMessage?.singleText() == "first second" }
-            assertSame(committed, second.messages)
+            vm.awaitStreaming { it.streamingMessage?.singleText() == "first second" }
+            assertSame(committed, vm.uiState.value.messages)
 
             releaseDone.complete(Unit)
             vm.awaitState { !it.isStreaming }
@@ -508,7 +509,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         vm.newSession()
         val fresh = vm.awaitState { it.activeSessionId != firstId }
         assertTrue(fresh.messages.isEmpty())
-        assertNull(fresh.streamingMessage)
+        assertNull(vm.streamingState.value.streamingMessage)
         // Only the flushed session is listed: the new one is absent until its
         // first assistant message commits.
         assertEquals(1, fresh.sessionSummaries.size)
@@ -658,7 +659,8 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             session.agent.processEvent(AgentEvent.MessageStart(ok))
             session.agent.processEvent(AgentEvent.MessageEnd(ok))
             waitUntil {
-                vm.uiState.value.messages.size == 4 && vm.uiState.value.streamingMessage == null
+                vm.uiState.value.messages.size == 4 &&
+                    vm.streamingState.value.streamingMessage == null
             }
 
             // The result joins the SAME row (no remove-and-re-add across the
@@ -1291,8 +1293,8 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.onDraftChange("hi")
             vm.send()
 
-            vm.awaitState { it.streamingMessage?.content?.isNotEmpty() == true }
-            val streaming = vm.uiState.value.streamingMessage!!
+            vm.awaitStreaming { it.streamingMessage?.content?.isNotEmpty() == true }
+            val streaming = vm.streamingState.value.streamingMessage!!
             assertEquals(listOf(ThinkingContent("reasoning so far")), streaming.content)
 
             // Let the stream finish so teardown never abandons it.

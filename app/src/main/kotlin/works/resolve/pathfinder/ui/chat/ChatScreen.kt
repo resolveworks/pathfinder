@@ -76,6 +76,8 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import com.mikepenz.markdown.model.parseMarkdown
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.AssistantMessage
@@ -110,6 +112,7 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
     val backStack = rememberNavBackStack(uiState.startKey)
     ChatScreen(
         uiState = uiState,
+        streamingState = viewModel.streamingState,
         backStack = backStack,
         conversationView = conversationView,
         onConversationViewChange = { conversationView = it },
@@ -161,6 +164,7 @@ fun ChatRoute(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
 @Composable
 fun ChatScreen(
     uiState: ChatUiState,
+    streamingState: StateFlow<StreamingUiState>,
     backStack: MutableList<NavKey>,
     conversationView: ConversationView,
     onConversationViewChange: (ConversationView) -> Unit,
@@ -212,7 +216,8 @@ fun ChatScreen(
     // Panel scroll state lives above the Chat/Tree switch so each view keeps
     // its own position across view toggles. A different transcript starts
     // with fresh list state positioned at its bottom anchor.
-    val chatScrollState = key(uiState.activeSessionId) { rememberTranscriptScrollState(uiState) }
+    val chatScrollState =
+        key(uiState.activeSessionId) { rememberTranscriptScrollState(uiState.messages) }
     val treeListState = rememberLazyListState()
     // Session whose tree has been positioned on its current leaf at open.
     var positionedTreeSessionId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -329,7 +334,11 @@ fun ChatScreen(
         gesturesEnabled = uiState.status == ChatStatus.Ready,
         drawerContent = {
             ChatDrawerContent(
-                uiState = uiState,
+                sessionSummaries = uiState.sessionSummaries,
+                sessionSearchResults = uiState.sessionSearchResults,
+                sessionSearchQuery = uiState.sessionSearchQuery,
+                sessionSearchSort = uiState.sessionSearchSort,
+                activeSessionId = uiState.activeSessionId,
                 onSessionSearchQueryChange = onSessionSearchQueryChange,
                 onSessionSearchSortChange = onSessionSearchSortChange,
                 onNewSession = {
@@ -445,6 +454,7 @@ fun ChatScreen(
                                     when (conversationView) {
                                         ConversationView.Chat -> ChatSurface(
                                             uiState = uiState,
+                                            streamingState = streamingState,
                                             onDraftChange = onDraftChange,
                                             onSend = sendAndFollow,
                                             onStop = onStop,
@@ -473,6 +483,7 @@ fun ChatScreen(
                                 } else {
                                     ChatSurface(
                                         uiState = uiState,
+                                        streamingState = streamingState,
                                         onDraftChange = onDraftChange,
                                         onSend = sendAndFollow,
                                         onStop = onStop,
@@ -701,7 +712,11 @@ private fun HostKeyDialog(request: HostKeyRequest, onTrust: () -> Unit, onRefuse
 
 @Composable
 private fun ChatDrawerContent(
-    uiState: ChatUiState,
+    sessionSummaries: List<SessionInfo>,
+    sessionSearchResults: List<SessionInfo>,
+    sessionSearchQuery: String,
+    sessionSearchSort: SessionSearchSort,
+    activeSessionId: String?,
     onSessionSearchQueryChange: (String) -> Unit,
     onSessionSearchSortChange: (SessionSearchSort) -> Unit,
     onNewSession: () -> Unit,
@@ -734,13 +749,13 @@ private fun ChatDrawerContent(
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             OutlinedTextField(
-                value = uiState.sessionSearchQuery,
+                value = sessionSearchQuery,
                 onValueChange = onSessionSearchQueryChange,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 placeholder = { Text(stringResource(R.string.session_search_hint)) },
                 trailingIcon = {
-                    if (uiState.sessionSearchQuery.isNotEmpty()) {
+                    if (sessionSearchQuery.isNotEmpty()) {
                         IconButton(onClick = { onSessionSearchQueryChange("") }) {
                             Icon(
                                 Icons.Filled.Close,
@@ -757,7 +772,7 @@ private fun ChatDrawerContent(
             ) {
                 SessionSearchSort.entries.forEachIndexed { index, sort ->
                     SegmentedButton(
-                        selected = uiState.sessionSearchSort == sort,
+                        selected = sessionSearchSort == sort,
                         onClick = { onSessionSearchSortChange(sort) },
                         shape = SegmentedButtonDefaults.itemShape(
                             index,
@@ -780,9 +795,9 @@ private fun ChatDrawerContent(
                 }
             }
         }
-        val queryBlank = uiState.sessionSearchQuery.isBlank()
+        val queryBlank = sessionSearchQuery.isBlank()
         val listedSessions =
-            if (queryBlank) uiState.sessionSummaries else uiState.sessionSearchResults
+            if (queryBlank) sessionSummaries else sessionSearchResults
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(listedSessions, key = SessionInfo::id) { summary ->
                 NavigationDrawerItem(
@@ -793,9 +808,9 @@ private fun ChatDrawerContent(
                             overflow = TextOverflow.Ellipsis
                         )
                     },
-                    selected = summary.id == uiState.activeSessionId,
+                    selected = summary.id == activeSessionId,
                     onClick = {
-                        if (summary.id != uiState.activeSessionId) onSwitchSession(summary.id)
+                        if (summary.id != activeSessionId) onSwitchSession(summary.id)
                     },
                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                 )
@@ -1008,6 +1023,7 @@ private fun PreviewChatScreen(
     startKey: NavKey = ChatNavKey,
     extraKeys: List<NavKey> = emptyList(),
     conversationView: ConversationView = ConversationView.Chat,
+    streaming: StreamingUiState = StreamingUiState(),
     authPrompts: (String) -> List<CatalogAuthPrompt> = { emptyList() },
     authMethods: (String) -> List<AuthMethodInfo> = { emptyList() },
     searchAuthPrompts: (String) -> List<CatalogAuthPrompt> = { emptyList() }
@@ -1015,6 +1031,7 @@ private fun PreviewChatScreen(
     PathfinderTheme {
         ChatScreen(
             uiState = uiState,
+            streamingState = remember { MutableStateFlow(streaming) },
             backStack = rememberNavBackStack(startKey).apply { addAll(extraKeys) },
             conversationView = conversationView,
             onConversationViewChange = {},
@@ -1394,13 +1411,15 @@ private fun ChatScreenReadyStreamingPreview() {
                     )
                 }
             ),
+            isStreaming = true
+        ),
+        streaming = StreamingUiState(
             streamingMessage = AssistantMessage(
                 content = listOf(TextContent("Sure, ")),
                 api = "preview",
                 provider = "preview",
                 model = "preview"
-            ),
-            isStreaming = true
+            )
         )
     )
 }

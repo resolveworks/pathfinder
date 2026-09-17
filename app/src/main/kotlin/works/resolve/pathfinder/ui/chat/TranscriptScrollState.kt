@@ -50,12 +50,13 @@ internal class TranscriptScrollState(
 }
 
 @Composable
-internal fun rememberTranscriptScrollState(uiState: ChatUiState): TranscriptScrollState {
+internal fun rememberTranscriptScrollState(messages: List<TranscriptRow>): TranscriptScrollState {
     // Start at the sentinel on the first measure, not at the top followed by
     // an effect-driven jump. Restored reader positions still take precedence.
+    // (No streaming-row term: a transcript is only ever adopted while idle,
+    // so the streaming projection is empty whenever this initializes.)
     val initialBottomIndex = remember {
-        uiState.messages.count(TranscriptRow::hasRenderableContent) +
-            if (uiState.streamingMessage != null) 1 else 0
+        messages.count(TranscriptRow::hasRenderableContent)
     }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialBottomIndex)
     return rememberSaveable(
