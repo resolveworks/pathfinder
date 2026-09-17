@@ -64,7 +64,6 @@ import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
-import works.resolve.pathfinder.ai.auth.ApiKeyCredential
 import works.resolve.pathfinder.ai.auth.AuthEvent
 import works.resolve.pathfinder.ai.auth.AuthInteraction
 import works.resolve.pathfinder.ai.auth.AuthMethodInfo
@@ -93,7 +92,6 @@ import works.resolve.pathfinder.codingagent.core.SessionInfo
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.ThinkingLevelEntry
 import works.resolve.pathfinder.data.settings.SettingsRepository
-import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
@@ -143,8 +141,7 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
     fun preStoredSearchKey_enablesWebSearch_beforeFirstReadySession() =
         runTest(mainDispatcherRule.scheduler) {
             val h = harness()
-            h.credentials.creds[SearchProviderService.BRAVE_CREDENTIAL_ID] =
-                ApiKeyCredential(key = "brave-key")
+            h.searchProviders.saveApiKey(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
             val vm = h.newViewModel()
             vm.awaitState { it.status == ChatStatus.NeedsConfiguration }
 
@@ -173,7 +170,7 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
         vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "   ")
         vm.awaitState { it.error != null }
         assertFalse(vm.uiState.value.searchProviderOptions.single().configured)
-        assertNull(h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
+        assertNull(h.searchProviders.apiKey(SearchProviderService.BRAVE_PROVIDER_ID))
         vm.dismissError()
 
         vm.saveSearchProviderCredential("nope", "k")
@@ -192,7 +189,10 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
         // Confirmed save enables web_search on the SAME session.
         vm.saveSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID, "brave-key")
         vm.awaitState { it.searchProviderOptions.single().configured }
-        assertEquals("brave-key", h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
+        assertEquals(
+            "brave-key",
+            h.searchProviders.apiKey(SearchProviderService.BRAVE_PROVIDER_ID)
+        )
         assertEquals(1, h.createdAgents.size)
         assertTrue(BraveWebSearchTool.NAME in agent.getActiveToolNames())
         assertFalse(vm.uiState.value.toString().contains("brave-key"))
@@ -201,7 +201,9 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
             SearchProviderService.BRAVE_PROVIDER_ID,
             "brave-key-2"
         )
-        waitUntil { h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID) == "brave-key-2" }
+        waitUntil {
+            h.searchProviders.apiKey(SearchProviderService.BRAVE_PROVIDER_ID) == "brave-key-2"
+        }
 
         vm.closeForTest()
     }
@@ -221,7 +223,7 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
 
         vm.removeSearchProviderCredential(SearchProviderService.BRAVE_PROVIDER_ID)
         vm.awaitState { !it.searchProviderOptions.single().configured }
-        assertNull(h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
+        assertNull(h.searchProviders.apiKey(SearchProviderService.BRAVE_PROVIDER_ID))
         assertFalse(BraveWebSearchTool.NAME in agent.getActiveToolNames())
         assertEquals(1, h.createdAgents.size)
 
@@ -249,10 +251,14 @@ internal class SearchProviderViewModelTest : ChatHarnessTest() {
             assertFalse(vm.uiState.value.searchProviderOptions.single().configured)
             assertFalse(BraveWebSearchTool.NAME in agent.getActiveToolNames())
             assertEquals(ChatStatus.Ready, vm.uiState.value.status)
-            assertEquals("brave-key", h.storedApiKey(SearchProviderService.BRAVE_CREDENTIAL_ID))
             assertFalse(vm.uiState.value.toString().contains("brave-key"))
             vm.dismissError()
             h.credentials.failWrites = false
+            // The failed refresh left the stored key intact.
+            assertEquals(
+                "brave-key",
+                h.searchProviders.apiKey(SearchProviderService.BRAVE_PROVIDER_ID)
+            )
 
             vm.refreshSearchProviderStatus()
             vm.awaitState { it.searchProviderOptions.single().configured }

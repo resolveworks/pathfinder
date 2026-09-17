@@ -125,9 +125,9 @@ class WebFetchTool(private val fetcher: PageFetcher) : AgentTool {
         private val HTTP_SCHEMES = setOf("http", "https")
 
         /** Caps the returned content roughly at pi's 50 KiB tool-output budget. */
-        internal const val MAX_CONTENT_CHARS = 50_000
+        private const val MAX_CONTENT_CHARS = 50_000
 
-        internal fun truncate(text: String): String = if (text.length <= MAX_CONTENT_CHARS) {
+        private fun truncate(text: String): String = if (text.length <= MAX_CONTENT_CHARS) {
             text
         } else {
             text.take(MAX_CONTENT_CHARS) + "\n\n[Content truncated]"

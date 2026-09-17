@@ -119,9 +119,14 @@ class PathfinderApplication : Application() {
 
     /** Machine configs, per-machine keys, and TOFU host-key state. */
     val machineStore: MachineStore by lazy {
+        val keyCipher = KeystoreAeadCipher()
         MachineStore(
             machinesDataStore,
-            MachineKeyStore(File(filesDir, "machine-keys"), KeystoreAeadCipher())
+            MachineKeyStore(
+                File(filesDir, "machine-keys"),
+                keyCipher::encrypt,
+                keyCipher::decrypt
+            )
         )
     }
 

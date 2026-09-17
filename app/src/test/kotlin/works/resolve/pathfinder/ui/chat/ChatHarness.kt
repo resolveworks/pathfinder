@@ -1,6 +1,8 @@
 package works.resolve.pathfinder.ui.chat
 
+import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.Preferences
 import androidx.lifecycle.viewModelScope
 import java.io.File
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -65,11 +67,8 @@ import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.codingagent.core.AgentSession
 import works.resolve.pathfinder.codingagent.core.SessionManager
 import works.resolve.pathfinder.codingagent.core.SettingsManager
-import works.resolve.pathfinder.codingagent.core.SettingsStorage
 import works.resolve.pathfinder.codingagent.core.createAgentSession
-import works.resolve.pathfinder.data.credentials.KeystoreAeadCipher
 import works.resolve.pathfinder.data.settings.SettingsRepository
-import works.resolve.pathfinder.data.settings.SettingsStore
 import works.resolve.pathfinder.runtime.AgentFactory
 import works.resolve.pathfinder.runtime.NativeAgentFactory
 import works.resolve.pathfinder.runtime.catalogAuthResolver
@@ -77,7 +76,6 @@ import works.resolve.pathfinder.ssh.MachineKeyStore
 import works.resolve.pathfinder.ssh.MachineStore
 import works.resolve.pathfinder.ssh.SshConnectionHelper
 import works.resolve.pathfinder.ssh.SshConnectionProvider
-import works.resolve.pathfinder.ssh.SshPrivateKeyPem
 import works.resolve.pathfinder.ssh.TofuHostKeyConfirmer
 import works.resolve.pathfinder.tools.websearch.BraveWebSearchTool
 import works.resolve.pathfinder.tools.websearch.SearchProviderService
@@ -142,26 +140,21 @@ internal class FakeOAuthAuth(
 }
 
 /**
- * Fails app-pref writes (per flag) and, via the SettingsStorage backend,
- * runtime settings JSON writes — SettingsManager records the latter as
- * drained errors instead of throwing.
+ * Fails DataStore edits on demand — the storage boundary itself, like a
+ * full disk — while reads keep flowing from the real store. App-pref
+ * writes and runtime settings JSON writes (SettingsStorage's withLock)
+ * fail together; SettingsManager records the latter as drained errors
+ * instead of throwing.
  */
-internal class FailingSettingsStore(private val delegate: SettingsRepository) :
-    SettingsStore by delegate,
-    SettingsStorage by delegate {
+internal class FailingDataStore(private val delegate: DataStore<Preferences>) :
+    DataStore<Preferences> {
     var failWrites = false
-    var failActiveSessionWrites = false
-    override suspend fun withLock(transform: (current: String?) -> String?) {
+
+    override val data: Flow<Preferences> get() = delegate.data
+
+    override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences {
         if (failWrites) throw java.io.IOException("settings write failed")
-        delegate.withLock(transform)
-    }
-    override suspend fun setActiveSessionId(sessionId: String?) {
-        if (failActiveSessionWrites) throw java.io.IOException("active session write failed")
-        delegate.setActiveSessionId(sessionId)
-    }
-    override suspend fun setShowThinking(showThinking: Boolean) {
-        if (failWrites) throw java.io.IOException("settings write failed")
-        delegate.setShowThinking(showThinking)
+        return delegate.updateData(transform)
     }
 }
 
@@ -213,7 +206,7 @@ internal class ChatHarness(
         credentials = credentials
     )
     val dataStoreScope = CoroutineScope(SupervisorJob() + testDispatcher)
-    val settings = SettingsRepository(
+    val failingDataStore = FailingDataStore(
         PreferenceDataStoreFactory.create(
             scope = dataStoreScope,
             produceFile = {
@@ -221,21 +214,7 @@ internal class ChatHarness(
             }
         )
     )
-    val settingsStore = FailingSettingsStore(settings)
-
-    private class FakeMachineKeyStore(dir: File) :
-        MachineKeyStore(dir, KeystoreAeadCipher()) {
-        private val keys = mutableMapOf<String, SshPrivateKeyPem>()
-        override suspend fun write(machineId: String, key: SshPrivateKeyPem) {
-            keys[machineId] = key
-        }
-
-        override suspend fun read(machineId: String): SshPrivateKeyPem? = keys[machineId]
-
-        override suspend fun delete(machineId: String) {
-            keys.remove(machineId)
-        }
-    }
+    val settings = SettingsRepository(failingDataStore)
 
     val machineStore = MachineStore(
         PreferenceDataStoreFactory.create(
@@ -244,7 +223,7 @@ internal class ChatHarness(
                 File(tmpFolder.root, "machines_${System.nanoTime()}.preferences_pb")
             }
         ),
-        FakeMachineKeyStore(File(tmpFolder.root, "machine-keys"))
+        MachineKeyStore(File(tmpFolder.root, "machine-keys"), { it }, { it })
     )
 
     val hostKeyConfirmer = TofuHostKeyConfirmer()
@@ -255,7 +234,7 @@ internal class ChatHarness(
 
     /** The shared manager all ViewModels and the factory write through. */
     val settingsManager: SettingsManager =
-        runBlocking { SettingsManager.fromStorage(settingsStore) }
+        runBlocking { SettingsManager.fromStorage(settings) }
 
     /** Seeds a persisted startup default through the shared manager. */
     fun seedStartupDefault(providerId: String, modelId: String) {
@@ -389,7 +368,7 @@ internal class ChatHarness(
     }
 
     fun newViewModel(): ChatViewModel = ChatViewModel(
-        settingsStore = settingsStore,
+        settingsStore = settings,
         settingsManager = settingsManager,
         catalog = works.resolve.pathfinder.ai.testing.TestCatalogs.CATALOG,
         authService = authService,
