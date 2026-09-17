@@ -186,10 +186,6 @@ class PathfinderApplication : Application() {
         }
     }
 
-    override fun onCreate() {
-        super.onCreate()
-    }
-
     private companion object {
         const val SESSIONS_DIRECTORY = "sessions"
         const val CONNECT_TIMEOUT_SECONDS = 30L
