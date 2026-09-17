@@ -481,7 +481,12 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         val state = vm2.awaitState { it.status == ChatStatus.Ready }
         assertEquals(originalId, state.activeSessionId)
         assertEquals(2, state.messages.size)
-        assertEquals("Hello", state.sessionSummaries.first { it.id == originalId!! }.firstMessage)
+        // Summaries land asynchronously after Ready; wait for the build.
+        vm2.awaitState { it.sessionSummaries.any { s -> s.id == originalId } }
+        assertEquals(
+            "Hello",
+            vm2.uiState.value.sessionSummaries.first { it.id == originalId!! }.firstMessage
+        )
 
         vm2.closeForTest()
     }
@@ -942,6 +947,8 @@ internal class ChatViewModelTest : ChatHarnessTest() {
             vm.configure(apiKey = "k")
             vm.awaitState { it.status == ChatStatus.Ready }
             val firstId = vm.uiState.value.activeSessionId!!
+            // The background build has landed — with zero rows for a fresh app.
+            vm.awaitState { it.sessionSummariesLoaded }
             assertEquals(0, vm.uiState.value.sessionSummaries.size)
 
             vm.exchange(h, "Hello", "world")

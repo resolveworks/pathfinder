@@ -36,6 +36,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -784,6 +785,17 @@ private fun ChatDrawerContent(
         val listedSessions =
             if (queryBlank) uiState.sessionSummaries else uiState.sessionSearchResults
         LazyColumn(modifier = Modifier.weight(1f)) {
+            // The one-time summary build has not landed yet: show a loading
+            // affordance instead of an empty session list.
+            if (queryBlank && !uiState.sessionSummariesLoaded) {
+                item(key = "session-summaries-loading") {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(NavigationDrawerItemDefaults.ItemPadding)
+                    )
+                }
+            }
             items(listedSessions, key = SessionInfo::id) { summary ->
                 NavigationDrawerItem(
                     label = {
@@ -1323,6 +1335,7 @@ private fun ChatScreenChatViewPreview() {
             machines = PREVIEW_MACHINES,
             selectedMachine = PREVIEW_MACHINES.first(),
             activeSessionId = "s1",
+            sessionSummariesLoaded = true,
             sessionSummaries = listOf(
                 SessionInfo(
                     id = "s1",
@@ -1365,6 +1378,7 @@ private fun ChatScreenReadyStreamingPreview() {
             modelOptions = PREVIEW_MODEL_OPTIONS,
             selectedModel = PREVIEW_SELECTED_MODEL,
             activeSessionId = "s1",
+            sessionSummariesLoaded = true,
             sessionSummaries = listOf(
                 SessionInfo(
                     id = "s1",

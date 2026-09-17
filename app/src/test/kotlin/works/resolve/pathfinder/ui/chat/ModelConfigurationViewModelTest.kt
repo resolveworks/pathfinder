@@ -200,6 +200,8 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.configure(apiKey = "k")
             vm.awaitState { it.status == ChatStatus.Ready }
             val firstId = vm.uiState.value.activeSessionId!!
+            vm.exchange(h, "hi", "ok")
+            vm.closeForTest()
 
             // A pre-existing session without a thinking entry (as written by
             // an older process, hand-built here): switching to it appends the
@@ -212,14 +214,19 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
                 other.appendMessage(h.assistant("Stock").copy(timestamp = 2L))
             }
             // The switch entry point addresses listed sessions (the drawer
-            // renders from the summaries), so the pre-existing file must
-            // first appear there — as it would after the committed-message
-            // refresh.
-            vm.exchange(h, "hi", "ok")
+            // renders from the summaries), and only the one-time build lists
+            // files written outside the active session — so the restarted
+            // ViewModel must list it before the switch.
+            val vm2 = h.newViewModel()
+            vm2.awaitState {
+                it.status == ChatStatus.Ready &&
+                    it.activeSessionId == firstId &&
+                    it.sessionSummaries.any { s -> s.id == other.getSessionId() }
+            }
             val firstBefore = h.stored(firstId)!!.getEntries()
 
-            vm.switchSession(other.getSessionId())
-            val state = vm.awaitState { it.activeSessionId == other.getSessionId() }
+            vm2.switchSession(other.getSessionId())
+            val state = vm2.awaitState { it.activeSessionId == other.getSessionId() }
             assertEquals(2, state.messages.size)
             waitUntil {
                 h.stored(other.getSessionId())!!
@@ -235,7 +242,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
                     .map { it.thinkingLevel }
             )
 
-            vm.closeForTest()
+            vm2.closeForTest()
         }
 
     @Test
