@@ -231,12 +231,13 @@ class AgentSession(
      * reason) and rebuild the context from the agent transcript.
      */
     private suspend fun compactBeforeNextAssistantResponse(context: AgentContext): AgentContext {
+        val settings = settingsManager.getCompactionSettings(model)
         if (
             model.contextWindow <= 0 ||
             !shouldCompact(
                 estimateContextTokens(context.messages).tokens,
                 model.contextWindow,
-                settingsManager.getCompactionSettings()
+                settings
             )
         ) {
             return context
@@ -803,7 +804,8 @@ class AgentSession(
         assistantMessage: AssistantMessage,
         skipAbortedCheck: Boolean = true
     ): Boolean {
-        if (!settingsManager.getCompactionSettings().enabled) return false
+        val compactionSettings = settingsManager.getCompactionSettings(model)
+        if (!compactionSettings.enabled) return false
 
         // Skip if message was aborted (user cancelled) - unless the pre-prompt
         // check asked for aborted messages too.
@@ -890,7 +892,7 @@ class AgentSession(
         } else {
             contextTokens = directContextTokens
         }
-        if (shouldCompact(contextTokens, contextWindow, settingsManager.getCompactionSettings())) {
+        if (shouldCompact(contextTokens, contextWindow, compactionSettings)) {
             return runAutoCompaction(AgentEvent.CompactionReason.THRESHOLD, willRetry = false)
         }
         return false
@@ -915,7 +917,7 @@ class AgentSession(
         val preparation = when (
             val outcome = prepareCompaction(
                 pathEntries,
-                settingsManager.getCompactionSettings()
+                settingsManager.getCompactionSettings(model)
             )
         ) {
             is CompactionOutcome.Err -> return false
@@ -1096,7 +1098,7 @@ class AgentSession(
                 val pathEntries = manager.getBranch()
                 when (
                     val outcome =
-                        prepareCompaction(pathEntries, settingsManager.getCompactionSettings())
+                        prepareCompaction(pathEntries, settingsManager.getCompactionSettings(model))
                 ) {
                     is CompactionOutcome.Err ->
                         throw IllegalStateException(outcome.error.message ?: "compaction failed")
@@ -1152,18 +1154,14 @@ class AgentSession(
         }
     }
 
-    /**
-     * Live retry policy for agent backoff and the summarization calls.
-     * Divergence: [SettingsManager] does not yet parse
-     * `retry.maxAgentDelayMs`, so the policy default (60s) caps backoff
-     * until that setting lands.
-     */
+    /** Live retry policy for agent backoff and the summarization calls. */
     private fun retryPolicy(): RetryPolicy {
         val settings = settingsManager.getRetrySettings()
         return RetryPolicy(
             enabled = settings.enabled,
             maxRetries = settings.maxRetries,
-            baseDelayMs = settings.baseDelayMs
+            baseDelayMs = settings.baseDelayMs,
+            maxAgentDelayMs = settings.maxAgentDelayMs
         )
     }
 

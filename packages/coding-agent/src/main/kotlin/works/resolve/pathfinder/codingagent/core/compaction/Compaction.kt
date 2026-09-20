@@ -12,6 +12,7 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ToolCall
@@ -269,10 +270,15 @@ private fun getMessageFromEntry(entry: SessionEntry): Message? = when (entry) {
 
 /**
  * Compaction entries contribute no message: their stored summary re-enters
- * summarization via `previousSummary` instead.
+ * summarization via `previousSummary` instead, and system messages are
+ * prompt state, not conversation — the compaction entry carries their
+ * replay.
  */
-internal fun getMessageFromEntryForCompaction(entry: SessionEntry): Message? =
-    if (entry is CompactionEntry) null else getMessageFromEntry(entry)
+internal fun getMessageFromEntryForCompaction(entry: SessionEntry): Message? = when {
+    entry is CompactionEntry -> null
+    entry is MessageEntry && entry.message is SystemMessage -> null
+    else -> getMessageFromEntry(entry)
+}
 
 enum class CompactionErrorCode { ABORTED, SUMMARIZATION_FAILED }
 

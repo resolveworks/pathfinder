@@ -2,6 +2,7 @@ package works.resolve.pathfinder.codingagent.core
 
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.io.path.createTempDirectory
+import kotlin.test.assertIs
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
@@ -24,13 +25,14 @@ import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FauxProvider
 import works.resolve.pathfinder.ai.testing.FauxResponseFactory
-import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
+import works.resolve.pathfinder.codingagent.core.CompactionSettings
 
 class AgentSessionCompactionTest {
 
@@ -188,7 +190,9 @@ class AgentSessionCompactionTest {
         assertTrue(result.tokensBefore > 0)
         val messages = session.state.value.messages
         assertTrue(messages.isNotEmpty())
-        val firstMessage = messages.first() as UserMessage
+        // The compacted context leads with the replayed system message.
+        assertIs<SystemMessage>(messages.first())
+        val firstMessage = messages.first { it is UserMessage } as UserMessage
         assertTrue((firstMessage.content.single() as TextContent).text.contains(result.summary))
     }
 

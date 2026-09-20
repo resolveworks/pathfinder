@@ -12,7 +12,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import works.resolve.pathfinder.ai.ModelThinkingLevel
-import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings
+import works.resolve.pathfinder.codingagent.core.compaction.CompactionSettings as ResolvedCompactionSettings
 
 /**
  * Characterization of upstream `test/settings-manager.test.ts`, restricted to
@@ -180,7 +180,11 @@ class SettingsManagerTest {
         assertTrue(manager.getAllModelThinkingLevels().isEmpty())
         assertNull(manager.getEnabledModels())
         assertEquals(
-            CompactionSettings(enabled = true, reserveTokens = 16384, keepRecentTokens = 20000),
+            ResolvedCompactionSettings(
+                enabled = true,
+                reserveTokens = 16384,
+                keepRecentTokens = 20000
+            ),
             manager.getCompactionSettings()
         )
         assertEquals(
@@ -219,7 +223,11 @@ class SettingsManagerTest {
         assertEquals(listOf("claude-*"), manager.getEnabledModels())
         // Partial compaction object fills remaining fields from defaults.
         assertEquals(
-            CompactionSettings(enabled = false, reserveTokens = 16384, keepRecentTokens = 20000),
+            ResolvedCompactionSettings(
+                enabled = false,
+                reserveTokens = 16384,
+                keepRecentTokens = 20000
+            ),
             manager.getCompactionSettings()
         )
         assertEquals(
@@ -306,7 +314,11 @@ class SettingsManagerTest {
         manager.setRetrySettings(RetrySettings(enabled = false, maxRetries = 0, baseDelayMs = 100))
 
         assertEquals(
-            CompactionSettings(enabled = false, reserveTokens = 1000, keepRecentTokens = 2000),
+            ResolvedCompactionSettings(
+                enabled = false,
+                reserveTokens = 1000,
+                keepRecentTokens = 2000
+            ),
             manager.getCompactionSettings()
         )
         assertEquals(
