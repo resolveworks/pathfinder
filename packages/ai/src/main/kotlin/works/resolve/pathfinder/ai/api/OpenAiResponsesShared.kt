@@ -9,24 +9,29 @@ import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Content
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.ProviderStreamException
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.calculateCost
+import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.obj
+import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
+import works.resolve.pathfinder.ai.utils.resolveTranscript
+import works.resolve.pathfinder.ai.utils.resolveTranscriptTools
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
 import works.resolve.pathfinder.ai.utils.strictInt
@@ -84,27 +89,27 @@ object OpenAiResponsesShared {
         val strict: Boolean? = false,
         val supportsStrictMode: Boolean = true,
         val supportsOpenAIGrammarTools: Boolean = false,
-        val deferLoading: Boolean = false
+        val toolSearchResult: Boolean = false
     )
-
-    enum class DeferredToolsMode { ADDITIONAL_TOOLS, TOOL_SEARCH }
 
     data class ConvertResponsesMessagesOptions(
         val includeSystemPrompt: Boolean = true,
         val grammarToolInputProperties: Map<String, String> = emptyMap(),
-        val deferredTools: Map<String, Tool> = emptyMap(),
-        val deferredToolsMode: DeferredToolsMode? = null,
+        /** Whether later system messages are sent in place; otherwise they are folded into the leading prompt. */
+        val supportsMidConvoSystemMessages: Boolean = false,
+        val supportsAdditionalTools: Boolean = false,
+        val supportsToolSearch: Boolean = false,
         val toolOptions: ConvertResponsesToolsOptions = ConvertResponsesToolsOptions()
     )
 
     fun convertResponsesMessages(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         allowedToolCallProviders: Set<String>,
         options: ConvertResponsesMessagesOptions = ConvertResponsesMessagesOptions()
     ): List<JsonObject> {
+        val normalizedContext = resolveTranscript(context, options.supportsMidConvoSystemMessages)
         val messages = mutableListOf<JsonObject>()
-        val loadedToolNames = mutableSetOf<String>()
 
         fun normalizeIdPart(part: String): String {
             val sanitized = part.replace(Regex("[^a-zA-Z0-9_-]"), "_")
@@ -141,27 +146,90 @@ object OpenAiResponsesShared {
             }
         }
 
-        val transformedMessages = transformMessages(context.messages, model, normalizeToolCallId)
+        val transformedMessages = transformMessages(normalizedContext.messages, model, normalizeToolCallId)
+        val transcriptTools = resolveTranscriptTools(
+            normalizedContext.messages,
+            options.supportsAdditionalTools || options.supportsToolSearch
+        )
 
-        if (options.includeSystemPrompt && context.systemPrompt != null) {
-            val role =
-                if (model.reasoning &&
-                    model.responsesCompat?.supportsDeveloperRole != false
-                ) {
-                    "developer"
-                } else {
-                    "system"
-                }
+        fun appendSystemToolAdditions(message: SystemMessage, seed: String) {
+            val tools = if (transcriptTools.anchorsAdditions) message.toolsAdded.orEmpty() else emptyList()
+            if (tools.isEmpty()) return
+            if (options.supportsAdditionalTools) {
+                messages.add(
+                    buildJsonObject {
+                        put("type", "additional_tools")
+                        put("role", "developer")
+                        put("tools", JsonArray(convertResponsesTools(tools, options.toolOptions)))
+                    }
+                )
+                return
+            }
+            if (!options.supportsToolSearch) return
+            val names = tools.map { it.name }
+            val callId = "pi_tool_load_${shortHash("$seed:${names.joinToString(",")}")}"
             messages.add(
                 buildJsonObject {
-                    put("role", role)
-                    put("content", sanitizeSurrogates(context.systemPrompt))
+                    put("type", "tool_search_call")
+                    put("call_id", callId)
+                    put("execution", "client")
+                    put("status", "completed")
+                    put(
+                        "arguments",
+                        buildJsonObject {
+                            put("query", names.joinToString(" "))
+                            put("limit", names.size)
+                        }
+                    )
+                }
+            )
+            messages.add(
+                buildJsonObject {
+                    put("type", "tool_search_output")
+                    put("call_id", callId)
+                    put("execution", "client")
+                    put("status", "completed")
+                    put(
+                        "tools",
+                        JsonArray(
+                            convertResponsesTools(tools, options.toolOptions.copy(toolSearchResult = true))
+                        )
+                    )
                 }
             )
         }
 
-        transformedMessages.forEachIndexed { msgIndex, msg ->
+        val includeInitialSystemMessage = options.includeSystemPrompt
+        val instructionRole =
+            if (model.reasoning && model.responsesCompat?.supportsDeveloperRole != false) {
+                "developer"
+            } else {
+                "system"
+            }
+        val initialSystemMessage = transformedMessages.firstOrNull() as? SystemMessage
+
+        transformedMessages.forEachIndexed { index, msg ->
+            val isLeadingSystemMessage = index == 0 && msg is SystemMessage
+            // The leading system message is not counted as a conversation message.
+            val msgIndex = if (initialSystemMessage != null) index - 1 else index
             when (msg) {
+                is SystemMessage -> {
+                    if (!isLeadingSystemMessage) appendSystemToolAdditions(msg, "system:$msgIndex")
+                    if (!isLeadingSystemMessage || includeInitialSystemMessage) {
+                        val text =
+                            if (isLeadingSystemMessage) getSystemMessageText(msg)
+                            else renderSystemMessageUpdate(msg)
+                        if (text.isNotEmpty()) {
+                            messages.add(
+                                buildJsonObject {
+                                    put("role", instructionRole)
+                                    put("content", sanitizeSurrogates(text))
+                                }
+                            )
+                        }
+                    }
+                }
+
                 is UserMessage -> {
                     val content = msg.content.mapNotNull { item ->
                         when (item) {
@@ -471,7 +539,7 @@ object OpenAiResponsesShared {
                         put("definition", grammar.definition)
                     }
                 )
-                if (options.deferLoading) put("defer_loading", true)
+                if (options.toolSearchResult) put("defer_loading", true)
             }
         } else {
             val constrainedStrict =
@@ -482,7 +550,7 @@ object OpenAiResponsesShared {
                 put("name", tool.name)
                 put("description", tool.description)
                 put("parameters", getJsonSchemaToolParameters(tool, strict == true))
-                if (options.deferLoading) put("defer_loading", true)
+                if (options.toolSearchResult) put("defer_loading", true)
                 if (options.supportsStrictMode) strict?.let { put("strict", it) }
             }
         }

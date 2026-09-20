@@ -28,13 +28,13 @@ import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ChatApi
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.ProviderAuthException
 import works.resolve.pathfinder.ai.ProviderResponse
 import works.resolve.pathfinder.ai.ProviderStreamException
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Transport
 import works.resolve.pathfinder.ai.headersToRecord
 import works.resolve.pathfinder.ai.toModelThinkingLevel
@@ -50,12 +50,17 @@ import works.resolve.pathfinder.ai.transport.WebSocketStreamingTransport
 import works.resolve.pathfinder.ai.utils.RetryDelayExceededError
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.getDeclaredTools
+import works.resolve.pathfinder.ai.utils.getInitialSystemMessage
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.getSystemMessageText
+import works.resolve.pathfinder.ai.utils.normalizeContext
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
-import works.resolve.pathfinder.ai.utils.splitDeferredTools
+import works.resolve.pathfinder.ai.utils.resolveTranscript
+import works.resolve.pathfinder.ai.utils.resolveTranscriptTools
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strictBoolean
 import works.resolve.pathfinder.ai.utils.strictDouble
@@ -279,12 +284,14 @@ class OpenAICodexResponsesApi(
 
     fun stream(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: OpenAICodexResponsesOptions = OpenAICodexResponsesOptions()
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = nowMs()
+        val normalizedContext =
+            resolveTranscript(context, model.compat?.supportsMidConvoSystemMessages)
         val grammarToolInputProperties = createGrammarToolInputProperties(
-            context.tools,
+            getDeclaredTools(normalizedContext.messages),
             model.responsesCompat?.supportsOpenAIGrammarTools ?: false
         )
         val state = OpenAiResponsesShared.ResponsesStreamState(
@@ -337,7 +344,7 @@ class OpenAICodexResponsesApi(
             var bodyObj =
                 buildCodexRequestBody(
                     model,
-                    context,
+                    normalizedContext,
                     options,
                     codexSessionId,
                     grammarToolInputProperties
@@ -496,7 +503,7 @@ class OpenAICodexResponsesApi(
 
     override fun streamSimple(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: works.resolve.pathfinder.ai.SimpleStreamOptions
     ): Flow<AssistantMessageEvent> {
         val apiKey = options.apiKey
@@ -665,7 +672,7 @@ class OpenAICodexResponsesApi(
                     val responseItems =
                         OpenAiResponsesShared.convertResponsesMessages(
                             model,
-                            Context(messages = listOf(state.partialSnapshot())),
+                            normalizeContext(Context(messages = listOf(state.partialSnapshot()))),
                             OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
                             OpenAiResponsesShared.ConvertResponsesMessagesOptions(
                                 includeSystemPrompt = false,
@@ -783,7 +790,7 @@ class OpenAICodexResponsesApi(
  */
 internal fun buildOpenAICodexResponsesOptions(
     model: Model,
-    context: Context,
+    context: TranscriptContext,
     options: works.resolve.pathfinder.ai.SimpleStreamOptions,
     reasoningEffort: ModelThinkingLevel?
 ): OpenAICodexResponsesOptions = OpenAICodexResponsesOptions(
@@ -828,26 +835,22 @@ private object TerminalEventReached : RuntimeException()
 
 internal fun buildCodexRequestBody(
     model: Model,
-    context: Context,
+    context: TranscriptContext,
     options: OpenAICodexResponsesOptions?,
     codexSessionId: String?,
     grammarToolInputProperties: Map<String, String> = createGrammarToolInputProperties(
-        context.tools,
+        getDeclaredTools(context.messages),
         model.responsesCompat?.supportsOpenAIGrammarTools ?: false
     )
 ): JsonObject {
     val supportsStrictMode = model.responsesCompat?.supportsStrictMode ?: true
     val supportsOpenAIGrammarTools = model.responsesCompat?.supportsOpenAIGrammarTools ?: false
-    val deferredToolsMode = when {
-        model.responsesCompat?.supportsAdditionalTools == true ->
-            OpenAiResponsesShared.DeferredToolsMode.ADDITIONAL_TOOLS
-
-        model.responsesCompat?.supportsToolSearch == true ->
-            OpenAiResponsesShared.DeferredToolsMode.TOOL_SEARCH
-
-        else -> null
-    }
-    val toolPlacement = splitDeferredTools(context, deferredToolsMode != null)
+    val supportsAdditionalTools = model.responsesCompat?.supportsAdditionalTools ?: false
+    val supportsToolSearch = model.responsesCompat?.supportsToolSearch ?: false
+    val transcriptTools = resolveTranscriptTools(
+        context.messages,
+        supportsAdditionalTools || supportsToolSearch
+    )
     val messages = OpenAiResponsesShared.convertResponsesMessages(
         model,
         context,
@@ -855,8 +858,9 @@ internal fun buildCodexRequestBody(
         OpenAiResponsesShared.ConvertResponsesMessagesOptions(
             includeSystemPrompt = false,
             grammarToolInputProperties = grammarToolInputProperties,
-            deferredTools = toolPlacement.deferred,
-            deferredToolsMode = deferredToolsMode,
+            supportsMidConvoSystemMessages = model.compat?.supportsMidConvoSystemMessages ?: false,
+            supportsAdditionalTools = supportsAdditionalTools,
+            supportsToolSearch = supportsToolSearch,
             toolOptions = OpenAiResponsesShared.ConvertResponsesToolsOptions(
                 strict = null,
                 supportsStrictMode = supportsStrictMode,
@@ -865,13 +869,21 @@ internal fun buildCodexRequestBody(
         )
     )
 
+    val initialSystemMessage = getInitialSystemMessage(context.messages)
+    val instructions = if (initialSystemMessage !=
+        null
+    ) {
+        getSystemMessageText(initialSystemMessage)
+    } else {
+        ""
+    }
     return buildJsonObject {
         put("model", model.id)
         put("store", false)
         put("stream", true)
         put(
             "instructions",
-            context.systemPrompt?.takeIf { it.isNotEmpty() } ?: "You are a helpful assistant."
+            instructions.takeIf { it.isNotEmpty() } ?: "You are a helpful assistant."
         )
         put("input", JsonArray(messages))
         put("text", buildJsonObject { put("verbosity", options?.textVerbosity ?: "low") })
@@ -882,12 +894,12 @@ internal fun buildCodexRequestBody(
 
         options?.temperature?.let { put("temperature", it) }
         options?.serviceTier?.let { put("service_tier", it) }
-        if (toolPlacement.immediate.isNotEmpty()) {
+        if (transcriptTools.requestTools.isNotEmpty()) {
             put(
                 "tools",
                 JsonArray(
                     OpenAiResponsesShared.convertResponsesTools(
-                        toolPlacement.immediate,
+                        transcriptTools.requestTools,
                         OpenAiResponsesShared.ConvertResponsesToolsOptions(
                             strict = null,
                             supportsStrictMode = supportsStrictMode,
@@ -921,6 +933,16 @@ internal fun buildCodexRequestBody(
                     }
                 )
             }
+        } else if (model.reasoning &&
+            !(
+                model.thinkingLevelMap?.isSpecified(ModelThinkingLevel.OFF) == true &&
+                    model.thinkingLevelMap?.forLevel(ModelThinkingLevel.OFF) == null
+                )
+        ) {
+            // An explicit null OFF mapping means the model cannot disable reasoning.
+            val off = model.thinkingLevelMap?.takeIf { it.isSpecified(ModelThinkingLevel.OFF) }
+                ?.forLevel(ModelThinkingLevel.OFF) ?: "none"
+            put("reasoning", buildJsonObject { put("effort", off) })
         }
     }
 }

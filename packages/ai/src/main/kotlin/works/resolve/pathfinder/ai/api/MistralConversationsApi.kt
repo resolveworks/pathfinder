@@ -17,7 +17,6 @@ import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.ContentType
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.DoneSentinel
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Message
@@ -29,11 +28,13 @@ import works.resolve.pathfinder.ai.ProviderResponse
 import works.resolve.pathfinder.ai.ProviderStreamException
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolChoice
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.calculateCost
 import works.resolve.pathfinder.ai.clampThinkingLevel
@@ -48,13 +49,17 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.utils.MAX_PROVIDER_ERROR_BODY_CHARS
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
+import works.resolve.pathfinder.ai.utils.getCurrentTools
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.long
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
+import works.resolve.pathfinder.ai.utils.resolveTranscript
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
 import works.resolve.pathfinder.ai.utils.strOrNull
@@ -206,16 +211,18 @@ class MistralConversationsApi(
 
     fun stream(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: OpenAiCompletionsOptions
     ): Flow<AssistantMessageEvent> = stream(model, context, toMistralOptions(model, options))
 
     fun stream(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: MistralOptions
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = clock.now().toEpochMilliseconds()
+        val normalizedContext =
+            resolveTranscript(context, model.mistralCompat.supportsMidConvoSystemMessages)
         val state = MistralStreamingState(model, startedAtMs)
         try {
             val apiKey = options.apiKey
@@ -223,19 +230,16 @@ class MistralConversationsApi(
 
             val normalizer = MistralToolCallIdNormalizer()
             val transformedMessages =
-                transformMessages(context.messages, model) { id, _ -> normalizer.normalize(id) }
-            var wireMessages = MistralConversationsPayload.toChatMessages(
+                transformMessages(normalizedContext.messages, model) { id, _ ->
+                    normalizer.normalize(id)
+                }
+            val wireMessages = MistralConversationsPayload.toChatMessages(
                 transformedMessages,
                 model.input.contains(InputModality.IMAGE)
             )
-            if (!context.systemPrompt.isNullOrEmpty()) {
-                wireMessages = listOf(
-                    works.resolve.pathfinder.ai.api.buildMistralSystemMessage(context.systemPrompt)
-                ) + wireMessages
-            }
             var payload = MistralConversationsPayload.buildRequestBody(
                 model,
-                context,
+                normalizedContext,
                 wireMessages,
                 options
             )
@@ -299,7 +303,7 @@ class MistralConversationsApi(
 
     override fun streamSimple(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: SimpleStreamOptions
     ): Flow<AssistantMessageEvent> {
         val apiKey = options.apiKey
@@ -752,15 +756,16 @@ object MistralConversationsPayload {
     /** Builds the `v1/chat/completions` request body. */
     fun buildRequestBody(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         messages: List<JsonObject>,
         options: MistralOptions
     ): JsonObject = buildJsonObject {
         put("model", model.id)
         put("stream", true)
         put("messages", JsonArray(messages))
-        if (context.tools.isNotEmpty()) {
-            put("tools", JsonArray(context.tools.map { toFunctionTool(it) }))
+        val currentTools = getCurrentTools(context.messages)
+        if (currentTools.isNotEmpty()) {
+            put("tools", JsonArray(currentTools.map { toFunctionTool(it) }))
         }
         options.temperature?.let { put("temperature", it) }
         options.maxTokens?.let { put("max_tokens", it) }
@@ -818,7 +823,27 @@ object MistralConversationsPayload {
     fun toChatMessages(messages: List<Message>, supportsImages: Boolean): List<JsonObject> {
         val result = mutableListOf<JsonObject>()
 
-        for (msg in messages) {
+        for ((index, msg) in messages.withIndex()) {
+            if (msg.role == MessageRole.SYSTEM) {
+                val system = msg as SystemMessage
+                val text =
+                    if (index ==
+                        0
+                    ) {
+                        getSystemMessageText(system)
+                    } else {
+                        renderSystemMessageUpdate(system)
+                    }
+                if (text.isNotEmpty()) {
+                    result.add(
+                        buildJsonObject {
+                            put("role", "system")
+                            put("content", sanitizeSurrogates(text))
+                        }
+                    )
+                }
+                continue
+            }
             when (msg.role) {
                 MessageRole.USER -> {
                     val content = (msg as works.resolve.pathfinder.ai.UserMessage).content
@@ -1037,7 +1062,8 @@ internal fun buildMistralSystemMessage(systemPrompt: String): JsonObject =
 
 internal fun usesReasoningEffort(model: Model): Boolean =
     model.id == "mistral-small-2603" || model.id == "mistral-small-latest" ||
-        model.id == "mistral-medium-3.5"
+        model.id.startsWith("mistral-medium-") ||
+        model.id == "zai-glm-5-2"
 
 internal fun usesPromptModeReasoning(model: Model): Boolean =
     model.reasoning && !usesReasoningEffort(model)

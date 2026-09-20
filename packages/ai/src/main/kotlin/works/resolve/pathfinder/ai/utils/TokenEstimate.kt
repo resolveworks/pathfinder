@@ -6,15 +6,16 @@ import kotlin.math.min
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.ContentType
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.MessageRole
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
+import works.resolve.pathfinder.ai.Tool
+import works.resolve.pathfinder.ai.ToolReference
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 
 /**
@@ -50,6 +51,13 @@ private fun estimateTextAndImageChars(content: List<Content>): Int = content.sum
 }
 
 fun estimateMessageTokens(message: Message): Int = when (message.role) {
+    MessageRole.SYSTEM -> {
+        val system = message as SystemMessage
+        estimateTextTokens(getSystemMessageText(system)) +
+            estimateToolsTokens(system.toolsAdded) +
+            estimateToolsTokens(system.toolsRemoved)
+    }
+
     MessageRole.USER, MessageRole.TOOL_RESULT ->
         ceil(
             estimateTextAndImageChars(message.contentList()) / CHARS_PER_TOKEN.toDouble()
@@ -74,6 +82,7 @@ fun estimateMessageTokens(message: Message): Int = when (message.role) {
 }
 
 private fun Message.contentList(): List<Content> = when (this) {
+    is works.resolve.pathfinder.ai.SystemMessage -> content
     is works.resolve.pathfinder.ai.UserMessage -> content
     is works.resolve.pathfinder.ai.AssistantMessage -> content
     is works.resolve.pathfinder.ai.ToolResultMessage -> content
@@ -128,8 +137,6 @@ private fun estimateMessages(messages: List<Message>): ContextUsageEstimate {
     return ContextUsageEstimate(tokens, 0, tokens, null)
 }
 
-private fun estimateToolsTokens(context: Context): Int = estimateToolsTokens(context.tools)
-
 /** Compact JSON re-serialization mirroring JS `JSON.stringify`; unparseable
  * input yields the same "[unserializable]" placeholder as pi. */
 private fun safeJsonStringify(json: String): String = try {
@@ -144,99 +151,37 @@ private fun safeJsonStringify(element: JsonElement): String = try {
     "[unserializable]"
 }
 
-private fun estimateToolsTokens(tools: List<works.resolve.pathfinder.ai.Tool>): Int =
-    if (tools.isEmpty()) {
-        0
-    } else {
-        estimateTextTokens(safeJsonStringify(JsonArray(tools.map(::toolToJson))))
-    }
-
-/** pi's `Tool` wire shape: JSON.stringify includes name, description,
- * parameters, and constrainedSampling only when defined. */
-private fun toolToJson(tool: works.resolve.pathfinder.ai.Tool): JsonObject = buildJsonObject {
-    put("name", tool.name)
-    put("description", tool.description)
-    put("parameters", tool.parameters)
-    tool.constrainedSampling?.let { put("constrainedSampling", it.toJson()) }
+private fun toolsTokens(objects: List<JsonObject>?): Int = if (objects.isNullOrEmpty()) {
+    0
+} else {
+    estimateTextTokens(safeJsonStringify(JsonArray(objects)))
 }
 
-private fun works.resolve.pathfinder.ai.ConstrainedSamplingConfig.toJson(): JsonElement =
-    when (this) {
-        works.resolve.pathfinder.ai.ConstrainedSamplingConfig.Disabled ->
-            kotlinx.serialization.json.JsonPrimitive(false)
-
-        is works.resolve.pathfinder.ai.ConstrainedSamplingConfig.JsonSchema -> buildJsonObject {
-            put("type", "json_schema")
-            put(
-                "strict",
-                if (strict ==
-                    works.resolve.pathfinder.ai.StrictJsonSchemaMode.PREFER
-                ) {
-                    "prefer"
-                } else {
-                    "require"
-                }
-            )
-        }
-
-        is works.resolve.pathfinder.ai.ConstrainedSamplingConfig.Grammar -> buildJsonObject {
-            put("type", "grammar")
-            put(
-                "variants",
-                buildJsonObject {
-                    variants.forEach { (format, definition) ->
-                        put(
-                            if (format ==
-                                works.resolve.pathfinder.ai.GrammarFormat.OPENAI_LARK
-                            ) {
-                                "openai_lark"
-                            } else {
-                                "openai_regex"
-                            },
-                            definition
-                        )
-                    }
-                }
-            )
-        }
+private fun estimateToolsTokens(tools: List<Tool>?): Int = toolsTokens(
+    tools?.map {
+        toolToJson(it)
     }
+)
 
-fun estimateContextTokens(context: Context): ContextUsageEstimate {
-    val estimate = estimateMessages(context.messages)
+private fun estimateToolsTokens(tools: List<ToolReference>?): Int =
+    toolsTokens(tools?.map { toolReferenceToJson(it) })
 
-    if (estimate.lastUsageIndex != null) {
-        // Tools introduced after the usage point aren't covered by its
-        // snapshot; re-add them via trailing ToolResultMessage.addedToolNames.
-        val addedNames = context.messages
-            .drop(estimate.lastUsageIndex + 1)
-            .filterIsInstance<works.resolve.pathfinder.ai.ToolResultMessage>()
-            .flatMap { it.addedToolNames }
-            .toSet()
-        val addedToolTokens = estimateToolsTokens(context.tools.filter { it.name in addedNames })
-        return ContextUsageEstimate(
-            tokens = estimate.tokens + addedToolTokens,
-            usageTokens = estimate.usageTokens,
-            trailingTokens = estimate.trailingTokens + addedToolTokens,
-            lastUsageIndex = estimate.lastUsageIndex
-        )
-    }
+/**
+ * Token estimate for a normalized transcript. System messages now carry the
+ * prompt and tool declarations, so the estimate walks the message list.
+ */
+fun estimateContextTokens(context: TranscriptContext): ContextUsageEstimate =
+    estimateMessages(context.messages)
 
-    val prefixTokens =
-        (context.systemPrompt?.let { estimateTextTokens(it) } ?: 0) + estimateToolsTokens(context)
-    return ContextUsageEstimate(
-        tokens = estimate.tokens + prefixTokens,
-        usageTokens = estimate.usageTokens,
-        trailingTokens = estimate.trailingTokens + prefixTokens,
-        lastUsageIndex = estimate.lastUsageIndex
-    )
-}
+fun estimateContextTokens(messages: List<Message>): ContextUsageEstimate =
+    estimateMessages(messages)
 
 /**
  * Clamps a requested max output token limit to the room left in the model's
  * context window, keeping [CONTEXT_SAFETY_TOKENS] tokens of headroom and at
  * least [MIN_MAX_TOKENS] for the answer.
  */
-fun clampMaxTokensToContext(model: Model, context: Context, maxTokens: Int): Int {
+fun clampMaxTokensToContext(model: Model, context: TranscriptContext, maxTokens: Int): Int {
     if (model.contextWindow <= 0) return max(MIN_MAX_TOKENS, maxTokens)
     val available =
         model.contextWindow - estimateContextTokens(context).tokens - CONTEXT_SAFETY_TOKENS

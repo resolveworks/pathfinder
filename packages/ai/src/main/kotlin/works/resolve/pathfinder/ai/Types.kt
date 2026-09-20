@@ -144,7 +144,37 @@ sealed class Message {
     abstract val timestamp: Long
 }
 
-enum class MessageRole { USER, ASSISTANT, TOOL_RESULT }
+enum class MessageRole { SYSTEM, USER, ASSISTANT, TOOL_RESULT }
+
+/**
+ * System instructions and tool declarations at one point in the transcript.
+ *
+ * The leading system message is the system prompt. Later system messages change it:
+ * [content] adds instructions from that point on, [sections] replace or remove named
+ * prompt sections, and [toolsAdded]/[toolsRemoved] change the tool set. Replaying
+ * every system message in order yields the current prompt and tools. Providers that
+ * accept system messages mid-conversation send each one in place; other providers
+ * rebuild the leading system message from the replayed state.
+ *
+ * Reduction: pi's content is `string | TextContent[]`; the port always stores the
+ * structured form (an empty list for the plain empty string).
+ */
+data class SystemMessage(
+    /** Instruction text. On the leading message this is the base prompt; later, additional instructions. */
+    val content: List<TextContent>,
+    /**
+     * Named, ordered prompt sections rendered verbatim after [content]. The leading message
+     * declares them; later messages replace sections by name, and a null value removes one.
+     */
+    val sections: Map<String, String?>? = null,
+    /** Complete definitions of tools that become available at this point. */
+    val toolsAdded: List<Tool>? = null,
+    /** Tools that stop being available at this point. */
+    val toolsRemoved: List<ToolReference>? = null,
+    override val timestamp: Long = 0L
+) : Message() {
+    override val role: MessageRole get() = MessageRole.SYSTEM
+}
 
 data class UserMessage(
     // Reduction: pi's content also allows a plain string; the port accepts
@@ -198,8 +228,6 @@ data class ToolResultMessage(
      */
     val usage: Usage? = null,
     val isError: Boolean = false,
-    /** Tool names this result made available (deferred tool loading). */
-    val addedToolNames: List<String> = emptyList(),
     override val timestamp: Long = 0L
 ) : Message() {
     override val role: MessageRole get() = MessageRole.TOOL_RESULT
@@ -265,6 +293,9 @@ data class Tool(
     val constrainedSampling: ConstrainedSamplingConfig? = null
 )
 
+/** A reference to a tool by name; the tool's definition is carried elsewhere in the transcript. */
+data class ToolReference(val name: String)
+
 /**
  * Narrow tool-selection union for the simple API. The full union
  * ([ToolChoice]) is accepted only by the OpenAI-completions options.
@@ -301,6 +332,14 @@ data class Context(
     val messages: List<Message>,
     val tools: List<Tool> = emptyList()
 )
+
+/**
+ * Normalized request context passed to providers and API implementations. The
+ * prompt and tool declarations are carried by the transcript's system messages.
+ * Only [normalizeContext] produces this type, so a raw [Context] cannot reach
+ * provider code by accident.
+ */
+class TranscriptContext internal constructor(val messages: List<Message>)
 
 /**
  * A successful stream emits `Start` first, then block events, and
@@ -607,6 +646,7 @@ data class Model(
     val compat: OpenAiCompletionsCompat = OpenAiCompletionsCompat(),
     val anthropicCompat: AnthropicMessagesCompat = AnthropicMessagesCompat(),
     val responsesCompat: OpenAiResponsesCompat? = null,
+    val mistralCompat: MistralConversationsCompat = MistralConversationsCompat(),
     val headers: Map<String, String> = emptyMap(),
     /**
      * Default sampling parameters for this model, merged under per-request
@@ -675,6 +715,10 @@ data class OpenAiCompletionsCompat(
     val supportsLongCacheRetention: Boolean = true,
     val supportsStrictMode: Boolean = true,
     val supportsOpenAIGrammarTools: Boolean = false,
+    /** Whether the exact model accepts system or developer messages after the conversation has started. Default: false; the generated model catalog enables it for verified models. */
+    val supportsMidConvoSystemMessages: Boolean = false,
+    /** Whether system messages can introduce additional tools mid-conversation. Requires [supportsMidConvoSystemMessages]. Default: false. */
+    val supportsMidConvoToolAdditions: Boolean = false,
     /** "anthropic" enables Anthropic-style cache_control emission; null disables it. */
     val cacheControlFormat: CacheControlFormat? = null,
     /**
@@ -683,12 +727,6 @@ data class OpenAiCompletionsCompat(
      * assistant messages without it.
      */
     val requiresReasoningContentOnAssistantMessages: Boolean = false,
-    /**
-     * Provider-specific deferred tool serialization: "kimi" emits deferred
-     * tools as a bare `tools` system message after tool results instead of the
-     * standard `tools` param entry.
-     */
-    val deferredToolsMode: DeferredToolsMode? = null,
     /**
      * vLLM scheduler priority sent as the top-level `priority` request field
      * (lower values are handled earlier; server default 0). Only meaningful
@@ -699,11 +737,10 @@ data class OpenAiCompletionsCompat(
     val vllmPriority: Int? = null
 )
 
-/** Only "kimi" exists upstream. */
-enum class DeferredToolsMode { KIMI }
-
 data class OpenAiResponsesCompat(
     val supportsDeveloperRole: Boolean = true,
+    /** Whether the exact model accepts developer or system messages after the conversation has started. Default: false. */
+    val supportsMidConvoSystemMessages: Boolean = false,
     /** null means auto-detect from provider/baseUrl. */
     val sessionAffinityFormat: SessionAffinityFormat? = null,
     val supportsLongCacheRetention: Boolean = true,
@@ -728,14 +765,12 @@ data class AnthropicMessagesCompat(
     val forceAdaptiveThinking: Boolean? = null,
     /** Whether the exact model transport supports effort-only system messages and thinking binding controls. Default: false. */
     val supportsMidConvoEffort: Boolean = false,
-    /**
-     * Whether the provider supports deferred tools loaded by `tool_reference`
-     * blocks in tool results. Default is computed per model by
-     * [defaultSupportsToolReferences]: first-party Anthropic models except
-     * Haiku and models that predate tool search (older than Claude 4.5);
-     * false for other providers.
-     */
-    val supportsToolReferences: Boolean? = null,
+    /** Session-affinity format. `"openrouter"` sends `x-session-id`; when unset, sends `x-session-affinity`. */
+    val sessionAffinityFormat: SessionAffinityFormat? = null,
+    /** Whether the exact model accepts system-role messages inside the conversation. Default: false. */
+    val supportsMidConvoSystemMessages: Boolean = false,
+    /** Whether the exact model accepts mid-conversation `tool_addition` and `tool_removal` blocks. Requires [supportsMidConvoSystemMessages]. Default: false. */
+    val supportsMidConvoToolChanges: Boolean = false,
     /**
      * Models Anthropic accepts in `fallbacks` for server-side refusal fallback,
      * with local pricing metadata for returned fallback responses. When empty,
@@ -743,6 +778,12 @@ data class AnthropicMessagesCompat(
      * with no permitted fallback targets.
      */
     val allowedFallbackModels: List<AnthropicAllowedFallbackModel> = emptyList()
+)
+
+/** Compatibility settings for the Mistral chat API. */
+data class MistralConversationsCompat(
+    /** Whether the exact model accepts system messages after the conversation has started. Default: false. */
+    val supportsMidConvoSystemMessages: Boolean = false
 )
 
 fun anthropicCompatOf(model: Model): AnthropicMessagesCompat = model.anthropicCompat
@@ -812,7 +853,7 @@ enum class SessionAffinityFormat { OPENAI, OPENAI_NOSESSION, OPENROUTER }
 interface ChatApi {
     fun streamSimple(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: SimpleStreamOptions = SimpleStreamOptions()
     ): Flow<AssistantMessageEvent>
 }

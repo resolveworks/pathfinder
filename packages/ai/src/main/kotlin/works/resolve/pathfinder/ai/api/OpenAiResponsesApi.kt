@@ -13,7 +13,6 @@ import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ChatApi
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
@@ -24,6 +23,7 @@ import works.resolve.pathfinder.ai.SessionAffinityFormat
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.ToolChoice
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.hasHeader
 import works.resolve.pathfinder.ai.headersToRecord
@@ -37,12 +37,14 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.getDeclaredTools
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
-import works.resolve.pathfinder.ai.utils.splitDeferredTools
+import works.resolve.pathfinder.ai.utils.resolveTranscript
+import works.resolve.pathfinder.ai.utils.resolveTranscriptTools
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
@@ -82,6 +84,7 @@ internal fun getCompat(model: Model): ResolvedResponsesCompat {
     val compat = model.responsesCompat
     return ResolvedResponsesCompat(
         supportsDeveloperRole = compat?.supportsDeveloperRole ?: true,
+        supportsMidConvoSystemMessages = compat?.supportsMidConvoSystemMessages ?: false,
         sessionAffinityFormat = compat?.sessionAffinityFormat ?: detectSessionAffinityFormat(model),
         supportsLongCacheRetention = compat?.supportsLongCacheRetention ?: true,
         supportsStrictMode = compat?.supportsStrictMode ?: false,
@@ -95,6 +98,7 @@ internal fun getCompat(model: Model): ResolvedResponsesCompat {
 
 internal data class ResolvedResponsesCompat(
     val supportsDeveloperRole: Boolean,
+    val supportsMidConvoSystemMessages: Boolean,
     val sessionAffinityFormat: SessionAffinityFormat,
     val supportsLongCacheRetention: Boolean,
     val supportsStrictMode: Boolean,
@@ -109,8 +113,27 @@ internal data class ResolvedResponsesCompat(
 internal fun getPromptCacheRetention(
     compat: ResolvedResponsesCompat,
     cacheRetention: CacheRetention
-): String? =
-    if (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention) "24h" else null
+): String? = if (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention &&
+    !compat.supportsExplicitPromptCacheMode
+) {
+    "24h"
+} else {
+    null
+}
+
+internal fun getPromptCacheOptions(
+    compat: ResolvedResponsesCompat,
+    cacheRetention: CacheRetention
+): JsonObject? {
+    if (!compat.supportsExplicitPromptCacheMode) return null
+    if (cacheRetention == CacheRetention.NONE) {
+        return buildJsonObject { put("mode", "explicit") }
+    }
+    if (cacheRetention == CacheRetention.LONG && compat.supportsLongCacheRetention) {
+        return buildJsonObject { put("ttl", "30m") }
+    }
+    return null
+}
 
 internal fun sessionAffinityHeaders(
     sessionId: String?,
@@ -206,7 +229,7 @@ data class OpenAiResponsesOptions(
 
 internal fun buildOpenAiResponsesOptions(
     model: Model,
-    context: Context,
+    context: TranscriptContext,
     options: SimpleStreamOptions,
     reasoningEffort: ModelThinkingLevel?
 ): OpenAiResponsesOptions = OpenAiResponsesOptions(
@@ -240,7 +263,7 @@ class OpenAiResponsesApi(
 
     override fun streamSimple(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: SimpleStreamOptions
     ): Flow<AssistantMessageEvent> {
         val apiKey = options.apiKey
@@ -256,13 +279,15 @@ class OpenAiResponsesApi(
     }
     fun stream(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: OpenAiResponsesOptions = OpenAiResponsesOptions()
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = clock.now().toEpochMilliseconds()
+        val normalizedContext =
+            resolveTranscript(context, getCompat(model).supportsMidConvoSystemMessages)
         val compatForGrammar = getCompat(model)
         val grammarToolInputProperties = createGrammarToolInputProperties(
-            context.tools,
+            getDeclaredTools(normalizedContext.messages),
             compatForGrammar.supportsOpenAIGrammarTools
         )
         val state = OpenAiResponsesShared.ResponsesStreamState(
@@ -297,13 +322,13 @@ class OpenAiResponsesApi(
                 // the model headers and the affinity/options headers.
                 mergeHeaders(
                     mapOf("User-Agent" to getPiUserAgent()),
-                    mergeHeaders(model.headers, copilotDynamicHeadersFor(model, context))
+                    mergeHeaders(model.headers, copilotDynamicHeadersFor(model, normalizedContext))
                 ).filterValues { it != null }.mapValues { it.value!! },
                 cacheSessionId,
                 compat,
                 options.headers
             ) + mapOf("Accept" to "text/event-stream")
-            var params = buildParams(model, context, options, compat, cacheRetention)
+            var params = buildParams(model, normalizedContext, options, compat, cacheRetention)
             options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
             val body = params
                 .toString().toByteArray(Charsets.UTF_8)
@@ -341,7 +366,10 @@ class OpenAiResponsesApi(
                     StopReason.ERROR,
                     state.partialSnapshot().copy(
                         stopReason = StopReason.ERROR,
-                        errorMessage = formatResponsesProviderError(error, "OpenAI API error")
+                        errorMessage = formatResponsesProviderError(
+                            error,
+                            "${if (model.provider == "openai") "OpenAI" else model.provider} API error"
+                        )
                     )
                 )
             )
@@ -383,29 +411,28 @@ class OpenAiResponsesApi(
 
 internal fun buildParams(
     model: Model,
-    context: Context,
+    context: TranscriptContext,
     options: OpenAiResponsesOptions?,
     compat: ResolvedResponsesCompat,
     cacheRetention: CacheRetention,
     grammarToolInputProperties: Map<String, String> = createGrammarToolInputProperties(
-        context.tools,
+        getDeclaredTools(context.messages),
         compat.supportsOpenAIGrammarTools
     )
 ): JsonObject {
-    val deferredToolsMode = when {
-        compat.supportsAdditionalTools -> OpenAiResponsesShared.DeferredToolsMode.ADDITIONAL_TOOLS
-        compat.supportsToolSearch -> OpenAiResponsesShared.DeferredToolsMode.TOOL_SEARCH
-        else -> null
-    }
-    val toolPlacement = splitDeferredTools(context, deferredToolsMode != null)
+    val transcriptTools = resolveTranscriptTools(
+        context.messages,
+        compat.supportsAdditionalTools || compat.supportsToolSearch
+    )
     val messages = OpenAiResponsesShared.convertResponsesMessages(
         model,
         context,
         OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS,
         OpenAiResponsesShared.ConvertResponsesMessagesOptions(
             grammarToolInputProperties = grammarToolInputProperties,
-            deferredTools = toolPlacement.deferred,
-            deferredToolsMode = deferredToolsMode,
+            supportsMidConvoSystemMessages = compat.supportsMidConvoSystemMessages,
+            supportsAdditionalTools = compat.supportsAdditionalTools,
+            supportsToolSearch = compat.supportsToolSearch,
             toolOptions = OpenAiResponsesShared.ConvertResponsesToolsOptions(
                 supportsStrictMode = compat.supportsStrictMode,
                 supportsOpenAIGrammarTools = compat.supportsOpenAIGrammarTools
@@ -413,8 +440,6 @@ internal fun buildParams(
         )
     )
 
-    val disableImplicitPromptCache =
-        cacheRetention == CacheRetention.NONE && compat.supportsExplicitPromptCacheMode
     var params = buildJsonObject {
         put("model", model.id)
         put("input", kotlinx.serialization.json.JsonArray(messages))
@@ -427,8 +452,8 @@ internal fun buildParams(
         getPromptCacheRetention(compat, cacheRetention)?.let {
             put("prompt_cache_retention", it)
         }
-        if (disableImplicitPromptCache) {
-            put("prompt_cache_options", buildJsonObject { put("mode", "explicit") })
+        getPromptCacheOptions(compat, cacheRetention)?.let { options ->
+            put("prompt_cache_options", options)
         }
         put("store", false)
 
@@ -441,12 +466,12 @@ internal fun buildParams(
         }
         options?.temperature?.let { put("temperature", it) }
         options?.serviceTier?.let { put("service_tier", it) }
-        if (toolPlacement.immediate.isNotEmpty()) {
+        if (transcriptTools.requestTools.isNotEmpty()) {
             put(
                 "tools",
                 kotlinx.serialization.json.JsonArray(
                     OpenAiResponsesShared.convertResponsesTools(
-                        toolPlacement.immediate,
+                        transcriptTools.requestTools,
                         OpenAiResponsesShared.ConvertResponsesToolsOptions(
                             supportsStrictMode = compat.supportsStrictMode,
                             supportsOpenAIGrammarTools = compat.supportsOpenAIGrammarTools
