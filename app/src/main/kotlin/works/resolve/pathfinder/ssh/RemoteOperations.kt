@@ -65,7 +65,8 @@ private suspend fun connect(provider: SshConnectionProvider): SshConnection = tr
  * this implementation performs no timeout handling of its own, and the
  * resulting cancellation closes the channel. Unlike pi's local shell, which
  * kills the process tree, remote termination is server-side best effort on
- * channel close.
+ * channel close. A channel that closes without `exit-status` or
+ * `exit-signal` completes with no exit code, which the shell rejects.
  */
 class RemoteBashOperations(private val provider: SshConnectionProvider) : BashOperations {
 
@@ -113,10 +114,55 @@ class RemoteBashOperations(private val provider: SshConnectionProvider) : BashOp
                 }
             }
             val exit = it.exitInfo.await()
-            return (exit as? SessionExit.Status)?.code?.toInt()
+            return when (exit) {
+                is SessionExit.Status -> exit.code.toInt()
+                is SessionExit.Signal -> 128 + posixSignalNumber(exit.signalName)
+                null -> null
+            }
         }
     }
 }
+
+/**
+ * SSH delivers `exit-signal` names without the "SIG" prefix (RFC 4254
+ * section 6.10); map them to the POSIX numbers pi's local shell reads from
+ * `osConstants.signals`, with an unknown name counting as signal 0.
+ */
+private fun posixSignalNumber(signalName: String): Int = POSIX_SIGNAL_NUMBERS[signalName] ?: 0
+
+private val POSIX_SIGNAL_NUMBERS = mapOf(
+    "HUP" to 1,
+    "INT" to 2,
+    "QUIT" to 3,
+    "ILL" to 4,
+    "TRAP" to 5,
+    "ABRT" to 6,
+    "BUS" to 7,
+    "FPE" to 8,
+    "KILL" to 9,
+    "USR1" to 10,
+    "SEGV" to 11,
+    "USR2" to 12,
+    "PIPE" to 13,
+    "ALRM" to 14,
+    "TERM" to 15,
+    "STKFLT" to 16,
+    "CHLD" to 17,
+    "CONT" to 18,
+    "STOP" to 19,
+    "TSTP" to 20,
+    "TTIN" to 21,
+    "TTOU" to 22,
+    "URG" to 23,
+    "XCPU" to 24,
+    "XFSZ" to 25,
+    "VTALRM" to 26,
+    "PROF" to 27,
+    "WINCH" to 28,
+    "IO" to 29,
+    "PWR" to 30,
+    "SYS" to 31
+)
 
 /**
  * Read/write/edit operations over the process-wide SSH connection: file

@@ -7,9 +7,11 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.AgentToolResult
+import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.StrictJsonSchemaMode
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.utils.double
@@ -97,7 +99,8 @@ class ReadTool internal constructor(private val cwd: String, private val options
                 }
             )
             put("required", JsonArray(listOf(JsonPrimitive("path"))))
-        }
+        },
+        constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER)
     )
 
     override val label: String = NAME

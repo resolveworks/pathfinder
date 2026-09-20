@@ -14,6 +14,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.AgentToolResult
+import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
+import works.resolve.pathfinder.ai.StrictJsonSchemaMode
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.utils.double
@@ -113,7 +115,8 @@ class BashTool internal constructor(private val cwd: String, private val options
                 }
             )
             put("required", JsonArray(listOf(JsonPrimitive("command"))))
-        }
+        },
+        constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER)
     )
 
     override val label: String = NAME
@@ -303,7 +306,12 @@ class BashTool internal constructor(private val cwd: String, private val options
 
                 val snapshot = finishOutput()
                 val (outputText, details) = formatOutput(snapshot)
-                if (exitCode != null && exitCode != 0) {
+                if (exitCode == null) {
+                    throw IllegalStateException(
+                        appendStatus(outputText, "Command terminated without an exit code")
+                    )
+                }
+                if (exitCode != 0) {
                     throw IllegalStateException(
                         appendStatus(outputText, "Command exited with code $exitCode")
                     )
