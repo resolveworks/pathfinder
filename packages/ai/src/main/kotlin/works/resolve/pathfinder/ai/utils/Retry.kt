@@ -1,5 +1,6 @@
 package works.resolve.pathfinder.ai.utils
 
+import kotlin.math.pow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -34,6 +35,7 @@ private val RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern(
     listOf(
         // Generic provider load, HTTP status, and server-side transient failures.
         "overloaded",
+        "currently experiencing high demand",
         "rate.?limit",
         "too many requests",
         "429",
@@ -41,6 +43,7 @@ private val RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern(
         "502",
         "503",
         "504",
+        "520",
         "524",
         "service.?unavailable",
         "server.?error",
@@ -98,14 +101,34 @@ private val RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern(
     )
 )
 
-/** Matches `settings.retry` (`enabled`, `maxRetries`, `baseDelayMs`) in coding-agent. */
+/**
+ * Retry policy: bounded attempts with exponential backoff (`baseDelayMs * 2^(attempt-1)`).
+ * [maxAgentDelayMs] caps each computed delay and defaults to 60 seconds.
+ * Matches `settings.retry` (`enabled`, `maxRetries`, `baseDelayMs`, `maxAgentDelayMs`) in
+ * coding-agent.
+ */
 data class RetryPolicy(
     val enabled: Boolean,
     /** Max retry attempts (0 = no retries). The initial call never counts as a retry. */
     val maxRetries: Int,
     /** Base delay in ms. Per-attempt delay is `baseDelayMs * 2^(attempt-1)` before jitter. */
-    val baseDelayMs: Long
+    val baseDelayMs: Long,
+    /** Optional cap for agent-level retry delays in ms. Defaults to 60 seconds. */
+    val maxAgentDelayMs: Long? = null
 )
+
+const val DEFAULT_MAX_AGENT_RETRY_DELAY_MS: Long = 60_000
+
+/**
+ * Per-attempt exponential backoff (`baseDelayMs * 2^(attempt-1)`), capped by
+ * [RetryPolicy.maxAgentDelayMs]. The raw delay is computed in double precision so
+ * large attempt counts saturate at the cap instead of wrapping.
+ */
+fun retryDelayMs(policy: RetryPolicy, attempt: Int): Long {
+    val delay = policy.baseDelayMs.toDouble() * 2.0.pow(maxOf(0, attempt - 1))
+    val cap = (policy.maxAgentDelayMs ?: DEFAULT_MAX_AGENT_RETRY_DELAY_MS).toDouble()
+    return minOf(delay, cap).toLong()
+}
 
 /** Optional callbacks emitted by [Retry.retryAssistantCall] around each retry. */
 data class RetryCallbacks(
@@ -199,7 +222,7 @@ class Retry(private val sleep: suspend (Long) -> Unit = { kotlinx.coroutines.del
             attempt++
             val errorMessage = response.errorMessage ?: "Unknown error"
             lastRetry = attempt to errorMessage
-            val delayMs = policy!!.baseDelayMs shl (attempt - 1)
+            val delayMs = retryDelayMs(policy!!, attempt)
             callbacks?.onRetryScheduled?.invoke(attempt, maxAttempts, delayMs, errorMessage)
 
             try {

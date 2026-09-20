@@ -13,12 +13,12 @@ import works.resolve.pathfinder.ai.StopReason
  * - OpenAI/LiteLLM: "Requested token count exceeds the model's maximum context length of 131072 tokens"
  * - Google: "The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)"
  * - Together AI: "The input (X tokens) is longer than the model's context length (Y tokens)."
- * - z.ai: does NOT error, accepts overflow silently — handled via usage.input > contextWindow
+ * - z.ai: `{"code":"1261","message":"Prompt too long"}` or silent overflow via usage.input > contextWindow
  * - Xiaomi MiMo: truncates input to fill the context window exactly, then returns finish_reason
  *   "length" with output=0 — detected via stopReason LENGTH + zero output + filled context
  */
 private val OVERFLOW_PATTERNS = listOf(
-    Regex("prompt is too long", RegexOption.IGNORE_CASE), // Anthropic token overflow
+    Regex("prompt (?:is )?too long", RegexOption.IGNORE_CASE), // Anthropic and z.ai token overflow
     // Anthropic request byte-size overflow (HTTP 413)
     Regex("request_too_large", RegexOption.IGNORE_CASE),
     Regex("input is too long for requested model", RegexOption.IGNORE_CASE), // Amazon Bedrock
@@ -60,10 +60,13 @@ private val OVERFLOW_PATTERNS = listOf(
     Regex("range of input length should be", RegexOption.IGNORE_CASE),
     Regex("context[_ ]length[_ ]exceeded", RegexOption.IGNORE_CASE), // Generic fallback
     Regex("too many tokens", RegexOption.IGNORE_CASE), // Generic fallback
-    Regex("token limit exceeded", RegexOption.IGNORE_CASE), // Generic fallback
-    // Cerebras: 400/413 with no body
-    Regex("^4(?:00|13)\\s*(?:status code)?\\s*\\(no body\\)", RegexOption.IGNORE_CASE)
+    Regex("token limit exceeded", RegexOption.IGNORE_CASE) // Generic fallback
 )
+
+// Cerebras reports the overflow as a bodyless 400/413; scoped to that provider so
+// unrelated bodyless HTTP errors elsewhere are not misread as overflow.
+private val CEREBRAS_BODYLESS_OVERFLOW_PATTERN =
+    Regex("^4(?:00|13)\\s*(?:status code)?\\s*\\(no body\\)", RegexOption.IGNORE_CASE)
 
 /**
  * Error messages matching any of these are excluded from overflow detection
@@ -90,6 +93,9 @@ private val NON_OVERFLOW_PATTERNS = listOf(
  * 3. Length-stop overflow: Xiaomi MiMo can return LENGTH with zero output when
  *    the input fills the context window.
  *
+ * z.ai's "Prompt too long" is matched by [OVERFLOW_PATTERNS]; Cerebras' bodyless
+ * 400/413 status is matched only for the Cerebras provider.
+ *
  * Cases 2 and 3 need a non-zero [contextWindow]; silent truncation (some
  * Ollama deployments) remains undetectable because the expected token count
  * is unknown.
@@ -102,8 +108,15 @@ fun isContextOverflow(message: AssistantMessage, contextWindow: Int? = null): Bo
     if (message.stopReason == StopReason.ERROR && message.errorMessage != null) {
         val errorMessage = message.errorMessage!!
         val isNonOverflow = NON_OVERFLOW_PATTERNS.any { it.containsMatchIn(errorMessage) }
-        if (!isNonOverflow && OVERFLOW_PATTERNS.any { it.containsMatchIn(errorMessage) }) {
-            return true
+        if (!isNonOverflow) {
+            if (OVERFLOW_PATTERNS.any { it.containsMatchIn(errorMessage) }) {
+                return true
+            }
+            if (message.provider == "cerebras" &&
+                CEREBRAS_BODYLESS_OVERFLOW_PATTERN.containsMatchIn(errorMessage)
+            ) {
+                return true
+            }
         }
     }
 
