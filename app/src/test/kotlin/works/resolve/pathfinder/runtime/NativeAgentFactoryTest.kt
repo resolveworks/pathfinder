@@ -173,11 +173,12 @@ class NativeAgentFactoryTest {
             .create(manager)
         val agent = result.session
         val messages = agent.state.value.messages
-        // The restored transcript is preceded by the session prompt baseline.
-        assertEquals(3, messages.size)
+        // The restored transcript is the branch fold as-is: the prompt is
+        // recorded as a section patch at the next prompt, not seeded here.
+        assertEquals(2, messages.size)
         assertEquals(
             "hello",
-            (messages[1] as UserMessage).content.single().let {
+            (messages[0] as UserMessage).content.single().let {
                 (it as TextContent).text
             }
         )
@@ -250,16 +251,16 @@ class NativeAgentFactoryTest {
             ).create(session()).session
 
             assertEquals(listOf("web_search"), agent.getActiveToolNames())
-            assertEquals(buildSystemPrompt(listOf(webSearch)), agent.state.value.systemPrompt)
+            assertEquals(buildSystemPrompt(listOf(webSearch)), agent.systemPrompt)
 
             agent.setActiveToolsByName(emptyList())
             assertEquals(emptyList<String>(), agent.getActiveToolNames())
             assertEquals(emptyList<AgentTool>(), agent.state.value.tools)
-            assertEquals(buildSystemPrompt(emptyList()), agent.state.value.systemPrompt)
+            assertEquals(buildSystemPrompt(emptyList()), agent.systemPrompt)
 
             agent.setActiveToolsByName(listOf("web_search", "unknown"))
             assertEquals(listOf("web_search"), agent.getActiveToolNames())
-            assertEquals(buildSystemPrompt(listOf(webSearch)), agent.state.value.systemPrompt)
+            assertEquals(buildSystemPrompt(listOf(webSearch)), agent.systemPrompt)
 
             configured.clear()
             assertEquals(listOf("web_search"), agent.getActiveToolNames())
@@ -586,9 +587,10 @@ class NativeAgentFactoryTest {
             assertEquals(5, state.messages.size)
             val entries = agent.sessionManager.getEntries()
             // The factory seeds model_change/thinking entries for the new
-            // session, so the switch's entry is the fifth.
+            // session, so the switch's entry is the sixth (the prompt's
+            // section-patch message entry comes after them).
             assertTrue(
-                entries[4] is ModelChangeEntry
+                entries[5] is ModelChangeEntry
             )
             assertEquals(
                 "Hi",

@@ -9,7 +9,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +30,7 @@ import works.resolve.pathfinder.agent.AgentState
 import works.resolve.pathfinder.agent.AgentTool
 import works.resolve.pathfinder.agent.PrepareNextTurnContext
 import works.resolve.pathfinder.ai.AssistantMessage
+import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.Models
@@ -42,8 +45,10 @@ import works.resolve.pathfinder.ai.utils.RetryCallbacks
 import works.resolve.pathfinder.ai.utils.RetryPolicy
 import works.resolve.pathfinder.ai.utils.calculateContextTokens
 import works.resolve.pathfinder.ai.utils.estimateMessageTokens
+import works.resolve.pathfinder.ai.utils.getCurrentSystemMessage
 import works.resolve.pathfinder.ai.utils.isContextOverflow
 import works.resolve.pathfinder.ai.utils.isRecoverableLength
+import works.resolve.pathfinder.ai.utils.retryDelayMs
 import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryCallResult
 import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryErrorCode
 import works.resolve.pathfinder.codingagent.core.compaction.BranchSummaryResult
@@ -70,7 +75,10 @@ data class ScopedModel(val model: Model, val thinkingLevel: ModelThinkingLevel? 
  * Layering mirrors pi: [Agent] keeps only the single-run
  * prompt/continue/abort primitives, and everything session-scoped — retry
  * counter lifetime across continues, event emission, tree persistence
- * points — lives here. Like pi, a storage failure propagates out of the
+ * points — lives here. The system prompt and tool loadout are transcript
+ * state (mid-conversation system messages): each request records desired
+ * prompt changes as a section-patch system message, and tool changes are
+ * declared by the agent loop. Like pi, a storage failure propagates out of the
  * event sink and fails the run: the [Agent] awaits the sink inline, so a
  * failed append surfaces from [prompt].
  *
@@ -132,8 +140,8 @@ class AgentSession(
 
     /**
      * 1-indexed auto-retry attempt counter, reset only on a successful
-     * assistant response, final failure, or cancelled backoff — it survives
-     * continuation runs.
+     * assistant response, final failure, a cancelled backoff, or an aborted
+     * run — it survives continuation runs.
      */
     private var retryAttempt = 0
 
@@ -150,7 +158,10 @@ class AgentSession(
      */
     private var overflowRecoveryAttempted = false
 
-    /** True while automatic compaction runs; guards prompt submission. */
+    /**
+     * True while compaction or branch summarization (tree navigation) runs —
+     * pi's isCompacting; guards prompt submission and navigation.
+     */
     @Volatile
     private var compactionInProgress = false
 
@@ -179,53 +190,35 @@ class AgentSession(
         agent.attachEventSink { event -> processEvent(event) }
         // The agent arrives already restored: createAgentSession owns the
         // branch fold's transcript/thinking/model restoration and seeds the
-        // new-session configuration entries.
-        // There is no persisted active-tools fold (pi has no such entry
-        // either): tools resolve to the full registry, and the app layer
-        // narrows the set per session via setActiveToolsByName.
+        // new-session configuration entries. The default loadout is the full
+        // registry (pi's _buildRuntime activates its built-in subset; the
+        // app layer narrows via setActiveToolsByName), and a transcript that
+        // declares a loadout overrides it (pi's constructor-time
+        // _restoreToolsFromTranscript).
         if (tools.isNotEmpty()) {
             agent.setTools(resolveTools(tools.map { it.definition.name }))
         }
-        setAgentSystemPrompt(buildSystemPromptSections(agent.state.value.tools.toList(), cwd))
+        restoreToolsFromTranscript()
         installAgentNextTurnRefresh()
-    }
-
-    /**
-     * Mechanical bridge for this sync wave: upstream's session declares the
-     * prompt as a leading system message's sections and patches it with
-     * mid-conversation system messages at prompt time (a later wave); until
-     * then the transcript's leading system message is rewritten with the
-     * built sections (content empty, preamble among the sections — the
-     * upstream leading-message shape, rendered by getSystemMessageText).
-     * Tool declarations are left to the agent loop, which announces the
-     * delta before the next request.
-     */
-    private fun setAgentSystemPrompt(sections: SystemPromptSections) {
-        val messages = agent.state.value.messages
-        val rest = if (messages.firstOrNull() is SystemMessage) messages.drop(1) else messages
-        agent.replaceTranscript(
-            listOf(
-                SystemMessage(
-                    content = emptyList(),
-                    sections = sections,
-                    timestamp = clock.now().toEpochMilliseconds()
-                )
-            ) + rest
-        )
     }
 
     /**
      * pi's _installAgentNextTurnRefresh: before every assistant response
      * after the first, run the mid-run compaction checkpoint, then refresh
-     * context (system prompt, tools, messages) and model/thinkingLevel from
-     * the live agent state — this is what makes mid-run setter calls take
-     * effect on the next turn.
+     * context (tools, prompt sections, messages) and model/thinkingLevel
+     * from the live agent state — this is what makes mid-run setter calls
+     * take effect on the next turn. The desired prompt is applied as a
+     * section-patch system message carried by [AgentLoopTurnUpdate.messages]
+     * (pi's run-options refresh), so mid-run loadout changes reach the
+     * model — and the transcript — like any other prompt update.
      */
     private fun installAgentNextTurnRefresh() {
         agent.prepareNextTurnWithContext = { turn ->
             val context = compactBeforeNextAssistantResponse(turn.context)
+            val updateMessage = preparePromptAndToolLoadout(getActiveToolNames(), context.messages)
             AgentLoopTurnUpdate(
                 context = context.copy(tools = agent.state.value.tools.toList()),
+                messages = updateMessage?.let(::listOf),
                 model = agent.state.value.model,
                 thinkingLevel = agent.state.value.thinkingLevel
             )
@@ -256,25 +249,80 @@ class AgentSession(
     private fun findLastAssistantMessage(): AssistantMessage? =
         agent.state.value.messages.lastOrNull { it is AssistantMessage } as AssistantMessage?
 
+    /**
+     * Current effective system prompt, including changes not yet sent to
+     * the model (pi's getter; its run/base prompt-options distinction has
+     * no pathfinder producer — extension mutations and forced prompts — so
+     * this renders the live loadout).
+     */
+    val systemPrompt: String get() = buildSystemPrompt(agent.state.value.tools.toList(), cwd)
+
     fun getActiveToolNames(): List<String> = agent.state.value.tools.map { it.definition.name }
 
     /**
      * Set active tools by name: only tools in the registry can be enabled,
      * unknown names are ignored, and a name appearing twice resolves to two
-     * entries (no dedupe). Takes effect on the next run — the agent
-     * snapshots tools and system prompt per run (see [Agent.setTools]).
-     *
-     * Not persisted: no session entry is appended, so the set is re-derived
-     * from the full registry on reload.
+     * entries (no dedupe — the request-time loadout in
+     * [preparePromptAndToolLoadout] dedupes). Takes effect on the next
+     * request, where the desired prompt is re-derived and recorded as a
+     * section patch; the loadout itself is durable through the
+     * transcript's system-message tool declarations, restored by
+     * [restoreToolsFromTranscript] on reload and navigation.
      */
     fun setActiveToolsByName(toolNames: List<String>) {
-        val validTools = toolNames.mapNotNull(toolRegistry::get)
-        agent.setTools(validTools)
-        setAgentSystemPrompt(buildSystemPromptSections(validTools, cwd))
+        agent.setTools(toolNames.mapNotNull(toolRegistry::get))
     }
 
     private fun resolveTools(toolNames: List<String>): List<AgentTool> =
         toolNames.mapNotNull(toolRegistry::get)
+
+    /**
+     * pi's _preparePromptAndToolLoadout: apply the prompt and tool loadout
+     * for the next request. Sets the executable tools from [toolNames]
+     * (deduped, registry-filtered) and returns a system message patching
+     * the prompt sections the model currently has (replayed from
+     * [messages]), or null when the prompt is unchanged. Tool changes are
+     * declared by the agent loop before the request.
+     *
+     * Divergence: pi threads a mutable normalized-options object —
+     * extensions edit it in before_agent_start and may force a prompt that
+     * replaces the provider's leading system message without being
+     * recorded. Pathfinder has no producer for either, so the loadout is
+     * the live tool set and the transcript always records section patches.
+     */
+    private fun preparePromptAndToolLoadout(
+        toolNames: List<String>,
+        messages: List<Message> = agent.state.value.messages
+    ): SystemMessage? {
+        val activeToolNames = toolNames.distinct().filter(toolRegistry::containsKey)
+        agent.setTools(resolveTools(activeToolNames))
+        val sections = diffSystemPromptSections(
+            getCurrentSystemMessage(messages)?.sections ?: emptyMap(),
+            buildSystemPromptSections(resolveTools(activeToolNames), cwd)
+        )
+        return sections?.let {
+            SystemMessage(
+                content = emptyList(),
+                sections = it,
+                timestamp = clock.now().toEpochMilliseconds()
+            )
+        }
+    }
+
+    /**
+     * pi's _restoreToolsFromTranscript: restore the active tool loadout the
+     * session transcript declares, if it declares one. A leading system
+     * message without tool declarations restores an empty loadout (pi
+     * transcripts always declare their tools); the constructor's default
+     * loadout applies only when the transcript has no system message.
+     */
+    private fun restoreToolsFromTranscript() {
+        val current = getCurrentSystemMessage(manager.buildSessionContext().messages) ?: return
+        val toolNames = current.toolsAdded.orEmpty()
+            .map { it.name }
+            .filter(toolRegistry::containsKey)
+        agent.setTools(resolveTools(toolNames))
+    }
 
     /**
      * Submit one prompt: the user message is created here (persisted to the
@@ -329,6 +377,13 @@ class AgentSession(
             }
 
             val promptMessage = UserMessage.ofText(text, clock.now().toEpochMilliseconds())
+            // pi's before_agent_start block, minus the extension producers:
+            // the live loadout is authoritative, so apply the prompt/tool
+            // loadout and record the desired prompt as a system message
+            // ahead of the user message (pi's unshift).
+            val updateMessage =
+                preparePromptAndToolLoadout(getActiveToolNames(), agent.state.value.messages)
+            val promptMessages = listOfNotNull(updateMessage, promptMessage)
             // The loop runs on loopDispatcher: prompt() is Main-friendly in the app
             // (per-token reduce, event emission, and tool execution leave the
             // UI thread) while staying dispatcher-agnostic in tests. Tools
@@ -340,9 +395,17 @@ class AgentSession(
                     // Lazily started so promptJob is published before the job
                     // can run anything (abort guarantee).
                     val job = launch(start = CoroutineStart.LAZY) {
-                        agent.prompt(listOf(promptMessage))
-                        while (handlePostAgentRun()) {
-                            agent.continueRun()
+                        try {
+                            agent.prompt(promptMessages)
+                            while (handlePostAgentRun()) {
+                                agent.continueRun()
+                            }
+                        } catch (e: CancellationException) {
+                            // pi's _runAgentPrompt finally: an aborted run
+                            // finalizes an outstanding retry attempt (an
+                            // abort during the backoff sleep already did).
+                            finishCancelledRetry()
+                            throw e
                         }
                     }
                     promptJob = job
@@ -509,6 +572,9 @@ class AgentSession(
     /**
      * Navigate to a different node in the session tree, staying in the same
      * session (unlike fork). Idle-only; abort is coroutine cancellation.
+     * Rejected while compaction or another navigation runs (pi's isCompacting
+     * guard — unlike pi's prompt(), a prompt submitted mid-navigation is
+     * rejected too, since the marker is shared).
      *
      * A user-message target re-edits instead of moving the leaf onto it:
      * the leaf moves to the target's parent (or root) and the text is
@@ -521,8 +587,9 @@ class AgentSession(
      * recorded as its fromId inside the manager), and the rebuilt context
      * projects branch summaries via [buildSessionContext].
      *
-     * @throws IllegalStateException when a prompt/compaction is running or
-     *   summarization was requested without a provider stack.
+     * @throws IllegalStateException when a prompt, compaction, or another
+     *   navigation is running, or summarization was requested without a
+     *   provider stack.
      * @throws IllegalArgumentException when [targetId] does not exist.
      */
     suspend fun navigateTree(
@@ -530,30 +597,37 @@ class AgentSession(
         options: NavigateTreeOptions = NavigateTreeOptions()
     ): NavigationResult {
         synchronized(lock) {
-            if (active || compactionInProgress) {
+            if (active) {
                 throw IllegalStateException(
                     "Wait for the current response to finish before navigating the session tree."
                 )
             }
+            if (compactionInProgress) {
+                throw IllegalStateException(
+                    "Wait for the current compaction or tree navigation to finish before " +
+                        "navigating the session tree."
+                )
+            }
+            compactionInProgress = true
         }
-
-        val oldLeafId = manager.getLeafId()
-        val targetEntry = manager.getEntry(targetId)
-            ?: throw IllegalArgumentException("Entry $targetId not found")
-        if (targetId == oldLeafId) {
-            return NavigationResult(outcome = NavigationOutcome.NO_OP, cancelled = false)
-        }
-        val userMessage = (targetEntry as? MessageEntry)?.message as? UserMessage
-
-        val summarizationModels = models
-        if (options.summarize && summarizationModels == null) {
-            throw IllegalStateException("No model available for summarization")
-        }
-
-        // Entries to summarize: from the old leaf to the common ancestor.
-        val collected = collectEntriesForBranchSummary(manager, oldLeafId, targetId)
 
         try {
+            val oldLeafId = manager.getLeafId()
+            val targetEntry = manager.getEntry(targetId)
+                ?: throw IllegalArgumentException("Entry $targetId not found")
+            if (targetId == oldLeafId) {
+                return NavigationResult(outcome = NavigationOutcome.NO_OP, cancelled = false)
+            }
+            val userMessage = (targetEntry as? MessageEntry)?.message as? UserMessage
+
+            val summarizationModels = models
+            if (options.summarize && summarizationModels == null) {
+                throw IllegalStateException("No model available for summarization")
+            }
+
+            // Entries to summarize: from the old leaf to the common ancestor.
+            val collected = collectEntriesForBranchSummary(manager, oldLeafId, targetId)
+
             var summary: BranchSummaryResult? = null
             if (options.summarize && collected.entries.isNotEmpty()) {
                 when (
@@ -564,7 +638,7 @@ class AgentSession(
                             model = model,
                             customInstructions = options.customInstructions,
                             replaceInstructions = options.replaceInstructions,
-                            retry = summarizationRetryPolicy(),
+                            retry = retryPolicy(),
                             callbacks = summarizationRetryCallbacks(
                                 AgentEvent.SummarizationSource.BranchSummary
                             ),
@@ -610,6 +684,9 @@ class AgentSession(
             }
 
             agent.replaceTranscript(manager.buildSessionContext().messages)
+            // pi's _restoreToolsFromTranscript: the target's transcript
+            // declares the loadout at that point in the tree.
+            restoreToolsFromTranscript()
 
             return NavigationResult(
                 outcome = if (userMessage != null) {
@@ -623,6 +700,8 @@ class AgentSession(
             )
         } catch (e: CancellationException) {
             throw e
+        } finally {
+            compactionInProgress = false
         }
     }
 
@@ -842,8 +921,11 @@ class AgentSession(
             is CompactionOutcome.Err -> return false
             is CompactionOutcome.Ok -> outcome.value ?: return false
         }
-        _events.emit(AgentEvent.CompactionStart(reason))
+        // pi registers its abort controller before emitting compaction_start
+        // so a concurrent prompt/navigation observes the in-progress marker;
+        // the marker is cleared by [runCompactionCore]'s finally.
         compactionInProgress = true
+        _events.emit(AgentEvent.CompactionStart(reason))
         val run = runCompactionCore(reason, willRetry, customInstructions = null, preparation)
         if (run !is CompactionRunResult.Success) {
             if (run is CompactionRunResult.Failure && !run.aborted) {
@@ -894,9 +976,11 @@ class AgentSession(
      * Shared compaction machinery for the automatic and manual paths (pi's
      * `_runDefaultCompaction` callers): streams the summary, appends the
      * compaction entry, rebuilds the transcript, and emits the success
-     * `compaction_end`. Synchronous failures are returned unemitted so each
-     * caller formats its own failure event; cancellation emits the aborted
-     * `compaction_end` under [NonCancellable] and rethrows.
+     * `compaction_end`. Callers register [compactionInProgress] before the
+     * first await; the finally here clears it. Synchronous failures are
+     * returned unemitted so each caller formats its own failure event;
+     * cancellation emits the aborted `compaction_end` under [NonCancellable]
+     * and rethrows.
      */
     private suspend fun runCompactionCore(
         reason: AgentEvent.CompactionReason,
@@ -905,7 +989,6 @@ class AgentSession(
         preparation: CompactionPreparation
     ): CompactionRunResult {
         val summarizationModels = models!!
-        compactionInProgress = true
         try {
             val compactResult = when (
                 val outcome = compact(
@@ -916,7 +999,7 @@ class AgentSession(
                     // The summary request reasons at the level the user
                     // selected, when the summarization model supports it.
                     thinkingLevel = agent.thinkingLevel,
-                    retry = summarizationRetryPolicy(),
+                    retry = retryPolicy(),
                     callbacks = summarizationRetryCallbacks(
                         AgentEvent.SummarizationSource.Compaction(reason)
                     ),
@@ -942,7 +1025,10 @@ class AgentSession(
             }
 
             // Single append point: the tree either gains the compaction entry
-            // or does not — an abort mid-summarization leaves it untouched.
+            // or does not — pi's throwIfAborted before the append: an abort
+            // signaled during summarization must not append. An abort mid-append
+            // still lands the entry atomically under the manager's mutex.
+            currentCoroutineContext().ensureActive()
             manager.appendCompaction(
                 summary = compactResult.summary,
                 firstKeptEntryId = compactResult.firstKeptEntryId,
@@ -1066,8 +1152,13 @@ class AgentSession(
         }
     }
 
-    /** pi's summarization call sites read the live retry settings per call. */
-    private fun summarizationRetryPolicy(): RetryPolicy {
+    /**
+     * Live retry policy for agent backoff and the summarization calls.
+     * Divergence: [SettingsManager] does not yet parse
+     * `retry.maxAgentDelayMs`, so the policy default (60s) caps backoff
+     * until that setting lands.
+     */
+    private fun retryPolicy(): RetryPolicy {
         val settings = settingsManager.getRetrySettings()
         return RetryPolicy(
             enabled = settings.enabled,
@@ -1120,6 +1211,26 @@ class AgentSession(
     }
 
     /**
+     * pi's _finishCancelledRetry: terminal retry event for an aborted run;
+     * a no-op when no attempt is outstanding. Emitted under [NonCancellable]
+     * — the caller is cancelled.
+     */
+    private suspend fun finishCancelledRetry() {
+        if (retryAttempt == 0) return
+        val attempt = retryAttempt
+        retryAttempt = 0
+        withContext(NonCancellable) {
+            _events.emit(
+                AgentEvent.AutoRetryEnd(
+                    success = false,
+                    attempt = attempt,
+                    finalError = RETRY_CANCELLED
+                )
+            )
+        }
+    }
+
+    /**
      * Prepare a retry of [message] with exponential backoff. Returns true
      * when the caller should continue the agent.
      *
@@ -1131,23 +1242,24 @@ class AgentSession(
      * agent state only — it stays in the append-only session tree.
      */
     private suspend fun prepareRetry(message: AssistantMessage): Boolean {
-        val settings = settingsManager.getRetrySettings()
-        if (!settings.enabled) return false
+        val policy = retryPolicy()
+        if (!policy.enabled) return false
 
         retryAttempt++
-        if (retryAttempt > settings.maxRetries) {
+        if (retryAttempt > policy.maxRetries) {
             // Preserve the completed attempt count so post-run handling can
             // emit the final failure.
             retryAttempt--
             return false
         }
 
-        val delayMs = settings.baseDelayMs * (1L shl (retryAttempt - 1))
+        // pi's retryDelayMs caps the exponential backoff.
+        val delayMs = retryDelayMs(policy, retryAttempt)
 
         _events.emit(
             AgentEvent.AutoRetryStart(
                 attempt = retryAttempt,
-                maxAttempts = settings.maxRetries,
+                maxAttempts = policy.maxRetries,
                 delayMs = delayMs,
                 errorMessage = message.errorMessage ?: "Unknown error"
             )
@@ -1161,17 +1273,7 @@ class AgentSession(
         try {
             sleep(delayMs)
         } catch (e: CancellationException) {
-            val attempt = retryAttempt
-            retryAttempt = 0
-            withContext(NonCancellable) {
-                _events.emit(
-                    AgentEvent.AutoRetryEnd(
-                        success = false,
-                        attempt = attempt,
-                        finalError = RETRY_CANCELLED
-                    )
-                )
-            }
+            finishCancelledRetry()
             throw e
         }
 

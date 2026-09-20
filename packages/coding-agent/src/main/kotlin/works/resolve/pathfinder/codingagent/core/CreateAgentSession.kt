@@ -154,8 +154,16 @@ suspend fun createAgentSession(
     thinkingLevel = clampThinkingLevel(model, thinkingLevel)
 
     val agent =
-        Agent(model = model, streamOptions = streamOptions, tools = tools, streamFn = streamFn)
-    // pi passes the resolved level in the Agent's initialState; the Agent
+        Agent(
+            model = model,
+            streamOptions = streamOptions,
+            tools = emptyList(),
+            streamFn = streamFn
+        )
+    // pi passes initialState {systemPrompt: "", tools: []}: the prompt and
+    // tool loadout are transcript state, applied by the session's
+    // prompt-time loadout preparation — never seeded here. pi applies the
+    // resolved thinking level in the Agent's initialState; the Agent
     // constructor has no level parameter, so it is applied right after.
     agent.setThinkingLevel(thinkingLevel)
 

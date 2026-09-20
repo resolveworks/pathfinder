@@ -175,11 +175,11 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             )
             vm.onDraftChange("Hello")
             vm.send()
-            vm.awaitState { !it.isStreaming && it.messages.size == 2 }
+            vm.awaitState { !it.isStreaming && it.messages.size == 3 }
             val sessionId = vm.uiState.value.activeSessionId!!
             vm.awaitState {
                 it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount ==
-                    2
+                    3
             }
 
             vm.saveStartupDefault("zai", "glm-5.3")
@@ -487,7 +487,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
         // file, and a reload could not restore anything.
         vm.exchange(h, "Hello", "world")
         vm.selectThinkingLevel(ModelThinkingLevel.MAX)
-        waitUntil { h.stored(sessionId)!!.getEntries().size == 5 }
+        waitUntil { h.stored(sessionId)!!.getEntries().size == 6 }
         vm.closeForTest()
 
         val vm2 = h.newViewModel()
@@ -713,7 +713,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             vm.exchange(h, "Hello", "world")
             vm.awaitState {
                 it.sessionSummaries.firstOrNull { s -> s.id == sessionId }?.messageCount ==
-                    2
+                    3
             }
             vm.selectModel("zai", "glm-5.3")
             vm.awaitState { it.selectedModel?.modelId == "glm-5.3" }
@@ -724,7 +724,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             // transcript but keeps the live glm-5.3 agent — no rebuild, the
             // chip still shows the running model.
             val agentsBefore = h.createdAgents.size
-            val assistantEntryId = vm.uiState.value.treeRows[1].id
+            val assistantEntryId = vm.uiState.value.treeRows[2].id
             vm.navigateToTreeEntry(assistantEntryId)
             vm.awaitState {
                 h.liveManager(sessionId).getLeafId() == assistantEntryId
@@ -769,7 +769,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             // resumes it on the branch fold.
             vm.exchange(h, "Hello", "world")
             vm.awaitState {
-                it.sessionSummaries.firstOrNull { s -> s.id == firstId }?.messageCount == 2
+                it.sessionSummaries.firstOrNull { s -> s.id == firstId }?.messageCount == 3
             }
             vm.selectModel("zai", "glm-5.3")
             vm.awaitState { it.selectedModel?.modelId == "glm-5.3" }
@@ -846,7 +846,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             // on-branch; the fold carries the switch across loads.
             vm.exchange(h, "Hello", "world")
             vm.awaitState {
-                it.sessionSummaries.firstOrNull { s -> s.id == firstId }?.messageCount == 2
+                it.sessionSummaries.firstOrNull { s -> s.id == firstId }?.messageCount == 3
             }
             vm.selectModel("zai", "glm-5.2")
             vm.awaitState { it.selectedModel?.modelId == "glm-5.2" }
@@ -865,7 +865,7 @@ internal class ModelConfigurationViewModelTest : ChatHarnessTest() {
             // (Only flushed sessions are switchable: no file, no drawer row.)
             vm.exchange(h, "Second", "reply")
             vm.awaitState {
-                it.sessionSummaries.firstOrNull { s -> s.id == secondId }?.messageCount == 2
+                it.sessionSummaries.firstOrNull { s -> s.id == secondId }?.messageCount == 3
             }
             vm.switchSession(firstId)
             vm.awaitState {

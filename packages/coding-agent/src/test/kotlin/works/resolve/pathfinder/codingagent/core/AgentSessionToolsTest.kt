@@ -98,52 +98,53 @@ class AgentSessionToolsTest {
     )
 
     @Test
-    fun `setActiveToolsByName applies registry-filtered tools and rebuilds the prompt`() = runTest {
-        val webSearch = tool("web_search")
-        val webFetch = tool("web_fetch")
-        val contexts = CopyOnWriteArrayList<TranscriptContext>()
-        val s = session(tools = listOf(webSearch, webFetch)) { _, context, _ ->
-            contexts.add(context)
-            okStream()
+    fun `setActiveToolsByName applies registry-filtered tools and records the loadout at prompt time`() =
+        runTest {
+            val webSearch = tool("web_search")
+            val webFetch = tool("web_fetch")
+            val contexts = CopyOnWriteArrayList<TranscriptContext>()
+            val s = session(tools = listOf(webSearch, webFetch)) { _, context, _ ->
+                contexts.add(context)
+                okStream()
+            }
+
+            assertEquals(
+                "registry default: all tools active, prompt built",
+                listOf("web_search", "web_fetch"),
+                s.getActiveToolNames()
+            )
+            assertEquals(
+                buildSystemPrompt(listOf(webSearch, webFetch)),
+                s.systemPrompt
+            )
+
+            s.setActiveToolsByName(listOf("web_fetch", "nope", "web_search"))
+
+            assertEquals(
+                "unknown names dropped, request order preserved",
+                listOf("web_fetch", "web_search"),
+                s.getActiveToolNames()
+            )
+            assertEquals(
+                listOf(webFetch, webSearch),
+                s.agent.state.value.tools
+            )
+            assertEquals(
+                buildSystemPrompt(listOf(webFetch, webSearch)),
+                s.systemPrompt
+            )
+            assertEquals("no session entry is appended", 0, s.sessionManager.getEntries().size)
+
+            s.prompt("go")
+            assertEquals(
+                listOf("web_fetch", "web_search"),
+                getCurrentTools(contexts.single().messages).map { it.name }
+            )
+            assertEquals(
+                buildSystemPrompt(listOf(webFetch, webSearch)),
+                getCurrentSystemPrompt(contexts.single().messages)
+            )
         }
-
-        assertEquals(
-            "registry default: all tools active, prompt built",
-            listOf("web_search", "web_fetch"),
-            s.getActiveToolNames()
-        )
-        assertEquals(
-            buildSystemPrompt(listOf(webSearch, webFetch)),
-            s.agent.state.value.systemPrompt
-        )
-
-        s.setActiveToolsByName(listOf("web_fetch", "nope", "web_search"))
-
-        assertEquals(
-            "unknown names dropped, request order preserved",
-            listOf("web_fetch", "web_search"),
-            s.getActiveToolNames()
-        )
-        assertEquals(
-            listOf(webFetch, webSearch),
-            s.agent.state.value.tools
-        )
-        assertEquals(
-            buildSystemPrompt(listOf(webFetch, webSearch)),
-            s.agent.state.value.systemPrompt
-        )
-        assertEquals("no session entry is appended", 0, s.sessionManager.getEntries().size)
-
-        s.prompt("go")
-        assertEquals(
-            listOf("web_fetch", "web_search"),
-            getCurrentTools(contexts.single().messages).map { it.name }
-        )
-        assertEquals(
-            buildSystemPrompt(listOf(webFetch, webSearch)),
-            getCurrentSystemPrompt(contexts.single().messages)
-        )
-    }
 
     @Test
     fun `duplicate names are not deduped`() = runTest {
@@ -163,7 +164,7 @@ class AgentSessionToolsTest {
         s.setActiveToolsByName(emptyList())
 
         assertEquals(emptyList<String>(), s.getActiveToolNames())
-        assertEquals(buildSystemPrompt(emptyList()), s.agent.state.value.systemPrompt)
+        assertEquals(buildSystemPrompt(emptyList()), s.systemPrompt)
     }
 
     @Test
@@ -176,7 +177,7 @@ class AgentSessionToolsTest {
         assertEquals(listOf("web_search", "web_fetch"), s.getActiveToolNames())
         assertEquals(
             buildSystemPrompt(listOf(webSearch, webFetch)),
-            s.agent.state.value.systemPrompt
+            s.systemPrompt
         )
     }
 
@@ -185,7 +186,7 @@ class AgentSessionToolsTest {
         val s = session()
 
         assertEquals(emptyList<String>(), s.getActiveToolNames())
-        assertEquals(buildSystemPrompt(emptyList()), s.agent.state.value.systemPrompt)
+        assertEquals(buildSystemPrompt(emptyList()), s.systemPrompt)
 
         s.setActiveToolsByName(listOf("web_search"))
         assertEquals(
@@ -193,6 +194,6 @@ class AgentSessionToolsTest {
             emptyList<String>(),
             s.getActiveToolNames()
         )
-        assertEquals(buildSystemPrompt(emptyList()), s.agent.state.value.systemPrompt)
+        assertEquals(buildSystemPrompt(emptyList()), s.systemPrompt)
     }
 }

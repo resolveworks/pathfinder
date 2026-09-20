@@ -215,7 +215,7 @@ class AgentCompactionTest {
         val compaction = entries.last() as CompactionEntry
         assertEquals("SUMMARY", compaction.summary)
         assertEquals(
-            agent.sessionManager.getEntries()[2].id,
+            agent.sessionManager.getEntries()[3].id,
             compaction.firstKeptEntryId
         )
         val rebuilt = agent.state.value.messages

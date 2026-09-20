@@ -116,7 +116,7 @@ internal class SessionSearchViewModelTest : ChatHarnessTest() {
         val secondId = vm.awaitState { it.activeSessionId != firstId }.activeSessionId!!
         vm.exchange(h, "zebra facts", "reply")
         vm.awaitState {
-            it.sessionSummaries.sumOf { s -> s.messageCount } == 4
+            it.sessionSummaries.sumOf { s -> s.messageCount } == 6
         }
 
         vm.onSessionSearchQueryChange("zebra")
@@ -151,7 +151,7 @@ internal class SessionSearchViewModelTest : ChatHarnessTest() {
             vm.newSession()
             val looseId = vm.awaitState { it.activeSessionId != tightId }.activeSessionId!!
             vm.exchange(h, "a long unrelated preamble before mentioning zebra", "ok")
-            vm.awaitState { it.sessionSummaries.sumOf { s -> s.messageCount } == 4 }
+            vm.awaitState { it.sessionSummaries.sumOf { s -> s.messageCount } == 6 }
 
             vm.onSessionSearchQueryChange("zebra")
             // Default RELEVANCE: the exact-match session ranks first.

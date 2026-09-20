@@ -20,7 +20,6 @@ import works.resolve.pathfinder.ai.Provider
 import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
-import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.UserMessage
@@ -159,9 +158,11 @@ class CreateAgentSessionTest {
             // restores model-b over the settings default.
             assertEquals(otherModel, result.session.model)
             assertEquals(ModelThinkingLevel.LOW, result.session.thinkingLevel)
-            // The session's prompt baseline message leads the restored transcript.
-            assertEquals(3, result.session.state.value.messages.size)
-            assertTrue(result.session.state.value.messages[0] is SystemMessage)
+            // The restored transcript is the branch fold as-is: the prompt
+            // is transcript state now, recorded as a section patch at the
+            // next prompt rather than a seeded leading system message.
+            assertEquals(2, result.session.state.value.messages.size)
+            assertTrue(result.session.state.value.messages[0] is UserMessage)
             assertEquals(
                 1,
                 manager.getEntries().filterIsInstance<ThinkingLevelEntry>().size
