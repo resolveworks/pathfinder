@@ -52,6 +52,7 @@ import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.Tool
@@ -1235,6 +1236,7 @@ internal class ChatViewModelTest : ChatHarnessTest() {
         is UserMessage -> m.content.textContent()
         is AssistantMessage -> m.content.textContent()
         is ToolResultMessage -> m.content.textContent()
+        is SystemMessage -> m.content.joinToString("") { it.text }
     }
 
     private fun TranscriptRow.errorMessage(): String? = assistant().errorMessage

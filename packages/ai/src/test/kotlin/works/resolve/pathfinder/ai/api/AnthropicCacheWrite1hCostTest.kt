@@ -15,6 +15,7 @@ import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class AnthropicCacheWrite1hCostTest {
 
@@ -29,7 +30,7 @@ class AnthropicCacheWrite1hCostTest {
         cost = ModelCost(input = 5.0, output = 25.0, cacheRead = 0.5, cacheWrite = 6.25)
     )
 
-    private val context = Context(messages = listOf(UserMessage.ofText("hi")))
+    private val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
     private fun eventsWithCacheCreation(cacheCreation: String?): List<Pair<String, String>> {
         val baseUsage =

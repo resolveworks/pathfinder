@@ -11,7 +11,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ChatApi
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.ProviderAuthException
@@ -19,6 +18,7 @@ import works.resolve.pathfinder.ai.ProviderResponse
 import works.resolve.pathfinder.ai.ProviderStreamException
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.headersToRecord
 import works.resolve.pathfinder.ai.mergeHeaders
 import works.resolve.pathfinder.ai.mergeSamplingParams
@@ -27,9 +27,12 @@ import works.resolve.pathfinder.ai.toToolChoice
 import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.getDeclaredTools
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.ai.utils.resolveTranscript
+import works.resolve.pathfinder.ai.utils.resolveTranscriptTools
 import works.resolve.pathfinder.telemetry.TelemetryContext
 
 /**
@@ -138,7 +141,7 @@ data class AzureOpenAiResponsesOptions(
 
 internal fun buildAzureOpenAiResponsesOptions(
     model: Model,
-    context: Context,
+    context: TranscriptContext,
     options: SimpleStreamOptions,
     reasoningEffort: ModelThinkingLevel?
 ): AzureOpenAiResponsesOptions = AzureOpenAiResponsesOptions(
@@ -176,7 +179,7 @@ class AzureOpenAiResponsesApi(
 
     override fun streamSimple(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: SimpleStreamOptions
     ): Flow<AssistantMessageEvent> {
         val apiKey = options.apiKey
@@ -193,13 +196,15 @@ class AzureOpenAiResponsesApi(
     }
     fun stream(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: AzureOpenAiResponsesOptions = AzureOpenAiResponsesOptions()
     ): Flow<AssistantMessageEvent> = flow {
         val deploymentName = resolveDeploymentName(model, options)
         val startedAtMs = clock.now().toEpochMilliseconds()
+        val normalizedContext =
+            resolveTranscript(context, model.responsesCompat?.supportsMidConvoSystemMessages)
         val grammarToolInputProperties = createGrammarToolInputProperties(
-            context.tools,
+            getDeclaredTools(normalizedContext.messages),
             model.responsesCompat?.supportsOpenAIGrammarTools ?: false
         )
         val state = OpenAiResponsesShared.ResponsesStreamState(
@@ -213,16 +218,14 @@ class AzureOpenAiResponsesApi(
             val apiKey = options.apiKey
                 ?: throw ProviderAuthException("No API key for provider: ${model.provider}")
             val config = resolveAzureConfig(model, options)
-            val messages = OpenAiResponsesShared.convertResponsesMessages(
-                model,
-                context,
-                AZURE_TOOL_CALL_PROVIDERS,
-                OpenAiResponsesShared.ConvertResponsesMessagesOptions(
-                    grammarToolInputProperties = grammarToolInputProperties
-                )
-            )
 
-            var params = buildAzureParams(model, context, options, deploymentName, messages)
+            var params = buildAzureParams(
+                model,
+                normalizedContext,
+                options,
+                deploymentName,
+                grammarToolInputProperties
+            )
             options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
             val headers = LinkedHashMap<String, String?>()
             // Precedence: default User-Agent, then model headers (which may
@@ -345,11 +348,35 @@ internal fun resolveAzureConfig(model: Model, options: AzureOpenAiResponsesOptio
 
 internal fun buildAzureParams(
     model: Model,
-    context: Context,
+    context: TranscriptContext,
     options: AzureOpenAiResponsesOptions?,
     deploymentName: String,
-    messages: List<JsonObject>
+    grammarToolInputProperties: Map<String, String>
 ): JsonObject {
+    val supportsAdditionalTools = model.responsesCompat?.supportsAdditionalTools ?: false
+    val supportsToolSearch = model.responsesCompat?.supportsToolSearch ?: false
+    val transcriptTools = resolveTranscriptTools(
+        context.messages,
+        supportsAdditionalTools || supportsToolSearch
+    )
+    val messages = OpenAiResponsesShared.convertResponsesMessages(
+        model,
+        context,
+        AZURE_TOOL_CALL_PROVIDERS,
+        OpenAiResponsesShared.ConvertResponsesMessagesOptions(
+            grammarToolInputProperties = grammarToolInputProperties,
+            supportsMidConvoSystemMessages =
+                model.responsesCompat?.supportsMidConvoSystemMessages ?: false,
+            supportsAdditionalTools = supportsAdditionalTools,
+            supportsToolSearch = supportsToolSearch,
+            toolOptions = OpenAiResponsesShared.ConvertResponsesToolsOptions(
+                supportsStrictMode = model.responsesCompat?.supportsStrictMode ?: true,
+                supportsOpenAIGrammarTools =
+                    model.responsesCompat?.supportsOpenAIGrammarTools ?: false
+            )
+        )
+    )
+
     var params = buildJsonObject {
         put("model", deploymentName)
         put("input", kotlinx.serialization.json.JsonArray(messages))
@@ -363,14 +390,14 @@ internal fun buildAzureParams(
             put("max_output_tokens", maxOf(it, OPENAI_RESPONSES_MIN_OUTPUT_TOKENS))
         }
         options?.temperature?.let { put("temperature", it) }
-        if (!context.tools.isEmpty()) {
+        if (transcriptTools.requestTools.isNotEmpty()) {
             // Defaults to true here, unlike openai-responses' getCompat (false).
             val supportsStrictMode = model.responsesCompat?.supportsStrictMode ?: true
             put(
                 "tools",
                 kotlinx.serialization.json.JsonArray(
                     OpenAiResponsesShared.convertResponsesTools(
-                        context.tools,
+                        transcriptTools.requestTools,
                         OpenAiResponsesShared.ConvertResponsesToolsOptions(
                             supportsStrictMode = supportsStrictMode,
                             supportsOpenAIGrammarTools =

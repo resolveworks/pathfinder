@@ -21,6 +21,7 @@ import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 /**
  * Delta events carry no snapshot; boundary events (part start/end, done)
@@ -30,7 +31,7 @@ import works.resolve.pathfinder.ai.utils.ProviderRetry
  */
 class PartialSnapshotReuseTest {
 
-    private val context = Context(messages = listOf(UserMessage.ofText("hi")))
+    private val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
     private fun retry() = ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 })
     private fun clock() = FakeClock(1_770_000_000_000L)

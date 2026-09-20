@@ -23,8 +23,6 @@ import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.ChatTemplateKwargValue
 import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.ContentType
-import works.resolve.pathfinder.ai.Context
-import works.resolve.pathfinder.ai.DeferredToolsMode
 import works.resolve.pathfinder.ai.DoneSentinel
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.MaxTokensField
@@ -40,6 +38,7 @@ import works.resolve.pathfinder.ai.SessionAffinityFormat
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.StreamOptions
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ThinkingFormat
@@ -48,6 +47,7 @@ import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolChoice
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.api.resolveCloudflareBaseUrl
 import works.resolve.pathfinder.ai.calculateCost
@@ -64,6 +64,7 @@ import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.arr
 import works.resolve.pathfinder.ai.utils.formatProviderError
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.long
@@ -71,6 +72,9 @@ import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
+import works.resolve.pathfinder.ai.utils.resolveTranscript
+import works.resolve.pathfinder.ai.utils.resolveTranscriptTools
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
 import works.resolve.pathfinder.ai.utils.str
@@ -291,7 +295,7 @@ class OpenAiCompletionsApi(
 
     override fun streamSimple(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: SimpleStreamOptions
     ): Flow<AssistantMessageEvent> {
         val clamped = options.reasoning?.let {
@@ -313,10 +317,12 @@ class OpenAiCompletionsApi(
 
     fun stream(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: OpenAiCompletionsOptions
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = clock.now().toEpochMilliseconds()
+        val normalizedContext =
+            resolveTranscript(context, model.compat.supportsMidConvoSystemMessages)
         val state = StreamingState(model, startedAtMs)
         try {
             // Header-based auth (e.g. Cloudflare's cf-aig-authorization)
@@ -332,7 +338,11 @@ class OpenAiCompletionsApi(
                     )
                 }
 
-            var params = OpenAiCompletionsPayload.buildRequestBody(model, context, options)
+            var params = OpenAiCompletionsPayload.buildRequestBody(
+                model,
+                normalizedContext,
+                options
+            )
             options.onPayload?.let { hook -> hook(params, model)?.let { params = it } }
             val body = params
                 .toString()
@@ -836,7 +846,7 @@ object OpenAiCompletionsPayload {
 
     fun buildRequestBody(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: OpenAiCompletionsOptions,
         compat: OpenAiCompletionsCompat = model.compat,
         cacheRetention: CacheRetention = OpenAiResponsesApi.resolveCacheRetention(
@@ -878,29 +888,15 @@ object OpenAiCompletionsPayload {
         }
         options.temperature?.let { body["temperature"] = JsonPrimitive(it) }
 
-        val tools: MutableList<JsonObject>? = if (context.tools.isNotEmpty()) {
-            // deferredToolsMode "kimi": tools already loaded via the bare-tools
-            // system message are excluded from the standard tools param.
-            val deferredToolNames =
-                if (compat.deferredToolsMode ==
-                    DeferredToolsMode.KIMI
-                ) {
-                    getDeferredToolNames(context.messages)
-                } else {
-                    emptySet()
+        val transcriptTools = resolveTranscriptTools(
+            context.messages,
+            compat.supportsMidConvoSystemMessages && compat.supportsMidConvoToolAdditions
+        )
+        val tools: MutableList<JsonObject>? = if (transcriptTools.requestTools.isNotEmpty()) {
+            transcriptTools.requestTools.map { convertTool(it, compat) }.toMutableList().also {
+                if (compat.zaiToolStream) {
+                    body["tool_stream"] = JsonPrimitive(true)
                 }
-            val activeTools = context.tools.filter { it.name !in deferredToolNames }
-            if (activeTools.isNotEmpty()) {
-                activeTools.map { convertTool(it, compat) }.toMutableList().also {
-                    if (compat.zaiToolStream) {
-                        body["tool_stream"] = JsonPrimitive(true)
-                    }
-                }
-            } else if (hasToolHistory(context.messages)) {
-                // Some proxies require the tools param when history has tool calls.
-                mutableListOf()
-            } else {
-                null
             }
         } else if (hasToolHistory(context.messages)) {
             // Some proxies require the tools param when history has tool calls.
@@ -1255,36 +1251,66 @@ object OpenAiCompletionsPayload {
 
     fun convertMessages(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         compat: OpenAiCompletionsCompat = model.compat
     ): List<JsonObject> {
+        val normalizedContext = resolveTranscript(context, compat.supportsMidConvoSystemMessages)
         val params = mutableListOf<JsonObject>()
-
-        if (!context.systemPrompt.isNullOrEmpty()) {
-            val role = if (model.reasoning &&
-                compat.supportsDeveloperRole
-            ) {
-                "developer"
-            } else {
-                "system"
-            }
-            params.add(
-                buildJsonObject {
-                    put("role", role)
-                    put("content", sanitizeSurrogates(context.systemPrompt))
-                }
-            )
+        val transcriptTools = resolveTranscriptTools(
+            normalizedContext.messages,
+            compat.supportsMidConvoSystemMessages && compat.supportsMidConvoToolAdditions
+        )
+        val instructionRole = if (model.reasoning &&
+            compat.supportsDeveloperRole
+        ) {
+            "developer"
+        } else {
+            "system"
         }
 
         val messages =
-            transformMessages(context.messages, model) { id, _ ->
+            transformMessages(normalizedContext.messages, model) { id, _ ->
                 normalizeToolCallId(id, model.provider)
             }
-        val deferredToolNames = mutableSetOf<String>()
         var i = 0
         while (i < messages.size) {
             val msg = messages[i]
             when (msg.role) {
+                MessageRole.SYSTEM -> {
+                    val system = msg as SystemMessage
+                    val addedTools =
+                        if (i > 0 && transcriptTools.anchorsAdditions) {
+                            system.toolsAdded.orEmpty()
+                        } else {
+                            emptyList()
+                        }
+                    if (addedTools.isNotEmpty()) {
+                        // Kimi accepts a system message with a bare `tools` array and no content.
+                        params.add(
+                            buildJsonObject {
+                                put("role", "system")
+                                put("tools", JsonArray(addedTools.map { convertTool(it, compat) }))
+                            }
+                        )
+                    }
+                    val text =
+                        if (i ==
+                            0
+                        ) {
+                            getSystemMessageText(system)
+                        } else {
+                            renderSystemMessageUpdate(system)
+                        }
+                    if (text.isNotEmpty()) {
+                        params.add(
+                            buildJsonObject {
+                                put("role", instructionRole)
+                                put("content", sanitizeSurrogates(text))
+                            }
+                        )
+                    }
+                }
+
                 MessageRole.USER ->
                     convertUserMessage(msg as works.resolve.pathfinder.ai.UserMessage)
                         ?.let { params.add(it) }
@@ -1323,12 +1349,6 @@ object OpenAiCompletionsPayload {
                             toolMessage["name"] = JsonPrimitive(toolMsg.toolName)
                         }
                         params.add(JsonObject(toolMessage))
-                        // deferredToolsMode "kimi": tool results mark the
-                        // tools they loaded; those are re-announced as a bare
-                        // `tools` system message after the group.
-                        if (compat.deferredToolsMode == DeferredToolsMode.KIMI) {
-                            deferredToolNames.addAll(toolMsg.addedToolNames)
-                        }
                         if (supportsImage) {
                             toolMsg.content
                                 .filter { it.type == ContentType.IMAGE }
@@ -1356,26 +1376,6 @@ object OpenAiCompletionsPayload {
                                 )
                             }
                         )
-                    }
-                    if (deferredToolNames.isNotEmpty()) {
-                        // Kimi accepts a system message with a bare `tools`
-                        // array and no content.
-                        val deferredTools = getToolsByName(context.tools, deferredToolNames)
-                        if (deferredTools.isNotEmpty()) {
-                            params.add(
-                                buildJsonObject {
-                                    put("role", "system")
-                                    put(
-                                        "tools",
-                                        JsonArray(
-                                            deferredTools.map {
-                                                convertTool(it, compat)
-                                            }
-                                        )
-                                    )
-                                }
-                            )
-                        }
                     }
                 }
             }
@@ -1589,16 +1589,6 @@ object OpenAiCompletionsPayload {
                 }
             )
         }
-    }
-
-    private fun getDeferredToolNames(messages: List<Message>): Set<String> = messages.flatMap {
-        (it as? works.resolve.pathfinder.ai.ToolResultMessage)?.addedToolNames.orEmpty()
-    }
-        .toSet()
-
-    private fun getToolsByName(tools: List<Tool>, names: Collection<String>): List<Tool> {
-        val byName = tools.associateBy { it.name }
-        return names.mapNotNull { byName[it] }
     }
 
     private fun hasToolHistory(messages: List<Message>): Boolean = messages.any { msg ->

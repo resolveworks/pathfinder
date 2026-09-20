@@ -15,6 +15,7 @@ import works.resolve.pathfinder.ai.OpenAiCompletionsCompat
 import works.resolve.pathfinder.ai.ThinkingFormat
 import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class OpenAiCompletionsThinkingFormatsTest {
 
@@ -42,7 +43,7 @@ class OpenAiCompletionsThinkingFormatsTest {
     private fun body(model: Model, effort: ModelThinkingLevel? = null): JsonObject =
         OpenAiCompletionsPayload.buildRequestBody(
             model,
-            Context(messages = listOf(UserMessage.ofText("hi"))),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
             OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = effort)
         )
 

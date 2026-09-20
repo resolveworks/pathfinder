@@ -20,7 +20,9 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class GoogleSharedConvertMessagesTest {
 
@@ -34,20 +36,22 @@ class GoogleSharedConvertMessagesTest {
     )
 
     private fun contextFor(model: Model, content: List<works.resolve.pathfinder.ai.Content>) =
-        Context(
-            messages = listOf(
-                UserMessage.ofText("Hi"),
-                AssistantMessage(
-                    content = content,
-                    api = model.api,
-                    provider = model.provider,
-                    model = model.id,
-                    stopReason = StopReason.TOOL_USE
+        normalizeContext(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("Hi"),
+                    AssistantMessage(
+                        content = content,
+                        api = model.api,
+                        provider = model.provider,
+                        model = model.id,
+                        stopReason = StopReason.TOOL_USE
+                    )
                 )
             )
         )
 
-    private fun contents(model: Model, context: Context): List<JsonObject> =
+    private fun contents(model: Model, context: TranscriptContext): List<JsonObject> =
         GoogleShared.convertMessages(model, context).map { it.jsonObject }
 
     private fun partsOf(turn: JsonObject) = turn["parts"]!!.jsonArray.map { it.jsonObject }
@@ -165,30 +169,35 @@ class GoogleSharedConvertMessagesTest {
             model = "glm-4.7",
             stopReason = StopReason.STOP
         )
-        val turns = contents(model, Context(messages = listOf(UserMessage.ofText("Hi"), foreign)))
+        val turns = contents(
+            model,
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("Hi"), foreign)))
+        )
         val modelTurn = turns.first { it["role"]!!.jsonPrimitive.content == "model" }
         val part = partsOf(modelTurn).single()
         assertEquals("foreign reasoning", part["text"]!!.jsonPrimitive.content)
         assertNull(part["thought"])
     }
 
-    private fun imageToolContext() = Context(
-        messages = listOf(
-            UserMessage.ofText("read the files"),
-            AssistantMessage(
-                content = listOf(
-                    ToolCall("call_a", "read", """{"path":"a.txt"}"""),
-                    ToolCall("call_img", "read", """{"path":"image.png"}"""),
-                    ToolCall("call_b", "read", """{"path":"b.txt"}""")
+    private fun imageToolContext() = normalizeContext(
+        Context(
+            messages = listOf(
+                UserMessage.ofText("read the files"),
+                AssistantMessage(
+                    content = listOf(
+                        ToolCall("call_a", "read", """{"path":"a.txt"}"""),
+                        ToolCall("call_img", "read", """{"path":"image.png"}"""),
+                        ToolCall("call_b", "read", """{"path":"b.txt"}""")
+                    ),
+                    api = "google-generative-ai",
+                    provider = "google",
+                    model = "x",
+                    stopReason = StopReason.TOOL_USE
                 ),
-                api = "google-generative-ai",
-                provider = "google",
-                model = "x",
-                stopReason = StopReason.TOOL_USE
-            ),
-            ToolResultMessage("call_a", "read", listOf(TextContent("alpha text"))),
-            ToolResultMessage("call_img", "read", listOf(ImageContent("abc", "image/png"))),
-            ToolResultMessage("call_b", "read", listOf(TextContent("beta text")))
+                ToolResultMessage("call_a", "read", listOf(TextContent("alpha text"))),
+                ToolResultMessage("call_img", "read", listOf(ImageContent("abc", "image/png"))),
+                ToolResultMessage("call_b", "read", listOf(TextContent("beta text")))
+            )
         )
     )
 
@@ -227,18 +236,23 @@ class GoogleSharedConvertMessagesTest {
         val model = model(id = "gemini-3-pro-preview")
         val turns = contents(
             model,
-            Context(
-                messages = listOf(
-                    UserMessage.ofText("go"),
-                    AssistantMessage(
-                        content = listOf(ToolCall("c1", "ok", "{}"), ToolCall("c2", "bad", "{}")),
-                        api = model.api,
-                        provider = model.provider,
-                        model = model.id,
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    ToolResultMessage("c1", "ok", listOf(TextContent("fine"))),
-                    ToolResultMessage("c2", "bad", listOf(TextContent("boom")), isError = true)
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage.ofText("go"),
+                        AssistantMessage(
+                            content = listOf(
+                                ToolCall("c1", "ok", "{}"),
+                                ToolCall("c2", "bad", "{}")
+                            ),
+                            api = model.api,
+                            provider = model.provider,
+                            model = model.id,
+                            stopReason = StopReason.TOOL_USE
+                        ),
+                        ToolResultMessage("c1", "ok", listOf(TextContent("fine"))),
+                        ToolResultMessage("c2", "bad", listOf(TextContent("boom")), isError = true)
+                    )
                 )
             )
         )
@@ -256,18 +270,20 @@ class GoogleSharedConvertMessagesTest {
         val model = model()
         val turns = contents(
             model,
-            Context(
-                messages = listOf(
-                    UserMessage.ofText("go"),
-                    AssistantMessage(
-                        content = listOf(ToolCall("c1", "t", "{}"), ToolCall("c2", "t", "{}")),
-                        api = model.api,
-                        provider = model.provider,
-                        model = model.id,
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    ToolResultMessage("c1", "t", listOf(TextContent("one"))),
-                    ToolResultMessage("c2", "t", listOf(TextContent("two")))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage.ofText("go"),
+                        AssistantMessage(
+                            content = listOf(ToolCall("c1", "t", "{}"), ToolCall("c2", "t", "{}")),
+                            api = model.api,
+                            provider = model.provider,
+                            model = model.id,
+                            stopReason = StopReason.TOOL_USE
+                        ),
+                        ToolResultMessage("c1", "t", listOf(TextContent("one"))),
+                        ToolResultMessage("c2", "t", listOf(TextContent("two")))
+                    )
                 )
             )
         )
@@ -282,19 +298,21 @@ class GoogleSharedConvertMessagesTest {
             "call|with|symbols|and-a-very-long-id-that-exceeds-sixty-four-characters-1234567890"
         val turns = contents(
             model,
-            Context(
-                messages = listOf(
-                    UserMessage.ofText("go"),
-                    // Tool call IDs are normalized only when replaying across
-                    // models, hence the foreign assistant message.
-                    AssistantMessage(
-                        content = listOf(ToolCall(weird, "t", "{}")),
-                        api = "openai-completions",
-                        provider = "openai",
-                        model = "gpt-x",
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    ToolResultMessage(weird, "t", listOf(TextContent("ok")))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage.ofText("go"),
+                        // Tool call IDs are normalized only when replaying across
+                        // models, hence the foreign assistant message.
+                        AssistantMessage(
+                            content = listOf(ToolCall(weird, "t", "{}")),
+                            api = "openai-completions",
+                            provider = "openai",
+                            model = "gpt-x",
+                            stopReason = StopReason.TOOL_USE
+                        ),
+                        ToolResultMessage(weird, "t", listOf(TextContent("ok")))
+                    )
                 )
             )
         )
@@ -314,17 +332,19 @@ class GoogleSharedConvertMessagesTest {
         val model = model(id = "gemini-2.5-flash")
         val turns = contents(
             model,
-            Context(
-                messages = listOf(
-                    UserMessage.ofText("go"),
-                    AssistantMessage(
-                        content = listOf(ToolCall("call_1", "t", "{}")),
-                        api = model.api,
-                        provider = model.provider,
-                        model = model.id,
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    ToolResultMessage("call_1", "t", listOf(TextContent("ok")))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage.ofText("go"),
+                        AssistantMessage(
+                            content = listOf(ToolCall("call_1", "t", "{}")),
+                            api = model.api,
+                            provider = model.provider,
+                            model = model.id,
+                            stopReason = StopReason.TOOL_USE
+                        ),
+                        ToolResultMessage("call_1", "t", listOf(TextContent("ok")))
+                    )
                 )
             )
         )
@@ -340,21 +360,23 @@ class GoogleSharedConvertMessagesTest {
             val model = model(id = modelId)
             val turns = contents(
                 model,
-                Context(
-                    messages = listOf(
-                        UserMessage.ofText("Hi"),
-                        AssistantMessage(
-                            content = listOf(
-                                ToolCall("call_1", "bash", """{"command":"echo hi"}"""),
-                                ToolCall("call_2", "bash", """{"command":"ls -la"}""")
+                normalizeContext(
+                    Context(
+                        messages = listOf(
+                            UserMessage.ofText("Hi"),
+                            AssistantMessage(
+                                content = listOf(
+                                    ToolCall("call_1", "bash", """{"command":"echo hi"}"""),
+                                    ToolCall("call_2", "bash", """{"command":"ls -la"}""")
+                                ),
+                                api = model.api,
+                                provider = model.provider,
+                                model = model.id,
+                                stopReason = StopReason.TOOL_USE
                             ),
-                            api = model.api,
-                            provider = model.provider,
-                            model = model.id,
-                            stopReason = StopReason.TOOL_USE
-                        ),
-                        ToolResultMessage("call_1", "bash", listOf(TextContent("hi"))),
-                        ToolResultMessage("call_2", "bash", listOf(TextContent("files")))
+                            ToolResultMessage("call_1", "bash", listOf(TextContent("hi"))),
+                            ToolResultMessage("call_2", "bash", listOf(TextContent("files")))
+                        )
                     )
                 )
             )
@@ -523,10 +545,11 @@ class GoogleSharedConvertToolsTest {
 
     @Test
     fun `legacy parameters strips json schema meta declarations`() {
+        val strictJsonSchema = """
+            {"${'$'}schema":"https://example.com/schema","type":"object","properties":{"a":{"${'$'}ref":"#/${'$'}defs/a"}},"${'$'}defs":{"a":{"type":"string"}}}
+        """.trimIndent()
         val strictTool = tool.copy(
-            parameters = kotlinx.serialization.json.Json.parseToJsonElement(
-                """{"${'$'}schema":"https://example.com/schema","type":"object","properties":{"a":{"${'$'}ref":"#/${'$'}defs/a"}},"${'$'}defs":{"a":{"type":"string"}}}"""
-            )
+            parameters = kotlinx.serialization.json.Json.parseToJsonElement(strictJsonSchema)
         )
         val tools = GoogleShared.convertTools(listOf(strictTool), useParameters = true)!!
         val declaration = tools[0].jsonObject["functionDeclarations"]!!.jsonArray[0].jsonObject
@@ -667,13 +690,6 @@ class GoogleSharedConvertToolsTest {
             baseUrl = "https://example.invalid/v1beta",
             reasoning = true
         )
-        assertEquals(
-            GoogleShared.ResolvedGoogleThinkingLevel.HIGH,
-            GoogleShared.resolveGoogleThinkingLevel(
-                base,
-                works.resolve.pathfinder.ai.ModelThinkingLevel.OFF
-            )
-        )
         for ((level, mapped) in listOf(
             "MINIMAL" to GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL,
             "LOW" to GoogleShared.ResolvedGoogleThinkingLevel.LOW,
@@ -690,14 +706,14 @@ class GoogleSharedConvertToolsTest {
                 mapped,
                 GoogleShared.resolveGoogleThinkingLevel(
                     model,
-                    works.resolve.pathfinder.ai.ModelThinkingLevel.HIGH
+                    works.resolve.pathfinder.ai.ThinkingLevel.HIGH
                 )
             )
             assertEquals(
                 mapped,
                 GoogleShared.resolveGoogleThinkingLevel(
                     model,
-                    works.resolve.pathfinder.ai.ModelThinkingLevel.XHIGH
+                    works.resolve.pathfinder.ai.ThinkingLevel.XHIGH
                 )
             )
         }
@@ -710,7 +726,7 @@ class GoogleSharedConvertToolsTest {
         val error = assertFailsWith<IllegalStateException> {
             GoogleShared.resolveGoogleThinkingLevel(
                 invalid,
-                works.resolve.pathfinder.ai.ModelThinkingLevel.XHIGH
+                works.resolve.pathfinder.ai.ThinkingLevel.XHIGH
             )
         }
         assertEquals(

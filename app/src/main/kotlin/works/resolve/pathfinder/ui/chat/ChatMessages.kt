@@ -56,6 +56,7 @@ import kotlinx.serialization.json.JsonObject
 import works.resolve.pathfinder.R
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.Content
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
@@ -153,6 +154,8 @@ internal fun ConversationContent(
                         // The projection never emits result messages as rows:
                         // they render through their call's Tool row.
                         is ToolResultMessage -> Unit
+
+                        is SystemMessage -> Unit
                     }
                 }
             }

@@ -20,6 +20,7 @@ import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 /**
  * Ports the request-shaping half of pi's anthropic-auth-token.test.ts.
@@ -47,9 +48,11 @@ class AnthropicMessagesAuthTokenTest {
         maxTokens = 4096
     )
 
-    private val context = Context(
-        systemPrompt = "System prompt.",
-        messages = listOf(UserMessage.ofText("Hello"))
+    private val context = normalizeContext(
+        Context(
+            systemPrompt = "System prompt.",
+            messages = listOf(UserMessage.ofText("Hello"))
+        )
     )
 
     private fun api(transport: FakeTransport) = AnthropicMessagesApi(

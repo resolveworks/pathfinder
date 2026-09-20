@@ -680,8 +680,7 @@ class AgentLoopTest {
                 AgentToolResult(
                     content = content,
                     details = details,
-                    usage = usage,
-                    addedToolNames = listOf("extra")
+                    usage = usage
                 )
             }
         )
@@ -703,7 +702,6 @@ class AgentLoopTest {
         assertEquals(content, trm.content)
         assertEquals(details, trm.details)
         assertEquals(usage, trm.usage)
-        assertEquals(listOf("extra"), trm.addedToolNames)
         assertFalse(trm.isError)
         assertTrue("timestamp set", trm.timestamp > 0)
     }

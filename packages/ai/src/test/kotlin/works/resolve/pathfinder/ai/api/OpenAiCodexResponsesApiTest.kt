@@ -35,6 +35,7 @@ import works.resolve.pathfinder.ai.ModelCost
 import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.Tool
@@ -48,6 +49,7 @@ import works.resolve.pathfinder.ai.testing.NoWebSocketTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.transport.NetworkException
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class OpenAiCodexResponsesApiTest {
 
@@ -65,7 +67,9 @@ class OpenAiCodexResponsesApiTest {
     )
 
     private val context =
-        Context(systemPrompt = "You are Codex.", messages = listOf(UserMessage.ofText("hi")))
+        normalizeContext(
+            Context(systemPrompt = "You are Codex.", messages = listOf(UserMessage.ofText("hi")))
+        )
 
     private val apiKey = jwt("acc-123")
 
@@ -261,7 +265,13 @@ class OpenAiCodexResponsesApiTest {
                 supportsOpenAIGrammarTools = true
             )
         )
-        val toolContext = context.copy(tools = listOf(grammarTool))
+        val toolContext = normalizeContext(
+            Context(
+                systemPrompt = "You are Codex.",
+                messages = listOf(UserMessage.ofText("hi")),
+                tools = listOf(grammarTool)
+            )
+        )
 
         val enabled = FakeTransport()
         enabled.enqueueResponse(sse(*doneEvents().toTypedArray()))
@@ -291,7 +301,7 @@ class OpenAiCodexResponsesApiTest {
         transport.enqueueResponse(sse(*doneEvents().toTypedArray()))
         api(transport).stream(
             model,
-            context.copy(systemPrompt = null),
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
             OpenAICodexResponsesOptions(apiKey = apiKey)
         ).toList()
         assertEquals(
@@ -724,27 +734,33 @@ class OpenAiCodexResponsesApiTest {
             Tool("base_tool", "The base_tool tool", buildJsonObject { put("type", "object") }),
             Tool("late_tool", "The late_tool tool", buildJsonObject { put("type", "object") })
         )
-        val context = Context(
-            messages = listOf(
-                UserMessage.ofText("Hello", 1),
-                AssistantMessage(
-                    content = listOf(ToolCall("call_1", "base_tool", "{}")),
-                    api = "anthropic-messages",
-                    provider = "anthropic",
-                    model = "claude-opus-4-6",
-                    stopReason = StopReason.TOOL_USE,
-                    timestamp = 2
+        val context = normalizeContext(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("Hello", 1),
+                    AssistantMessage(
+                        content = listOf(ToolCall("call_1", "base_tool", "{}")),
+                        api = "anthropic-messages",
+                        provider = "anthropic",
+                        model = "claude-opus-4-6",
+                        stopReason = StopReason.TOOL_USE,
+                        timestamp = 2
+                    ),
+                    ToolResultMessage(
+                        toolCallId = "call_1",
+                        toolName = "base_tool",
+                        content = listOf(TextContent("done")),
+                        timestamp = 3
+                    ),
+                    SystemMessage(
+                        content = emptyList(),
+                        toolsAdded = listOf(tools[1]),
+                        timestamp = 3
+                    ),
+                    UserMessage.ofText("again", 4)
                 ),
-                ToolResultMessage(
-                    toolCallId = "call_1",
-                    toolName = "base_tool",
-                    content = listOf(TextContent("done")),
-                    addedToolNames = listOf("late_tool"),
-                    timestamp = 3
-                ),
-                UserMessage.ofText("again", 4)
-            ),
-            tools = tools
+                tools = listOf(tools[0])
+            )
         )
 
         fun inputOf(modelId: String): List<JsonObject> {
@@ -761,7 +777,7 @@ class OpenAiCodexResponsesApiTest {
         }
 
         val additional = inputOf("gpt-5.6-sol")
-        val toolSearch = inputOf("gpt-5.4")
+        val toolSearch = inputOf("gpt-5.5")
         val topLevel = inputOf("gpt-5.3-codex-spark")
 
         fun JsonObject.isType(name: String) = this["type"]?.jsonPrimitive?.content == name
@@ -769,7 +785,7 @@ class OpenAiCodexResponsesApiTest {
         assertEquals(listOf("base_tool"), toolNamesOf("gpt-5.6-sol"))
         assertTrue(additional.any { it.isType("additional_tools") })
         assertTrue(additional.none { it.isType("tool_search_output") })
-        assertEquals(listOf("base_tool"), toolNamesOf("gpt-5.4"))
+        assertEquals(listOf("base_tool"), toolNamesOf("gpt-5.5"))
         assertTrue(toolSearch.none { it.isType("additional_tools") })
         assertTrue(toolSearch.any { it.isType("tool_search_output") })
         assertEquals(listOf("base_tool", "late_tool"), toolNamesOf("gpt-5.3-codex-spark"))

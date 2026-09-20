@@ -26,6 +26,7 @@ import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.api.GoogleRequest.CommonOptions
 import works.resolve.pathfinder.ai.api.GoogleRequest.GoogleThinking
@@ -41,8 +42,12 @@ import works.resolve.pathfinder.ai.transport.TransportRequest
 import works.resolve.pathfinder.ai.transport.TransportResponse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.arr
+import works.resolve.pathfinder.ai.utils.collapseSystemMessages
 import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.getCurrentTools
+import works.resolve.pathfinder.ai.utils.getInitialSystemMessage
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
@@ -125,17 +130,17 @@ class GoogleGenerativeAiApi(
 
     fun stream(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: GoogleOptions
     ): Flow<works.resolve.pathfinder.ai.AssistantMessageEvent> {
         val apiKey = options.apiKey
             ?: return missingApiKeyFlow(model)
 
+        val normalizedContext = collapseSystemMessages(context)
         val body = GoogleRequest.buildGenerateContentRequest(
             model,
-            context,
-            options.toCommon(),
-            gemmaSupported = true
+            normalizedContext,
+            options.toCommon()
         )
 
         val baseUrl = model.baseUrl.trim().trimEnd('/').ifBlank { DEFAULT_BASE_URL }
@@ -172,7 +177,7 @@ class GoogleGenerativeAiApi(
 
     override fun streamSimple(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: SimpleStreamOptions
     ): Flow<works.resolve.pathfinder.ai.AssistantMessageEvent> =
         stream(model, context, buildGoogleOptions(model, context, options))
@@ -524,7 +529,7 @@ internal object GoogleStreamEngine {
  */
 internal fun buildGoogleOptions(
     model: Model,
-    context: Context,
+    context: TranscriptContext,
     options: SimpleStreamOptions
 ): GoogleGenerativeAiApi.GoogleOptions = GoogleGenerativeAiApi.GoogleOptions(
     apiKey = options.apiKey,
@@ -550,8 +555,7 @@ internal fun buildGoogleOptions(
     thinking = GoogleRequest.thinkingForSimpleStream(
         model,
         options.reasoning,
-        options.thinkingBudgets,
-        gemmaSupported = true
+        options.thinkingBudgets
     ),
     telemetryContext = options.telemetryContext
 )
@@ -607,14 +611,15 @@ object GoogleRequest {
 
     fun buildGenerateContentRequest(
         model: Model,
-        context: Context,
-        options: CommonOptions,
-        gemmaSupported: Boolean
+        context: TranscriptContext,
+        options: CommonOptions
     ): JsonObject {
+        val initialSystemMessage = getInitialSystemMessage(context.messages)
+        val currentTools = getCurrentTools(context.messages)
         val supportsStrictMode = GoogleShared.supportsGoogleStrictToolSampling(model.id)
-        val functionCallingMode = if (context.tools.isNotEmpty()) {
+        val functionCallingMode = if (currentTools.isNotEmpty()) {
             GoogleShared.resolveGoogleFunctionCallingMode(
-                context.tools,
+                currentTools,
                 options.toolChoice,
                 supportsStrictMode
             )
@@ -624,13 +629,15 @@ object GoogleRequest {
 
         val request = mutableMapOf<String, kotlinx.serialization.json.JsonElement>()
         request["contents"] = GoogleShared.convertMessages(model, context)
-        if (!context.systemPrompt.isNullOrEmpty()) {
+        val systemInstruction =
+            if (initialSystemMessage != null) getSystemMessageText(initialSystemMessage) else ""
+        if (systemInstruction.isNotEmpty()) {
             request["systemInstruction"] = JsonPrimitive(
-                sanitizeSurrogates(context.systemPrompt)
+                sanitizeSurrogates(systemInstruction)
             )
         }
-        if (context.tools.isNotEmpty()) {
-            request["tools"] = GoogleShared.convertTools(context.tools, false, supportsStrictMode)!!
+        if (currentTools.isNotEmpty()) {
+            request["tools"] = GoogleShared.convertTools(currentTools, false, supportsStrictMode)!!
         }
         if (functionCallingMode != null) {
             request["toolConfig"] = buildJsonObject {
@@ -654,7 +661,7 @@ object GoogleRequest {
             }
 
             model.reasoning && thinking != null && !thinking.enabled ->
-                getDisabledThinkingConfig(model, gemmaSupported)
+                GoogleShared.getDisabledGoogleThinkingConfig(model)
 
             else -> null
         }
@@ -666,44 +673,6 @@ object GoogleRequest {
         return JsonObject(request)
     }
 
-    private fun isGemma4Model(modelId: String): Boolean =
-        Regex("gemma-?4").containsMatchIn(modelId.lowercase())
-
-    private fun isGemini3ProModel(modelId: String): Boolean =
-        Regex("gemini-3(?:\\.\\d+)?-pro").containsMatchIn(modelId.lowercase())
-
-    fun isGemini3FlashModel(modelId: String): Boolean {
-        val id = modelId.lowercase()
-        return Regex("gemini-3(?:\\.\\d+)?-flash").containsMatchIn(id) ||
-            id == "gemini-flash-latest" || id == "gemini-flash-lite-latest"
-    }
-
-    /**
-     * Google docs: Gemini 3.1 Pro cannot disable thinking, and Gemini 3
-     * Flash/Flash-Lite (and Gemma 4, where in scope) do not support full
-     * thinking-off either, so use the lowest supported thinkingLevel without
-     * includeThoughts; Gemini 2.x disables via thinkingBudget = 0.
-     */
-    private fun getDisabledThinkingConfig(model: Model, gemmaSupported: Boolean): JsonObject =
-        when {
-            isGemini3ProModel(model.id) ->
-                buildJsonObject {
-                    put("thinkingLevel", GoogleShared.GoogleApiThinkingLevel.LOW.wire)
-                }
-
-            isGemini3FlashModel(model.id) ->
-                buildJsonObject {
-                    put("thinkingLevel", GoogleShared.GoogleApiThinkingLevel.MINIMAL.wire)
-                }
-
-            gemmaSupported && isGemma4Model(model.id) ->
-                buildJsonObject {
-                    put("thinkingLevel", GoogleShared.GoogleApiThinkingLevel.MINIMAL.wire)
-                }
-
-            else -> buildJsonObject { put("thinkingBudget", 0) }
-        }
-
     /**
      * The provider-neutral reasoning level becomes a Gemini 3 `thinkingLevel`
      * or a Gemini 2.5 `thinkingBudget`. A null reasoning still resolves to
@@ -713,65 +682,27 @@ object GoogleRequest {
     fun thinkingForSimpleStream(
         model: Model,
         reasoning: ThinkingLevel?,
-        budgets: Map<ThinkingLevel, Int>,
-        gemmaSupported: Boolean
+        budgets: Map<ThinkingLevel, Int>
     ): GoogleThinking {
         if (reasoning == null) return GoogleThinking(enabled = false)
 
         val clamped = clampThinkingLevel(model, reasoning.toModelThinkingLevel())
-        val resolvedLevel = GoogleShared.resolveGoogleThinkingLevel(model, clamped)
+        if (clamped == ModelThinkingLevel.OFF) return GoogleThinking(enabled = false)
+        val resolvedLevel = GoogleShared.resolveGoogleThinkingLevel(
+            model,
+            clamped.toThinkingLevelOrNull()!!
+        )
 
-        val useLevels = isGemini3ProModel(model.id) ||
-            isGemini3FlashModel(model.id) ||
-            (gemmaSupported && isGemma4Model(model.id))
-        if (useLevels) {
+        if (GoogleShared.usesGoogleThinkingLevel(model)) {
             return GoogleThinking(
                 enabled = true,
-                level = getThinkingLevel(resolvedLevel, model, gemmaSupported)
+                level = GoogleShared.toGoogleThinkingLevel(resolvedLevel)
             )
         }
         return GoogleThinking(
             enabled = true,
             budgetTokens = getGoogleBudget(model, resolvedLevel, budgets)
         )
-    }
-
-    private fun getThinkingLevel(
-        effort: GoogleShared.ResolvedGoogleThinkingLevel,
-        model: Model,
-        gemmaSupported: Boolean
-    ): GoogleShared.GoogleApiThinkingLevel {
-        if (isGemini3ProModel(model.id)) {
-            return when (effort) {
-                GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL,
-                GoogleShared.ResolvedGoogleThinkingLevel.LOW
-                -> GoogleShared.GoogleApiThinkingLevel.LOW
-
-                else -> GoogleShared.GoogleApiThinkingLevel.HIGH
-            }
-        }
-        if (gemmaSupported && isGemma4Model(model.id)) {
-            return when (effort) {
-                GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL,
-                GoogleShared.ResolvedGoogleThinkingLevel.LOW
-                -> GoogleShared.GoogleApiThinkingLevel.MINIMAL
-
-                else -> GoogleShared.GoogleApiThinkingLevel.HIGH
-            }
-        }
-        return when (effort) {
-            GoogleShared.ResolvedGoogleThinkingLevel.MINIMAL ->
-                GoogleShared.GoogleApiThinkingLevel.MINIMAL
-
-            GoogleShared.ResolvedGoogleThinkingLevel.LOW ->
-                GoogleShared.GoogleApiThinkingLevel.LOW
-
-            GoogleShared.ResolvedGoogleThinkingLevel.MEDIUM ->
-                GoogleShared.GoogleApiThinkingLevel.MEDIUM
-
-            GoogleShared.ResolvedGoogleThinkingLevel.HIGH ->
-                GoogleShared.GoogleApiThinkingLevel.HIGH
-        }
     }
 
     /** Model-specific default budgets; -1 (dynamic) otherwise. */

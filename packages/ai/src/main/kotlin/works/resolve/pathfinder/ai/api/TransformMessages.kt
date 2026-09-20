@@ -102,7 +102,7 @@ internal fun transformMessages(
 
     val transformed = imageAwareMessages.map { msg ->
         when (msg.role) {
-            MessageRole.USER -> msg
+            MessageRole.SYSTEM, MessageRole.USER -> msg
 
             MessageRole.TOOL_RESULT -> {
                 val toolResult = msg as ToolResultMessage
@@ -176,8 +176,12 @@ internal fun transformMessages(
     val result = mutableListOf<Message>()
     var pendingToolCalls = mutableListOf<ToolCall>()
     var existingToolResultIds = mutableSetOf<String>()
+    // System messages are transparent to tool-call accounting: one that lands between a
+    // tool call and its results is held back and emitted after the results (synthetic ones
+    // included), so it never causes a duplicate result for a call that is answered later.
+    val heldSystemMessages = mutableListOf<Message>()
 
-    fun insertSyntheticToolResults(now: Long) {
+    fun closePendingToolCalls(now: Long) {
         for (tc in pendingToolCalls) {
             if (tc.id !in existingToolResultIds) {
                 result.add(
@@ -193,12 +197,14 @@ internal fun transformMessages(
         }
         pendingToolCalls = mutableListOf()
         existingToolResultIds = mutableSetOf()
+        result.addAll(heldSystemMessages)
+        heldSystemMessages.clear()
     }
 
     for (msg in transformed) {
         when (msg.role) {
             MessageRole.ASSISTANT -> {
-                insertSyntheticToolResults(msg.timestamp)
+                closePendingToolCalls(msg.timestamp)
                 val assistantMsg = msg as AssistantMessage
                 if (assistantMsg.stopReason == works.resolve.pathfinder.ai.StopReason.ERROR ||
                     assistantMsg.stopReason == works.resolve.pathfinder.ai.StopReason.ABORTED
@@ -218,13 +224,23 @@ internal fun transformMessages(
                 result.add(msg)
             }
 
+            MessageRole.SYSTEM -> {
+                if (pendingToolCalls.isNotEmpty()) {
+                    heldSystemMessages.add(msg)
+                } else {
+                    result.add(msg)
+                }
+            }
+
             MessageRole.USER -> {
-                insertSyntheticToolResults(msg.timestamp)
+                // A new user turn interrupts tool flow - insert synthetic results for orphaned calls
+                closePendingToolCalls(msg.timestamp)
                 result.add(msg)
             }
         }
     }
-    insertSyntheticToolResults(transformed.lastOrNull()?.timestamp ?: 0L)
+    // If the conversation ends with unresolved tool calls, synthesize results now.
+    closePendingToolCalls(transformed.lastOrNull()?.timestamp ?: 0L)
 
     return result
 }

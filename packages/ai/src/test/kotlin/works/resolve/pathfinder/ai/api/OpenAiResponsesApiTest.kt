@@ -28,17 +28,20 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.OpenAiResponsesCompat
 import works.resolve.pathfinder.ai.SessionAffinityFormat
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.providers.ProviderCatalog
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.testing.sse
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class OpenAiResponsesApiTest {
 
@@ -56,7 +59,7 @@ class OpenAiResponsesApiTest {
         responsesCompat = OpenAiResponsesCompat()
     )
 
-    private val context = Context(messages = listOf(UserMessage.ofText("hi")))
+    private val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
     private fun api(transport: FakeTransport) = OpenAiResponsesApi(
         transport,
@@ -232,7 +235,9 @@ class OpenAiResponsesApiTest {
         val tool = Tool("get_weather", "Get weather", buildJsonObject { put("type", "object") })
         api(transport).stream(
             model,
-            context.copy(tools = listOf(tool)),
+            normalizeContext(
+                Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))
+            ),
             OpenAiResponsesOptions(apiKey = "k", toolChoice = "required")
         ).toList()
         val body = body(transport)
@@ -430,7 +435,12 @@ class OpenAiResponsesApiTest {
         )
         api(transport).stream(
             model.copy(responsesCompat = OpenAiResponsesCompat(supportsStrictMode = true)),
-            context.copy(tools = listOf(ordinary, constrained)),
+            normalizeContext(
+                Context(
+                    messages = listOf(UserMessage.ofText("hi")),
+                    tools = listOf(ordinary, constrained)
+                )
+            ),
             OpenAiResponsesOptions(apiKey = "k")
         ).toList()
         val tools = body(transport)["tools"]!!.jsonArray
@@ -562,14 +572,17 @@ class OpenAiResponsesApiTest {
         transport.enqueueResponse(sse(*completedChunk().toTypedArray()))
         api(transport).streamSimple(
             model,
-            context.copy(
-                tools = listOf(
-                    Tool(
-                        "read",
-                        "Read a file",
-                        buildJsonObject {
-                            put("type", "object")
-                        }
+            normalizeContext(
+                Context(
+                    messages = listOf(UserMessage.ofText("hi")),
+                    tools = listOf(
+                        Tool(
+                            "read",
+                            "Read a file",
+                            buildJsonObject {
+                                put("type", "object")
+                            }
+                        )
                     )
                 )
             ),
@@ -607,31 +620,37 @@ class OpenAiResponsesApiTest {
         }
     )
 
-    /** Upstream makeContext(): base tool call, then a result that loads late_tool. */
-    private fun deferredContext(tools: List<Tool>): Context = Context(
-        messages = listOf(
-            UserMessage.ofText("Hello", 1),
-            AssistantMessage(
-                content = listOf(ToolCall("call_1", "base_tool", "{}")),
-                api = "anthropic-messages",
-                provider = "anthropic",
-                model = "claude-opus-4-6",
-                stopReason = StopReason.TOOL_USE,
-                timestamp = 2
+    /** Upstream makeContext(): base tool, then a system message that adds late_tool. */
+    private fun deferredContext(tools: List<Tool>): TranscriptContext = normalizeContext(
+        Context(
+            messages = listOf(
+                UserMessage.ofText("Hello", 1),
+                AssistantMessage(
+                    content = listOf(ToolCall("call_1", "base_tool", "{}")),
+                    api = "anthropic-messages",
+                    provider = "anthropic",
+                    model = "claude-opus-4-6",
+                    stopReason = StopReason.TOOL_USE,
+                    timestamp = 2
+                ),
+                ToolResultMessage(
+                    toolCallId = "call_1",
+                    toolName = "base_tool",
+                    content = listOf(TextContent("done")),
+                    timestamp = 3
+                ),
+                SystemMessage(
+                    content = emptyList(),
+                    toolsAdded = tools.drop(1),
+                    timestamp = 3
+                ),
+                UserMessage.ofText("again", 4)
             ),
-            ToolResultMessage(
-                toolCallId = "call_1",
-                toolName = "base_tool",
-                content = listOf(TextContent("done")),
-                addedToolNames = listOf("late_tool"),
-                timestamp = 3
-            ),
-            UserMessage.ofText("again", 4)
-        ),
-        tools = tools
+            tools = tools.take(1)
+        )
     )
 
-    private fun params(model: Model, context: Context): JsonObject = buildParams(
+    private fun params(model: Model, context: TranscriptContext): JsonObject = buildParams(
         model,
         context,
         OpenAiResponsesOptions(apiKey = "k"),
@@ -662,34 +681,50 @@ class OpenAiResponsesApiTest {
     @Test
     fun `additional_tools marker is preserved after the loaded tool is used`() {
         val model = realAsset().getModel("openai", "gpt-5.4")!!
-        val messages = deferredContext(
-            listOf(makeTool("base_tool"), makeTool("late_tool"))
-        ).messages.toMutableList()
-        messages.addAll(
-            3,
-            listOf(
-                AssistantMessage(
-                    content = listOf(ToolCall("call_late|fc_late", "late_tool", "{}")),
-                    api = "openai-responses",
-                    provider = "openai",
-                    model = "gpt-5.4",
-                    stopReason = StopReason.TOOL_USE,
-                    timestamp = 3
+        val baseTool = makeTool("base_tool")
+        val lateTool = makeTool("late_tool")
+        val context = normalizeContext(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("Hello", 1),
+                    AssistantMessage(
+                        content = listOf(ToolCall("call_1", "base_tool", "{}")),
+                        api = "anthropic-messages",
+                        provider = "anthropic",
+                        model = "claude-opus-4-6",
+                        stopReason = StopReason.TOOL_USE,
+                        timestamp = 2
+                    ),
+                    ToolResultMessage(
+                        toolCallId = "call_1",
+                        toolName = "base_tool",
+                        content = listOf(TextContent("done")),
+                        timestamp = 3
+                    ),
+                    SystemMessage(
+                        content = emptyList(),
+                        toolsAdded = listOf(lateTool),
+                        timestamp = 3
+                    ),
+                    AssistantMessage(
+                        content = listOf(ToolCall("call_late|fc_late", "late_tool", "{}")),
+                        api = "openai-responses",
+                        provider = "openai",
+                        model = "gpt-5.4",
+                        stopReason = StopReason.TOOL_USE,
+                        timestamp = 3
+                    ),
+                    ToolResultMessage(
+                        toolCallId = "call_late|fc_late",
+                        toolName = "late_tool",
+                        content = listOf(TextContent("done")),
+                        timestamp = 3
+                    ),
+                    UserMessage.ofText("again", 4)
                 ),
-                ToolResultMessage(
-                    toolCallId = "call_late|fc_late",
-                    toolName = "late_tool",
-                    content = listOf(TextContent("done")),
-                    addedToolNames = listOf("late_tool"),
-                    timestamp = 3
-                )
+                tools = listOf(baseTool)
             )
         )
-        val context =
-            Context(
-                messages = messages,
-                tools = listOf(makeTool("base_tool"), makeTool("late_tool"))
-            )
         val json = params(model, context)
         assertEquals(listOf("base_tool"), toolNames(json))
         val input = json["input"]!!.jsonArray.map { it.jsonObject }
@@ -705,7 +740,10 @@ class OpenAiResponsesApiTest {
     fun `falls back to client tool search when additional_tools is unsupported`() {
         val model = this.model.copy(
             provider = "openai-proxy",
-            responsesCompat = OpenAiResponsesCompat(supportsToolSearch = true)
+            responsesCompat = OpenAiResponsesCompat(
+                supportsMidConvoSystemMessages = true,
+                supportsToolSearch = true
+            )
         )
         val json =
             params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))

@@ -8,7 +8,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.ContentType
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.MessageRole
 import works.resolve.pathfinder.ai.Model
@@ -16,15 +15,22 @@ import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
+import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.clampThinkingLevel
+import works.resolve.pathfinder.ai.toModelThinkingLevel
+import works.resolve.pathfinder.ai.toThinkingLevelOrNull
 import works.resolve.pathfinder.ai.utils.arr
+import works.resolve.pathfinder.ai.utils.collapseSystemMessages
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strictBoolean
+import works.resolve.pathfinder.ai.utils.withoutInitialSystemMessage
 
 /**
  * Shared logic for the Google Generative AI adapter.
@@ -46,22 +52,24 @@ object GoogleShared {
         HIGH("HIGH")
     }
 
-    /** A [ModelThinkingLevel] without the xhigh/max variants. */
+    /** A [ThinkingLevel] without the xhigh/max variants. */
     enum class ResolvedGoogleThinkingLevel { MINIMAL, LOW, MEDIUM, HIGH }
 
-    const val FUNCTION_CALLING_MODE_AUTO = "AUTO"
-    const val FUNCTION_CALLING_MODE_NONE = "NONE"
-    const val FUNCTION_CALLING_MODE_ANY = "ANY"
-    const val FUNCTION_CALLING_MODE_VALIDATED = "VALIDATED"
+    private val GOOGLE_SDK_THINKING_LEVEL_MAP = mapOf(
+        GoogleApiThinkingLevel.THINKING_LEVEL_UNSPECIFIED to
+            GoogleApiThinkingLevel.THINKING_LEVEL_UNSPECIFIED,
+        GoogleApiThinkingLevel.MINIMAL to GoogleApiThinkingLevel.MINIMAL,
+        GoogleApiThinkingLevel.LOW to GoogleApiThinkingLevel.LOW,
+        GoogleApiThinkingLevel.MEDIUM to GoogleApiThinkingLevel.MEDIUM,
+        GoogleApiThinkingLevel.HIGH to GoogleApiThinkingLevel.HIGH
+    )
 
-    /** Resolves to a standard Google level; "off" maps to "high" (upstream behavior). */
+    /** Resolve a supported pi level or model-specific Google mapping to a standard Google level. */
     fun resolveGoogleThinkingLevel(
         model: Model,
-        level: ModelThinkingLevel
+        level: ThinkingLevel
     ): ResolvedGoogleThinkingLevel {
-        if (level == ModelThinkingLevel.OFF) return ResolvedGoogleThinkingLevel.HIGH
-
-        val mapped = model.thinkingLevelMap?.forLevel(level)
+        val mapped = model.thinkingLevelMap?.forLevel(level.toModelThinkingLevel())
         val resolvedLevel = mapped?.lowercase() ?: level.name.lowercase()
         return when (resolvedLevel) {
             "minimal" -> ResolvedGoogleThinkingLevel.MINIMAL
@@ -78,6 +86,45 @@ object GoogleShared {
             )
         }
     }
+
+    /**
+     * Whether this model uses Gemini's discrete `thinkingLevel` control instead of
+     * the token-based `thinkingBudget` control. Supported levels come from the
+     * model's `thinkingLevelMap`; this only selects the Google wire format.
+     */
+    fun usesGoogleThinkingLevel(model: Model): Boolean {
+        val id = model.id.lowercase()
+        return Regex("gemini-3(?:\\.\\d+)?-(?:pro|flash)").containsMatchIn(id) ||
+            id == "gemini-flash-latest" ||
+            id == "gemini-flash-lite-latest" ||
+            Regex("gemma-?4").containsMatchIn(id)
+    }
+
+    fun toGoogleThinkingLevel(level: ResolvedGoogleThinkingLevel): GoogleApiThinkingLevel =
+        when (level) {
+            ResolvedGoogleThinkingLevel.MINIMAL -> GoogleApiThinkingLevel.MINIMAL
+            ResolvedGoogleThinkingLevel.LOW -> GoogleApiThinkingLevel.LOW
+            ResolvedGoogleThinkingLevel.MEDIUM -> GoogleApiThinkingLevel.MEDIUM
+            ResolvedGoogleThinkingLevel.HIGH -> GoogleApiThinkingLevel.HIGH
+        }
+
+    fun toGoogleSdkThinkingLevel(level: GoogleApiThinkingLevel): GoogleApiThinkingLevel =
+        GOOGLE_SDK_THINKING_LEVEL_MAP.getValue(level)
+
+    fun getDisabledGoogleThinkingConfig(model: Model): JsonObject {
+        if (!usesGoogleThinkingLevel(model)) return buildJsonObject { put("thinkingBudget", 0) }
+
+        val fallback = clampThinkingLevel(model, ModelThinkingLevel.OFF)
+        if (fallback == ModelThinkingLevel.OFF) return buildJsonObject { put("thinkingBudget", 0) }
+
+        val resolvedLevel = resolveGoogleThinkingLevel(model, fallback.toThinkingLevelOrNull()!!)
+        val apiLevel = toGoogleThinkingLevel(resolvedLevel)
+        return buildJsonObject { put("thinkingLevel", toGoogleSdkThinkingLevel(apiLevel).wire) }
+    }
+    const val FUNCTION_CALLING_MODE_AUTO = "AUTO"
+    const val FUNCTION_CALLING_MODE_NONE = "NONE"
+    const val FUNCTION_CALLING_MODE_ANY = "ANY"
+    const val FUNCTION_CALLING_MODE_VALIDATED = "VALIDATED"
 
     /**
      * Whether a Gemini part is thinking content: `thought: true` is the
@@ -138,7 +185,10 @@ object GoogleShared {
     }
 
     /** Converts internal messages to Gemini `Content[]` wire JSON via [transformMessages]. */
-    fun convertMessages(model: Model, context: Context): JsonArray {
+    fun convertMessages(model: Model, context: TranscriptContext): JsonArray {
+        // Gemini has no mid-conversation system messages; the leading prompt is sent as
+        // systemInstruction.
+        val conversation = withoutInitialSystemMessage(collapseSystemMessages(context).messages)
         val contents = mutableListOf<JsonObject>()
         val normalizeToolCallId = { id: String, _: AssistantMessage ->
             if (!requiresToolCallId(model.id)) {
@@ -148,7 +198,7 @@ object GoogleShared {
             }
         }
 
-        for (msg in transformMessages(context.messages, model, normalizeToolCallId)) {
+        for (msg in transformMessages(conversation, model, normalizeToolCallId)) {
             when (msg.role) {
                 MessageRole.USER -> convertUserMessage(msg as UserMessage, model)?.let {
                     contents.add(it)
@@ -357,6 +407,8 @@ object GoogleShared {
                         )
                     }
                 }
+
+                MessageRole.SYSTEM -> Unit
             }
         }
 

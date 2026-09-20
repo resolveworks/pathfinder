@@ -12,6 +12,7 @@ import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.StrictJsonSchemaMode
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.UserMessage
+import works.resolve.pathfinder.ai.utils.normalizeContext
 import works.resolve.pathfinder.ai.utils.shortHash
 
 class MistralConversationsPayloadTest {
@@ -75,9 +76,11 @@ class MistralConversationsPayloadTest {
                 StrictJsonSchemaMode.REQUIRE
             )
         )
-        val context = Context(
-            messages = listOf(UserMessage.ofText("Hi")),
-            tools = listOf(tool)
+        val context = normalizeContext(
+            Context(
+                messages = listOf(UserMessage.ofText("Hi")),
+                tools = listOf(tool)
+            )
         )
 
         val body = MistralConversationsPayload.buildRequestBody(
@@ -112,7 +115,10 @@ class MistralConversationsPayloadTest {
                 """{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}"""
             )
         )
-        val context = Context(messages = listOf(UserMessage.ofText("Hi")), tools = listOf(tool))
+        val context =
+            normalizeContext(
+                Context(messages = listOf(UserMessage.ofText("Hi")), tools = listOf(tool))
+            )
         val body = MistralConversationsPayload.buildRequestBody(
             model,
             context,

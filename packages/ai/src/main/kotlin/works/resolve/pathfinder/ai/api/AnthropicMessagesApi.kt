@@ -18,7 +18,6 @@ import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ChatApi
 import works.resolve.pathfinder.ai.Content
 import works.resolve.pathfinder.ai.ContentType
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
@@ -29,11 +28,13 @@ import works.resolve.pathfinder.ai.ProviderStreamException
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.StreamOptions
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.anthropicCompatOf
 import works.resolve.pathfinder.ai.calculateCost
@@ -51,15 +52,21 @@ import works.resolve.pathfinder.ai.utils.ProviderRetry
 import works.resolve.pathfinder.ai.utils.appendAssistantMessageDiagnostic
 import works.resolve.pathfinder.ai.utils.clampMaxTokensToContext
 import works.resolve.pathfinder.ai.utils.formatProviderError
+import works.resolve.pathfinder.ai.utils.getCurrentTools
+import works.resolve.pathfinder.ai.utils.getDeclaredTools
+import works.resolve.pathfinder.ai.utils.getInitialSystemMessage
 import works.resolve.pathfinder.ai.utils.getPiUserAgent
+import works.resolve.pathfinder.ai.utils.getSystemMessageText
+import works.resolve.pathfinder.ai.utils.hasToolRedefinitions
 import works.resolve.pathfinder.ai.utils.int
 import works.resolve.pathfinder.ai.utils.lenientJson
 import works.resolve.pathfinder.ai.utils.normalizeProviderError
 import works.resolve.pathfinder.ai.utils.obj
 import works.resolve.pathfinder.ai.utils.optionsToString
 import works.resolve.pathfinder.ai.utils.redactedSecret
+import works.resolve.pathfinder.ai.utils.renderSystemMessageUpdate
+import works.resolve.pathfinder.ai.utils.resolveTranscript
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
-import works.resolve.pathfinder.ai.utils.splitDeferredTools
 import works.resolve.pathfinder.ai.utils.str
 import works.resolve.pathfinder.ai.utils.strOrNull
 import works.resolve.pathfinder.telemetry.TelemetryContext
@@ -100,6 +107,28 @@ internal const val INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14"
 internal const val SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-07-01"
 internal const val MID_CONVERSATION_OUTPUT_CONFIG_BETA = "mid-conversation-output-config-2026-07-01"
 internal const val THINKING_BINDING_CONTROLS_BETA = "thinking-binding-controls-2026-08-01"
+internal const val MID_CONVERSATION_TOOL_CHANGES_BETA = "mid-conversation-tool-changes-2026-07-01"
+
+/**
+ * Stable deferred tool declared whenever native tool changes are in use. Anthropic adds
+ * hidden prompt scaffolding as soon as any tool has `defer_loading`; declaring this
+ * placeholder from the first request keeps that scaffolding in the cached prefix, so the
+ * first real late tool does not invalidate the cache. It is never activated and the model
+ * cannot see it.
+ */
+private val DEFERRED_TOOL_PLACEHOLDER: JsonObject = buildJsonObject {
+    put("name", "__pi_deferred_placeholder__")
+    put("description", "Reserved placeholder. Never available. Never call this.")
+    put(
+        "input_schema",
+        buildJsonObject {
+            put("type", "object")
+            put("properties", JsonObject(emptyMap()))
+            put("required", JsonArray(emptyList()))
+        }
+    )
+    put("defer_loading", true)
+}
 
 internal fun toClaudeCodeName(name: String): String = CC_TOOL_LOOKUP[name.lowercase()] ?: name
 
@@ -250,10 +279,13 @@ class AnthropicMessagesApi(
 
     fun stream(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: AnthropicMessagesOptions = AnthropicMessagesOptions()
     ): Flow<AssistantMessageEvent> = flow {
         val startedAtMs = clock.now().toEpochMilliseconds()
+        val normalizedContext =
+            resolveTranscript(context, anthropicCompatOf(model).supportsMidConvoSystemMessages)
+        val currentTools = getCurrentTools(normalizedContext.messages)
         // Copilot is never OAuth: its Bearer-auth branch is checked first,
         // as in pi's createClient.
         val isOAuth =
@@ -271,7 +303,7 @@ class AnthropicMessagesApi(
             val retention = resolveCacheRetention(options.cacheRetention, options.env)
             val cacheSessionId = if (retention == CacheRetention.NONE) null else options.sessionId
 
-            var params = buildRequestBody(model, context, isOAuth, options)
+            var params = buildRequestBody(model, normalizedContext, isOAuth, options)
             options.onPayload?.let { hook ->
                 hook(params, model)?.let { next ->
                     // A replacement payload must not turn off streaming.
@@ -293,7 +325,7 @@ class AnthropicMessagesApi(
                 model,
                 isOAuth,
                 options,
-                context,
+                normalizedContext,
                 cacheSessionId,
                 betas
             )
@@ -321,7 +353,9 @@ class AnthropicMessagesApi(
             emit(AssistantMessageEvent.Start(state.snapshot()))
 
             response.events.collect { event ->
-                processSseEvent(event, model, context, state)?.forEach { emit(it) }
+                processSseEvent(event, model, normalizedContext, currentTools, state)?.forEach {
+                    emit(it)
+                }
             }
 
             if (state.sawMessageStart && !state.sawMessageStop) {
@@ -357,7 +391,7 @@ class AnthropicMessagesApi(
      */
     override fun streamSimple(
         model: Model,
-        context: Context,
+        context: TranscriptContext,
         options: SimpleStreamOptions
     ): Flow<AssistantMessageEvent> = flow {
         try {
@@ -399,7 +433,8 @@ class AnthropicMessagesApi(
     private fun processSseEvent(
         event: works.resolve.pathfinder.ai.transport.SseEvent,
         model: Model,
-        context: Context,
+        context: TranscriptContext,
+        currentTools: List<Tool>,
         state: AnthropicStreamState
     ): List<AssistantMessageEvent> {
         if (event.name == "error") {
@@ -423,7 +458,7 @@ class AnthropicMessagesApi(
 
         return when (name) {
             "message_start" -> state.onMessageStart(parsed, model)
-            "content_block_start" -> state.onContentBlockStart(parsed, context)
+            "content_block_start" -> state.onContentBlockStart(parsed, currentTools)
             "content_block_delta" -> state.onContentBlockDelta(parsed)
             "content_block_stop" -> state.onContentBlockStop(parsed)
             "message_delta" -> state.onMessageDelta(parsed, model)
@@ -567,7 +602,7 @@ internal fun mapToolChoice(choice: works.resolve.pathfinder.ai.ToolChoice?): Ant
 
 internal fun buildBaseOptions(
     model: Model,
-    context: Context,
+    context: TranscriptContext,
     options: works.resolve.pathfinder.ai.SimpleStreamOptions
 ): AnthropicMessagesOptions = AnthropicMessagesOptions(
     apiKey = options.apiKey,
@@ -591,26 +626,6 @@ internal fun isOAuthToken(apiKey: String): Boolean = apiKey.contains("sk-ant-oat
 internal const val ANTHROPIC_VERSION = "2023-06-01"
 
 /**
- * Default for [AnthropicMessagesCompat.supportsToolReferences]: first-party
- * Anthropic models except Haiku (rejects client-side `tool_reference`
- * blocks) and models that predate tool search (Claude 3.x, Opus/Sonnet 4.0,
- * Opus 4.1).
- */
-internal fun defaultSupportsToolReferences(model: Model): Boolean {
-    if (model.provider != "anthropic" || model.id.contains("haiku")) return false
-    val version =
-        Regex("^claude-(?:opus|sonnet|fable)-(\\d+)(?:-(\\d+))?(?:-|$)").find(model.id)
-            ?: return false
-    val major = version.groupValues[1].toInt()
-    // A long "minor" (a date suffix, >= 8 chars) is not a version minor.
-    val minor = version.groupValues[2].takeIf { it.isNotEmpty() && it.length < 8 }?.toInt() ?: 0
-    return major > 4 || (major == 4 && minor >= 5)
-}
-
-internal fun supportsToolReferences(model: Model): Boolean =
-    anthropicCompatOf(model).supportsToolReferences ?: defaultSupportsToolReferences(model)
-
-/**
  * Composes the `anthropic-beta` feature list. An explicit `anthropic-beta`
  * entry in model or options headers wins: a string replaces the composed
  * list (split, trimmed, deduped), an explicit null suppresses betas entirely.
@@ -626,8 +641,9 @@ internal fun supportsToolReferences(model: Model): Boolean =
  */
 internal fun getBetaFeatures(
     model: Model,
-    context: Context,
+    context: TranscriptContext,
     isOAuthToken: Boolean,
+    nativeToolChanges: Boolean,
     options: AnthropicMessagesOptions?
 ): List<String> {
     var configuredFeatures: String? = null
@@ -651,7 +667,7 @@ internal fun getBetaFeatures(
         features.add("claude-code-20250219")
         features.add("oauth-2025-04-20")
     }
-    if (context.tools.isNotEmpty() && !compat.supportsEagerToolInputStreaming) {
+    if (getCurrentTools(context.messages).isNotEmpty() && !compat.supportsEagerToolInputStreaming) {
         features.add(FINE_GRAINED_TOOL_STREAMING_BETA)
     }
     if (
@@ -669,6 +685,7 @@ internal fun getBetaFeatures(
         features.add(MID_CONVERSATION_OUTPUT_CONFIG_BETA)
         features.add(THINKING_BINDING_CONTROLS_BETA)
     }
+    if (nativeToolChanges) features.add(MID_CONVERSATION_TOOL_CHANGES_BETA)
     return features.distinct()
 }
 
@@ -686,7 +703,7 @@ private fun buildHeaders(
     model: Model,
     isOAuth: Boolean,
     options: AnthropicMessagesOptions,
-    context: Context,
+    context: TranscriptContext,
     cacheSessionId: String?,
     betas: List<String>
 ): Pair<Map<String, String>, String?> {
@@ -730,7 +747,15 @@ private fun buildHeaders(
 
     val sessionAffinity: Map<String, String?> =
         if (cacheSessionId != null && compat.sendSessionAffinityHeaders) {
-            mapOf("x-session-affinity" to cacheSessionId)
+            val header =
+                if (compat.sessionAffinityFormat ==
+                    works.resolve.pathfinder.ai.SessionAffinityFormat.OPENROUTER
+                ) {
+                    "x-session-id"
+                } else {
+                    "x-session-affinity"
+                }
+            mapOf(header to cacheSessionId)
         } else {
             emptyMap()
         }
@@ -761,41 +786,43 @@ internal const val CLAUDE_CODE_IDENTITY =
 
 internal fun buildRequestBody(
     model: Model,
-    context: Context,
+    context: TranscriptContext,
     isOAuthToken: Boolean,
     options: AnthropicMessagesOptions
 ): JsonObject {
     val cacheControl = getCacheControl(model, options)
     val compat = anthropicCompatOf(model)
+    val initialSystemMessage = getInitialSystemMessage(context.messages)
+    val initialSystemText =
+        if (initialSystemMessage != null) getSystemMessageText(initialSystemMessage) else ""
     val transformed =
         transformMessages(context.messages, model) { id, _ -> normalizeToolCallId(id) }
-    val normalizeToolName: (
-        String
-    ) -> String = if (isOAuthToken) ::toClaudeCodeName else { name -> name }
-    val toolPlacement = splitDeferredTools(
-        context.copy(messages = transformed),
-        supportsToolReferences(model),
-        normalizeToolName
-    )
-    var immediateTools = toolPlacement.immediate
-    var deferredTools = toolPlacement.deferred.values.toList()
-    if (immediateTools.isEmpty() && deferredTools.isNotEmpty()) {
-        immediateTools = deferredTools
-        deferredTools = emptyList()
+    val conversationMessages = if (initialSystemMessage !=
+        null
+    ) {
+        transformed.drop(1)
+    } else {
+        transformed
     }
-    val deferredToolNames = deferredTools.map { normalizeToolName(it.name) }.toSet()
+    val initialTools = initialSystemMessage?.toolsAdded.orEmpty()
+    // Native tool changes reference tools by name, so a redefined name cannot be expressed,
+    // and Anthropic rejects a tool list where every tool is deferred, so there must be an
+    // initial active tool to anchor the deferred ones.
+    val nativeToolChanges = compat.supportsMidConvoSystemMessages &&
+        compat.supportsMidConvoToolChanges &&
+        initialTools.isNotEmpty() &&
+        !hasToolRedefinitions(context.messages)
     val managed = compat.supportsMidConvoEffort
     val converted = convertMessages(
-        transformed,
+        conversationMessages,
         isOAuthToken,
         cacheControl,
         compat.allowEmptySignature,
-        deferredToolNames,
-        normalizeToolName,
-        if (managed) model.provider else null
+        if (managed) model.provider else null,
+        nativeToolChanges
     )
     val activeEffort = options.effort ?: "high"
-    val betaFeatures = getBetaFeatures(model, context, isOAuthToken, options)
+    val betaFeatures = getBetaFeatures(model, context, isOAuthToken, nativeToolChanges, options)
 
     val body = mutableMapOf<String, JsonElement>()
     body["model"] = JsonPrimitive(model.id)
@@ -814,11 +841,11 @@ internal fun buildRequestBody(
     val systemBlocks = mutableListOf<JsonObject>()
     if (isOAuthToken) {
         systemBlocks.add(textBlock(CLAUDE_CODE_IDENTITY, cacheControl))
-        if (context.systemPrompt != null) {
-            systemBlocks.add(textBlock(context.systemPrompt, cacheControl))
+        if (initialSystemText.isNotEmpty()) {
+            systemBlocks.add(textBlock(initialSystemText, cacheControl))
         }
-    } else if (context.systemPrompt != null) {
-        systemBlocks.add(textBlock(context.systemPrompt, cacheControl))
+    } else if (initialSystemText.isNotEmpty()) {
+        systemBlocks.add(textBlock(initialSystemText, cacheControl))
     }
     if (systemBlocks.isNotEmpty()) body["system"] = JsonArray(systemBlocks)
 
@@ -832,23 +859,44 @@ internal fun buildRequestBody(
         body["temperature"] = JsonPrimitive(options.temperature)
     }
 
-    if (immediateTools.isNotEmpty() || deferredTools.isNotEmpty()) {
+    val toolCacheControl = if (compat.supportsCacheControlOnTools) cacheControl else null
+    if (nativeToolChanges) {
+        // Initial tools stay active with the cache breakpoint on the last one. Every later
+        // declaration is deferred and only surfaced by its `tool_addition` block; removed
+        // tools stay declared and are withdrawn by `tool_removal`. The request-level list
+        // therefore only grows, keeping the cached prefix intact across tool changes.
+        val initialNames = initialTools.map { it.name }.toSet()
+        val laterTools = getDeclaredTools(context.messages).filter { it.name !in initialNames }
         body["tools"] = JsonArray(
             convertTools(
-                immediateTools,
+                initialTools,
                 isOAuthToken,
                 compat.supportsEagerToolInputStreaming,
                 compat.supportsStrictTools,
-                if (compat.supportsCacheControlOnTools) cacheControl else null
-            ) + convertTools(
-                deferredTools,
+                toolCacheControl
+            ) + DEFERRED_TOOL_PLACEHOLDER + convertTools(
+                laterTools,
                 isOAuthToken,
                 compat.supportsEagerToolInputStreaming,
                 compat.supportsStrictTools,
-                cacheControl = null,
-                deferLoading = true
-            )
+                null
+            ).map { tool ->
+                JsonObject(tool.toMutableMap().apply { put("defer_loading", JsonPrimitive(true)) })
+            }
         )
+    } else {
+        val tools = getCurrentTools(context.messages)
+        if (tools.isNotEmpty()) {
+            body["tools"] = JsonArray(
+                convertTools(
+                    tools,
+                    isOAuthToken,
+                    compat.supportsEagerToolInputStreaming,
+                    compat.supportsStrictTools,
+                    toolCacheControl
+                )
+            )
+        }
     }
 
     // Managed effort models always use adaptive thinking so prefix mismatches
@@ -985,45 +1033,17 @@ private fun insertThinkingLevelMessages(
  * the displaced content returns as sibling blocks to append after the whole
  * consecutive tool-result run.
  */
-private fun convertToolResult(
-    msg: ToolResultMessage,
-    isOAuthToken: Boolean,
-    deferredToolNames: Set<String>,
-    loadedToolNames: MutableSet<String>,
-    normalizeToolName: (String) -> String
-): Pair<JsonObject, List<JsonObject>> {
-    val references = mutableListOf<JsonObject>()
-    for (name in msg.addedToolNames) {
-        val normalizedName = normalizeToolName(name)
-        if (normalizedName !in deferredToolNames || normalizedName in loadedToolNames) continue
-        loadedToolNames.add(normalizedName)
-        references.add(
-            buildJsonObject {
-                put("type", "tool_reference")
-                put("tool_name", if (isOAuthToken) toClaudeCodeName(name) else name)
-            }
-        )
-    }
-    val convertedContent = convertContentBlocks(msg.content)
-    val toolResult = buildJsonObject {
-        put("type", "tool_result")
-        put("tool_use_id", msg.toolCallId)
-        put(
-            "content",
-            when {
-                references.isNotEmpty() -> JsonArray(references)
-                convertedContent is JsonArray -> convertedContent
-                else -> JsonPrimitive(convertedContent.toString())
-            }
-        )
-        put("is_error", msg.isError)
-    }
-    val siblingContent: List<JsonObject> = when {
-        references.isEmpty() -> emptyList()
-        convertedContent is JsonArray -> convertedContent.toList().filterIsInstance<JsonObject>()
-        else -> listOf(textBlock(convertedContent.toString()))
-    }
-    return toolResult to siblingContent
+private fun convertToolResult(msg: ToolResultMessage): JsonObject = buildJsonObject {
+    put("type", "tool_result")
+    put("tool_use_id", msg.toolCallId)
+    put(
+        "content",
+        when (val converted = convertContentBlocks(msg.content)) {
+            is JsonArray -> converted
+            else -> JsonPrimitive(converted.toString())
+        }
+    )
+    put("is_error", msg.isError)
 }
 
 internal fun convertMessages(
@@ -1031,18 +1051,51 @@ internal fun convertMessages(
     isOAuthToken: Boolean,
     cacheControl: JsonObject?,
     allowEmptySignature: Boolean,
-    deferredToolNames: Set<String> = emptySet(),
-    normalizeToolName: (String) -> String = { it },
-    managedProvider: String? = null
+    managedProvider: String? = null,
+    nativeToolChanges: Boolean = false
 ): ConvertedAnthropicMessages {
     val params = mutableListOf<JsonObject>()
     val assistantLevels = mutableMapOf<Int, String>()
-    val loadedToolNames = mutableSetOf<String>()
+    // Later system messages are held back and emitted directly before the next assistant
+    // message (or at the end of the transcript). Anthropic requires `tool_result` blocks to
+    // immediately follow their `tool_use`, so a system message between them is rejected; this
+    // also mirrors where the managed-effort system messages are inserted. As a result an
+    // update placed before a user message in the transcript lands after it on the wire.
+    val pendingSystemMessages = mutableListOf<JsonObject>()
+    fun flushPendingSystemMessages() {
+        params.addAll(pendingSystemMessages)
+        pendingSystemMessages.clear()
+    }
 
     var i = 0
     while (i < transformedMessages.size) {
         val msg = transformedMessages[i]
         when (msg.role) {
+            works.resolve.pathfinder.ai.MessageRole.SYSTEM -> {
+                // Later system messages only reach this point when the model accepts them
+                // natively; otherwise the transcript was collapsed before conversion.
+                val system = msg as SystemMessage
+                val text = renderSystemMessageUpdate(system)
+                val blocks = mutableListOf<JsonObject>()
+                if (text.isNotEmpty()) blocks.add(textBlock(text))
+                if (nativeToolChanges) {
+                    for (tool in system.toolsRemoved.orEmpty()) {
+                        blocks.add(toolChangeBlock("tool_removal", tool.name, isOAuthToken))
+                    }
+                    for (tool in system.toolsAdded.orEmpty()) {
+                        blocks.add(toolChangeBlock("tool_addition", tool.name, isOAuthToken))
+                    }
+                }
+                if (blocks.isNotEmpty()) {
+                    pendingSystemMessages.add(
+                        buildJsonObject {
+                            put("role", "system")
+                            put("content", JsonArray(blocks))
+                        }
+                    )
+                }
+            }
+
             works.resolve.pathfinder.ai.MessageRole.USER -> {
                 val userContent = (msg as works.resolve.pathfinder.ai.UserMessage).content
                 val blocks = userContent.mapNotNull { block ->
@@ -1066,6 +1119,7 @@ internal fun convertMessages(
             }
 
             works.resolve.pathfinder.ai.MessageRole.ASSISTANT -> {
+                flushPendingSystemMessages()
                 val assistant = msg as works.resolve.pathfinder.ai.AssistantMessage
                 val blocks = mutableListOf<JsonObject>()
                 for (block in assistant.content) {
@@ -1154,29 +1208,19 @@ internal fun convertMessages(
             works.resolve.pathfinder.ai.MessageRole.TOOL_RESULT -> {
                 // Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint.
                 val toolResults = mutableListOf<JsonObject>()
-                val siblingContent = mutableListOf<JsonObject>()
                 var j = i
                 while (j < transformedMessages.size &&
                     transformedMessages[j].role ==
                     works.resolve.pathfinder.ai.MessageRole.TOOL_RESULT
                 ) {
-                    val (toolResult, siblings) = convertToolResult(
-                        transformedMessages[j] as ToolResultMessage,
-                        isOAuthToken,
-                        deferredToolNames,
-                        loadedToolNames,
-                        normalizeToolName
-                    )
-                    toolResults.add(toolResult)
-                    siblingContent.addAll(siblings)
+                    toolResults.add(convertToolResult(transformedMessages[j] as ToolResultMessage))
                     j++
                 }
                 i = j - 1
-                // Displaced reference-bearing content must follow every tool_result block.
                 params.add(
                     buildJsonObject {
                         put("role", "user")
-                        put("content", JsonArray(toolResults + siblingContent))
+                        put("content", JsonArray(toolResults))
                     }
                 )
             }
@@ -1184,18 +1228,24 @@ internal fun convertMessages(
         i++
     }
 
-    // Prompt caching: the marker on the last user message caches the
+    flushPendingSystemMessages()
+
+    // Prompt caching: the marker on the last user or system message caches the
     // conversation history.
     if (cacheControl != null && params.isNotEmpty()) {
         val lastMessage = params.last()
-        if (lastMessage.str("role") == "user") {
+        val lastRole = lastMessage.str("role")
+        if (lastRole == "user" || lastRole == "system") {
             val content = lastMessage["content"]
             val contentValue = when {
                 content is JsonArray && content.isNotEmpty() -> {
                     val lastBlock = content.last() as? JsonObject
                     val type = lastBlock.str("type")
                     if (lastBlock != null &&
-                        (type == "text" || type == "image" || type == "tool_result")
+                        (
+                            type == "text" || type == "image" || type == "tool_result" ||
+                                type == "tool_addition" || type == "tool_removal"
+                            )
                     ) {
                         JsonArray(
                             content.dropLast(1) + lastBlock.toMutableMap().apply {
@@ -1214,7 +1264,7 @@ internal fun convertMessages(
                 else -> content ?: JsonNull
             }
             params[params.size - 1] = buildJsonObject {
-                put("role", "user")
+                put("role", lastRole)
                 put("content", contentValue)
             }
         }
@@ -1222,6 +1272,19 @@ internal fun convertMessages(
 
     return ConvertedAnthropicMessages(params, assistantLevels)
 }
+
+/** A mid-conversation `tool_addition`/`tool_removal` block referencing a tool by name. */
+private fun toolChangeBlock(type: String, toolName: String, isOAuthToken: Boolean): JsonObject =
+    buildJsonObject {
+        put("type", type)
+        put(
+            "tool",
+            buildJsonObject {
+                put("type", "tool_reference")
+                put("name", if (isOAuthToken) toClaudeCodeName(toolName) else toolName)
+            }
+        )
+    }
 
 private fun parseOrEmptyObject(arguments: String): JsonObject {
     if (arguments.isBlank()) return JsonObject(emptyMap())
@@ -1238,8 +1301,7 @@ internal fun convertTools(
     isOAuthToken: Boolean,
     supportsEagerToolInputStreaming: Boolean,
     supportsStrictTools: Boolean,
-    cacheControl: JsonObject?,
-    deferLoading: Boolean = false
+    cacheControl: JsonObject?
 ): List<JsonObject> = tools.mapIndexed { index, tool ->
     val strict = resolveJsonSchemaStrictSampling(tool, supportsStrictTools)
     val parameters = getJsonSchemaToolParameters(tool, strict)
@@ -1263,7 +1325,6 @@ internal fun convertTools(
         if (supportsEagerToolInputStreaming) put("eager_input_streaming", true)
         if (strict == true) put("strict", true)
         put("input_schema", inputSchema)
-        if (deferLoading) put("defer_loading", true)
         if (cacheControl != null && index == tools.size - 1) put("cache_control", cacheControl)
     }
 }
@@ -1367,7 +1428,10 @@ internal class AnthropicStreamState(
         return emptyList()
     }
 
-    fun onContentBlockStart(event: JsonObject, context: Context): List<AssistantMessageEvent> {
+    fun onContentBlockStart(
+        event: JsonObject,
+        tools: List<works.resolve.pathfinder.ai.Tool>
+    ): List<AssistantMessageEvent> {
         val index = event.int("index") ?: return emptyList()
         val contentBlock = event.obj("content_block") ?: return emptyList()
         val type = contentBlock.str("type")
@@ -1389,7 +1453,7 @@ internal class AnthropicStreamState(
             "tool_use" -> Tool(index).apply {
                 id = contentBlock["id"].strOrNull() ?: ""
                 var blockName = contentBlock["name"].strOrNull() ?: ""
-                if (isOAuth) blockName = fromClaudeCodeName(blockName, context.tools)
+                if (isOAuth) blockName = fromClaudeCodeName(blockName, tools)
                 name = blockName
                 (contentBlock.obj("input"))?.let { seedJson = it.toString() }
             }

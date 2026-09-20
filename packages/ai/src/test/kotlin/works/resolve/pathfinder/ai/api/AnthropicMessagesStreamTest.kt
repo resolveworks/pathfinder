@@ -38,6 +38,7 @@ import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.transport.ProviderHttpException
 import works.resolve.pathfinder.ai.utils.ProviderRetry
+import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class AnthropicMessagesStreamTest {
 
@@ -54,7 +55,7 @@ class AnthropicMessagesStreamTest {
         maxTokens = 64_000
     )
 
-    private val context = Context(messages = listOf(UserMessage.ofText("hi")))
+    private val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
     private fun api(transport: FakeTransport) = AnthropicMessagesApi(
         transport,
@@ -349,9 +350,11 @@ class AnthropicMessagesStreamTest {
             description = "reads a file",
             parameters = Json.parseToJsonElement("{}")
         )
-        val toolContext = Context(
-            messages = listOf(UserMessage.ofText("hi")),
-            tools = listOf(tool)
+        val toolContext = normalizeContext(
+            Context(
+                messages = listOf(UserMessage.ofText("hi")),
+                tools = listOf(tool)
+            )
         )
         val transport = FakeTransport()
         transport.enqueueNamedResponse(
@@ -449,7 +452,10 @@ class AnthropicMessagesStreamTest {
             assertEquals("Glob", fromClaudeCodeName("Glob", tools))
             assertEquals("my_custom_tool", fromClaudeCodeName("my_custom_tool", tools))
 
-            val toolContext = Context(messages = listOf(UserMessage.ofText("hi")), tools = tools)
+            val toolContext =
+                normalizeContext(
+                    Context(messages = listOf(UserMessage.ofText("hi")), tools = tools)
+                )
             val transport = FakeTransport()
             transport.enqueueNamedResponse(
                 messageStart(),
@@ -830,7 +836,9 @@ class AnthropicMessagesStreamTest {
         api(transport)
             .stream(
                 legacy,
-                Context(messages = listOf(UserMessage.ofText("hi")), tools = tools),
+                normalizeContext(
+                    Context(messages = listOf(UserMessage.ofText("hi")), tools = tools)
+                ),
                 AnthropicMessagesOptions(apiKey = "k")
             )
             .toList()
@@ -845,7 +853,9 @@ class AnthropicMessagesStreamTest {
         api(thinking)
             .stream(
                 legacy,
-                Context(messages = listOf(UserMessage.ofText("hi")), tools = tools),
+                normalizeContext(
+                    Context(messages = listOf(UserMessage.ofText("hi")), tools = tools)
+                ),
                 AnthropicMessagesOptions(apiKey = "k", thinkingEnabled = true)
             )
             .toList()
@@ -1321,7 +1331,9 @@ class AnthropicMessagesStreamTest {
                 description = "Edit a file.",
                 parameters = Json.parseToJsonElement("""{"type":"object"}""")
             )
-        val tooledContext = context.copy(tools = listOf(tool))
+        val tooledContext = normalizeContext(
+            Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))
+        )
         val cases = mapOf(
             SimpleToolChoice.Auto to "auto",
             SimpleToolChoice.None to "none"
@@ -1369,7 +1381,9 @@ class AnthropicMessagesStreamTest {
         api(transport)
             .streamSimple(
                 claude,
-                Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi"))),
+                normalizeContext(
+                    Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi")))
+                ),
                 SimpleStreamOptions(apiKey = "k", cacheRetention = CacheRetention.LONG)
             )
             .toList()
@@ -1393,7 +1407,9 @@ class AnthropicMessagesStreamTest {
         api(transport)
             .streamSimple(
                 affinity,
-                Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi"))),
+                normalizeContext(
+                    Context(systemPrompt = "s", messages = listOf(UserMessage.ofText("hi")))
+                ),
                 SimpleStreamOptions(
                     apiKey = "k",
                     sessionId = "sess-1",
@@ -1432,9 +1448,11 @@ class AnthropicMessagesStreamTest {
         api(transport)
             .stream(
                 claude,
-                Context(
-                    systemPrompt = "sys",
-                    messages = listOf(foreign, UserMessage.ofText("next"))
+                normalizeContext(
+                    Context(
+                        systemPrompt = "sys",
+                        messages = listOf(foreign, UserMessage.ofText("next"))
+                    )
                 ),
                 AnthropicMessagesOptions(apiKey = "k")
             )

@@ -1,12 +1,13 @@
 package works.resolve.pathfinder.ai.api
 
 import works.resolve.pathfinder.ai.AssistantMessage
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.MessageRole
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.UserMessage
 
 enum class CopilotInitiator(val wire: String) {
@@ -33,7 +34,7 @@ fun hasCopilotVisionInput(messages: List<Message>): Boolean = messages.any { mes
     when (message) {
         is UserMessage -> message.content.any { it is ImageContent }
         is ToolResultMessage -> message.content.any { it is ImageContent }
-        is AssistantMessage -> false
+        is AssistantMessage, is SystemMessage -> false
     }
 }
 
@@ -51,7 +52,7 @@ fun buildCopilotDynamicHeaders(messages: List<Message>, hasImages: Boolean): Map
     }
 
 /** Applies only for provider "github-copilot"; other providers get no extra headers. */
-fun copilotDynamicHeadersFor(model: Model, context: Context): Map<String, String> =
+fun copilotDynamicHeadersFor(model: Model, context: TranscriptContext): Map<String, String> =
     if (model.provider == "github-copilot") {
         buildCopilotDynamicHeaders(
             messages = context.messages,

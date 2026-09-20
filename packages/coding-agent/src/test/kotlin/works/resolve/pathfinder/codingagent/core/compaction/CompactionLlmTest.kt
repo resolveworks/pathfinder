@@ -26,6 +26,7 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingLevel
 import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
@@ -95,13 +96,13 @@ class CompactionLlmTest {
     )
 
     private class FauxApi : ChatApi {
-        val seenContexts = mutableListOf<Context>()
+        val seenContexts = mutableListOf<TranscriptContext>()
         val seenOptions = mutableListOf<SimpleStreamOptions>()
         val responses = ArrayDeque<AssistantMessage>()
 
         override fun streamSimple(
             model: Model,
-            context: Context,
+            context: TranscriptContext,
             options: SimpleStreamOptions
         ): Flow<AssistantMessageEvent> = flow {
             seenContexts += context
@@ -329,7 +330,7 @@ class CompactionLlmTest {
     }
 
     private fun firstPrompt(faux: Faux): String {
-        val message = faux.api.seenContexts.first().messages.single() as UserMessage
+        val message = faux.api.seenContexts.first().messages.last() as UserMessage
         return (message.content.single() as TextContent).text
     }
 
