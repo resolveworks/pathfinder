@@ -16,7 +16,9 @@ import works.resolve.pathfinder.ai.UserMessage
  * exhaustive dispatch in ai/utils/ui), so each role is collapsed into its
  * projection: the create functions here return the wrapped user message
  * directly, and `convertToLlm` is omitted — it is the identity for
- * pathfinder messages, and callers already hold LLM-ready messages.
+ * pathfinder messages (upstream's `case "system":` passthrough confirms
+ * system messages too pass through unchanged), and callers already hold
+ * LLM-ready messages.
  *
  * The remaining upstream surface is deliberately omitted:
  * `BashExecutionMessage`/`bashExecutionToText` (pathfinder has no bash

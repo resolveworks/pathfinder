@@ -124,7 +124,7 @@ interface AgentTool {
     val executionMode: ToolExecutionMode? get() = null
 
     /**
-     * Optional one-line snippet for the Available tools section of the default
+     * Optional one-line snippet for the `tools` section of the default
      * system prompt; tools without one are omitted from that section.
      *
      * Placement divergence: pi keeps this on its coding-agent `ToolDefinition`,
@@ -134,7 +134,7 @@ interface AgentTool {
     val promptSnippet: String? get() = null
 
     /**
-     * Guideline bullets appended to the default system prompt Guidelines
+     * Guideline bullets appended to the default system prompt `rules`
      * section while this tool is active; see [promptSnippet] for placement.
      */
     val promptGuidelines: List<String> get() = emptyList()
