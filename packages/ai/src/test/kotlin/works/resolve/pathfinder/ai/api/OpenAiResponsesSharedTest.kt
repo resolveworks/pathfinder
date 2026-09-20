@@ -20,7 +20,6 @@ import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.CacheRetention
 import works.resolve.pathfinder.ai.ConstrainedSamplingConfig
 import works.resolve.pathfinder.ai.Context
-import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.GrammarFormat
 import works.resolve.pathfinder.ai.ImageContent
 import works.resolve.pathfinder.ai.InputModality
@@ -37,12 +36,13 @@ import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.normalizeContext
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
-import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class OpenAiResponsesSharedTest {
 
@@ -147,16 +147,18 @@ class OpenAiResponsesSharedTest {
     fun `user content converts to input_text and input_image parts`() {
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(input = listOf(InputModality.TEXT, InputModality.IMAGE)),
-            normalizeContext(Context(
-                messages = listOf(
-                    UserMessage(
-                        listOf(
-                            TextContent("hello"),
-                            ImageContent(data = "AAAA", mimeType = "image/png")
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage(
+                            listOf(
+                                TextContent("hello"),
+                                ImageContent(data = "AAAA", mimeType = "image/png")
+                            )
                         )
                     )
                 )
-            )),
+            ),
             OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         val content = input.single()["content"]!!.jsonArray
@@ -352,15 +354,17 @@ class OpenAiResponsesSharedTest {
     fun `tool results convert to function_call_output with the call id`() {
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(),
-            normalizeContext(Context(
-                messages = listOf(
-                    ToolResultMessage(
-                        toolCallId = "call_1|fc_2",
-                        toolName = "edit",
-                        content = listOf(TextContent("line 1"), TextContent("line 2"))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        ToolResultMessage(
+                            toolCallId = "call_1|fc_2",
+                            toolName = "edit",
+                            content = listOf(TextContent("line 1"), TextContent("line 2"))
+                        )
                     )
                 )
-            )),
+            ),
             OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         val item = input.single()
@@ -373,11 +377,13 @@ class OpenAiResponsesSharedTest {
     fun `empty tool results produce a placeholder`() {
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(),
-            normalizeContext(Context(
-                messages = listOf(
-                    ToolResultMessage(toolCallId = "c", toolName = "t", content = emptyList())
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        ToolResultMessage(toolCallId = "c", toolName = "t", content = emptyList())
+                    )
                 )
-            )),
+            ),
             OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         assertEquals("(no tool output)", input.single()["output"]!!.jsonPrimitive.content)
@@ -387,15 +393,17 @@ class OpenAiResponsesSharedTest {
     fun `tool result images inline as data urls for vision models`() {
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(input = listOf(InputModality.TEXT, InputModality.IMAGE)),
-            normalizeContext(Context(
-                messages = listOf(
-                    ToolResultMessage(
-                        toolCallId = "c",
-                        toolName = "t",
-                        content = listOf(TextContent("see"), ImageContent("AAAA", "image/jpeg"))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        ToolResultMessage(
+                            toolCallId = "c",
+                            toolName = "t",
+                            content = listOf(TextContent("see"), ImageContent("AAAA", "image/jpeg"))
+                        )
                     )
                 )
-            )),
+            ),
             OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         val output = input.single()["output"]!!.jsonArray
@@ -407,15 +415,17 @@ class OpenAiResponsesSharedTest {
     fun `tool result images become a placeholder for non-vision models`() {
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(),
-            normalizeContext(Context(
-                messages = listOf(
-                    ToolResultMessage(
-                        toolCallId = "c",
-                        toolName = "t",
-                        content = listOf(ImageContent("AAAA", "image/jpeg"))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        ToolResultMessage(
+                            toolCallId = "c",
+                            toolName = "t",
+                            content = listOf(ImageContent("AAAA", "image/jpeg"))
+                        )
                     )
                 )
-            )),
+            ),
             OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         assertEquals(
@@ -1437,15 +1447,17 @@ class OpenAiResponsesSharedTest {
         // mentions an attached image.
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(),
-            normalizeContext(Context(
-                messages = listOf(
-                    ToolResultMessage(
-                        toolCallId = "c",
-                        toolName = "t",
-                        content = listOf(TextContent(""))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        ToolResultMessage(
+                            toolCallId = "c",
+                            toolName = "t",
+                            content = listOf(TextContent(""))
+                        )
                     )
                 )
-            )),
+            ),
             OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         val output = input.single()["output"]!!.jsonPrimitive.content
@@ -1459,15 +1471,17 @@ class OpenAiResponsesSharedTest {
         // function_call_output — without the unported images stack.
         val input = OpenAiResponsesShared.convertResponsesMessages(
             model(input = listOf(InputModality.TEXT, InputModality.IMAGE)),
-            normalizeContext(Context(
-                messages = listOf(
-                    ToolResultMessage(
-                        toolCallId = "c",
-                        toolName = "t",
-                        content = listOf(TextContent("see"), ImageContent("AAAA", "image/png"))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        ToolResultMessage(
+                            toolCallId = "c",
+                            toolName = "t",
+                            content = listOf(TextContent("see"), ImageContent("AAAA", "image/png"))
+                        )
                     )
                 )
-            )),
+            ),
             OpenAiResponsesShared.BASE_TOOL_CALL_PROVIDERS
         )
         val output = input.single()["output"]!!.jsonArray

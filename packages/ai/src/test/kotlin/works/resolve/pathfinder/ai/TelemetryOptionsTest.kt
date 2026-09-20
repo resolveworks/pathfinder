@@ -26,8 +26,8 @@ import works.resolve.pathfinder.ai.api.toMistralOptions
 import works.resolve.pathfinder.ai.testing.FakeClock
 import works.resolve.pathfinder.ai.testing.FakeTransport
 import works.resolve.pathfinder.ai.utils.ProviderRetry
-import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
 import works.resolve.pathfinder.ai.utils.normalizeContext
+import works.resolve.pathfinder.telemetry.InMemoryTelemetryContext
 
 /** telemetryContext is dormant: no adapter reads it, and none may emit spans. */
 class TelemetryOptionsTest {

@@ -37,9 +37,9 @@ import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.TestCatalogs
+import works.resolve.pathfinder.ai.utils.normalizeContext
 import works.resolve.pathfinder.ai.utils.sanitizeSurrogates
 import works.resolve.pathfinder.ai.utils.shortHash
-import works.resolve.pathfinder.ai.utils.normalizeContext
 
 class OpenAiCompletionsPayloadTest {
 
@@ -165,7 +165,11 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `tools converted with json schema and tool_stream flag`() {
         val tool = Tool(name = "read_file", description = "Reads a file", parameters = schema)
-        val b = body(normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))))
+        val b = body(
+            normalizeContext(
+                Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))
+            )
+        )
         val converted = b["tools"]!!.jsonArray.single().jsonObject
         assertEquals("function", converted["type"]!!.jsonPrimitive.content)
         val function = converted["function"]!!.jsonObject
@@ -177,22 +181,24 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `tool history without active tools sends empty tools array`() {
-        val context = normalizeContext(Context(
-            messages = listOf(
-                UserMessage.ofText("hi"),
-                AssistantMessage(
-                    content = listOf(ToolCall("call_1", "read_file", "{}")),
-                    api = "openai-completions",
-                    provider = "zai",
-                    model = "glm-5.2"
-                ),
-                ToolResultMessage(
-                    toolCallId = "call_1",
-                    toolName = "read_file",
-                    content = listOf(TextContent("contents"))
+        val context = normalizeContext(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("hi"),
+                    AssistantMessage(
+                        content = listOf(ToolCall("call_1", "read_file", "{}")),
+                        api = "openai-completions",
+                        provider = "zai",
+                        model = "glm-5.2"
+                    ),
+                    ToolResultMessage(
+                        toolCallId = "call_1",
+                        toolName = "read_file",
+                        content = listOf(TextContent("contents"))
+                    )
                 )
             )
-        ))
+        )
         val b = body(context)
         val messages = b["messages"]!!.jsonArray
         assertEquals(3, messages.size)
@@ -221,17 +227,19 @@ class OpenAiCompletionsPayloadTest {
     fun `tool call arguments replay as raw json string with exact escaping`() {
         val raw = """{"path":"/tmp/a\\"b","n":1}"""
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(ToolCall("call_1", "read_file", raw)),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2"
-                    ),
-                    ToolResultMessage("call_1", "read_file", listOf(TextContent("ok")))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(ToolCall("call_1", "read_file", raw)),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2"
+                        ),
+                        ToolResultMessage("call_1", "read_file", listOf(TextContent("ok")))
+                    )
                 )
-            ))
+            )
         )
         val function = b["messages"]!!.jsonArray[0].jsonObject["tool_calls"]!!.jsonArray[0]
             .jsonObject["function"]!!.jsonObject
@@ -247,7 +255,11 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `function tools carry explicit strict false`() {
         val tool = Tool(name = "read_file", description = "Reads a file", parameters = schema)
-        val b = body(normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))))
+        val b = body(
+            normalizeContext(
+                Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))
+            )
+        )
         val function = b["tools"]!!.jsonArray.single().jsonObject["function"]!!.jsonObject
         assertEquals(false, function["strict"]!!.jsonPrimitive.content.toBoolean())
     }
@@ -259,7 +271,9 @@ class OpenAiCompletionsPayloadTest {
         val strictless = model.copy(compat = model.compat.copy(supportsStrictMode = false))
         val b =
             body(
-                normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))),
+                normalizeContext(
+                    Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))
+                ),
                 model = strictless
             )
         val function = b["tools"]!!.jsonArray.single().jsonObject["function"]!!.jsonObject
@@ -279,7 +293,11 @@ class OpenAiCompletionsPayloadTest {
                 StrictJsonSchemaMode.REQUIRE
             )
         )
-        val b = body(normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))))
+        val b = body(
+            normalizeContext(
+                Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))
+            )
+        )
         val function = b["tools"]!!.jsonArray.single().jsonObject["function"]!!.jsonObject
         assertEquals(true, function["strict"]!!.jsonPrimitive.content.toBoolean())
         val sent = function["parameters"]!!.jsonObject
@@ -306,7 +324,11 @@ class OpenAiCompletionsPayloadTest {
             parameters = parameters,
             constrainedSampling = ConstrainedSamplingConfig.JsonSchema(StrictJsonSchemaMode.PREFER)
         )
-        val b = body(normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))))
+        val b = body(
+            normalizeContext(
+                Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))
+            )
+        )
         val function = b["tools"]!!.jsonArray.single().jsonObject["function"]!!.jsonObject
         assertEquals(false, function["strict"]!!.jsonPrimitive.content.toBoolean())
         assertEquals(parameters, function["parameters"])
@@ -325,7 +347,11 @@ class OpenAiCompletionsPayloadTest {
             )
         )
         val error = assertFailsWith<ConstrainedSamplingError> {
-            body(normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))))
+            body(
+                normalizeContext(
+                    Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))
+                )
+            )
         }
         assertEquals(
             "Tool \"read_file\" requires JSON-schema constrained sampling, but allOf schemas are unsupported.",
@@ -346,7 +372,9 @@ class OpenAiCompletionsPayloadTest {
         val strictless = model.copy(compat = model.compat.copy(supportsStrictMode = false))
         val error = assertFailsWith<ConstrainedSamplingError> {
             body(
-                normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))),
+                normalizeContext(
+                    Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(tool))
+                ),
                 model = strictless
             )
         }
@@ -360,19 +388,21 @@ class OpenAiCompletionsPayloadTest {
     fun `opencode-go replay remaps a reasoning signature to reasoning_content`() {
         val goModel = model.copy(provider = "opencode-go")
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ThinkingContent("let me think", thinkingSignature = "reasoning"),
-                            TextContent("answer")
-                        ),
-                        api = "openai-completions",
-                        provider = "opencode-go",
-                        model = "glm-5.2"
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent("let me think", thinkingSignature = "reasoning"),
+                                TextContent("answer")
+                            ),
+                            api = "openai-completions",
+                            provider = "opencode-go",
+                            model = "glm-5.2"
+                        )
                     )
                 )
-            )),
+            ),
             model = goModel
         )
         val assistant = b["messages"]!!.jsonArray.single().jsonObject
@@ -383,19 +413,21 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `non opencode-go replay keeps the literal reasoning field`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ThinkingContent("let me think", thinkingSignature = "reasoning"),
-                            TextContent("answer")
-                        ),
-                        api = "openai-completions",
-                        provider = "chutes",
-                        model = "glm-5.2"
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent("let me think", thinkingSignature = "reasoning"),
+                                TextContent("answer")
+                            ),
+                            api = "openai-completions",
+                            provider = "chutes",
+                            model = "glm-5.2"
+                        )
                     )
                 )
-            )),
+            ),
             model = model.copy(provider = "chutes")
         )
         val assistant = b["messages"]!!.jsonArray.single().jsonObject
@@ -406,20 +438,22 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `whitespace-only assistant text blocks are dropped`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ThinkingContent("hmm", thinkingSignature = "reasoning_content"),
-                            TextContent("  "),
-                            TextContent("answer")
-                        ),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2"
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent("hmm", thinkingSignature = "reasoning_content"),
+                                TextContent("  "),
+                                TextContent("answer")
+                            ),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2"
+                        )
                     )
                 )
-            ))
+            )
         )
         assertEquals(
             "answer",
@@ -430,18 +464,20 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `assistant message with only blank text and no tool calls is skipped`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    UserMessage.ofText("hi"),
-                    AssistantMessage(
-                        content = listOf(TextContent(" \t ")),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2"
-                    ),
-                    UserMessage.ofText("again")
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage.ofText("hi"),
+                        AssistantMessage(
+                            content = listOf(TextContent(" \t ")),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2"
+                        ),
+                        UserMessage.ofText("again")
+                    )
                 )
-            ))
+            )
         )
         val messages = b["messages"]!!.jsonArray
         assertEquals(2, messages.size)
@@ -457,9 +493,14 @@ class OpenAiCompletionsPayloadTest {
     fun `empty user content array is skipped`() {
         val b =
             body(
-                normalizeContext(Context(
-                    messages = listOf(UserMessage(content = emptyList()), UserMessage.ofText("hi"))
-                ))
+                normalizeContext(
+                    Context(
+                        messages = listOf(
+                            UserMessage(content = emptyList()),
+                            UserMessage.ofText("hi")
+                        )
+                    )
+                )
             )
         val messages = b["messages"]!!.jsonArray
         assertEquals(1, messages.size)
@@ -468,7 +509,11 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `empty system prompt is skipped`() {
-        val b = body(normalizeContext(Context(systemPrompt = "", messages = listOf(UserMessage.ofText("hi")))))
+        val b = body(
+            normalizeContext(
+                Context(systemPrompt = "", messages = listOf(UserMessage.ofText("hi")))
+            )
+        )
         val messages = b["messages"]!!.jsonArray
         assertEquals(1, messages.size)
         assertEquals("user", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
@@ -486,7 +531,11 @@ class OpenAiCompletionsPayloadTest {
         val sanitized = sanitizeSurrogates(lone)
         assertEquals("a\uD83D\uDC00", sanitized)
 
-        val b = body(normalizeContext(Context(systemPrompt = lone, messages = listOf(UserMessage.ofText(lone)))))
+        val b = body(
+            normalizeContext(
+                Context(systemPrompt = lone, messages = listOf(UserMessage.ofText(lone)))
+            )
+        )
         val messages = b["messages"]!!.jsonArray
         assertEquals("system", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
         assertEquals("a\uD83D\uDC00", messages[0].jsonObject["content"]!!.jsonPrimitive.content)
@@ -502,19 +551,21 @@ class OpenAiCompletionsPayloadTest {
             append(0xD800.toChar())
         }
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ThinkingContent(lone, thinkingSignature = "reasoning_content"),
-                            TextContent("answer")
-                        ),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2"
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent(lone, thinkingSignature = "reasoning_content"),
+                                TextContent("answer")
+                            ),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2"
+                        )
                     )
                 )
-            ))
+            )
         )
         val assistant = b["messages"]!!.jsonArray[0].jsonObject
         assertTrue(assistant.containsKey("reasoning_content"))
@@ -525,10 +576,12 @@ class OpenAiCompletionsPayloadTest {
     fun `system prompt sent with system role not developer`() {
         val b =
             body(
-                normalizeContext(Context(
-                    systemPrompt = "You are helpful.",
-                    messages = listOf(UserMessage.ofText("hi"))
-                ))
+                normalizeContext(
+                    Context(
+                        systemPrompt = "You are helpful.",
+                        messages = listOf(UserMessage.ofText("hi"))
+                    )
+                )
             )
         val first = b["messages"]!!.jsonArray[0].jsonObject
         assertEquals("system", first["role"]!!.jsonPrimitive.content)
@@ -538,16 +591,18 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `user image content becomes data url part`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    UserMessage(
-                        listOf(
-                            TextContent("what is this?"),
-                            ImageContent(data = "aGVsbG8=", mimeType = "image/png")
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage(
+                            listOf(
+                                TextContent("what is this?"),
+                                ImageContent(data = "aGVsbG8=", mimeType = "image/png")
+                            )
                         )
                     )
                 )
-            )),
+            ),
             model = TestCatalogs.GPT_4O
         )
         val content = b["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
@@ -566,16 +621,18 @@ class OpenAiCompletionsPayloadTest {
                 requiresReasoningContentOnAssistantMessages = true
             )
         )
-        val context = normalizeContext(Context(
-            messages = listOf(
-                AssistantMessage(
-                    content = listOf(ToolCall("call_1", "read_file", "{}")),
-                    api = "openai-completions",
-                    provider = deepseekModel.provider,
-                    model = deepseekModel.id
+        val context = normalizeContext(
+            Context(
+                messages = listOf(
+                    AssistantMessage(
+                        content = listOf(ToolCall("call_1", "read_file", "{}")),
+                        api = "openai-completions",
+                        provider = deepseekModel.provider,
+                        model = deepseekModel.id
+                    )
                 )
             )
-        ))
+        )
         val assistant = body(context, model = deepseekModel)["messages"]!!.jsonArray[0].jsonObject
         assertEquals("", assistant["reasoning_content"]!!.jsonPrimitive.content)
 
@@ -598,22 +655,24 @@ class OpenAiCompletionsPayloadTest {
             )
         )
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ThinkingContent(
-                                "let me think",
-                                thinkingSignature = "reasoning_content"
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent(
+                                    "let me think",
+                                    thinkingSignature = "reasoning_content"
+                                ),
+                                TextContent("answer")
                             ),
-                            TextContent("answer")
-                        ),
-                        api = "openai-completions",
-                        provider = deepseekModel.provider,
-                        model = deepseekModel.id
+                            api = "openai-completions",
+                            provider = deepseekModel.provider,
+                            model = deepseekModel.id
+                        )
                     )
                 )
-            )),
+            ),
             model = deepseekModel
         )
         assertEquals(
@@ -625,22 +684,24 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `assistant thinking replayed in signature wire field`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ThinkingContent(
-                                "let me think",
-                                thinkingSignature = "reasoning_content"
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent(
+                                    "let me think",
+                                    thinkingSignature = "reasoning_content"
+                                ),
+                                TextContent("answer")
                             ),
-                            TextContent("answer")
-                        ),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2"
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2"
+                        )
                     )
                 )
-            ))
+            )
         )
         val assistant = b["messages"]!!.jsonArray[0].jsonObject
         assertEquals("answer", assistant["content"]!!.jsonPrimitive.content)
@@ -652,19 +713,21 @@ class OpenAiCompletionsPayloadTest {
         val details =
             """[{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}]"""
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ThinkingContent("let me think", thinkingSignature = details),
-                            TextContent("answer")
-                        ),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2"
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent("let me think", thinkingSignature = details),
+                                TextContent("answer")
+                            ),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2"
+                        )
                     )
                 )
-            ))
+            )
         )
         val assistant = b["messages"]!!.jsonArray[0].jsonObject
         assertEquals(Json.parseToJsonElement(details), assistant["reasoning_details"])
@@ -678,23 +741,25 @@ class OpenAiCompletionsPayloadTest {
         val detail =
             """{"type":"reasoning.encrypted","id":"call_1","data":"encrypted-signature"}"""
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ToolCall(
-                                id = "call_1",
-                                name = "read",
-                                arguments = "{}",
-                                thoughtSignature = detail
-                            )
-                        ),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2"
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ToolCall(
+                                    id = "call_1",
+                                    name = "read",
+                                    arguments = "{}",
+                                    thoughtSignature = detail
+                                )
+                            ),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2"
+                        )
                     )
                 )
-            ))
+            )
         )
         val assistant = b["messages"]!!.jsonArray[0].jsonObject
         assertEquals(Json.parseToJsonElement("[$detail]"), assistant["reasoning_details"])
@@ -707,24 +772,26 @@ class OpenAiCompletionsPayloadTest {
         val legacy =
             """{"type":"reasoning.encrypted","id":"call_1","data":"legacy"}"""
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ThinkingContent("thinking", thinkingSignature = signed),
-                            ToolCall(
-                                id = "call_1",
-                                name = "read",
-                                arguments = "{}",
-                                thoughtSignature = legacy
-                            )
-                        ),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2"
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent("thinking", thinkingSignature = signed),
+                                ToolCall(
+                                    id = "call_1",
+                                    name = "read",
+                                    arguments = "{}",
+                                    thoughtSignature = legacy
+                                )
+                            ),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2"
+                        )
                     )
                 )
-            ))
+            )
         )
         val assistant = b["messages"]!!.jsonArray[0].jsonObject
         assertEquals(Json.parseToJsonElement(signed), assistant["reasoning_details"])
@@ -733,19 +800,24 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `invalid reasoning_details signature falls back to plain replay`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ThinkingContent("let me think", thinkingSignature = "not json at all"),
-                            TextContent("answer")
-                        ),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2"
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent(
+                                    "let me think",
+                                    thinkingSignature = "not json at all"
+                                ),
+                                TextContent("answer")
+                            ),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2"
+                        )
                     )
                 )
-            ))
+            )
         )
         val assistant = b["messages"]!!.jsonArray[0].jsonObject
         assertFalse(assistant.containsKey("reasoning_details"))
@@ -756,18 +828,20 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `empty assistant messages are skipped`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    UserMessage.ofText("hi"),
-                    AssistantMessage(
-                        content = emptyList(),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2"
-                    ),
-                    UserMessage.ofText("again")
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage.ofText("hi"),
+                        AssistantMessage(
+                            content = emptyList(),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2"
+                        ),
+                        UserMessage.ofText("again")
+                    )
                 )
-            ))
+            )
         )
         val messages = b["messages"]!!.jsonArray
         assertEquals(2, messages.size)
@@ -778,15 +852,17 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `tool result without content gets placeholder`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    ToolResultMessage(
-                        toolCallId = "c1",
-                        toolName = "t",
-                        content = emptyList()
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        ToolResultMessage(
+                            toolCallId = "c1",
+                            toolName = "t",
+                            content = emptyList()
+                        )
                     )
                 )
-            ))
+            )
         )
         assertEquals(
             "(no tool output)",
@@ -797,15 +873,17 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `tool result image not attached for text-only model`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    ToolResultMessage(
-                        toolCallId = "c1",
-                        toolName = "t",
-                        content = listOf(ImageContent("aGVsbG8=", "image/png"))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        ToolResultMessage(
+                            toolCallId = "c1",
+                            toolName = "t",
+                            content = listOf(ImageContent("aGVsbG8=", "image/png"))
+                        )
                     )
                 )
-            ))
+            )
         )
         val messages = b["messages"]!!.jsonArray
         assertEquals(1, messages.size, "no follow-up user image message for text-only model")
@@ -819,17 +897,19 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `user image downgraded to placeholder for non-vision model and deduped`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    UserMessage(
-                        listOf(
-                            TextContent("what is this?"),
-                            ImageContent("aGVsbG8=", "image/png"),
-                            ImageContent("aGVsbG8=", "image/png")
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage(
+                            listOf(
+                                TextContent("what is this?"),
+                                ImageContent("aGVsbG8=", "image/png"),
+                                ImageContent("aGVsbG8=", "image/png")
+                            )
                         )
                     )
                 )
-            ))
+            )
         )
         val messages = b["messages"]!!.jsonArray
         assertEquals(1, messages.size)
@@ -842,19 +922,21 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `aborted assistant turn with partial content is skipped`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    UserMessage.ofText("hi"),
-                    AssistantMessage(
-                        content = listOf(TextContent("partial answ")),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2",
-                        stopReason = StopReason.ABORTED
-                    ),
-                    UserMessage.ofText("again")
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage.ofText("hi"),
+                        AssistantMessage(
+                            content = listOf(TextContent("partial answ")),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2",
+                            stopReason = StopReason.ABORTED
+                        ),
+                        UserMessage.ofText("again")
+                    )
                 )
-            ))
+            )
         )
         val messages = b["messages"]!!.jsonArray
         assertEquals(2, messages.size)
@@ -867,19 +949,21 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `orphaned tool call gets synthetic tool result`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    UserMessage.ofText("read the file"),
-                    AssistantMessage(
-                        content = listOf(ToolCall("call_1", "read", "{}")),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2",
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    UserMessage.ofText("any luck?")
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage.ofText("read the file"),
+                        AssistantMessage(
+                            content = listOf(ToolCall("call_1", "read", "{}")),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2",
+                            stopReason = StopReason.TOOL_USE
+                        ),
+                        UserMessage.ofText("any luck?")
+                    )
                 )
-            ))
+            )
         )
         val messages = b["messages"]!!.jsonArray
         assertEquals(4, messages.size)
@@ -895,18 +979,20 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `foreign pipe tool call ids are split and applied to tool calls and results`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(ToolCall("call_123|fc_123", "read", "{}")),
-                        api = "openai-responses",
-                        provider = "github-copilot",
-                        model = "gpt-5",
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    ToolResultMessage("call_123|fc_123", "read", listOf(TextContent("done")))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(ToolCall("call_123|fc_123", "read", "{}")),
+                            api = "openai-responses",
+                            provider = "github-copilot",
+                            model = "gpt-5",
+                            stopReason = StopReason.TOOL_USE
+                        ),
+                        ToolResultMessage("call_123|fc_123", "read", listOf(TextContent("done")))
+                    )
                 )
-            ))
+            )
         )
         val messages = b["messages"]!!.jsonArray
         assertEquals(
@@ -925,17 +1011,19 @@ class OpenAiCompletionsPayloadTest {
         val itemId = "fc_" + "x".repeat(60)
         val id = "call_123|$itemId"
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(ToolCall(id, "read", "{}")),
-                        api = "openai-responses",
-                        provider = "github-copilot",
-                        model = "gpt-5",
-                        stopReason = StopReason.TOOL_USE
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(ToolCall(id, "read", "{}")),
+                            api = "openai-responses",
+                            provider = "github-copilot",
+                            model = "gpt-5",
+                            stopReason = StopReason.TOOL_USE
+                        )
                     )
                 )
-            ))
+            )
         )
         val hash = shortHash(id).take(8)
         val expected = "call_123_$hash"
@@ -953,18 +1041,20 @@ class OpenAiCompletionsPayloadTest {
     fun `plain foreign id truncated to 40 chars only for openai provider`() {
         val longId = "call_" + "a".repeat(40)
         fun idFor(model: works.resolve.pathfinder.ai.Model): String = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(ToolCall(longId, "read", "{}")),
-                        api = "openai-completions",
-                        provider = "other",
-                        model = "other-model",
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    ToolResultMessage(longId, "read", listOf(TextContent("done")))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(ToolCall(longId, "read", "{}")),
+                            api = "openai-completions",
+                            provider = "other",
+                            model = "other-model",
+                            stopReason = StopReason.TOOL_USE
+                        ),
+                        ToolResultMessage(longId, "read", listOf(TextContent("done")))
+                    )
                 )
-            )),
+            ),
             model = model
         )["messages"]!!.jsonArray[0].jsonObject["tool_calls"]!!.jsonArray[0]
             .jsonObject["id"]!!.jsonPrimitive.content
@@ -977,18 +1067,20 @@ class OpenAiCompletionsPayloadTest {
     fun `same-model tool call ids are not normalized`() {
         val id = "call_123|fc_123"
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(ToolCall(id, "read", "{}")),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2",
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    ToolResultMessage(id, "read", listOf(TextContent("done")))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(ToolCall(id, "read", "{}")),
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2",
+                            stopReason = StopReason.TOOL_USE
+                        ),
+                        ToolResultMessage(id, "read", listOf(TextContent("done")))
+                    )
                 )
-            ))
+            )
         )
         val messages = b["messages"]!!.jsonArray
         assertEquals(
@@ -1002,23 +1094,25 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `cross-model thinking replayed as plain text`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ThinkingContent(
-                                "let me think",
-                                thinkingSignature = "reasoning_content"
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent(
+                                    "let me think",
+                                    thinkingSignature = "reasoning_content"
+                                ),
+                                TextContent("answer")
                             ),
-                            TextContent("answer")
-                        ),
-                        api = "openai-completions",
-                        provider = "github-copilot",
-                        model = "gpt-4o",
-                        stopReason = StopReason.STOP
+                            api = "openai-completions",
+                            provider = "github-copilot",
+                            model = "gpt-4o",
+                            stopReason = StopReason.STOP
+                        )
                     )
                 )
-            ))
+            )
         )
         val assistant = b["messages"]!!.jsonArray[0].jsonObject
         assertEquals("let me thinkanswer", assistant["content"]!!.jsonPrimitive.content)
@@ -1174,11 +1268,13 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `anthropic cache markers applied when compat enables them`() {
         val b = body(
-            normalizeContext(Context(
-                systemPrompt = "System prompt",
-                messages = listOf(UserMessage.ofText("Hello")),
-                tools = listOf(cacheTool)
-            )),
+            normalizeContext(
+                Context(
+                    systemPrompt = "System prompt",
+                    messages = listOf(UserMessage.ofText("Hello")),
+                    tools = listOf(cacheTool)
+                )
+            ),
             model = openrouterAnthropic
         )
         // Default retention is short: ephemeral marker without a ttl.
@@ -1188,11 +1284,13 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `anthropic cache markers carry ttl 1h for long retention when supported`() {
         val b = body(
-            normalizeContext(Context(
-                systemPrompt = "System prompt",
-                messages = listOf(UserMessage.ofText("Hello")),
-                tools = listOf(cacheTool)
-            )),
+            normalizeContext(
+                Context(
+                    systemPrompt = "System prompt",
+                    messages = listOf(UserMessage.ofText("Hello")),
+                    tools = listOf(cacheTool)
+                )
+            ),
             OpenAiCompletionsOptions(apiKey = "k", cacheRetention = CacheRetention.LONG),
             openrouterAnthropic
         )
@@ -1205,11 +1303,13 @@ class OpenAiCompletionsPayloadTest {
             compat = openrouterAnthropic.compat.copy(supportsLongCacheRetention = false)
         )
         val b = body(
-            normalizeContext(Context(
-                systemPrompt = "System prompt",
-                messages = listOf(UserMessage.ofText("Hello")),
-                tools = listOf(cacheTool)
-            )),
+            normalizeContext(
+                Context(
+                    systemPrompt = "System prompt",
+                    messages = listOf(UserMessage.ofText("Hello")),
+                    tools = listOf(cacheTool)
+                )
+            ),
             OpenAiCompletionsOptions(apiKey = "k", cacheRetention = CacheRetention.LONG),
             model
         )
@@ -1219,24 +1319,28 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `conversation cache marker moves to a tool result`() {
         val b = body(
-            normalizeContext(Context(
-                systemPrompt = "System prompt",
-                messages = listOf(
-                    UserMessage.ofText("Read the file"),
-                    AssistantMessage(
-                        content = listOf(ToolCall("call_1", "read", """{"path":"README.md"}""")),
-                        api = "openai-completions",
-                        provider = "openrouter",
-                        model = openrouterAnthropic.id
+            normalizeContext(
+                Context(
+                    systemPrompt = "System prompt",
+                    messages = listOf(
+                        UserMessage.ofText("Read the file"),
+                        AssistantMessage(
+                            content = listOf(
+                                ToolCall("call_1", "read", """{"path":"README.md"}""")
+                            ),
+                            api = "openai-completions",
+                            provider = "openrouter",
+                            model = openrouterAnthropic.id
+                        ),
+                        ToolResultMessage(
+                            toolCallId = "call_1",
+                            toolName = "read",
+                            content = listOf(TextContent("file contents"))
+                        )
                     ),
-                    ToolResultMessage(
-                        toolCallId = "call_1",
-                        toolName = "read",
-                        content = listOf(TextContent("file contents"))
-                    )
-                ),
-                tools = listOf(cacheTool)
-            )),
+                    tools = listOf(cacheTool)
+                )
+            ),
             model = openrouterAnthropic
         )
         val messages = b["messages"]!!.jsonArray
@@ -1252,11 +1356,13 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `anthropic cache markers omitted when cache retention is none`() {
         val b = body(
-            normalizeContext(Context(
-                systemPrompt = "System prompt",
-                messages = listOf(UserMessage.ofText("Hello")),
-                tools = listOf(cacheTool)
-            )),
+            normalizeContext(
+                Context(
+                    systemPrompt = "System prompt",
+                    messages = listOf(UserMessage.ofText("Hello")),
+                    tools = listOf(cacheTool)
+                )
+            ),
             OpenAiCompletionsOptions(apiKey = "k", cacheRetention = CacheRetention.NONE),
             openrouterAnthropic
         )
@@ -1269,11 +1375,13 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `anthropic cache markers omitted for models without anthropic format`() {
         val b = body(
-            normalizeContext(Context(
-                systemPrompt = "System prompt",
-                messages = listOf(UserMessage.ofText("Hello")),
-                tools = listOf(cacheTool)
-            )),
+            normalizeContext(
+                Context(
+                    systemPrompt = "System prompt",
+                    messages = listOf(UserMessage.ofText("Hello")),
+                    tools = listOf(cacheTool)
+                )
+            ),
             OpenAiCompletionsOptions(apiKey = "k", cacheRetention = CacheRetention.LONG),
             openaiModel
         )
@@ -1291,7 +1399,11 @@ class OpenAiCompletionsPayloadTest {
     fun `omits tools field when context tools is empty or absent`() {
         // `tools: []` must not be serialized — some backends (DashScope)
         // reject the empty array; only tool history keeps an empty tools param.
-        val empty = body(normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")), tools = emptyList())))
+        val empty = body(
+            normalizeContext(
+                Context(messages = listOf(UserMessage.ofText("hi")), tools = emptyList())
+            )
+        )
         assertFalse(empty.containsKey("tools"))
         val absent = body(normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))))
         assertFalse(absent.containsKey("tools"))
@@ -1305,10 +1417,12 @@ class OpenAiCompletionsPayloadTest {
     fun `developer role for reasoning models with developer role support`() {
         val reasoning = openaiModel.copy(reasoning = true)
         val b = body(
-            normalizeContext(Context(
-                systemPrompt = "Follow instructions.",
-                messages = listOf(UserMessage.ofText("hi"))
-            )),
+            normalizeContext(
+                Context(
+                    systemPrompt = "Follow instructions.",
+                    messages = listOf(UserMessage.ofText("hi"))
+                )
+            ),
             model = reasoning
         )
         assertEquals(
@@ -1320,26 +1434,28 @@ class OpenAiCompletionsPayloadTest {
     @Test
     fun `zai replay keeps reasoning_content and thinking enabled with mapped effort`() {
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    UserMessage.ofText("Read README.md"),
-                    AssistantMessage(
-                        content = listOf(
-                            ThinkingContent(
-                                "prior reasoning",
-                                thinkingSignature = "reasoning_content"
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage.ofText("Read README.md"),
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent(
+                                    "prior reasoning",
+                                    thinkingSignature = "reasoning_content"
+                                ),
+                                ToolCall("call_1", "read", """{"path":"README.md"}""")
                             ),
-                            ToolCall("call_1", "read", """{"path":"README.md"}""")
+                            api = "openai-completions",
+                            provider = "zai",
+                            model = "glm-5.2",
+                            stopReason = StopReason.TOOL_USE
                         ),
-                        api = "openai-completions",
-                        provider = "zai",
-                        model = "glm-5.2",
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    ToolResultMessage("call_1", "read", listOf(TextContent("contents"))),
-                    UserMessage.ofText("Continue")
+                        ToolResultMessage("call_1", "read", listOf(TextContent("contents"))),
+                        UserMessage.ofText("Continue")
+                    )
                 )
-            )),
+            ),
             OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.HIGH)
         )
         val assistant = b["messages"]!!.jsonArray.first {
@@ -1359,19 +1475,22 @@ class OpenAiCompletionsPayloadTest {
     private fun asTextModel() =
         openaiModel.copy(compat = openaiModel.compat.copy(requiresThinkingAsText = true))
 
-    private fun replayContext(content: List<works.resolve.pathfinder.ai.Content>) = normalizeContext(Context(
-        messages = listOf(
-            UserMessage.ofText("hello"),
-            AssistantMessage(
-                content = content,
-                api = "openai-completions",
-                provider = "openai",
-                model = "gpt-4o",
-                stopReason = StopReason.STOP
-            ),
-            UserMessage.ofText("continue")
+    private fun replayContext(content: List<works.resolve.pathfinder.ai.Content>) =
+        normalizeContext(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("hello"),
+                    AssistantMessage(
+                        content = content,
+                        api = "openai-completions",
+                        provider = "openai",
+                        model = "gpt-4o",
+                        stopReason = StopReason.STOP
+                    ),
+                    UserMessage.ofText("continue")
+                )
+            )
         )
-    ))
 
     @Test
     fun `requiresThinkingAsText serializes thinking plus text replay as assistant text parts`() {
@@ -1431,37 +1550,39 @@ class OpenAiCompletionsPayloadTest {
     fun `batches tool-result images after consecutive tool results`() {
         val vision = openaiModel // gpt-4o accepts image input
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    UserMessage.ofText("Read the images"),
-                    AssistantMessage(
-                        content = listOf(
-                            ToolCall("tool-1", "read", """{"path":"img-1.png"}"""),
-                            ToolCall("tool-2", "read", """{"path":"img-2.png"}""")
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage.ofText("Read the images"),
+                        AssistantMessage(
+                            content = listOf(
+                                ToolCall("tool-1", "read", """{"path":"img-1.png"}"""),
+                                ToolCall("tool-2", "read", """{"path":"img-2.png"}""")
+                            ),
+                            api = "openai-completions",
+                            provider = vision.provider,
+                            model = vision.id,
+                            stopReason = StopReason.TOOL_USE
                         ),
-                        api = "openai-completions",
-                        provider = vision.provider,
-                        model = vision.id,
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    ToolResultMessage(
-                        toolCallId = "tool-1",
-                        toolName = "read",
-                        content = listOf(
-                            TextContent("Read image file [image/png]"),
-                            ImageContent("ZmFrZQ==", "image/png")
-                        )
-                    ),
-                    ToolResultMessage(
-                        toolCallId = "tool-2",
-                        toolName = "read",
-                        content = listOf(
-                            TextContent("Read image file [image/png]"),
-                            ImageContent("ZmFrZQ==", "image/png")
+                        ToolResultMessage(
+                            toolCallId = "tool-1",
+                            toolName = "read",
+                            content = listOf(
+                                TextContent("Read image file [image/png]"),
+                                ImageContent("ZmFrZQ==", "image/png")
+                            )
+                        ),
+                        ToolResultMessage(
+                            toolCallId = "tool-2",
+                            toolName = "read",
+                            content = listOf(
+                                TextContent("Read image file [image/png]"),
+                                ImageContent("ZmFrZQ==", "image/png")
+                            )
                         )
                     )
                 )
-            )),
+            ),
             model = vision
         )
         val messages = b["messages"]!!.jsonArray
@@ -1497,7 +1618,7 @@ class OpenAiCompletionsPayloadTest {
 
     @Test
     fun `deepseek catalog model sends max_tokens`() {
-        val deepseek = realAsset().getProvider("deepseek")!!.model("deepseek-v4-flash")!!
+        val deepseek = realAsset().getProvider("deepseek")!!.model("deepseek-flash")!!
         val b = body(
             normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
             OpenAiCompletionsOptions(apiKey = "k", maxTokens = 123),
@@ -1522,19 +1643,23 @@ class OpenAiCompletionsPayloadTest {
     fun `xiaomi mimo replay sends empty reasoning_content with deepseek thinking params`() {
         val mimo = realAsset().getProvider("xiaomi")!!.model("mimo-v2.5-pro")!!
         val b = body(
-            normalizeContext(Context(
-                messages = listOf(
-                    UserMessage.ofText("Read README.md"),
-                    AssistantMessage(
-                        content = listOf(ToolCall("call_1", "read", """{"path":"README.md"}""")),
-                        api = "openai-completions",
-                        provider = "xiaomi",
-                        model = "mimo-v2.5-pro",
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    ToolResultMessage("call_1", "read", listOf(TextContent("contents")))
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage.ofText("Read README.md"),
+                        AssistantMessage(
+                            content = listOf(
+                                ToolCall("call_1", "read", """{"path":"README.md"}""")
+                            ),
+                            api = "openai-completions",
+                            provider = "xiaomi",
+                            model = "mimo-v2.5-pro",
+                            stopReason = StopReason.TOOL_USE
+                        ),
+                        ToolResultMessage("call_1", "read", listOf(TextContent("contents")))
+                    )
                 )
-            )),
+            ),
             OpenAiCompletionsOptions(apiKey = "k", reasoningEffort = ModelThinkingLevel.HIGH),
             mimo
         )
@@ -1552,7 +1677,10 @@ class OpenAiCompletionsPayloadTest {
         val prioritized = model.copy(
             compat = model.compat.copy(vllmPriority = 10)
         )
-        val b = body(normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))), model = prioritized)
+        val b = body(
+            normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))),
+            model = prioritized
+        )
         assertEquals(10, b["priority"]!!.jsonPrimitive.longOrNull)
     }
 

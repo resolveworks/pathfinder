@@ -256,11 +256,8 @@ private fun messageToText(message: Message): String = when (message) {
 
 private fun messageRole(message: Message): String = when (message) {
     is SystemMessage -> "system"
-
     is UserMessage -> "user"
-
     is AssistantMessage -> "assistant"
-
     is ToolResultMessage -> "toolResult"
 }
 

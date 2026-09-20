@@ -67,7 +67,9 @@ class OpenAiCodexResponsesApiTest {
     )
 
     private val context =
-        normalizeContext(Context(systemPrompt = "You are Codex.", messages = listOf(UserMessage.ofText("hi"))))
+        normalizeContext(
+            Context(systemPrompt = "You are Codex.", messages = listOf(UserMessage.ofText("hi")))
+        )
 
     private val apiKey = jwt("acc-123")
 
@@ -732,32 +734,34 @@ class OpenAiCodexResponsesApiTest {
             Tool("base_tool", "The base_tool tool", buildJsonObject { put("type", "object") }),
             Tool("late_tool", "The late_tool tool", buildJsonObject { put("type", "object") })
         )
-        val context = normalizeContext(Context(
-            messages = listOf(
-                UserMessage.ofText("Hello", 1),
-                AssistantMessage(
-                    content = listOf(ToolCall("call_1", "base_tool", "{}")),
-                    api = "anthropic-messages",
-                    provider = "anthropic",
-                    model = "claude-opus-4-6",
-                    stopReason = StopReason.TOOL_USE,
-                    timestamp = 2
+        val context = normalizeContext(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("Hello", 1),
+                    AssistantMessage(
+                        content = listOf(ToolCall("call_1", "base_tool", "{}")),
+                        api = "anthropic-messages",
+                        provider = "anthropic",
+                        model = "claude-opus-4-6",
+                        stopReason = StopReason.TOOL_USE,
+                        timestamp = 2
+                    ),
+                    ToolResultMessage(
+                        toolCallId = "call_1",
+                        toolName = "base_tool",
+                        content = listOf(TextContent("done")),
+                        timestamp = 3
+                    ),
+                    SystemMessage(
+                        content = emptyList(),
+                        toolsAdded = listOf(tools[1]),
+                        timestamp = 3
+                    ),
+                    UserMessage.ofText("again", 4)
                 ),
-                ToolResultMessage(
-                    toolCallId = "call_1",
-                    toolName = "base_tool",
-                    content = listOf(TextContent("done")),
-                    timestamp = 3
-                ),
-                SystemMessage(
-                    content = emptyList(),
-                    toolsAdded = listOf(tools[1]),
-                    timestamp = 3
-                ),
-                UserMessage.ofText("again", 4)
-            ),
-            tools = listOf(tools[0])
-        ))
+                tools = listOf(tools[0])
+            )
+        )
 
         fun inputOf(modelId: String): List<JsonObject> {
             val model = catalog.getModel("openai-codex", modelId)!!

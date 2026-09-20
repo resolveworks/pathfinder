@@ -77,10 +77,12 @@ class AnthropicOAuthRuntimeTest {
         )
     )
 
-    private val context = normalizeContext(Context(
-        systemPrompt = "Be terse.",
-        messages = listOf(UserMessage.ofText("hi"))
-    ))
+    private val context = normalizeContext(
+        Context(
+            systemPrompt = "Be terse.",
+            messages = listOf(UserMessage.ofText("hi"))
+        )
+    )
 
     private val sseBody = sequence {
         yield(

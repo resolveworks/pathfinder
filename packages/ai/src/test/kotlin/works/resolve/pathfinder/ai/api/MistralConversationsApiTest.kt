@@ -63,26 +63,28 @@ class MistralConversationsApiTest {
 
         val done = api(transport).stream(
             imageModel,
-            normalizeContext(Context(
-                systemPrompt = "Be precise",
-                messages = listOf(
-                    UserMessage(
-                        listOf(
-                            TextContent("describe"),
-                            ImageContent("aGVsbG8=", "image/png")
+            normalizeContext(
+                Context(
+                    systemPrompt = "Be precise",
+                    messages = listOf(
+                        UserMessage(
+                            listOf(
+                                TextContent("describe"),
+                                ImageContent("aGVsbG8=", "image/png")
+                            )
                         )
-                    )
-                ),
-                tools = listOf(
-                    Tool(
-                        name = "lookup",
-                        description = "Look something up",
-                        parameters = Json.parseToJsonElement(
-                            """{"type":"object","properties":{"query":{"type":"string"}}}"""
+                    ),
+                    tools = listOf(
+                        Tool(
+                            name = "lookup",
+                            description = "Look something up",
+                            parameters = Json.parseToJsonElement(
+                                """{"type":"object","properties":{"query":{"type":"string"}}}"""
+                            )
                         )
                     )
                 )
-            )),
+            ),
             MistralOptions(
                 apiKey = "secret",
                 sessionId = "session-1",
@@ -142,29 +144,31 @@ class MistralConversationsApiTest {
 
         api(transport).stream(
             imageModel,
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ThinkingContent("reason"),
-                            TextContent("answer"),
-                            ToolCall("abc123456", "lookup", """{"query":"pi"}""")
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent("reason"),
+                                TextContent("answer"),
+                                ToolCall("abc123456", "lookup", """{"query":"pi"}""")
+                            ),
+                            api = model.api,
+                            provider = model.provider,
+                            model = model.id,
+                            stopReason = StopReason.TOOL_USE
                         ),
-                        api = model.api,
-                        provider = model.provider,
-                        model = model.id,
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    ToolResultMessage(
-                        toolCallId = "abc123456",
-                        toolName = "lookup",
-                        content = listOf(
-                            TextContent("found"),
-                            ImageContent("aGVsbG8=", "image/png")
+                        ToolResultMessage(
+                            toolCallId = "abc123456",
+                            toolName = "lookup",
+                            content = listOf(
+                                TextContent("found"),
+                                ImageContent("aGVsbG8=", "image/png")
+                            )
                         )
                     )
                 )
-            )),
+            ),
             MistralOptions(apiKey = "test")
         ).toList()
 
@@ -191,24 +195,26 @@ class MistralConversationsApiTest {
 
         api(transport).stream(
             model,
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ToolCall("resp_abc|with-pipes-and-more", "lookup", """{"q":1}""")
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ToolCall("resp_abc|with-pipes-and-more", "lookup", """{"q":1}""")
+                            ),
+                            api = "openai-responses",
+                            provider = "openai",
+                            model = "gpt-x",
+                            stopReason = StopReason.TOOL_USE
                         ),
-                        api = "openai-responses",
-                        provider = "openai",
-                        model = "gpt-x",
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    ToolResultMessage(
-                        toolCallId = "resp_abc|with-pipes-and-more",
-                        toolName = "lookup",
-                        content = listOf(TextContent("ok"))
+                        ToolResultMessage(
+                            toolCallId = "resp_abc|with-pipes-and-more",
+                            toolName = "lookup",
+                            content = listOf(TextContent("ok"))
+                        )
                     )
                 )
-            )),
+            ),
             MistralOptions(apiKey = "test")
         ).toList()
 
@@ -650,19 +656,21 @@ class MistralConversationsApiTest {
         transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
         api(transport).stream(
             mistralModel(input = listOf(InputModality.TEXT)),
-            normalizeContext(Context(
-                messages = listOf(
-                    UserMessage(
-                        listOf(
-                            TextContent("look"),
-                            ImageContent("aGVsbG8=", "image/png"),
-                            ImageContent("aGVsbG8=", "image/png"),
-                            TextContent("again"),
-                            ImageContent("aGVsbG8=", "image/jpeg")
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        UserMessage(
+                            listOf(
+                                TextContent("look"),
+                                ImageContent("aGVsbG8=", "image/png"),
+                                ImageContent("aGVsbG8=", "image/png"),
+                                TextContent("again"),
+                                ImageContent("aGVsbG8=", "image/jpeg")
+                            )
                         )
                     )
                 )
-            )),
+            ),
             MistralOptions(apiKey = "test")
         ).toList()
         val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
@@ -684,26 +692,28 @@ class MistralConversationsApiTest {
         transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
         api(transport).stream(
             mistralModel(input = listOf(InputModality.TEXT)),
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(ToolCall("abc123456", "lookup", "{}")),
-                        api = model.api,
-                        provider = model.provider,
-                        model = model.id,
-                        stopReason = StopReason.TOOL_USE
-                    ),
-                    ToolResultMessage(
-                        toolCallId = "abc123456",
-                        toolName = "lookup",
-                        content = listOf(
-                            TextContent("found"),
-                            ImageContent("aGVsbG8=", "image/png")
-                        )
-                    ),
-                    UserMessage.ofText("thanks")
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(ToolCall("abc123456", "lookup", "{}")),
+                            api = model.api,
+                            provider = model.provider,
+                            model = model.id,
+                            stopReason = StopReason.TOOL_USE
+                        ),
+                        ToolResultMessage(
+                            toolCallId = "abc123456",
+                            toolName = "lookup",
+                            content = listOf(
+                                TextContent("found"),
+                                ImageContent("aGVsbG8=", "image/png")
+                            )
+                        ),
+                        UserMessage.ofText("thanks")
+                    )
                 )
-            )),
+            ),
             MistralOptions(apiKey = "test")
         ).toList()
         val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())
@@ -724,32 +734,34 @@ class MistralConversationsApiTest {
             transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
             api(transport).stream(
                 model,
-                normalizeContext(Context(
-                    messages = listOf(
-                        AssistantMessage(
-                            content = listOf(
-                                TextContent("partial"),
-                                ToolCall("abc123456", "lookup", "{}")
+                normalizeContext(
+                    Context(
+                        messages = listOf(
+                            AssistantMessage(
+                                content = listOf(
+                                    TextContent("partial"),
+                                    ToolCall("abc123456", "lookup", "{}")
+                                ),
+                                api = "openai-responses",
+                                provider = "openai",
+                                model = "gpt-x",
+                                stopReason = StopReason.ERROR,
+                                errorMessage = "boom"
                             ),
-                            api = "openai-responses",
-                            provider = "openai",
-                            model = "gpt-x",
-                            stopReason = StopReason.ERROR,
-                            errorMessage = "boom"
-                        ),
-                        AssistantMessage(
-                            content = listOf(
-                                TextContent("will call"),
-                                ToolCall("resp_orphan|with-pipes", "lookup", "{}")
+                            AssistantMessage(
+                                content = listOf(
+                                    TextContent("will call"),
+                                    ToolCall("resp_orphan|with-pipes", "lookup", "{}")
+                                ),
+                                api = "openai-responses",
+                                provider = "openai",
+                                model = "gpt-x",
+                                stopReason = StopReason.TOOL_USE
                             ),
-                            api = "openai-responses",
-                            provider = "openai",
-                            model = "gpt-x",
-                            stopReason = StopReason.TOOL_USE
-                        ),
-                        UserMessage.ofText("interrupted")
+                            UserMessage.ofText("interrupted")
+                        )
                     )
-                )),
+                ),
                 MistralOptions(apiKey = "test")
             ).toList()
             val messages = Json.parseToJsonElement(
@@ -778,22 +790,24 @@ class MistralConversationsApiTest {
         transport.enqueueResponse(sse(terminalEvent(), "[DONE]"))
         api(transport).stream(
             model,
-            normalizeContext(Context(
-                messages = listOf(
-                    AssistantMessage(
-                        content = listOf(
-                            ThinkingContent("deep thought", thinkingSignature = "sig"),
-                            ThinkingContent("redacted", redacted = true),
-                            TextContent("answer")
+            normalizeContext(
+                Context(
+                    messages = listOf(
+                        AssistantMessage(
+                            content = listOf(
+                                ThinkingContent("deep thought", thinkingSignature = "sig"),
+                                ThinkingContent("redacted", redacted = true),
+                                TextContent("answer")
+                            ),
+                            api = "anthropic-messages",
+                            provider = "anthropic",
+                            model = "claude-x",
+                            stopReason = StopReason.STOP
                         ),
-                        api = "anthropic-messages",
-                        provider = "anthropic",
-                        model = "claude-x",
-                        stopReason = StopReason.STOP
-                    ),
-                    UserMessage.ofText("continue")
+                        UserMessage.ofText("continue")
+                    )
                 )
-            )),
+            ),
             MistralOptions(apiKey = "test")
         ).toList()
         val messages = Json.parseToJsonElement(transport.requests.single().body.decodeToString())

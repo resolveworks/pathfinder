@@ -436,7 +436,10 @@ class OpenAiResponsesApiTest {
         api(transport).stream(
             model.copy(responsesCompat = OpenAiResponsesCompat(supportsStrictMode = true)),
             normalizeContext(
-                Context(messages = listOf(UserMessage.ofText("hi")), tools = listOf(ordinary, constrained))
+                Context(
+                    messages = listOf(UserMessage.ofText("hi")),
+                    tools = listOf(ordinary, constrained)
+                )
             ),
             OpenAiResponsesOptions(apiKey = "k")
         ).toList()
@@ -737,7 +740,10 @@ class OpenAiResponsesApiTest {
     fun `falls back to client tool search when additional_tools is unsupported`() {
         val model = this.model.copy(
             provider = "openai-proxy",
-            responsesCompat = OpenAiResponsesCompat(supportsToolSearch = true)
+            responsesCompat = OpenAiResponsesCompat(
+                supportsMidConvoSystemMessages = true,
+                supportsToolSearch = true
+            )
         )
         val json =
             params(model, deferredContext(listOf(makeTool("base_tool"), makeTool("late_tool"))))

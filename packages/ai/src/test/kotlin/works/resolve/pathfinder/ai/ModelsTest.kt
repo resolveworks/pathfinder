@@ -15,6 +15,7 @@ import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.testing.TestCatalogs
 
 class ModelsTest {
@@ -35,7 +36,7 @@ class ModelsTest {
 
         override fun streamSimple(
             model: Model,
-            context: Context,
+            context: TranscriptContext,
             options: SimpleStreamOptions
         ): Flow<AssistantMessageEvent> = flow {
             calls += 1

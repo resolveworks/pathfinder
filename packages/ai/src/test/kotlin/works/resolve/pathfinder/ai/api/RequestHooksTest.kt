@@ -194,7 +194,8 @@ class RequestHooksTest {
         maxTokens = 64_000
     )
 
-    private val anthropicContext = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
+    private val anthropicContext =
+        normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
     private fun anthropicEvents() = listOf(
         "message_start" to
@@ -316,7 +317,8 @@ class RequestHooksTest {
         maxTokens = 131_000
     )
 
-    private val mistralContext = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
+    private val mistralContext =
+        normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
     private fun mistralTerminal() = """
         {"id":"mistral-response-id","model":"${mistral.id}",
@@ -479,10 +481,12 @@ class RequestHooksTest {
                 webSocketTransport = NoWebSocketTransport
             ).streamSimple(
                 model,
-                normalizeContext(Context(
-                    systemPrompt = "You are Codex.",
-                    messages = listOf(UserMessage.ofText("hi"))
-                )),
+                normalizeContext(
+                    Context(
+                        systemPrompt = "You are Codex.",
+                        messages = listOf(UserMessage.ofText("hi"))
+                    )
+                ),
                 SimpleStreamOptions(
                     apiKey = jwt("acc-1"),
                     onPayload = { payload, _ ->

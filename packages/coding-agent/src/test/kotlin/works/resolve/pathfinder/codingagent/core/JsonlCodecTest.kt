@@ -105,7 +105,6 @@ class JsonlCodecTest {
                 toolName = "read",
                 content = listOf(TextContent("ok")),
                 isError = false,
-                addedToolNames = listOf("read"),
                 timestamp = 3L
             )
         )

@@ -677,7 +677,9 @@ class ProviderCatalogTest {
                 supportsEagerToolInputStreaming = false,
                 supportsLongCacheRetention = false,
                 sendSessionAffinityHeaders = true,
-                supportsCacheControlOnTools = false
+                supportsCacheControlOnTools = false,
+                allowEmptySignature = true,
+                forceAdaptiveThinking = true
             ),
             catalog.getModel(
                 "fireworks",
@@ -720,7 +722,7 @@ class ProviderCatalogTest {
         assertEquals(false, cf.compat.supportsLongCacheRetention)
         assertNull(cf.compat.sessionAffinityFormat, "format auto-detects at request time")
         val or = catalog.getModel("openrouter", "aion-labs/aion-2.0")!!
-        assertEquals(false, or.compat.sendSessionAffinityHeaders)
+        assertEquals(true, or.compat.sendSessionAffinityHeaders)
         assertEquals(true, or.compat.supportsLongCacheRetention)
         assertNull(or.compat.sessionAffinityFormat)
     }
@@ -759,7 +761,7 @@ class ProviderCatalogTest {
         val kimi = catalog.getModel("baseten", "moonshotai/Kimi-K2.5")!!
         assertTrue(kimi.reasoning)
         assertIs<ChatTemplateKwargValue.Ref>(kimi.compat.chatTemplateArgs["enable_thinking"])
-        val copilot = catalog.getModel("github-copilot", "gpt-4.1")!!
+        val copilot = catalog.getModel("github-copilot", "claude-haiku-4.5")!!
         assertTrue("User-Agent" in copilot.headers)
     }
 

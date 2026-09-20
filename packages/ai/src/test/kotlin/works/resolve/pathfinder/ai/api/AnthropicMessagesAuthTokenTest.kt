@@ -48,10 +48,12 @@ class AnthropicMessagesAuthTokenTest {
         maxTokens = 4096
     )
 
-    private val context = normalizeContext(Context(
-        systemPrompt = "System prompt.",
-        messages = listOf(UserMessage.ofText("Hello"))
-    ))
+    private val context = normalizeContext(
+        Context(
+            systemPrompt = "System prompt.",
+            messages = listOf(UserMessage.ofText("Hello"))
+        )
+    )
 
     private fun api(transport: FakeTransport) = AnthropicMessagesApi(
         transport,

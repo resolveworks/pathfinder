@@ -16,11 +16,13 @@ import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.InputModality
 import works.resolve.pathfinder.ai.Model
+import works.resolve.pathfinder.ai.ModelThinkingLevel
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ThinkingLevel
+import works.resolve.pathfinder.ai.ThinkingLevelMap
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
@@ -34,14 +36,37 @@ class GoogleGenerativeAiStreamTest {
     private val model = geminiModel()
     private val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
-    private fun geminiModel(id: String = "gemini-2.5-flash", baseUrl: String = "") = Model(
+    private fun geminiModel(
+        id: String = "gemini-2.5-flash",
+        baseUrl: String = "",
+        thinkingLevelMap: ThinkingLevelMap? = null
+    ) = Model(
         id = id, name = id, api = "google-generative-ai", provider = "google",
         baseUrl = baseUrl, reasoning = true,
+        thinkingLevelMap = thinkingLevelMap,
         input = listOf(
             InputModality.TEXT,
             InputModality.IMAGE
         ),
         contextWindow = 128000, maxTokens = 8192
+    )
+
+    /** The regenerated catalog map for gemini-3.1-pro-preview. */
+    private val gemini31ProMap = ThinkingLevelMap.of(
+        ModelThinkingLevel.OFF to null,
+        ModelThinkingLevel.MINIMAL to null,
+        ModelThinkingLevel.LOW to "low",
+        ModelThinkingLevel.MEDIUM to "medium",
+        ModelThinkingLevel.HIGH to "high"
+    )
+
+    /** The regenerated catalog map for gemma-4-31b-it. */
+    private val gemma4Map = ThinkingLevelMap.of(
+        ModelThinkingLevel.OFF to null,
+        ModelThinkingLevel.MINIMAL to "MINIMAL",
+        ModelThinkingLevel.LOW to null,
+        ModelThinkingLevel.MEDIUM to null,
+        ModelThinkingLevel.HIGH to "HIGH"
     )
 
     private fun api(transport: FakeTransport) = GoogleGenerativeAiApi(
@@ -287,17 +312,19 @@ class GoogleGenerativeAiStreamTest {
         transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
         api(transport).stream(
             model,
-            normalizeContext(Context(
-                systemPrompt = "be brief",
-                messages = listOf(UserMessage.ofText("hi")),
-                tools = listOf(
-                    works.resolve.pathfinder.ai.Tool(
-                        name = "bash",
-                        description = "run",
-                        parameters = Json.parseToJsonElement("""{"type":"object"}""")
+            normalizeContext(
+                Context(
+                    systemPrompt = "be brief",
+                    messages = listOf(UserMessage.ofText("hi")),
+                    tools = listOf(
+                        works.resolve.pathfinder.ai.Tool(
+                            name = "bash",
+                            description = "run",
+                            parameters = Json.parseToJsonElement("""{"type":"object"}""")
+                        )
                     )
                 )
-            )),
+            ),
             GoogleGenerativeAiApi.GoogleOptions(
                 apiKey = "k",
                 toolChoice = "any",
@@ -375,7 +402,7 @@ class GoogleGenerativeAiStreamTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
         api(transport).streamSimple(
-            geminiModel(id = "gemini-3-pro-preview"),
+            geminiModel(id = "gemini-3.1-pro-preview", thinkingLevelMap = gemini31ProMap),
             context,
             SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.MEDIUM)
         ).toList()
@@ -383,7 +410,7 @@ class GoogleGenerativeAiStreamTest {
             transport.requests.single().body.decodeToString()
         ).jsonObject
         val thinkingConfig = body["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
-        assertEquals("HIGH", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
+        assertEquals("MEDIUM", thinkingConfig["thinkingLevel"]!!.jsonPrimitive.content)
         assertNull(thinkingConfig["thinkingBudget"])
     }
 
@@ -393,7 +420,7 @@ class GoogleGenerativeAiStreamTest {
             val transport = FakeTransport()
             transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
             api(transport).streamSimple(
-                geminiModel(id = "gemini-3-pro-preview"),
+                geminiModel(id = "gemini-3.1-pro-preview", thinkingLevelMap = gemini31ProMap),
                 context,
                 SimpleStreamOptions(apiKey = "k", reasoning = level)
             ).toList()
@@ -412,7 +439,16 @@ class GoogleGenerativeAiStreamTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
         api(transport).streamSimple(
-            geminiModel(id = "gemini-3-flash-preview"),
+            geminiModel(
+                id = "gemini-3-flash-preview",
+                thinkingLevelMap = ThinkingLevelMap.of(
+                    ModelThinkingLevel.OFF to null,
+                    ModelThinkingLevel.MINIMAL to "minimal",
+                    ModelThinkingLevel.LOW to "low",
+                    ModelThinkingLevel.MEDIUM to "medium",
+                    ModelThinkingLevel.HIGH to "high"
+                )
+            ),
             context,
             SimpleStreamOptions(apiKey = "k", reasoning = ThinkingLevel.MINIMAL)
         ).toList()
@@ -430,7 +466,16 @@ class GoogleGenerativeAiStreamTest {
         val disableTransport = FakeTransport()
         disableTransport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
         api(disableTransport).streamSimple(
-            geminiModel(id = "gemini-3-flash-preview"),
+            geminiModel(
+                id = "gemini-3-flash-preview",
+                thinkingLevelMap = ThinkingLevelMap.of(
+                    ModelThinkingLevel.OFF to null,
+                    ModelThinkingLevel.MINIMAL to "minimal",
+                    ModelThinkingLevel.LOW to "low",
+                    ModelThinkingLevel.MEDIUM to "medium",
+                    ModelThinkingLevel.HIGH to "high"
+                )
+            ),
             context,
             SimpleStreamOptions(apiKey = "k")
         ).toList()
@@ -449,7 +494,7 @@ class GoogleGenerativeAiStreamTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
         api(transport).streamSimple(
-            geminiModel(id = "gemini-3.1-pro-preview"),
+            geminiModel(id = "gemini-3.1-pro-preview", thinkingLevelMap = gemini31ProMap),
             context,
             SimpleStreamOptions(apiKey = "k")
         ).toList()
@@ -462,15 +507,15 @@ class GoogleGenerativeAiStreamTest {
     }
 
     @Test
-    fun `gemma4 maps low to MINIMAL and high to HIGH`() = runTest {
+    fun `gemma4 maps minimal to MINIMAL and high to HIGH`() = runTest {
         for ((level, expected) in listOf(
-            ThinkingLevel.LOW to "MINIMAL",
+            ThinkingLevel.MINIMAL to "MINIMAL",
             ThinkingLevel.HIGH to "HIGH"
         )) {
             val transport = FakeTransport()
             transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
             api(transport).streamSimple(
-                geminiModel(id = "gemma-4-xel"),
+                geminiModel(id = "gemma-4-31b-it", thinkingLevelMap = gemma4Map),
                 context,
                 SimpleStreamOptions(apiKey = "k", reasoning = level)
             ).toList()
@@ -491,7 +536,7 @@ class GoogleGenerativeAiStreamTest {
         val transport = FakeTransport()
         transport.enqueueResponse(sse("""{"candidates":[{"finishReason":"STOP"}]}"""))
         api(transport).streamSimple(
-            geminiModel(id = "gemma-4-xel"),
+            geminiModel(id = "gemma-4-31b-it", thinkingLevelMap = gemma4Map),
             context,
             SimpleStreamOptions(apiKey = "k")
         ).toList()

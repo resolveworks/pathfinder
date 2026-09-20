@@ -25,7 +25,6 @@ import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ChatApi
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.Provider
@@ -33,6 +32,7 @@ import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.codingagent.core.CompactionEntry
@@ -80,7 +80,7 @@ class AgentCompactionTest {
 
         override fun streamSimple(
             model: Model,
-            context: Context,
+            context: TranscriptContext,
             options: SimpleStreamOptions
         ): Flow<AssistantMessageEvent> = flow {
             gate?.await()

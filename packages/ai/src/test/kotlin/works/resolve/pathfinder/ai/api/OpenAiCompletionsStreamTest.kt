@@ -289,7 +289,9 @@ class OpenAiCompletionsStreamTest {
             api(transport)
                 .stream(
                     model,
-                    normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"), done.message))),
+                    normalizeContext(
+                        Context(messages = listOf(UserMessage.ofText("hi"), done.message))
+                    ),
                     OpenAiCompletionsOptions(apiKey = "test-key")
                 )
                 .toList()
@@ -378,7 +380,9 @@ class OpenAiCompletionsStreamTest {
             api(transport)
                 .stream(
                     model,
-                    normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"), done.message))),
+                    normalizeContext(
+                        Context(messages = listOf(UserMessage.ofText("hi"), done.message))
+                    ),
                     OpenAiCompletionsOptions(apiKey = "test-key")
                 )
                 .toList()
@@ -1621,10 +1625,12 @@ class OpenAiCompletionsStreamTest {
         api(transport)
             .stream(
                 cloudflareKimi(),
-                normalizeContext(Context(
-                    systemPrompt = "You are helpful.",
-                    messages = listOf(UserMessage.ofText("hi"))
-                )),
+                normalizeContext(
+                    Context(
+                        systemPrompt = "You are helpful.",
+                        messages = listOf(UserMessage.ofText("hi"))
+                    )
+                ),
                 OpenAiCompletionsOptions(
                     headers = mapOf(
                         "cf-aig-authorization" to "Bearer cf-token",
@@ -1781,21 +1787,23 @@ class OpenAiCompletionsStreamTest {
         val events = api(transport)
             .stream(
                 asText,
-                normalizeContext(Context(
-                    messages = listOf(
-                        UserMessage.ofText("hello"),
-                        AssistantMessage(
-                            content = listOf(
-                                ThinkingContent("internal reasoning"),
-                                TextContent("visible answer")
+                normalizeContext(
+                    Context(
+                        messages = listOf(
+                            UserMessage.ofText("hello"),
+                            AssistantMessage(
+                                content = listOf(
+                                    ThinkingContent("internal reasoning"),
+                                    TextContent("visible answer")
+                                ),
+                                api = "openai-completions",
+                                provider = "openai",
+                                model = asText.id
                             ),
-                            api = "openai-completions",
-                            provider = "openai",
-                            model = asText.id
-                        ),
-                        UserMessage.ofText("continue")
+                            UserMessage.ofText("continue")
+                        )
                     )
-                )),
+                ),
                 OpenAiCompletionsOptions(apiKey = "test-key")
             )
             .toList()

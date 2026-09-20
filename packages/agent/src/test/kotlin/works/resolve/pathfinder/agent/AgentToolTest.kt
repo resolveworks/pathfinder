@@ -88,11 +88,10 @@ class AgentToolTest {
     }
 
     @Test
-    fun `defaults for details usage and addedToolNames`() {
+    fun `defaults for details and usage`() {
         val result = AgentToolResult(content = emptyList())
         assertNull(result.details)
         assertNull(result.usage)
-        assertTrue(result.addedToolNames.isEmpty())
     }
 
     @Test

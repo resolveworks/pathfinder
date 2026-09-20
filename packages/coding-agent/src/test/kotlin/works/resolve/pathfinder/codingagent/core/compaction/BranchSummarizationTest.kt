@@ -17,7 +17,6 @@ import kotlinx.serialization.json.putJsonArray
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.ChatApi
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Cost
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.Model
@@ -26,11 +25,14 @@ import works.resolve.pathfinder.ai.Provider
 import works.resolve.pathfinder.ai.ResolvedAuth
 import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
 import works.resolve.pathfinder.ai.testing.FakeClock
+import works.resolve.pathfinder.ai.utils.getSystemMessageText
 import works.resolve.pathfinder.codingagent.core.BRANCH_SUMMARY_PREFIX
 import works.resolve.pathfinder.codingagent.core.BRANCH_SUMMARY_SUFFIX
 import works.resolve.pathfinder.codingagent.core.BranchSummaryEntry
@@ -259,13 +261,13 @@ class BranchSummarizationTest {
     }
 
     private class FauxApi : ChatApi {
-        val seenContexts = mutableListOf<Context>()
+        val seenContexts = mutableListOf<TranscriptContext>()
         val seenOptions = mutableListOf<SimpleStreamOptions>()
         val responses = ArrayDeque<AssistantMessage>()
 
         override fun streamSimple(
             model: Model,
-            context: Context,
+            context: TranscriptContext,
             options: SimpleStreamOptions
         ): Flow<AssistantMessageEvent> = flow {
             seenContexts += context
@@ -337,8 +339,8 @@ class BranchSummarizationTest {
         errorMessage = errorMessage
     )
 
-    private fun promptText(context: Context): String =
-        ((context.messages[0] as UserMessage).content[0] as TextContent).text
+    private fun promptText(context: TranscriptContext): String =
+        ((context.messages[1] as UserMessage).content[0] as TextContent).text
 
     @Test
     fun `generates a branch summary with the fixed prompt format`() = runTest {
@@ -361,12 +363,15 @@ class BranchSummarizationTest {
         assertEquals(emptyList(), ok.value.readFiles)
         assertEquals(emptyList(), ok.value.modifiedFiles)
 
-        assertEquals(SUMMARIZATION_SYSTEM_PROMPT, faux.api.seenContexts[0].systemPrompt)
+        assertEquals(
+            SUMMARIZATION_SYSTEM_PROMPT,
+            getSystemMessageText(faux.api.seenContexts[0].messages[0] as SystemMessage)
+        )
         val expectedPrompt =
             "<conversation>\n[User]: explore the widget\n</conversation>\n\n$BRANCH_SUMMARY_PROMPT"
         assertEquals(expectedPrompt, promptText(faux.api.seenContexts[0]))
         assertEquals(4096, faux.api.seenOptions[0].maxTokens)
-        assertEquals(1000, (faux.api.seenContexts[0].messages[0] as UserMessage).timestamp)
+        assertEquals(1000, (faux.api.seenContexts[0].messages[1] as UserMessage).timestamp)
     }
 
     @Test

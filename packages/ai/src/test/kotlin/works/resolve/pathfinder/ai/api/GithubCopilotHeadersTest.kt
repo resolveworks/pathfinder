@@ -127,26 +127,32 @@ class GithubCopilotHeadersTest {
 
     private val image = ImageContent(data = "aGk=", mimeType = "image/png")
 
-    private fun userContext() = normalizeContext(Context(
-        messages = listOf(UserMessage(listOf(TextContent("hello"))))
-    ))
-
-    private fun toolInitiatedContext() = normalizeContext(Context(
-        messages = listOf(
-            UserMessage.ofText("hi"),
-            AssistantMessage(
-                content = listOf(TextContent("calling")),
-                api = "openai-completions",
-                provider = "github-copilot",
-                model = "gpt-5"
-            ),
-            ToolResultMessage("call_1", "tool", listOf(TextContent("result")))
+    private fun userContext() = normalizeContext(
+        Context(
+            messages = listOf(UserMessage(listOf(TextContent("hello"))))
         )
-    ))
+    )
 
-    private fun visionContext() = normalizeContext(Context(
-        messages = listOf(UserMessage(listOf(TextContent("look"), image)))
-    ))
+    private fun toolInitiatedContext() = normalizeContext(
+        Context(
+            messages = listOf(
+                UserMessage.ofText("hi"),
+                AssistantMessage(
+                    content = listOf(TextContent("calling")),
+                    api = "openai-completions",
+                    provider = "github-copilot",
+                    model = "gpt-5"
+                ),
+                ToolResultMessage("call_1", "tool", listOf(TextContent("result")))
+            )
+        )
+    )
+
+    private fun visionContext() = normalizeContext(
+        Context(
+            messages = listOf(UserMessage(listOf(TextContent("look"), image)))
+        )
+    )
 
     private fun retry() = ProviderRetry(sleep = {}, clock = FakeClock(0L), random = { 0.0 })
 

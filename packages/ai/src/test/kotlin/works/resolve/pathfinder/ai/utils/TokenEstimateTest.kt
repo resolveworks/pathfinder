@@ -64,20 +64,24 @@ class TokenEstimateTest {
             stopReason = StopReason.STOP,
             timestamp = 2L
         )
-        val context = normalizeContext(Context(
-            systemPrompt = "system", // covered by usage, must not be added
-            messages = listOf(
-                UserMessage.ofText("hi", 1L),
-                assistant,
-                UserMessage.ofText("hello!", 3L)
-            ),
-            tools = listOf(Tool("t", "d", JsonPrimitive("x")))
-        ))
+        val context = normalizeContext(
+            Context(
+                systemPrompt = "system", // covered by usage, must not be added
+                messages = listOf(
+                    UserMessage.ofText("hi", 1L),
+                    assistant,
+                    UserMessage.ofText("hello!", 3L)
+                ),
+                tools = listOf(Tool("t", "d", JsonPrimitive("x")))
+            )
+        )
         val estimate = estimateContextTokens(context)
         assertEquals(100, estimate.usageTokens)
         assertEquals(2, estimate.trailingTokens) // ceil(6/4)
         assertEquals(102, estimate.tokens)
-        assertEquals(1, estimate.lastUsageIndex)
+        // Index 2 in the normalized transcript: the leading system message
+        // occupies index 0.
+        assertEquals(2, estimate.lastUsageIndex)
     }
 
     @Test
@@ -109,7 +113,9 @@ class TokenEstimateTest {
             timestamp = 1L
         )
         val laterSummary = UserMessage.ofText("summary", 5L) // inserted after the response
-        val estimate = estimateContextTokens(normalizeContext(Context(messages = listOf(laterSummary, assistant))))
+        val estimate = estimateContextTokens(
+            normalizeContext(Context(messages = listOf(laterSummary, assistant)))
+        )
         assertNull(estimate.lastUsageIndex)
         assertEquals(2, estimate.tokens)
     }
@@ -129,14 +135,16 @@ class TokenEstimateTest {
             stopReason = StopReason.STOP,
             timestamp = 100L
         )
-        val context = normalizeContext(Context(
-            systemPrompt = "system", // 6 chars → 2 tokens
-            messages = listOf(
-                UserMessage.ofText("summary", 200L), // inserted after the response
-                assistant, // stale: timestamp 100 < 200 → usage cannot apply
-                UserMessage.ofText("x".repeat(4_000), 300L) // 1000 tokens
+        val context = normalizeContext(
+            Context(
+                systemPrompt = "system", // 6 chars → 2 tokens
+                messages = listOf(
+                    UserMessage.ofText("summary", 200L), // inserted after the response
+                    assistant, // stale: timestamp 100 < 200 → usage cannot apply
+                    UserMessage.ofText("x".repeat(4_000), 300L) // 1000 tokens
+                )
             )
-        ))
+        )
         assertEquals(
             ContextUsageEstimate(
                 tokens = 1_005,
@@ -159,15 +167,17 @@ class TokenEstimateTest {
             stopReason = StopReason.STOP,
             timestamp = timestamp
         )
-        val context = normalizeContext(Context(
-            messages = listOf(
-                UserMessage.ofText("summary", 200L),
-                assistant(100L, 9_500), // stale: predates the inserted summary
-                UserMessage.ofText("new prompt", 300L),
-                assistant(400L, 2_000),
-                UserMessage.ofText("tail", 500L)
+        val context = normalizeContext(
+            Context(
+                messages = listOf(
+                    UserMessage.ofText("summary", 200L),
+                    assistant(100L, 9_500), // stale: predates the inserted summary
+                    UserMessage.ofText("new prompt", 300L),
+                    assistant(400L, 2_000),
+                    UserMessage.ofText("tail", 500L)
+                )
             )
-        ))
+        )
         val estimate = estimateContextTokens(context)
         assertEquals(2_000, estimate.usageTokens)
         assertEquals(1, estimate.trailingTokens) // ceil(4/4)
@@ -177,11 +187,13 @@ class TokenEstimateTest {
 
     @Test
     fun `without usage system prompt and tools are estimated`() {
-        val context = normalizeContext(Context(
-            systemPrompt = "12345678", // 2 tokens
-            messages = listOf(UserMessage.ofText("abcd")), // 1 token
-            tools = listOf(Tool("t", "d", JsonPrimitive("x")))
-        ))
+        val context = normalizeContext(
+            Context(
+                systemPrompt = "12345678", // 2 tokens
+                messages = listOf(UserMessage.ofText("abcd")), // 1 token
+                tools = listOf(Tool("t", "d", JsonPrimitive("x")))
+            )
+        )
         val estimate = estimateContextTokens(context)
         assertNull(estimate.lastUsageIndex)
         assertEquals(
@@ -193,7 +205,8 @@ class TokenEstimateTest {
     @Test
     fun `clamping keeps 4096 safety tokens and minimum one output`() {
         val model = TestCatalogs.GLM_5_2
-        val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi")))) // 1 token
+        // 1 token
+        val context = normalizeContext(Context(messages = listOf(UserMessage.ofText("hi"))))
 
         assertEquals(500, clampMaxTokensToContext(model, context, 500))
         assertEquals(1_000_000 - 1 - 4096, clampMaxTokensToContext(model, context, 1_000_000))
