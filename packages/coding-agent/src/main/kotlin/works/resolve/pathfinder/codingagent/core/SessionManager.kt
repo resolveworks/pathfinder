@@ -36,7 +36,9 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
+import works.resolve.pathfinder.ai.Tool
 import works.resolve.pathfinder.ai.ToolCall
+import works.resolve.pathfinder.ai.ToolReference
 import works.resolve.pathfinder.ai.ToolResultMessage
 import works.resolve.pathfinder.ai.Usage
 import works.resolve.pathfinder.ai.UserMessage
@@ -523,9 +525,39 @@ internal object JsonlCodec {
             put("content", encodeContentList(message.content))
         }
 
-        is SystemMessage -> throw IllegalArgumentException(
-            "System messages are not part of the classic session transcript"
-        )
+        is SystemMessage -> buildJsonObject {
+            put("role", "system")
+            put("timestamp", message.timestamp)
+            // pi's wire content is a plain string, or a content array when a
+            // message carries structured blocks.
+            put(
+                "content",
+                when {
+                    message.content.isEmpty() -> JsonPrimitive("")
+
+                    message.content.size == 1 && message.content[0] is TextContent ->
+                        JsonPrimitive((message.content[0] as TextContent).text)
+
+                    else -> encodeContentList(message.content)
+                }
+            )
+            message.sections?.let { sections ->
+                putJsonObject("sections") {
+                    sections.forEach { (name, value) ->
+                        put(name, if (value == null) JsonNull else JsonPrimitive(value))
+                    }
+                }
+            }
+            message.toolsAdded?.takeIf { it.isNotEmpty() }?.let { tools ->
+                put("toolsAdded", JsonArray(tools.map(::encodeTool)))
+            }
+            message.toolsRemoved?.takeIf { it.isNotEmpty() }?.let { tools ->
+                put(
+                    "toolsRemoved",
+                    JsonArray(tools.map { buildJsonObject { put("name", it.name) } })
+                )
+            }
+        }
 
         is AssistantMessage -> buildJsonObject {
             put("role", "assistant")
@@ -559,6 +591,18 @@ internal object JsonlCodec {
     fun decodeMessage(element: kotlinx.serialization.json.JsonElement): Message {
         val obj = element as? JsonObject ?: invalid()
         return when (val role = obj.string("role")) {
+            "system" -> SystemMessage(
+                content = decodeSystemContent(obj["content"]),
+                sections = obj["sections"]?.let(::decodeSections),
+                toolsAdded = obj["toolsAdded"]?.let(::decodeTools),
+                toolsRemoved = obj["toolsRemoved"]?.let { element ->
+                    (element as? JsonArray)
+                        ?.map { ToolReference((it as JsonObject).string("name") ?: invalid()) }
+                        ?: invalid()
+                },
+                timestamp = obj.number("timestamp")?.toLong() ?: invalid()
+            )
+
             "user" -> UserMessage(
                 content = decodeContentList(obj["content"]),
                 timestamp = obj.number("timestamp")?.toLong() ?: invalid()
@@ -600,6 +644,61 @@ internal object JsonlCodec {
             )
 
             else -> invalid("unknown message role $role")
+        }
+    }
+
+    /** pi's system-message content: a plain string (empty for announcements) or a text-content array. */
+    private fun decodeSystemContent(
+        element: kotlinx.serialization.json.JsonElement?
+    ): List<TextContent> = when (element) {
+        // pi normalizes a null/missing content to "".
+        null, JsonNull -> emptyList()
+
+        is JsonPrimitive ->
+            element.contentOrNull?.takeIf { it.isNotEmpty() }
+                ?.let { listOf(TextContent(it)) }
+                ?: emptyList()
+
+        is JsonArray -> decodeContentList(element).map {
+            it as? TextContent ?: invalid()
+        }
+
+        else -> invalid()
+    }
+
+    /** Named prompt sections; an explicit null removes the section. */
+    private fun decodeSections(
+        element: kotlinx.serialization.json.JsonElement
+    ): Map<String, String?> {
+        val obj = element as? JsonObject ?: invalid()
+        return obj.mapValues { (_, value) ->
+            when (value) {
+                is JsonNull -> null
+                is JsonPrimitive -> value.content
+                else -> invalid()
+            }
+        }
+    }
+
+    private fun encodeTool(tool: Tool): JsonObject = buildJsonObject {
+        put("name", tool.name)
+        put("description", tool.description)
+        put("parameters", tool.parameters)
+        check(tool.constrainedSampling == null) {
+            "Constrained-sampling tool declarations are not persistable"
+        }
+    }
+
+    private fun decodeTools(element: kotlinx.serialization.json.JsonElement): List<Tool> {
+        val array = element as? JsonArray ?: invalid()
+        return array.map { item ->
+            val obj = item as? JsonObject ?: invalid()
+            if ("constrainedSampling" in obj) invalid("constrained tool declarations unsupported")
+            Tool(
+                name = obj.string("name") ?: invalid(),
+                description = obj.string("description") ?: invalid(),
+                parameters = obj["parameters"] ?: invalid()
+            )
         }
     }
 

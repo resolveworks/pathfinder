@@ -19,12 +19,19 @@ import works.resolve.pathfinder.ai.AssistantMessageEvent
 import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Message
 import works.resolve.pathfinder.ai.StopReason
+import works.resolve.pathfinder.ai.SystemMessage
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.ThinkingContent
 import works.resolve.pathfinder.ai.ToolCall
 import works.resolve.pathfinder.ai.ToolResultMessage
+import works.resolve.pathfinder.ai.TranscriptContext
 import works.resolve.pathfinder.ai.toThinkingLevelOrNull
+import works.resolve.pathfinder.ai.utils.ToolStateChanges
+import works.resolve.pathfinder.ai.utils.getCurrentTools
+import works.resolve.pathfinder.ai.utils.getToolStateChanges
 import works.resolve.pathfinder.ai.utils.lenientJson
+import works.resolve.pathfinder.ai.utils.normalizeContext
+import works.resolve.pathfinder.ai.utils.toToolDeclaration
 
 /**
  * Runs the agent loop: streams assistant turns and executes each response's
@@ -33,9 +40,10 @@ import works.resolve.pathfinder.ai.utils.lenientJson
  * its stop reason is `ERROR`/`ABORTED`. Returns the run's new messages in
  * source order.
  *
- * [context] is treated as an immutable snapshot; it is never mutated. A fresh
- * [Context] (tool definitions only) is projected for every provider request —
- * executor objects are never exposed to provider serialization.
+ * [context] is treated as an immutable snapshot; it is never mutated. The
+ * transcript is normalized for every provider request: the system prompt and
+ * tool declarations ride its system messages, never a separate context
+ * field, so executor objects are never exposed to provider serialization.
  *
  * Divergence: pi's `prompt()` resolves normally after an abort; coroutine
  * cancellation cannot be swallowed without corrupting structured concurrency,
@@ -54,14 +62,15 @@ suspend fun runAgentLoop(
         require(prompt !is AssistantMessage) { "Prompts must be user or toolResult messages" }
     }
 
-    val newMessages = prompts.toMutableList()
-    val llmMessages = (context.messages + prompts).toMutableList()
+    val initialMessages = declareToolChanges(context, prompts, config.clock)
+    val newMessages = initialMessages.toMutableList()
+    val llmMessages = (context.messages + initialMessages).toMutableList()
 
     emit(AgentEvent.AgentStart)
     emit(AgentEvent.TurnStart)
-    for (prompt in prompts) {
-        emit(AgentEvent.MessageStart(prompt))
-        emit(AgentEvent.MessageEnd(prompt))
+    for (message in initialMessages) {
+        emit(AgentEvent.MessageStart(message))
+        emit(AgentEvent.MessageEnd(message))
     }
 
     runLoop(context, llmMessages, newMessages, config, emit)
@@ -111,6 +120,7 @@ private suspend fun runLoop(
     var config = initialConfig
     var lastCompletedTurn: PrepareNextTurnContext? = null
     while (true) {
+        var preparedMessages: List<Message> = emptyList()
         if (lastCompletedTurn != null) {
             val update = config.prepareNextTurn?.invoke(lastCompletedTurn)
             if (update != null) {
@@ -118,6 +128,7 @@ private suspend fun runLoop(
                     context = refreshed
                     llmMessages = refreshed.messages.toMutableList()
                 }
+                preparedMessages = update.messages ?: emptyList()
                 val nextModel = update.model
                 val nextThinkingLevel = update.thinkingLevel
                 if (nextModel != null || nextThinkingLevel != null) {
@@ -133,12 +144,20 @@ private suspend fun runLoop(
             emit(AgentEvent.TurnStart)
         }
 
+        // pi keeps one live transcript on the context; this port syncs the
+        // snapshot's messages from the working list before each request.
+        context = context.copy(messages = llmMessages.toList())
+
+        // Process prepared messages before the next assistant response.
+        for (message in declareToolChanges(context, preparedMessages, config.clock)) {
+            emit(AgentEvent.MessageStart(message))
+            emit(AgentEvent.MessageEnd(message))
+            llmMessages.add(message)
+            newMessages.add(message)
+        }
+
         val message = streamAssistantResponse(
-            llmContext = Context(
-                systemPrompt = context.systemPrompt,
-                messages = llmMessages.toList(),
-                tools = context.tools.map { it.definition }
-            ),
+            llmContext = normalizeContext(Context(messages = llmMessages.toList())),
             config = config,
             emit = emit
         )
@@ -216,6 +235,69 @@ private suspend fun runLoop(
 }
 
 /**
+ * Declare tool loadout changes to the model.
+ *
+ * [AgentContext.tools] is what the runtime can execute; the transcript's
+ * system messages declare what the model may call. Before each request the
+ * difference becomes `toolsAdded` and `toolsRemoved` on a system message.
+ * When a pending system message exists, its tool fields are treated as
+ * intent and replaced with the delta between the committed transcript and
+ * the executable set, so replay always yields exactly the executable tools.
+ * Otherwise a new system message is inserted before the first non-system
+ * pending message.
+ */
+private fun declareToolChanges(
+    context: AgentContext,
+    pendingMessages: List<Message>,
+    clock: Clock
+): List<Message> {
+    val systemIndex = pendingMessages.indexOfLast { it is SystemMessage }
+    val pending = pendingMessages.getOrNull(systemIndex) as SystemMessage?
+    val baseline = if (pending != null) {
+        pendingMessages.mapIndexed { index, message ->
+            if (index == systemIndex) withToolChanges(pending, NO_CHANGES) else message
+        }
+    } else {
+        pendingMessages
+    }
+    val changes = getToolStateChanges(
+        getCurrentTools(context.messages + baseline),
+        context.tools.map { toToolDeclaration(it.definition) }
+    )
+    val unchanged = changes.toolsAdded.isEmpty() && changes.toolsRemoved.isEmpty()
+
+    if (pending != null) {
+        // Keep the caller's message when it already declares no tool changes.
+        if (unchanged && pending.toolsAdded.isNullOrEmpty() &&
+            pending.toolsRemoved.isNullOrEmpty()
+        ) {
+            return pendingMessages
+        }
+        return baseline.mapIndexed { index, message ->
+            if (index == systemIndex) withToolChanges(pending, changes) else message
+        }
+    }
+    if (unchanged) return pendingMessages
+    val update = withToolChanges(
+        SystemMessage(content = emptyList(), timestamp = clock.now().toEpochMilliseconds()),
+        changes
+    )
+    val insertIndex = pendingMessages.indexOfFirst { it !is SystemMessage }
+    val index = if (insertIndex == -1) pendingMessages.size else insertIndex
+    return pendingMessages.subList(0, index) + update +
+        pendingMessages.subList(index, pendingMessages.size)
+}
+
+private val NO_CHANGES = ToolStateChanges(toolsAdded = emptyList(), toolsRemoved = emptyList())
+
+/** Copy a system message with its tool fields replaced by [changes]; empty lists omit the field. */
+private fun withToolChanges(message: SystemMessage, changes: ToolStateChanges): SystemMessage =
+    message.copy(
+        toolsAdded = changes.toolsAdded.ifEmpty { null },
+        toolsRemoved = changes.toolsRemoved.ifEmpty { null }
+    )
+
+/**
  * Streams one assistant response, folding provider events into message
  * lifecycle events. The provider stream is created and collected exactly
  * once per turn.
@@ -230,7 +312,7 @@ private suspend fun runLoop(
  * errorMessage set, partial content preserved.
  */
 private suspend fun streamAssistantResponse(
-    llmContext: Context,
+    llmContext: TranscriptContext,
     config: AgentLoopConfig,
     emit: suspend (AgentEvent) -> Unit
 ): AssistantMessage {

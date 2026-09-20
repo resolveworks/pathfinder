@@ -85,7 +85,7 @@ class AgentSessionThinkingTest {
         settingsManager: SettingsManager? = null,
         streamFn: (
             Model,
-            works.resolve.pathfinder.ai.Context,
+            works.resolve.pathfinder.ai.TranscriptContext,
             SimpleStreamOptions
         ) -> Flow<AssistantMessageEvent> =
             { m, _, _ -> okStream(m) }

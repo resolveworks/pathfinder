@@ -30,7 +30,7 @@ class AgentSessionPromptTest {
     fun `throws when prompting without configured auth`() = runTest {
         val faux = FauxProvider(configuredAuth = false)
         val session = AgentSession(
-            agent = Agent(faux.model, streamFn = StreamFn(faux.models::stream)),
+            agent = Agent(faux.model, streamFn = modelsStreamFn(faux.models)),
             manager = SessionManager.create(
                 createTempDirectory("prompt-test").toFile(),
                 ioDispatcher = Dispatchers.Unconfined
@@ -78,7 +78,7 @@ class AgentSessionPromptTest {
         runTest {
             val faux = FauxProvider().apply { setResponses(fauxAssistant()) }
             val session = AgentSession(
-                agent = Agent(faux.model, streamFn = StreamFn(faux.models::stream)),
+                agent = Agent(faux.model, streamFn = modelsStreamFn(faux.models)),
                 manager = SessionManager.create(
                     createTempDirectory("prompt-test").toFile(),
                     ioDispatcher = Dispatchers.Unconfined

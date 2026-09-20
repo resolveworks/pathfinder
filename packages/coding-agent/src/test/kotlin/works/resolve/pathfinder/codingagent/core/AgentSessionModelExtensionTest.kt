@@ -13,7 +13,7 @@ import works.resolve.pathfinder.ai.testing.FauxProvider
 class AgentSessionModelExtensionTest {
 
     private suspend fun session(faux: FauxProvider) = AgentSession(
-        agent = Agent(faux.model, streamFn = StreamFn(faux.models::stream)),
+        agent = Agent(faux.model, streamFn = modelsStreamFn(faux.models)),
         manager = SessionManager.create(
             createTempDirectory("model-extension-test").toFile(),
             ioDispatcher = Dispatchers.Unconfined

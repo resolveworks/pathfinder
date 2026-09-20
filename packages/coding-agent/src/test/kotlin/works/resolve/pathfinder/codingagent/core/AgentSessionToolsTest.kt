@@ -17,7 +17,6 @@ import works.resolve.pathfinder.agent.AgentToolUpdateCallback
 import works.resolve.pathfinder.agent.StreamFn
 import works.resolve.pathfinder.ai.AssistantMessage
 import works.resolve.pathfinder.ai.AssistantMessageEvent
-import works.resolve.pathfinder.ai.Context
 import works.resolve.pathfinder.ai.Model
 import works.resolve.pathfinder.ai.Models
 import works.resolve.pathfinder.ai.Provider
@@ -26,6 +25,9 @@ import works.resolve.pathfinder.ai.SimpleStreamOptions
 import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.TextContent
 import works.resolve.pathfinder.ai.Tool
+import works.resolve.pathfinder.ai.TranscriptContext
+import works.resolve.pathfinder.ai.utils.getCurrentSystemPrompt
+import works.resolve.pathfinder.ai.utils.getCurrentTools
 import works.resolve.pathfinder.codingagent.core.SessionManager
 
 class AgentSessionToolsTest {
@@ -82,7 +84,7 @@ class AgentSessionToolsTest {
 
     private suspend fun session(
         tools: List<AgentTool> = emptyList(),
-        streamFn: (Model, Context, SimpleStreamOptions) -> Flow<AssistantMessageEvent> =
+        streamFn: (Model, TranscriptContext, SimpleStreamOptions) -> Flow<AssistantMessageEvent> =
             { _, _, _ -> okStream() }
     ): AgentSession = AgentSession(
         agent = Agent(model = model, streamFn = StreamFn(streamFn)),
@@ -99,7 +101,7 @@ class AgentSessionToolsTest {
     fun `setActiveToolsByName applies registry-filtered tools and rebuilds the prompt`() = runTest {
         val webSearch = tool("web_search")
         val webFetch = tool("web_fetch")
-        val contexts = CopyOnWriteArrayList<Context>()
+        val contexts = CopyOnWriteArrayList<TranscriptContext>()
         val s = session(tools = listOf(webSearch, webFetch)) { _, context, _ ->
             contexts.add(context)
             okStream()
@@ -133,8 +135,14 @@ class AgentSessionToolsTest {
         assertEquals("no session entry is appended", 0, s.sessionManager.getEntries().size)
 
         s.prompt("go")
-        assertEquals(listOf("web_fetch", "web_search"), contexts.single().tools.map { it.name })
-        assertEquals(buildSystemPrompt(listOf(webFetch, webSearch)), contexts.single().systemPrompt)
+        assertEquals(
+            listOf("web_fetch", "web_search"),
+            getCurrentTools(contexts.single().messages).map { it.name }
+        )
+        assertEquals(
+            buildSystemPrompt(listOf(webFetch, webSearch)),
+            getCurrentSystemPrompt(contexts.single().messages)
+        )
     }
 
     @Test

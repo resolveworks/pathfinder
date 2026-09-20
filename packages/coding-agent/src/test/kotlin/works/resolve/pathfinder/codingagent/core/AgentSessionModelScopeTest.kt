@@ -31,7 +31,7 @@ class AgentSessionModelScopeTest {
         )
         val provider = FauxProvider(sonnet, additionalModels = listOf(opus))
         val session = AgentSession(
-            agent = Agent(provider.model, streamFn = StreamFn(provider.models::stream)),
+            agent = Agent(provider.model, streamFn = modelsStreamFn(provider.models)),
             manager = SessionManager.create(
                 createTempDirectory("model-scope-test").toFile(),
                 ioDispatcher = Dispatchers.Unconfined
@@ -62,7 +62,7 @@ class AgentSessionModelScopeTest {
         val provider = FauxProvider(faux.model, additionalModels = listOf(opus))
         val settingsManager = SettingsManager.inMemory()
         val session = AgentSession(
-            agent = Agent(provider.model, streamFn = StreamFn(provider.models::stream)),
+            agent = Agent(provider.model, streamFn = modelsStreamFn(provider.models)),
             manager = SessionManager.create(
                 createTempDirectory("model-scope-test").toFile(),
                 ioDispatcher = Dispatchers.Unconfined
@@ -88,7 +88,7 @@ class AgentSessionModelScopeTest {
         )
         val provider = FauxProvider(sonnet, additionalModels = listOf(opus))
         val session = AgentSession(
-            agent = Agent(provider.model, streamFn = StreamFn(provider.models::stream)),
+            agent = Agent(provider.model, streamFn = modelsStreamFn(provider.models)),
             manager = SessionManager.create(
                 createTempDirectory("model-scope-test").toFile(),
                 ioDispatcher = Dispatchers.Unconfined
