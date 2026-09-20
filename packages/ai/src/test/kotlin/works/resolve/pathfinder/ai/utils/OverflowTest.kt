@@ -9,10 +9,13 @@ import works.resolve.pathfinder.ai.StopReason
 import works.resolve.pathfinder.ai.Usage
 
 class OverflowTest {
-    private fun createErrorMessage(errorMessage: String): AssistantMessage = AssistantMessage(
+    private fun createErrorMessage(
+        errorMessage: String,
+        provider: String = "ollama"
+    ): AssistantMessage = AssistantMessage(
         content = emptyList(),
         api = "openai-completions",
-        provider = "ollama",
+        provider = provider,
         model = "qwen3.5:35b",
         usage = Usage(),
         stopReason = StopReason.ERROR,
@@ -54,8 +57,9 @@ class OverflowTest {
     @Test
     fun `detects Cerebras empty-body overflow via the pi-shaped transport message`() {
         // ProviderHttpException(400, "") message: "<status> status code (no body)".
-        assertTrue(isContextOverflow(createErrorMessage("400 status code (no body)")))
-        assertTrue(isContextOverflow(createErrorMessage("413 status code (no body)")))
+        // Provider-scoped: other providers must not match this bodyless status.
+        assertTrue(isContextOverflow(createErrorMessage("400 status code (no body)", "cerebras")))
+        assertTrue(isContextOverflow(createErrorMessage("413 status code (no body)", "cerebras")))
     }
 
     @Test
